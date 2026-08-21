@@ -207,6 +207,224 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
+@given(data=st.data(), sigma=sigma())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lorentzian_filter_images(data, sigma, lazy, device):
+    if lazy is True and device == gpu.values[0]:
+        return
+
+    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
+    assume(all(n > 1 for n in measurement.base_shape))
+    try:
+        filtered = measurement.lorentzian_filter(sigma)
+        filtered.compute()
+        measurement.compute()
+    except OSError:
+        pytest.skip(
+            "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
+        )
+
+    if np.any(np.array(sigma)) > 1:
+        assert not np.allclose(filtered.array, measurement.array)
+
+
+@given(data=st.data(), sigma=sigma())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_voigtian_filter_images(data, sigma, lazy, device):
+    if lazy is True and device == gpu.values[0]:
+        return
+
+    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
+    assume(all(n > 1 for n in measurement.base_shape))
+    try:
+        # Use sigma as both gaussian_sigma and lorentzian_gamma
+        filtered = measurement.voigtian_filter(sigma, sigma)
+        filtered.compute()
+        measurement.compute()
+    except OSError:
+        pytest.skip(
+            "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
+        )
+
+    if np.any(np.array(sigma)) > 1:
+        assert not np.allclose(filtered.array, measurement.array)
+
+
+def test_lorentzian_filter_changes_image():
+    """Lorentzian filter with a non-trivial HWHM should change the image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    filtered = images.lorentzian_filter(0.5)
+    assert not np.allclose(filtered.array, images.array)
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_lorentzian_filter_respects_precision_config(precision):
+    """The Lorentzian family of filters must honour ``abtem.config['precision']``.
+
+    The kernel is built via :func:`_lorentzian_kernel_2d`, which queries the
+    config — and the output dtype must match the configured precision rather
+    than being silently downcast to float32. Regression for a bug where the
+    kernel was hardcoded to ``np.float32``.
+    """
+    expected_dtype = np.dtype(precision)
+    n = 21
+    with abtem.config.set({"precision": precision}):
+        arr = np.zeros((n, n), dtype=expected_dtype)
+        arr[n // 2, n // 2] = 1.0
+        images = Images(arr, sampling=(0.1, 0.1))
+
+        out_l = images.lorentzian_filter(0.3).array
+        out_v = images.voigtian_filter(0.2, 0.3).array
+        out_pv = images.pseudo_voigtian_filter(0.2, 0.3, eta=0.5).array
+
+    assert out_l.dtype == expected_dtype, (
+        f"lorentzian_filter: got {out_l.dtype}, expected {expected_dtype}"
+    )
+    assert out_v.dtype == expected_dtype, (
+        f"voigtian_filter: got {out_v.dtype}, expected {expected_dtype}"
+    )
+    assert out_pv.dtype == expected_dtype, (
+        f"pseudo_voigtian_filter: got {out_pv.dtype}, expected {expected_dtype}"
+    )
+
+
+@pytest.mark.parametrize(
+    "filter_name,kwargs",
+    [
+        ("lorentzian_filter", dict(half_width=0.5, truncate=10.0)),
+        ("voigtian_filter", dict(gaussian_sigma=0.1, lorentzian_gamma=0.5)),
+        (
+            "pseudo_voigtian_filter",
+            dict(gaussian_sigma=0.1, lorentzian_gamma=0.5, eta=0.5),
+        ),
+    ],
+)
+def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwargs):
+    """
+    Filtering a delta image with the Lorentzian family of filters must produce
+    a rotationally-symmetric impulse response. A naively separable 1-D × 1-D
+    Lorentzian would be several times brighter along the x and y axes than
+    along the diagonal at the same radius, producing visible cross-shaped halos
+    around sharp features. Regression for that bug.
+    """
+    # Square delta image with isotropic sampling
+    n = 81
+    arr = np.zeros((n, n), dtype=np.float32)
+    arr[n // 2, n // 2] = 1.0
+    images = Images(arr, sampling=(0.1, 0.1))
+
+    out = getattr(images, filter_name)(**kwargs).array
+    c = n // 2
+
+    # Sample at several radii; compare on-axis vs along-diagonal at the same r.
+    for r in (4, 8, 12, 20):
+        d = int(round(r / np.sqrt(2)))  # so √2·d ≈ r
+        ax_val = float(out[c, c + r])
+        diag_val = float(out[c + d, c + d])
+        ratio = ax_val / diag_val
+        # True 2-D Lorentzian / Voigt is rotationally symmetric → ratio ≈ 1.
+        # The old separable implementation gave ratio ≳ 3 at large r.
+        assert 0.85 < ratio < 1.15, (
+            f"{filter_name}: axis/diag ratio = {ratio:.3g} at r={r} "
+            f"(ax={ax_val:.4g}, diag={diag_val:.4g}); kernel is not "
+            "rotationally symmetric"
+        )
+
+
+def test_voigtian_filter_changes_image():
+    """Voigtian filter with non-trivial parameters should change the image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    filtered = images.voigtian_filter(0.3, 0.3)
+    assert not np.allclose(filtered.array, images.array)
+
+
+def test_voigtian_filter_pure_gaussian_limit():
+    """voigtian_filter with lorentzian_gamma=0 must equal gaussian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    sigma = 0.4
+    gauss = images.gaussian_filter(sigma)
+    voigt = images.voigtian_filter(sigma, 0.0)
+    assert np.allclose(gauss.array, voigt.array, atol=1e-5)
+
+
+def test_voigtian_filter_pure_lorentzian_limit():
+    """voigtian_filter with gaussian_sigma=0 must equal lorentzian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    hw = 0.4
+    lor = images.lorentzian_filter(hw)
+    voigt = images.voigtian_filter(0.0, hw)
+    assert np.allclose(lor.array, voigt.array, atol=1e-5)
+
+
+def test_pseudo_voigtian_filter_changes_image():
+    """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
+    assert not np.allclose(filtered.array, images.array)
+
+
+def test_pseudo_voigtian_filter_pure_gaussian_limit():
+    """pseudo_voigtian_filter with eta=0 must equal gaussian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    sigma = 0.4
+    gauss = images.gaussian_filter(sigma)
+    pv = images.pseudo_voigtian_filter(sigma, 1.0, eta=0.0)
+    assert np.allclose(gauss.array, pv.array, atol=1e-5)
+
+
+def test_pseudo_voigtian_filter_pure_lorentzian_limit():
+    """pseudo_voigtian_filter with eta=1 must equal lorentzian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    hw = 0.4
+    lor = images.lorentzian_filter(hw)
+    pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
+    assert np.allclose(lor.array, pv.array, atol=1e-5)
+
+
+def test_filter_boundary_modes():
+    """All four filter methods accept all three boundary modes without error."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
+    images = wave.build((0, 0), lazy=False).intensity()
+    for boundary in ("periodic", "reflect", "constant"):
+        images.gaussian_filter(0.3, boundary=boundary).array
+        images.lorentzian_filter(0.3, boundary=boundary).array
+        images.voigtian_filter(0.3, 0.3, boundary=boundary).array
+        images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
+
+
+def test_lorentzian_filter_lazy():
+    """Lorentzian filter works on a lazy (dask-backed) image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
+    images = wave.build((0, 0), lazy=True).intensity()
+    filtered = images.lorentzian_filter(0.5)
+    assert np.isfinite(filtered.array.compute()).all()
+
+
+def test_voigtian_filter_lazy():
+    """Voigtian filter works on a lazy (dask-backed) image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
+    images = wave.build((0, 0), lazy=True).intensity()
+    filtered = images.voigtian_filter(0.3, 0.3)
+    assert np.isfinite(filtered.array.compute()).all()
+
+
+def test_pseudo_voigtian_filter_lazy():
+    """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
+    images = wave.build((0, 0), lazy=True).intensity()
+    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
+    assert np.isfinite(filtered.array.compute()).all()
+
+
 # @given(data=st.data())
 # @pytest.mark.parametrize('lazy', [True, False])
 # @pytest.mark.parametrize('device', ['cpu', gpu])

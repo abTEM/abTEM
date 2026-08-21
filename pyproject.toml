@@ -54,6 +54,13 @@ gpaw = [
     "hankel",
     "sympy",
 ]
+# Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
+# are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
+# must be installed to match the local toolkit (see the multi-GPU docs).
+all = [
+    "abtem[extra]",
+    "abtem[gpaw]",
+]
 
 [dependency-groups]
 dev = [
@@ -61,6 +68,7 @@ dev = [
     "isort>=7.0.0",
     "jupyterlab-code-formatter>=3.0.2",
     "mypy>=1.19.1",
+    "nvidia-ml-py",
     "pre-commit>=4.5.1",
     "ruff>=0.15.0",
     "types-pyyaml>=6.0.12.20250915",
@@ -135,7 +143,9 @@ filterwarnings = [
     "ignore:Passing storage-related arguments:FutureWarning",
     "ignore:FNV hashing is not implemented in Numba:UserWarning",
     "ignore:ensemble_mean=False returns the full frozen-phonon ensemble:UserWarning",
-    "ignore:.*Grid size.*will likely result in GPU under-utilization:numba.core.errors.NumbaPerformanceWarning"
+    "ignore:.*Grid size.*will likely result in GPU under-utilization:numba.core.errors.NumbaPerformanceWarning",
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+    "ignore:cupyx.jit.rawkernel is experimental:FutureWarning"
 ]
 
 [tool.numpydoc_validation]
