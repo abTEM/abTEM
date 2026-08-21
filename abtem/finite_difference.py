@@ -350,7 +350,7 @@ class LaplaceOperator:
             Cached stencil function with waves prefactor, on specified device
         """
         key = (
-            waves.wavelength,
+            energy2wavelength(waves._valid_energy),
             waves.sampling,
         )
 
