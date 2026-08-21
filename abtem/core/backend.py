@@ -105,7 +105,23 @@ def ensure_cuda_cluster():
     except Exception:  # noqa: BLE001 -- fall back to dask-cuda's default sizing
         pass
 
-    _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
+    try:
+        _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
+    except RuntimeError as exc:
+        # dask-cuda starts worker processes with the 'spawn' method (fork is
+        # unsafe with a live CUDA context), so the workers re-import the main
+        # module. Without an entry-point guard that re-runs the script in every
+        # worker, which multiprocessing reports with a cryptic bootstrapping
+        # error (typically alongside a port-8787-in-use complaint).
+        if "bootstrapping phase" in str(exc):
+            raise RuntimeError(
+                "Starting the multi-GPU cluster failed because the worker "
+                "processes re-imported the main module before it finished "
+                "executing. dask-cuda starts workers with the 'spawn' method, "
+                "so the script's entry point must be guarded with "
+                "'if __name__ == \"__main__\":'."
+            ) from exc
+        raise
 
     logger.info(
         "dask.multi-gpu: started a dask-cuda LocalCUDACluster; computations "

@@ -113,6 +113,36 @@ def test_ensure_cuda_cluster_requires_dask_cuda(monkeypatch):
         backend.ensure_cuda_cluster()
 
 
+def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch):
+    """The cryptic multiprocessing spawn error is translated into guidance."""
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+
+    def raise_bootstrapping(self, **kwargs):
+        raise RuntimeError(
+            "An attempt has been made to start a new process before the "
+            "current process has finished its bootstrapping phase."
+        )
+
+    m = types.ModuleType("dask_cuda")
+    m.LocalCUDACluster = type("LocalCUDACluster", (), {"__init__": raise_bootstrapping})
+    monkeypatch.setitem(sys.modules, "dask_cuda", m)
+    with pytest.raises(RuntimeError, match="__main__"):
+        backend.ensure_cuda_cluster()
+
+
+def test_ensure_cuda_cluster_reraises_other_runtime_errors(monkeypatch):
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+
+    def raise_other(self, **kwargs):
+        raise RuntimeError("something else entirely")
+
+    m = types.ModuleType("dask_cuda")
+    m.LocalCUDACluster = type("LocalCUDACluster", (), {"__init__": raise_other})
+    monkeypatch.setitem(sys.modules, "dask_cuda", m)
+    with pytest.raises(RuntimeError, match="something else entirely"):
+        backend.ensure_cuda_cluster()
+
+
 # --------------------------------------------------------------------------
 # _compute scheduler selection on the GPU path  (needs cupy to build gpu meta)
 # --------------------------------------------------------------------------
