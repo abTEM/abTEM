@@ -276,6 +276,55 @@ def test_resolve_gpu_scheduler_starts_cluster(monkeypatch):
     assert "scheduler" not in kwargs  # the cluster client is left in charge
 
 
+def test_resolve_gpu_scheduler_warns_when_single_gpu(monkeypatch):
+    import distributed
+
+    _patch_no_cupy_check(monkeypatch)
+    monkeypatch.setattr(distributed, "get_client", _no_client)
+    started = []
+    monkeypatch.setattr(abtem.array, "ensure_cuda_cluster", lambda: started.append(1))
+    fake_cp = mock.Mock()
+    fake_cp.cuda.runtime.getDeviceCount.return_value = 1
+    monkeypatch.setattr(abtem.array, "cp", fake_cp)
+    with abtem.config.set({"dask.multi-gpu": True}):
+        with pytest.warns(UserWarning, match="only one GPU"):
+            kwargs = abtem.array._resolve_gpu_scheduler({})
+    assert started == []  # declined; and no longer silently
+    assert kwargs["scheduler"] == "synchronous"
+
+
+def test_resolve_gpu_scheduler_warns_on_unsuitable_client(monkeypatch):
+    import distributed
+
+    _patch_no_cupy_check(monkeypatch)
+    monkeypatch.setattr(
+        distributed, "get_client", lambda *a, **k: mock.Mock(status="running")
+    )
+    monkeypatch.setattr(abtem.array, "is_gpu_dask_client", lambda c: False)
+    with abtem.config.set({"dask.multi-gpu": True}):
+        with pytest.warns(UserWarning, match="not a single-threaded"):
+            kwargs = abtem.array._resolve_gpu_scheduler({})
+    assert kwargs["scheduler"] == "synchronous"
+
+
+# --------------------------------------------------------------------------
+# get_cuda_cluster_client  (public, side-effect-free accessor)
+# --------------------------------------------------------------------------
+
+
+def test_get_cuda_cluster_client_returns_running(monkeypatch):
+    running = mock.Mock(status="running")
+    monkeypatch.setattr(backend, "_cuda_cluster_client", running)
+    assert backend.get_cuda_cluster_client() is running
+
+
+def test_get_cuda_cluster_client_none_when_absent_or_dead(monkeypatch):
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+    assert backend.get_cuda_cluster_client() is None
+    monkeypatch.setattr(backend, "_cuda_cluster_client", mock.Mock(status="closed"))
+    assert backend.get_cuda_cluster_client() is None
+
+
 # --------------------------------------------------------------------------
 # to_zarr resolves the GPU execution context (the save path must distribute
 # like .compute() does; previously it silently forced single-GPU synchronous
@@ -289,6 +338,7 @@ def _build_lazy_cpu():
     )
 
 
+@pytest.mark.filterwarnings("ignore")
 def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
     import distributed
 

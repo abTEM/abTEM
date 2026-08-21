@@ -552,18 +552,29 @@ def _resolve_gpu_scheduler(kwargs: dict) -> dict:
     except ValueError:
         client = None
 
+    multi_gpu = config.get("dask.multi-gpu", False)
+
     # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
     # enabled, no client is already handling the computation, and the user has
     # not explicitly requested a scheduler.
-    if (
-        client is None
-        and "scheduler" not in kwargs
-        and config.get("dask.multi-gpu", False)
-        and cp.cuda.runtime.getDeviceCount() > 1
-    ):
-        client = ensure_cuda_cluster()
+    if client is None and "scheduler" not in kwargs and multi_gpu:
+        if cp.cuda.runtime.getDeviceCount() > 1:
+            client = ensure_cuda_cluster()
+        else:
+            warnings.warn(
+                "dask.multi-gpu is enabled but only one GPU is visible; "
+                "computing on a single GPU with the synchronous scheduler.",
+                UserWarning,
+            )
 
     if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
+        if client is not None and multi_gpu:
+            warnings.warn(
+                "dask.multi-gpu is enabled but the active dask client is not a "
+                "single-threaded one-worker-per-GPU (dask-cuda) client; "
+                "falling back to the synchronous scheduler on a single GPU.",
+                UserWarning,
+            )
         kwargs["scheduler"] = "synchronous"
 
     return kwargs

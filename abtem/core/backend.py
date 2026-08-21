@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from numbers import Number
 from types import ModuleType
@@ -42,6 +43,8 @@ except ImportError:
 
 
 ArrayModule = Union[ModuleType, str]
+
+logger = logging.getLogger(__name__)
 
 
 def check_cupy_is_installed():
@@ -104,7 +107,34 @@ def ensure_cuda_cluster():
 
     _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
 
+    logger.info(
+        "dask.multi-gpu: started a dask-cuda LocalCUDACluster; computations "
+        "will be distributed with one worker per visible GPU."
+    )
+
     return _cuda_cluster_client
+
+
+def get_cuda_cluster_client():
+    """
+    Return the dask-cuda cluster client started by ``ensure_cuda_cluster``.
+
+    Returns the running client, or None when no cluster has been started or the
+    previous one was shut down. Unlike ``ensure_cuda_cluster`` this never starts
+    a cluster, which makes it suitable for inspecting whether multi-GPU
+    execution is active (e.g. from benchmark or verification scripts).
+
+    Returns
+    -------
+    distributed.Client or None
+        The client connected to the running dask-cuda cluster, if any.
+    """
+    if (
+        _cuda_cluster_client is not None
+        and getattr(_cuda_cluster_client, "status", None) == "running"
+    ):
+        return _cuda_cluster_client
+    return None
 
 
 def is_gpu_dask_client(client) -> bool:
