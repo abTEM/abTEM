@@ -364,6 +364,26 @@ class CustomScan(BaseScan):
     def get_positions(self) -> np.ndarray:
         return self._positions
 
+    def add_to_plot(self, ax, **kwargs):
+        """
+        Add a visualization of the scan positions to a matplotlib plot.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes or Visualization
+            The axes of the matplotlib plot the visualization should be added to.
+        kwargs :
+            Additional options for matplotlib.pyplot.scatter as keyword arguments.
+        """
+        if isinstance(ax, Visualization):
+            for ax in np.array(ax.axes).ravel():
+                self.add_to_plot(ax, **kwargs)
+            return
+
+        kwargs.setdefault("color", "r")
+        kwargs.setdefault("s", 10)
+        return ax.scatter(self.positions[:, 0], self.positions[:, 1], **kwargs)
+
 
 def validate_coordinate(
     coordinate: float | tuple[float, float] | Atom | None,
@@ -766,30 +786,42 @@ class LineScan(BaseScan):
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_axes(self, ax: Axes, width: float = 0.0, **kwargs):
+    def add_to_plot(self, ax, width: float = 0.0, **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
         Parameters
         ----------
-        ax : matplotlib Axes
+        ax : matplotlib Axes or Visualization
             The axes of the matplotlib plot the visualization should be added to.
         width : float, optional
             Width of line [Å].
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        assert isinstance(self.start, tuple)
-        assert isinstance(self.end, tuple)
-        assert isinstance(self.extent, float)
+        if isinstance(ax, Visualization):
+            for ax in np.array(ax.axes).ravel():
+                self.add_to_plot(ax, width=width, **kwargs)
+            return
+
+        if self.start is None or self.end is None:
+            raise RuntimeError(
+                "start or end is not defined, pass explicit 'start' and 'end' "
+                "when creating the LineScan"
+            )
 
         if width:
             rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
+            return rect
         else:
-            ax.plot(
+            return ax.plot(
                 [self.start[0], self.end[0]], [self.start[1], self.end[1]], **kwargs
             )
+
+    def add_to_axes(self, *args, **kwargs):
+        """Deprecated: use :meth:`add_to_plot` instead."""
+        return self.add_to_plot(*args, **kwargs)
 
 
 class GridScan(HasGrid2DMixin, BaseScan):
@@ -843,9 +875,21 @@ class GridScan(HasGrid2DMixin, BaseScan):
             coordinate=end, potential=potential, fractional=fractional
         )
 
+        if self._end is None and potential is not None:
+            validated = validate_potential(potential)
+            self._end = validated._valid_extent
+
         if self._start is not None and self._end is not None:
             extent = (self._end[0] - self._start[0], self._end[1] - self._start[1])
-            if all(d <= 0.0 for d in extent):
+
+            # A scan with a single position along every axis is degenerate: its extent
+            # is zero, but the position is still well defined. This occurs both for a
+            # user-defined one-point scan and when such a scan is partitioned into
+            # blocks for lazy evaluation.
+            single_point = gpts is not None and bool(np.all(np.array(gpts) == 1))
+            degenerate = all(d == 0.0 for d in extent)
+
+            if all(d <= 0.0 for d in extent) and not (degenerate and single_point):
                 raise ValueError(f"scan extent must be positive, got {extent}")
         else:
             extent = None
@@ -916,6 +960,120 @@ class GridScan(HasGrid2DMixin, BaseScan):
             self.end = probe.extent
 
         _validate_scan_sampling(self, probe)
+
+    @classmethod
+    def commensurate(
+        cls,
+        matrix: "BaseSMatrix | BasePotential | Atoms",
+        gpts: int | tuple[int, int] | None = None,
+        sampling: float | tuple[float, float] | None = None,
+        start: float | tuple[float, float] | Atom = (0.0, 0.0),
+        end: float | tuple[float, float] | Atom | None = None,
+    ) -> "GridScan":
+        """
+        Create a grid scan whose step is a whole number of pixels of the grid
+        the given scattering matrix is reduced on.
+
+        Scattering-matrix reductions with ``upsample=True`` are much faster for
+        such scans, since every probe position falls on the pixel grid of the
+        reduced wave functions. The requested number of positions or sampling
+        is snapped to the nearest whole-pixel step; when the scanned span is
+        itself a whole number of pixels, the step is snapped to a divisor of
+        the span so the scan tiles it exactly, otherwise the end point is
+        moved to the nearest lattice point.
+
+        Parameters
+        ----------
+        matrix : BaseSMatrix or BasePotential or Atoms
+            The scattering matrix (built or not) whose reduction grid the scan
+            steps along. Given a potential, the grid of a scattering matrix
+            with default downsampling is assumed.
+        gpts : one or two int, optional
+            Requested number of scan positions in the `x`- and `y`-direction.
+            Provide either gpts or sampling.
+        sampling : one or two float, optional
+            Requested sampling rate of the scan positions [Å]. Provide either
+            gpts or sampling.
+        start : one or two float or Atom, optional
+            Start corner of the scan [Å]. Default is (0., 0.).
+        end : one or two float or Atom, optional
+            End corner of the scan [Å] (not included, as for
+            ``endpoint=False``). Default is the scanned extent.
+        """
+        if (gpts is None) == (sampling is None):
+            raise ValueError("provide either gpts or sampling")
+
+        coordinate_potential = None
+        if hasattr(matrix, "downsampled_gpts"):
+            matrix.grid.check_is_defined()
+            grid_gpts = tuple(matrix.downsampled_gpts)
+            grid_extent = matrix._valid_extent
+        elif hasattr(matrix, "wave_vectors"):
+            grid_gpts = matrix._valid_gpts
+            grid_extent = matrix._valid_extent
+        else:
+            validated_potential = validate_potential(matrix)
+            assert validated_potential is not None
+            validated_potential.grid.check_is_defined()
+            coordinate_potential = validated_potential
+
+            from abtem.waves import _antialias_cutoff_gpts
+
+            grid_gpts = tuple(
+                n + (-n) % 4
+                for n in _antialias_cutoff_gpts(
+                    validated_potential._valid_gpts,
+                    validated_potential._valid_sampling,
+                )
+            )
+            grid_extent = validated_potential._valid_extent
+
+        pixel = np.array(grid_extent) / np.array(grid_gpts)
+
+        start_coordinate = validate_coordinate(start, coordinate_potential)
+        assert start_coordinate is not None
+        end_coordinate = validate_coordinate(end, coordinate_potential)
+        if end_coordinate is None:
+            end_coordinate = grid_extent
+
+        span_pixels = (np.array(end_coordinate) - np.array(start_coordinate)) / pixel
+        if np.any(span_pixels <= 0.0):
+            raise ValueError(f"scan span must be positive, got {span_pixels * pixel}")
+
+        if gpts is not None:
+            gpts_pair = (gpts, gpts) if isinstance(gpts, (int, np.integer)) else gpts
+            targets = span_pixels / np.array(gpts_pair)
+        else:
+            targets = np.array(
+                (sampling, sampling)
+                if isinstance(sampling, (int, float, np.floating))
+                else sampling
+            ) / pixel
+
+        scan_gpts = []
+        scan_end = []
+        for target, span, origin, delta in zip(
+            targets, span_pixels, start_coordinate, pixel
+        ):
+            whole_span = int(round(span))
+            if whole_span > 0 and abs(span - whole_span) < 1e-6:
+                step = min(
+                    (d for d in range(1, whole_span + 1) if whole_span % d == 0),
+                    key=lambda d: abs(d - target),
+                )
+                n = whole_span // step
+            else:
+                step = max(1, int(round(target)))
+                n = max(1, int(round(span / step)))
+            scan_gpts.append(n)
+            scan_end.append(origin + n * step * delta)
+
+        return cls(
+            start=start_coordinate,
+            end=(scan_end[0], scan_end[1]),
+            gpts=(scan_gpts[0], scan_gpts[1]),
+            endpoint=False,
+        )
 
     def _x_coordinates(self):
         return np.linspace(
@@ -1093,9 +1251,13 @@ class GridScan(HasGrid2DMixin, BaseScan):
                 self.add_to_plot(
                     ax, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor, **kwargs
                 )
+            return
 
         if self.start is None or self.extent is None:
-            raise RuntimeError("start or extent is not defined")
+            raise RuntimeError(
+                "start or extent is not defined, pass 'potential' or explicit "
+                "'start'/'end' when creating the GridScan"
+            )
 
         rect = Rectangle(
             xy=self.start,
@@ -1107,3 +1269,4 @@ class GridScan(HasGrid2DMixin, BaseScan):
             **kwargs,
         )
         ax.add_patch(rect)
+        return rect

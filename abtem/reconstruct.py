@@ -1,4 +1,6 @@
-"""Module for reconstructing phase objects from far-field intensity measurements using iterative ptychography."""
+"""DEPRECATED module for reconstructing phase objects from far-field intensity measurements using iterative ptychography."""
+"""NOTE: Ptychography reconstructions in abTEM are no longer supported. We suggest looking into the quantEM code that"""
+"""directly interfaces with abTEM: https://electronmicroscopy.github.io/quantem-docs/"""
 
 from abc import ABCMeta, abstractmethod
 from copy import copy
