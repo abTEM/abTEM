@@ -34,8 +34,9 @@ cupy:
   # 0 MB  — disable caching entirely (workspace freed after every FFT call;
   #          use when VRAM is tight and large-grid OOMs occur).
   # > 0   — bound cached workspace to this many bytes (e.g. "512 MB").
-  # -1    — unlimited (CuPy default; fastest but accumulates workspace).
-  fft-cache-size: -1
+  # -1    — unlimited (CuPy default; fastest but accumulates workspace,
+  #          which on Bluestein-fallback grid sizes can reach tens of GB).
+  fft-cache-size: 2 GB
 mkl:
   # The number of threads to use for mkl
   threads: 2

@@ -290,9 +290,14 @@ def _configure_cufft_cache():
                      Plans are reused for repeated same-shape transforms but the
                      total persistent workspace is bounded.
     * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
+
+    The abTEM default is ``2 GB``: enough to keep the plans of a typical
+    multislice hot, while bounding the workspace retained by plans for
+    Bluestein-fallback transform sizes, which can otherwise accumulate to
+    tens of GB across the distinct batch shapes of a scan.
     """
     global _CUFFT_CACHE_STATE
-    raw = config.get("cupy.fft-cache-size", "0 MB")
+    raw = config.get("cupy.fft-cache-size", "2 GB")
 
     # Fast path: config hasn't changed since we last applied it.
     if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == raw:
