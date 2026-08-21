@@ -43,7 +43,7 @@ class BaseTransferFunction(
 
     def __init__(
         self,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -52,6 +52,10 @@ class BaseTransferFunction(
         # Unwrap EnergyEnsemble (passed from Probe.ctf / SMatrix with ensemble energy)
         if hasattr(energy, "energy"):
             energy = energy.energy  # EnergyEnsemble → scalar or BaseDistribution
+        # A list/array of energies becomes an energy-ensemble distribution,
+        # consistent with PlaneWave/Probe/SMatrix accepting a list of energies.
+        if isinstance(energy, (list, tuple, np.ndarray)):
+            energy = validate_distribution(energy)
         if isinstance(energy, BaseDistribution):
             self._energy_distribution = energy
             energy = None
@@ -72,6 +76,8 @@ class BaseTransferFunction(
     def energy(self, value: float | BaseDistribution | None) -> None:
         if hasattr(value, "energy"):
             value = value.energy  # unwrap EnergyEnsemble
+        if isinstance(value, (list, tuple, np.ndarray)):
+            value = validate_distribution(value)
         if isinstance(value, BaseDistribution):
             self._energy_distribution = value
             self._accelerator.energy = None

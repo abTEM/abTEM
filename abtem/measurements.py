@@ -226,6 +226,40 @@ def _scan_extent(measurement):
     return extent
 
 
+def _array_module_fn(array, xp: ModuleType, name: str):
+    """Return the array-module function ``name`` (e.g. ``"concatenate"``),
+    routed through dask's own implementation whenever ``array`` is still a
+    lazy dask array, regardless of device.
+
+    NumPy dispatches a top-level call like ``np.concatenate([dask_array])``
+    to dask automatically via ``__array_function__``, but CuPy does not: its
+    functions raise ``TypeError`` when given a ``dask.array.core.Array``
+    rather than a genuine ``cupy.ndarray``. Any code that resolves ``xp`` via
+    :func:`get_array_module` and then calls ``xp.<name>(...)`` directly on an
+    array that might still be lazy (e.g. because it was built from
+    ``exit_waves.array``/``dp.array`` without forcing computation) must go
+    through this helper instead of calling ``xp.<name>`` unconditionally.
+    """
+    if isinstance(array, da.core.Array):
+        return getattr(da, name)
+    return getattr(xp, name)
+
+
+def _spatial_frequency_squared(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    xp: ModuleType = np,
+) -> np.ndarray:
+    """Squared spatial frequency grid, the shared (and expensive) part of
+    :func:`_annular_detector_mask` — factored out so callers building many
+    masks for the same ``gpts``/``sampling`` (e.g. a q-sweep) can compute it
+    once and reuse it."""
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
+    return kx[:, None] ** 2 + ky[None] ** 2
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -234,12 +268,10 @@ def _annular_detector_mask(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     xp: ModuleType = np,
+    k2: Optional[np.ndarray] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    kx, ky = spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
-    )
-
-    k2 = kx[:, None] ** 2 + ky[None] ** 2
+    if k2 is None:
+        k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
@@ -5755,3 +5787,774 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         return IndexedDiffractionPatterns(
             intensities, miller_indices, positions, ensemble_axes_metadata, metadata
         )
+
+
+class MomentumResolvedSpectrum(BaseMeasurements):
+    """
+    Momentum-resolved energy-loss spectrum S(q, E).
+
+    Stores a 2D intensity array whose last two dimensions correspond to
+    scattering-vector bins (q) and energy bins (E). Additional leading
+    dimensions are ensemble axes.
+
+    Parameters
+    ----------
+    array : np.ndarray or dask array
+        Array of shape ``(..., n_q, n_E)``.
+    q_values : sequence of float
+        Scattering-vector values [mrad] for each q bin.
+    e_values : sequence of float
+        Energy-loss values [eV] for each energy bin.
+    ensemble_axes_metadata : list of AxisMetadata, optional
+    metadata : dict, optional
+    """
+
+    _base_dims = 2
+
+    def __init__(
+        self,
+        array: np.ndarray | da.core.Array,
+        q_values: Sequence[float] | np.ndarray,
+        e_values: Sequence[float] | np.ndarray,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
+    ):
+        self._q_values = tuple(float(v) for v in q_values)
+        self._e_values = tuple(float(v) for v in e_values)
+
+        if metadata is None:
+            metadata = {}
+        metadata.setdefault("label", "intensity")
+        metadata.setdefault("units", "arb. unit")
+
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    @property
+    def q_values(self) -> tuple[float, ...]:
+        """Scattering-vector values [mrad]."""
+        return self._q_values
+
+    @property
+    def e_values(self) -> tuple[float, ...]:
+        """Energy-loss values [eV]."""
+        return self._e_values
+
+    @property
+    def _area_per_pixel(self):
+        raise RuntimeError("Cannot infer pixel area for a spectrum.")
+
+    @property
+    def base_axes_metadata(self) -> list[AxisMetadata]:
+        return [
+            NonLinearAxis(
+                label="q",
+                values=self._q_values,
+                units="mrad",
+            ),
+            NonLinearAxis(
+                label="energy loss",
+                values=self._e_values,
+                units="eV",
+            ),
+        ]
+
+    @classmethod
+    def from_array_and_metadata(
+        cls,
+        array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
+        metadata: Optional[dict] = None,
+    ) -> "MomentumResolvedSpectrum":
+        q_axis = axes_metadata[-2]
+        e_axis = axes_metadata[-1]
+        return cls(
+            array,
+            q_values=q_axis.values,
+            e_values=e_axis.values,
+            ensemble_axes_metadata=axes_metadata[:-2] or None,
+            metadata=metadata,
+        )
+
+    def show(
+        self,
+        ax: Optional[Axes] = None,
+        cbar: bool = True,
+        cmap: Optional[str] = "viridis",
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        power: float = 1.0,
+        explode: bool | Sequence[int] = (),
+        figsize: Optional[tuple[int, int]] = None,
+        title: bool | str = True,
+        e_units: str = "meV",
+        **kwargs,
+    ) -> tuple:
+        """
+        Show the spectrum as a 2D heatmap with q on the x-axis and energy
+        on the y-axis.
+
+        Unlike other abTEM measurements this method plots directly with
+        matplotlib (the q and energy axes are non-linear, so the shared
+        :class:`.Visualization` imshow machinery does not apply) and therefore
+        returns the raw matplotlib objects rather than a :class:`.Visualization`.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes, optional
+            Only used for the single-panel case (ignored when exploding).
+        cbar : bool
+            Show colorbar. Default True.
+        cmap : str, optional
+            Colormap name. Default 'viridis'.
+        vmin, vmax : float, optional
+            Colour-scale limits.  When exploding, a value left as None is filled
+            from the global min/max across all panels so the shared colorbar is
+            meaningful.
+        power : float
+            Display on a power scale.
+        explode : bool or sequence of int
+            If True, explode all ensemble axes into a panel grid. If a sequence
+            of ints, explode only those ensemble-axis indices (the remaining
+            ensemble axes collapse to their first element). If falsy (default),
+            a single panel is shown.
+        figsize : (width, height), optional
+        title : bool or str
+            If a string, used as the (base) title. If True, a default title is
+            generated. If False, no title is set.
+        e_units : str
+            Units for the energy axis ('meV' or 'eV'). Default 'meV'.
+        kwargs
+            Forwarded to :meth:`matplotlib.axes.Axes.pcolormesh`.
+
+        Returns
+        -------
+        fig, ax : matplotlib Figure and Axes (single panel) or ndarray of Axes
+            (exploded grid).
+        """
+        import itertools
+        import warnings
+
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import PowerNorm
+
+        array = self.array
+        if hasattr(array, "compute"):
+            array = array.compute()
+
+        q = np.array(self._q_values)
+        e = np.array(self._e_values)
+        if e_units == "meV":
+            e = e * 1000.0
+            e_label = "Energy loss [meV]"
+        else:
+            e_label = "Energy loss [eV]"
+
+        n_q, n_e = len(q), len(e)
+        ensemble_shape = array.shape[: -self._base_dims]
+        n_ensemble = len(ensemble_shape)
+
+        # Resolve which ensemble axes to explode into a panel grid.
+        if explode is True:
+            explode_axes: tuple[int, ...] = tuple(range(n_ensemble))
+        elif not explode:
+            explode_axes = ()
+        else:
+            explode_axes = tuple(int(a) % n_ensemble for a in explode)
+
+        cbar_label = (
+            f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]"
+        )
+
+        def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
+            # Exploded axes take their grid value; other ensemble axes collapse
+            # to their first element. grid_index is positional in explode_axes
+            # order (matching how indices was built below), not ascending axis
+            # order, so map by axis identity rather than consuming positionally.
+            axis_to_value = dict(zip(explode_axes, grid_index))
+            full = tuple(
+                axis_to_value.get(d, 0) for d in range(n_ensemble)
+            )
+            data = array[full] if full else array
+            # array may be GPU-resident (cupy); np.asarray() cannot convert a
+            # cupy array implicitly (cupy deliberately blocks it), so prefer
+            # .get() when available, matching the convention used elsewhere
+            # (e.g. noise.py) for a possibly-cupy, possibly-numpy array.
+            data = data.get() if hasattr(data, "get") else np.asarray(data)
+            if data.shape != (n_q, n_e):
+                raise ValueError(
+                    f"Shape mismatch in MomentumResolvedSpectrum.show(): "
+                    f"data.shape={data.shape} but expected ({n_q}, {n_e}) from "
+                    f"q_values (len {n_q}) and e_values (len {n_e}). "
+                    f"Full array shape: {array.shape}"
+                )
+            return data
+
+        if explode_axes:
+            grid_sizes = [ensemble_shape[a] for a in explode_axes]
+            indices = list(itertools.product(*[range(s) for s in grid_sizes]))
+            n = len(indices)
+            ncols = min(n, 4)
+            nrows = (n + ncols - 1) // ncols
+            if figsize is None:
+                figsize = (4 * ncols, 3.5 * nrows)
+            fig, axes_arr = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+            axes_flat = axes_arr.flatten()
+
+            # Shared colour scale across panels so the single colorbar applies to
+            # every panel (otherwise the norm autoscales to the first panel only).
+            panels = [panel_data(idx).T for idx in indices]
+            _vmin = min(float(p.min()) for p in panels) if vmin is None else vmin
+            _vmax = max(float(p.max()) for p in panels) if vmax is None else vmax
+            norm = PowerNorm(gamma=power, vmin=_vmin, vmax=_vmax)
+
+            im = None
+            for k, (idx, data_t) in enumerate(zip(indices, panels)):
+                a = axes_flat[k]
+                im = a.pcolormesh(
+                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm, **kwargs
+                )
+                a.set_xlabel("q [mrad]")
+                a.set_ylabel(e_label)
+                parts = [
+                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title()
+                    for j, a_idx in enumerate(explode_axes)
+                ]
+                panel_title = ", ".join(parts)
+                if isinstance(title, str):
+                    panel_title = f"{title} — {panel_title}" if panel_title else title
+                if title:
+                    a.set_title(panel_title)
+            for k in range(len(indices), len(axes_flat)):
+                axes_flat[k].set_visible(False)
+            if cbar and im is not None:
+                fig.colorbar(
+                    im, ax=axes_flat[: len(indices)].tolist(), label=cbar_label
+                )
+            fig.tight_layout()
+            return fig, axes_arr
+
+        # Single panel — collapse any ensemble axes to their first element.
+        if n_ensemble > 0:
+            warnings.warn(
+                "MomentumResolvedSpectrum.show(): array has ensemble axes "
+                f"{ensemble_shape}; showing member {(0,) * n_ensemble} only. Pass "
+                "explode=True (or a sequence of ensemble-axis indices) to see all.",
+                stacklevel=2,
+            )
+        data = panel_data(())
+
+        if ax is None:
+            if figsize is None:
+                figsize = (6, 4)
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        im = ax.pcolormesh(
+            q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
+        )
+        ax.set_xlabel("q [mrad]")
+        ax.set_ylabel(e_label)
+        if isinstance(title, str):
+            ax.set_title(title)
+        elif title is True:
+            ax.set_title("S(q, E)")
+        if cbar:
+            fig.colorbar(im, ax=ax, label=cbar_label)
+        fig.tight_layout()
+        return fig, ax
+
+
+def _thermal_weight_tds(
+    I_tds: np.ndarray,
+    e_values: np.ndarray,
+    energy_axis_idx: int,
+    temperature: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Unfold a classical (loss/gain-symmetric) TDS intensity, computed at
+    energy magnitudes ``|E|`` only, into quantum loss (``+E``) and gain
+    (``-E``) sides via detailed balance.
+
+    A single frozen-phonon multislice run per energy magnitude already
+    contains the *combined* loss + gain intensity — the split between the
+    two sides is a quantum-statistical effect governed by the Bose-Einstein
+    phonon occupation ``n(E)``, not something the classical thermal sampling
+    distinguishes. The zero-energy bin is passed through unweighted: there is
+    no loss/gain asymmetry at zero energy transfer, and the classical
+    sampling already accounts for the thermal occupation there.
+
+    Loss and gain weights, ``(n+1)/(2n+1)`` and ``n/(2n+1)``, sum to 1, so
+    splitting preserves the total (loss + gain) spectral weight of the
+    unweighted input at each energy magnitude.
+    """
+    from ase import units
+
+    if e_values[0] != 0.0 or np.any(np.diff(e_values) <= 0):
+        raise ValueError(
+            "temperature-based loss/gain unfolding requires energies "
+            "starting at 0 and strictly increasing (one multislice run per "
+            "|energy loss|, unfolded into +/- sides here)."
+        )
+
+    xp = get_array_module(I_tds)
+    is_lazy = isinstance(I_tds, da.core.Array)
+    concatenate = _array_module_fn(I_tds, xp, "concatenate")
+    flip = _array_module_fn(I_tds, xp, "flip")
+
+    nonzero_e = e_values[1:]
+    beta = 1.0 / (units.kB * temperature)
+    n_occ = 1.0 / (np.exp(nonzero_e * beta) - 1.0)
+    loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
+    gain_weight = n_occ / (2.0 * n_occ + 1.0)
+
+    def _broadcast(weight):
+        shape = [1] * I_tds.ndim
+        shape[energy_axis_idx] = len(weight)
+        return xp.asarray(weight.reshape(shape))
+
+    zero_slice = tuple(
+        slice(0, 1) if i == energy_axis_idx else slice(None)
+        for i in range(I_tds.ndim)
+    )
+    nonzero_slice = tuple(
+        slice(1, None) if i == energy_axis_idx else slice(None)
+        for i in range(I_tds.ndim)
+    )
+
+    I_zero = I_tds[zero_slice]
+    I_loss = I_tds[nonzero_slice] * _broadcast(loss_weight)
+    # Reverse along the energy axis: ascending |E| -> descending (most
+    # negative first), so the final signed axis comes out ascending overall.
+    I_gain = flip(I_tds[nonzero_slice] * _broadcast(gain_weight), axis=energy_axis_idx)
+
+    result_array = concatenate([I_gain, I_zero, I_loss], axis=energy_axis_idx)
+    if is_lazy:
+        # I_gain/I_zero/I_loss each inherit exit_waves' original per-config
+        # chunking along the energy axis (e.g. one chunk per energy value),
+        # so the concatenated result ends up with many tiny chunks there.
+        # Downstream dask operations on this axis (e.g. interpolate_line in
+        # momentum_resolved_spectrum) mishandle that level of fragmentation,
+        # so consolidate it into a single chunk here at the source rather
+        # than relying on every consumer to work around it.
+        result_array = result_array.rechunk({energy_axis_idx: -1})
+    e_values_signed = np.concatenate([-nonzero_e[::-1], [0.0], nonzero_e])
+
+    return result_array, e_values_signed
+
+
+def phonon_loss_diffraction_patterns(
+    exit_waves,
+    component: str = "tds",
+    max_angle: str | float = "cutoff",
+    parity: str = "odd",
+    block_direct: bool | float = False,
+    temperature: Optional[float] = None,
+) -> "DiffractionPatterns":
+    """
+    Compute inelastic (TDS) diffraction patterns from energy-resolved
+    frozen-phonon exit waves.
+
+    The thermal diffuse scattering signal is obtained per energy bin as::
+
+        I_coherent   = |FT(Σ_j psi_j)|² / N²   (elastic)
+        I_incoherent = Σ_j |FT(psi_j)|² / N     (total)
+        I_tds        = I_incoherent - I_coherent  (inelastic / phonon loss)
+
+    The returned ``DiffractionPatterns`` retain the ``EnergyLossAxis`` but the
+    ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
+    or ``SlitDetector`` to integrate over desired q points.
+
+    Parameters
+    ----------
+    exit_waves : Waves
+        Complex exit waves from a multislice simulation with an
+        ``EnergyResolvedAtomsEnsemble`` (``ensemble_mean=False``).
+        Must contain both a ``FrozenPhononsAxis`` and an ``EnergyLossAxis``
+        in its ensemble axes. If the potential used more than one slice,
+        prefer building it with ``projection="finite"`` — see the
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` notes
+        on slice-boundary artifacts with out-of-plane displacement.
+    component : {'tds', 'coherent', 'incoherent', 'all'}
+        Which component to return.  ``'all'`` stacks the three along a
+        new leading ``OrdinalAxis(label='component')``.
+    max_angle : str or float
+        Passed to ``Waves.diffraction_patterns``.
+    parity : str
+        Passed to ``Waves.diffraction_patterns``.
+    block_direct : bool or float, optional
+        If True, the direct beam is blocked in the resulting diffraction
+        patterns. If given as a float, masks up to that scattering angle
+        [mrad]. Default is False.
+    temperature : float, optional
+        Sample temperature [K]. If given, unfolds the TDS signal — computed
+        from a single frozen-phonon run per energy *magnitude* — into signed
+        quantum loss (``+E``) and gain (``-E``) sides using Bose-Einstein
+        detailed balance, following P. Zeiger's approach. Requires
+        ``component="tds"`` and an ``EnergyLossAxis`` whose values start at 0
+        and strictly increase (the classical/incoherent-minus-coherent
+        signal is symmetric in loss/gain; only their *split* is a quantum
+        effect). The zero-energy bin is unweighted. Default is None (no
+        unfolding — the returned energies are the ones in ``exit_waves``).
+
+    Returns
+    -------
+    DiffractionPatterns
+        Intensity patterns with the ``FrozenPhononsAxis`` removed and the
+        ``EnergyLossAxis`` preserved (or replaced by its signed loss/gain
+        unfolding if ``temperature`` is given).
+    """
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+
+    # --- validate ensemble axes ---
+    fp_axis_idx = None
+    energy_axis_idx = None
+    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
+        if isinstance(ax, FrozenPhononsAxis):
+            fp_axis_idx = i
+        if isinstance(ax, EnergyLossAxis):
+            energy_axis_idx = i
+
+    if fp_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have a FrozenPhononsAxis in ensemble_axes_metadata. "
+            "Did you create the EnergyResolvedAtomsEnsemble with ensemble_mean=False?"
+        )
+    if energy_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
+        )
+
+    if not np.iscomplexobj(exit_waves.array):
+        raise ValueError(
+            "exit_waves must contain complex wave functions (not intensities). "
+            "Pass the Waves object directly, not DiffractionPatterns."
+        )
+
+    # --- number of frozen-phonon configurations ---
+    N = exit_waves.shape[fp_axis_idx]
+
+    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
+
+    # Coherent: sum complex exit waves first, then compute diffraction pattern
+    #   I_coh = |FT(Σ_j psi_j)|² / N²
+    coherent_waves = exit_waves.sum(axis=fp_axis_idx)
+    dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
+    I_coherent = dp_coherent.array / N**2
+
+    # Incoherent: compute diffraction patterns first, then sum intensities
+    #   I_inc = Σ_j |FT(psi_j)|² / N
+    dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
+    I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
+
+    # TDS = incoherent - coherent
+    I_tds = I_incoherent - I_coherent
+
+    # --- select component ---
+    valid_components = ("tds", "coherent", "incoherent", "all")
+    if component not in valid_components:
+        raise ValueError(f"component must be one of {valid_components}")
+
+    if temperature is not None and component != "tds":
+        raise ValueError(
+            "temperature-based loss/gain unfolding requires component='tds'."
+        )
+
+    remaining_axes = [
+        ax
+        for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+        if i != fp_axis_idx
+    ]
+
+    if temperature is not None:
+        remaining_energy_axis_idx = next(
+            i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
+        )
+        energy_axis = remaining_axes[remaining_energy_axis_idx]
+        e_values = np.asarray(energy_axis.values, dtype=float)
+        I_tds, e_values_signed = _thermal_weight_tds(
+            I_tds, e_values, remaining_energy_axis_idx, temperature
+        )
+        remaining_axes[remaining_energy_axis_idx] = EnergyLossAxis(
+            values=tuple(e_values_signed), units=energy_axis.units
+        )
+
+    if component == "all":
+        xp = get_array_module(I_tds)
+        stack_fn = _array_module_fn(I_tds, xp, "stack")
+        result_array = stack_fn([I_coherent, I_incoherent, I_tds], axis=0)
+        component_axis = OrdinalAxis(
+            label="component",
+            values=("coherent", "incoherent", "tds"),
+        )
+        remaining_axes = [component_axis] + remaining_axes
+    elif component == "tds":
+        result_array = I_tds
+    elif component == "coherent":
+        result_array = I_coherent
+    else:
+        result_array = I_incoherent
+
+    metadata = dict(dp_coherent.metadata)
+    metadata["phonon_loss_component"] = component
+
+    result = DiffractionPatterns(
+        result_array,
+        sampling=dp_coherent.sampling,
+        fftshift=dp_coherent.fftshift,
+        ensemble_axes_metadata=remaining_axes or None,
+        metadata=metadata,
+    )
+
+    if block_direct:
+        radius = block_direct if isinstance(block_direct, (int, float)) else None
+        result = result.block_direct(radius=radius)
+
+    return result
+
+
+def momentum_resolved_spectrum(
+    tds_diffraction_patterns: "DiffractionPatterns",
+    detector,
+) -> "MomentumResolvedSpectrum":
+    """
+    Build S(q, E) from energy-resolved TDS diffraction patterns.
+
+    Dispatches on the type of *detector*:
+
+    * :class:`~abtem.detectors.SpectralAnnularDetector` — sweeps an offset
+      circular acceptance disk (acceptance **radius** ``outer``, inner always 0)
+      along a radial direction at each q-step.  The q-axis runs from
+      ``q_min`` to ``q_max`` in steps of ``outer`` (one disk-radius per step).
+    * :class:`~abtem.detectors.SpectralSlitDetector` — uses
+      :meth:`DiffractionPatterns.interpolate_line` (spline interpolation) to
+      integrate strips along the slit's long axis.  Samples directly from
+      ``q_min`` to ``q_max`` (default ``q_min=0`` includes the direct beam).
+      The integration aperture perpendicular to q has **full width** ``width``
+      (= ``2 * outer`` of an equivalent annular detector).
+
+    Both detector types share the same ``q_min`` / ``q_max`` convention — the
+    same numerical values yield the same q-range in the output spectrum::
+
+        SpectralAnnularDetector(outer=r, q_min=Q0, q_max=Q)
+        SpectralSlitDetector(q_min=Q0, q_max=Q, width=2*r)
+
+    Parameters
+    ----------
+    tds_diffraction_patterns : DiffractionPatterns
+        Energy-resolved TDS diffraction patterns as returned by
+        :func:`phonon_loss_diffraction_patterns`.  Must have an
+        ``EnergyLossAxis`` in its ensemble axes.
+    detector : SpectralAnnularDetector or SpectralSlitDetector
+        Detector that controls the integration strategy and q-range.
+
+    Returns
+    -------
+    MomentumResolvedSpectrum
+    """
+    from abtem.core.axes import EnergyLossAxis, OrdinalAxis
+    from abtem.core.energy import energy2wavelength
+    from abtem.detectors import SpectralAnnularDetector, SpectralSlitDetector
+
+    dp = tds_diffraction_patterns
+
+    # --- auto-select TDS slice when component="all" was used ---
+    if dp.metadata.get("phonon_loss_component") == "all":
+        for i, ax in enumerate(dp.ensemble_axes_metadata):
+            if isinstance(ax, OrdinalAxis) and ax.label == "component":
+                tds_idx = list(ax.values).index("tds")
+                slicing = tuple(
+                    tds_idx if j == i else slice(None)
+                    for j in range(len(dp.ensemble_axes_metadata))
+                )
+                dp = dp[slicing]
+                break
+
+    # --- find the energy axis ---
+    energy_axis_idx = None
+    for i, ax in enumerate(dp.ensemble_axes_metadata):
+        if isinstance(ax, EnergyLossAxis):
+            energy_axis_idx = i
+            break
+    if energy_axis_idx is None:
+        raise ValueError(
+            "tds_diffraction_patterns must have an EnergyLossAxis in "
+            "ensemble_axes_metadata.  Use phonon_loss_diffraction_patterns first."
+        )
+
+    energy_axis = dp.ensemble_axes_metadata[energy_axis_idx]
+    e_values = np.array(energy_axis.values)
+
+    # Guard against a mismatch between axis metadata and actual array size
+    # (e.g. a frozen-phonon axis that was not fully collapsed).
+    n_e_array = dp.array.shape[energy_axis_idx]
+    n_e_axis = len(e_values)
+    if n_e_array != n_e_axis:
+        raise ValueError(
+            f"EnergyLossAxis at position {energy_axis_idx} has {n_e_axis} values "
+            f"but dp.array has size {n_e_array} along that axis.  "
+            f"Make sure the input was produced by phonon_loss_diffraction_patterns "
+            f"with all FrozenPhonons axes collapsed."
+        )
+
+    remaining_ensemble = [
+        ax for i, ax in enumerate(dp.ensemble_axes_metadata) if i != energy_axis_idx
+    ]
+
+    # ---- SpectralSlitDetector: interpolated strip integration ----
+    if isinstance(detector, SpectralSlitDetector):
+        # interpolate_line works in the DP's internal coordinate system (Å⁻¹).
+        # Convert mrad → Å⁻¹ using the electron wavelength.
+        energy = dp.metadata.get("energy")
+        if energy is None:
+            raise ValueError(
+                "DiffractionPatterns metadata must contain 'energy' [eV] for "
+                "mrad → Å⁻¹ conversion in SpectralSlitDetector mode."
+            )
+        wavelength = energy2wavelength(energy)  # Å
+        mrad_to_inv_ang = 1.0 / (wavelength * 1e3)
+
+        offset_inv = (
+            detector.offset[0] * mrad_to_inv_ang,
+            detector.offset[1] * mrad_to_inv_ang,
+        )
+        q_min_inv = detector.q_min * mrad_to_inv_ang
+        q_max_inv = detector.q_max * mrad_to_inv_ang
+        width_inv = detector.width * mrad_to_inv_ang
+        sampling_inv = min(dp.sampling)
+
+        angle_rad = np.deg2rad(detector.angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+        # Sample directly from q_min to q_max along the slit direction.
+        # For q_min=0 this naturally includes q=0 as the first point.
+        N = max(2, int(round((q_max_inv - q_min_inv) / sampling_inv)) + 1)
+
+        start_inv = (offset_inv[0] + q_min_inv * cos_a, offset_inv[1] + q_min_inv * sin_a)
+        end_inv = (offset_inv[0] + q_max_inv * cos_a, offset_inv[1] + q_max_inv * sin_a)
+
+        # A fragmented energy axis (e.g. one chunk per energy value, as
+        # EnergyResolvedAtomsEnsemble produces by default, or as
+        # _thermal_weight_tds's concatenate leaves it) causes dask's
+        # interpolate_line + the q-binning reshape below to compute an
+        # incorrect result size. Consolidate it into a single chunk first.
+        dp_for_interp = dp.rechunk({energy_axis_idx: -1}) if dp.is_lazy else dp
+
+        line_profiles = dp_for_interp.interpolate_line(
+            start=start_inv,
+            end=end_inv,
+            gpts=N,
+            width=width_inv,
+            endpoint=True,
+            order=1,  # linear interp — cubic splines ring around sharp peaks
+        )
+
+        # interpolate_line with width>0 returns the AVERAGE across the
+        # perpendicular direction.  Convert to a SUM to be consistent with the
+        # annular detector path (which sums all pixels inside the mask).
+        # n_perp is the number of perpendicular samples used internally.
+        n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+
+        # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
+        xp = get_array_module(line_profiles.array)
+        moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
+        spectrum_array = moveaxis(
+            line_profiles.array * n_perp, energy_axis_idx, -1
+        )
+        q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
+
+        # Optionally bin along q to reduce the number of points
+        if detector.q_sampling is not None:
+            q_sampling_mrad = detector.q_sampling
+            native_step = (detector.q_max - detector.q_min) / max(N - 1, 1)
+            bin_size = max(1, int(round(q_sampling_mrad / native_step)))
+            n_q_fine = spectrum_array.shape[-2]
+            n_q_binned = n_q_fine // bin_size
+            # Trim to a multiple of bin_size, then reshape and sum
+            trimmed = spectrum_array[..., : n_q_binned * bin_size, :]
+            new_shape = trimmed.shape[:-2] + (n_q_binned, bin_size, trimmed.shape[-1])
+            spectrum_array = trimmed.reshape(new_shape).sum(axis=-2)
+            # Bin centres for q_values
+            q_trimmed = q_values_fine[: n_q_binned * bin_size]
+            q_values = q_trimmed.reshape(n_q_binned, bin_size).mean(axis=1)
+        else:
+            q_values = q_values_fine
+
+    # ---- SpectralAnnularDetector: offset-disk sweep ----
+    elif isinstance(detector, SpectralAnnularDetector):
+        outer = detector.outer
+        q_max = detector.q_max if detector.q_max is not None else min(dp.max_angles)
+        q_step = detector.q_sampling if detector.q_sampling is not None else outer
+        n_steps = max(2, round((q_max - detector.q_min) / q_step) + 1)
+        q_values = np.linspace(detector.q_min, q_max, n_steps)
+
+        angle_rad = np.deg2rad(detector.sweep_angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+        xp = get_array_module(dp.array)
+        gpts = dp.shape[-2:]
+        sampling = dp.angular_sampling
+
+        # The spatial-frequency grid is the same for every q-step (only the
+        # offset/roll differs), so compute it once rather than inside the
+        # per-q loop below.
+        k2 = _spatial_frequency_squared(gpts, sampling, xp)
+
+        # Build all masks at once and stack: (n_q, gy, gx)
+        masks = xp.stack(
+            [
+                _annular_detector_mask(
+                    gpts=gpts,
+                    sampling=sampling,
+                    inner=0.0,
+                    outer=outer,
+                    offset=(float(q * cos_a), float(q * sin_a)),
+                    fftshift=dp.fftshift,
+                    xp=xp,
+                    k2=k2,
+                )
+                for q in q_values
+            ],
+            axis=0,
+        )
+
+        # Single batched contraction: (...ens, gy, gx) × (n_q, gy, gx) → (...ens, n_q)
+        tensordot = _array_module_fn(dp.array, xp, "tensordot")
+        # dask (as of 2025.11.0) silently computes the wrong result for
+        # da.tensordot with negative axis indices -- declared shape is
+        # correct but the actual data is not. Positive indices are
+        # unaffected and work identically for numpy/cupy's own tensordot,
+        # so always use them here rather than only when routed through dask.
+        dp_axes = (dp.array.ndim - 2, dp.array.ndim - 1)
+        mask_axes = (masks.ndim - 2, masks.ndim - 1)
+        spectrum_array = tensordot(dp.array, masks, axes=(dp_axes, mask_axes))
+        moveaxis = _array_module_fn(spectrum_array, xp, "moveaxis")
+        spectrum_array = moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
+
+    else:
+        raise TypeError(
+            f"detector must be a SpectralAnnularDetector or SpectralSlitDetector, "
+            f"got {type(detector).__name__}"
+        )
+
+    # Validate: last two dims must be (n_q, n_e)
+    expected_tail = (len(q_values), len(e_values))
+    if spectrum_array.shape[-2:] != expected_tail:
+        raise RuntimeError(
+            f"momentum_resolved_spectrum internal error: spectrum_array.shape="
+            f"{spectrum_array.shape} but expected last two dims {expected_tail} "
+            f"(n_q={len(q_values)}, n_e={len(e_values)}).  "
+            f"dp.array.shape={dp.array.shape}, energy_axis_idx={energy_axis_idx}"
+        )
+
+    return MomentumResolvedSpectrum(
+        array=spectrum_array,
+        q_values=q_values,
+        e_values=e_values,
+        ensemble_axes_metadata=remaining_ensemble or None,
+        metadata={"label": "intensity", "units": "arb. unit"},
+    )
