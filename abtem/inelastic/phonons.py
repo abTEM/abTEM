@@ -662,6 +662,22 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
     All inner configuration lists must have the same length.
 
+    Notes
+    -----
+    When running a multi-slice :class:`~abtem.potentials.iam.Potential`
+    (more than one slice) over this ensemble, prefer ``projection="finite"``
+    over the default ``projection="infinite"``. The default assigns each
+    atom to exactly one slice with a hard cutoff and no padding
+    (:class:`~abtem.slicing.SliceIndexedAtoms`); if the configurations
+    include out-of-plane (z) displacement, an atom sitting near a slice
+    boundary can flip its entire potential contribution between slices
+    across otherwise near-identical configurations, producing spurious
+    discontinuities in the resulting spectra. ``projection="finite"`` uses
+    padded slicing (:class:`~abtem.slicing.SlicedAtoms`) where such atoms
+    blend gradually into the neighbouring slice instead. With a single
+    slice there is no boundary to cross, so this does not arise regardless
+    of projection method.
+
     Parameters
     ----------
     energy_resolved_snapshots : list of lists of ASE Atoms, or 2D np.ndarray

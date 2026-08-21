@@ -5434,7 +5434,10 @@ def phonon_loss_diffraction_patterns(
         Complex exit waves from a multislice simulation with an
         ``EnergyResolvedAtomsEnsemble`` (``ensemble_mean=False``).
         Must contain both a ``FrozenPhononsAxis`` and an ``EnergyLossAxis``
-        in its ensemble axes.
+        in its ensemble axes. If the potential used more than one slice,
+        prefer building it with ``projection="finite"`` — see the
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` notes
+        on slice-boundary artifacts with out-of-plane displacement.
     component : {'tds', 'coherent', 'incoherent', 'all'}
         Which component to return.  ``'all'`` stacks the three along a
         new leading ``OrdinalAxis(label='component')``.
