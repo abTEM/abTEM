@@ -37,6 +37,90 @@ except ImportError:
     cp = None
 
 
+_FAST_FFT_PRIMES = (2, 3, 5, 7)
+
+
+def is_fast_fft_size(n: int) -> bool:
+    """
+    Whether an FFT of length ``n`` runs on fast radix kernels.
+
+    FFT libraries only ship optimized kernels for lengths whose prime factors
+    are small (2, 3, 5 and 7 are supported everywhere). A length with a larger
+    prime factor triggers a generic fallback -- on cuFFT the Bluestein
+    algorithm, which pads internally to a power of two, costing several times
+    the arithmetic and, on GPU, a workspace of several times the transform
+    size.
+
+    Parameters
+    ----------
+    n : int
+        The transform length.
+
+    Returns
+    -------
+    bool
+        True if ``n`` factorizes completely into 2, 3, 5 and 7.
+    """
+    n = int(n)
+    if n < 1:
+        return False
+    for p in _FAST_FFT_PRIMES:
+        while n % p == 0:
+            n //= p
+    return n == 1
+
+
+def next_fast_fft_size(n: int) -> int:
+    """
+    The smallest length >= ``n`` whose prime factors are all in {2, 3, 5, 7}.
+
+    Useful for choosing grid sizes (``gpts``) that avoid the slow
+    large-workspace Bluestein fallback on GPU.
+
+    Parameters
+    ----------
+    n : int
+        The minimum transform length.
+
+    Returns
+    -------
+    int
+        The next fast transform length.
+    """
+    n = max(1, int(n))
+    while not is_fast_fft_size(n):
+        n += 1
+    return n
+
+
+_warned_slow_fft_shapes: set = set()
+
+# Bluestein overhead only matters for large transforms; small odd-sized arrays
+# (e.g. interpolated measurements) are not worth a warning.
+_SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
+
+
+def _warn_slow_fft_size(shape):
+    """Warn once per large 2D transform shape whose lengths force Bluestein."""
+    dims = tuple(int(n) for n in shape[-2:])
+    if len(dims) < 2 or dims in _warned_slow_fft_shapes:
+        return
+    _warned_slow_fft_shapes.add(dims)
+    if dims[0] * dims[1] < _SLOW_FFT_WARN_MIN_ELEMENTS:
+        return
+    if all(is_fast_fft_size(n) for n in dims):
+        return
+    suggestion = " x ".join(str(next_fast_fft_size(n)) for n in dims)
+    warnings.warn(
+        f"FFT size {dims[0]} x {dims[1]} contains prime factors larger than 7; "
+        "cuFFT falls back to the Bluestein algorithm, which is several times "
+        "slower and allocates a workspace of several times the array size. "
+        f"Consider adjusting the grid to {suggestion}, e.g. by setting gpts "
+        "explicitly instead of the sampling.",
+        UserWarning,
+    )
+
+
 def _raise_fft_lib_not_present(lib_name: str):
     raise RuntimeError(
         f"FFT library {lib_name} not present. Install this package or change the FFT"
@@ -262,6 +346,7 @@ def _fft_dispatch(
 
     if isinstance(x, cp.ndarray):
         _configure_cufft_cache()
+        _warn_slow_fft_size(x.shape)
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
