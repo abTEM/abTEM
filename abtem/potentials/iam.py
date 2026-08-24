@@ -1073,7 +1073,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def _from_partitioned_args(self, *args, **kwargs):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
+        # integrator is excluded from the deep-copied kwargs and passed through
+        # by reference: generate_blocks()/ensemble_blocks() reconstruct a fresh
+        # Potential per ensemble member, and integrators (e.g.
+        # QuadratureProjectionIntegrals) lazily cache per-symbol projection
+        # tables and, on GPU, device-resident arrays specifically so repeated
+        # calls across many slices don't re-upload them (see the PR #309
+        # discussion in integrals.py). Deep-copying the integrator per member
+        # silently defeats that cache for every single ensemble member -- on
+        # GPU this means a real device-to-device copy of the cached arrays for
+        # every member, for no benefit, since the copy is used once and
+        # discarded.
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling", "integrator"))
+        kwargs["integrator"] = self.integrator
 
         return partial(
             self._from_partitioned_args_func,
