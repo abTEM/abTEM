@@ -6193,6 +6193,14 @@ def phonon_loss_diffraction_patterns(
     ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
     or ``SlitDetector`` to integrate over desired q points.
 
+    Note that ``I_tds`` is the variance of the diffracted amplitude across
+    frozen-phonon configurations: with a single configuration per energy,
+    ``I_incoherent`` and ``I_coherent`` are identical by construction and
+    ``I_tds`` is exactly zero everywhere, not a numerical artifact. At least
+    2 configurations per energy are required for ``component="tds"``/``"all"``
+    (this is enforced with a ``ValueError``); in practice many more are
+    needed for good statistics.
+
     Parameters
     ----------
     exit_waves : Waves
@@ -6261,6 +6269,18 @@ def phonon_loss_diffraction_patterns(
 
     # --- number of frozen-phonon configurations ---
     N = exit_waves.shape[fp_axis_idx]
+
+    if N < 2 and component in ("tds", "all"):
+        raise ValueError(
+            f"component={component!r} requires at least 2 frozen-phonon "
+            f"configurations per energy, got N={N}. TDS/phonon-loss is "
+            "I_incoherent - I_coherent, the variance of the diffracted "
+            "amplitude across configurations -- for a single configuration "
+            "I_incoherent and I_coherent are identical by construction, so "
+            "the result is exactly zero everywhere, not a numerical fluke. "
+            "Build the EnergyResolvedAtomsEnsemble with more than one "
+            "configuration per energy to get a non-trivial signal."
+        )
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 

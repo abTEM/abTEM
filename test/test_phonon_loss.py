@@ -54,6 +54,32 @@ def test_invalid_component_raises():
         phonon_loss_diffraction_patterns(waves, component="bogus")
 
 
+@pytest.mark.parametrize("component", ["tds", "all"])
+def test_single_config_tds_raises_instead_of_returning_zeros(component):
+    """With one frozen-phonon configuration, I_incoherent == I_coherent by
+    construction, so I_tds is identically zero everywhere -- not a bug, but
+    silently returning an all-zero array looks exactly like one. This must
+    raise instead."""
+    waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=1)
+    with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
+        phonon_loss_diffraction_patterns(waves, component=component)
+
+
+@pytest.mark.parametrize("component", ["coherent", "incoherent"])
+def test_single_config_non_tds_components_still_work(component):
+    """coherent/incoherent are well-defined (if trivial) for a single
+    configuration and must not be blocked by the N>=2 check."""
+    waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=1)
+    dp = phonon_loss_diffraction_patterns(waves, component=component)
+    assert not np.allclose(dp.array, 0.0)
+
+
+def test_two_configs_tds_does_not_raise():
+    waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=2)
+    dp = phonon_loss_diffraction_patterns(waves, component="tds")
+    assert dp.array.shape[0] == 3
+
+
 class TestThermalWeighting:
     def test_signed_axis_and_zero_bin_passthrough(self):
         e_values = [0.0, 0.02, 0.05, 0.10]
