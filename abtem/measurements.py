@@ -6001,7 +6001,14 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             nrows = (n + ncols - 1) // ncols
             if figsize is None:
                 figsize = (4 * ncols, 3.5 * nrows)
-            fig, axes_arr = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+            fig, axes_arr = plt.subplots(
+                nrows,
+                ncols,
+                figsize=figsize,
+                squeeze=False,
+                sharex=True,
+                sharey=True,
+            )
             axes_flat = axes_arr.flatten()
 
             # Shared colour scale across panels so the single colorbar applies to
@@ -6030,11 +6037,28 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                     a.set_title(panel_title)
             for k in range(len(indices), len(axes_flat)):
                 axes_flat[k].set_visible(False)
+
+            # Hide the x/y tick labels and axis labels of interior panels
+            # (kept only on the bottom row / left column), since sharex/sharey
+            # above already makes them redundant on every other panel.
+            for a in axes_flat[: len(indices)]:
+                a.label_outer()
+
+            # tight_layout() must run before fig.colorbar(): colorbar()
+            # shrinks the given panel axes via their gridspec to make room for
+            # the new colorbar axes, and a tight_layout() call afterwards
+            # would re-layout every axes from scratch -- including the
+            # colorbar axes, which it has no special handling for -- and can
+            # end up overlapping it with the last panel instead of leaving it
+            # in its own strip.
+            fig.tight_layout()
             if cbar and im is not None:
                 fig.colorbar(
-                    im, ax=axes_flat[: len(indices)].tolist(), label=cbar_label
+                    im,
+                    ax=axes_flat[: len(indices)].tolist(),
+                    label=cbar_label,
+                    pad=0.015,
                 )
-            fig.tight_layout()
             return fig, axes_arr
 
         # Single panel — collapse any ensemble axes to their first element.

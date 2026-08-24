@@ -338,6 +338,65 @@ def test_show_explode_true_matches_full_range():
     assert axes_true.shape == axes_all.shape
 
 
+@pytest.mark.parametrize("n_panels, ncols", [(4, 4), (6, 4)])
+def test_show_explode_shares_axes_and_places_colorbar_beside_panels(
+    n_panels, ncols
+):
+    """An exploded grid must not repeat the y-axis label/tick labels on every
+    panel (only the leftmost column of each row), and the colorbar must land
+    in its own strip beside the panels rather than overlapping the last one
+    (regression: tight_layout() called after fig.colorbar() previously
+    fought over the colorbar axes' position -- see the "This figure includes
+    Axes that are not compatible with tight_layout" warning that used to
+    fire here)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    rng = np.random.default_rng(0)
+    q_values = np.linspace(0, 10, 5)
+    e_values = np.linspace(-0.1, 0.1, 6)
+    array = rng.random((n_panels, 5, 6))
+    spec = MomentumResolvedSpectrum(
+        array,
+        q_values=q_values,
+        e_values=e_values,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="axis0", values=tuple(range(n_panels)))
+        ],
+    )
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fig, axes = spec.show(explode=True)
+
+    axes_flat = axes.flatten()[:n_panels]
+    nrows = len(axes.flatten()) // ncols
+
+    for k, a in enumerate(axes_flat):
+        row, col = divmod(k, ncols)
+        is_left_column = col == 0
+        assert bool(a.yaxis.get_label().get_text()) == is_left_column
+
+    # The colorbar axes (last Axes added to the figure that isn't one of the
+    # panels) must not overlap any panel's bounding box.
+    fig.canvas.draw()
+    panel_bboxes = [a.get_window_extent() for a in axes_flat]
+    cbar_axes = [a for a in fig.axes if a not in list(axes.flatten())]
+    assert len(cbar_axes) == 1
+    cbar_bbox = cbar_axes[0].get_window_extent()
+    for bbox in panel_bboxes:
+        assert not bbox.overlaps(cbar_bbox)
+
+    # The colorbar should sit close to the rightmost panel, not stranded with
+    # a large empty gap.
+    rightmost_panel_bbox = panel_bboxes[ncols - 1 if ncols <= n_panels else n_panels - 1]
+    gap = cbar_bbox.x0 - rightmost_panel_bbox.x1
+    assert gap < 0.25 * rightmost_panel_bbox.width
+
+
 def test_show_warns_on_ensemble_collapse():
     """A non-exploded show() on an object with ensemble axes must warn that
     only member (0, ..., 0) is shown."""
