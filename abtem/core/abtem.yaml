@@ -51,6 +51,9 @@ warnings:
 potential:
   # Number of slices to build at once during multislice. "auto" = memory-budget-aware.
   slice-chunk-size: "auto"
+  # Number of ensemble members (e.g. frozen-phonon configs) batched into one
+  # dask chunk. "auto" = memory-budget-aware (GPU only; always 1 on CPU).
+  ensemble-chunk-size: "auto"
 antialias:
   # The antialias cutoff in reciprocal space
   cutoff: 0.6666666

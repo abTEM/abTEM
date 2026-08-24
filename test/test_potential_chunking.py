@@ -4,10 +4,15 @@ import numpy as np
 import pytest
 from ase.build import bulk
 
-from abtem import PlaneWave, Potential
+from abtem import EnergyResolvedAtomsEnsemble, FrozenPhonons, PlaneWave, Potential
 from abtem.core import config as abtem_config
-from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
+from abtem.core.chunks import (
+    _nearest_power_of_two,
+    estimate_ensemble_chunk_size,
+    estimate_potential_chunk_size,
+)
 from abtem.core.complex import complex_exponential
+from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import CrystalPotential, PotentialArray
 
 
@@ -463,3 +468,141 @@ class TestComplexExponential:
         assert isinstance(result_gpu, cp.ndarray)
         assert result_gpu.dtype == expected_cdtype
         assert np.allclose(cp.asnumpy(result_gpu), result_cpu, atol=1e-6)
+
+
+class TestEstimateEnsembleChunkSize:
+    """Unit tests for estimate_ensemble_chunk_size."""
+
+    def test_config_override(self):
+        """The potential.ensemble-chunk-size config key must short-circuit
+        estimation, regardless of device."""
+        with abtem_config.set({"potential.ensemble-chunk-size": 7}):
+            assert (
+                estimate_ensemble_chunk_size(
+                    n_available=20, num_slices=10, gpts=(64, 64), device="cpu"
+                )
+                == 7
+            )
+            assert (
+                estimate_ensemble_chunk_size(
+                    n_available=20, num_slices=10, gpts=(64, 64), device="gpu"
+                )
+                == 7
+            )
+
+    def test_config_override_capped_at_n_available(self):
+        with abtem_config.set({"potential.ensemble-chunk-size": 100}):
+            assert (
+                estimate_ensemble_chunk_size(
+                    n_available=3, num_slices=10, gpts=(64, 64), device="gpu"
+                )
+                == 3
+            )
+
+    def test_cpu_always_returns_one(self):
+        """On CPU, dask's threaded scheduler already parallelises size-1
+        ensemble chunks; batching them would only reduce that parallelism."""
+        assert (
+            estimate_ensemble_chunk_size(
+                n_available=50, num_slices=5000, gpts=(4096, 4096), device="cpu"
+            )
+            == 1
+        )
+
+    def test_gpu_bounded_by_n_available(self):
+        n = estimate_ensemble_chunk_size(
+            n_available=20, num_slices=10, gpts=(64, 64), device="gpu"
+        )
+        assert 1 <= n <= 20
+
+    def test_gpu_falls_back_to_no_batching_for_large_systems(self):
+        """A per-member cost that clearly exceeds the fallback GPU chunk-size
+        budget must not be batched at all -- same as today's default."""
+        n = estimate_ensemble_chunk_size(
+            n_available=20, num_slices=200, gpts=(2048, 2048), device="gpu"
+        )
+        assert n == 1
+
+    def test_gpu_larger_system_gives_smaller_or_equal_chunk(self):
+        small = estimate_ensemble_chunk_size(
+            n_available=64, num_slices=10, gpts=(64, 64), device="gpu"
+        )
+        large = estimate_ensemble_chunk_size(
+            n_available=64, num_slices=10, gpts=(1024, 1024), device="gpu"
+        )
+        assert large <= small
+
+
+class TestEnsembleChunkingCorrectness:
+    """Verify VRAM-aware ensemble-axis batching does not change results, and
+    that it only ever batches the last ensemble axis."""
+
+    @pytest.fixture
+    def energy_resolved_ensemble(self):
+        rng = np.random.default_rng(0)
+        base = bulk("Si", cubic=True)
+        energies = [0.0, 0.02, 0.05]
+        n_configs = 5
+        snapshots_per_energy = []
+        for _ in energies:
+            group = []
+            for _ in range(n_configs):
+                atoms = base.copy()
+                atoms.positions += rng.normal(scale=0.02, size=atoms.positions.shape)
+                group.append(atoms)
+            snapshots_per_energy.append(group)
+        return EnergyResolvedAtomsEnsemble(
+            snapshots_per_energy, energies, ensemble_mean=False
+        ), n_configs
+
+    def test_cpu_chunking_unchanged(self, energy_resolved_ensemble):
+        """CPU chunking must stay exactly (1,) * n_axes -- no behaviour change."""
+        ensemble, n_configs = energy_resolved_ensemble
+        potential = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+        transform = MultisliceTransform(potential, detectors=None)
+        assert transform._default_ensemble_chunks == (1, 1)
+
+    def test_only_last_axis_batched(self, energy_resolved_ensemble):
+        """The energy-loss axis (not the last axis) must stay at chunk-size 1;
+        only the config axis (the last one) is a candidate for batching."""
+        ensemble, n_configs = energy_resolved_ensemble
+        with abtem_config.set({"potential.ensemble-chunk-size": n_configs}):
+            potential = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+            potential._device = "gpu"
+            transform = MultisliceTransform(potential, detectors=None)
+            assert transform._default_ensemble_chunks == (1, n_configs)
+
+    def test_coarse_chunking_matches_fine_chunking(self, energy_resolved_ensemble):
+        """A batched (coarse) ensemble chunk must produce bitwise-identical
+        exit waves to the default one-member-per-chunk chunking."""
+        ensemble, n_configs = energy_resolved_ensemble
+
+        potential_fine = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+        exit_waves_fine = PlaneWave(energy=100e3).multislice(
+            potential_fine, lazy=True
+        )
+        assert exit_waves_fine.array.chunks[:2] == ((1, 1, 1), (1,) * n_configs)
+        computed_fine = exit_waves_fine.compute()
+
+        with abtem_config.set({"potential.ensemble-chunk-size": n_configs}):
+            potential_coarse = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+            exit_waves_coarse = PlaneWave(energy=100e3).multislice(
+                potential_coarse, lazy=True
+            )
+            assert exit_waves_coarse.array.chunks[:2] == ((1, 1, 1), (n_configs,))
+            computed_coarse = exit_waves_coarse.compute()
+
+        np.testing.assert_allclose(computed_fine.array, computed_coarse.array)
+
+    def test_regular_frozen_phonons_single_axis_batched(self):
+        """A regular (non-energy-resolved) FrozenPhonons ensemble has a single
+        ensemble axis, which must be the one batched."""
+        atoms = bulk("Si", cubic=True)
+        phonons = FrozenPhonons(
+            atoms, num_configs=12, sigmas=0.05, ensemble_mean=False, seed=1
+        )
+        with abtem_config.set({"potential.ensemble-chunk-size": 12}):
+            potential = Potential(phonons, sampling=0.15, slice_thickness=1.0)
+            potential._device = "gpu"
+            transform = MultisliceTransform(potential, detectors=None)
+            assert transform._default_ensemble_chunks == (12,)

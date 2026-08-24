@@ -622,3 +622,109 @@ def estimate_scan_batch_size(
         chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
 
     return max(1, chunk_bytes // max(1, per_probe_bytes))
+
+
+def estimate_ensemble_chunk_size(
+    n_available: int,
+    num_slices: int,
+    gpts: tuple[int, int],
+    device: str = "cpu",
+    dtype: np.dtype = None,
+) -> int:
+    """
+    Estimate how many members of a potential's ensemble (e.g. frozen-phonon
+    configurations, or energy-resolved configurations) fit in one dask chunk.
+
+    ``build()``/``multislice()`` place each ensemble member in its own
+    single-element chunk by default. On CPU this is fine: dask's default
+    threaded scheduler already runs many chunks concurrently, so size-1
+    chunks give it many independent units of work to parallelise over. On
+    GPU, abTEM forces the synchronous scheduler (one chunk executed at a
+    time, to keep multiple chunks' potentials/waves from being VRAM-resident
+    simultaneously — see ``_gpu_scheduler_guard``), so size-1 chunks mean
+    every ensemble member runs as its own fully serial, unbatched multislice
+    pass: for a workload with no scan (e.g. a bare ``PlaneWave``) there is
+    then nothing at all for the GPU to batch, which shows up as low
+    utilisation from many small, serial kernel launches with dask/Python
+    orchestration overhead between them. This function sizes a genuine batch
+    of ensemble members instead, so their potentials and waves are built and
+    propagated together as arrays with a real leading batch dimension.
+
+    Each batched member needs its own independently-built potential (unlike
+    scan positions, which share one potential and only vary the wavefunction)
+    plus its own exit wave. The per-member cost used here assumes the full,
+    unchunked potential for one member — i.e. it does not know about (and is
+    not reduced by) ``generate_chunked_slices``' own slice-level chunking,
+    which operates per member independently of how many members are batched
+    into one ensemble chunk. This makes the estimate conservative rather than
+    exact: if slice-chunking is also active for a very large system, actual
+    peak VRAM will be lower than what this estimate assumes, not higher.
+
+    The overhead factor (3x) and budget (15% of effective-free VRAM, claimed
+    at graph-construction time like ``estimate_scan_batch_size``) are chosen
+    to sit inside the ~25-30% headroom the existing potential-chunking (35%,
+    claimed at computation time) and scan-batching (50%, claimed at
+    graph-construction time) budgets already leave, rather than from
+    empirical GPU profiling like those two factors were. Validate and tune
+    via the ``potential.ensemble-chunk-size`` configuration key on real
+    hardware before relying on this for a memory-critical workload.
+
+    On CPU this always returns 1 (no batching): dask's default threaded
+    scheduler already parallelises size-1 chunks across threads, so batching
+    them would reduce rather than improve parallelism.
+
+    Parameters
+    ----------
+    n_available : int
+        Number of ensemble members available along the axis being chunked
+        (an upper bound on the returned chunk size).
+    num_slices : int
+        Number of slices in the potential.
+    gpts : tuple of int
+        The number of grid points (y, x).
+    device : str
+        The device ('cpu' or 'gpu').
+    dtype : np.dtype, optional
+        The dtype of the potential array. If None, uses float32.
+
+    Returns
+    -------
+    int
+        The estimated number of ensemble members that fit in one chunk,
+        between 1 and ``n_available``.
+    """
+    from abtem.core.utils import get_dtype
+
+    if dtype is None:
+        dtype = np.dtype(get_dtype(complex=False))
+
+    chunk_size_key = "potential.ensemble-chunk-size"
+    chunk_size_setting = config.get(chunk_size_key, "auto")
+
+    if chunk_size_setting != "auto":
+        return max(1, min(int(chunk_size_setting), n_available))
+
+    if device != "gpu":
+        return 1
+
+    wave_dtype = np.dtype(get_dtype(complex=True))
+    per_member_bytes = num_slices * gpts[0] * gpts[1] * dtype.itemsize
+    per_member_bytes += gpts[0] * gpts[1] * wave_dtype.itemsize
+
+    try:
+        import cupy as cp
+
+        pool = cp.get_default_memory_pool()
+        free_mem, total_mem = cp.cuda.Device().mem_info
+        pool_used = pool.used_bytes()
+        effective_free = min(free_mem, total_mem - pool_used)
+
+        budget_bytes = int(effective_free * 0.15)
+        effective_per_member = max(1, per_member_bytes * 3)
+    except (ImportError, Exception):
+        budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+        effective_per_member = max(1, per_member_bytes * 3)
+
+    chunk_size = max(1, int(budget_bytes / effective_per_member))
+
+    return min(chunk_size, n_available)

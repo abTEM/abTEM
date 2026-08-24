@@ -1325,7 +1325,21 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         chunks: tuple[int, ...] = ()
 
         if len(self.potential.ensemble_shape) > 0:
-            chunks = chunks + (1,) * len(self.potential.ensemble_shape)
+            # Keep every axis but the last (e.g. an energy-loss axis) at
+            # chunk-size 1, and VRAM-aware-batch the last one (e.g. frozen-
+            # phonon configurations) — see estimate_ensemble_chunk_size for
+            # why this matters on GPU (forced synchronous scheduler, so
+            # size-1 chunks give no batching at all for a scan-less run).
+            from abtem.core.chunks import estimate_ensemble_chunk_size
+
+            n_leading = len(self.potential.ensemble_shape) - 1
+            last_chunk_size = estimate_ensemble_chunk_size(
+                n_available=self.potential.ensemble_shape[-1],
+                num_slices=self.potential.num_slices,
+                gpts=self.potential.gpts,
+                device=self.potential.device,
+            )
+            chunks = chunks + (1,) * n_leading + (last_chunk_size,)
 
         if len(self.potential.exit_planes) > 1:
             chunks = chunks + (len(self.potential.exit_planes),)
