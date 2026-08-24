@@ -535,14 +535,14 @@ class TestEstimateEnsembleChunkSize:
 
 class TestEnsembleChunkingCorrectness:
     """Verify VRAM-aware ensemble-axis batching does not change results, and
-    that it only ever batches the last ensemble axis."""
+    that it always batches whichever ensemble axis has the most members --
+    not a fixed axis position."""
 
-    @pytest.fixture
-    def energy_resolved_ensemble(self):
+    @staticmethod
+    def _build_energy_resolved_ensemble(n_energies, n_configs):
         rng = np.random.default_rng(0)
         base = bulk("Si", cubic=True)
-        energies = [0.0, 0.02, 0.05]
-        n_configs = 5
+        energies = np.linspace(0.0, 0.05, n_energies)
         snapshots_per_energy = []
         for _ in energies:
             group = []
@@ -553,7 +553,12 @@ class TestEnsembleChunkingCorrectness:
             snapshots_per_energy.append(group)
         return EnergyResolvedAtomsEnsemble(
             snapshots_per_energy, energies, ensemble_mean=False
-        ), n_configs
+        )
+
+    @pytest.fixture
+    def energy_resolved_ensemble(self):
+        n_configs = 5
+        return self._build_energy_resolved_ensemble(3, n_configs), n_configs
 
     def test_cpu_chunking_unchanged(self, energy_resolved_ensemble):
         """CPU chunking must stay exactly (1,) * n_axes -- no behaviour change."""
@@ -562,15 +567,27 @@ class TestEnsembleChunkingCorrectness:
         transform = MultisliceTransform(potential, detectors=None)
         assert transform._default_ensemble_chunks == (1, 1)
 
-    def test_only_last_axis_batched(self, energy_resolved_ensemble):
-        """The energy-loss axis (not the last axis) must stay at chunk-size 1;
-        only the config axis (the last one) is a candidate for batching."""
+    def test_larger_axis_batched_when_configs_larger(self, energy_resolved_ensemble):
+        """3 energies x 5 configs: the config axis (more members) is batched,
+        the energy-loss axis stays at chunk-size 1."""
         ensemble, n_configs = energy_resolved_ensemble
         with abtem_config.set({"potential.ensemble-chunk-size": n_configs}):
             potential = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
             potential._device = "gpu"
             transform = MultisliceTransform(potential, detectors=None)
             assert transform._default_ensemble_chunks == (1, n_configs)
+
+    def test_larger_axis_batched_when_energies_larger(self):
+        """8 energies x 1 config (the common real-world shape when snapshots
+        come from an external phonon calculation): the energy-loss axis has
+        the most members and must be the one batched, not the config axis."""
+        n_energies = 8
+        ensemble = self._build_energy_resolved_ensemble(n_energies, 1)
+        with abtem_config.set({"potential.ensemble-chunk-size": n_energies}):
+            potential = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+            potential._device = "gpu"
+            transform = MultisliceTransform(potential, detectors=None)
+            assert transform._default_ensemble_chunks == (n_energies, 1)
 
     def test_coarse_chunking_matches_fine_chunking(self, energy_resolved_ensemble):
         """A batched (coarse) ensemble chunk must produce bitwise-identical
@@ -590,6 +607,29 @@ class TestEnsembleChunkingCorrectness:
                 potential_coarse, lazy=True
             )
             assert exit_waves_coarse.array.chunks[:2] == ((1, 1, 1), (n_configs,))
+            computed_coarse = exit_waves_coarse.compute()
+
+        np.testing.assert_allclose(computed_fine.array, computed_coarse.array)
+
+    def test_coarse_chunking_matches_fine_chunking_energy_axis(self):
+        """Same bitwise-identical check, but for the case where it's the
+        energy-loss axis (not configs) that gets batched."""
+        n_energies = 4
+        ensemble = self._build_energy_resolved_ensemble(n_energies, 1)
+
+        potential_fine = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+        exit_waves_fine = PlaneWave(energy=100e3).multislice(
+            potential_fine, lazy=True
+        )
+        assert exit_waves_fine.array.chunks[:2] == ((1,) * n_energies, (1,))
+        computed_fine = exit_waves_fine.compute()
+
+        with abtem_config.set({"potential.ensemble-chunk-size": n_energies}):
+            potential_coarse = Potential(ensemble, sampling=0.15, slice_thickness=1.0)
+            exit_waves_coarse = PlaneWave(energy=100e3).multislice(
+                potential_coarse, lazy=True
+            )
+            assert exit_waves_coarse.array.chunks[:2] == ((n_energies,), (1,))
             computed_coarse = exit_waves_coarse.compute()
 
         np.testing.assert_allclose(computed_fine.array, computed_coarse.array)

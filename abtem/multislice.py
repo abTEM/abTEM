@@ -1325,21 +1325,29 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         chunks: tuple[int, ...] = ()
 
         if len(self.potential.ensemble_shape) > 0:
-            # Keep every axis but the last (e.g. an energy-loss axis) at
-            # chunk-size 1, and VRAM-aware-batch the last one (e.g. frozen-
-            # phonon configurations) — see estimate_ensemble_chunk_size for
-            # why this matters on GPU (forced synchronous scheduler, so
-            # size-1 chunks give no batching at all for a scan-less run).
+            # VRAM-aware-batch whichever ensemble axis actually has the most
+            # members (e.g. an EnergyResolvedAtomsEnsemble's energy-loss axis
+            # is often much larger than its frozen-phonon configuration axis,
+            # sometimes the latter is size 1) — batching a fixed axis by
+            # position missed the axis batching would actually help. Every
+            # other axis stays at chunk-size 1. See estimate_ensemble_chunk_size
+            # for why batching matters at all on GPU (forced synchronous
+            # scheduler, so size-1 chunks give no batching for a scan-less run).
             from abtem.core.chunks import estimate_ensemble_chunk_size
 
-            n_leading = len(self.potential.ensemble_shape) - 1
-            last_chunk_size = estimate_ensemble_chunk_size(
-                n_available=self.potential.ensemble_shape[-1],
+            ensemble_shape = self.potential.ensemble_shape
+            batch_axis = int(np.argmax(ensemble_shape))
+
+            batch_chunk_size = estimate_ensemble_chunk_size(
+                n_available=ensemble_shape[batch_axis],
                 num_slices=self.potential.num_slices,
                 gpts=self.potential.gpts,
                 device=self.potential.device,
             )
-            chunks = chunks + (1,) * n_leading + (last_chunk_size,)
+            chunks = chunks + tuple(
+                batch_chunk_size if i == batch_axis else 1
+                for i in range(len(ensemble_shape))
+            )
 
         if len(self.potential.exit_planes) > 1:
             chunks = chunks + (len(self.potential.exit_planes),)
