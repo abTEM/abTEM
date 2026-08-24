@@ -68,3 +68,30 @@ def test_warn_slow_fft_size_silent_for_small_shapes():
         warnings.simplefilter("error")
         _warn_slow_fft_size((36, 29))
         _warn_slow_fft_size((4, 11, 20))
+
+
+def test_cufft_cache_auto_resolves_device_relative():
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no GPU available")
+    except Exception:
+        pytest.skip("no usable CUDA/HIP runtime")
+
+    from abtem.core import config
+    from abtem.core import fft as abtem_fft
+
+    expected = cp.cuda.Device().mem_info[1] // 4
+
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": "auto"}):
+        abtem_fft._configure_cufft_cache()
+        assert abtem_fft._CUFFT_CACHE_STATE is not None
+        assert abtem_fft._CUFFT_CACHE_STATE[1] == expected
+        assert cp.fft.config.get_plan_cache().get_memsize() == expected
+
+    # -1 must still mean unlimited (no memsize bound applied).
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": -1}):
+        abtem_fft._configure_cufft_cache()
+        assert abtem_fft._CUFFT_CACHE_STATE[1] == -1

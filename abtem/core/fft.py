@@ -290,20 +290,31 @@ def _configure_cufft_cache():
                      Plans are reused for repeated same-shape transforms but the
                      total persistent workspace is bounded.
     * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
+    * ``auto``     — 25 % of the device's total memory, resolved per device.
 
-    The abTEM default is ``2 GB``: enough to keep the plans of a typical
-    multislice hot, while bounding the workspace retained by plans for
-    Bluestein-fallback transform sizes, which can otherwise accumulate to
-    tens of GB across the distinct batch shapes of a scan.
+    The abTEM default is ``auto``. The bound must scale with the card: batch
+    auto-sizing targets ~8 % of VRAM per batch and the live plan workspace is
+    ~1x the batch bytes on fast-radix shapes (~2x on Bluestein shapes), so the
+    live working set of a production scan is ~10-17 % of VRAM on any card — a
+    fixed byte bound either evicts live plans on large cards (a flat 2 GB was
+    measured to cost ~7 % on a 40 GB A100) or is needlessly tight on small
+    ones. 25 % clears the live set with margin, while still capping the stale
+    workspace an unlimited cache accumulates across the distinct batch shapes
+    of successive computations. The limit is a ceiling, not a reservation —
+    unused headroom costs no memory.
     """
     global _CUFFT_CACHE_STATE
-    raw = config.get("cupy.fft-cache-size", "2 GB")
+    raw = config.get("cupy.fft-cache-size", "auto")
 
-    # Fast path: config hasn't changed since we last applied it.
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == raw:
+    # The plan cache and the resolved "auto" limit are per device, so the
+    # applied state is keyed on the current device as well as the raw value.
+    device = cp.cuda.Device()
+    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
         return
 
-    if isinstance(raw, str):
+    if raw == "auto":
+        limit = device.mem_info[1] // 4
+    elif isinstance(raw, str):
         from dask.utils import parse_bytes
         limit = parse_bytes(raw)
     else:
@@ -316,7 +327,7 @@ def _configure_cufft_cache():
         cache.set_memsize(limit)
     # limit < 0 → leave at CuPy default (unlimited)
 
-    _CUFFT_CACHE_STATE = (raw, limit)
+    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
 
 
 def _fft_dispatch(
