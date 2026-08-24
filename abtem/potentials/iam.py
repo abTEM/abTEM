@@ -1152,11 +1152,13 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     sampling : one or two float or 'auto', optional
         Sampling of the potential in `x` and `y` [Å].
         Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
-        to be commensurate with the atom positions (closest to a default of 0.05 Å).
+        to be commensurate with the atom positions (closest to a default of 0.05 Å)
+        and, whenever compatible with commensurability, a fast FFT size (all prime
+        factors in {2, 3, 5, 7}).
         For an `AtomsEnsemble` with more than one configuration (e.g. an MD
         trajectory), each configuration is an independent, generally
         non-commensurate snapshot, so commensurability is not attempted and the
-        target sampling is used directly.
+        target sampling is used directly (rounded up to a fast FFT size).
     slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
         (default is 1 Å).
@@ -1263,12 +1265,18 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # the same problem: the chosen grid is applied to every frame
                 # regardless, and searching for commensurate planes in one
                 # arbitrary frame is meaningless. Just use the target sampling
-                # directly.
+                # directly, rounded up to a fast FFT size (no commensurability
+                # constrains the grid here, so rounding is free).
+                from abtem.core.fft import next_fast_fft_size
+
                 if box is not None:
                     extent = box[:2]
                 else:
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
-                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+                gpts = tuple(
+                    next_fast_fft_size(int(np.ceil(extent[i] / 0.05)))
+                    for i in range(2)
+                )
             elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
                 if not isinstance(plane, str):
                     raise NotImplementedError

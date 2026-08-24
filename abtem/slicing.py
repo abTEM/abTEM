@@ -116,6 +116,7 @@ def commensurate_gpts(
     positions: np.ndarray,
     target_sampling: float = 0.05,
     tolerance: float = 1e-3,
+    round_to_fast_fft: bool = True,
 ) -> tuple[int, int]:
     """
     Find grid points such that the sampling grid is commensurate with the atom
@@ -128,6 +129,14 @@ def commensurate_gpts(
     translations of the structure: a crystal that has been centered or otherwise
     shifted within the cell always yields the same p as the unshifted version.
 
+    When `round_to_fast_fft` is enabled the number of grid points additionally
+    factorizes completely into the primes 2, 3, 5 and 7 whenever that is
+    compatible with commensurability, so FFTs run on fast radix kernels instead
+    of the slow, memory-hungry Bluestein fallback.  The smallest such grid not
+    coarser than the target sampling is chosen; if the grid period p itself
+    contains a prime factor larger than 7 no multiple of it can be a fast FFT
+    length, and commensurability takes precedence.
+
     Parameters
     ----------
     extent : tuple of float
@@ -138,12 +147,83 @@ def commensurate_gpts(
         Target grid sampling [Å].
     tolerance : float
         Tolerance for identifying distinct atom planes [Å].
+    round_to_fast_fft : bool
+        If True (default), prefer grids that are also fast FFT sizes (all prime
+        factors in {2, 3, 5, 7}), at the cost of a sampling slightly finer than
+        commensurability alone would give.
 
     Returns
     -------
     tuple of int
         Number of grid points in x and y.
     """
+    from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
+
+    def translational_period_count(unique_x: np.ndarray, L: float) -> int:
+        # Largest m such that the set of atom planes is invariant under a shift
+        # of L / m. Even when the intra-cell plane positions are irrational
+        # (no commensurate grid exists), a repeated unit cell still imposes
+        # this translational period, and symmetry-equivalent atoms only see
+        # identical discretised potentials if gpts is a multiple of m.
+        for m in range(len(unique_x), 1, -1):
+            shifted = np.sort((unique_x + L / m) % L)
+            idx = np.searchsorted(unique_x, shifted)
+            neighbors = np.stack(
+                [
+                    unique_x[np.clip(idx - 1, 0, len(unique_x) - 1)],
+                    unique_x[np.clip(idx, 0, len(unique_x) - 1)],
+                ]
+            )
+            distances = np.abs(neighbors - shifted)
+            distances = np.minimum(distances, L - distances)
+            if np.all(distances.min(axis=0) < tolerance):
+                return m
+        return 1
+
+    def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
+        # The GCD search found no commensurate period. When fast-FFT rounding
+        # is enabled, pick the fast size that (a) keeps gpts a multiple of the
+        # translational period count m of the plane set and (b) best aligns
+        # the planes with grid points: structures with an irrational internal
+        # parameter (e.g. rutile u = 0.306, brookite) have no exactly
+        # commensurate grid, but some fast sizes come much closer than others.
+        if not round_to_fast_fft:
+            return n_target
+        if unique_x is None or L is None or len(unique_x) <= 1:
+            return next_fast_fft_size(n_target)
+
+        m = translational_period_count(unique_x, L)
+        if not is_fast_fft_size(m):
+            # No multiple of m can be a fast FFT size; translational
+            # commensurability takes precedence, as in the main path.
+            return max(round(n_target / m), 1) * m
+
+        best = None
+        multiplier = -(-n_target // m)
+        while True:
+            multiplier = next_fast_fft_size(multiplier)
+            n = multiplier * m
+            # Score by ALIGNABILITY, not realized alignment: the smallest
+            # achievable max plane-to-gridpoint distance over all grid-origin
+            # phases. The plane residues x_i*n/L mod 1 must cluster near a
+            # common phase for the planes to sit near grid points; the tightest
+            # arc containing all residues is 1 - (largest circular gap), and
+            # centering the phase in that arc gives max distance (1 - gap)/2.
+            # Unlike distance-to-nearest-gridpoint at a fixed origin, this
+            # depends only on RELATIVE positions, so a rigidly translated
+            # structure gets the same grid (a tested invariant of the
+            # commensurate search that the fallback must preserve).
+            residues = np.sort(np.mod(unique_x * (n / L), 1.0))
+            gaps = np.diff(np.concatenate([residues, [residues[0] + 1.0]]))
+            alignability = (1.0 - float(np.max(gaps))) / 2.0
+            # Round the score so nearly-equal alignments prefer the smaller grid.
+            score = (round(alignability, 2), n)
+            if best is None or score < best[0]:
+                best = (score, n)
+            if n > n_target * 1.12:
+                return best[1]
+            multiplier += 1
+
     gpts = []
     for i in range(2):
         L = extent[i]
@@ -161,7 +241,7 @@ def commensurate_gpts(
         unique_x = x[unique_mask]
 
         if len(unique_x) <= 1:
-            gpts.append(n_target)
+            gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 
         # Spacings between consecutive unique planes, including the wrap-around gap
@@ -169,7 +249,7 @@ def commensurate_gpts(
 
         min_spacing = float(np.min(spacings))
         if min_spacing < tolerance:
-            gpts.append(n_target)
+            gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 
         # Check that every spacing is approximately an integer multiple of the
@@ -178,14 +258,22 @@ def commensurate_gpts(
         k = np.round(ratios).astype(int)
         if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
             # No clear commensurability — fall back to the raw target
-            gpts.append(n_target)
+            gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 
         # Primitive spacing refined as L / (total number of primitive periods).
         # Using L / sum(k) is more accurate than min_spacing alone because it
         # averages out any floating-point scatter in the individual spacings.
         n_periods = int(np.sum(k))
-        n_multiple = max(round(n_target / n_periods), 1) * n_periods
+        if round_to_fast_fft and is_fast_fft_size(n_periods):
+            # A multiple m * n_periods is a fast FFT size exactly when both
+            # factors are, so the smallest fast commensurate grid not coarser
+            # than the target uses the next fast multiplier. When n_periods
+            # itself has a prime factor larger than 7, no multiple can be fast
+            # and commensurability takes precedence (handled below).
+            n_multiple = next_fast_fft_size(-(-n_target // n_periods)) * n_periods
+        else:
+            n_multiple = max(round(n_target / n_periods), 1) * n_periods
         gpts.append(n_multiple)
 
     return tuple(gpts)

@@ -467,12 +467,19 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
     )
 
     extent_x, extent_y = float(single.cell[0, 0]), float(single.cell[1, 1])
-    expected_gpts = (int(np.ceil(extent_x / 0.05)), int(np.ceil(extent_y / 0.05)))
+    # The ensemble path uses the plain target sampling (no commensurate
+    # search), rounded up to a fast FFT size like every auto-derived grid.
+    from abtem.core.fft import next_fast_fft_size
+
+    expected_gpts = (
+        next_fast_fft_size(int(np.ceil(extent_x / 0.05))),
+        next_fast_fft_size(int(np.ceil(extent_y / 0.05))),
+    )
     assert ensemble_pot.gpts == expected_gpts
 
     # commensurate_gpts on the same cell/positions should NOT match the plain
-    # ceil(extent / target_sampling) fallback -- confirm they actually differ
-    # here, so this test would catch a regression to commensurability search.
+    # target-derived fallback -- confirm they actually differ here, so this
+    # test would catch a regression to commensurability search.
     commensurate = commensurate_gpts(
         (extent_x, extent_y), single.positions, target_sampling=0.05
     )
