@@ -5789,6 +5789,25 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
 
+def _axis_range_mask(
+    values: np.ndarray, value_range: Optional[tuple[float, float]], param_name: str
+) -> np.ndarray:
+    if value_range is None:
+        return np.ones(len(values), dtype=bool)
+
+    lo, hi = value_range
+    if lo > hi:
+        raise ValueError(f"{param_name}={value_range}: min must not exceed max")
+
+    mask = (values >= lo) & (values <= hi)
+    if not mask.any():
+        raise ValueError(
+            f"{param_name}={value_range} selects no data -- values span "
+            f"[{values.min()}, {values.max()}]"
+        )
+    return mask
+
+
 class MomentumResolvedSpectrum(BaseMeasurements):
     """
     Momentum-resolved energy-loss spectrum S(q, E).
@@ -5796,6 +5815,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
     Stores a 2D intensity array whose last two dimensions correspond to
     scattering-vector bins (q) and energy bins (E). Additional leading
     dimensions are ensemble axes.
+
+    Use :meth:`crop` to restrict the q/energy-loss range before plotting
+    with :meth:`show` -- besides zooming in, this also rescales the
+    colour scale (and, for an exploded grid, every panel's shared colour
+    scale) to the cropped region instead of the full data.
 
     Parameters
     ----------
@@ -5878,6 +5902,44 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             ensemble_axes_metadata=axes_metadata[:-2] or None,
             metadata=metadata,
         )
+
+    def crop(
+        self,
+        q_range: Optional[tuple[float, float]] = None,
+        e_range: Optional[tuple[float, float]] = None,
+    ) -> "MomentumResolvedSpectrum":
+        """
+        Crop the spectrum to a q and/or energy-loss range.
+
+        Parameters
+        ----------
+        q_range : tuple of float, optional
+            Inclusive ``(min, max)`` scattering-vector range [mrad] to keep.
+            If None (default), the full q range is kept.
+        e_range : tuple of float, optional
+            Inclusive ``(min, max)`` energy-loss range [eV] to keep -- note
+            this is in eV (the unit ``e_values`` is stored in) regardless of
+            the ``e_units`` display option of :meth:`show`. If None
+            (default), the full energy range is kept.
+
+        Returns
+        -------
+        cropped : MomentumResolvedSpectrum
+            The cropped spectrum.
+        """
+        q = np.array(self._q_values)
+        e = np.array(self._e_values)
+
+        q_mask = _axis_range_mask(q, q_range, "q_range")
+        e_mask = _axis_range_mask(e, e_range, "e_range")
+
+        array = self.array[..., q_mask, :][..., :, e_mask]
+
+        kwargs = self._copy_kwargs(exclude=("array", "q_values", "e_values"))
+        kwargs["array"] = array
+        kwargs["q_values"] = q[q_mask]
+        kwargs["e_values"] = e[e_mask]
+        return self.__class__(**kwargs)
 
     def show(
         self,

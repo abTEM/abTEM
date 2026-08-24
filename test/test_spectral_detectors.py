@@ -408,6 +408,76 @@ def test_show_warns_on_ensemble_collapse():
         spec.show()
 
 
+# ---- MomentumResolvedSpectrum.crop() -----------------------------------------
+
+
+def _make_simple_spectrum(seed=0):
+    rng = np.random.default_rng(seed)
+    q_values = np.linspace(0, 10, 6)
+    e_values = np.linspace(-0.1, 0.1, 5)
+    array = rng.random((len(q_values), len(e_values)))
+    return (
+        MomentumResolvedSpectrum(array, q_values=q_values, e_values=e_values),
+        array,
+    )
+
+
+def test_crop_selects_correct_sub_range():
+    spec, array = _make_simple_spectrum()
+
+    cropped = spec.crop(q_range=(2, 8), e_range=(-0.06, 0.06))
+
+    assert cropped.q_values == tuple(spec.q_values[1:5])
+    assert cropped.e_values == tuple(spec.e_values[1:4])
+    np.testing.assert_allclose(cropped.array, array[1:5, 1:4])
+
+
+def test_crop_none_keeps_full_range():
+    spec, array = _make_simple_spectrum()
+    cropped = spec.crop()
+    assert cropped.q_values == spec.q_values
+    assert cropped.e_values == spec.e_values
+    np.testing.assert_allclose(cropped.array, array)
+
+
+def test_crop_only_q_range():
+    spec, array = _make_simple_spectrum()
+    cropped = spec.crop(q_range=(2, 8))
+    assert cropped.q_values == tuple(spec.q_values[1:5])
+    assert cropped.e_values == spec.e_values
+    np.testing.assert_allclose(cropped.array, array[1:5, :])
+
+
+def test_crop_preserves_ensemble_axes():
+    spec, array = _make_multiaxis_spectrum()
+    cropped = spec.crop(q_range=(0, 5))
+    assert cropped.ensemble_shape == spec.ensemble_shape
+    assert cropped.ensemble_axes_metadata == spec.ensemble_axes_metadata
+    np.testing.assert_allclose(cropped.array, array[..., :3, :])
+
+
+def test_crop_empty_range_raises():
+    spec, _ = _make_simple_spectrum()
+    with pytest.raises(ValueError, match="selects no data"):
+        spec.crop(q_range=(100, 200))
+
+
+def test_crop_reversed_range_raises():
+    spec, _ = _make_simple_spectrum()
+    with pytest.raises(ValueError, match="min must not exceed max"):
+        spec.crop(q_range=(8, 2))
+
+
+def test_cropped_spectrum_shows_without_error():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()
+    cropped = spec.crop(q_range=(2, 8), e_range=(-0.06, 0.06))
+    fig, ax = cropped.show()
+    assert ax.get_xlim()[1] < spec.q_values[-1]
+
+
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------
 
 
