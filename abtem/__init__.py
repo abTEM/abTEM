@@ -11,17 +11,26 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     PixelatedDetector,
     SegmentedDetector,
+    SpectralAnnularDetector,
+    SpectralSlitDetector,
     WavesDetector,
 )
-from abtem.inelastic.phonons import AtomsEnsemble, FrozenPhonons
+from abtem.inelastic.phonons import (
+    AtomsEnsemble,
+    EnergyResolvedAtomsEnsemble,
+    FrozenPhonons,
+)
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
     IndexedDiffractionPatterns,
     MeasurementsEnsemble,
+    MomentumResolvedSpectrum,
     PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
+    momentum_resolved_spectrum,
+    phonon_loss_diffraction_patterns,
 )
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import CompressedSMatrixArray, SMatrix, SMatrixArray
@@ -41,6 +50,8 @@ __all__ = [
     "stack",
     "from_zarr",
     "AnnularDetector",
+    "SpectralAnnularDetector",
+    "SpectralSlitDetector",
     "SegmentedDetector",
     "FlexibleAnnularDetector",
     "PixelatedDetector",
@@ -50,6 +61,9 @@ __all__ = [
     "RealSpaceLineProfiles",
     "ReciprocalSpaceLineProfiles",
     "MeasurementsEnsemble",
+    "MomentumResolvedSpectrum",
+    "momentum_resolved_spectrum",
+    "phonon_loss_diffraction_patterns",
     "PolarMeasurements",
     "IndexedDiffractionPatterns",
     "SMatrix",
@@ -57,6 +71,7 @@ __all__ = [
     "CompressedSMatrixArray",
     "FrozenPhonons",
     "AtomsEnsemble",
+    "EnergyResolvedAtomsEnsemble",
     "Potential",
     "CrystalPotential",
     "PotentialArray",

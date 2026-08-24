@@ -58,6 +58,7 @@ from abtem.multislice import (
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
+from abtem.distributions import BaseDistribution, EnsembleFromDistributions, validate_distribution
 from abtem.tilt import TiltType2D, validate_tilt
 from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
 from abtem.transform import WavesToWavesTransform
@@ -446,6 +447,22 @@ class Waves(BaseWaves, ArrayObject):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
+        from abtem.core.axes import EnergyAxis
+
+        if ensemble_axes_metadata is None:
+            ensemble_axes_metadata = []
+
+        # Normalise energy: list/array/distribution → EnergyAxis in ensemble_axes_metadata
+        if isinstance(energy, (list, tuple, np.ndarray)):
+            energy = validate_distribution(energy)
+        if isinstance(energy, BaseDistribution):
+            energy_axis = EnergyAxis(
+                values=tuple(float(v) for v in energy.values),
+                _ensemble_mean=energy.ensemble_mean,
+            )
+            ensemble_axes_metadata = [energy_axis] + list(ensemble_axes_metadata)
+            energy = None  # energy stored in ensemble axis, not accelerator
+
         if sampling is not None and extent is not None:
             extent = None
 
@@ -484,9 +501,80 @@ class Waves(BaseWaves, ArrayObject):
 
     @property
     def metadata(self) -> dict:
-        self._metadata["energy"] = self.energy
+        # Only write energy when it is a concrete scalar value.  For
+        # energy-ensemble Waves (self.energy is None) we must *not* overwrite
+        # the "energy" key: it may have been populated with the per-member
+        # value by EnergyAxis.item_metadata when this object was produced by
+        # indexing a multi-energy ensemble.
+        if self.energy is not None:
+            self._metadata["energy"] = self.energy
         self._metadata["reciprocal_space"] = self.reciprocal_space
         return self._metadata
+
+    @property
+    def _valid_energy(self) -> float:
+        """Return a scalar energy [eV] for this object.
+
+        Resolution order:
+        1. ``accelerator.energy`` — set for ordinary single-energy waves.
+        2. ``_metadata["energy"]`` — populated by :meth:`EnergyAxis.item_metadata`
+           when this object was produced by indexing an energy-ensemble.
+        3. A single-element ``EnergyAxis`` in ``ensemble_axes_metadata`` — the
+           residual case during per-member partitioned computation.
+        """
+        from abtem.core.energy import EnergyUndefinedError
+        from abtem.core.axes import EnergyAxis
+        if self.energy is not None:
+            return self.energy
+        energy = self._metadata.get("energy")
+        if energy is not None:
+            return float(energy)
+        for axis in self.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis) and len(axis.values) == 1:
+                return float(axis.values[0])
+        raise EnergyUndefinedError("Energy is not defined")
+
+    @property
+    def angular_sampling(self) -> tuple[float, float]:
+        """Reciprocal-space sampling in units of scattering angles [mrad].
+
+        For a single-energy object the exact energy is used.  For an indexed
+        member of an energy ensemble the per-member energy stored in
+        ``metadata["energy"]`` is used.  For the full multi-member ensemble the
+        maximum energy (shortest wavelength) is used so that the grid is
+        conservative — it covers all members without aliasing.
+        """
+        from abtem.core.axes import EnergyAxis
+        from abtem.core.energy import EnergyUndefinedError, energy2wavelength
+
+        energy = self.accelerator.energy
+        if energy is None:
+            energy = self._metadata.get("energy")
+        if energy is None:
+            for axis in self.ensemble_axes_metadata:
+                if isinstance(axis, EnergyAxis):
+                    energy = float(max(axis.values))
+                    break
+        if energy is None:
+            raise EnergyUndefinedError("Energy is not defined")
+        wl = energy2wavelength(energy)
+        return (
+            self.reciprocal_space_sampling[0] * wl * 1e3,
+            self.reciprocal_space_sampling[1] * wl * 1e3,
+        )
+
+    @property
+    def wavelength(self) -> float:
+        """Relativistic electron wavelength [Å].
+
+        Resolves the per-member energy (``metadata["energy"]`` or a single-value
+        ``EnergyAxis``) for an indexed energy-ensemble member, mirroring
+        :attr:`angular_sampling`.  A full multi-energy ensemble has no single
+        wavelength and raises ``EnergyUndefinedError``.
+        """
+        from abtem.core.energy import energy2wavelength
+
+        return energy2wavelength(self._valid_energy)
 
     @classmethod
     def from_array_and_metadata(
@@ -1284,6 +1372,15 @@ class Waves(BaseWaves, ArrayObject):
 
         return diffraction_patterns
 
+    def phonon_loss_diffraction_patterns(self, **kwargs):
+        """Compute inelastic (TDS) diffraction patterns from energy-resolved
+        frozen-phonon exit waves.  See
+        :func:`abtem.measurements.phonon_loss_diffraction_patterns` for full
+        documentation."""
+        from abtem.measurements import phonon_loss_diffraction_patterns
+
+        return phonon_loss_diffraction_patterns(self, **kwargs)
+
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
     ) -> Waves:
@@ -1308,14 +1405,60 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
+        from abtem.array import stack
+        from abtem.core.axes import EnergyAxis
+
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        if not ctf.accelerator.energy:
-            ctf.accelerator.match(self.accelerator)
+        # Multi-energy ensemble: a single CTF cannot represent several
+        # wavelengths at once.  Apply the CTF to each energy member at its own
+        # wavelength and restack along the EnergyAxis.
+        energy_axes = [
+            (i, ax)
+            for i, ax in enumerate(self.ensemble_axes_metadata)
+            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
+        ]
+        if energy_axes:
+            if ctf.accelerator.energy is not None:
+                raise ValueError(
+                    "Cannot apply a CTF with a fixed energy to a multi-energy "
+                    "ensemble: each energy member requires its own wavelength. "
+                    "Pass a CTF without an energy so the per-member energies are "
+                    "used."
+                )
+            axis_idx, energy_axis = energy_axes[0]
+            members = []
+            for i, energy in enumerate(energy_axis.values):
+                index = tuple(
+                    i if j == axis_idx else slice(None)
+                    for j in range(len(self.ensemble_shape))
+                )
+                member_ctf = ctf.copy()
+                member_ctf.accelerator.energy = float(energy)
+                members.append(
+                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
+                )
+            waves = stack(members, energy_axis, axis=axis_idx)
+            # The stacked object must remain a genuine multi-energy ensemble:
+            # its scalar accelerator/metadata energy come from member[0] and
+            # would misrepresent the other members.
+            waves.accelerator.energy = None
+            waves._metadata.pop("energy", None)
+            assert isinstance(waves, Waves)
+            return waves
 
-        self.accelerator.match(ctf.accelerator, check_match=True)
-        self.accelerator.check_is_defined()
+        if not ctf.accelerator.energy:
+            # Single energy: resolve the wavelength from the wave functions
+            # (ordinary waves, or an indexed ensemble member whose per-member
+            # energy lives in metadata) without mutating ``self``.
+            ctf.accelerator.energy = self._valid_energy
+        else:
+            # CTF fixes the energy: verify it does not disagree with a concrete
+            # wave energy, but do not overwrite ``self``.
+            self.accelerator.check_match(ctf.accelerator)
+
+        ctf.accelerator.check_is_defined()
 
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
@@ -1483,6 +1626,72 @@ class Waves(BaseWaves, ArrayObject):
         return self.to_images(convert_complex=convert_complex).show(**kwargs)
 
 
+class EnergyEnsemble(EnsembleFromDistributions):
+    """
+    Wraps electron energy for use inside the WavesBuilder ensemble machinery.
+
+    Accepts a scalar float, a list/array of floats, or a
+    :class:`.BaseDistribution`.  When a single value is given, the object
+    behaves like a plain scalar.  When multiple values are given, it acts as
+    an ensemble axis and causes :class:`.WavesBuilder` subclasses to produce
+    output with a leading :class:`.EnergyAxis`.
+
+    The :attr:`energy` property returns:
+
+    * ``float`` — for a scalar energy or a single-element sequence.
+    * :class:`.BaseDistribution` — for a genuine multi-energy ensemble.
+    * ``None`` — if no energy has been set.
+    """
+
+    def __init__(self, energy=None):
+        if energy is not None:
+            self._energy = validate_distribution(energy)
+        else:
+            self._energy = None
+        super().__init__(distributions=("energy",))
+
+    @property
+    def energy(self):
+        """Return the energy value(s).
+
+        Returns
+        -------
+        float
+            The scalar energy [eV] if a single value was given.
+        BaseDistribution
+            The full distribution if multiple values were given.
+        None
+            If no energy has been set.
+        """
+        if self._energy is None:
+            return None
+        if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
+            return float(self._energy.values[0])
+        return self._energy
+
+    @energy.setter
+    def energy(self, value):
+        self._energy = validate_distribution(value) if value is not None else None
+
+    @property
+    def ensemble_axes_metadata(self) -> list:
+        from abtem.core.axes import EnergyAxis
+        e = self.energy
+        if isinstance(e, BaseDistribution):
+            return [EnergyAxis(
+                values=tuple(float(v) for v in e.values),
+                _ensemble_mean=e.ensemble_mean,
+            )]
+        return []
+
+
+def validate_energy(energy) -> EnergyEnsemble:
+    """Convert energy (float, list, distribution, or EnergyEnsemble) to EnergyEnsemble."""
+    if isinstance(energy, EnergyEnsemble):
+        return energy
+    return EnergyEnsemble(energy)
+
+
 class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def __init__(
         self,
@@ -1531,6 +1740,17 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         """Check whether the wave functions can be built."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
+    @property
+    def _valid_energy(self) -> float:
+        """Electron acceleration energy [eV]. Uses accelerator.energy directly to
+        bypass the energy property override in subclasses (which may return
+        EnergyEnsemble rather than a scalar float)."""
+        from abtem.core.energy import EnergyUndefinedError
+
+        if self.accelerator.energy is None:
+            raise EnergyUndefinedError("Energy is not defined")
+        return self.accelerator.energy
 
     @property
     def _ensembles(self):
@@ -1634,8 +1854,13 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         )
 
     @property
-    def _default_ensemble_chunks(self) -> tuple[str, ...]:
-        return ("auto",) * len(self.ensemble_shape)
+    def _default_ensemble_chunks(self) -> tuple:
+        # Collect per-ensemble default chunks so each ensemble can specify its own
+        return tuple(
+            c
+            for ensemble in self._ensembles.values()
+            for c in ensemble._default_ensemble_chunks
+        )
 
     @property
     def device(self) -> str:
@@ -1711,7 +1936,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
         waves = Waves(
             array,
-            energy=self.energy,
+            energy=self.accelerator.energy,
             extent=self.extent,
             reciprocal_space=False,
             metadata=self.metadata,
@@ -1735,8 +1960,12 @@ class PlaneWave(WavesBuilder):
     sampling : two float, optional
         Lateral sampling of the wave functions [Å]. If 'gpts' is also given, will be
         ignored.
-    energy : float, optional
-        Electron energy [eV]. If not provided, inferred from the wave functions.
+    energy : float or list of float, optional
+        Electron energy [eV]. A single float gives a standard single-energy
+        simulation. A list or array of floats runs the simulation at each
+        energy in turn and returns output with a leading :class:`.EnergyAxis`
+        ensemble dimension. If not provided, the energy must be inferred from
+        attached wave functions.
     normalize : bool, optional
         If true, normalizes the wave function such that its reciprocal space intensity
         sums to one. If false, the
@@ -1754,18 +1983,20 @@ class PlaneWave(WavesBuilder):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | None = None,
         normalize: bool = False,
         tilt: tuple[float, float] = (0.0, 0.0),
         device: Optional[str] = None,
     ):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self._accelerator = Accelerator(energy=energy)
+        self._energy = validate_energy(energy)
+        _e = self._energy.energy
+        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
 
         self._normalize = normalize
         device = validate_device(device)
 
-        super().__init__(ensemble_names=("tilt",), device=device, tilt=tilt)
+        super().__init__(ensemble_names=("tilt", "energy"), device=device, tilt=tilt)
 
     @property
     def tilt(self):
@@ -1777,9 +2008,24 @@ class PlaneWave(WavesBuilder):
         self._tilt = validate_tilt(value)
 
     @property
+    def energy(self):
+        return self._energy
+
+    @energy.setter
+    def energy(self, value):
+        self._energy = validate_energy(value)
+        _e = self._energy.energy
+        self._accelerator.energy = _e if not isinstance(_e, BaseDistribution) else None
+
+    def check_can_build(self):
+        self.grid.check_is_defined()
+        if self.accelerator.energy is None and self._energy.energy is None:
+            raise RuntimeError("Energy is not defined")
+
+    @property
     def metadata(self):
         metadata = {
-            "energy": self.energy,
+            "energy": self.accelerator.energy,
             **self._tilt.metadata,
             "normalization": ("reciprocal_space" if self._normalize else "values"),
         }
@@ -1797,6 +2043,33 @@ class PlaneWave(WavesBuilder):
 
         xp = get_array_module(waves_builder.device)
 
+        # Multi-energy case: iterate over energies and stack results
+        if (
+            waves_builder.accelerator.energy is None
+            and waves_builder._energy.energy is not None
+        ):
+            arrays = []
+            for e_val in waves_builder._energy.energy.values:
+                e_float = float(e_val)
+                if waves_builder.normalize:
+                    arr = xp.full(
+                        waves_builder.gpts,
+                        1 / np.prod(waves_builder.gpts),
+                        dtype=get_dtype(complex=True),
+                    )
+                else:
+                    arr = xp.ones(waves_builder.gpts, dtype=get_dtype(complex=True))
+                single_waves = Waves(
+                    arr,
+                    energy=e_float,
+                    extent=waves_builder.extent,
+                    metadata={**waves_builder.metadata, "energy": e_float},
+                    reciprocal_space=False,
+                )
+                single_waves = waves_builder.tilt.apply(single_waves)
+                arrays.append(single_waves._eager_array)
+            return xp.stack(arrays, axis=0)
+
         if waves_builder.normalize:
             array = xp.full(
                 waves_builder.gpts,
@@ -1809,7 +2082,7 @@ class PlaneWave(WavesBuilder):
 
         waves = Waves(
             array,
-            energy=waves_builder.energy,
+            energy=waves_builder.accelerator.energy,
             extent=waves_builder.extent,
             metadata=waves_builder.metadata,
             reciprocal_space=False,
@@ -1897,6 +2170,17 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
+        # Ensure each energy value occupies its own dask chunk so that
+        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        if waves.is_lazy:
+            from abtem.core.axes import EnergyAxis
+            for i, ax in enumerate(waves.ensemble_axes_metadata):
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
+                    chunks = list(waves._lazy_array.chunks)
+                    chunks[i] = (1,) * len(ax.values)
+                    waves = waves.rechunk(tuple(chunks))
+                    break
+
         multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
         measurements = multislice.apply(waves)
@@ -1921,11 +2205,15 @@ class Probe(WavesBuilder):
     sampling : two float, optional
         Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be
         ignored.
-    energy : float, optional
-        Electron energy [eV]. If not provided, inferred from the wave functions.
-    soft : float, optional
-        Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a
-        custom aperture is given.
+    energy : float or list of float, optional
+        Electron energy [eV]. A single float gives a standard single-energy
+        simulation. A list or array of floats runs the simulation at each
+        energy in turn and returns output with a leading :class:`.EnergyAxis`
+        ensemble dimension. If not provided, the energy must be inferred from
+        attached wave functions.
+    soft : bool, optional
+        If True, the edge of the default aperture is softened (default is True). Ignored
+        if a custom aperture is given.
     tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`,
     optional
         Small-angle beam tilt [mrad]. This value should generally not exceed one degree.
@@ -1951,7 +2239,7 @@ class Probe(WavesBuilder):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | None = None,
         soft: bool = True,
         tilt: TiltType2D = (0.0, 0.0),
         device: Optional[str] = None,
@@ -1961,7 +2249,9 @@ class Probe(WavesBuilder):
         metadata: Optional[dict] = None,
         **kwargs,
     ):
-        self._accelerator = Accelerator(energy=energy)
+        self._energy = validate_energy(energy)
+        _e = self._energy.energy
+        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
 
         if (semiangle_cutoff is not None) and (aperture is not None):
             if not np.allclose(aperture.semiangle_cutoff, semiangle_cutoff):
@@ -1983,7 +2273,7 @@ class Probe(WavesBuilder):
             aberrations = {}
 
         if isinstance(aberrations, dict):
-            aberrations = Aberrations(energy=energy, **aberrations, **kwargs)
+            aberrations = Aberrations(energy=_e if not isinstance(_e, BaseDistribution) else None, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -2005,9 +2295,25 @@ class Probe(WavesBuilder):
             "aberrations",
             "aperture",
             "scan_positions",
+            "energy",
         )
 
         super().__init__(ensemble_names=ensemble_names, device=device, tilt=tilt)
+
+    @property
+    def energy(self):
+        return self._energy
+
+    @energy.setter
+    def energy(self, value):
+        self._energy = validate_energy(value)
+        _e = self._energy.energy
+        self._accelerator.energy = _e if not isinstance(_e, BaseDistribution) else None
+
+    def check_can_build(self):
+        self.grid.check_is_defined()
+        if self.accelerator.energy is None and self._energy.energy is None:
+            raise RuntimeError("Energy is not defined")
 
     @property
     def scan_positions(self) -> BaseScan:
@@ -2076,7 +2382,7 @@ class Probe(WavesBuilder):
         """Metadata describing the probe wave functions."""
         return {
             **self._metadata,
-            "energy": self.energy,
+            "energy": self.accelerator.energy,
             **self.aperture.metadata,
             **self._tilt.metadata,
         }
@@ -2086,11 +2392,49 @@ class Probe(WavesBuilder):
         if hasattr(waves_builder, "item"):
             waves_builder = waves_builder.item()
 
+        xp = get_array_module(waves_builder.device)
+
+        # Multi-energy case: iterate over energies and stack results.
+        # NOTE: aperture and aberrations share waves_builder._accelerator (set in
+        # __init__: aberrations._accelerator = self._accelerator), so mutating
+        # _accelerator.energy propagates to all three. try/finally guarantees
+        # restoration even on exceptions.
+        if (
+            waves_builder.accelerator.energy is None
+            and waves_builder._energy.energy is not None
+        ):
+            kernel = waves_builder.scan_positions._evaluate_kernel(waves_builder)
+            arrays = []
+            original_energy = waves_builder._accelerator.energy
+            try:
+                for e_val in waves_builder._energy.energy.values:
+                    e_float = float(e_val)
+                    waves_builder._accelerator.energy = e_float
+                    single_waves = Waves(
+                        kernel.copy(),
+                        energy=e_float,
+                        extent=waves_builder.extent,
+                        metadata={**waves_builder.metadata, "energy": e_float},
+                        reciprocal_space=True,
+                        ensemble_axes_metadata=waves_builder.scan_positions.ensemble_axes_metadata,
+                    )
+                    single_waves = waves_builder.aperture.apply(single_waves)
+                    single_waves = waves_builder.tilt.apply(single_waves)
+                    single_waves = waves_builder.aberrations.apply(single_waves)
+                    single_waves = single_waves.normalize()
+                    single_waves = single_waves.ensure_real_space()
+                    arrays.append(single_waves._eager_array)
+            finally:
+                waves_builder._accelerator.energy = original_energy
+            # Energy is the last ensemble axis; insert it after the non-energy ensemble dims
+            stack_axis = len(waves_builder.ensemble_shape) - len(waves_builder._energy.ensemble_shape)
+            return xp.stack(arrays, axis=stack_axis)
+
         array = waves_builder.scan_positions._evaluate_kernel(waves_builder)
 
         waves = Waves(
             array,
-            energy=waves_builder.energy,
+            energy=waves_builder.accelerator.energy,
             extent=waves_builder.extent,
             metadata=waves_builder.metadata,
             reciprocal_space=True,
@@ -2190,6 +2534,20 @@ class Probe(WavesBuilder):
             probe.grid.match(potential)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
+
+        # Ensure each energy value occupies its own dask chunk so that
+        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        # Do this before _prebuild_reused_potential below, so it sees the true
+        # final chunk count (and therefore how many times the potential will
+        # actually be reused) rather than the pre-rechunk chunking.
+        if waves.is_lazy:
+            from abtem.core.axes import EnergyAxis
+            for i, ax in enumerate(waves.ensemble_axes_metadata):
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
+                    chunks = list(waves._lazy_array.chunks)
+                    chunks[i] = (1,) * len(ax.values)
+                    waves = waves.rechunk(tuple(chunks))
+                    break
 
         potential = _prebuild_reused_potential(potential, waves)
 
