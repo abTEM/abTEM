@@ -169,6 +169,39 @@ def get_cuda_cluster_client():
     return None
 
 
+_pushed_config_token = None
+
+
+def _apply_config_snapshot(snapshot):
+    from abtem.core.config import config as config_dict
+
+    config_dict.clear()
+    config_dict.update(snapshot)
+
+
+def push_config_to_workers(client):
+    """Mirror this process's abTEM configuration onto the client's workers.
+
+    abTEM resolves configuration inside tasks, in the worker process --
+    ``get_dtype`` reads ``precision`` at call time, for example -- but worker
+    processes only ever see the defaults: ``abtem.config.set`` in the client
+    does not reach them, silently changing results (a float64 computation
+    dispatched to default-configured workers runs in float32). Push a snapshot
+    of the merged configuration before dispatching work; repeated pushes of an
+    unchanged configuration are skipped.
+    """
+    global _pushed_config_token
+
+    import copy
+
+    snapshot = copy.deepcopy(config)
+    token = (id(client), repr(snapshot))
+    if token == _pushed_config_token:
+        return
+    client.run(_apply_config_snapshot, snapshot)
+    _pushed_config_token = token
+
+
 def is_gpu_dask_client(client) -> bool:
     """
     Check whether a distributed client can safely execute CuPy computations.

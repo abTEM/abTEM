@@ -451,3 +451,72 @@ def test_to_zarr_compute_false_returns_delayed(tmp_path):
     assert isinstance(delayed, Delayed)
     delayed.compute()
     assert (tmp_path / "waves.zarr").exists()
+
+
+def _worker_precision():
+    from abtem.core import config
+
+    return config.get("precision")
+
+
+def test_push_config_to_workers():
+    distributed = pytest.importorskip("distributed")
+
+    from abtem.core import config
+    from abtem.core import backend
+
+    backend._pushed_config_token = None
+    with distributed.LocalCluster(
+        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=None
+    ) as cluster, distributed.Client(cluster) as client:
+        assert set(client.run(_worker_precision).values()) == {"float32"}
+
+        with config.set({"precision": "float64"}):
+            backend.push_config_to_workers(client)
+            assert set(client.run(_worker_precision).values()) == {"float64"}
+
+            # An unchanged configuration is not pushed again.
+            token = backend._pushed_config_token
+            backend.push_config_to_workers(client)
+            assert backend._pushed_config_token is token
+
+
+def _worker_config_snapshot():
+    import copy
+
+    from abtem.core.config import config as config_dict
+
+    return copy.deepcopy(config_dict)
+
+
+def test_workers_see_identical_config():
+    distributed = pytest.importorskip("distributed")
+
+    from abtem.core import backend, config
+    from abtem.core.config import config as client_config_dict
+
+    backend._pushed_config_token = None
+    with distributed.LocalCluster(
+        n_workers=2, processes=True, threads_per_worker=1, dashboard_address=None
+    ) as cluster, distributed.Client(cluster) as client:
+        with config.set(
+            {
+                "precision": "float64",
+                "cupy.fft-cache-size": "3 GB",
+                "potential.slice-chunk-size": 7,
+            }
+        ):
+            backend.push_config_to_workers(client)
+
+            # Every worker must hold a config identical to the client's merged
+            # configuration -- not just the keys we changed.
+            for snapshot in client.run(_worker_config_snapshot).values():
+                assert snapshot == client_config_dict
+
+            # A subsequent change must invalidate the push token and
+            # propagate on the next dispatch.
+            with config.set({"precision": "float32"}):
+                backend.push_config_to_workers(client)
+                for snapshot in client.run(_worker_config_snapshot).values():
+                    assert snapshot == client_config_dict
+                    assert snapshot["precision"] == "float32"

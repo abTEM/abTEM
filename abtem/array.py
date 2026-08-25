@@ -41,6 +41,7 @@ from abtem.core.axes import (
     axis_to_dict,
 )
 from abtem.core.backend import (
+    push_config_to_workers,
     check_cupy_is_installed,
     copy_to_device,
     cp,
@@ -576,6 +577,9 @@ def _resolve_gpu_scheduler(kwargs: dict) -> dict:
                 UserWarning,
             )
         kwargs["scheduler"] = "synchronous"
+
+    if is_gpu_dask_client(client):
+        push_config_to_workers(client)
 
     return kwargs
 
