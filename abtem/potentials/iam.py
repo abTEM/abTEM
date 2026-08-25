@@ -540,6 +540,34 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             typically require the potential to be sliced with a fine, close-to-uniform
             slice thickness.
 
+        Examples
+        --------
+        A line profile across the projected potential:
+
+        >>> import abtem
+        >>> from ase.build import bulk
+        >>> atoms = bulk("Si", cubic=True) * (4, 4, 4)
+        >>> potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=1.0)
+        >>> profile = potential.interpolate_line(start=(0, 0), end=(10, 10), gpts=200)
+        >>> profile.shape
+        (200,)
+
+        A *tilted* line through the full 3D potential, e.g. following an atomic
+        column that runs diagonally through the specimen thickness: give `start`
+        and `end` different depth (`z`) coordinates and set `projected=False`. A
+        fine, close-to-uniform `slice_thickness` (as here) gives the most accurate
+        depth axis:
+
+        >>> potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=0.1)
+        >>> profile = potential.interpolate_line(
+        ...     start=(0.0, 0.0, 0.0),
+        ...     end=(2.0, 2.0, potential.thickness),
+        ...     gpts=200,
+        ...     projected=False,
+        ... )
+        >>> profile.shape
+        (200,)
+
         Returns
         -------
         line_profiles : RealSpaceLineProfiles
@@ -599,6 +627,26 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             Sets whether the ending position is included or not.
         projected : bool, optional
             See :meth:`.interpolate_line`.
+
+        Examples
+        --------
+        A line profile centered on a given lateral position, at a fixed depth
+        through the full 3D potential (see :meth:`.interpolate_line` for a
+        *tilted* 3D line, i.e. one whose depth also varies along the line):
+
+        >>> import abtem
+        >>> from ase.build import bulk
+        >>> atoms = bulk("Si", cubic=True) * (4, 4, 4)
+        >>> potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=0.1)
+        >>> profile = potential.interpolate_line_at_position(
+        ...     center=(5.0, 5.0, 8.0),
+        ...     angle=30.0,
+        ...     extent=4.0,
+        ...     gpts=100,
+        ...     projected=False,
+        ... )
+        >>> profile.shape
+        (100,)
 
         Returns
         -------
