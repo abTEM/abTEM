@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Optional, Sequence, Type
 import dask
 import dask.array as da
 import numpy as np
-from ase import Atoms
+from ase import Atom, Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
@@ -34,7 +34,7 @@ from abtem.core.axes import (
     ThicknessAxis,
     _find_axes_type,
 )
-from abtem.core.backend import get_array_module, validate_device
+from abtem.core.backend import get_array_module, get_ndimage_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
 from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
@@ -52,7 +52,7 @@ from abtem.integrals import (
     QuadratureProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
 )
-from abtem.measurements import Images
+from abtem.measurements import Images, RealSpaceLineProfiles
 from abtem.slicing import (
     BaseSlicedAtoms,
     SlicedAtoms,
@@ -488,6 +488,134 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
                     )
 
         return visualization
+
+    def interpolate_line(
+        self,
+        start: tuple[float, float] | tuple[float, float, float] | Atom | None = None,
+        end: tuple[float, float] | tuple[float, float, float] | Atom | None = None,
+        sampling: Optional[float] = None,
+        gpts: Optional[int] = None,
+        width: float = 0.0,
+        margin: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
+        fractional: bool = False,
+        projected: bool = True,
+    ) -> RealSpaceLineProfiles:
+        """
+        Interpolate the potential along a line. Either `sampling` or `gpts` must be
+        provided. This requires building the potential (done automatically).
+
+        Parameters
+        ----------
+        start : two or three float, Atom, optional
+            Starting position of the line [Å] (alternatively taken from a selected
+            atom). Given as lateral `(x, y)` coordinates when `projected` is True.
+            When `projected` is False, a depth coordinate may be added, `(x, y, z)`
+            (default `z` is 0.).
+        end : two or three float, Atom, optional
+            Ending position of the line [Å]. See `start`.
+        sampling : float, optional
+            Sampling of grid points along the line [Å].
+        gpts : int, optional
+            Number of grid points along the line.
+        width : float, optional
+            The interpolation will be averaged across a perpendicular distance equal to
+            this width. Only supported when `projected` is True.
+        margin : float, optional
+            Add margin [Å] to the start and end of the interpolated line. Only
+            supported when `projected` is True.
+        order : int, optional
+            The spline interpolation order.
+        endpoint : bool
+            Sets whether the ending position is included or not.
+        fractional : bool
+            If True, use fractional coordinates with respect to the lateral extent
+            (and, if `projected` is False, the thickness) of the potential.
+        projected : bool, optional
+            If True (default), interpolate the projected (thickness-summed)
+            potential; `start` and `end` are lateral positions. If False, interpolate
+            the full 3D potential along a (possibly tilted) line in 3D; `start` and
+            `end` may include a depth coordinate. Meaningful results in this case
+            typically require the potential to be sliced with a fine, close-to-uniform
+            slice thickness.
+
+        Returns
+        -------
+        line_profiles : RealSpaceLineProfiles
+            The interpolated line(s).
+        """
+        return self.build().interpolate_line(
+            start=start,
+            end=end,
+            sampling=sampling,
+            gpts=gpts,
+            width=width,
+            margin=margin,
+            order=order,
+            endpoint=endpoint,
+            fractional=fractional,
+            projected=projected,
+        )
+
+    def interpolate_line_at_position(
+        self,
+        center: tuple[float, float] | tuple[float, float, float] | Atom,
+        angle: float = 0.0,
+        extent: float = 1.0,
+        gpts: Optional[int] = None,
+        sampling: Optional[float] = None,
+        width: float = 0.0,
+        order: int = 3,
+        endpoint: bool = True,
+        projected: bool = True,
+    ) -> RealSpaceLineProfiles:
+        """
+        Interpolate the potential along a line centered at a given position. This
+        requires building the potential (done automatically).
+
+        Parameters
+        ----------
+        center : two or three float, Atom
+            Center position of the line [Å]. May be given as an Atom. Given as a
+            lateral `(x, y)` position when `projected` is True. When `projected` is
+            False, a depth coordinate may be added, `(x, y, z)` (default `z` is 0.,
+            or the atom's `z` coordinate for an `Atom`); the line then runs at
+            constant depth.
+        angle : float
+            Angle of the line in the lateral `xy`-plane [deg.].
+        extent : float
+            Extent of the line [Å].
+        gpts : int, optional
+            Number of grid points along the line.
+        sampling : float, optional
+            Sampling of grid points along the line [Å].
+        width : float, optional
+            The interpolation will be averaged across a perpendicular distance equal to
+            this width. Only supported when `projected` is True.
+        order : int, optional
+            The spline interpolation order.
+        endpoint : bool
+            Sets whether the ending position is included or not.
+        projected : bool, optional
+            See :meth:`.interpolate_line`.
+
+        Returns
+        -------
+        line_profiles : RealSpaceLineProfiles
+            The interpolated line(s).
+        """
+        return self.build().interpolate_line_at_position(
+            center=center,
+            angle=angle,
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+            width=width,
+            order=order,
+            endpoint=endpoint,
+            projected=projected,
+        )
 
 
 class BasePotential(BaseField, metaclass=ABCMeta):
@@ -1353,6 +1481,42 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         )
 
 
+def _validate_3d_position(
+    position: tuple[float, float] | tuple[float, float, float] | Atom,
+) -> tuple[float, float, float]:
+    if isinstance(position, Atom):
+        return (position.x, position.y, position.z)
+
+    position = tuple(float(c) for c in position)
+
+    if len(position) == 3:
+        return position
+    elif len(position) == 2:
+        return position + (0.0,)
+    else:
+        raise ValueError(
+            "position must be given as two or three floats, or an Atom, got "
+            f"{position}"
+        )
+
+
+def _interpolate_stack_3d(array, positions, mode: str, order: int, **kwargs):
+    map_coordinates = get_ndimage_module(array).map_coordinates
+    xp = get_array_module(array)
+
+    old_shape = array.shape
+    array = array.reshape((-1,) + array.shape[-3:])
+    array = xp.pad(array, ((0, 0),) + ((2 * order,) * 2,) * 3, mode=mode)
+
+    positions = positions + 2 * order
+    output = xp.zeros((array.shape[0], positions.shape[1]), dtype=array.dtype)
+
+    for i in range(array.shape[0]):
+        map_coordinates(array[i], positions, output=output[i], order=order, **kwargs)
+
+    return output.reshape(old_shape[:-3] + (positions.shape[1],))
+
+
 class FieldArray(BaseField, ArrayObject):
     def __init__(
         self,
@@ -1742,6 +1906,174 @@ class FieldArray(BaseField, ArrayObject):
             sampling=self._valid_sampling,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=self.metadata,
+        )
+
+    def interpolate_line(
+        self,
+        start: tuple[float, float] | tuple[float, float, float] | Atom | None = None,
+        end: tuple[float, float] | tuple[float, float, float] | Atom | None = None,
+        sampling: Optional[float] = None,
+        gpts: Optional[int] = None,
+        width: float = 0.0,
+        margin: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
+        fractional: bool = False,
+        projected: bool = True,
+    ) -> RealSpaceLineProfiles:
+        """See :meth:`.BaseField.interpolate_line`."""
+        if projected:
+            return self.project().interpolate_line(
+                start=start,
+                end=end,
+                sampling=sampling,
+                gpts=gpts,
+                width=width,
+                margin=margin,
+                order=order,
+                endpoint=endpoint,
+                fractional=fractional,
+            )
+
+        if width:
+            raise NotImplementedError(
+                "width > 0 is only supported for projected=True."
+            )
+
+        if margin:
+            raise NotImplementedError("margin is only supported for projected=True.")
+
+        if start is None:
+            start = (0.0, 0.0, 0.0)
+        start = _validate_3d_position(start)
+
+        if end is None:
+            end = (0.0, 1.0, 0.0) if fractional else (0.0, self.extent[0], 0.0)
+        end = _validate_3d_position(end)
+
+        if fractional:
+            start = (
+                start[0] * self.extent[0],
+                start[1] * self.extent[1],
+                start[2] * self.thickness,
+            )
+            end = (
+                end[0] * self.extent[0],
+                end[1] * self.extent[1],
+                end[2] * self.thickness,
+            )
+
+        length = float(np.linalg.norm(np.array(end) - np.array(start)))
+
+        if (sampling is None) and (gpts is None):
+            sampling = min(min(self.sampling), min(self.slice_thickness))
+
+        if gpts is None:
+            gpts = max(int(np.ceil(length / sampling)), 1)
+
+        if endpoint and gpts > 1:
+            line_sampling = length / (gpts - 1)
+        elif gpts > 0:
+            line_sampling = length / gpts
+        else:
+            line_sampling = 0.0
+
+        dtype = get_dtype(complex=False)
+        x = np.linspace(start[0], end[0], gpts, endpoint=endpoint, dtype=dtype)
+        y = np.linspace(start[1], end[1], gpts, endpoint=endpoint, dtype=dtype)
+        z = np.linspace(start[2], end[2], gpts, endpoint=endpoint, dtype=dtype)
+
+        slice_thickness = np.array(self.slice_thickness)
+        z_centers = np.cumsum(slice_thickness) - slice_thickness / 2
+
+        if len(z_centers) > 1:
+            z_px = np.interp(z, z_centers, np.arange(len(z_centers)))
+        else:
+            z_px = np.zeros_like(z)
+
+        x_px = x / self.sampling[0]
+        y_px = y / self.sampling[1]
+
+        xp = get_array_module(self.array)
+        positions = xp.asarray(np.stack((z_px, x_px, y_px), axis=0))
+
+        if self.is_lazy:
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
+            chunks = self.array.chunks[:-n_base] + (gpts,)
+            new_axis = (base_axes[0],)
+
+            array = da.map_blocks(
+                _interpolate_stack_3d,
+                self.array,
+                positions=positions,
+                mode="wrap",
+                order=order,
+                drop_axis=base_axes,
+                new_axis=new_axis,
+                chunks=chunks,
+                meta=xp.array((), dtype=dtype),
+            )
+        else:
+            array = _interpolate_stack_3d(
+                self.array, positions, mode="wrap", order=order
+            )
+
+        from copy import copy
+
+        metadata = copy(self.metadata)
+        metadata["start"] = start
+        metadata["end"] = end
+
+        return RealSpaceLineProfiles(
+            array=array,
+            sampling=line_sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    def interpolate_line_at_position(
+        self,
+        center: tuple[float, float] | tuple[float, float, float] | Atom,
+        angle: float = 0.0,
+        extent: float = 1.0,
+        gpts: Optional[int] = None,
+        sampling: Optional[float] = None,
+        width: float = 0.0,
+        order: int = 3,
+        endpoint: bool = True,
+        projected: bool = True,
+    ) -> RealSpaceLineProfiles:
+        """See :meth:`.BaseField.interpolate_line_at_position`."""
+        if projected:
+            return self.project().interpolate_line_at_position(
+                center=center,
+                angle=angle,
+                extent=extent,
+                gpts=gpts,
+                sampling=sampling,
+                width=width,
+                order=order,
+                endpoint=endpoint,
+            )
+
+        center = _validate_3d_position(center)
+
+        direction = np.array(
+            (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)), 0.0)
+        )
+        start = tuple(np.array(center) - extent / 2 * direction)
+        end = tuple(np.array(center) + extent / 2 * direction)
+
+        return self.interpolate_line(
+            start,
+            end,
+            gpts=gpts,
+            sampling=sampling,
+            width=width,
+            order=order,
+            endpoint=endpoint,
+            projected=False,
         )
 
 

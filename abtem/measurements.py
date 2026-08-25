@@ -1075,10 +1075,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
-            # raise NotImplementedError("Lazy interpolation not implemented.")
-            # TDOO: Implement lazy interpolation
-
-            base_axes = tuple(range(len(self.base_shape)))
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
             chunks = self.array.chunks[:-2] + (positions.shape[0],)
             new_axis = (base_axes[0],)
 

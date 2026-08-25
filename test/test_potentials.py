@@ -1164,6 +1164,158 @@ def test_potential_show_depth_profile(si_potential):
     assert isinstance(viz, Visualization)
 
 
+# --- interpolate_line tests ---
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_potential_interpolate_line_projected_matches_project(device, lazy):
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (2, 2, 5)
+    potential = Potential(
+        atoms, slice_thickness=1.0, gpts=(32, 32), device=device
+    ).build(lazy=lazy)
+
+    direct = potential.interpolate_line(start=(0.0, 0.0), end=(3.0, 4.0), gpts=25)
+    via_project = potential.project().interpolate_line(
+        start=(0.0, 0.0), end=(3.0, 4.0), gpts=25
+    )
+
+    assert direct.shape == via_project.shape
+    np.testing.assert_allclose(
+        np.asarray(direct.array.compute() if lazy else direct.array),
+        np.asarray(via_project.array.compute() if lazy else via_project.array),
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_potential_interpolate_line_3d_lazy_matches_eager(device, lazy):
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (2, 2, 5)
+    potential_lazy = Potential(
+        atoms, slice_thickness=0.5, gpts=(32, 32), device=device
+    ).build(lazy=True)
+    potential_eager = Potential(
+        atoms, slice_thickness=0.5, gpts=(32, 32), device=device
+    ).build(lazy=False)
+
+    kwargs = dict(start=(1.0, 2.0, 0.5), end=(3.0, 3.5, 8.0), gpts=40, projected=False)
+    profile_lazy = potential_lazy.interpolate_line(**kwargs)
+    profile_eager = potential_eager.interpolate_line(**kwargs)
+
+    assert profile_lazy.shape == profile_eager.shape
+    np.testing.assert_allclose(
+        np.asarray(profile_lazy.array.compute()),
+        np.asarray(profile_eager.array),
+    )
+
+
+def test_potential_interpolate_line_3d_frozen_phonon_ensemble_shape():
+    import abtem
+
+    atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+    fp = abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=1)
+    potential_lazy = Potential(fp, sampling=0.2, slice_thickness=0.5).build(lazy=True)
+    potential_eager = Potential(fp, sampling=0.2, slice_thickness=0.5).build(
+        lazy=False
+    )
+
+    projected = potential_lazy.interpolate_line(
+        start=(0.0, 0.0), end=(2.0, 2.0), gpts=10
+    )
+    volumetric = potential_lazy.interpolate_line(
+        start=(0.0, 0.0, 0.0), end=(2.0, 2.0, 2.0), gpts=10, projected=False
+    )
+
+    assert projected.shape == (3, 10)
+    assert volumetric.shape == (3, 10)
+    np.testing.assert_allclose(
+        projected.array.compute(),
+        potential_eager.interpolate_line(
+            start=(0.0, 0.0), end=(2.0, 2.0), gpts=10
+        ).array,
+    )
+    np.testing.assert_allclose(
+        volumetric.array.compute(),
+        potential_eager.interpolate_line(
+            start=(0.0, 0.0, 0.0), end=(2.0, 2.0, 2.0), gpts=10, projected=False
+        ).array,
+    )
+
+
+def test_potential_interpolate_line_3d_rejects_width_and_margin(si_potential):
+    pot = si_potential.build(lazy=False)
+    with pytest.raises(NotImplementedError):
+        pot.interpolate_line(
+            start=(0.0, 0.0, 0.0),
+            end=(1.0, 1.0, 1.0),
+            gpts=10,
+            width=1.0,
+            projected=False,
+        )
+    with pytest.raises(NotImplementedError):
+        pot.interpolate_line(
+            start=(0.0, 0.0, 0.0),
+            end=(1.0, 1.0, 1.0),
+            gpts=10,
+            margin=1.0,
+            projected=False,
+        )
+
+
+def test_potential_interpolate_line_fractional(si_potential):
+    pot = si_potential.build(lazy=False)
+
+    projected = pot.interpolate_line(
+        start=(0.0, 0.0), end=(1.0, 1.0), fractional=True, gpts=10
+    )
+    expected_end = (pot.extent[0], pot.extent[1])
+    explicit = pot.interpolate_line(start=(0.0, 0.0), end=expected_end, gpts=10)
+    np.testing.assert_allclose(projected.array, explicit.array)
+
+    volumetric = pot.interpolate_line(
+        start=(0.0, 0.0, 0.0),
+        end=(1.0, 1.0, 1.0),
+        fractional=True,
+        gpts=10,
+        projected=False,
+    )
+    explicit_3d = pot.interpolate_line(
+        start=(0.0, 0.0, 0.0),
+        end=(pot.extent[0], pot.extent[1], pot.thickness),
+        gpts=10,
+        projected=False,
+    )
+    np.testing.assert_allclose(volumetric.array, explicit_3d.array)
+
+
+def test_potential_interpolate_line_at_position(si_potential):
+    pot = si_potential.build(lazy=False)
+    center = (pot.extent[0] / 2, pot.extent[1] / 2)
+
+    projected = pot.interpolate_line_at_position(
+        center=center, angle=30.0, extent=5.0, gpts=20
+    )
+    assert projected.shape == (20,)
+
+    volumetric = pot.interpolate_line_at_position(
+        center=center + (1.0,), angle=30.0, extent=5.0, gpts=20, projected=False
+    )
+    assert volumetric.shape == (20,)
+
+
+def test_potential_interpolate_line_lazy_delegation(si_potential):
+    profile_lazy = si_potential.interpolate_line(start=(0.0, 0.0), end=(2.0, 2.0), gpts=10)
+    profile_built = si_potential.build(lazy=False).interpolate_line(
+        start=(0.0, 0.0), end=(2.0, 2.0), gpts=10
+    )
+    assert profile_lazy.shape == profile_built.shape
+    np.testing.assert_allclose(profile_lazy.array, profile_built.array)
+
+
 @pytest.mark.parametrize(
     "position",
     [
