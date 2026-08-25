@@ -1342,9 +1342,6 @@ class _BaseMeasurement2D(BaseMeasurements):
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
-            # raise NotImplementedError("Lazy interpolation not implemented.")
-            # TDOO: Implement lazy interpolation
-
             # The base (spatial) axes are the *last* len(self.base_shape) axes
             # of self.array -- any ensemble axes come first. da.map_blocks's
             # drop_axis must name their actual positions; previously this used
