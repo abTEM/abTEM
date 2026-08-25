@@ -95,3 +95,39 @@ def test_cufft_cache_auto_resolves_device_relative():
     with config.set({"cupy.fft-cache-size": -1}):
         abtem_fft._configure_cufft_cache()
         assert abtem_fft._CUFFT_CACHE_STATE[1] == -1
+
+
+def test_oversized_plan_bypasses_cache():
+    cp = pytest.importorskip("cupy")
+
+    from abtem.core import fft as abtem_fft
+
+    calls = []
+
+    def fake_fft(x, **kwargs):
+        calls.append(cp.fft.config.get_plan_cache().get_size())
+        if len(calls) == 1:
+            raise RuntimeError("The plan memsize is too large.")
+        return x
+
+    abtem_fft._warned_plan_cache_bypass = False
+    x = cp.zeros((2, 8, 8), dtype="complex64")
+    with pytest.warns(UserWarning, match="uncached"):
+        out = abtem_fft._cupy_fft_with_cache_fallback(fake_fft, x)
+
+    assert out is x
+    assert len(calls) == 2
+    assert calls[1] == 0  # the retry ran with the cache disabled
+    assert cp.fft.config.get_plan_cache().get_size() > 0  # and it was restored
+
+
+def test_unrelated_runtime_error_propagates():
+    pytest.importorskip("cupy")
+
+    from abtem.core import fft as abtem_fft
+
+    def fake_fft(x, **kwargs):
+        raise RuntimeError("something else entirely")
+
+    with pytest.raises(RuntimeError, match="something else"):
+        abtem_fft._cupy_fft_with_cache_fallback(fake_fft, object())
