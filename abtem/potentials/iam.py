@@ -1951,17 +1951,22 @@ class FieldArray(BaseField, ArrayObject):
             end = (0.0, 1.0, 0.0) if fractional else (0.0, self.extent[0], 0.0)
         end = _validate_3d_position(end)
 
+        # The in-plane grid may be non-orthogonal (skewed); `effective_cell` is the
+        # 2x2 matrix whose rows are the two in-plane lattice vectors, falling back to
+        # a diagonal (orthogonal) cell built from `extent` when the grid is not skewed.
+        # It is used both ways: fractional (u, v) -> Cartesian (x, y) via `@ cell`, and
+        # Cartesian (x, y) -> fractional pixel index via `@ inv(cell)`.
+        effective_cell = self.grid.cell
+        if effective_cell is None:
+            effective_cell = np.diag(np.array(self.extent, dtype=float))
+        else:
+            effective_cell = np.asarray(effective_cell, dtype=float)
+
         if fractional:
-            start = (
-                start[0] * self.extent[0],
-                start[1] * self.extent[1],
-                start[2] * self.thickness,
-            )
-            end = (
-                end[0] * self.extent[0],
-                end[1] * self.extent[1],
-                end[2] * self.thickness,
-            )
+            start_xy = np.array(start[:2]) @ effective_cell
+            end_xy = np.array(end[:2]) @ effective_cell
+            start = (float(start_xy[0]), float(start_xy[1]), start[2] * self.thickness)
+            end = (float(end_xy[0]), float(end_xy[1]), end[2] * self.thickness)
 
         length = float(np.linalg.norm(np.array(end) - np.array(start)))
 
@@ -1991,8 +1996,10 @@ class FieldArray(BaseField, ArrayObject):
         else:
             z_px = np.zeros_like(z)
 
-        x_px = x / self.sampling[0]
-        y_px = y / self.sampling[1]
+        inv_cell = np.linalg.inv(effective_cell)
+        frac_xy = np.stack((x, y), axis=1) @ inv_cell
+        x_px = frac_xy[:, 0] * self.gpts[0]
+        y_px = frac_xy[:, 1] * self.gpts[1]
 
         xp = get_array_module(self.array)
         positions = xp.asarray(np.stack((z_px, x_px, y_px), axis=0))

@@ -1051,9 +1051,14 @@ class _BaseMeasurement2D(BaseMeasurements):
         if cell is not None:
             cell_arr = np.asarray(cell, dtype=float)
             if not is_cell_orthogonal(cell_arr):
-                # Map Cartesian positions to fractional pixel indices via inverse cell
+                # Map Cartesian positions to fractional pixel indices via inverse cell.
+                # cell_arr's rows are the lattice vectors a, b, so a Cartesian point p
+                # (row vector) relates to its fractional coordinates via p = frac @ cell,
+                # i.e. frac = p @ inv(cell) -- no transpose (that would instead apply the
+                # *reciprocal*-lattice basis change, landing on the wrong fraction for any
+                # non-symmetric cell).
                 inv_cell = np.linalg.inv(cell_arr)  # maps Cartesian -> fractional
-                frac = cart_positions @ inv_cell.T  # fractional coordinates
+                frac = cart_positions @ inv_cell  # fractional coordinates
                 # Scale fractional [0,1) -> pixel indices [0, N)
                 positions = xp.asarray(
                     frac * np.array(self.base_shape, dtype=float)
