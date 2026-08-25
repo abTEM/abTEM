@@ -338,6 +338,65 @@ def test_show_explode_true_matches_full_range():
     assert axes_true.shape == axes_all.shape
 
 
+@pytest.mark.parametrize("n_panels, ncols", [(4, 4), (6, 4)])
+def test_show_explode_shares_axes_and_places_colorbar_beside_panels(
+    n_panels, ncols
+):
+    """An exploded grid must not repeat the y-axis label/tick labels on every
+    panel (only the leftmost column of each row), and the colorbar must land
+    in its own strip beside the panels rather than overlapping the last one
+    (regression: tight_layout() called after fig.colorbar() previously
+    fought over the colorbar axes' position -- see the "This figure includes
+    Axes that are not compatible with tight_layout" warning that used to
+    fire here)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    rng = np.random.default_rng(0)
+    q_values = np.linspace(0, 10, 5)
+    e_values = np.linspace(-0.1, 0.1, 6)
+    array = rng.random((n_panels, 5, 6))
+    spec = MomentumResolvedSpectrum(
+        array,
+        q_values=q_values,
+        e_values=e_values,
+        ensemble_axes_metadata=[
+            OrdinalAxis(label="axis0", values=tuple(range(n_panels)))
+        ],
+    )
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fig, axes = spec.show(explode=True)
+
+    axes_flat = axes.flatten()[:n_panels]
+    nrows = len(axes.flatten()) // ncols
+
+    for k, a in enumerate(axes_flat):
+        row, col = divmod(k, ncols)
+        is_left_column = col == 0
+        assert bool(a.yaxis.get_label().get_text()) == is_left_column
+
+    # The colorbar axes (last Axes added to the figure that isn't one of the
+    # panels) must not overlap any panel's bounding box.
+    fig.canvas.draw()
+    panel_bboxes = [a.get_window_extent() for a in axes_flat]
+    cbar_axes = [a for a in fig.axes if a not in list(axes.flatten())]
+    assert len(cbar_axes) == 1
+    cbar_bbox = cbar_axes[0].get_window_extent()
+    for bbox in panel_bboxes:
+        assert not bbox.overlaps(cbar_bbox)
+
+    # The colorbar should sit close to the rightmost panel, not stranded with
+    # a large empty gap.
+    rightmost_panel_bbox = panel_bboxes[ncols - 1 if ncols <= n_panels else n_panels - 1]
+    gap = cbar_bbox.x0 - rightmost_panel_bbox.x1
+    assert gap < 0.25 * rightmost_panel_bbox.width
+
+
 def test_show_warns_on_ensemble_collapse():
     """A non-exploded show() on an object with ensemble axes must warn that
     only member (0, ..., 0) is shown."""
@@ -347,6 +406,76 @@ def test_show_warns_on_ensemble_collapse():
     spec, _ = _make_multiaxis_spectrum()
     with pytest.warns(UserWarning, match="showing member"):
         spec.show()
+
+
+# ---- MomentumResolvedSpectrum.crop() -----------------------------------------
+
+
+def _make_simple_spectrum(seed=0):
+    rng = np.random.default_rng(seed)
+    q_values = np.linspace(0, 10, 6)
+    e_values = np.linspace(-0.1, 0.1, 5)
+    array = rng.random((len(q_values), len(e_values)))
+    return (
+        MomentumResolvedSpectrum(array, q_values=q_values, e_values=e_values),
+        array,
+    )
+
+
+def test_crop_selects_correct_sub_range():
+    spec, array = _make_simple_spectrum()
+
+    cropped = spec.crop(q_range=(2, 8), e_range=(-0.06, 0.06))
+
+    assert cropped.q_values == tuple(spec.q_values[1:5])
+    assert cropped.e_values == tuple(spec.e_values[1:4])
+    np.testing.assert_allclose(cropped.array, array[1:5, 1:4])
+
+
+def test_crop_none_keeps_full_range():
+    spec, array = _make_simple_spectrum()
+    cropped = spec.crop()
+    assert cropped.q_values == spec.q_values
+    assert cropped.e_values == spec.e_values
+    np.testing.assert_allclose(cropped.array, array)
+
+
+def test_crop_only_q_range():
+    spec, array = _make_simple_spectrum()
+    cropped = spec.crop(q_range=(2, 8))
+    assert cropped.q_values == tuple(spec.q_values[1:5])
+    assert cropped.e_values == spec.e_values
+    np.testing.assert_allclose(cropped.array, array[1:5, :])
+
+
+def test_crop_preserves_ensemble_axes():
+    spec, array = _make_multiaxis_spectrum()
+    cropped = spec.crop(q_range=(0, 5))
+    assert cropped.ensemble_shape == spec.ensemble_shape
+    assert cropped.ensemble_axes_metadata == spec.ensemble_axes_metadata
+    np.testing.assert_allclose(cropped.array, array[..., :3, :])
+
+
+def test_crop_empty_range_raises():
+    spec, _ = _make_simple_spectrum()
+    with pytest.raises(ValueError, match="selects no data"):
+        spec.crop(q_range=(100, 200))
+
+
+def test_crop_reversed_range_raises():
+    spec, _ = _make_simple_spectrum()
+    with pytest.raises(ValueError, match="min must not exceed max"):
+        spec.crop(q_range=(8, 2))
+
+
+def test_cropped_spectrum_shows_without_error():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()
+    cropped = spec.crop(q_range=(2, 8), e_range=(-0.06, 0.06))
+    fig, ax = cropped.show()
+    assert ax.get_xlim()[1] < spec.q_values[-1]
 
 
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------

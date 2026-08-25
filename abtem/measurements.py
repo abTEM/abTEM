@@ -5789,6 +5789,25 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
 
+def _axis_range_mask(
+    values: np.ndarray, value_range: Optional[tuple[float, float]], param_name: str
+) -> np.ndarray:
+    if value_range is None:
+        return np.ones(len(values), dtype=bool)
+
+    lo, hi = value_range
+    if lo > hi:
+        raise ValueError(f"{param_name}={value_range}: min must not exceed max")
+
+    mask = (values >= lo) & (values <= hi)
+    if not mask.any():
+        raise ValueError(
+            f"{param_name}={value_range} selects no data -- values span "
+            f"[{values.min()}, {values.max()}]"
+        )
+    return mask
+
+
 class MomentumResolvedSpectrum(BaseMeasurements):
     """
     Momentum-resolved energy-loss spectrum S(q, E).
@@ -5796,6 +5815,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
     Stores a 2D intensity array whose last two dimensions correspond to
     scattering-vector bins (q) and energy bins (E). Additional leading
     dimensions are ensemble axes.
+
+    Use :meth:`crop` to restrict the q/energy-loss range before plotting
+    with :meth:`show` -- besides zooming in, this also rescales the
+    colour scale (and, for an exploded grid, every panel's shared colour
+    scale) to the cropped region instead of the full data.
 
     Parameters
     ----------
@@ -5878,6 +5902,44 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             ensemble_axes_metadata=axes_metadata[:-2] or None,
             metadata=metadata,
         )
+
+    def crop(
+        self,
+        q_range: Optional[tuple[float, float]] = None,
+        e_range: Optional[tuple[float, float]] = None,
+    ) -> "MomentumResolvedSpectrum":
+        """
+        Crop the spectrum to a q and/or energy-loss range.
+
+        Parameters
+        ----------
+        q_range : tuple of float, optional
+            Inclusive ``(min, max)`` scattering-vector range [mrad] to keep.
+            If None (default), the full q range is kept.
+        e_range : tuple of float, optional
+            Inclusive ``(min, max)`` energy-loss range [eV] to keep -- note
+            this is in eV (the unit ``e_values`` is stored in) regardless of
+            the ``e_units`` display option of :meth:`show`. If None
+            (default), the full energy range is kept.
+
+        Returns
+        -------
+        cropped : MomentumResolvedSpectrum
+            The cropped spectrum.
+        """
+        q = np.array(self._q_values)
+        e = np.array(self._e_values)
+
+        q_mask = _axis_range_mask(q, q_range, "q_range")
+        e_mask = _axis_range_mask(e, e_range, "e_range")
+
+        array = self.array[..., q_mask, :][..., :, e_mask]
+
+        kwargs = self._copy_kwargs(exclude=("array", "q_values", "e_values"))
+        kwargs["array"] = array
+        kwargs["q_values"] = q[q_mask]
+        kwargs["e_values"] = e[e_mask]
+        return self.__class__(**kwargs)
 
     def show(
         self,
@@ -6001,7 +6063,14 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             nrows = (n + ncols - 1) // ncols
             if figsize is None:
                 figsize = (4 * ncols, 3.5 * nrows)
-            fig, axes_arr = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+            fig, axes_arr = plt.subplots(
+                nrows,
+                ncols,
+                figsize=figsize,
+                squeeze=False,
+                sharex=True,
+                sharey=True,
+            )
             axes_flat = axes_arr.flatten()
 
             # Shared colour scale across panels so the single colorbar applies to
@@ -6030,11 +6099,28 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                     a.set_title(panel_title)
             for k in range(len(indices), len(axes_flat)):
                 axes_flat[k].set_visible(False)
+
+            # Hide the x/y tick labels and axis labels of interior panels
+            # (kept only on the bottom row / left column), since sharex/sharey
+            # above already makes them redundant on every other panel.
+            for a in axes_flat[: len(indices)]:
+                a.label_outer()
+
+            # tight_layout() must run before fig.colorbar(): colorbar()
+            # shrinks the given panel axes via their gridspec to make room for
+            # the new colorbar axes, and a tight_layout() call afterwards
+            # would re-layout every axes from scratch -- including the
+            # colorbar axes, which it has no special handling for -- and can
+            # end up overlapping it with the last panel instead of leaving it
+            # in its own strip.
+            fig.tight_layout()
             if cbar and im is not None:
                 fig.colorbar(
-                    im, ax=axes_flat[: len(indices)].tolist(), label=cbar_label
+                    im,
+                    ax=axes_flat[: len(indices)].tolist(),
+                    label=cbar_label,
+                    pad=0.015,
                 )
-            fig.tight_layout()
             return fig, axes_arr
 
         # Single panel — collapse any ensemble axes to their first element.
@@ -6169,6 +6255,14 @@ def phonon_loss_diffraction_patterns(
     ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
     or ``SlitDetector`` to integrate over desired q points.
 
+    Note that ``I_tds`` is the variance of the diffracted amplitude across
+    frozen-phonon configurations: with a single configuration per energy,
+    ``I_incoherent`` and ``I_coherent`` are identical by construction and
+    ``I_tds`` is exactly zero everywhere, not a numerical artifact. At least
+    2 configurations per energy are required for ``component="tds"``/``"all"``
+    (this is enforced with a ``ValueError``); in practice many more are
+    needed for good statistics.
+
     Parameters
     ----------
     exit_waves : Waves
@@ -6237,6 +6331,18 @@ def phonon_loss_diffraction_patterns(
 
     # --- number of frozen-phonon configurations ---
     N = exit_waves.shape[fp_axis_idx]
+
+    if N < 2 and component in ("tds", "all"):
+        raise ValueError(
+            f"component={component!r} requires at least 2 frozen-phonon "
+            f"configurations per energy, got N={N}. TDS/phonon-loss is "
+            "I_incoherent - I_coherent, the variance of the diffracted "
+            "amplitude across configurations -- for a single configuration "
+            "I_incoherent and I_coherent are identical by construction, so "
+            "the result is exactly zero everywhere, not a numerical fluke. "
+            "Build the EnergyResolvedAtomsEnsemble with more than one "
+            "configuration per energy to get a non-trivial signal."
+        )
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 
