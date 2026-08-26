@@ -471,6 +471,15 @@ def estimate_potential_chunk_size(
     slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
 
     if device == "gpu":
+        # The radix check cannot fail and needs no GPU -- keep it outside the
+        # try below, whose silent fallback is only for a missing/failing CUDA
+        # memory probe.
+        from abtem.core.fft import is_fast_fft_size
+
+        overhead = 6
+        if not all(is_fast_fft_size(n) for n in gpts):
+            overhead = 12
+
         try:
             import cupy as cp
 
@@ -589,6 +598,15 @@ def estimate_scan_batch_size(
     per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
 
     if device == "gpu":
+        # The radix check cannot fail and needs no GPU -- keep it outside the
+        # try below, whose silent fallback is only for a missing/failing CUDA
+        # memory probe.
+        from abtem.core.fft import is_fast_fft_size
+
+        overhead = 6
+        if not all(is_fast_fft_size(n) for n in gpts):
+            overhead = 12
+
         try:
             import cupy as cp
 
@@ -617,17 +635,11 @@ def estimate_scan_batch_size(
             # memory and sizes the potential chunk to fit in what remains.
             # Both functions now use the same pool-aware effective_free so
             # the two estimates operate on a consistent VRAM picture.
-            from abtem.core.fft import is_fast_fft_size
-
-            overhead = 6
-            if not all(is_fast_fft_size(n) for n in gpts):
-                overhead = 12
-
             probe_budget = int(effective_free * 0.50)
             per_probe_effective = max(1, int(per_probe_bytes * overhead))
             n_probes = max(1, probe_budget // per_probe_effective)
             return _nearest_power_of_two(n_probes)
-        except (ImportError, Exception):
+        except Exception:  # noqa: BLE001 -- no CUDA memory probe available
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
         chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))

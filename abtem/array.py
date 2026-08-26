@@ -41,7 +41,6 @@ from abtem.core.axes import (
     axis_to_dict,
 )
 from abtem.core.backend import (
-    push_config_to_workers,
     check_cupy_is_installed,
     copy_to_device,
     cp,
@@ -49,6 +48,7 @@ from abtem.core.backend import (
     ensure_cuda_cluster,
     get_array_module,
     is_gpu_dask_client,
+    push_config_to_workers,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -243,6 +243,11 @@ class ComputableList(list):
             For directory stores, use .zarr extension or a directory path.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
+            Note that the returned delayed write nests an ``array.compute()``
+            executed under whatever scheduler is active when the caller
+            finally computes it -- the multi-GPU bootstrap and the forced
+            synchronous GPU scheduler apply only to ``compute=True``. On GPU,
+            prefer ``compute=True`` or compute the result before saving.
         overwrite : bool
             If given array already exists, overwrite=False will cause an error, where
             overwrite=True will replace the existing data.
