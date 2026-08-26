@@ -159,25 +159,53 @@ def commensurate_gpts(
     """
     from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 
+    def plane_set_invariant_under(unique_x: np.ndarray, L: float, s: float) -> bool:
+        # Every plane, shifted by s, must land within tolerance of a plane.
+        shifted = np.sort((unique_x + s) % L)
+        idx = np.searchsorted(unique_x, shifted)
+        neighbors = np.stack(
+            [
+                unique_x[np.clip(idx - 1, 0, len(unique_x) - 1)],
+                unique_x[np.clip(idx, 0, len(unique_x) - 1)],
+            ]
+        )
+        distances = np.abs(neighbors - shifted)
+        distances = np.minimum(distances, L - distances)
+        return bool(np.all(distances.min(axis=0) < tolerance))
+
     def translational_period_count(unique_x: np.ndarray, L: float) -> int:
         # Largest m such that the set of atom planes is invariant under a shift
         # of L / m. Even when the intra-cell plane positions are irrational
         # (no commensurate grid exists), a repeated unit cell still imposes
         # this translational period, and symmetry-equivalent atoms only see
         # identical discretised potentials if gpts is a multiple of m.
-        for m in range(len(unique_x), 1, -1):
-            shifted = np.sort((unique_x + L / m) % L)
-            idx = np.searchsorted(unique_x, shifted)
-            neighbors = np.stack(
-                [
-                    unique_x[np.clip(idx - 1, 0, len(unique_x) - 1)],
-                    unique_x[np.clip(idx, 0, len(unique_x) - 1)],
-                ]
-            )
-            distances = np.abs(neighbors - shifted)
-            distances = np.minimum(distances, L - distances)
-            if np.all(distances.min(axis=0) < tolerance):
-                return m
+        #
+        # A shift s mapping the plane set onto itself must map the first plane
+        # onto some plane, so the only candidates are the differences to the
+        # first plane -- and s must moreover be L / m for near-integer m.
+        # Testing candidates in increasing s, the first valid shift is the
+        # minimal period, i.e. the largest m. This prunes the search from
+        # every m in [2, n_planes] to the few difference-derived candidates,
+        # typically O(n log n) overall instead of O(n^2 log n).
+        deltas = np.sort((unique_x - unique_x[0]) % L)
+        candidates_tried = 0
+        for s in deltas:
+            if s < tolerance or s > L / 2 + tolerance:
+                # m = L / s must be >= 2; deltas are sorted, so we could stop
+                # at the first s beyond L / 2, but the loop is cheap enough.
+                continue
+            m = L / s
+            m_int = int(round(m))
+            if m_int < 2 or abs(m - m_int) > 0.05:
+                continue
+            candidates_tried += 1
+            if candidates_tried > 64:
+                # Pathological sets can offer many near-integer-ratio
+                # differences that all fail the invariance test; treat such a
+                # structure as period-free rather than going quadratic.
+                return 1
+            if plane_set_invariant_under(unique_x, L, s):
+                return m_int
         return 1
 
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:

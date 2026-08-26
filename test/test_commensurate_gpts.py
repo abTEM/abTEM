@@ -130,3 +130,27 @@ def test_incommensurate_fallback_with_non_fast_period():
     gpts = commensurate_gpts(extent, positions, target_sampling=0.05)
 
     assert gpts[0] % 11 == 0
+
+
+def test_incommensurate_fallback_scales_to_large_supercells():
+    # The translational-period search prunes candidate shifts to the plane
+    # differences with near-integer L/s, so a large supercell of an
+    # incommensurate structure stays cheap (review flagged the previous
+    # search-every-m version as O(n^2 log n)).
+    import time
+
+    cell = 9.184
+    base = np.sort(np.random.RandomState(0).uniform(0, cell, 12))
+    planes = np.concatenate([base + i * cell for i in range(200)])
+    extent = 200 * cell
+    positions = _plane_positions(planes, planes)
+
+    start = time.perf_counter()
+    gpts = commensurate_gpts((extent, extent), positions, target_sampling=0.05)
+    elapsed = time.perf_counter() - start
+
+    # Correctness: the 200-cell translational period must be preserved.
+    assert gpts[0] % 200 == 0
+    # Performance: ~2 ms measured; 1 s is a generous CI-safe bound that the
+    # old quadratic search would still miss by an order of magnitude here.
+    assert elapsed < 1.0
