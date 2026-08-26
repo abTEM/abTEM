@@ -427,6 +427,8 @@ class ComputableList(list):
         is_gpu = config.get("device") == "gpu" or any(
             _is_gpu_array_object(obj) for obj in self
         )
+        _push_config_to_active_client()
+
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
@@ -605,6 +607,24 @@ def _nested_compute_guard(kwargs: dict):
         yield
 
 
+def _push_config_to_active_client():
+    """Mirror the configuration onto an active distributed client's workers.
+
+    The silently-defaulted-configuration bug is not specific to the multi-GPU
+    cluster: any distributed client (a CPU LocalCluster, a SLURMCluster, ...)
+    executes tasks in worker processes that never saw the client's
+    ``abtem.config.set``. Deduplicated inside push_config_to_workers, so
+    calling this on every dispatch is cheap.
+    """
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return
+    push_config_to_workers(client)
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -615,6 +635,8 @@ def _compute(
     is_gpu = config.get("device") == "gpu" or any(
         _is_gpu_array_object(obj) for obj in array_objects
     )
+
+    _push_config_to_active_client()
 
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)

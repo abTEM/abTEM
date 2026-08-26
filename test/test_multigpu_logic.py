@@ -513,6 +513,16 @@ def test_workers_see_identical_config():
             for snapshot in client.run(_worker_config_snapshot).values():
                 assert snapshot == client_config_dict
 
+            # The snapshot travels as a named worker plugin, so workers that
+            # join later (or are restarted by a Nanny) also receive it.
+            plugins = client.run(lambda dask_worker: list(dask_worker.plugins))
+            assert all("abtem-config" in names for names in plugins.values())
+
+            cluster.scale(2)
+            client.wait_for_workers(2)
+            for snapshot in client.run(_worker_config_snapshot).values():
+                assert snapshot == client_config_dict
+
             # A subsequent change must invalidate the push token and
             # propagate on the next dispatch.
             with config.set({"precision": "float32"}):
@@ -548,3 +558,22 @@ def test_forced_synchronous_scheduler_extends_to_nested_computes():
     with _nested_compute_guard({}):
         dask.compute(lazy, scheduler="synchronous")
     assert seen and all(s != "synchronous" for s in seen)
+
+
+def test_cpu_distributed_compute_pushes_config():
+    distributed = pytest.importorskip("distributed")
+    import numpy as np
+
+    from abtem.core import backend, config
+
+    backend._pushed_config_token = None
+    with distributed.LocalCluster(
+        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=None
+    ) as cluster, distributed.Client(cluster) as client:
+        with config.set({"precision": "float64"}):
+            images = abtem.Images(
+                np.ones((8, 8), dtype=np.float32), sampling=1.0
+            ).ensure_lazy()
+            images.compute(progress_bar=False)
+
+            assert set(client.run(_worker_precision).values()) == {"float64"}
