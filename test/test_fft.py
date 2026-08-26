@@ -85,3 +85,33 @@ def test_fast_fft_sizes_stricter_than_scipy():
 
     # Where the sets agree, results agree (the PR's own headline case).
     assert scipy.fft.next_fast_len(2623, real=False) == next_fast_fft_size(2623) == 2625
+
+
+def test_warn_slow_fft_size_thread_safe():
+    # _fft_dispatch runs concurrently in dask worker threads; the warn-once
+    # bookkeeping must not double-warn when threads race on a new shape.
+    import threading
+    from unittest import mock
+
+    from abtem.core import fft as abtem_fft
+
+    shape = (1031, 1033)  # both prime, > 1024*1024 elements
+    abtem_fft._warned_slow_fft_shapes.discard(shape)
+
+    calls = []
+    barrier = threading.Barrier(8)
+
+    def worker():
+        barrier.wait()
+        _warn_slow_fft_size(shape)
+
+    with mock.patch.object(
+        abtem_fft.warnings, "warn", side_effect=lambda *a, **k: calls.append(a)
+    ):
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(calls) == 1

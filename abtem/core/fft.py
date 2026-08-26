@@ -1,5 +1,6 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
+import threading
 import warnings
 from itertools import product as _product
 from typing import Tuple, TypeVar, overload
@@ -103,6 +104,9 @@ def next_fast_fft_size(n: int) -> int:
 
 
 _warned_slow_fft_shapes: set = set()
+# _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
+# on the shape set must be atomic or the same shape can warn more than once.
+_warned_slow_fft_shapes_lock = threading.Lock()
 
 # Bluestein overhead only matters for large transforms; small odd-sized arrays
 # (e.g. interpolated measurements) are not worth a warning.
@@ -112,9 +116,12 @@ _SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
 def _warn_slow_fft_size(shape):
     """Warn once per large 2D transform shape whose lengths force Bluestein."""
     dims = tuple(int(n) for n in shape[-2:])
-    if len(dims) < 2 or dims in _warned_slow_fft_shapes:
+    if len(dims) < 2:
         return
-    _warned_slow_fft_shapes.add(dims)
+    with _warned_slow_fft_shapes_lock:
+        if dims in _warned_slow_fft_shapes:
+            return
+        _warned_slow_fft_shapes.add(dims)
     if dims[0] * dims[1] < _SLOW_FFT_WARN_MIN_ELEMENTS:
         return
     if all(is_fast_fft_size(n) for n in dims):
