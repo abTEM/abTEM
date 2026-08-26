@@ -71,7 +71,17 @@ def commensurate_slice_thickness(
     cell_z = float(atoms.cell[2, 2])
     z = atoms.positions[:, 2] % cell_z
 
-    unique_z = np.unique(np.round(z / tolerance).astype(int)) * tolerance
+    # Snap values at z ≈ cell_z back to 0 before deduplicating, so planes near
+    # the periodic boundary merge with planes near 0 instead of being treated
+    # as distinct. Identify unique planes by sorted-neighbor distance (as in
+    # commensurate_gpts) rather than rounding to a fixed tolerance-wide grid
+    # anchored at 0: fixed-grid rounding can split two atoms much closer
+    # together than `tolerance` into different bins when they straddle a bin
+    # edge, or merge genuinely distinct planes that land in the same bin.
+    z[z > cell_z - tolerance] = 0.0
+    z = np.sort(z)
+    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])
+    unique_z = z[unique_mask]
     unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
 
     boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
@@ -86,7 +96,15 @@ def commensurate_slice_thickness(
         else:
             acc += t
     if acc > 0:
-        merged.append(acc)
+        # z is periodic, so the last slice and the first slice are also
+        # adjacent through the wrap at cell_z ≡ 0. Without this, a trailing
+        # remainder that is real (spacing ≥ tolerance) but well below half
+        # the target thickness would end up as its own near-degenerate final
+        # slice, since nothing follows it to trigger the merge guard above.
+        if merged and acc < target_thickness * 0.5:
+            merged[-1] += acc
+        else:
+            merged.append(acc)
 
     result = tuple(float(t) for t in merged)
     assert np.isclose(sum(result), cell_z)

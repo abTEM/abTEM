@@ -24,12 +24,14 @@ into real, parametrized pytest coverage. Combined they span:
 
 import numpy as np
 import pytest
+from ase import Atoms
 from ase.build import bcc100, bcc110, bulk, fcc100, fcc110, fcc111, mx2
 from ase.spacegroup import crystal
 from utils import gpu
 
 import abtem
 from abtem.atoms import rotate_atoms_to_plane
+from abtem.slicing import commensurate_slice_thickness
 
 THRESHOLD = 1e-3
 
@@ -406,3 +408,40 @@ def test_rotated_plane_orientation(name, tile, plane):
     reference = rotate_atoms_to_plane(tiled, plane)
     spread, _ = _max_relative_spread(sc, repeat=(1, 1, 1), reference=reference)
     assert spread < THRESHOLD
+
+
+# ── commensurate_slice_thickness edge cases ──────────────────────────────────
+def _atoms_at_z(z, cell_z, cell_xy=5.0):
+    return Atoms(
+        "C" * len(z),
+        positions=[[0, 0, zz] for zz in z],
+        cell=[cell_xy, cell_xy, cell_z],
+        pbc=True,
+    )
+
+
+def test_slice_thickness_no_degenerate_trailing_slice():
+    """A real plane spacing right before the periodic z boundary (>= tolerance
+    but well under half the target thickness) must be merged rather than left
+    as its own near-zero final slice: the last and first slices are adjacent
+    through the periodic wrap at cell_z = 0."""
+    atoms = _atoms_at_z([0.0, 1.0, 2.0, 3.0], cell_z=3.15)
+
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0)
+
+    assert min(result) >= 0.5
+    assert result == pytest.approx((1.0, 1.0, 1.15))
+
+
+def test_slice_thickness_merges_planes_closer_than_tolerance():
+    """Two atoms much closer together than `tolerance` must be recognized as
+    a single plane even when they straddle what would be a fixed-grid
+    rounding boundary."""
+    atoms = _atoms_at_z([0.099, 0.101, 1.1, 2.1], cell_z=3.0)
+
+    result = commensurate_slice_thickness(atoms, target_thickness=1.0, tolerance=0.2)
+
+    # A spurious boundary at 0.2 (from rounding 0.099 and 0.101 into
+    # different tolerance-wide bins) would split the first slice into two.
+    assert len(result) == 3
+    assert result == pytest.approx((1.1, 1.0, 0.9))
