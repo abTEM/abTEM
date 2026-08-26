@@ -1153,9 +1153,10 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Sampling of the potential in `x` and `y` [Å].
         Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
         to be commensurate with the atom positions (closest to a default of 0.05 Å).
-        For an `AtomsEnsemble` (e.g. an MD trajectory), each configuration is an
-        independent, generally non-commensurate snapshot, so commensurability is
-        not attempted and the target sampling is used directly.
+        For an `AtomsEnsemble` with more than one configuration (e.g. an MD
+        trajectory), each configuration is an independent, generally
+        non-commensurate snapshot, so commensurability is not attempted and the
+        target sampling is used directly.
     slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
         (default is 1 Å).
@@ -1165,8 +1166,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         the sum of slice thicknesses is not equal to the height of the atoms.
         If 'auto', slice boundaries are aligned with the crystal planes, with slices
         merged to stay close to a default of 1.0 Å. As with `sampling`, this
-        commensurability search is skipped for an `AtomsEnsemble`, which uses a
-        uniform 1.0 Å target thickness instead.
+        commensurability search is skipped for an `AtomsEnsemble` with more than
+        one configuration, which uses a uniform 1.0 Å target thickness instead.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential
         for each element. Two of the most accurate parametrizations are available
@@ -1237,6 +1238,16 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     ):
         frozen_phonons = _validate_frozen_phonons(atoms)
         atoms_obj = frozen_phonons.atoms
+        # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no
+        # shared reference lattice: each configuration is an independent,
+        # generally non-commensurate snapshot, and `atoms_obj` here is only the
+        # first frame. A single-configuration `AtomsEnsemble` has no such
+        # ambiguity — that one frame *is* the configuration, just as it would be
+        # if passed as plain `Atoms` — so only skip commensurability search when
+        # there is genuinely more than one configuration to be ambiguous about.
+        has_multiple_configs = (
+            isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
+        )
 
         if sampling == "auto":
             if gpts is not None:
@@ -1244,17 +1255,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     "Cannot specify both gpts and sampling='auto'"
                 )
             cell = np.array(atoms_obj.cell)
-            if not atoms_obj.pbc[:2].all() or isinstance(frozen_phonons, AtomsEnsemble):
+            if not atoms_obj.pbc[:2].all() or has_multiple_configs:
                 # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
                 # translationally repeated, so commensurability has no meaning and
                 # the period-search algorithm may produce spurious results for
-                # arbitrary rotations. An `AtomsEnsemble` (e.g. an MD trajectory)
-                # has the same problem: each configuration is an independent,
-                # thermally-displaced snapshot with no shared commensurate lattice,
-                # `atoms_obj` here is only the first frame, and the chosen grid is
-                # applied to every frame regardless — searching for commensurate
-                # planes in one arbitrary frame is meaningless. Just use the target
-                # sampling directly.
+                # arbitrary rotations. A multi-configuration `AtomsEnsemble` has
+                # the same problem: the chosen grid is applied to every frame
+                # regardless, and searching for commensurate planes in one
+                # arbitrary frame is meaningless. Just use the target sampling
+                # directly.
                 if box is not None:
                     extent = box[:2]
                 else:
@@ -1292,15 +1301,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             sampling = None
 
         if slice_thickness == "auto":
-            if atoms_obj.pbc[2] and not isinstance(frozen_phonons, AtomsEnsemble):
+            if atoms_obj.pbc[2] and not has_multiple_configs:
                 # Periodic in z: align slice boundaries with crystal planes.
                 slice_thickness = commensurate_slice_thickness(
                     atoms_obj, target_thickness=1.0
                 )
             else:
-                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or an
-                # `AtomsEnsemble` (independent MD snapshots with no shared
-                # commensurate lattice, see the sampling branch above):
+                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or a
+                # multi-configuration `AtomsEnsemble` (independent snapshots with
+                # no shared commensurate lattice, see the sampling branch above):
                 # crystal-plane commensurability is not applicable; use a uniform
                 # target thickness and let _validate_slice_thickness divide evenly.
                 slice_thickness = 1.0

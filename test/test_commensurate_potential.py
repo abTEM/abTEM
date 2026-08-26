@@ -449,8 +449,8 @@ def test_slice_thickness_merges_planes_closer_than_tolerance():
 
 # ── AtomsEnsemble: commensurability search must be skipped ──────────────────
 def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_search():
-    """An `AtomsEnsemble` has no single reference lattice to detect
-    commensurability against: each configuration is an independent MD
+    """A multi-configuration `AtomsEnsemble` has no single reference lattice to
+    detect commensurability against: each configuration is an independent MD
     snapshot, and `frozen_phonons.atoms` is only the first frame. 'auto'
     sampling/slice_thickness must fall back to the plain non-commensurate
     behaviour (as already used for non-periodic structures) rather than
@@ -490,3 +490,22 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
     )
     assert explicit_pot.gpts == expected_gpts
     assert explicit_pot.num_slices == n_slices
+
+
+def test_atoms_ensemble_single_config_still_uses_commensurate_search():
+    """A single-configuration `AtomsEnsemble` is unambiguous -- that one frame
+    *is* the configuration, e.g. when a static structure is wrapped in an
+    `AtomsEnsemble` purely for API uniformity (as `strategies/potentials.py`'s
+    `md_frozen_phonons` does for `min_configs=1`). It must get the same
+    commensurate grid/slicing as passing the bare `Atoms` directly, not the
+    non-commensurate ensemble fallback."""
+    single = _si().repeat((2, 2, 2))
+    single.cell[0, 0] += 0.13
+
+    plain_pot = abtem.Potential(single, sampling="auto", slice_thickness="auto")
+    ensemble_pot = abtem.Potential(
+        abtem.AtomsEnsemble([single]), sampling="auto", slice_thickness="auto"
+    )
+
+    assert ensemble_pot.gpts == plain_pot.gpts
+    assert ensemble_pot.slice_thickness == plain_pot.slice_thickness
