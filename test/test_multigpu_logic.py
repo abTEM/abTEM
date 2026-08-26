@@ -520,3 +520,31 @@ def test_workers_see_identical_config():
                 for snapshot in client.run(_worker_config_snapshot).values():
                     assert snapshot == client_config_dict
                     assert snapshot["precision"] == "float32"
+
+
+def test_forced_synchronous_scheduler_extends_to_nested_computes():
+    import dask
+    import dask.array as da
+    import numpy as np
+
+    from abtem.array import _nested_compute_guard
+
+    seen = []
+
+    def record(x):
+        seen.append(dask.config.get("scheduler", None))
+        return x
+
+    lazy = da.from_array(np.ones(2), chunks=1).map_blocks(record)
+    seen.clear()  # map_blocks meta-inference ran `record` once at build time
+
+    with _nested_compute_guard({"scheduler": "synchronous"}):
+        dask.compute(lazy)
+    assert set(seen) == {"synchronous"}
+
+    # The motivating gap: the kwargs route alone does not reach the config a
+    # nested compute would read.
+    seen.clear()
+    with _nested_compute_guard({}):
+        dask.compute(lazy, scheduler="synchronous")
+    assert seen and all(s != "synchronous" for s in seen)

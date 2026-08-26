@@ -430,7 +430,7 @@ class ComputableList(list):
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
-        with _compute_context(
+        with _nested_compute_guard(kwargs), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
@@ -584,6 +584,27 @@ def _resolve_gpu_scheduler(kwargs: dict) -> dict:
     return kwargs
 
 
+@contextmanager
+def _nested_compute_guard(kwargs: dict):
+    """Extend a forced synchronous scheduler to nested computes.
+
+    Passing ``scheduler="synchronous"`` to ``dask.compute`` governs only that
+    call's graph. A task body may itself call ``.compute()`` -- e.g.
+    ``CrystalPotential.generate_slices`` pooling a lazy multi-configuration
+    ``potential_unit`` -- and a nested compute reads the process-wide default
+    scheduler: the threaded one, which must not execute CuPy tasks
+    concurrently. Mirror the forced choice into the dask configuration for the
+    duration of the outer compute. When no scheduler is forced (a distributed
+    client is in charge, or the caller chose one), the configuration is left
+    alone so client routing is unaffected.
+    """
+    if kwargs.get("scheduler") == "synchronous":
+        with dask.config.set(scheduler="synchronous"):
+            yield
+    else:
+        yield
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -598,7 +619,7 @@ def _compute(
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
 
-    with _compute_context(
+    with _nested_compute_guard(kwargs), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
         arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
