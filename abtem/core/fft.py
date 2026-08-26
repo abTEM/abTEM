@@ -37,6 +37,13 @@ except ImportError:
     cp = None
 
 
+# Deliberately NOT scipy.fft.next_fast_len's set: scipy targets pocketfft,
+# whose kernels go up to radix 11, so next_fast_len returns 11-smooth lengths
+# (next_fast_len(121) == 121 == 11**2). cuFFT documents optimized kernels only
+# for sizes of the form 2^a * 3^b * 5^c * 7^d, so a factor-11 length falls off
+# exactly the GPU fast path this module exists to protect. {2, 3, 5, 7} is the
+# intersection guaranteed fast on every backend abTEM uses (FFTW, pocketfft,
+# MKL, cuFFT, hipFFT).
 _FAST_FFT_PRIMES = (2, 3, 5, 7)
 
 
@@ -75,7 +82,9 @@ def next_fast_fft_size(n: int) -> int:
     The smallest length >= ``n`` whose prime factors are all in {2, 3, 5, 7}.
 
     Useful for choosing grid sizes (``gpts``) that avoid the slow
-    large-workspace Bluestein fallback on GPU.
+    large-workspace Bluestein fallback on GPU. Stricter than
+    ``scipy.fft.next_fast_len``, which returns 11-smooth lengths (fast for
+    pocketfft on CPU, but off cuFFT's documented fast path).
 
     Parameters
     ----------
