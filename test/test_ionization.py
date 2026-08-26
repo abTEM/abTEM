@@ -214,6 +214,58 @@ def test_transition_potential_scan_accepts_grid_scan(si_atoms, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
+    si_atoms, device
+):
+    """Regression test for a bug where ``_prebuild_reused_potential`` (added for
+    issue #339/#340) replaced the ``Potential`` with a bare ``PotentialArray``
+    before auto-extracted ``sites`` were resolved from it. ``PotentialArray``
+    carries no atoms, so ``_extract_scattering_sites`` raised ``ValueError``
+    for any multi-chunk lazy scan (e.g. ``max_batch`` small enough to split the
+    scan into more than one dask block) that didn't pass ``sites=`` explicitly.
+
+    Also asserts the auto-extracted-sites result is bit-identical to both an
+    unchunked scan and an explicit ``sites=`` scan, since the fix must resolve
+    sites from the *original* potential rather than change what site set is
+    used.
+    """
+    potential = _make_si_potential(si_atoms, device)
+    tp = _make_si_transition_potential(potential, device)
+    probe = _make_probe(potential, device)
+    detector = abtem.FlexibleAnnularDetector()
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), fractional=True,
+        potential=potential, endpoint=False, sampling=2.0,
+    )
+
+    unchunked = probe.transition_potential_scan(
+        potential=potential, transition_potentials=tp, scan=scan,
+        detectors=detector, double_channel=False, lazy=False,
+    ).compute()
+
+    chunked_auto_sites = probe.transition_potential_scan(
+        potential=potential, transition_potentials=tp, scan=scan,
+        detectors=detector, double_channel=False, max_batch=1, lazy=True,
+    ).compute()
+
+    chunked_explicit_sites = probe.transition_potential_scan(
+        potential=potential, transition_potentials=tp, scan=scan,
+        detectors=detector, sites=si_atoms, double_channel=False,
+        max_batch=1, lazy=True,
+    ).compute()
+
+    if device == "gpu":
+        chunked_auto_sites = chunked_auto_sites.to_cpu()
+        chunked_explicit_sites = chunked_explicit_sites.to_cpu()
+        unchunked = unchunked.to_cpu()
+
+    np.testing.assert_array_equal(chunked_auto_sites.array, unchunked.array)
+    np.testing.assert_array_equal(
+        chunked_auto_sites.array, chunked_explicit_sites.array
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_transition_potential_scan_crystal_potential_matches_manual_tile(device):
     """Auto-extracted sites from a CrystalPotential must produce the same
     result as a regular Potential built from a manually-tiled supercell.
