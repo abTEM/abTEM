@@ -312,7 +312,9 @@ def _configure_cufft_cache():
     if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
         return
 
-    if raw == "auto":
+    if raw is None:
+        limit = -1  # null = no bound, matching the sibling keys' convention
+    elif raw == "auto":
         limit = device.mem_info[1] // 4
     elif isinstance(raw, str):
         from dask.utils import parse_bytes
@@ -324,8 +326,16 @@ def _configure_cufft_cache():
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
     elif limit > 0:
+        if cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
         cache.set_memsize(limit)
-    # limit < 0 → leave at CuPy default (unlimited)
+    else:
+        # Explicitly restore "unlimited": an earlier bound (e.g. from the
+        # "auto" default) must be undoable at runtime -- the oversized-plan
+        # warning recommends exactly this.
+        if cache.get_size() == 0:
+            cache.set_size(16)
+        cache.set_memsize(-1)
 
     _CUFFT_CACHE_STATE = ((raw, device.id), limit)
 
