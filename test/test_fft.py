@@ -87,6 +87,17 @@ def test_fast_fft_sizes_stricter_than_scipy():
     assert scipy.fft.next_fast_len(2623, real=False) == next_fast_fft_size(2623) == 2625
 
 
+def test_fast_fft_sizes_agree_with_cupy():
+    # CuPy made the same call for the same reason: cupyx.scipy.fft.next_fast_len
+    # is 7-smooth, and its docstring notes it deliberately differs from scipy
+    # ("pocketfft's prime factors are different from cuFFT's"). Pin the
+    # agreement so drift on either side fails loudly.
+    cupyx_fft = pytest.importorskip("cupyx.scipy.fft")
+
+    for n in (2, 11, 13, 121, 169, 335, 2623, 4619, 10007):
+        assert cupyx_fft.next_fast_len(n) == next_fast_fft_size(n)
+
+
 def test_warn_slow_fft_size_thread_safe():
     # _fft_dispatch runs concurrently in dask worker threads; the warn-once
     # bookkeeping must not double-warn when threads race on a new shape.
