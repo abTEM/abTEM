@@ -31,7 +31,7 @@ from utils import gpu
 
 import abtem
 from abtem.atoms import rotate_atoms_to_plane
-from abtem.slicing import commensurate_slice_thickness
+from abtem.slicing import commensurate_gpts, commensurate_slice_thickness
 
 THRESHOLD = 1e-3
 
@@ -445,3 +445,48 @@ def test_slice_thickness_merges_planes_closer_than_tolerance():
     # different tolerance-wide bins) would split the first slice into two.
     assert len(result) == 3
     assert result == pytest.approx((1.1, 1.0, 0.9))
+
+
+# ── AtomsEnsemble: commensurability search must be skipped ──────────────────
+def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_search():
+    """An `AtomsEnsemble` has no single reference lattice to detect
+    commensurability against: each configuration is an independent MD
+    snapshot, and `frozen_phonons.atoms` is only the first frame. 'auto'
+    sampling/slice_thickness must fall back to the plain non-commensurate
+    behaviour (as already used for non-periodic structures) rather than
+    search for commensurate planes in one arbitrary frame."""
+    single = _si().repeat((2, 2, 2))
+    # Perturb one axis so the target sampling doesn't already divide the
+    # extent evenly, which would make the commensurate and plain fallback
+    # gpts coincide by chance and defeat the point of this test.
+    single.cell[0, 0] += 0.13
+
+    trajectory = [single, single.copy()]
+    ensemble_pot = abtem.Potential(
+        trajectory, sampling="auto", slice_thickness="auto"
+    )
+
+    extent_x, extent_y = float(single.cell[0, 0]), float(single.cell[1, 1])
+    expected_gpts = (int(np.ceil(extent_x / 0.05)), int(np.ceil(extent_y / 0.05)))
+    assert ensemble_pot.gpts == expected_gpts
+
+    # commensurate_gpts on the same cell/positions should NOT match the plain
+    # ceil(extent / target_sampling) fallback -- confirm they actually differ
+    # here, so this test would catch a regression to commensurability search.
+    commensurate = commensurate_gpts(
+        (extent_x, extent_y), single.positions, target_sampling=0.05
+    )
+    assert commensurate != expected_gpts
+
+    cell_z = float(single.cell[2, 2])
+    n_slices = int(np.ceil(cell_z / 1.0))
+    assert ensemble_pot.num_slices == n_slices
+    assert np.allclose(ensemble_pot.slice_thickness, cell_z / n_slices)
+
+    # Same behaviour when explicitly wrapped in AtomsEnsemble rather than a
+    # plain list.
+    explicit_pot = abtem.Potential(
+        abtem.AtomsEnsemble(trajectory), sampling="auto", slice_thickness="auto"
+    )
+    assert explicit_pot.gpts == expected_gpts
+    assert explicit_pot.num_slices == n_slices
