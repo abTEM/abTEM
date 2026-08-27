@@ -1062,6 +1062,18 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     ):
         sites = self.validate_sites(sites)
 
+        # Filter once for the whole set rather than inside every chunk.
+        # filter_sites copies the mask back to the host, which synchronises
+        # the device; doing that per chunk cost one synchronisation per chunk
+        # -- for a production core-loss scan, ~1400 per task. The threshold is
+        # applied per site and does not depend on how the sites are chunked,
+        # so the surviving set is identical.
+        if threshold is not None and threshold > 0.0:
+            sites = self.filter_sites(waves, sites, threshold=threshold)
+            if len(sites) == 0:
+                return
+            threshold = None
+
         if isinstance(max_batch, int):
             limit = int(max_batch * np.prod(waves.shape) * len(self))
         else:
@@ -1084,6 +1096,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             sites_chunk = sites[start:end]
             start = end
 
+            # threshold is None here: the sites were filtered above.
             scattered_waves = self.scatter(waves, sites_chunk, threshold=threshold)
             yield sites_chunk, scattered_waves
 
