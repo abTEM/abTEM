@@ -40,7 +40,7 @@ from abtem.core.energy import (
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
-from abtem.core.utils import CopyMixin
+from abtem.core.utils import CopyMixin, get_dtype
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
@@ -645,7 +645,9 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        array = np.zeros((len(self._transitions),) + self.gpts, dtype=np.complex64)
+        complex_dtype = get_dtype(complex=True)
+
+        array = np.zeros((len(self._transitions),) + self.gpts, dtype=complex_dtype)
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
@@ -668,9 +670,11 @@ class TransitionPotential(BaseTransitionPotential):
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
-        array = array / np.prod(self.sampling)
-
-        # array = array.astype(xp.complex64)
+        # Dividing by the (float64) sampling product promotes the array to
+        # complex128; cast back so the transition potentials follow the
+        # configured precision instead of silently upcasting every wave
+        # function they are later multiplied with.
+        array = (array / np.prod(self.sampling)).astype(complex_dtype)
 
         return TransitionPotentialArray(
             self.Z,
