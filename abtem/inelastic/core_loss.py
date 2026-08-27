@@ -27,7 +27,11 @@ except ImportError:
 
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
-from abtem.core.backend import copy_to_device, get_array_module
+from abtem.core.backend import (
+    copy_to_device,
+    device_name_from_array_module,
+    get_array_module,
+)
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
@@ -768,6 +772,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
 
         self._local_potential = self.local_potential(space="real").sum(0)
+        self._local_potential_device_cache = None
         self._threshold = None
 
     def from_array_and_metadata(self, array, metadata):
@@ -892,6 +897,21 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
+    def _local_potential_on_device(self, like):
+        """The local potential, resident on the device of ``like``.
+
+        Cached per device so repeated calls reuse the upload; the cache is
+        dropped when the local potential itself is recomputed.
+        """
+        device = device_name_from_array_module(get_array_module(like))
+        cache = getattr(self, "_local_potential_device_cache", None)
+        if cache is not None and cache[0] == device:
+            return cache[1]
+
+        on_device = copy_to_device(self._local_potential, like)
+        self._local_potential_device_cache = (device, on_device)
+        return on_device
+
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
@@ -906,7 +926,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
                 (validated_sites / xp.array(self.sampling))
             ).astype(int)
 
-            local_potential = copy_to_device(self._local_potential, waves.array)
+            # filter_sites runs once per site chunk, so re-uploading the
+            # local potential here costs a full-grid host-to-device transfer
+            # hundreds of times per task. Keep the device copy on the object,
+            # as scatter() already does for the transition potentials.
+            local_potential = self._local_potential_on_device(waves.array)
 
             # Stream the overlap reduction over sites in chunks. The full
             # (n_sites, *waves_shape, H, W) tensor that the naive computation
