@@ -26,6 +26,7 @@ from abtem.core.axes import (
     ThicknessAxis,
 )
 from abtem.core.backend import (
+    maybe_scatter_large_input,
     device_name_from_array_module,
     get_array_module,
     validate_device,
@@ -1489,11 +1490,18 @@ class Waves(BaseWaves, ArrayObject):
 
         measurements: list[Waves | BaseMeasurements] = []
         for transition_potential in transition_potentials:
+            # Transition potentials are embedded in every task that uses them;
+            # for a scan split into many tasks that is a copy of the array per
+            # task. Place large ones on the workers instead. The original
+            # object is kept for the metadata below.
+            transition_potential_arg = maybe_scatter_large_input(
+                transition_potential
+            )
             multislice_transform = MultisliceTransform(
                 potential=potential,
                 detectors=detectors,
                 multislice_func=transition_potential_multislice_and_detect,
-                transition_potential=transition_potential,
+                transition_potential=transition_potential_arg,
                 sites=sites,
                 **multislice_func_kwargs,
             )

@@ -334,6 +334,42 @@ def scatter_to_workers(obj, client=None, name: Optional[str] = None):
     return ScatteredInput(key, metadata=getattr(obj, "metadata", None))
 
 
+def maybe_scatter_large_input(obj, nbytes: Optional[int] = None):
+    """Scatter an input that would otherwise be copied into every task.
+
+    Called by abTEM when it builds a graph, so users never handle a scattered
+    input themselves. Returns ``obj`` unchanged when there is no distributed
+    client, when the input is small, or when ``dask.scatter-large-inputs`` is
+    disabled.
+    """
+    threshold = _config_get("dask.scatter-large-inputs", "10 MB")
+    if not threshold:
+        return obj
+
+    if isinstance(threshold, str):
+        from dask.utils import parse_bytes
+
+        threshold = parse_bytes(threshold)
+
+    if nbytes is None:
+        array = getattr(obj, "array", None)
+        nbytes = getattr(array, "nbytes", 0)
+    if not nbytes or nbytes < int(threshold):
+        return obj
+
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return obj
+
+    try:
+        return scatter_to_workers(obj, client=client)
+    except Exception:  # noqa: BLE001 -- fall back to embedding it
+        return obj
+
+
 def resolve_scattered(obj):
     """Return the value behind a scattered handle; pass anything else through.
 

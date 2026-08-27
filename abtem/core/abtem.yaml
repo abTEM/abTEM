@@ -28,6 +28,10 @@ dask:
   # indices (e.g. [0, 1]) or a comma-separated string (e.g. "0,1").
   # null spans all visible GPUs.
   multi-gpu-devices: null
+  # Inputs larger than this are placed on the workers once instead of being
+  # copied into every task of a distributed computation (e.g. core-loss
+  # transition potentials). false disables it.
+  scatter-large-inputs: 10 MB
 cupy:
   # Maximum GPU memory (bytes) used by the cuFFT plan cache.
   # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache

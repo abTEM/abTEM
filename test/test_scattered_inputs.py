@@ -160,3 +160,48 @@ def test_scattering_shrinks_the_task_graph(client):
         scattered = graph_size(scatter_to_workers(tp, client=client))
 
     assert scattered < embedded - tp.array.nbytes / 2
+
+
+def test_large_inputs_are_scattered_automatically(client):
+    """The user passes the object; abTEM places it on the workers itself."""
+    from abtem.core import config
+    from abtem.core.backend import ScatteredInput, maybe_scatter_large_input
+
+    big = np.ones((2048, 2048), dtype=np.complex64)  # 32 MB
+
+    class Holder:
+        def __init__(self, array):
+            self.array = array
+            self.metadata = {"Z": 5}
+
+    handle = maybe_scatter_large_input(Holder(big))
+    assert isinstance(handle, ScatteredInput)
+    assert handle.metadata == {"Z": 5}
+
+    # Small inputs are left alone.
+    small = Holder(np.ones((8, 8), dtype=np.complex64))
+    assert maybe_scatter_large_input(small) is small
+
+    # And the behaviour is switchable.
+    with config.set({"dask.scatter-large-inputs": False}):
+        holder = Holder(big)
+        assert maybe_scatter_large_input(holder) is holder
+
+
+
+def test_scan_scatters_without_user_involvement(client):
+    """Same call as always -- no handle, no helper, no new arguments."""
+    from abtem.core import config
+    from abtem.core.backend import _worker_inputs
+
+    potential, tp, probe, scan, sites = _small_eels_setup()
+
+    with config.set({"device": "cpu", "dask.scatter-large-inputs": "1 kB"}):
+        before = len(_worker_inputs)
+        result = _run_scan(probe, potential, tp, scan, sites)
+        assert len(_worker_inputs) > before  # abTEM scattered it itself
+
+    with config.set({"device": "cpu", "dask.scatter-large-inputs": False}):
+        reference = _run_scan(probe, potential, tp, scan, sites)
+
+    assert np.allclose(result, reference, rtol=1e-6, atol=0)
