@@ -8,6 +8,7 @@ import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from functools import lru_cache
 from numbers import Number
 from types import ModuleType
 from typing import (
@@ -260,6 +261,7 @@ def _spatial_frequency_squared(
     return kx[:, None] ** 2 + ky[None] ** 2
 
 
+@lru_cache(maxsize=32)
 def _radial_weight_map(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -272,6 +274,12 @@ def _radial_weight_map(
 
     The weight of each pixel is given by evaluating ``sensitivity`` at the radial
     scattering angle (in mrad) of that pixel.
+
+    The map depends only on the grid/sensitivity, not on any diffraction pattern data,
+    so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp) is
+    evaluated once and reused across dask blocks/scan positions instead of being
+    recomputed (including, for a measured sensitivity curve, the GPU-to-CPU round trip
+    of the interpolation) on every call.
 
     Parameters
     ----------
@@ -324,7 +332,10 @@ def _annular_detector_mask(
     if sensitivity is not None:
         # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
         # float mask is rolled and fftshifted below, so the weights are computed here
-        # without an fftshift.
+        # without an fftshift. Select (rather than multiply) by the weight so that a
+        # sensitivity callable that is undefined (e.g. NaN) outside [inner, outer] does
+        # not corrupt pixels the mask already excludes: 0 * nan is nan, but
+        # where(False, weights, 0) is always exactly 0.
         weights = _radial_weight_map(
             gpts=gpts,
             sampling=sampling,
@@ -332,7 +343,7 @@ def _annular_detector_mask(
             fftshift=False,
             xp=xp,
         )
-        bins = bins * weights
+        bins = xp.where(bins, weights, 0.0)
 
     if np.any(np.array(offset) != 0.0):
         offset = (

@@ -272,6 +272,11 @@ class RadialSensitivity:
             and np.array_equal(self._values, other._values)
         )
 
+    def __hash__(self) -> int:
+        if self._func is not None:
+            return hash(self._func)
+        return hash((tuple(self._angles.tolist()), tuple(self._values.tolist())))
+
 
 def validate_radial_sensitivity(
     sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]],
@@ -554,6 +559,9 @@ class _AbstractRadialDetector(BaseDetector):
         else:
             outer = np.floor(min(waves.cutoff_angles))
 
+        if self.sensitivity is not None:
+            self.sensitivity._check_range(inner, outer)
+
         return inner, outer
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
@@ -570,9 +578,6 @@ class _AbstractRadialDetector(BaseDetector):
         measurement : PolarMeasurements
         """
         inner, outer = self.angular_limits(waves)
-
-        if self.sensitivity is not None:
-            self.sensitivity._check_range(inner, outer)
 
         measurement = waves.diffraction_patterns(max_angle=outer, parity="same")
 
@@ -593,7 +598,9 @@ class _AbstractRadialDetector(BaseDetector):
 
     def _match_waves(self, waves: WavesType) -> None:
         if self.outer is None:
-            self._outer = min(waves.cutoff_angles)
+            self._outer = np.floor(min(waves.cutoff_angles))
+            if self.sensitivity is not None:
+                self.sensitivity._check_range(self.inner, self._outer)
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
         """
@@ -641,7 +648,11 @@ class _AbstractRadialDetector(BaseDetector):
             radial_centers = (
                 self.inner + (np.arange(self.nbins_radial) + 0.5) * self.radial_sampling
             )
-            weights = np.asarray(self.sensitivity(radial_centers), dtype=float) * 100.0
+            weights = np.asarray(self.sensitivity(radial_centers), dtype=float)
+            # A sensitivity callable is not required to preserve the input shape (e.g. a
+            # constant weight returns a scalar); broadcast explicitly so a scalar result
+            # doesn't crash the [:, None] indexing below.
+            weights = np.broadcast_to(weights, radial_centers.shape) * 100.0
             bins = np.repeat(weights[:, None], self.nbins_azimuthal, axis=1)
             metadata.update({"label": "Detector efficiency", "units": "%"})
         else:
@@ -660,6 +671,11 @@ class _AbstractRadialDetector(BaseDetector):
 
         return polar_measurements
 
+    def _raise_region_arity_error(self, has: str, use: str, use_is_for: str) -> None:
+        raise NotImplementedError(
+            f"'{type(self).__name__}' {has}; use '{use}' to obtain {use_is_for}."
+        )
+
     def get_detector_region(
         self, waves: Optional[BaseWaves] = None, fftshift: bool = True
     ):
@@ -671,10 +687,11 @@ class _AbstractRadialDetector(BaseDetector):
         ``get_detector_region`` is only defined for the single-region
         ``AnnularDetector``, which overrides this method.
         """
-        raise NotImplementedError(
-            f"'{type(self).__name__}' has multiple regions; use 'get_detector_regions' "
-            "(plural) to obtain its polar regions. The singular 'get_detector_region' "
-            "is only for the single-region AnnularDetector."
+        self._raise_region_arity_error(
+            has="has multiple regions",
+            use="get_detector_regions",
+            use_is_for="its polar regions (plural); the singular 'get_detector_region' "
+            "is only for the single-region AnnularDetector",
         )
 
     def show(
@@ -719,7 +736,7 @@ class _AbstractRadialDetector(BaseDetector):
             gpts = waves.gpts
             angular_sampling = waves.angular_sampling
             reciprocal_space_sampling = waves.reciprocal_space_sampling
-            energy = _energy_from_waves(waves)
+            energy = waves._valid_energy
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
@@ -948,7 +965,10 @@ class AnnularDetector(_AbstractRadialDetector):
         if self.outer is not None:
             outer = self.outer
         else:
-            outer = min(waves.cutoff_angles)
+            outer = np.floor(min(waves.cutoff_angles))
+
+        if self.sensitivity is not None:
+            self.sensitivity._check_range(inner, outer)
 
         return inner, outer
 
@@ -997,20 +1017,14 @@ class AnnularDetector(_AbstractRadialDetector):
         -------
         measurement : DiffractionPatterns
         """
-        if self.outer is None:
-            outer = np.floor(min(waves.cutoff_angles))
-        else:
-            outer = self.outer
-
-        if self.sensitivity is not None:
-            self.sensitivity._check_range(self.inner, outer)
+        inner, outer = self.angular_limits(waves)
 
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
         offset = self.offset if self.offset is not None else (0.0, 0.0)
         measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer, offset=offset, sensitivity=self.sensitivity
+            inner=inner, outer=outer, offset=offset, sensitivity=self.sensitivity
         )
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
@@ -1044,9 +1058,6 @@ class AnnularDetector(_AbstractRadialDetector):
         inner, outer = self.angular_limits(waves)
         gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
 
-        if self.sensitivity is not None:
-            self.sensitivity._check_range(inner, outer)
-
         array = _polar_detector_bins(
             gpts=gpts,
             sampling=angular_sampling,
@@ -1060,16 +1071,21 @@ class AnnularDetector(_AbstractRadialDetector):
             return_indices=False,
         )
         assert isinstance(array, np.ndarray)
-        region = (array >= 0).astype(get_dtype(complex=False))
+        inside = array >= 0
 
         if self.sensitivity is not None:
             weights = _radial_weight_map(
-                gpts=region.shape,
+                gpts=inside.shape,
                 sampling=angular_sampling,
                 sensitivity=self.sensitivity,
                 fftshift=fftshift,
             )
-            region = region * weights
+            # Select (rather than multiply) by the weight: a sensitivity callable that is
+            # undefined (e.g. NaN) outside [inner, outer] must not corrupt pixels that are
+            # already excluded by `inside`.
+            region = np.where(inside, weights, 0.0).astype(get_dtype(complex=False))
+        else:
+            region = inside.astype(get_dtype(complex=False))
 
         return region * 100.0
 
@@ -1116,11 +1132,12 @@ class AnnularDetector(_AbstractRadialDetector):
         (sensitivity-weighted) efficiency map. The plural ``get_detector_regions`` is
         for multi-region detectors (``FlexibleAnnularDetector``, ``SegmentedDetector``).
         """
-        raise NotImplementedError(
-            "The annular detector has a single region; use 'get_detector_region' "
-            "(singular) to obtain its sensitivity-weighted efficiency map. The plural "
+        self._raise_region_arity_error(
+            has="has a single region",
+            use="get_detector_region",
+            use_is_for="its sensitivity-weighted efficiency map (singular); the plural "
             "'get_detector_regions' is for multi-region detectors "
-            "(FlexibleAnnularDetector, SegmentedDetector)."
+            "(FlexibleAnnularDetector, SegmentedDetector)",
         )
 
 
