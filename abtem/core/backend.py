@@ -6,7 +6,7 @@ import logging
 import warnings
 from numbers import Number
 from types import ModuleType
-from typing import Union
+from typing import Optional, Union
 
 import dask.array as da
 import numpy as np
@@ -241,6 +241,119 @@ def push_config_to_workers(client):
     except AttributeError:  # distributed without Client.register_plugin
         client.register_worker_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
     _pushed_config_token = token
+
+
+class ScatteredInput:
+    """A handle to a large input placed on the workers, not in the task graph.
+
+    abTEM embeds inputs such as transition potentials into the task that uses
+    them, so a computation split into many tasks ships a copy of the array with
+    every task. For a production core-loss scan that is hundreds of copies of a
+    multi-megabyte array, which exhausts worker memory long before the devices
+    are busy. A scattered input is uploaded to the workers once and resolved
+    inside the task; the handle itself pickles to a few hundred bytes.
+
+    Cheap metadata is kept on the handle so that callers which only inspect
+    ``metadata`` client-side keep working.
+    """
+
+    def __init__(self, future, metadata: Optional[dict] = None):
+        self.future = future
+        self.metadata = dict(metadata or {})
+
+    @property
+    def key(self):
+        """The distributed key of the scattered value."""
+        return self.future.key
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(key={self.key!r})"
+
+
+def scatter_to_workers(obj, client=None, broadcast: bool = True):
+    """Place a large input on the workers instead of in every task.
+
+    Parameters
+    ----------
+    obj : object
+        The input to scatter, e.g. a built ``TransitionPotentialArray``.
+    client : distributed.Client, optional
+        The client to scatter through. Defaults to the active client, which is
+        the multi-GPU cluster's client when ``dask.multi-gpu`` started one.
+    broadcast : bool, optional
+        Copy the value to every worker (default). Each worker then resolves it
+        locally, without fetching it from a peer.
+
+    Returns
+    -------
+    ScatteredInput
+        A lightweight handle accepted wherever the original input is.
+    """
+    if client is None:
+        from distributed import get_client
+
+        client = get_client()
+
+    future = client.scatter(obj, broadcast=broadcast, hash=False)
+    return ScatteredInput(future, metadata=getattr(obj, "metadata", None))
+
+
+_scattered_values: dict = {}
+
+
+def resolve_scattered(obj):
+    """Return the value behind a scattered handle; pass anything else through.
+
+    Called inside a task, on the worker. Values are cached per worker process,
+    so repeated tasks resolve without touching the cluster.
+    """
+    future = None
+    if isinstance(obj, ScatteredInput):
+        future = obj.future
+    else:
+        try:
+            from distributed import Future
+        except ImportError:
+            return obj
+        if isinstance(obj, Future):
+            future = obj
+
+    if future is None:
+        return obj
+
+    key = future.key
+    if key in _scattered_values:
+        return _scattered_values[key]
+
+    value = _gather_scattered(future)
+    _scattered_values[key] = value
+    return value
+
+
+def _gather_scattered(future):
+    from distributed import get_worker
+
+    try:
+        worker = get_worker()
+    except ValueError:  # not inside a task -- e.g. an eager, in-process call
+        worker = None
+
+    if worker is None:
+        # Client process (abTEM's eager path runs the same functions here).
+        return future.result()
+
+    data = getattr(worker, "data", None)
+    if data is not None and future.key in data:
+        # A broadcast scatter put the value on every worker; take it locally
+        # rather than asking the cluster for it.
+        return data[future.key]
+
+    from distributed import worker_client
+
+    # secedes from the thread pool, so a single-threaded worker cannot
+    # deadlock while waiting for the value.
+    with worker_client() as client:
+        return client.gather(future)
 
 
 def is_gpu_dask_client(client) -> bool:

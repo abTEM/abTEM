@@ -15,7 +15,7 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, resolve_scattered
 from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -943,6 +943,10 @@ def transition_potential_multislice_and_detect(
                 new_measurement = detector.detect(waves)
                 new_measurement = new_measurement.sum((0,))
                 measurements[i].array[measurement_index] += new_measurement.array
+
+    # The transition potential may be a handle to a value scattered onto the
+    # workers instead of embedded in this task (see scatter_to_workers).
+    transition_potential = resolve_scattered(transition_potential)
 
     waves = waves.ensure_real_space()
 
