@@ -206,10 +206,19 @@ def commensurate_gpts(
     When `round_to_fast_fft` is enabled the number of grid points additionally
     factorizes completely into the primes 2, 3, 5 and 7 whenever that is
     compatible with commensurability, so FFTs run on fast radix kernels instead
-    of the slow, memory-hungry Bluestein fallback.  The smallest such grid not
-    coarser than the target sampling is chosen; if the grid period p itself
-    contains a prime factor larger than 7 no multiple of it can be a fast FFT
-    length, and commensurability takes precedence.
+    of the slow, memory-hungry Bluestein fallback.  The multiple of p nearest
+    the target sampling is kept when it is already such a length, and otherwise
+    the nearest one that is; if p itself contains a prime factor larger than 7
+    no multiple of it can be, and commensurability takes precedence.
+
+    Structures whose internal parameters are irrational (rutile, brookite) have
+    no commensurate grid at all.  For those, `round_to_fast_fft` additionally
+    selects among fast sizes within a few percent of the target the one whose
+    grid the atom planes come closest to sitting on, subject to keeping the
+    grid a multiple of the plane set's translational period -- without which
+    symmetry-equivalent atoms in different unit cells would discretise
+    differently.  This is the only case in which the returned grid is not the
+    one closest to `target_sampling`.
 
     Parameters
     ----------
@@ -223,8 +232,11 @@ def commensurate_gpts(
         Tolerance for identifying distinct atom planes [Å].
     round_to_fast_fft : bool
         If True (default), prefer grids that are also fast FFT sizes (all prime
-        factors in {2, 3, 5, 7}), at the cost of a sampling slightly finer than
-        commensurability alone would give.
+        factors in {2, 3, 5, 7}). The realized sampling is then finer than
+        commensurability alone would give, by at most a few percent. Setting
+        this to False reproduces the plain commensurate grid exactly, including
+        for the incommensurate structures above, which then simply take the
+        target size.
 
     Returns
     -------
@@ -238,12 +250,15 @@ def commensurate_gpts(
     )
 
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
-        # The GCD search found no commensurate period. When fast-FFT rounding
-        # is enabled, pick the fast size that (a) keeps gpts a multiple of the
+        # The GCD search found no commensurate period. With fast-FFT rounding
+        # off this is simply the target size (the base branch's behaviour).
+        # With it on, pick the fast size that (a) keeps gpts a multiple of the
         # translational period count m of the plane set and (b) best aligns
         # the planes with grid points: structures with an irrational internal
         # parameter (e.g. rutile u = 0.306, brookite) have no exactly
         # commensurate grid, but some fast sizes come much closer than others.
+        # Note this ties the period constraint in (a) to the rounding flag, so
+        # that `round_to_fast_fft=False` reproduces the base branch exactly.
         if not round_to_fast_fft:
             return n_target
         if unique_x is None or L is None or len(unique_x) <= 1:
@@ -329,7 +344,7 @@ def commensurate_gpts(
         ratios = spacings / min_spacing
         k = np.round(ratios).astype(int)
         if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
-            # No clear commensurability — fall back to the raw target
+            # No clear commensurability — take the incommensurate fallback
             gpts.append(fallback_gpts(n_target, unique_x, L))
             continue
 

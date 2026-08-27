@@ -1154,7 +1154,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
         to be commensurate with the atom positions (closest to a default of 0.05 Å)
         and, whenever compatible with commensurability, a fast FFT size (all prime
-        factors in {2, 3, 5, 7}).
+        factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
+        when it is already such a size. Set the configuration option
+        'grid.round-to-fast-fft' to False for the plain commensurate grid.
         For an `AtomsEnsemble` with more than one configuration (e.g. an MD
         trajectory), each configuration is an independent, generally
         non-commensurate snapshot, so commensurability is not attempted and the

@@ -182,7 +182,8 @@ def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
     # user sets with gpts; for anything else (e.g. the 3D structure-factor
     # grid, which follows from g_max and the cell) that advice would be wrong.
     remedy = (
-        ", e.g. by setting gpts explicitly instead of the sampling"
+        ", e.g. with abtem.config.set({'grid.round-to-fast-fft': True}) or by "
+        "setting gpts explicitly instead of the sampling"
         if len(lengths) == 2 and len(shape) >= 2 and tuple(shape[-2:]) == lengths
         else ""
     )

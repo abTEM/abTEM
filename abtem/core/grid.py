@@ -434,14 +434,24 @@ class Grid(CopyMixin, EqualityMixin):
         self, powers: Optional[int | list[int]] = None
     ) -> tuple[int, ...]:
         """
-        Round the grid gpts up to the nearest value that is a power of n. Fourier
-        transforms are faster for arrays of whose size can be factored into small primes
-        (2, 3, 5 and 7).
+        Round the grid gpts up to a whole power of one of the given bases.
+
+        Each gpts becomes ``base ** k`` for whichever base gives the smallest
+        such value at or above it -- a *pure* power, not a product of several
+        bases, so 2623 rounds to 4096 rather than to 2625. That is a much
+        larger grid than fast FFTs actually require: see
+        :meth:`round_to_fast_fft`, which rounds to the nearest length whose
+        prime factors all lie in {2, 3, 5, 7} and is what "faster for arrays
+        whose size factorizes into small primes" normally means.
+
+        (For a handful of inputs that are already exact powers of 5 or 7 --
+        125, 15625, 16807 -- floating-point ``log`` rounds the exponent up and
+        the result overshoots to the next power.)
 
         Parameters
         ----------
-        powers : int
-            The gpts will be a power of this number.
+        powers : int or list of int, optional
+            The bases to consider. Default [2, 3, 5, 7].
         """
         if powers is None:
             powers = [2, 3, 5, 7]
@@ -473,9 +483,15 @@ class Grid(CopyMixin, EqualityMixin):
         workspace of several times the transform size. Rounding is always
         upward, so the realized sampling is never coarser than before.
 
-        The same rounding can be applied automatically whenever gpts are
-        derived from a requested sampling by enabling the configuration option
-        ``grid.round-to-fast-fft``.
+        Every gpts is rounded, including on an endpoint grid -- unlike the
+        automatic rounding, which leaves endpoint grids alone because they are
+        not periodic FFT grids.
+
+        Automatic rounding is governed by the configuration option
+        ``grid.round-to-fast-fft``: ``'auto'`` (the default) rounds the grids
+        abTEM derives on its own, such as ``Potential(sampling='auto')``;
+        ``True`` additionally rounds gpts derived from a numeric sampling;
+        ``False`` disables it everywhere.
 
         Returns
         -------
