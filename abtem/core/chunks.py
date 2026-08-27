@@ -471,15 +471,21 @@ def estimate_potential_chunk_size(
     slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
 
     if device == "gpu":
-        # The radix check cannot fail and needs no GPU -- keep it outside the
-        # try below, whose silent fallback is only for a missing/failing CUDA
-        # memory probe.
-        from abtem.core.fft import is_fast_fft_size
-
-        overhead = 6
-        if not all(is_fast_fft_size(n) for n in gpts):
-            overhead = 12
-
+        # Deliberately no Bluestein-overhead factor here, unlike the sibling
+        # estimate_scan_batch_size.  Every FFT that touches a potential slice
+        # is a single, unbatched 2D transform: build() and generate_slices()
+        # emit one slice at a time (see _FieldBuilder.build), the projection
+        # integrals in integrals.py transform a bare (ny, nx) array, and
+        # multislice_step bandlimits one transmission function per step.  The
+        # cuFFT workspace for those transforms is therefore constant in
+        # chunk_size, while effective_per_slice below is multiplied by it --
+        # folding an FFT-unfriendliness factor in would halve the chunk on a
+        # Bluestein grid to pay for a cost that does not grow with it.  The
+        # probe batch is the only quantity whose FFT is batched over the
+        # dimension being sized, which is why the factor belongs to
+        # estimate_scan_batch_size alone.  What residual Bluestein cost there
+        # is (one cached plan) this function already sees: it runs at
+        # computation time and reads the live free-VRAM figure below.
         try:
             import cupy as cp
 
@@ -598,9 +604,12 @@ def estimate_scan_batch_size(
     per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
 
     if device == "gpu":
-        # The radix check cannot fail and needs no GPU -- keep it outside the
-        # try below, whose silent fallback is only for a missing/failing CUDA
-        # memory probe.
+        # ``gpts`` is the wavefunction grid every probe lives on, not the scan
+        # grid: the scan positions form the FFT *batch* dimension, so only the
+        # transform lengths (ny, nx) decide whether cuFFT falls back to
+        # Bluestein.  The radix check cannot fail and needs no GPU -- keep it
+        # outside the try below, whose silent fallback is only for a
+        # missing/failing CUDA memory probe.
         from abtem.core.fft import is_fast_fft_size
 
         overhead = 6

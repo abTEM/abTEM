@@ -54,6 +54,18 @@ class TestNearestPowerOfTwo:
         assert _nearest_power_of_two(n) == expected
 
 
+def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
+    """Install a minimal cupy stand-in exposing the memory-probing API."""
+    fake = types.ModuleType("cupy")
+    fake.get_default_memory_pool = lambda: types.SimpleNamespace(
+        used_bytes=lambda: pool_used
+    )
+    fake.cuda = types.SimpleNamespace(
+        Device=lambda: types.SimpleNamespace(mem_info=(free, total))
+    )
+    monkeypatch.setitem(sys.modules, "cupy", fake)
+
+
 class TestEstimatePotentialChunkSize:
     """Unit tests for estimate_potential_chunk_size."""
 
@@ -72,17 +84,23 @@ class TestEstimatePotentialChunkSize:
         large = estimate_potential_chunk_size((512, 512), device="cpu")
         assert large <= small
 
+    def test_gpu_chunk_size_depends_only_on_slice_bytes(self, monkeypatch):
+        """An FFT-unfriendly grid must not shrink the potential chunk.
 
-def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
-    """Install a minimal cupy stand-in exposing the memory-probing API."""
-    fake = types.ModuleType("cupy")
-    fake.get_default_memory_pool = lambda: types.SimpleNamespace(
-        used_bytes=lambda: pool_used
-    )
-    fake.cuda = types.SimpleNamespace(
-        Device=lambda: types.SimpleNamespace(mem_info=(free, total))
-    )
-    monkeypatch.setitem(sys.modules, "cupy", fake)
+        Unlike the probe batch, potential slices are built and bandlimited one
+        at a time, so the Bluestein workspace is constant in the chunk size --
+        see the comment in ``estimate_potential_chunk_size``.  2623 = 43*61 and
+        2271 = 3*757 force the Bluestein fallback; 2625 = 3*5^3*7 and
+        2268 = 2^2*3^4*7 do not, and the two grids differ in area by 0.06 %.
+        Both must give the same chunk, fixed by bytes alone:
+        int(0.35 * 40 GB / (2623*2271*4 * 5)) = 117.  A doubled overhead like
+        the one in ``estimate_scan_batch_size`` would give 58.
+        """
+        _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
+        dtype = np.dtype(np.float32)
+        bluestein = estimate_potential_chunk_size((2623, 2271), "gpu", dtype)
+        fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
+        assert bluestein == fast == 117
 
 
 class TestEstimateScanBatchSize:
