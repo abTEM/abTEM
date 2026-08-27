@@ -6,7 +6,11 @@ from ase.build import bulk
 
 from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 from abtem.potentials.iam import Potential
-from abtem.slicing import commensurate_gpts
+from abtem.slicing import (
+    _plane_set_invariant_under,
+    _translational_period_count,
+    commensurate_gpts,
+)
 
 
 def _plane_positions(x_planes, y_planes):
@@ -154,3 +158,57 @@ def test_incommensurate_fallback_scales_to_large_supercells():
     # Performance: ~2 ms measured; 1 s is a generous CI-safe bound that the
     # old quadratic search would still miss by an order of magnitude here.
     assert elapsed < 1.0
+
+
+def test_plane_set_invariance_sees_across_the_periodic_wrap():
+    # A shifted plane landing an ulp below the cell edge is nearest to the
+    # plane at 0 through the wrap. Clipping the searchsorted index collapses
+    # both neighbours onto the last plane and misses it, rejecting a genuine
+    # period; float cell transforms produce exactly this (orthogonalize_cell
+    # returns rutile's L / 2 plane one ulp short).
+    L = 10.0
+    planes = np.array([0.0, 1.3, 5.0 - 1e-12, 6.3])
+
+    # Shifting by L / 2 maps this set onto itself to well within tolerance.
+    assert _plane_set_invariant_under(planes, L, 5.0 - 1e-12)
+    assert _translational_period_count(planes, L) == 2
+
+
+def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
+    # Rutile has no exactly commensurate grid, so it takes the fallback path.
+    # Its grid must not depend on where the structure sits in the cell -- the
+    # property commensurate_gpts exists to guarantee. plane='xz' is the case
+    # the wrap bug broke (orthogonalize_cell puts a plane an ulp below L).
+    from ase.spacegroup import crystal
+
+    rutile = crystal(
+        ["Ti", "O"],
+        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
+        spacegroup=136,
+        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
+    )
+
+    reference = Potential(rutile, sampling="auto", plane="xz").gpts
+    for shift in (1e-6, 0.001, 0.25, 1.3):
+        shifted = rutile.copy()
+        shifted.positions[:, 0] += shift
+        shifted.wrap()
+        assert Potential(shifted, sampling="auto", plane="xz").gpts == reference
+
+
+def test_period_search_is_not_abandoned_on_dense_plane_sets():
+    # A tiled disordered cell (e.g. an amorphous support film repeated to cover
+    # the field of view) offers hundreds of near-integer-ratio plane
+    # differences that fail the invariance test before the real period is
+    # reached. Abandoning the search after a fixed number of candidates
+    # silently dropped the translational period the fallback exists to keep.
+    rng = np.random.RandomState(3)
+    cell = 25.0
+    base = rng.uniform(0, cell, 900)
+    planes = np.sort(np.concatenate([base, base + cell]))
+
+    assert _translational_period_count(planes, 2 * cell) == 2
+
+    positions = _plane_positions(planes, planes)
+    gpts = commensurate_gpts((2 * cell, 2 * cell), positions, target_sampling=0.05)
+    assert gpts[0] % 2 == 0

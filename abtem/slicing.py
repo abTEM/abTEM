@@ -111,6 +111,73 @@ def commensurate_slice_thickness(
     return result
 
 
+def _plane_set_invariant_under(
+    unique_x: np.ndarray, L: float, s: float, tolerance: float = 1e-3
+) -> bool:
+    """Whether shifting every atom plane by ``s`` maps the plane set onto itself."""
+    # Every plane, shifted by s, must land within tolerance of a plane.
+    # The plane set is periodic, so the nearest plane to a shifted point may
+    # lie across the wrap at 0 ≡ L: a point landing just below L is nearest
+    # to unique_x[0], and one landing below unique_x[0] is nearest to
+    # unique_x[-1]. Indexing modulo n picks up both; clipping the
+    # searchsorted index instead collapses the two neighbours onto the same
+    # end plane and silently misses the true nearest one. (The caller's
+    # `x > L - tolerance -> 0` snap bounds the input planes away from L, but
+    # not the shifted ones: floating-point cell transforms routinely put a
+    # shifted plane an ulp below L.)
+    n = len(unique_x)
+    shifted = (unique_x + s) % L
+    idx = np.searchsorted(unique_x, shifted)
+    neighbors = np.stack([unique_x[(idx - 1) % n], unique_x[idx % n]])
+    distances = np.abs(neighbors - shifted)
+    distances = np.minimum(distances, L - distances)
+    return bool(np.all(distances.min(axis=0) < tolerance))
+
+
+def _translational_period_count(
+    unique_x: np.ndarray, L: float, tolerance: float = 1e-3
+) -> int:
+    """The largest m for which the plane set is invariant under a shift of L / m."""
+    # Largest m such that the set of atom planes is invariant under a shift
+    # of L / m. Even when the intra-cell plane positions are irrational
+    # (no commensurate grid exists), a repeated unit cell still imposes
+    # this translational period, and symmetry-equivalent atoms only see
+    # identical discretised potentials if gpts is a multiple of m.
+    #
+    # A shift s mapping the plane set onto itself must map the first plane
+    # onto some plane, so the differences to the first plane are the only
+    # candidates -- and s must moreover be L / m for near-integer m. This
+    # prunes the search from every m in [2, n_planes] to the few
+    # difference-derived candidates, typically O(n log n) overall instead of
+    # O(n^2 log n). Candidates are tried in increasing s, so the first valid
+    # shift is the minimal period, i.e. the largest m.
+    #
+    # Each candidate is tested at the EXACT shift L / m rather than at the
+    # difference that suggested it: a period-m set is invariant under L / m by
+    # definition, while the difference carries the plane's own float noise and
+    # may sit up to 2.5 % away (the near-integer filter's width). Testing the
+    # exact shift also makes m the whole identity of a candidate, so distinct
+    # differences rounding to the same m can be collapsed -- without that, an
+    # off-period difference rounding to m could be tested and rejected first,
+    # suppressing the genuine L / m shift entirely.
+    deltas = np.sort((unique_x - unique_x[0]) % L)
+    tested: set[int] = set()
+    for delta in deltas:
+        if delta < tolerance:
+            continue
+        if delta > L / 2 + tolerance:
+            # m = L / delta must be >= 2, and deltas are sorted ascending.
+            break
+        m = L / delta
+        m_int = int(round(m))
+        if m_int < 2 or abs(m - m_int) > 0.05 or m_int in tested:
+            continue
+        tested.add(m_int)
+        if _plane_set_invariant_under(unique_x, L, L / m_int, tolerance):
+            return m_int
+    return 1
+
+
 def commensurate_gpts(
     extent: tuple[float, float],
     positions: np.ndarray,
@@ -159,55 +226,6 @@ def commensurate_gpts(
     """
     from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 
-    def plane_set_invariant_under(unique_x: np.ndarray, L: float, s: float) -> bool:
-        # Every plane, shifted by s, must land within tolerance of a plane.
-        shifted = np.sort((unique_x + s) % L)
-        idx = np.searchsorted(unique_x, shifted)
-        neighbors = np.stack(
-            [
-                unique_x[np.clip(idx - 1, 0, len(unique_x) - 1)],
-                unique_x[np.clip(idx, 0, len(unique_x) - 1)],
-            ]
-        )
-        distances = np.abs(neighbors - shifted)
-        distances = np.minimum(distances, L - distances)
-        return bool(np.all(distances.min(axis=0) < tolerance))
-
-    def translational_period_count(unique_x: np.ndarray, L: float) -> int:
-        # Largest m such that the set of atom planes is invariant under a shift
-        # of L / m. Even when the intra-cell plane positions are irrational
-        # (no commensurate grid exists), a repeated unit cell still imposes
-        # this translational period, and symmetry-equivalent atoms only see
-        # identical discretised potentials if gpts is a multiple of m.
-        #
-        # A shift s mapping the plane set onto itself must map the first plane
-        # onto some plane, so the only candidates are the differences to the
-        # first plane -- and s must moreover be L / m for near-integer m.
-        # Testing candidates in increasing s, the first valid shift is the
-        # minimal period, i.e. the largest m. This prunes the search from
-        # every m in [2, n_planes] to the few difference-derived candidates,
-        # typically O(n log n) overall instead of O(n^2 log n).
-        deltas = np.sort((unique_x - unique_x[0]) % L)
-        candidates_tried = 0
-        for s in deltas:
-            if s < tolerance or s > L / 2 + tolerance:
-                # m = L / s must be >= 2; deltas are sorted, so we could stop
-                # at the first s beyond L / 2, but the loop is cheap enough.
-                continue
-            m = L / s
-            m_int = int(round(m))
-            if m_int < 2 or abs(m - m_int) > 0.05:
-                continue
-            candidates_tried += 1
-            if candidates_tried > 64:
-                # Pathological sets can offer many near-integer-ratio
-                # differences that all fail the invariance test; treat such a
-                # structure as period-free rather than going quadratic.
-                return 1
-            if plane_set_invariant_under(unique_x, L, s):
-                return m_int
-        return 1
-
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
         # The GCD search found no commensurate period. When fast-FFT rounding
         # is enabled, pick the fast size that (a) keeps gpts a multiple of the
@@ -220,7 +238,7 @@ def commensurate_gpts(
         if unique_x is None or L is None or len(unique_x) <= 1:
             return next_fast_fft_size(n_target)
 
-        m = translational_period_count(unique_x, L)
+        m = _translational_period_count(unique_x, L, tolerance)
         if not is_fast_fft_size(m):
             # No multiple of m can be a fast FFT size; translational
             # commensurability takes precedence, as in the main path.
