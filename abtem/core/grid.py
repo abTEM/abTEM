@@ -498,6 +498,11 @@ class Grid(CopyMixin, EqualityMixin):
         ``True`` additionally rounds gpts derived from a numeric sampling;
         ``False`` disables it everywhere.
 
+        Grids that are never Fourier transformed (``fft_grid=False``, e.g. the
+        probe positions of a ``GridScan``) are returned unchanged: a fast
+        length buys them nothing, and changing them would change what is
+        simulated rather than how fast it runs.
+
         Returns
         -------
         tuple of int
@@ -506,6 +511,9 @@ class Grid(CopyMixin, EqualityMixin):
         from abtem.core.fft import next_fast_fft_size
 
         assert self.gpts is not None
+
+        if not self._fft_grid:
+            return self.gpts
 
         gpts = tuple(next_fast_fft_size(n) for n in self.gpts)
 

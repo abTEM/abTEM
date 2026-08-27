@@ -199,6 +199,21 @@ def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
     )
 
 
+def warn_if_slow_gpu_fft(x, func_name: str = "fft2", **kwargs):
+    """
+    Emit the slow-FFT diagnostic for a transform run outside ``_fft_dispatch``.
+
+    A few transforms call ``xp.fft`` directly rather than through the wrappers
+    in this module -- ``structure_factor_to_potential`` does, because the FFTW
+    backend here only ever transforms the trailing two axes and would silently
+    turn its 3D transform into a 2D one. They still deserve the diagnostic, so
+    they can call this alongside. Only GPU arrays are considered: the Bluestein
+    workspace this warns about is a cuFFT concern.
+    """
+    if cp is not None and isinstance(x, cp.ndarray):
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
+
+
 def _raise_fft_lib_not_present(lib_name: str):
     raise RuntimeError(
         f"FFT library {lib_name} not present. Install this package or change the FFT"

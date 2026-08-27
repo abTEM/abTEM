@@ -309,6 +309,15 @@ def commensurate_gpts(
             multiplier += 1
 
         assert best is not None
+        if best[1] > n_target * _FALLBACK_MAX_OVERSHOOT:
+            # Candidates ascend, so the first one already overshoots and there
+            # is no in-window candidate to find: every fast multiple of m is
+            # this far above the target or further. Being a fast size is not
+            # worth that many extra pixels, so keep the period constraint on
+            # its own -- exactly what the branch above does when m itself is
+            # not a fast size. Without this the window is not a bound at all
+            # (m = 64 against a target of 72 lands on 128, +78 %).
+            return max(round(n_target / m), 1) * m
         return best[1]
 
     gpts = []

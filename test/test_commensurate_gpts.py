@@ -319,3 +319,25 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
         # Written out rather than imported from the module under test, which
         # would move both sides of the assertion together.
         assert n <= n_target * 1.12
+
+
+def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
+    # When the translational period m is large relative to the target, the
+    # smallest fast multiple of m can overshoot the window badly and there is
+    # no in-window candidate to find -- every fast multiple is that far above
+    # the target or further (m = 64 against a target of 72 lands on 128, +78 %).
+    # Being a fast size is not worth that; the period constraint is kept on its
+    # own instead, exactly as when m itself is not a fast size.
+    cell = 3.6
+    m = 64
+    planes = np.sort(
+        np.concatenate([[i * cell / m, (i + 0.306) * cell / m] for i in range(m)]).ravel()
+    )
+    positions = _plane_positions(planes, planes)
+
+    gpts = commensurate_gpts((cell, cell), positions, target_sampling=0.05)
+
+    n_target = int(np.ceil(cell / 0.05))
+    assert gpts[0] <= n_target * 1.12
+    # The period is what the fallback exists to preserve, so it survives.
+    assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0

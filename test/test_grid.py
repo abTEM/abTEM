@@ -186,3 +186,16 @@ def test_round_to_fast_fft_method():
         assert grid.gpts == (336, 336)
         assert grid.extent == (10.0, 10.0)
         check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def test_round_to_fast_fft_leaves_non_fft_grids_alone():
+    # A grid that is never Fourier transformed (a GridScan's probe positions)
+    # gains nothing from a fast length, and rounding it would change what is
+    # simulated rather than how fast it runs.
+    assert Grid(extent=(131.15, 131.15), gpts=(2623, 2623)).round_to_fast_fft() == (
+        2625,
+        2625,
+    )
+    scan_grid = Grid(extent=(131.15, 131.15), gpts=(2623, 2623), fft_grid=False)
+    assert scan_grid.round_to_fast_fft() == (2623, 2623)
+    assert scan_grid.gpts == (2623, 2623)
