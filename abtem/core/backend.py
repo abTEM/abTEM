@@ -244,116 +244,114 @@ def push_config_to_workers(client):
 
 
 class ScatteredInput:
-    """A handle to a large input placed on the workers, not in the task graph.
+    """A handle to a large input held on the workers, not in the task graph.
 
     abTEM embeds inputs such as transition potentials into the task that uses
     them, so a computation split into many tasks ships a copy of the array with
     every task. For a production core-loss scan that is hundreds of copies of a
     multi-megabyte array, which exhausts worker memory long before the devices
-    are busy. A scattered input is uploaded to the workers once and resolved
-    inside the task; the handle itself pickles to a few hundred bytes.
+    are busy.
+
+    The value travels as a named worker plugin rather than as scattered data:
+    the plugin's setup runs on every worker at registration and again on any
+    worker that joins or is restarted later, so -- unlike ``client.scatter``,
+    whose data is unrecoverable once its worker dies -- a restarted worker
+    still finds the value. The handle itself pickles to a few hundred bytes.
 
     Cheap metadata is kept on the handle so that callers which only inspect
     ``metadata`` client-side keep working.
     """
 
-    def __init__(self, future, metadata: Optional[dict] = None):
-        self.future = future
+    def __init__(self, key: str, metadata: Optional[dict] = None):
+        self.key = key
         self.metadata = dict(metadata or {})
-
-    @property
-    def key(self):
-        """The distributed key of the scattered value."""
-        return self.future.key
 
     def __repr__(self):
         return f"{self.__class__.__name__}(key={self.key!r})"
 
 
-def scatter_to_workers(obj, client=None, broadcast: bool = True):
+_worker_inputs: dict = {}
+
+
+def _store_worker_input(key, value):
+    _worker_inputs[key] = value
+
+
+def _make_input_plugin(key, value):
+    from distributed.diagnostics.plugin import WorkerPlugin
+
+    class _AbtemInputPlugin(WorkerPlugin):
+        """Hold one large abTEM input on every worker."""
+
+        name = key
+
+        def __init__(self, key, value):
+            self._key = key
+            self._value = value
+
+        def setup(self, worker=None):
+            _store_worker_input(self._key, self._value)
+
+    return _AbtemInputPlugin(key, value)
+
+
+def scatter_to_workers(obj, client=None, name: Optional[str] = None):
     """Place a large input on the workers instead of in every task.
 
     Parameters
     ----------
     obj : object
-        The input to scatter, e.g. a built ``TransitionPotentialArray``.
+        The input to distribute, e.g. a built ``TransitionPotentialArray``.
     client : distributed.Client, optional
-        The client to scatter through. Defaults to the active client, which is
-        the multi-GPU cluster's client when ``dask.multi-gpu`` started one.
-    broadcast : bool, optional
-        Copy the value to every worker (default). Each worker then resolves it
-        locally, without fetching it from a peer.
+        Defaults to the active client, which is the multi-GPU cluster's client
+        when ``dask.multi-gpu`` started one.
+    name : str, optional
+        Plugin name; defaults to a unique name per call.
 
     Returns
     -------
     ScatteredInput
         A lightweight handle accepted wherever the original input is.
     """
+    import uuid
+
     if client is None:
         from distributed import get_client
 
         client = get_client()
 
-    future = client.scatter(obj, broadcast=broadcast, hash=False)
-    return ScatteredInput(future, metadata=getattr(obj, "metadata", None))
+    key = name or f"abtem-input-{uuid.uuid4().hex}"
+    plugin = _make_input_plugin(key, obj)
+    try:
+        client.register_plugin(plugin, name=key)
+    except AttributeError:  # distributed without Client.register_plugin
+        client.register_worker_plugin(plugin, name=key)
 
+    # Also keep it here, so abTEM's eager path -- which runs the same
+    # functions in the client process -- can resolve the handle.
+    _store_worker_input(key, obj)
 
-_scattered_values: dict = {}
+    return ScatteredInput(key, metadata=getattr(obj, "metadata", None))
 
 
 def resolve_scattered(obj):
     """Return the value behind a scattered handle; pass anything else through.
 
-    Called inside a task, on the worker. Values are cached per worker process,
-    so repeated tasks resolve without touching the cluster.
+    Called inside a task, on the worker.
     """
-    future = None
-    if isinstance(obj, ScatteredInput):
-        future = obj.future
-    else:
-        try:
-            from distributed import Future
-        except ImportError:
-            return obj
-        if isinstance(obj, Future):
-            future = obj
-
-    if future is None:
+    if not isinstance(obj, ScatteredInput):
         return obj
 
-    key = future.key
-    if key in _scattered_values:
-        return _scattered_values[key]
-
-    value = _gather_scattered(future)
-    _scattered_values[key] = value
-    return value
-
-
-def _gather_scattered(future):
-    from distributed import get_worker
-
     try:
-        worker = get_worker()
-    except ValueError:  # not inside a task -- e.g. an eager, in-process call
-        worker = None
-
-    if worker is None:
-        # Client process (abTEM's eager path runs the same functions here).
-        return future.result()
-
-    data = getattr(worker, "data", None)
-    if data is not None and future.key in data:
-        # A broadcast scatter put the value on every worker; take it locally
-        # rather than asking the cluster for it.
-        return data[future.key]
-
-    from distributed import worker_client
-
-    # secedes from the thread pool, so a single-threaded worker cannot
-    # deadlock while waiting for the value.
-    with worker_client() as client:
-        return client.gather(future)
+        return _worker_inputs[obj.key]
+    except KeyError:
+        raise RuntimeError(
+            f"The scattered input {obj.key!r} is not available in this "
+            "process. It is distributed by a worker plugin registered on the "
+            "client that scattered it, so a task running on a cluster other "
+            "than that one cannot see it. Scatter it again for this cluster, "
+            "or pass the object itself instead of the handle."
+        ) from None
 
 
 def is_gpu_dask_client(client) -> bool:

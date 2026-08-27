@@ -47,6 +47,31 @@ def test_scattered_handle_pickles_small_and_keeps_metadata(client):
     assert resolve_scattered(handle) is not None
 
 
+def test_resolution_survives_a_worker_restart(client):
+    """A restarted worker must still find the value.
+
+    This is the failure that killed a production run with client.scatter:
+    losing a worker lost the scattered data unrecoverably. A worker plugin's
+    setup runs again on the replacement.
+    """
+    array = np.arange(9, dtype=np.float64)
+    handle = scatter_to_workers(array, client=client)
+
+    client.restart()
+
+    from functools import partial
+
+    func = partial(_sum_payload, payload=handle)
+    results = client.gather([client.submit(func, i, pure=False) for i in range(4)])
+    assert results == [float(array.sum()) + i for i in range(4)]
+
+
+def test_missing_handle_raises_a_clear_error():
+    handle = ScatteredInput("abtem-input-never-registered")
+    with pytest.raises(RuntimeError, match="not available in this process"):
+        resolve_scattered(handle)
+
+
 def test_scattered_input_resolves_inside_tasks(client):
     from functools import partial
 
