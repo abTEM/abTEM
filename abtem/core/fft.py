@@ -1,5 +1,6 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
+import math
 import threading
 import warnings
 from itertools import product as _product
@@ -113,26 +114,75 @@ _warned_slow_fft_shapes_lock = threading.Lock()
 _SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
 
 
-def _warn_slow_fft_size(shape):
-    """Warn once per large 2D transform shape whose lengths force Bluestein."""
-    dims = tuple(int(n) for n in shape[-2:])
-    if len(dims) < 2:
+def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int, ...]:
+    """
+    The array lengths a transform actually acts on.
+
+    Only the transformed axes matter for the Bluestein fallback: batch axes are
+    looped over, whatever their length. Which axes those are depends on the
+    function -- ``fftn`` transforms all of them unless ``axes`` says otherwise,
+    ``fft2`` the trailing two, ``fft`` a single one -- so reading the trailing
+    two axes unconditionally misreports every non-2D transform.
+    """
+    kwargs = kwargs or {}
+    axes = kwargs.get("axes")
+
+    if axes is None:
+        if func_name.endswith("fftn"):
+            axes = tuple(range(len(shape)))
+        elif func_name.endswith("fft2"):
+            axes = (-2, -1)
+        else:
+            axes = (kwargs.get("axis", -1),)
+
+    # An explicit `s` overrides the array lengths (None entries keep theirs).
+    s = kwargs.get("s")
+
+    lengths = []
+    for i, axis in enumerate(axes):
+        length = shape[axis]
+        if s is not None and i < len(s) and s[i] is not None:
+            length = s[i]
+        lengths.append(int(length))
+
+    return tuple(lengths)
+
+
+def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
+    """Warn once per large transform whose transformed lengths force Bluestein."""
+    lengths = _transform_lengths(shape, func_name, kwargs)
+
+    if not lengths:
         return
+
+    # Test cheaply first, and record only shapes that actually warn: the
+    # memo then holds at most one entry per warning ever emitted, and a run
+    # whose grid is fast never touches the lock on the FFT hot path.
+    if math.prod(lengths) < _SLOW_FFT_WARN_MIN_ELEMENTS:
+        return
+    if all(is_fast_fft_size(n) for n in lengths):
+        return
+
     with _warned_slow_fft_shapes_lock:
-        if dims in _warned_slow_fft_shapes:
+        if lengths in _warned_slow_fft_shapes:
             return
-        _warned_slow_fft_shapes.add(dims)
-    if dims[0] * dims[1] < _SLOW_FFT_WARN_MIN_ELEMENTS:
-        return
-    if all(is_fast_fft_size(n) for n in dims):
-        return
-    suggestion = " x ".join(str(next_fast_fft_size(n)) for n in dims)
+        _warned_slow_fft_shapes.add(lengths)
+
+    shown = " x ".join(str(n) for n in lengths)
+    suggestion = " x ".join(str(next_fast_fft_size(n)) for n in lengths)
+    # Only a 2D transform of the trailing axes is the wave-function grid the
+    # user sets with gpts; for anything else (e.g. the 3D structure-factor
+    # grid, which follows from g_max and the cell) that advice would be wrong.
+    remedy = (
+        ", e.g. by setting gpts explicitly instead of the sampling"
+        if len(lengths) == 2 and len(shape) >= 2 and tuple(shape[-2:]) == lengths
+        else ""
+    )
     warnings.warn(
-        f"FFT size {dims[0]} x {dims[1]} contains prime factors larger than 7; "
+        f"FFT size {shown} contains prime factors larger than 7; "
         "cuFFT falls back to the Bluestein algorithm, which is several times "
         "slower and allocates a workspace of several times the array size. "
-        f"Consider adjusting the grid to {suggestion}, e.g. by setting gpts "
-        "explicitly instead of the sampling.",
+        f"Consider adjusting the transformed grid to {suggestion}{remedy}.",
         UserWarning,
     )
 
@@ -362,7 +412,7 @@ def _fft_dispatch(
 
     if isinstance(x, cp.ndarray):
         _configure_cufft_cache()
-        _warn_slow_fft_size(x.shape)
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
