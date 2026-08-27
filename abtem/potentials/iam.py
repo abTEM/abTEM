@@ -38,7 +38,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -1273,10 +1273,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     extent = box[:2]
                 else:
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
-                gpts = tuple(
-                    next_fast_fft_size(int(np.ceil(extent[i] / 0.05)))
-                    for i in range(2)
-                )
+                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+                if round_auto_derived_gpts():
+                    gpts = tuple(next_fast_fft_size(n) for n in gpts)
             elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
                 if not isinstance(plane, str):
                     raise NotImplementedError
@@ -1294,7 +1293,10 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     allow_transform=True,
                 )
                 gpts = commensurate_gpts(
-                    extent, _auto_atoms.positions, target_sampling=0.05
+                    extent,
+                    _auto_atoms.positions,
+                    target_sampling=0.05,
+                    round_to_fast_fft=round_auto_derived_gpts(),
                 )
             else:
                 if box is not None:
@@ -1304,7 +1306,10 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
                     _auto_atoms = atoms_obj
                 gpts = commensurate_gpts(
-                    extent, _auto_atoms.positions, target_sampling=0.05
+                    extent,
+                    _auto_atoms.positions,
+                    target_sampling=0.05,
+                    round_to_fast_fft=round_auto_derived_gpts(),
                 )
             sampling = None
 

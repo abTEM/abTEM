@@ -14,6 +14,43 @@ from abtem.core.backend import device_name_from_array_module, get_array_module
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 
+def _fast_fft_rounding_mode() -> str:
+    """
+    Normalize the ``grid.round-to-fast-fft`` configuration to a mode string.
+
+    Returns
+    -------
+    str
+        ``'never'``, ``'auto'`` (only grids abTEM derives on its own) or
+        ``'always'`` (additionally grids derived from a numeric sampling).
+    """
+    value = config.get("grid.round-to-fast-fft", "auto")
+
+    if value is True:
+        return "always"
+    if value is False:
+        return "never"
+    if isinstance(value, str) and value.lower() == "auto":
+        return "auto"
+
+    raise ValueError(
+        "configuration 'grid.round-to-fast-fft' must be True, False or 'auto', "
+        f"got {value!r}"
+    )
+
+
+def round_auto_derived_gpts() -> bool:
+    """
+    Whether grids abTEM derives on its own are rounded to fast FFT lengths.
+
+    This covers grids abTEM chooses without a user-supplied sampling, such as
+    ``Potential(..., sampling='auto')``. Grids derived from a numeric sampling
+    are governed separately (they are only rounded in the ``'always'`` mode),
+    because rounding those changes the result of an existing script.
+    """
+    return _fast_fft_rounding_mode() != "never"
+
+
 def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
     """
     Ensure that the prodived grid points are valid.
@@ -287,7 +324,7 @@ class Grid(CopyMixin, EqualityMixin):
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 
-            if config.get("grid.round-to-fast-fft", False):
+            if _fast_fft_rounding_mode() == "always":
                 from abtem.core.fft import next_fast_fft_size
 
                 # Round upward only, so the realized sampling is never coarser

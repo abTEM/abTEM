@@ -212,3 +212,54 @@ def test_period_search_is_not_abandoned_on_dense_plane_sets():
     positions = _plane_positions(planes, planes)
     gpts = commensurate_gpts((2 * cell, 2 * cell), positions, target_sampling=0.05)
     assert gpts[0] % 2 == 0
+
+
+def test_auto_sampling_respects_the_fast_fft_config():
+    # The config option governs every automatically derived grid, so a user who
+    # turns it off gets no rounding anywhere -- previously sampling='auto'
+    # rounded unconditionally and could not be switched off.
+    from abtem.core import config
+
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1)
+
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        rounded = Potential(atoms, sampling="auto").gpts
+    with config.set({"grid.round-to-fast-fft": False}):
+        plain = Potential(atoms, sampling="auto").gpts
+
+    assert all(is_fast_fft_size(n) for n in rounded)
+    assert plain != rounded
+    # 'false' must reproduce the un-rounded commensurate grid exactly.
+    extent = (float(atoms.cell[0, 0]), float(atoms.cell[1, 1]))
+    assert plain == commensurate_gpts(
+        extent, atoms.positions, target_sampling=0.05, round_to_fast_fft=False
+    )
+
+
+def test_ensemble_auto_sampling_respects_the_fast_fft_config():
+    from abtem.core import config
+
+    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1)
+    trajectory = [atoms, atoms.copy()]
+
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        rounded = Potential(trajectory, sampling="auto").gpts
+    with config.set({"grid.round-to-fast-fft": False}):
+        plain = Potential(trajectory, sampling="auto").gpts
+
+    assert all(is_fast_fft_size(n) for n in rounded)
+    assert plain == tuple(
+        int(np.ceil(float(atoms.cell[i, i]) / 0.05)) for i in range(2)
+    )
+
+
+def test_invalid_fast_fft_config_raises():
+    # 'auto' is truthy, so a bare truthiness test on the config value would
+    # silently treat any string as "on"; every read goes through the mode
+    # helper instead.
+    from abtem.core import config
+    from abtem.core.grid import _fast_fft_rounding_mode
+
+    with config.set({"grid.round-to-fast-fft": "sometimes"}):
+        with pytest.raises(ValueError, match="must be True, False or 'auto'"):
+            _fast_fft_rounding_mode()
