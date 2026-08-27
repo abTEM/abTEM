@@ -157,8 +157,13 @@ class Grid(CopyMixin, EqualityMixin):
         lock_extent: bool = False,
         lock_gpts: bool = False,
         lock_sampling: bool = False,
+        fft_grid: bool = True,
     ):
         self._dimensions = dimensions
+        # Only a grid that is Fourier transformed benefits from a fast FFT
+        # length. A scan grid samples probe positions, so rounding it would
+        # silently change the number of probes and the scan step for nothing.
+        self._fft_grid = fft_grid
 
         if isinstance(endpoint, bool):
             endpoint = (endpoint,) * dimensions
@@ -324,7 +329,7 @@ class Grid(CopyMixin, EqualityMixin):
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 
-            if _fast_fft_rounding_mode() == "always":
+            if self._fft_grid and _fast_fft_rounding_mode() == "always":
                 from abtem.core.fft import next_fast_fft_size
 
                 # Round upward only, so the realized sampling is never coarser

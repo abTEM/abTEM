@@ -111,10 +111,14 @@ def commensurate_slice_thickness(
     return result
 
 
-# How far above the target grid size the incommensurate fallback may go looking
-# for a better-aligned fast size. Structures with no commensurate grid trade a
-# few percent of extra pixels for a much smaller residual misalignment; beyond
-# this the trade stops being worth the memory and FFT time.
+# How far above the target grid size the incommensurate fallback may look for a
+# better-aligned fast size. Alignment is a tie-break among nearby candidates,
+# not something to optimise: how closely the grid samples an atom column is set
+# by the requested sampling, which is the user's to choose, whereas what this
+# fallback exists to guarantee is that symmetry-equivalent atoms are sampled
+# ALIKE -- and that follows from gpts being a multiple of the translational
+# period, which every candidate here satisfies. So the window stays tight;
+# chasing the best-aligned candidate without one costs up to 38 % extra pixels.
 _FALLBACK_MAX_OVERSHOOT = 1.12
 
 
@@ -208,8 +212,9 @@ def commensurate_gpts(
     compatible with commensurability, so FFTs run on fast radix kernels instead
     of the slow, memory-hungry Bluestein fallback.  The multiple of p nearest
     the target sampling is kept when it is already such a length, and otherwise
-    the nearest one that is; if p itself contains a prime factor larger than 7
-    no multiple of it can be, and commensurability takes precedence.
+    the next one up -- so enabling this never coarsens the grid.  If p itself
+    contains a prime factor larger than 7 no multiple of it can be fast, and
+    commensurability takes precedence.
 
     Structures whose internal parameters are irrational (rutile, brookite) have
     no commensurate grid at all.  For those, `round_to_fast_fft` additionally
@@ -232,8 +237,9 @@ def commensurate_gpts(
         Tolerance for identifying distinct atom planes [Å].
     round_to_fast_fft : bool
         If True (default), prefer grids that are also fast FFT sizes (all prime
-        factors in {2, 3, 5, 7}). The realized sampling is then finer than
-        commensurability alone would give, by at most a few percent. Setting
+        factors in {2, 3, 5, 7}). The realized sampling is then never coarser
+        than commensurability alone would give, and at most a few percent
+        finer. Setting
         this to False reproduces the plain commensurate grid exactly, including
         for the incommensurate structures above, which then simply take the
         target size.
@@ -243,11 +249,7 @@ def commensurate_gpts(
     tuple of int
         Number of grid points in x and y.
     """
-    from abtem.core.fft import (
-        _prev_fast_fft_size,
-        is_fast_fft_size,
-        next_fast_fft_size,
-    )
+    from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
 
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
         # The GCD search found no commensurate period. With fast-FFT rounding
@@ -276,12 +278,10 @@ def commensurate_gpts(
             multiplier = next_fast_fft_size(multiplier)
             n = multiplier * m
             if best is not None and n > n_target * _FALLBACK_MAX_OVERSHOOT:
-                # The overshoot window is a real bound: a candidate outside it
-                # is not scored at all. Scoring it first and only then stopping
-                # let the largest candidate -- often the best aligned, since a
-                # finer grid resolves more phases -- win from outside the
-                # window, costing up to 38 % extra pixels for an improvement
-                # far below what the potential can resolve.
+                # Candidates outside the window are not scored at all. Scoring
+                # the terminating candidate and only then stopping let the
+                # largest one -- often the best aligned, since a finer grid
+                # resolves more phases -- win from outside any window at all.
                 break
             # Score by ALIGNABILITY, not realized alignment: the smallest
             # achievable max plane-to-gridpoint distance over all grid-origin
@@ -364,15 +364,12 @@ def commensurate_gpts(
             # so the extra pixels improve no measurable quantity. When n_periods
             # itself has a prime factor larger than 7 no multiple can be fast
             # and commensurability takes precedence (handled below).
-            if is_fast_fft_size(nearest):
-                multiplier = nearest
-            else:
-                # Take whichever fast multiplier lands closer to the target,
-                # keeping the finer grid on a tie.
-                multiplier = min(
-                    (next_fast_fft_size(nearest), _prev_fast_fft_size(nearest)),
-                    key=lambda q: (abs(q * n_periods - n_target), -q),
-                )
+            # Rounding the multiplier up rather than to the nearer fast value
+            # keeps the grid from ever coming out coarser than it would with
+            # rounding off, so enabling this can only refine the sampling.
+            multiplier = nearest if is_fast_fft_size(nearest) else (
+                next_fast_fft_size(nearest)
+            )
             n_multiple = multiplier * n_periods
         else:
             n_multiple = nearest * n_periods

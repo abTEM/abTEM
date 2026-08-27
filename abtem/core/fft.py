@@ -104,14 +104,6 @@ def next_fast_fft_size(n: int) -> int:
     return n
 
 
-def _prev_fast_fft_size(n: int) -> int:
-    """The largest length <= ``n`` whose prime factors are all in {2, 3, 5, 7}."""
-    n = max(1, int(n))
-    while not is_fast_fft_size(n):
-        n -= 1
-    return n
-
-
 _warned_slow_fft_shapes: set = set()
 # _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
 # on the shape set must be atomic or the same shape can warn more than once.
@@ -134,17 +126,27 @@ def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int
     """
     kwargs = kwargs or {}
     axes = kwargs.get("axes")
+    # An explicit `s` overrides the array lengths (None entries keep theirs).
+    s = kwargs.get("s")
 
     if axes is None:
         if func_name.endswith("fftn"):
-            axes = tuple(range(len(shape)))
+            # numpy and cupy apply `s` to the TRAILING len(s) axes when no axes
+            # are given, so deriving the axes from the array rank alone would
+            # pair `s` with the wrong ones.
+            count = len(s) if s is not None else len(shape)
+            axes = tuple(range(len(shape) - count, len(shape)))
         elif func_name.endswith("fft2"):
             axes = (-2, -1)
         else:
             axes = (kwargs.get("axis", -1),)
 
-    # An explicit `s` overrides the array lengths (None entries keep theirs).
-    s = kwargs.get("s")
+    # Drop axes the array does not have. cupy's fft2 quietly reduces the axes
+    # for arrays of fewer than two dimensions, and this runs ahead of every GPU
+    # transform: raising here would break a transform that would otherwise
+    # succeed, rather than merely skipping a diagnostic.
+    ndim = len(shape)
+    axes = tuple(axis for axis in axes if -ndim <= axis < ndim)
 
     lengths = []
     for i, axis in enumerate(axes):
@@ -182,8 +184,9 @@ def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
     # user sets with gpts; for anything else (e.g. the 3D structure-factor
     # grid, which follows from g_max and the cell) that advice would be wrong.
     remedy = (
-        ", e.g. with abtem.config.set({'grid.round-to-fast-fft': True}) or by "
-        "setting gpts explicitly instead of the sampling"
+        ", e.g. by setting gpts explicitly, or -- if this grid was derived from "
+        "a numeric sampling -- with "
+        "abtem.config.set({'grid.round-to-fast-fft': True})"
         if len(lengths) == 2 and len(shape) >= 2 and tuple(shape[-2:]) == lengths
         else ""
     )

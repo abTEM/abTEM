@@ -102,29 +102,35 @@ def test_gpts_change(grid_data, new_extent):
 
 @given(grid_data=grid_data(), new_sampling=abtem_st.sampling())
 def test_sampling_change(grid_data, new_sampling):
-    grid = Grid(**grid_data)
+    # Pin the option: these assert the behaviour of the default mode,
+    # which a user-level override of the config would otherwise change.
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        grid = Grid(**grid_data)
 
-    grid.sampling = new_sampling
-    if grid.extent is None:
-        assert (
-            grid.sampling == ensure_is_tuple(new_sampling, 2)
-            if new_sampling is not None
-            else new_sampling
-        )
-    else:
-        adjusted_sampling = grid.extent / np.ceil(
-            np.array(grid.extent) / np.array(new_sampling)
-        )
-        assert np.allclose(grid.sampling, adjusted_sampling)
+        grid.sampling = new_sampling
+        if grid.extent is None:
+            assert (
+                grid.sampling == ensure_is_tuple(new_sampling, 2)
+                if new_sampling is not None
+                else new_sampling
+            )
+        else:
+            adjusted_sampling = grid.extent / np.ceil(
+                np.array(grid.extent) / np.array(new_sampling)
+            )
+            assert np.allclose(grid.sampling, adjusted_sampling)
 
-    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+        check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
 def test_fast_fft_rounding_off_by_default():
-    # 10 / 0.03 -> ceil = 334 = 2 * 167; 167 is prime, so 334 is not a fast
-    # FFT length and must be kept exactly as derived when the option is off.
-    grid = Grid(extent=10, sampling=0.03)
-    assert grid.gpts == (334, 334)
+    # Pin the option: these assert the behaviour of the default mode,
+    # which a user-level override of the config would otherwise change.
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        # 10 / 0.03 -> ceil = 334 = 2 * 167; 167 is prime, so 334 is not a fast
+        # FFT length and must be kept exactly as derived when the option is off.
+        grid = Grid(extent=10, sampling=0.03)
+        assert grid.gpts == (334, 334)
 
 
 def test_fast_fft_rounding_refines_sampling():
@@ -168,12 +174,15 @@ def test_fast_fft_rounding_applies_on_sampling_change():
 
 
 def test_round_to_fast_fft_method():
-    grid = Grid(extent=10, sampling=0.03)
-    assert grid.gpts == (334, 334)
+    # Pin the option: these assert the behaviour of the default mode,
+    # which a user-level override of the config would otherwise change.
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        grid = Grid(extent=10, sampling=0.03)
+        assert grid.gpts == (334, 334)
 
-    gpts = grid.round_to_fast_fft()
+        gpts = grid.round_to_fast_fft()
 
-    assert gpts == (336, 336)
-    assert grid.gpts == (336, 336)
-    assert grid.extent == (10.0, 10.0)
-    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+        assert gpts == (336, 336)
+        assert grid.gpts == (336, 336)
+        assert grid.extent == (10.0, 10.0)
+        check_grid_consistent(grid.extent, grid.gpts, grid.sampling)

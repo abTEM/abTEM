@@ -462,9 +462,11 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
     single.cell[0, 0] += 0.13
 
     trajectory = [single, single.copy()]
-    ensemble_pot = abtem.Potential(
-        trajectory, sampling="auto", slice_thickness="auto"
-    )
+    # Pin the option: the expected gpts below are the default mode's.
+    with abtem.config.set({"grid.round-to-fast-fft": "auto"}):
+        ensemble_pot = abtem.Potential(
+            trajectory, sampling="auto", slice_thickness="auto"
+        )
 
     extent_x, extent_y = float(single.cell[0, 0]), float(single.cell[1, 1])
     # The ensemble path uses the plain target sampling (no commensurate
@@ -492,9 +494,10 @@ def test_atoms_ensemble_sampling_and_slice_thickness_auto_skip_commensurate_sear
 
     # Same behaviour when explicitly wrapped in AtomsEnsemble rather than a
     # plain list.
-    explicit_pot = abtem.Potential(
-        abtem.AtomsEnsemble(trajectory), sampling="auto", slice_thickness="auto"
-    )
+    with abtem.config.set({"grid.round-to-fast-fft": "auto"}):
+        explicit_pot = abtem.Potential(
+            abtem.AtomsEnsemble(trajectory), sampling="auto", slice_thickness="auto"
+        )
     assert explicit_pot.gpts == expected_gpts
     assert explicit_pot.num_slices == n_slices
 

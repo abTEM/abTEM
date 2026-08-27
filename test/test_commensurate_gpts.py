@@ -90,9 +90,17 @@ def test_smallest_fast_commensurate_multiple():
 
 @pytest.mark.parametrize("name,crystalstructure,a", [("Si", "diamond", 5.431), ("Au", "fcc", 4.078)])
 def test_potential_auto_sampling_is_commensurate_and_fast(name, crystalstructure, a):
+    from abtem.core import config
+
     atoms = bulk(name, crystalstructure, a=a, cubic=True) * (2, 2, 1)
 
-    potential = Potential(atoms, sampling="auto", projection="infinite")
+    with config.set({"grid.round-to-fast-fft": "auto"}):
+        potential = Potential(atoms, sampling="auto", projection="infinite")
+
+    # Derived independently: the plain commensurate grid is 216 = 2**3 * 27 for
+    # Si (already fast, so kept) and 164 = 2**2 * 41 for Au (not fast, so the
+    # multiplier moves up: 41 -> 42, giving 168).
+    assert potential.gpts == {"Si": (216, 216), "Au": (168, 168)}[name]
 
     for axis, (n, extent) in enumerate(zip(potential.gpts, potential.extent)):
         assert is_fast_fft_size(n)
@@ -180,8 +188,10 @@ def test_plane_set_invariance_sees_across_the_periodic_wrap():
 def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
     # Rutile has no exactly commensurate grid, so it takes the fallback path.
     # Its grid must not depend on where the structure sits in the cell -- the
-    # property commensurate_gpts exists to guarantee. plane='xz' is the case
-    # the wrap bug broke (orthogonalize_cell puts a plane an ulp below L).
+    # property commensurate_gpts exists to guarantee, and the one the fallback
+    # scoring has to preserve. (The regression guard for the periodic-wrap bug
+    # itself is test_plane_set_invariance_sees_across_the_periodic_wrap; this
+    # is the end-to-end property that bug was one way of breaking.)
     from ase.spacegroup import crystal
 
     rutile = crystal(
@@ -191,12 +201,13 @@ def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
         cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
     )
 
-    reference = Potential(rutile, sampling="auto", plane="xz").gpts
-    for shift in (1e-6, 0.001, 0.25, 1.3):
-        shifted = rutile.copy()
-        shifted.positions[:, 0] += shift
-        shifted.wrap()
-        assert Potential(shifted, sampling="auto", plane="xz").gpts == reference
+    for plane in ("xy", "xz", "yz"):
+        reference = Potential(rutile, sampling="auto", plane=plane).gpts
+        for shift in (1e-6, 0.001, 0.25, 1.3):
+            shifted = rutile.copy()
+            shifted.positions[:, 0] += shift
+            shifted.wrap()
+            assert Potential(shifted, sampling="auto", plane=plane).gpts == reference
 
 
 def test_period_search_is_not_abandoned_on_dense_plane_sets():
@@ -210,11 +221,9 @@ def test_period_search_is_not_abandoned_on_dense_plane_sets():
     base = rng.uniform(0, cell, 900)
     planes = np.sort(np.concatenate([base, base + cell]))
 
+    # The period itself is the assertion: the grid happens to come out even
+    # either way here, so asserting only on gpts would not discriminate.
     assert _translational_period_count(planes, 2 * cell) == 2
-
-    positions = _plane_positions(planes, planes)
-    gpts = commensurate_gpts((2 * cell, 2 * cell), positions, target_sampling=0.05)
-    assert gpts[0] % 2 == 0
 
 
 def test_auto_sampling_respects_the_fast_fft_config():
@@ -296,8 +305,6 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
     # (38 % more pixels) win from outside it.
     from ase.spacegroup import crystal
 
-    from abtem.slicing import _FALLBACK_MAX_OVERSHOOT
-
     rutile = crystal(
         ["Ti", "O"],
         basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
@@ -309,4 +316,6 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
 
     for n, extent in zip(potential.gpts, potential.extent):
         n_target = int(np.ceil(extent / 0.05))
-        assert n <= n_target * _FALLBACK_MAX_OVERSHOOT
+        # Written out rather than imported from the module under test, which
+        # would move both sides of the assertion together.
+        assert n <= n_target * 1.12
