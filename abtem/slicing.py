@@ -111,6 +111,13 @@ def commensurate_slice_thickness(
     return result
 
 
+# How far above the target grid size the incommensurate fallback may go looking
+# for a better-aligned fast size. Structures with no commensurate grid trade a
+# few percent of extra pixels for a much smaller residual misalignment; beyond
+# this the trade stops being worth the memory and FFT time.
+_FALLBACK_MAX_OVERSHOOT = 1.12
+
+
 def _plane_set_invariant_under(
     unique_x: np.ndarray, L: float, s: float, tolerance: float = 1e-3
 ) -> bool:
@@ -224,7 +231,11 @@ def commensurate_gpts(
     tuple of int
         Number of grid points in x and y.
     """
-    from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
+    from abtem.core.fft import (
+        _prev_fast_fft_size,
+        is_fast_fft_size,
+        next_fast_fft_size,
+    )
 
     def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
         # The GCD search found no commensurate period. When fast-FFT rounding
@@ -249,6 +260,14 @@ def commensurate_gpts(
         while True:
             multiplier = next_fast_fft_size(multiplier)
             n = multiplier * m
+            if best is not None and n > n_target * _FALLBACK_MAX_OVERSHOOT:
+                # The overshoot window is a real bound: a candidate outside it
+                # is not scored at all. Scoring it first and only then stopping
+                # let the largest candidate -- often the best aligned, since a
+                # finer grid resolves more phases -- win from outside the
+                # window, costing up to 38 % extra pixels for an improvement
+                # far below what the potential can resolve.
+                break
             # Score by ALIGNABILITY, not realized alignment: the smallest
             # achievable max plane-to-gridpoint distance over all grid-origin
             # phases. The plane residues x_i*n/L mod 1 must cluster near a
@@ -262,13 +281,20 @@ def commensurate_gpts(
             residues = np.sort(np.mod(unique_x * (n / L), 1.0))
             gaps = np.diff(np.concatenate([residues, [residues[0] + 1.0]]))
             alignability = (1.0 - float(np.max(gaps))) / 2.0
-            # Round the score so nearly-equal alignments prefer the smaller grid.
-            score = (round(alignability, 2), n)
+            # Compare candidates by misalignment in ANGSTROM, not in fractions
+            # of a grid spacing: a finer grid has a smaller spacing, so the same
+            # fractional alignability is physically better there and the two are
+            # not comparable as they stand. Rounding to 0.001 A -- far below
+            # what a projected potential resolves -- makes indistinguishable
+            # candidates tie, and the tie-break then takes the smaller grid.
+            misalignment = alignability * (L / n)
+            score = (round(misalignment, 3), n)
             if best is None or score < best[0]:
                 best = (score, n)
-            if n > n_target * 1.12:
-                return best[1]
             multiplier += 1
+
+        assert best is not None
+        return best[1]
 
     gpts = []
     for i in range(2):
@@ -311,15 +337,30 @@ def commensurate_gpts(
         # Using L / sum(k) is more accurate than min_spacing alone because it
         # averages out any floating-point scatter in the individual spacings.
         n_periods = int(np.sum(k))
+        # The commensurate grid nearest the target, i.e. the grid chosen when
+        # fast-FFT rounding is off.
+        nearest = max(round(n_target / n_periods), 1)
+
         if round_to_fast_fft and is_fast_fft_size(n_periods):
-            # A multiple m * n_periods is a fast FFT size exactly when both
-            # factors are, so the smallest fast commensurate grid not coarser
-            # than the target uses the next fast multiplier. When n_periods
-            # itself has a prime factor larger than 7, no multiple can be fast
+            # A multiple q * n_periods is a fast FFT size exactly when both
+            # factors are, so only the multiplier has to be moved -- and only
+            # when the nearest commensurate grid is not already fast. Enlarging
+            # an already-fast grid buys nothing: both are exactly commensurate,
+            # so the extra pixels improve no measurable quantity. When n_periods
+            # itself has a prime factor larger than 7 no multiple can be fast
             # and commensurability takes precedence (handled below).
-            n_multiple = next_fast_fft_size(-(-n_target // n_periods)) * n_periods
+            if is_fast_fft_size(nearest):
+                multiplier = nearest
+            else:
+                # Take whichever fast multiplier lands closer to the target,
+                # keeping the finer grid on a tie.
+                multiplier = min(
+                    (next_fast_fft_size(nearest), _prev_fast_fft_size(nearest)),
+                    key=lambda q: (abs(q * n_periods - n_target), -q),
+                )
+            n_multiple = multiplier * n_periods
         else:
-            n_multiple = max(round(n_target / n_periods), 1) * n_periods
+            n_multiple = nearest * n_periods
         gpts.append(n_multiple)
 
     return tuple(gpts)

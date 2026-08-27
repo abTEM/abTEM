@@ -96,7 +96,10 @@ def test_potential_auto_sampling_is_commensurate_and_fast(name, crystalstructure
 
     for axis, (n, extent) in enumerate(zip(potential.gpts, potential.extent)):
         assert is_fast_fft_size(n)
-        assert extent / n <= 0.05 + 1e-12
+        # Close to the target sampling. Not necessarily finer than it: the
+        # commensurate grid nearest the target wins whenever it is already
+        # fast, exactly as with rounding switched off.
+        assert abs(extent / n - 0.05) / 0.05 < 0.12
         # Commensurate: every atom plane falls on a grid point.
         fractional = atoms.positions[:, axis] / (extent / n)
         offsets = np.abs(fractional - np.round(fractional))
@@ -220,7 +223,9 @@ def test_auto_sampling_respects_the_fast_fft_config():
     # rounded unconditionally and could not be switched off.
     from abtem.core import config
 
-    atoms = bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1)
+    # Gold: the nearest commensurate grid is 164 = 2**2 * 41, not a fast size,
+    # so the two modes genuinely differ here.
+    atoms = bulk("Au", "fcc", a=4.078, cubic=True) * (2, 2, 1)
 
     with config.set({"grid.round-to-fast-fft": "auto"}):
         rounded = Potential(atoms, sampling="auto").gpts
@@ -228,6 +233,7 @@ def test_auto_sampling_respects_the_fast_fft_config():
         plain = Potential(atoms, sampling="auto").gpts
 
     assert all(is_fast_fft_size(n) for n in rounded)
+    assert not any(is_fast_fft_size(n) for n in plain)
     assert plain != rounded
     # 'false' must reproduce the un-rounded commensurate grid exactly.
     extent = (float(atoms.cell[0, 0]), float(atoms.cell[1, 1]))
@@ -263,3 +269,44 @@ def test_invalid_fast_fft_config_raises():
     with config.set({"grid.round-to-fast-fft": "sometimes"}):
         with pytest.raises(ValueError, match="must be True, False or 'auto'"):
             _fast_fft_rounding_mode()
+
+
+def test_already_fast_commensurate_grids_are_not_enlarged():
+    # Both the nearest commensurate grid and any larger fast multiple are
+    # exactly commensurate, so enlarging one that is already fast buys no
+    # accuracy -- it only costs memory and FFT time (up to +23 % pixels).
+    from abtem.core import config
+
+    for atoms in (
+        bulk("Si", "diamond", a=5.431, cubic=True) * (2, 2, 1),
+        bulk("Cu", "fcc", a=3.61, cubic=True) * (6, 6, 1),
+    ):
+        with config.set({"grid.round-to-fast-fft": False}):
+            plain = Potential(atoms, sampling="auto").gpts
+        assert all(is_fast_fft_size(n) for n in plain)  # guard the premise
+
+        with config.set({"grid.round-to-fast-fft": "auto"}):
+            assert Potential(atoms, sampling="auto").gpts == plain
+
+
+def test_incommensurate_fallback_respects_its_overshoot_window():
+    # Rutile has no commensurate grid, so the fallback trades pixels for
+    # alignment -- but only inside the documented window. Scoring the
+    # candidate that terminates the search let a size 17 % above the target
+    # (38 % more pixels) win from outside it.
+    from ase.spacegroup import crystal
+
+    from abtem.slicing import _FALLBACK_MAX_OVERSHOOT
+
+    rutile = crystal(
+        ["Ti", "O"],
+        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
+        spacegroup=136,
+        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
+    ) * (6, 6, 1)
+
+    potential = Potential(rutile, sampling="auto")
+
+    for n, extent in zip(potential.gpts, potential.extent):
+        n_target = int(np.ceil(extent / 0.05))
+        assert n <= n_target * _FALLBACK_MAX_OVERSHOOT

@@ -104,6 +104,14 @@ def next_fast_fft_size(n: int) -> int:
     return n
 
 
+def _prev_fast_fft_size(n: int) -> int:
+    """The largest length <= ``n`` whose prime factors are all in {2, 3, 5, 7}."""
+    n = max(1, int(n))
+    while not is_fast_fft_size(n):
+        n -= 1
+    return n
+
+
 _warned_slow_fft_shapes: set = set()
 # _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
 # on the shape set must be atomic or the same shape can warn more than once.
