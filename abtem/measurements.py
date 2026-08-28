@@ -3960,9 +3960,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ti_v, tj_v = ti[valid], tj[valid]
 
         flat = array.reshape((-1,) + gpts_src)
-        out = np.zeros((flat.shape[0],) + gpts, dtype=array.dtype)
-        for i in range(flat.shape[0]):
-            np.add.at(out[i], (ti_v, tj_v), flat[i][valid])
+        n_frames = flat.shape[0]
+        out = np.zeros((n_frames,) + gpts, dtype=array.dtype)
+        # ti_v/tj_v (and thus valid) do not depend on the frame, so scatter-add every
+        # frame in one vectorized call instead of looping np.add.at per frame.
+        frame_idx = np.repeat(np.arange(n_frames), ti_v.size)
+        ti_tiled = np.tile(ti_v, n_frames)
+        tj_tiled = np.tile(tj_v, n_frames)
+        values = flat[:, valid].reshape(-1)
+        np.add.at(out, (frame_idx, ti_tiled, tj_tiled), values)
         out = out.reshape(self.shape[:-2] + gpts)
 
         metadata = {k: v for k, v in self.metadata.items() if k != "cell"}
