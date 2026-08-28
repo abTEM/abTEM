@@ -458,6 +458,94 @@ def test_images_interpolate_line(data, lazy, device):
     assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
 
 
+def test_line_profiles_add_to_plot():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
+    image = wave.build((0, 0), lazy=False).intensity()
+    line = image.interpolate_line(start=(1.0, 2.0), end=(15.0, 8.0), gpts=32)
+
+    fig, ax = plt.subplots()
+    try:
+        (artist,) = line.add_to_plot(ax, color="r")
+        assert isinstance(artist, Line2D)
+        np.testing.assert_allclose(artist.get_xdata(), [1.0, 15.0])
+        np.testing.assert_allclose(artist.get_ydata(), [2.0, 8.0])
+    finally:
+        plt.close(fig)
+
+
+def test_line_profiles_add_to_plot_width_returns_rectangle():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
+    image = wave.build((0, 0), lazy=False).intensity()
+    line = image.interpolate_line(start=(0.0, 0.0), end=(10.0, 0.0), width=2.0)
+
+    fig, ax = plt.subplots()
+    try:
+        artist = line.add_to_plot(ax)
+        assert isinstance(artist, Rectangle)
+    finally:
+        plt.close(fig)
+
+
+def test_line_profiles_add_to_plot_on_visualization():
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
+    image = wave.build((0, 0), lazy=False).intensity()
+    line = image.interpolate_line(start=(1.0, 2.0), end=(15.0, 8.0), gpts=32)
+
+    visualization = image.show(display=False)
+    try:
+        line.add_to_plot(visualization, color="r")
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
+
+
+def test_line_profiles_add_to_plot_uses_lateral_projection_of_3d_start_end():
+    """A line profile whose start/end carry a depth (z) coordinate (as produced by
+    Potential.interpolate_line(..., projected=False)) should still be drawable,
+    using only the lateral (x, y) projection of the line."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    array = np.arange(32, dtype=float)
+    line = RealSpaceLineProfiles(
+        array,
+        sampling=1.0,
+        metadata={"start": (1.0, 2.0, 3.0), "end": (15.0, 8.0, 20.0)},
+    )
+
+    fig, ax = plt.subplots()
+    try:
+        (artist,) = line.add_to_plot(ax)
+        assert isinstance(artist, Line2D)
+        np.testing.assert_allclose(artist.get_xdata(), [1.0, 15.0])
+        np.testing.assert_allclose(artist.get_ydata(), [2.0, 8.0])
+    finally:
+        plt.close(fig)
+
+
+def test_line_profiles_add_to_plot_missing_metadata_raises():
+    array = np.arange(32, dtype=float)
+    line = RealSpaceLineProfiles(array, sampling=1.0)
+    with pytest.raises(RuntimeError, match="start.*end"):
+        line.add_to_plot(None)
+
+
 @given(
     data=st.data(), dose_per_area=abtem_st.sensible_floats(min_value=1e8, max_value=1e9)
 )

@@ -2159,18 +2159,53 @@ class _BaseMeasurement1D(BaseMeasurements):
         start, end = self.metadata["start"], self.metadata["end"]
         from abtem.scan import LineScan
 
-        return LineScan(start=start, end=end, sampling=sampling)
+        # start/end may carry a depth (z) coordinate (e.g. a non-projected 3D line
+        # profile); add_to_plot draws the lateral projection of the line, so only the
+        # (x, y) part is relevant here.
+        return LineScan(start=start[:2], end=end[:2], sampling=sampling)
 
-    def _add_to_plot(self, *args, **kwargs):
+    def add_to_plot(self, ax, **kwargs):
+        """
+        Add a visualization of the location of the line profile(s) to a matplotlib
+        plot, e.g. an image of the potential or measurement the line profile(s) were
+        interpolated from.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes or Visualization
+            The axes of the matplotlib plot the visualization should be added to.
+        kwargs :
+            Additional options for matplotlib.pyplot.plot (or
+            matplotlib.patches.Rectangle if the line profile(s) were created with a
+            nonzero `width`) as keyword arguments.
+
+        Returns
+        -------
+        artist : matplotlib.lines.Line2D or matplotlib.patches.Rectangle
+            The plotted line, or, if `width` is nonzero, the rectangle indicating the
+            averaging width.
+
+        Examples
+        --------
+        >>> import abtem
+        >>> from ase.build import bulk
+        >>> atoms = bulk("Si", cubic=True) * (4, 4, 4)
+        >>> potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=1.0)
+        >>> profile = potential.interpolate_line(start=(0, 0), end=(10, 10), gpts=200)
+        >>> visualization = potential.project().show()
+        >>> _ = profile.add_to_plot(visualization, color="r")
+        """
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
-                "The metadata does not contain the keys 'start' and 'end'"
+                "The metadata does not contain the keys 'start' and 'end'; "
+                "add_to_plot requires line profiles produced by interpolate_line "
+                "or interpolate_line_at_position"
             )
 
         if "width" in self.metadata:
-            kwargs["width"] = self.metadata["width"]
+            kwargs.setdefault("width", self.metadata["width"])
 
-        self._line_scan().add_to_plot(*args, **kwargs)
+        return self._line_scan().add_to_plot(ax, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
