@@ -1172,6 +1172,8 @@ def test_potential_show_depth_profile(si_potential):
 def test_potential_interpolate_line_projected_matches_project(device, lazy):
     from ase.build import bulk
 
+    from abtem.core.backend import asnumpy
+
     atoms = bulk("Si", cubic=True) * (2, 2, 5)
     potential = Potential(
         atoms, slice_thickness=1.0, gpts=(32, 32), device=device
@@ -1184,8 +1186,8 @@ def test_potential_interpolate_line_projected_matches_project(device, lazy):
 
     assert direct.shape == via_project.shape
     np.testing.assert_allclose(
-        np.asarray(direct.array.compute() if lazy else direct.array),
-        np.asarray(via_project.array.compute() if lazy else via_project.array),
+        asnumpy(direct.array.compute() if lazy else direct.array),
+        asnumpy(via_project.array.compute() if lazy else via_project.array),
     )
 
 
@@ -1193,6 +1195,8 @@ def test_potential_interpolate_line_projected_matches_project(device, lazy):
 @pytest.mark.parametrize("lazy", [True, False])
 def test_potential_interpolate_line_3d_lazy_matches_eager(device, lazy):
     from ase.build import bulk
+
+    from abtem.core.backend import asnumpy
 
     atoms = bulk("Si", cubic=True) * (2, 2, 5)
     potential_lazy = Potential(
@@ -1208,8 +1212,8 @@ def test_potential_interpolate_line_3d_lazy_matches_eager(device, lazy):
 
     assert profile_lazy.shape == profile_eager.shape
     np.testing.assert_allclose(
-        np.asarray(profile_lazy.array.compute()),
-        np.asarray(profile_eager.array),
+        asnumpy(profile_lazy.array.compute()),
+        asnumpy(profile_eager.array),
     )
 
 
