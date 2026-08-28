@@ -57,19 +57,21 @@ def _fresnel_propagator_array(
 
     if not grid.is_orthogonal:
         # Non-orthogonal (skewed) grid: the free-space propagator is still diagonal in
-        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell.
+        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell. The
+        # exact/order-1 formulas below depend only on k2 (not on kx, ky separately), so
+        # they generalise to a skewed grid unchanged once k2 uses the correct metric;
+        # only the order-2 term (untested for a skewed metric) stays unsupported.
         if order == 2:
             raise NotImplementedError(
                 "the order-2 Fourier propagator is not implemented for non-orthogonal "
-                "grids; use order=1 or the realspace multislice"
+                "grids; use order=1, order='exact', or the realspace multislice"
             )
         k2 = grid.k_squared(xp)
-        return complex_exponential(-k2 * np.pi * thickness * wavelength)
-
-    # Orthogonal grid: keep the separable form (bit-identical to the previous code).
-    kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
-    kx, ky = kx[:, None], ky[None]
-    k2 = kx**2 + ky**2
+    else:
+        # Orthogonal grid: keep the separable form (bit-identical to the previous code).
+        kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
+        kx, ky = kx[:, None], ky[None]
+        k2 = kx**2 + ky**2
 
     # Split into propagating and evanescent waves
     x = wavelength**2 * k2
@@ -119,6 +121,7 @@ def _fresnel_propagator_array(
             grid._valid_gpts,
             grid._valid_sampling,
             get_array_module(device),
+            cell=grid.cell,
         )[propagating]
 
         max_phase_error = float((phase_error * aperture).max())

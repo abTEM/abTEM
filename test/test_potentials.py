@@ -1016,13 +1016,18 @@ def test_all_modes_agree_on_fully_triclinic_cell():
 
     # real-space FD agrees with Fourier MS within its FD discretisation -- the
     # tilted-c potential adds an in-plane drift between slices that the metric
-    # Laplacian must capture
+    # Laplacian must capture. Fourier MS now uses the true (metric-aware) exact
+    # propagator on a skewed grid rather than silently falling back to the order-1
+    # approximation (see _fresnel_propagator_array), so it is a more accurate
+    # reference than before; the gap below is real-space FD's own discretisation
+    # error on this triclinic cell, no longer partly masked by a correlated error
+    # in the Fourier reference.
     rel_FR = np.abs(IF[mask] - IR[mask]) / IF[mask]
-    assert rel_FR.max() < 5e-2, (
+    assert rel_FR.max() < 0.10, (
         f"Real-space FD vs Fourier MS disagrees on {n} pixels: max rel={rel_FR.max():.2e}, "
         f"mean rel={rel_FR.mean():.2e}"
     )
-    assert rel_FR.mean() < 1e-2, (
+    assert rel_FR.mean() < 0.02, (
         f"Real-space FD vs Fourier MS mean rel error {rel_FR.mean():.2e} too large"
     )
 

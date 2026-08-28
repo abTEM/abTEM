@@ -1852,6 +1852,7 @@ class PotentialArray(BasePotential, FieldArray):
             slice_thickness=self.slice_thickness,
             extent=self.extent,
             energy=energy,
+            cell=self.cell,
         )
         return t
 
@@ -1904,9 +1905,10 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         energy: Optional[float] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(array, slice_thickness, extent, sampling)
+        super().__init__(array, slice_thickness, extent, sampling, cell=cell)
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]
@@ -1917,6 +1919,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             self.slice_thickness[first_slice:last_slice],
             extent=self.extent,
             energy=self.energy,
+            cell=self.cell,
         )
 
     def transmission_function(self, energy) -> TransmissionFunction:

@@ -222,6 +222,7 @@ class Grid(CopyMixin, EqualityMixin):
 
     @extent.setter
     def extent(self, extent: float | Sequence[float] | None):
+        rescaled_cell = None
         if extent is not None:
             if (
                 self._lock_extent
@@ -232,6 +233,19 @@ class Grid(CopyMixin, EqualityMixin):
 
             validated_extent = self._validate(extent, dtype=float)
 
+            if self._cell is not None and self.extent is not None:
+                # Keep an already-set skewed cell consistent with a changed extent:
+                # rescale each lattice-vector row to match its axis' new length,
+                # preserving direction. Without this a cell's row lengths silently
+                # desync from the grid's extent (previously only checked once, at
+                # Grid construction, by _validate_cell) -- e.g. via Grid.match()
+                # overwriting self.extent to match another grid's slightly different
+                # extent.
+                old_extent = np.array(self.extent, dtype=float)
+                new_extent = np.array(validated_extent, dtype=float)
+                cell_arr = np.array(self._cell, dtype=float)
+                rescaled_cell = cell_arr * (new_extent / old_extent)[:, None]
+
             if self._lock_sampling or (self.gpts is None):
                 self._adjust_gpts(validated_extent, self.sampling)
                 self._adjust_sampling(validated_extent, self.gpts)
@@ -241,6 +255,9 @@ class Grid(CopyMixin, EqualityMixin):
             validated_extent = None
 
         self._extent = validated_extent
+
+        if rescaled_cell is not None:
+            self._cell = self._validate_cell(rescaled_cell)
 
     @property
     def gpts(self) -> tuple[int, ...] | None:
