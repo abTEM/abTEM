@@ -194,9 +194,11 @@ class BaseSlicedAtoms(EqualityMixin):
 
     @property
     def box(self) -> tuple[float, float, float]:
-        """The simulation box [Å]."""
-        diag = np.diag(self._atoms.cell)
-        return float(diag[0]), float(diag[1]), float(diag[2])
+        """The simulation box [Å]: the lengths of the three lattice vectors. For an
+        orthogonal cell this is the same as the diagonal; for a skewed in-plane cell
+        (a, b) the lattice-vector length differs from the diagonal entry."""
+        lengths = np.linalg.norm(np.asarray(self._atoms.cell, dtype=float), axis=1)
+        return float(lengths[0]), float(lengths[1]), float(lengths[2])
 
     @property
     def num_slices(self) -> int:
@@ -411,5 +413,12 @@ class SlicedAtoms(BaseSlicedAtoms):
             in_slice = (self.atoms.numbers == atomic_number) * in_slice
 
         atoms = self.atoms[in_slice]
-        atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
+        # Preserve the true in-plane (a, b) cell -- which may be skewed -- instead of
+        # collapsing it to its diagonal; only the z-extent changes, to this slice's
+        # thickness.
+        cell = np.array(atoms.cell, dtype=float)
+        new_cell = np.zeros((3, 3))
+        new_cell[:2, :2] = cell[:2, :2]
+        new_cell[2, 2] = b - a
+        atoms.cell = new_cell
         return atoms
