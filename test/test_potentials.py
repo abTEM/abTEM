@@ -1397,6 +1397,35 @@ def test_potential_interpolate_line_fractional_skew_matches_cartesian(
     np.testing.assert_allclose(frac_profile.array, cartesian_profile.array)
 
 
+def test_potential_interpolate_line_fractional_skew_matches_cartesian_projected(
+    hex_skew_potential,
+):
+    """Same as test_potential_interpolate_line_fractional_skew_matches_cartesian, but
+    for the projected=True (2D) path -- this goes through LineScan's own fractional
+    handling rather than the potential's own effective-cell conversion, and must
+    likewise use the true (skewed) cell rather than a plain per-axis extent scaling."""
+    potential, _, atom1_xy = hex_skew_potential
+    built = potential.build(lazy=False)
+
+    frac_profile = built.interpolate_line(
+        start=(0.0, 0.0),
+        end=(1 / 3, 1 / 3),
+        gpts=50,
+        endpoint=True,
+        fractional=True,
+        projected=True,
+    )
+    cartesian_profile = built.interpolate_line(
+        start=(0.0, 0.0),
+        end=(atom1_xy[0], atom1_xy[1]),
+        gpts=50,
+        endpoint=True,
+        projected=True,
+    )
+    np.testing.assert_allclose(frac_profile.array, cartesian_profile.array)
+    np.testing.assert_allclose(frac_profile.metadata["end"], atom1_xy)
+
+
 @pytest.mark.parametrize(
     "position",
     [

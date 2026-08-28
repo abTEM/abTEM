@@ -1028,10 +1028,29 @@ class _BaseMeasurement2D(BaseMeasurements):
         elif end is None:
             end = (0.0, self.extent[0])
 
-        if fractional:
-            extent = self.extent
+        cell = self.metadata.get("cell", None)
+        skewed = cell is not None and not is_cell_orthogonal(
+            np.asarray(cell, dtype=float)
+        )
+
+        if fractional and skewed and not isinstance(start, Atom) and not isinstance(
+            end, Atom
+        ):
+            # LineScan's own fractional handling assumes an orthogonal grid
+            # (Cartesian = fractional * extent per axis), which is wrong for a
+            # non-orthogonal cell: it would scale along Cartesian x/y instead of
+            # along the (possibly skewed) lattice directions. Convert fractional
+            # (u, v) -> Cartesian (x, y) ourselves via the true cell (rows =
+            # lattice vectors, so Cartesian = frac @ cell), then hand LineScan
+            # already-Cartesian coordinates.
+            cell_arr = np.asarray(cell, dtype=float)
+            start = tuple(np.asarray(start, dtype=float) @ cell_arr)
+            end = tuple(np.asarray(end, dtype=float) @ cell_arr)
+            scan_fractional = False
+            scan_extent = None
         else:
-            extent = None
+            scan_fractional = fractional
+            scan_extent = self.extent if fractional else None
 
         scan = LineScan(
             start=start,
@@ -1039,8 +1058,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             gpts=gpts,
             sampling=sampling,
             endpoint=endpoint,
-            potential=extent,
-            fractional=fractional,
+            potential=scan_extent,
+            fractional=scan_fractional,
         )
 
         if margin != 0.0:
