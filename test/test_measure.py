@@ -498,6 +498,27 @@ def test_line_profiles_add_to_plot_width_returns_rectangle():
         plt.close(fig)
 
 
+def test_line_profiles_add_to_plot_width_always_matches_metadata():
+    """The drawn rectangle must always reflect the profile's real averaging width,
+    even if a caller passes a different width= to add_to_plot -- otherwise the plot
+    would misrepresent the region the data was actually averaged over."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
+    image = wave.build((0, 0), lazy=False).intensity()
+    line = image.interpolate_line(start=(0.0, 0.0), end=(10.0, 0.0), width=2.0)
+
+    fig, ax = plt.subplots()
+    try:
+        artist = line.add_to_plot(ax, width=5.0)
+        assert artist.get_height() == 2.0
+    finally:
+        plt.close(fig)
+
+
 def test_line_profiles_add_to_plot_on_visualization():
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
     image = wave.build((0, 0), lazy=False).intensity()
@@ -938,3 +959,39 @@ def test_skew_diffraction_to_cartesian_and_indexing():
     # equal to the skew multislice numerical floor (~1e-5); the broken
     # (non-metric) mapping gave a spread of order 1.
     assert (max(six) - min(six)) / np.mean(six) < 1e-3
+
+
+def test_diffraction_patterns_interpolate_line_skew_cell_uses_reciprocal_metric():
+    """interpolate_line's skew-cell handling must use the *reciprocal* lattice for a
+    reciprocal-space measurement (e.g. DiffractionPatterns), not the real-space cell
+    carried in metadata['cell'] -- using the real-space cell directly would apply an
+    Angstrom-scale transform to 1/Angstrom-scale positions."""
+    import abtem
+
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = ase.Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+    dp = (
+        abtem.PlaneWave(energy=100e3)
+        .multislice(abtem.Potential(atoms, gpts=(120, 120), slice_thickness=cz))
+        .compute()
+        .diffraction_patterns(max_angle="full", fftshift=True)
+    )
+    assert "cell" in dp.metadata
+
+    cell2d = cell[:2, :2]
+    reciprocal_cell = np.linalg.inv(cell2d).T  # rows are the reciprocal lattice vectors
+    b1 = reciprocal_cell[0]
+
+    # A fractional (1, 0) line must land on the true reciprocal lattice vector b1, and
+    # match interpolating the same Cartesian point directly.
+    frac_profile = dp.interpolate_line(
+        start=(0.0, 0.0), end=(1.0, 0.0), gpts=30, endpoint=True, fractional=True
+    )
+    cartesian_profile = dp.interpolate_line(
+        start=(0.0, 0.0), end=tuple(b1), gpts=30, endpoint=True
+    )
+    np.testing.assert_allclose(frac_profile.array, cartesian_profile.array)
+    np.testing.assert_allclose(frac_profile.metadata["end"], b1)

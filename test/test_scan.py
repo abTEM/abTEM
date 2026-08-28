@@ -160,6 +160,41 @@ def test_grid_scan_zero_extent_rejected():
         GridScan(start=(1.0, 1.0), end=(1.0, 1.0), gpts=(4, 4))
 
 
+def test_fractional_coordinates_on_skew_potential():
+    """Fractional start/end (via validate_coordinate, used by LineScan/GridScan) must
+    resolve through the true (possibly skewed) cell, not a plain per-axis extent
+    scaling -- otherwise a fractional scan position on a non-orthogonal cell silently
+    lands off the actual lattice."""
+    from ase import Atoms
+
+    a = 2.46
+    hexcell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, 3.35],
+    ]
+    atoms = Atoms(
+        "C2", cell=hexcell, pbc=True, scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)]
+    )
+    potential = Potential(atoms, gpts=(64, 64), slice_thickness=3.35)
+    assert not potential.grid.is_orthogonal
+
+    cell2d = np.array(hexcell)[:2, :2]
+    expected_end = np.array([1 / 3, 1 / 3]) @ cell2d
+
+    scan = GridScan(
+        start=(0.0, 0.0), end=(1 / 3, 1 / 3), gpts=(2, 2), fractional=True,
+        potential=potential,
+    )
+    np.testing.assert_allclose(scan.end, expected_end)
+
+    line = LineScan(
+        start=(0.0, 0.0), end=(1 / 3, 1 / 3), gpts=10, fractional=True,
+        potential=potential,
+    )
+    np.testing.assert_allclose(line.end, expected_end)
+
+
 # def test_source_offset():
 #     distribution = GaussianDistribution(4, num_samples=4, dimension=2)
 #

@@ -369,23 +369,37 @@ def _sum_run_length_encoded(array, result, separators):
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
+    """Spline-interpolate a stack of arrays at given fractional-pixel positions.
+
+    `array`'s trailing `ndim` axes (`ndim = positions.shape[-1]`, e.g. 2 for
+    images/diffraction patterns, 3 for a potential volume) are the spatial axes
+    interpolated over; any leading axes are treated as an ensemble/batch dimension.
+    `positions` holds one `ndim`-tuple of pixel coordinates per output point, with
+    arbitrary leading shape (e.g. `(N,)` for a plain line, or `(N, n_perp)` when
+    averaging across a perpendicular width).
+    """
     map_coordinates = get_ndimage_module(array).map_coordinates
     xp = get_array_module(array)
+    ndim = positions.shape[-1]
 
     positions_shape = positions.shape
-    positions = positions.reshape((-1, 2))
+    positions = positions.reshape((-1, ndim)) + 2 * order
 
     old_shape = array.shape
-    array = array.reshape((-1,) + array.shape[-2:])
-    array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
+    array = array.reshape((-1,) + array.shape[-ndim:])
 
-    positions = positions + 2 * order
+    pad_width = ((2 * order,) * 2,) * ndim
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
+    # Pad one ensemble member at a time rather than the whole stack at once: for a
+    # large ensemble (e.g. frozen phonons), padding the full stack in one call would
+    # multiply the padded array's memory by the ensemble size; padding per member
+    # keeps peak memory to a single padded array.
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        padded = xp.pad(array[i], pad_width, mode=mode)
+        map_coordinates(padded, positions.T, output=output[i], order=order, **kwargs)
 
-    output = output.reshape(old_shape[:-2] + positions_shape[:-1])
+    output = output.reshape(old_shape[:-ndim] + positions_shape[:-1])
     return output
 
 
@@ -1033,19 +1047,38 @@ class _BaseMeasurement2D(BaseMeasurements):
             np.asarray(cell, dtype=float)
         )
 
-        if fractional and skewed and not isinstance(start, Atom) and not isinstance(
-            end, Atom
+        # `conversion_cell`'s rows are the lattice vectors to convert between
+        # Cartesian and fractional coordinates with (Cartesian = frac @ cell, i.e.
+        # frac = Cartesian @ inv(cell) -- no transpose; that would instead apply the
+        # *reciprocal*-lattice basis change, landing on the wrong fraction for any
+        # non-symmetric cell). `metadata["cell"]` always holds the real-space
+        # lattice; a reciprocal-space measurement (e.g. DiffractionPatterns) instead
+        # needs the reciprocal lattice vectors (rows b1, b2), matching
+        # Grid.k_components / artists._build_skew_mesh's own real-vs-reciprocal
+        # branch -- using the real-space cell directly here would silently apply an
+        # Å-scale transform to 1/Å-scale positions.
+        conversion_cell = None
+        if skewed:
+            cell_arr = np.asarray(cell, dtype=float)
+            if isinstance(self.base_axes_metadata[0], ReciprocalSpaceAxis):
+                conversion_cell = np.linalg.inv(cell_arr).T
+            else:
+                conversion_cell = cell_arr
+
+        if (
+            fractional
+            and conversion_cell is not None
+            and not isinstance(start, Atom)
+            and not isinstance(end, Atom)
         ):
             # LineScan's own fractional handling assumes an orthogonal grid
             # (Cartesian = fractional * extent per axis), which is wrong for a
             # non-orthogonal cell: it would scale along Cartesian x/y instead of
             # along the (possibly skewed) lattice directions. Convert fractional
-            # (u, v) -> Cartesian (x, y) ourselves via the true cell (rows =
-            # lattice vectors, so Cartesian = frac @ cell), then hand LineScan
-            # already-Cartesian coordinates.
-            cell_arr = np.asarray(cell, dtype=float)
-            start = tuple(np.asarray(start, dtype=float) @ cell_arr)
-            end = tuple(np.asarray(end, dtype=float) @ cell_arr)
+            # (u, v) -> Cartesian (x, y) ourselves via the true cell, then hand
+            # LineScan already-Cartesian coordinates.
+            start = tuple(np.asarray(start, dtype=float) @ conversion_cell)
+            end = tuple(np.asarray(end, dtype=float) @ conversion_cell)
             scan_fractional = False
             scan_extent = None
         else:
@@ -1065,25 +1098,13 @@ class _BaseMeasurement2D(BaseMeasurements):
         if margin != 0.0:
             scan.add_margin(margin)
 
-        cell = self.metadata.get("cell", None)
         cart_positions = scan.get_positions(lazy=False) - self.offset
-        if cell is not None:
-            cell_arr = np.asarray(cell, dtype=float)
-            if not is_cell_orthogonal(cell_arr):
-                # Map Cartesian positions to fractional pixel indices via inverse cell.
-                # cell_arr's rows are the lattice vectors a, b, so a Cartesian point p
-                # (row vector) relates to its fractional coordinates via p = frac @ cell,
-                # i.e. frac = p @ inv(cell) -- no transpose (that would instead apply the
-                # *reciprocal*-lattice basis change, landing on the wrong fraction for any
-                # non-symmetric cell).
-                inv_cell = np.linalg.inv(cell_arr)  # maps Cartesian -> fractional
-                frac = cart_positions @ inv_cell  # fractional coordinates
-                # Scale fractional [0,1) -> pixel indices [0, N)
-                positions = xp.asarray(
-                    frac * np.array(self.base_shape, dtype=float)
-                )
-            else:
-                positions = xp.asarray(cart_positions / self.sampling)
+        if conversion_cell is not None:
+            # Map Cartesian positions to fractional pixel indices via inverse cell.
+            inv_cell = np.linalg.inv(conversion_cell)
+            frac = cart_positions @ inv_cell  # fractional coordinates
+            # Scale fractional [0,1) -> pixel indices [0, N)
+            positions = xp.asarray(frac * np.array(self.base_shape, dtype=float))
         else:
             positions = xp.asarray(cart_positions / self.sampling)
 
@@ -2212,7 +2233,10 @@ class _BaseMeasurement1D(BaseMeasurements):
             )
 
         if "width" in self.metadata:
-            kwargs.setdefault("width", self.metadata["width"])
+            # Always draw the width the profile was actually averaged over -- a
+            # caller-supplied `width` here would misrepresent the real averaging
+            # region the plotted data came from.
+            kwargs["width"] = self.metadata["width"]
 
         return self._line_scan().add_to_plot(ax, **kwargs)
 

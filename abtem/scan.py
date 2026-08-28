@@ -13,6 +13,7 @@ from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from abtem.array import ArrayObject
+from abtem.atoms import is_cell_orthogonal
 from abtem.core.axes import AxisMetadata, PositionsAxis, ScanAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
@@ -421,16 +422,29 @@ def validate_coordinate(
     elif fractional and potential is not None:
         potential = validate_potential(potential)
 
+        cell = None
         if isinstance(potential, BasePotential):
             extent = potential._valid_extent
+            cell = potential.cell
         else:
             assert potential is not None
             extent = potential
 
-        coordinate = (
-            extent[0] * coordinate[0],
-            extent[1] * coordinate[1],
-        )
+        if cell is not None and not is_cell_orthogonal(
+            np.asarray(cell, dtype=float)
+        ):
+            # A plain per-axis extent scaling (below) assumes an orthogonal grid;
+            # for a non-orthogonal (skewed) cell it silently lands on the wrong
+            # physical location. Convert fractional (u, v) -> Cartesian (x, y) via
+            # the true cell instead (rows are the lattice vectors, so Cartesian =
+            # fractional @ cell).
+            cell_arr = np.asarray(cell, dtype=float)
+            coordinate = tuple(np.asarray(coordinate, dtype=float) @ cell_arr)
+        else:
+            coordinate = (
+                extent[0] * coordinate[0],
+                extent[1] * coordinate[1],
+            )
 
     return coordinate
 

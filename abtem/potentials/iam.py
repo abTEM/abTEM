@@ -34,7 +34,7 @@ from abtem.core.axes import (
     ThicknessAxis,
     _find_axes_type,
 )
-from abtem.core.backend import get_array_module, get_ndimage_module, validate_device
+from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
 from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
@@ -52,7 +52,7 @@ from abtem.integrals import (
     QuadratureProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
 )
-from abtem.measurements import Images, RealSpaceLineProfiles
+from abtem.measurements import Images, RealSpaceLineProfiles, _interpolate_stack
 from abtem.slicing import (
     BaseSlicedAtoms,
     SlicedAtoms,
@@ -1500,23 +1500,6 @@ def _validate_3d_position(
         )
 
 
-def _interpolate_stack_3d(array, positions, mode: str, order: int, **kwargs):
-    map_coordinates = get_ndimage_module(array).map_coordinates
-    xp = get_array_module(array)
-
-    old_shape = array.shape
-    array = array.reshape((-1,) + array.shape[-3:])
-    array = xp.pad(array, ((0, 0),) + ((2 * order,) * 2,) * 3, mode=mode)
-
-    positions = positions + 2 * order
-    output = xp.zeros((array.shape[0], positions.shape[1]), dtype=array.dtype)
-
-    for i in range(array.shape[0]):
-        map_coordinates(array[i], positions, output=output[i], order=order, **kwargs)
-
-    return output.reshape(old_shape[:-3] + (positions.shape[1],))
-
-
 class FieldArray(BaseField, ArrayObject):
     def __init__(
         self,
@@ -1952,15 +1935,12 @@ class FieldArray(BaseField, ArrayObject):
         end = _validate_3d_position(end)
 
         # The in-plane grid may be non-orthogonal (skewed); `effective_cell` is the
-        # 2x2 matrix whose rows are the two in-plane lattice vectors, falling back to
-        # a diagonal (orthogonal) cell built from `extent` when the grid is not skewed.
+        # 2x2 matrix whose rows are the two in-plane lattice vectors (falling back to
+        # a diagonal cell built from `extent` for an orthogonal grid -- the same
+        # fallback `Grid._effective_cell()` uses for reciprocal_metric/k_components).
         # It is used both ways: fractional (u, v) -> Cartesian (x, y) via `@ cell`, and
         # Cartesian (x, y) -> fractional pixel index via `@ inv(cell)`.
-        effective_cell = self.grid.cell
-        if effective_cell is None:
-            effective_cell = np.diag(np.array(self.extent, dtype=float))
-        else:
-            effective_cell = np.asarray(effective_cell, dtype=float)
+        effective_cell = self.grid._effective_cell()
 
         if fractional:
             start_xy = np.array(start[:2]) @ effective_cell
@@ -1990,11 +1970,7 @@ class FieldArray(BaseField, ArrayObject):
 
         slice_thickness = np.array(self.slice_thickness)
         z_centers = np.cumsum(slice_thickness) - slice_thickness / 2
-
-        if len(z_centers) > 1:
-            z_px = np.interp(z, z_centers, np.arange(len(z_centers)))
-        else:
-            z_px = np.zeros_like(z)
+        z_px = np.interp(z, z_centers, np.arange(len(z_centers)))
 
         inv_cell = np.linalg.inv(effective_cell)
         frac_xy = np.stack((x, y), axis=1) @ inv_cell
@@ -2002,7 +1978,7 @@ class FieldArray(BaseField, ArrayObject):
         y_px = frac_xy[:, 1] * self.gpts[1]
 
         xp = get_array_module(self.array)
-        positions = xp.asarray(np.stack((z_px, x_px, y_px), axis=0))
+        positions = xp.asarray(np.stack((z_px, x_px, y_px), axis=1))
 
         if self.is_lazy:
             n_base = len(self.base_shape)
@@ -2011,7 +1987,7 @@ class FieldArray(BaseField, ArrayObject):
             new_axis = (base_axes[0],)
 
             array = da.map_blocks(
-                _interpolate_stack_3d,
+                _interpolate_stack,
                 self.array,
                 positions=positions,
                 mode="wrap",
@@ -2022,7 +1998,7 @@ class FieldArray(BaseField, ArrayObject):
                 meta=xp.array((), dtype=dtype),
             )
         else:
-            array = _interpolate_stack_3d(
+            array = _interpolate_stack(
                 self.array, positions, mode="wrap", order=order
             )
 
@@ -2053,6 +2029,13 @@ class FieldArray(BaseField, ArrayObject):
     ) -> RealSpaceLineProfiles:
         """See :meth:`.BaseField.interpolate_line_at_position`."""
         if projected:
+            if not isinstance(center, Atom) and len(center) == 3:
+                raise ValueError(
+                    "center has a depth (z) coordinate, which is only meaningful "
+                    "for projected=False; pass a two-float (x, y) center, or set "
+                    "projected=False."
+                )
+
             return self.project().interpolate_line_at_position(
                 center=center,
                 angle=angle,

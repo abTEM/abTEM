@@ -4,7 +4,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
-from ase import Atoms
+from ase import Atom, Atoms
 from hypothesis import given
 from utils import gpu
 
@@ -1305,6 +1305,26 @@ def test_potential_interpolate_line_at_position(si_potential):
         center=center + (1.0,), angle=30.0, extent=5.0, gpts=20, projected=False
     )
     assert volumetric.shape == (20,)
+
+
+def test_potential_interpolate_line_at_position_rejects_3d_center_when_projected(
+    si_potential,
+):
+    """A 3-tuple center only makes sense for projected=False; passing one with
+    projected=True (the default) should raise rather than silently drop z."""
+    pot = si_potential.build(lazy=False)
+    center = (pot.extent[0] / 2, pot.extent[1] / 2, 1.0)
+
+    with pytest.raises(ValueError, match="depth"):
+        pot.interpolate_line_at_position(center=center, angle=30.0, extent=5.0)
+
+    # An Atom center is a pre-existing, intentional 2D use case (only x, y are used)
+    # and must keep working.
+    atom_center = Atom("Si", center)
+    profile = pot.interpolate_line_at_position(
+        center=atom_center, angle=30.0, extent=5.0, gpts=10
+    )
+    assert profile.shape == (10,)
 
 
 def test_potential_interpolate_line_lazy_delegation(si_potential):
