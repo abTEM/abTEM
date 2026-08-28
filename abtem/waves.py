@@ -493,8 +493,11 @@ class Waves(BaseWaves, ArrayObject):
         self._metadata["reciprocal_space"] = self.reciprocal_space
         cell = self.grid.cell
         if cell is not None:
-            # store the non-orthogonal cell so it survives array/metadata round-trips
+            # the grid cell takes precedence so a non-orthogonal cell stays consistent
+            # with the grid (and overrides any stale cell carried in the metadata)
             self._metadata["cell"] = tuple(map(tuple, cell.tolist()))
+        else:
+            self._metadata.pop("cell", None)
         return self._metadata
 
     @classmethod
