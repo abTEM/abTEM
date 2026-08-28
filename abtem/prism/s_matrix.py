@@ -4697,6 +4697,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "over the potential ensemble."
             )
 
+        if self._upsample_enabled and self.grid.cell is not None:
+            raise NotImplementedError(
+                "SMatrix.build does not support upsample=True (the C-PRISM "
+                "algorithm) on a non-orthogonal (skewed) cell; the dense "
+                "plane-wave expansion and compressed wave vectors both assume an "
+                "orthogonal grid. Use upsample=False (the default), or "
+                "interpolation=(1, 1)."
+            )
+
         lazy = validate_lazy(lazy)
 
         downsampled_gpts = self.downsampled_gpts
