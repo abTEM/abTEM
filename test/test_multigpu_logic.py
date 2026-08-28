@@ -467,7 +467,7 @@ def test_push_config_to_workers():
 
     backend._pushed_config_token = None
     with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=None
+        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
     ) as cluster, distributed.Client(cluster) as client:
         assert set(client.run(_worker_precision).values()) == {"float32"}
 
@@ -497,7 +497,7 @@ def test_workers_see_identical_config():
 
     backend._pushed_config_token = None
     with distributed.LocalCluster(
-        n_workers=2, processes=True, threads_per_worker=1, dashboard_address=None
+        n_workers=2, processes=True, threads_per_worker=1, dashboard_address=":0"
     ) as cluster, distributed.Client(cluster) as client:
         with config.set(
             {
@@ -568,7 +568,7 @@ def test_cpu_distributed_compute_pushes_config():
 
     backend._pushed_config_token = None
     with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=None
+        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
     ) as cluster, distributed.Client(cluster) as client:
         with config.set({"precision": "float64"}):
             images = abtem.Images(
