@@ -55,6 +55,7 @@ from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
     polar_spatial_frequencies,
+    reciprocal_cell,
     spatial_frequencies,
 )
 from abtem.core.units import get_conversion_factor
@@ -3935,7 +3936,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         gx, gy = Grid(gpts=gpts_src, sampling=real_sampling, cell=cell).k_components()
         gx, gy = np.asarray(gx), np.asarray(gy)
 
-        reciprocal = np.linalg.inv(cell).T  # rows b1, b2
+        reciprocal = reciprocal_cell(cell)
         if sampling is None:
             sampling = (
                 float(np.linalg.norm(reciprocal[0])),

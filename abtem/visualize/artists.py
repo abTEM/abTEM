@@ -18,6 +18,7 @@ from abtem.atoms import is_cell_orthogonal
 from abtem.core import config
 from abtem.core.axes import LinearAxis, ReciprocalSpaceAxis
 from abtem.core.colors import hsluv_cmap
+from abtem.core.grid import reciprocal_cell
 from abtem.core.units import get_conversion_factor
 
 if TYPE_CHECKING:
@@ -509,7 +510,7 @@ def _build_skew_mesh(measurement, units=None):
     #                                 Cartesian reciprocal-vector components)
     norms = np.linalg.norm(cell, axis=1)
     if isinstance(ax0, ReciprocalSpaceAxis):
-        recip_cell = np.linalg.inv(cell).T
+        recip_cell = reciprocal_cell(cell)
         hat1 = norms[0] * recip_cell[0]
         hat2 = norms[1] * recip_cell[1]
     else:

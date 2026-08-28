@@ -389,7 +389,7 @@ class Grid(CopyMixin, EqualityMixin):
             )
 
         dtype = get_dtype(complex=False)
-        reciprocal = np.linalg.inv(self._effective_cell()).T  # rows b1, b2
+        reciprocal = reciprocal_cell(self._effective_cell())
         h1, h2 = _integer_frequencies(self._valid_gpts, xp)
         h1, h2 = h1[:, None].astype(dtype), h2[None, :].astype(dtype)
         gx = h1 * reciprocal[0, 0] + h2 * reciprocal[1, 0]
@@ -729,6 +729,13 @@ def _integer_frequencies(gpts: tuple[int, int], xp=np):
     h1 = xp.rint(n1 * xp.fft.fftfreq(n1))
     h2 = xp.rint(n2 * xp.fft.fftfreq(n2))
     return h1, h2
+
+
+def reciprocal_cell(cell: np.ndarray) -> np.ndarray:
+    """Reciprocal-lattice basis of a 2x2 real-space cell: rows ``b1, b2`` such that
+    ``a_i . b_j = delta_ij``. A reciprocal-space Fourier component with integer
+    indices ``(h1, h2)`` sits at physical position ``h1 * b1 + h2 * b2``."""
+    return np.linalg.inv(np.asarray(cell, dtype=float)).T
 
 
 def spatial_frequencies(

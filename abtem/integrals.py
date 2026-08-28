@@ -15,6 +15,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.core.backend import (
     cp,
     cupyx,
@@ -47,8 +48,7 @@ def _require_orthogonal_cell(cell: Optional[np.ndarray]) -> None:
     support skewed grids."""
     if cell is None:
         return
-    cell = np.asarray(cell, dtype=float)
-    if abs(cell[0, 1]) > 1e-12 or abs(cell[1, 0]) > 1e-12:
+    if not is_cell_orthogonal(cell):
         raise NotImplementedError(
             "this projection integrator does not yet support non-orthogonal grids; "
             "use the (default) ScatteringFactorProjectionIntegrals"
@@ -1045,11 +1045,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         # Detect a skewed in-plane grid. When the cell is None or orthogonal the original
         # rectangular-grid kernel is used unchanged (bit-identical). Otherwise the radial
         # potential is stamped via a metric-aware pixel <-> Cartesian map.
-        if cell is None:
-            skew = False
-        else:
-            cell_arr = np.asarray(cell, dtype=float)
-            skew = abs(cell_arr[0, 1]) > 1e-12 or abs(cell_arr[1, 0]) > 1e-12
+        skew = cell is not None and not is_cell_orthogonal(cell)
 
         xp = get_array_module(device)
 
@@ -1059,6 +1055,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     "finite projection on a non-orthogonal grid is not yet supported on "
                     "the GPU; use device='cpu' or projection='infinite'"
                 )
+            cell_arr = np.asarray(cell, dtype=float)
             sampling_vectors = np.stack(
                 [cell_arr[0] / gpts[0], cell_arr[1] / gpts[1]]
             )

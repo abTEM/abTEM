@@ -30,7 +30,7 @@ from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
+from abtem.core.grid import Grid, GridUndefinedError, reciprocal_cell, spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -3930,7 +3930,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             # reciprocal-lattice points g = n*ix*b1 + m*iy*b2 (Cartesian), with b1, b2
             # the reciprocal basis of the non-orthogonal cell.
-            reciprocal = np.linalg.inv(np.asarray(cell, dtype=float)).T  # rows b1, b2
+            reciprocal = reciprocal_cell(cell)
             nx = n * dtype(self.interpolation[0])
             my = m * dtype(self.interpolation[1])
             kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]
