@@ -2184,16 +2184,6 @@ class _BaseMeasurement1D(BaseMeasurements):
         artist : matplotlib.lines.Line2D or matplotlib.patches.Rectangle
             The plotted line, or, if `width` is nonzero, the rectangle indicating the
             averaging width.
-
-        Examples
-        --------
-        >>> import abtem
-        >>> from ase.build import bulk
-        >>> atoms = bulk("Si", cubic=True) * (4, 4, 4)
-        >>> potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=1.0)
-        >>> profile = potential.interpolate_line(start=(0, 0), end=(10, 10), gpts=200)
-        >>> visualization = potential.project().show()
-        >>> _ = profile.add_to_plot(visualization, color="r")
         """
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
