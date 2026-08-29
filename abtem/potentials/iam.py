@@ -926,7 +926,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1423,7 +1423,7 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1736,7 +1736,7 @@ class PotentialArray(BasePotential, FieldArray):
 
     Parameters
     ----------
-    array: 3D np.ndarray
+    array: 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness: float
@@ -1864,7 +1864,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
     Parameters
     ----------
-    array : 3D np.ndarray
+    array : 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness : float
@@ -2337,7 +2337,7 @@ class CrystalPotential(_PotentialBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         # if hasattr(self.potential_unit, "array")

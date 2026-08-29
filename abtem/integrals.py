@@ -80,13 +80,13 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        positions : np.ndarray
+        positions : numpy.ndarray
             2D array of xy-positions of the centers of each radial function [Å].
-        a : np.ndarray
+        a : numpy.ndarray
             Lower integration limit of the pr
             ojection integrals along z for each position [Å]. The limit is given
             relative to the center of the radial function.
-        b : np.ndarray
+        b : numpy.ndarray
             Upper integration limit of the projection integrals along z for each
             position [Å]. The limit is given relative to the center of the radial
             function.
@@ -330,7 +330,7 @@ def sinc(
 
     Returns
     -------
-    sinc : np.ndarray
+    sinc : numpy.ndarray
         2D sinc function.
     """
     xp = get_array_module(device)
@@ -354,12 +354,12 @@ def superpose_deltas(
 
     Parameters
     ----------
-    positions : np.ndarray
+    positions : numpy.ndarray
         Array of 2D positions as an nx2 array. The positions are given in units of
         pixels.
-    array : np.ndarray
+    array : numpy.ndarray
         The delta functions are added to this 2D array.
-    weights : np.ndarray, optional
+    weights : numpy.ndarray, optional
         If given each delta function is weighted by the given factor. Must match the
         length of `positions`.
     round_positions : bool, optional
@@ -368,7 +368,7 @@ def superpose_deltas(
 
     Returns
     -------
-    array : np.ndarray
+    array : numpy.ndarray
         The array with the delta functions added.
     """
 

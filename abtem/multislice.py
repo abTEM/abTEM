@@ -185,7 +185,7 @@ class FresnelPropagator:
 
         Returns
         -------
-        array : np.ndarray
+        array : numpy.ndarray
             The Fresnel propagator as an array.
         """
         key: tuple[Any, ...] = (
@@ -925,7 +925,7 @@ def transition_potential_multislice_and_detect(
 
     Returns
     -------
-    measurements : Waves or tuple of :class:`.BaseMeasurement`
+    measurements : :class:`.Waves` or tuple of :class:`.BaseMeasurements`
         Exit waves or detected measurements or lists of measurements.
     """
 

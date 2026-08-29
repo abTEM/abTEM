@@ -2326,7 +2326,7 @@ def stack(
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
     axis: int = 0,
 ) -> ArrayObjectType:
-    """Stack multiple array objects (e.g. Waves and BaseMeasurement) along a new
+    """Stack multiple array objects (e.g. Waves and BaseMeasurements) along a new
     ensemble axis.
 
     Parameters

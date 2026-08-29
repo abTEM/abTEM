@@ -1,4 +1,4 @@
-"""Module for handling Fourier transforms and convolution in *ab*TEM."""
+"""Module for handling Fourier transforms and convolution in abTEM."""
 
 import math
 import threading
@@ -290,7 +290,7 @@ def get_fftw_object(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to create the FFT object for.
     name : str
         Name of the FFT function.
@@ -617,16 +617,16 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
 
     Parameters
     ----------
-    x : np.ndarray or da.core.Array
+    x : numpy.ndarray or da.core.Array
         Array to convolve.
-    kernel : np.ndarray
+    kernel : numpy.ndarray
         Convolution kernel.
     overwrite_x : bool, optional
         Overwrite the input array.
 
     Returns
     -------
-    np.ndarray or da.core.Array
+    numpy.ndarray or da.core.Array
         Convolved array.
     """
     xp = get_array_module(x)
@@ -655,7 +655,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
 
     Parameters
     ----------
-    positions : np.ndarray
+    positions : numpy.ndarray
         Array of positions to shift the array to. The last dimension should be the
         number of dimensions to shift.
     shape : tuple
@@ -663,7 +663,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Array representing the phase ramp(s).
     """
     xp = get_array_module(positions)
@@ -700,15 +700,15 @@ def fft_shift(array: np.ndarray, positions: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to shift.
-    positions : np.ndarray
+    positions : numpy.ndarray
         Array of positions to shift the array to. The last dimension should be
         the number of dimensions to shift.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Shifted array
     """
     return ifft2(fft2(array) * fft_shift_kernel(positions, array.shape[-2:]))
@@ -760,7 +760,7 @@ def fft_interpolation_masks(
 
     Returns
     -------
-    tuple of np.ndarray
+    tuple of numpy.ndarray
         Masks for the input and output arrays.
     """
     mask1_1d = []
@@ -817,7 +817,7 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to crop.
     new_shape : tuple of int
         New shape of the array. If the new shape is smaller than the input array,
@@ -827,7 +827,7 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Cropped array.
     """
     xp = get_array_module(array)
@@ -872,7 +872,7 @@ def fft_interpolate(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to interpolate.
     new_shape : tuple of int
         New shape of the array.
@@ -883,7 +883,7 @@ def fft_interpolate(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Interpolated array.
     """
     old_size = np.prod(array.shape[-len(new_shape) :])

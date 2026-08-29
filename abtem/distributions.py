@@ -72,9 +72,9 @@ class DistributionFromValues(BaseDistribution):
 
     Parameters
     ----------
-    values : np.ndarray
+    values : numpy.ndarray
         The values of the distribution.
-    weights : np.ndarray, optional
+    weights : numpy.ndarray, optional
         The values of the weights. If None, all weights are set to 1.
     ensemble_mean : bool, optional
         If True, the mean of an ensemble of measurements defined by the distribution is

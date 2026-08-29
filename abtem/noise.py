@@ -170,7 +170,7 @@ def _single_axis_distortion(
 
     Parameters
     ----------
-    time : np.ndarray
+    time : numpy.ndarray
         Time constant for the distortion in s.
     max_frequency : float
         Maximum noise frequency in 1 / s.
@@ -201,7 +201,7 @@ def _make_displacement_field(
 
     Parameters
     ----------
-    time : np.ndarray
+    time : numpy.ndarray
        Time constant for the distortion in s.
     max_frequency : float
        Maximum noise frequency in 1 / s.

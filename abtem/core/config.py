@@ -217,21 +217,6 @@ def check_deprecations(key: str, deprecations: dict = deprecations) -> str:
     deprecations : Dict[str, str]
         The mapping of aliases
 
-    Examples
-    --------
-    >>> deprecations = {"old_key": "new_key", "invalid": None}
-    >>> check_deprecations("old_key", deprecations=deprecations)  # doctest: +SKIP
-    UserWarning: Configuration key "old_key" has been deprecated. Please use "new_key"
-    instead.
-
-    >>> check_deprecations("invalid", deprecations=deprecations)
-    Traceback (most recent call last):
-        ...
-    ValueError: Configuration value "invalid" has been removed
-
-    >>> check_deprecations("another_key", deprecations=deprecations)
-    'another_key'
-
     Returns
     -------
     new: str

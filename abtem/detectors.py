@@ -955,14 +955,14 @@ class SpectralSlitDetector(BaseDetector):
     rectangle of full width ``width``, while the annular detector integrates a
     disk of radius ``outer``.
 
-    ===========================  ====================================
+    ===========================  =================================
     SpectralSlitDetector         SpectralAnnularDetector
-    ===========================  ====================================
+    ===========================  =================================
     ``width`` — full slit width  ``outer`` — acceptance **radius**
-    ``q_min`` — start q (≥ 0)   ``q_min`` — start q (≥ 0)
+    ``q_min`` — start q (≥ 0)    ``q_min`` — start q (≥ 0)
     ``q_max`` — max q            ``q_max`` — max q
     ``angle`` — sweep direction  ``angle`` — sweep direction
-    ===========================  ====================================
+    ===========================  =================================
 
     For equivalent perpendicular acceptance and the same q-range::
 

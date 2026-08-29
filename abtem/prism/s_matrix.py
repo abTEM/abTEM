@@ -787,12 +787,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array defining the scattering matrix. Must be 3D or higher, dimensions before
         the last three dimensions should represent ensemble dimensions, the next
         dimension indexes the plane waves and the last two dimensions represent the
         spatial extent of the plane waves.
-    wave_vectors : np.ndarray
+    wave_vectors : numpy.ndarray
         Array defining the wave vectors corresponding to each plane wave.
         Must have shape Nx2, where N is equal to the number of plane waves.
     semiangle_cutoff : float
@@ -1370,7 +1370,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential
@@ -1504,15 +1504,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
     Parameters
     ----------
-    u : np.ndarray
+    u : numpy.ndarray
         Left singular vectors of the phase-removed scattering matrix of shape
         (K, gpts_x, gpts_y), where K is the number of retained modes.
-    sigma : np.ndarray
+    sigma : numpy.ndarray
         Retained singular values of shape (K,).
-    vh_dense : np.ndarray
+    vh_dense : numpy.ndarray
         Right singular vectors interpolated to the dense plane-wave expansion of
         shape (K, number of dense plane waves).
-    dense_indices : np.ndarray
+    dense_indices : numpy.ndarray
         Integer Fourier-space indices of the dense plane waves of shape (N, 2).
     semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
@@ -4922,7 +4922,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s)

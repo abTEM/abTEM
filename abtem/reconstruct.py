@@ -90,7 +90,7 @@ def _wrapped_indices_2D_window(
 
     Parameters
     ----------
-    center_position: (2,) np.ndarray
+    center_position: (2,) numpy.ndarray
         The window center positions in pixels
     window_shape: (2,) Sequence[int]
         The pixel dimensions of the window
@@ -144,7 +144,7 @@ def _propagate_array(
     ----------
     propagator: FresnelPropagator
         Near-field (Fresnel diffraction) propagation operator
-    waves_array: np.ndarray
+    waves_array: numpy.ndarray
         The wavefunction array to propagate
     wavelength: float
         The relativistic electron wavelength [Å]
@@ -157,7 +157,7 @@ def _propagate_array(
 
     Returns
     -------
-    propagated_array: np.ndarray
+    propagated_array: numpy.ndarray
         Propagated array
     """
     propagator_array = propagator._evaluate_propagator_array(
@@ -297,7 +297,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
         Parameters
         ----------
-        diffraction_patterns: (J,M,N) np.ndarray
+        diffraction_patterns: (J,M,N) numpy.ndarray
             Flat array of CBED patterns to be zero-padded
         region_of_interest_shape: (2,) Sequence[int]
             Pixel dimensions (R,S) the CBED patterns will be padded to
@@ -305,7 +305,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
         Returns
         -------
-        padded_diffraction_patterns: (J,R,S) np.ndarray
+        padded_diffraction_patterns: (J,R,S) numpy.ndarray
             Zero-padded CBED patterns
         """
 
@@ -351,7 +351,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
         Returns
         -------
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             CBED patterns from Measurement object
         angular_sampling: (2,) Sequence[float]
             Measurement angular sampling in mrad
@@ -377,7 +377,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
         Parameters
         ----------
-        positions: (J,2) np.ndarray or None
+        positions: (J,2) numpy.ndarray or None
             Input experimental positions [Å].
             If None, a raster scan using experimental parameters is constructed.
         sampling: (2,) Sequence[float]
@@ -389,7 +389,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         Returns
         -------
 
-        positions_in_px: (J,2) np.ndarray
+        positions_in_px: (J,2) numpy.ndarray
             Initial guess of scan positions in pixels
         updated_experimental_parameters:
             Updated experimental parameters dataset
@@ -483,20 +483,20 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
     Parameters
     ----------
 
-    diffraction_patterns: np.ndarray or Measurement
+    diffraction_patterns: numpy.ndarray or Measurement
         Input 3D or 4D CBED pattern intensities with dimensions (M,N)
     energy: float,
         Electron energy [eV]
     region_of_interest_shape: (2,) Sequence[int], optional
         Pixel dimensions (R,S) of the region of interest (ROI)
         If None, the ROI dimensions are taken as the CBED dimensions (M,N)
-    objects: np.ndarray, optional
+    objects: numpy.ndarray, optional
         Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
         If None, an array with 1.0j is initialized
-    probes: np.ndarray or Probe, optional
+    probes: numpy.ndarray or Probe, optional
         Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
         If None, a Probe with CTF given by the polar_parameters dictionary is initialized
-    positions: np.ndarray, optional
+    positions: numpy.ndarray, optional
         Initial positions guess [Å]
         If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
     semiangle_cutoff: float, optional
@@ -704,13 +704,13 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Object array to be illuminated
-        probes: np.ndarray
+        probes: numpy.ndarray
             Probe window array to illuminate object with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -718,9 +718,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Fractionally shifted probe window array
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Overlap projection of illuminated probe
         """
 
@@ -752,9 +752,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by RegularizedPtychographicOperator._overlap_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -763,7 +763,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Fourier projection of illuminated probe
         sse: float
             Updated sum of squares error estimate
@@ -804,17 +804,17 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by RegularizedPtychographicOperator._overlap_projection method
-        modified_exit_waves: np.ndarray
+        modified_exit_waves: numpy.ndarray
             Modified exit waves array given by RegularizedPtychographicOperator._fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -829,11 +829,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Updated objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Updated probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -903,17 +903,17 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Exit wave array given by RegularizedPtychographicOperator._overlap_projection method
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Modified exit wave array given by RegularizedPtychographicOperator._fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sobel: Callable, optional
             The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
@@ -924,7 +924,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -959,7 +959,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
         center_of_mass: Callable
             The scipy.ndimage module used to compute the array center of mass
@@ -968,7 +968,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Center-of-mass corrected probes array
         """
 
@@ -1092,7 +1092,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of DiffractionPatternss for the objects estimate at each iteration is returned
         reconstructed_probes_measurement: DiffractionPatterns or Sequence[DiffractionPatterns]
             If return_iterations, a list of DiffractionPatternss for the probes estimate at each iteration is returned
-        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+        reconstructed_position_measurement: numpy.ndarray or Sequence[numpy.ndarray]
             If return_iterations, a list of position estimates at each iteration is returned
         reconstruction_error: float or Sequence[float]
             If return_iterations, a list of the reconstruction error at each iteration is returned
@@ -1320,11 +1320,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Reconstructed objects array
-        probes: np.ndarray
+        probes: numpy.ndarray
             Reconstructed probes array
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -1335,7 +1335,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             Reconstructed objects DiffractionPatterns
         probes_measurement: DiffractionPatterns
             Reconstructed probes DiffractionPatterns
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -1365,20 +1365,20 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     Parameters
     ----------
 
-    diffraction_patterns: (2,) Sequence[np.ndarray] or (2,) Sequence[Measurement]
+    diffraction_patterns: (2,) Sequence[numpy.ndarray] or (2,) Sequence[Measurement]
         Two sets of 3D or 4D CBED pattern intensities with dimensions (M,N)
     energy: float,
         Electron energy [eV]
     region_of_interest_shape: (2,) Sequence[int], optional
         Pixel dimensions (R,S) of the region of interest (ROI)
         If None, the ROI dimensions are taken as the CBED dimensions (M,N)
-    objects: np.ndarray, optional
+    objects: numpy.ndarray, optional
         Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
         If None, an array with 1.0j is initialized
-    probes: np.ndarray or Probe, optional
+    probes: numpy.ndarray or Probe, optional
         Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
         If None, a Probe with CTF given by the polar_parameters dictionary is initialized
-    positions: np.ndarray, optional
+    positions: numpy.ndarray, optional
         Initial positions guess [Å]
         If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
     semiangle_cutoff: float, optional
@@ -1590,13 +1590,13 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Electrostatic and magnetic object arrays to be illuminated
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Forward and reverse probe window array to illuminate objects with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -1604,9 +1604,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Fractionally shifted forward probe window array, reverse probe array
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Overlap projection of electrostatic object with forward probe, dummy reverse exit wave
         """
 
@@ -1647,13 +1647,13 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Electrostatic and magnetic object arrays to be illuminated
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Forward and reverse probe window array to illuminate objects with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -1661,9 +1661,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Fractionally shifted probe window arrays
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Overlap projection of objects with forward and reverse probes
         """
 
@@ -1709,13 +1709,13 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Electrostatic and magnetic object arrays to be illuminated
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Forward and reverse probe window array to illuminate objects with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -1723,9 +1723,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Fractionally shifted forward probe window array, reverse probe array
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Overlap projection of objects with forward probe
         """
 
@@ -1766,9 +1766,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Exit waves array given by SimultaneousPtychographicOperator._warmup_overlap_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of forward and reverse CBED intensities arrays used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -1777,7 +1777,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: Sequence[np.ndarray]
+        modified_exit_wave: Sequence[numpy.ndarray]
             Fourier projection of forward illuminated probe, dummy projection of reverse illuminated probe
         sse: float
             Updated sum of squares error estimate
@@ -1812,9 +1812,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Exit waves array given by SimultaneousPtychographicOperator._overlap_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of forward and reverse CBED intensities arrays used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -1823,7 +1823,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: Sequence[np.ndarray]
+        modified_exit_wave: Sequence[numpy.ndarray]
             Fourier projection of forward and reverse illuminated probes
         sse: float
             Updated sum of squares error estimate
@@ -1880,17 +1880,17 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Current objects array estimate
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Exit waves array given by SimultaneousPtychographicOperator._warmup_overlap_projection method
-        modified_exit_waves: Sequence[np.ndarray]
+        modified_exit_waves: Sequence[numpy.ndarray]
             Modified exit waves array given by SimultaneousPtychographicOperator._fourier_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -1905,11 +1905,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Updated electrostatic object array estimate, dummy magnetic object array estimate
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Updated forward probe array estimate, dummy reverse probe array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
         exit_wave_forward, exit_wave_reverse = exit_waves
@@ -1996,17 +1996,17 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Current objects array estimate
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Exit waves array given by SimultaneousPtychographicOperator._overlap_projection method
-        modified_exit_waves: Sequence[np.ndarray]
+        modified_exit_waves: Sequence[numpy.ndarray]
             Modified exit waves array given by SimultaneousPtychographicOperator._fourier_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -2021,11 +2021,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Updated electrostatic and magnetic object array estimates
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Updated forward and reverse probe array estimates
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
         exit_wave_forward, exit_wave_reverse = exit_waves
@@ -2174,17 +2174,17 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Current objects array estimate
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: Sequence[np.ndarray]
+        exit_waves: Sequence[numpy.ndarray]
             Exit waves array given by SimultaneousPtychographicOperator._overlap_projection method
-        modified_exit_waves: Sequence[np.ndarray]
+        modified_exit_waves: Sequence[numpy.ndarray]
             Modified exit waves array given by SimultaneousPtychographicOperator._fourier_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -2199,11 +2199,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Updated electrostatic and magnetic object array estimates
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Updated forward probe array estimate, dummy reverse probe array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
         exit_wave_forward, exit_wave_reverse = exit_waves
@@ -2345,17 +2345,17 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Current objects array estimate
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_wave: Sequence[np.ndarray]
+        exit_wave: Sequence[numpy.ndarray]
             Exit wave array given by SimultaneousPtychographicOperator._overlap_projection method
-        modified_exit_wave: Sequence[np.ndarray]
+        modified_exit_wave: Sequence[numpy.ndarray]
             Modified exit wave array given by SimultaneousPtychographicOperator._fourier_projection method
-        diffraction_patterns: Sequence[np.ndarray]
+        diffraction_patterns: Sequence[numpy.ndarray]
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sobel: Callable, optional
             The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
@@ -2366,7 +2366,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -2407,7 +2407,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Current probes arrays estimate
         center_of_mass: Callable
             The scipy.ndimage module used to compute the array center of mass
@@ -2416,7 +2416,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Center-of-mass corrected probes array
         """
 
@@ -2617,7 +2617,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of Measurements for the objects estimate at each iteration is returned
         reconstructed_probes_measurement: Measurement or Sequence[Measurement]
             If return_iterations, a list of Measurements for the probes estimate at each iteration is returned
-        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+        reconstructed_position_measurement: numpy.ndarray or Sequence[numpy.ndarray]
             If return_iterations, a list of position estimates at each iteration is returned
         reconstruction_error: float or Sequence[float]
             If return_iterations, a list of the reconstruction error at each iteration is returned
@@ -2849,11 +2849,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: Sequence[np.ndarray]
+        objects: Sequence[numpy.ndarray]
             Reconstructed objects array
-        probes: Sequence[np.ndarray]
+        probes: Sequence[numpy.ndarray]
             Reconstructed probes array
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -2864,7 +2864,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             Reconstructed objects Measurement
         probes_measurement: Sequence[Measurement]
             Reconstructed probes Measurement
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -2892,7 +2892,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     Parameters
     ----------
-    diffraction_patterns: np.ndarray or Measurement
+    diffraction_patterns: numpy.ndarray or Measurement
         Input 3D or 4D CBED pattern intensities with dimensions (M,N)
     energy: float
         Electron energy [eV]
@@ -2901,13 +2901,13 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     region_of_interest_shape: (2,) Sequence[int], optional
         Pixel dimensions (R,S) of the region of interest (ROI)
         If None, the ROI dimensions are taken as the CBED dimensions (M,N)
-    objects: np.ndarray, optional
+    objects: numpy.ndarray, optional
         Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
         If None, an array with 1.0j is initialized
-    probes: np.ndarray or Probe, optional
+    probes: numpy.ndarray or Probe, optional
         Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
         If None, a Probe with CTF given by the polar_parameters dictionary is initialized
-    positions: np.ndarray, optional
+    positions: numpy.ndarray, optional
         Initial positions guess [Å]
         If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
     semiangle_cutoff: float, optional
@@ -3112,13 +3112,13 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Object array to be illuminated
-        probes: np.ndarray
+        probes: numpy.ndarray
             Probe window array to illuminate object with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -3126,9 +3126,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Fractionally shifted probe window array
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Overlap projection of illuminated probe
         """
 
@@ -3161,13 +3161,13 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Object array to be illuminated
-        probes: np.ndarray
+        probes: numpy.ndarray
             Probe window array to illuminate object with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -3175,9 +3175,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Fractionally shifted probes window array
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Overlap projection of illuminated probes
         """
 
@@ -3212,9 +3212,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MixedStatePtychographicOperator._warmup_overlap_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -3223,7 +3223,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Fourier projection of illuminated probe
         sse: float
             Updated sum of squares error estimate
@@ -3254,9 +3254,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MixedStatePtychographicOperator._overlap_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -3265,7 +3265,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Fourier projection of illuminated probe
         sse: float
             Updated sum of squares error estimate
@@ -3309,17 +3309,17 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MixedStatePtychographicOperator._warmup_overlap_projection method
-        modified_exit_waves: np.ndarray
+        modified_exit_waves: numpy.ndarray
             Modified exit waves array given by MixedStatePtychographicOperator._warmup_fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -3334,11 +3334,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Updated objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Updated probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -3417,17 +3417,17 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MixedStatePtychographicOperator._overlap_projection method
-        modified_exit_waves: np.ndarray
+        modified_exit_waves: numpy.ndarray
             Modified exit waves array given by MixedStatePtychographicOperator._fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -3442,11 +3442,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Updated objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Updated probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -3522,17 +3522,17 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Exit wave array given by MixedStatePtychographicOperator._warmup_overlap_projection method
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Modified exit wave array given by MixedStatePtychographicOperator._warmup_fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sobel: Callable, optional
             The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
@@ -3543,7 +3543,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -3578,7 +3578,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
         center_of_mass: Callable
             The scipy.ndimage module used to compute the array center of mass
@@ -3587,7 +3587,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Center-of-mass corrected probes array
         """
 
@@ -3771,7 +3771,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of Measurements for the objects estimate at each iteration is returned
         reconstructed_probes_measurement: Measurement or Sequence[Measurement]
             If return_iterations, a list of Measurements for the probes estimate at each iteration is returned
-        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+        reconstructed_position_measurement: numpy.ndarray or Sequence[numpy.ndarray]
             If return_iterations, a list of position estimates at each iteration is returned
         reconstruction_error: float or Sequence[float]
             If return_iterations, a list of the reconstruction error at each iteration is returned
@@ -4005,11 +4005,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Reconstructed objects array
-        probes: np.ndarray
+        probes: numpy.ndarray
             Reconstructed probes array
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -4020,7 +4020,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             Reconstructed objects Measurement
         probes_measurement: Measurement
             Reconstructed probes Measurement
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -4047,7 +4047,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     Parameters
     ----------
 
-    diffraction_patterns: np.ndarray or Measurement
+    diffraction_patterns: numpy.ndarray or Measurement
         Input 3D or 4D CBED pattern intensities with dimensions (M,N)
     energy: float
         Electron energy [eV]
@@ -4058,13 +4058,13 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     region_of_interest_shape: (2,) Sequence[int], optional
         Pixel dimensions (R,S) of the region of interest (ROI)
         If None, the ROI dimensions are taken as the CBED dimensions (M,N)
-    objects: np.ndarray, optional
+    objects: numpy.ndarray, optional
         Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
         If None, an array with 1.0j is initialized
-    probes: np.ndarray or Probe, optional
+    probes: numpy.ndarray or Probe, optional
         Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
         If None, a Probe with CTF given by the polar_parameters dictionary is initialized
-    positions: np.ndarray, optional
+    positions: numpy.ndarray, optional
         Initial positions guess [Å]
         If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
     semiangle_cutoff: float, optional
@@ -4280,13 +4280,13 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Object array to be illuminated
-        probes: np.ndarray
+        probes: numpy.ndarray
             Probe window array to illuminate object with
-        position: np.ndarray
+        position: numpy.ndarray
             Center position of probe window
-        old_position: np.ndarray
+        old_position: numpy.ndarray
             Old center position of probe window
             Used for fractionally shifting probe sequentially
         xp
@@ -4294,9 +4294,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Fractionally shifted probe window array
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Overlap projection of illuminated probe
         """
 
@@ -4344,9 +4344,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MultislicePtychographicOperator._overlap_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sse: float
             Current sum of squares error estimate
@@ -4355,7 +4355,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Fourier projection of illuminated probe
         sse: float
             Updated sum of squares error estimate
@@ -4401,17 +4401,17 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_waves: np.ndarray
+        exit_waves: numpy.ndarray
             Exit waves array given by MultislicePtychographicOperator._overlap_projection method
-        modified_exit_waves: np.ndarray
+        modified_exit_waves: numpy.ndarray
             Modified exit waves array given by MultislicePtychographicOperator._fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         fix_probe: bool, optional
             If True, the probe will not be updated by the algorithm. Default is False
@@ -4426,11 +4426,11 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Updated objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Updated probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -4513,17 +4513,17 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Current objects array estimate
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
-        position: np.ndarray
+        position: numpy.ndarray
             Current probe position estimate
-        exit_wave: np.ndarray
+        exit_wave: numpy.ndarray
             Exit wave array given by MultislicePtychographicOperator._overlap_projection method
-        modified_exit_wave: np.ndarray
+        modified_exit_wave: numpy.ndarray
             Modified exit wave array given by MultislicePtychographicOperator._fourier_projection method
-        diffraction_patterns: np.ndarray
+        diffraction_patterns: numpy.ndarray
             Square-root of CBED intensities array used to modify exit_waves amplitude
         sobel: Callable, optional
             The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
@@ -4534,7 +4534,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        position: np.ndarray
+        position: numpy.ndarray
             Updated probe position estimate
         """
 
@@ -4569,7 +4569,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Current probes array estimate
         center_of_mass: Callable
             The scipy.ndimage module used to compute the array center of mass
@@ -4578,7 +4578,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Returns
         -------
-        probes: np.ndarray
+        probes: numpy.ndarray
             Center-of-mass corrected probes array
         """
 
@@ -4703,7 +4703,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of Measurements for the objects estimate at each iteration is returned
         reconstructed_probes_measurement: Measurement or Sequence[Measurement]
             If return_iterations, a list of Measurements for the probes estimate at each iteration is returned
-        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+        reconstructed_position_measurement: numpy.ndarray or Sequence[numpy.ndarray]
             If return_iterations, a list of position estimates at each iteration is returned
         reconstruction_error: float or Sequence[float]
             If return_iterations, a list of the reconstruction error at each iteration is returned
@@ -4942,11 +4942,11 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         Parameters
         ----------
-        objects: np.ndarray
+        objects: numpy.ndarray
             Reconstructed objects array
-        probes: np.ndarray
+        probes: numpy.ndarray
             Reconstructed probes array
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
@@ -4959,7 +4959,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             Reconstructed objects Measurement
         probes_measurement: Measurement
             Reconstructed probes Measurement
-        positions: np.ndarray
+        positions: numpy.ndarray
             Reconstructed positions array
         sse: float
             Reconstruction error
