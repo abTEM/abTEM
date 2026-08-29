@@ -255,7 +255,7 @@ def check_deprecations(key: str, deprecations: dict = deprecations) -> str:
 def _initialize() -> None:
     fn = os.path.join(os.path.dirname(__file__), "abtem.yaml")
 
-    with open(fn) as f:
+    with open(fn, encoding="utf-8") as f:
         _defaults = yaml.safe_load(f)
 
     update_defaults(_defaults)
