@@ -6,7 +6,7 @@ import logging
 import warnings
 from numbers import Number
 from types import ModuleType
-from typing import Union
+from typing import Optional, Union
 
 import dask.array as da
 import numpy as np
@@ -241,6 +241,153 @@ def push_config_to_workers(client):
     except AttributeError:  # distributed without Client.register_plugin
         client.register_worker_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
     _pushed_config_token = token
+
+
+class ScatteredInput:
+    """A handle to a large input held on the workers, not in the task graph.
+
+    abTEM embeds inputs such as transition potentials into the task that uses
+    them, so a computation split into many tasks ships a copy of the array with
+    every task. For a production core-loss scan that is hundreds of copies of a
+    multi-megabyte array, which exhausts worker memory long before the devices
+    are busy.
+
+    The value travels as a named worker plugin rather than as scattered data:
+    the plugin's setup runs on every worker at registration and again on any
+    worker that joins or is restarted later, so -- unlike ``client.scatter``,
+    whose data is unrecoverable once its worker dies -- a restarted worker
+    still finds the value. The handle itself pickles to a few hundred bytes.
+
+    Cheap metadata is kept on the handle so that callers which only inspect
+    ``metadata`` client-side keep working.
+    """
+
+    def __init__(self, key: str, metadata: Optional[dict] = None):
+        self.key = key
+        self.metadata = dict(metadata or {})
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(key={self.key!r})"
+
+
+_worker_inputs: dict = {}
+
+
+def _store_worker_input(key, value):
+    _worker_inputs[key] = value
+
+
+def _make_input_plugin(key, value):
+    from distributed.diagnostics.plugin import WorkerPlugin
+
+    class _AbtemInputPlugin(WorkerPlugin):
+        """Hold one large abTEM input on every worker."""
+
+        name = key
+
+        def __init__(self, key, value):
+            self._key = key
+            self._value = value
+
+        def setup(self, worker=None):
+            _store_worker_input(self._key, self._value)
+
+    return _AbtemInputPlugin(key, value)
+
+
+def scatter_to_workers(obj, client=None, name: Optional[str] = None):
+    """Place a large input on the workers instead of in every task.
+
+    Parameters
+    ----------
+    obj : object
+        The input to distribute, e.g. a built ``TransitionPotentialArray``.
+    client : distributed.Client, optional
+        Defaults to the active client, which is the multi-GPU cluster's client
+        when ``dask.multi-gpu`` started one.
+    name : str, optional
+        Plugin name; defaults to a unique name per call.
+
+    Returns
+    -------
+    ScatteredInput
+        A lightweight handle accepted wherever the original input is.
+    """
+    import uuid
+
+    if client is None:
+        from distributed import get_client
+
+        client = get_client()
+
+    key = name or f"abtem-input-{uuid.uuid4().hex}"
+    plugin = _make_input_plugin(key, obj)
+    try:
+        client.register_plugin(plugin, name=key)
+    except AttributeError:  # distributed without Client.register_plugin
+        client.register_worker_plugin(plugin, name=key)
+
+    # Also keep it here, so abTEM's eager path -- which runs the same
+    # functions in the client process -- can resolve the handle.
+    _store_worker_input(key, obj)
+
+    return ScatteredInput(key, metadata=getattr(obj, "metadata", None))
+
+
+def maybe_scatter_large_input(obj, nbytes: Optional[int] = None):
+    """Scatter an input that would otherwise be copied into every task.
+
+    Called by abTEM when it builds a graph, so users never handle a scattered
+    input themselves. Returns ``obj`` unchanged when there is no distributed
+    client, when the input is small, or when ``dask.scatter-large-inputs`` is
+    disabled.
+    """
+    threshold = _config_get("dask.scatter-large-inputs", "10 MB")
+    if not threshold:
+        return obj
+
+    if isinstance(threshold, str):
+        from dask.utils import parse_bytes
+
+        threshold = parse_bytes(threshold)
+
+    if nbytes is None:
+        array = getattr(obj, "array", None)
+        nbytes = getattr(array, "nbytes", 0)
+    if not nbytes or nbytes < int(threshold):
+        return obj
+
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return obj
+
+    try:
+        return scatter_to_workers(obj, client=client)
+    except Exception:  # noqa: BLE001 -- fall back to embedding it
+        return obj
+
+
+def resolve_scattered(obj):
+    """Return the value behind a scattered handle; pass anything else through.
+
+    Called inside a task, on the worker.
+    """
+    if not isinstance(obj, ScatteredInput):
+        return obj
+
+    try:
+        return _worker_inputs[obj.key]
+    except KeyError:
+        raise RuntimeError(
+            f"The scattered input {obj.key!r} is not available in this "
+            "process. It is distributed by a worker plugin registered on the "
+            "client that scattered it, so a task running on a cluster other "
+            "than that one cannot see it. Scatter it again for this cluster, "
+            "or pass the object itself instead of the handle."
+        ) from None
 
 
 def is_gpu_dask_client(client) -> bool:
