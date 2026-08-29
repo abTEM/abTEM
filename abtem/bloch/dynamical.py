@@ -1867,9 +1867,8 @@ class BlochWaves:
         Parameters
         ----------
         args : sequence of (str, float)
-            The rotation axes and angles. The axes must be given as a string of 'x', 'y'
-             or 'z',
-            representing a sequence of rotation axes.
+            The rotation axes and angles. The axes must be given as a string of 'x',
+            'y' or 'z', representing a sequence of rotation axes.
         degrees : bool
             If True, the angles are given in degrees. Default is False.
 
