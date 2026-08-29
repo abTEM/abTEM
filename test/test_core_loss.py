@@ -1,5 +1,7 @@
 """Tests for core-loss transition potentials."""
 
+import sys
+
 import ase
 import numpy as np
 import pytest
@@ -7,6 +9,13 @@ import pytest
 import abtem
 from abtem.core import config
 from abtem.inelastic.core_loss import SubshellTransitions
+
+try:
+    import gpaw  # noqa: F401
+except ImportError:
+    pass
+
+pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 
 
 @pytest.fixture(scope="module")
