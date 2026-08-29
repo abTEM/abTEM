@@ -1,5 +1,7 @@
 """Site filtering happens once per slice, not once per scatter chunk."""
 
+import sys
+
 import ase
 import numpy as np
 import pytest
@@ -7,6 +9,13 @@ import pytest
 import abtem
 from abtem.core import config
 from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotentialArray
+
+try:
+    import gpaw  # noqa: F401
+except ImportError:
+    pass
+
+pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 
 
 @pytest.fixture(scope="module")
