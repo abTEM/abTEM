@@ -47,7 +47,7 @@ from abtem.core.constants import kappa
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import fft_interpolate
+from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
@@ -282,6 +282,12 @@ def structure_factor_to_potential(
     """
     xp = get_array_module(structure_factor)
     structure_factor = structure_factor_1d_to_3d(structure_factor, hkl, gpts)
+    # Deliberately xp.fft rather than abtem.core.fft.ifftn: the FFTW backend
+    # behind that wrapper only ever transforms the trailing two axes, so it
+    # would silently turn this 3D transform into a 2D one on CPU. The slow-FFT
+    # diagnostic is requested explicitly instead -- this grid follows from
+    # g_max and the cell, so it is essentially never a fast length.
+    warn_if_slow_gpu_fft(structure_factor, "ifftn")
     potential = xp.fft.ifftn(structure_factor)
     potential = potential * np.prod(potential.shape) / kappa
     potential -= potential.min()

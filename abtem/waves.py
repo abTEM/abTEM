@@ -44,7 +44,10 @@ from abtem.core.utils import (
     tuple_range,
 )
 from abtem.detectors import BaseDetector, FlexibleAnnularDetector
-from abtem.inelastic.core_loss import BaseTransitionPotential
+from abtem.inelastic.core_loss import (
+    BaseTransitionPotential,
+    _extract_scattering_sites,
+)
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -1476,6 +1479,12 @@ class Waves(BaseWaves, ArrayObject):
             transition_potentials = [transition_potentials]
 
         potential = validate_potential(potential, self)
+
+        # Resolve sites from the potential's atoms before it is potentially
+        # pre-built into a bare PotentialArray below, which carries no atoms
+        # and would otherwise make site extraction fail (abTEM issue #340).
+        sites = _extract_scattering_sites(potential, sites)
+
         potential = _prebuild_reused_potential(potential, self)
 
         measurements: list[Waves | BaseMeasurements] = []

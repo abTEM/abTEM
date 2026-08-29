@@ -56,6 +56,16 @@ fftw:
   planning_timelimit: 60
   # Whether to allow falling back to not using wisdom if the cache fails
   allow_fallback: true
+grid:
+  # Round automatically derived gpts up to the next fast FFT length (all prime
+  # factors in {2, 3, 5, 7}). Fast lengths avoid the slow, memory-hungry
+  # Bluestein FFT fallback on GPU and speed up CPU FFTs as well. Rounding is
+  # upward only, so a grid derived from a numeric sampling never comes out
+  # coarser than requested. gpts given explicitly are never altered.
+  #   'auto'  round only grids abTEM derives on its own (sampling='auto')
+  #   true    additionally round gpts derived from a numeric sampling
+  #   false   never round
+  round-to-fast-fft: auto
 warnings:
   # Show the dask warning about the blockwise performance when the number are increased dramatically
   dask-blockwise-performance: false
