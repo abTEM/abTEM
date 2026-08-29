@@ -639,7 +639,7 @@ class Waves(BaseWaves, ArrayObject):
 
         Parameters
         ----------
-        kernel : np.ndarray
+        kernel : numpy.ndarray
             Array to be convolved with.
         axes_metadata : list of AxisMetadata, optional
             Metadata for the resulting convolved array. Needed only if the given array
@@ -1558,7 +1558,7 @@ class Waves(BaseWaves, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential
@@ -1607,7 +1607,7 @@ class Waves(BaseWaves, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential
@@ -2167,7 +2167,7 @@ class PlaneWave(WavesBuilder):
 
         Returns
         -------
-        measurements : BaseMeasurements or ComputableList of BaseMeasurement
+        measurements : BaseMeasurements or ComputableList of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential
@@ -2534,7 +2534,7 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        measurements : BaseMeasurements or Waves or list of BaseMeasurement
+        measurements : BaseMeasurements or Waves or list of BaseMeasurements
         """
         probe = self.copy()
 
@@ -2671,7 +2671,7 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurements
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential

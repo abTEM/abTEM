@@ -231,7 +231,7 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     routed through dask's own implementation whenever ``array`` is still a
     lazy dask array, regardless of device.
 
-    NumPy dispatches a top-level call like ``np.concatenate([dask_array])``
+    NumPy dispatches a top-level call like ``numpy.concatenate([dask_array])``
     to dask automatically via ``__array_function__``, but CuPy does not: its
     functions raise ``TypeError`` when given a ``dask.array.core.Array``
     rather than a genuine ``cupy.ndarray``. Any code that resolves ``xp`` via
@@ -1603,7 +1603,7 @@ class Images(_BaseMeasurement2D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         2D or greater array containing data of type `float` or `complex`. The
         second-to-last and last
         dimensions are the image `y`- and `x`-axis, respectively.
@@ -2373,7 +2373,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array containing data of type `float` or `complex`.
     sampling : float
         Sampling of line profiles [Å].
@@ -2451,7 +2451,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array containing data of type `float` or `complex`.
     sampling : float
         Sampling of line profiles [1 / Å].
@@ -2947,7 +2947,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         2D or greater array containing data with `float` type. The second-to-last and
         last dimensions are the reciprocal space `y`- and `x`-axis of the diffraction
         pattern.
@@ -3162,7 +3162,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The assumed unit cell with respect to the diffraction pattern should be
             indexed. Must be one of ASE `Cell` object, float (for a cubic unit cell) or
             three floats (for orthorhombic unit cells).
-        orientation_matrices : np.ndarray, optional
+        orientation_matrices : numpy.ndarray, optional
             Orientation matrices used for indexing the diffraction spots. The shape of
             the orientation matrices must be broadcastable with the ensemble shape of
             the diffraction patterns.
@@ -4350,7 +4350,7 @@ class PolarMeasurements(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array containing the measurement.
     radial_sampling : float
         Sampling of the radial bins [mrad].
@@ -5111,15 +5111,15 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array of type `float` or `complex`. The last axis represents the
         diffraction spots and should have the same length as the number of miller
         indices, any preceding axis represents an ensemble axis.
-    miller_indices : np.ndarray
+    miller_indices : numpy.ndarray
         The miller indices of the diffraction spots as an N x 3 array where N is the
         number of miller indices. The order of the miller indices must correspond to the
         array of intensities. The second axis represents each hkl miller index.
-    reciprocal_lattice_vectors : np.ndarray
+    reciprocal_lattice_vectors : numpy.ndarray
         The reciprocal lattice vectors of the crystal as a 3 x 3 array. The first axis
         represents miller indices and the order of the items must correspond to the
         array of intensities. The second axis represents the reciprocal space positions
@@ -5823,7 +5823,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray or dask array
+    array : numpy.ndarray or dask array
         Array of shape ``(..., n_q, n_E)``.
     q_values : sequence of float
         Scattering-vector values [mrad] for each q bin.

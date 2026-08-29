@@ -13,7 +13,7 @@ def central_difference_gradient_pbc(X, dx=1.0, dy=1.0):
 
     Parameters
     ----------
-    X : np.ndarray
+    X : numpy.ndarray
         Array of shape (..., N, M) where the last two dimensions are the 2D grid.
     dx : float
         Spacing between points in the x direction.
@@ -22,9 +22,9 @@ def central_difference_gradient_pbc(X, dx=1.0, dy=1.0):
 
     Returns
     -------
-    grad_x : np.ndarray
+    grad_x : numpy.ndarray
         Gradient of X with respect to x.
-    grad_y : np.ndarray
+    grad_y : numpy.ndarray
         Gradient of X with respect to y.
     """
     original_shape = X.shape
@@ -57,7 +57,7 @@ def central_difference_gradient_cbc(X, dx=1.0, dy=1.0):
 
     Parameters
     ----------
-    X : np.ndarray
+    X : numpy.ndarray
         Array of shape (..., N, M) where the last two dimensions are the 2D grid.
     dx : float
         Spacing between points in the x direction.
@@ -66,9 +66,9 @@ def central_difference_gradient_cbc(X, dx=1.0, dy=1.0):
 
     Returns
     -------
-    grad_x : np.ndarray
+    grad_x : numpy.ndarray
         Gradient of X with respect to x.
-    grad_y : np.ndarray
+    grad_y : numpy.ndarray
         Gradient of X with respect to y.
     """
     original_shape = X.shape
@@ -108,16 +108,16 @@ def apply_A_xy_dot_nabla_xy(A, wave_functions, sampling):
 
     Parameters
     ----------
-    A : np.ndarray
+    A : numpy.ndarray
         Vector field of shape (2, N, M) representing the operator A.
-    wave_functions : np.ndarray
+    wave_functions : numpy.ndarray
         Array of shape (..., N, M) representing the wave functions.
     sampling : two floats
         Spacing between points in the x and y directions.
 
     Returns
     -------
-    result : np.ndarray
+    result : numpy.ndarray
         Result of the operation $A \cdot \nabla_{xy} \psi$.
     """
     grad_x, grad_y = central_difference_gradient_pbc(

@@ -162,7 +162,7 @@ def validate_chunks(
         The maximum number of elements in a chunk. If "auto", the maximum number of
         elements will be determined based on the maximum number of bytes per chunk and
         the dtype.
-    dtype : np.dtype
+    dtype : numpy.dtype
         The dtype of the array.
     device : str
         The device the array will be stored on.
@@ -233,7 +233,7 @@ def _auto_chunks(
         The maximum number of elements in a chunk. If "auto", the maximum number of
         elements will be determined based on the maximum number of bytes per chunk and
         the dtype.
-    dtype : np.dtype
+    dtype : numpy.dtype
         The dtype of the array.
     device : str
         The device the array will be stored on.
@@ -449,7 +449,7 @@ def estimate_potential_chunk_size(
         The number of grid points (y, x).
     device : str
         The device ('cpu' or 'gpu').
-    dtype : np.dtype, optional
+    dtype : numpy.dtype, optional
         The dtype of the potential array. If None, uses float32.
 
     Returns
@@ -547,8 +547,8 @@ def _nearest_power_of_two(n: int) -> int:
     exceeding the VRAM budget, since the raw estimate already uses only
     50 % of free VRAM as headroom.
 
-    Examples
-    --------
+    Notes
+    -----
     59 → 64  (int(59 * 1.25) = 73;  64 ≤ 73,  use upper)
     14 → 16  (int(14 * 1.25) = 17;  16 ≤ 17,  use upper)
     20 → 16  (int(20 * 1.25) = 25;  32 > 25,  use lower)

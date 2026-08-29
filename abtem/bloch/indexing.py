@@ -16,16 +16,16 @@ def _pixel_edges(
     """
     Get the pixel edges of an array.
 
-    Parameters:
+    Parameters
     -----------
     shape : tuple[int, int]
         The shape of the array.
     sampling : tuple[float, float]
         The sampling rate of the array in the x and y directions [Å].
 
-    Returns:
+    Returns
     --------
-    tuple[np.ndarray, np.ndarray]
+    tuple[numpy.ndarray, numpy.ndarray]
         The pixel edges in reciprocal
     """
     x = np.fft.fftshift(np.fft.fftfreq(shape[0], d=1 / shape[0]))
@@ -61,12 +61,12 @@ def validate_cell(
     """
     Validate the cell input.
 
-    Parameters:
+    Parameters
     ----------
     cell : Atoms | Cell | float | tuple[float, float, float]
         The unit cell of the crystal structure.
 
-    Returns:
+    Returns
     --------
     Cell
         The validated cell.
@@ -122,16 +122,16 @@ def create_ellipse(a: int, b: int) -> np.ndarray:
     """
     Create an ellipse with semi-major and semi-minor axes.
 
-    Parameters:
+    Parameters
     ----------
     a : int
         The semi-major axis of the ellipse.
     b : int
         The semi-minor axis of the ellipse.
 
-    Returns:
+    Returns
     --------
-    np.ndarray
+    numpy.ndarray
         The ellipse.
     """
     y, x = np.ogrid[-a : a + 1, -b : b + 1]
@@ -143,16 +143,16 @@ def antialiased_disk(r: float, sampling: tuple[float, float]) -> np.ndarray:
     """
     Create an array representing disk with antialiased edges.
 
-    Parameters:
+    Parameters
     ----------
     r : float
         The radius of the disk.
     sampling : two float
         The sampling rate of the array in the x and y directions. Units are arbitrary.
 
-    Returns:
+    Returns
     --------
-    np.ndarray
+    numpy.ndarray
         A 2D array representing the disk.
     """
     gpts = 2 * int(np.ceil(r / sampling[0])) + 1, 2 * int(np.ceil(r / sampling[1])) + 1
@@ -179,16 +179,16 @@ def integrate_ellipse_around_pixels(
     """
     Integrate an ellipse around pixels in an array.
 
-    Parameters:
+    Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         The input array containing diffraction spot intensities.
-    nm : np.ndarray
+    nm : numpy.ndarray
         The pixel coordinates of the diffraction spots.
 
-    Returns:
+    Returns
     --------
-    np.ndarray
+    numpy.ndarray
         The integrated intensities around the pixels.
     """
     weights = antialiased_disk(r, sampling)
@@ -237,24 +237,24 @@ def index_diffraction_spots(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         The input array containing diffraction spot intensities.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The Miller indices to index.
     sampling : tuple[float, float]
         The sampling rate of the array in the x and y directions [Å].
-    cell : Cell | np.ndarray
+    cell : Cell | numpy.ndarray
         The unit cell of the crystal structure.
     energy : float
         The energy of the incident electrons [eV].
-    orientation_matrices : np.ndarray, optional
+    orientation_matrices : numpy.ndarray, optional
         The orientation matrices of the crystal structure. Defaults to None.
     radius : float, optional
         The radius of the diffraction spots to integrate. Defaults to None.
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
         A tuple containing the indexed hkl values, wavevector transfer values, pixel
         coordinates, and intensities.
     """

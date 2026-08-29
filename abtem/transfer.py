@@ -130,7 +130,7 @@ class BaseTransferFunction(
 
         Returns
         -------
-        kernel : np.ndarray or dask.array.Array
+        kernel : numpy.ndarray or dask.array.Array
         """
         if isinstance(self._energy_distribution, BaseDistribution):
             arrays = []
@@ -312,7 +312,7 @@ def soft_aperture(
 
     Returns
     -------
-    soft_aperture_array : 2D or 3D np.ndarray
+    soft_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
 
@@ -366,7 +366,7 @@ def hard_aperture(
 
     Returns
     -------
-    hard_aperture_array : 2D or 3D np.ndarray
+    hard_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
     return xp.array(alpha <= semiangle_cutoff).astype(get_dtype(complex=False))
@@ -1648,13 +1648,13 @@ class CTF(_HasAberrations, BaseAperture):
     in HRTEM and specifies how the condenser system shapes the probe in STEM.
 
     abTEM implements phase aberrations up to 5th order using polar coefficients.
-    See Eq. 2.22 in the reference [1]_.
+    See Eq. 2.22 in Kirkland (2010).
 
     Cartesian coefficients can be converted to polar using the utility function
     `abtem.transfer.cartesian2polar`.
 
     Partial coherence is included as envelopes in the quasi-coherent approximation.
-    See Chapter 3.2 in reference [1]_.
+    See Chapter 3.2 in Kirkland (2010).
 
     Parameters
     ----------
@@ -1696,8 +1696,8 @@ class CTF(_HasAberrations, BaseAperture):
 
     References
     ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
-       Springer.
+    Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
+        Springer.
 
     """
 

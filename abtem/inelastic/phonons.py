@@ -680,7 +680,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
     Parameters
     ----------
-    energy_resolved_snapshots : list of lists of ASE Atoms, or 2D np.ndarray
+    energy_resolved_snapshots : list of lists of ASE Atoms, or 2D numpy.ndarray
         Outer index is energy, inner index is configuration.
     energies : array-like
         Energy values [eV] corresponding to each outer entry.

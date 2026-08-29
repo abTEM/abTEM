@@ -72,9 +72,9 @@ class DistributionFromValues(BaseDistribution):
 
     Parameters
     ----------
-    values : np.ndarray
+    values : numpy.ndarray
         The values of the distribution.
-    weights : np.ndarray, optional
+    weights : numpy.ndarray, optional
         The values of the weights. If None, all weights are set to 1.
     ensemble_mean : bool, optional
         If True, the mean of an ensemble of measurements defined by the distribution is
@@ -445,14 +445,14 @@ def lorentzian(
     parameter. For the same FWHM one needs γ = FWHM / 2 but
     σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
 
-    The Lorentzian source-size model is described in [1]_.
+    The Lorentzian source-size model is described in Nguyen et al. (2014).
 
     References
     ----------
-    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
-       in scanning transmission electron microscopy and spectroscopy",
-       *Ultramicroscopy* **146**, 6–16 (2014).
-       https://doi.org/10.1016/j.ultramic.2014.04.008
+    D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+        in scanning transmission electron microscopy and spectroscopy",
+        *Ultramicroscopy* **146**, 6–16 (2014).
+        https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     center = number_to_tuple(center, dimension)
     half_width = number_to_tuple(half_width, dimension)
@@ -686,10 +686,10 @@ def pseudo_voigtian(
 
     References
     ----------
-    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
-       in scanning transmission electron microscopy and spectroscopy",
-       *Ultramicroscopy* **146**, 6–16 (2014).
-       https://doi.org/10.1016/j.ultramic.2014.04.008
+    D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+        in scanning transmission electron microscopy and spectroscopy",
+        *Ultramicroscopy* **146**, 6–16 (2014).
+        https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     center = number_to_tuple(center, dimension)
     gaussian_sigma = number_to_tuple(gaussian_sigma, dimension)

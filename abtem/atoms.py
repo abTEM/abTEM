@@ -269,7 +269,7 @@ def rotation_matrix_to_euler(
 
     Parameters
     ----------
-    R : np.ndarray
+    R : numpy.ndarray
         Rotation array of dimension 3x3.
     axes : str
         String representation of Cartesian axes.
@@ -396,7 +396,7 @@ def decompose_affine_transform(
 
     Parameters
     ----------
-    affine_transform : np.ndarray
+    affine_transform : numpy.ndarray
         Matrix representation of an affine transformation of dimension 3x3.
 
     Returns
@@ -428,7 +428,7 @@ def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]
 
     Parameters
     ----------
-    decomposed : tuple of np.ndarray
+    decomposed : tuple of numpy.ndarray
         Tuple of length 3 whose items are arrays of dimension 3 representing rotation,
         scale and shear.
     """
@@ -585,7 +585,7 @@ def rotation_matrix_from_plane(
 
     Returns
     -------
-    rotation : np.ndarray
+    rotation : numpy.ndarray
         Rotation matrix of dimension 3x3.
     """
     if isinstance(plane, str):
@@ -726,7 +726,7 @@ def best_orthogonal_cell(
 
     Parameters
     ----------
-    cell : np.ndarray
+    cell : numpy.ndarray
         Cell of dimensions 3x3.
     max_repetitions : int
         Maximum number of allowed repetitions (default is 5).
@@ -735,7 +735,7 @@ def best_orthogonal_cell(
 
     Returns
     -------
-    cell : np.ndarray
+    cell : numpy.ndarray
         Closest orthogonal cell found.
     """
     zero_vectors = np.linalg.norm(cell, axis=0) < eps

@@ -20,12 +20,12 @@ def reciprocal_cell(cell: np.ndarray | Cell) -> np.ndarray:
 
     Parameters
     ----------
-    cell : 3x3 np.ndarray
+    cell : 3x3 numpy.ndarray
         The unit cell.
 
     Returns
     -------
-    3x3 np.ndarray
+    3x3 numpy.ndarray
         The reciprocal cell.
     """
     return np.linalg.pinv(cell).transpose()
@@ -53,7 +53,7 @@ def generate_linear_combinations(
 
     Parameters
     ----------
-    vectors : np.array
+    vectors : numpy.array
         Array of vectors.
     coefficients : sequence of int
         Coefficients to use in the linear combinations.
@@ -62,7 +62,7 @@ def generate_linear_combinations(
 
     Returns
     -------
-    np.array
+    numpy.array
         Array of linear combinations.
     """
     combinations = np.array(
@@ -161,7 +161,7 @@ def excitation_errors(
 
     Parameters
     ----------
-    g : np.ndarray
+    g : numpy.ndarray
         Reciprocal space vectors [1/Å], as an array of shape (N, 3).
     energy : float
         Electron energy [eV].
@@ -171,7 +171,7 @@ def excitation_errors(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Excitation errors [1/Å].
     """
     assert g.shape[-1] == 3
@@ -190,14 +190,14 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         Array of shape (N, 3) representing the Miller indices of reflections.
     centering : str
         The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Boolean mask indicating which reflections satisfy the reflection condition.
     """
     if centering.lower() == "f":
@@ -252,7 +252,7 @@ def filter_reciprocal_space_vectors(
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         Reciprocal space vectors.
     cell : Cell
         Unit cell.
@@ -264,12 +264,12 @@ def filter_reciprocal_space_vectors(
         Maximum scattering vector length [1/Å].
     centering : str, optional
         Crystal centering must be one of 'P', 'I', 'A', 'B', 'C' or 'F'. Default is 'P'.
-    orientation_matrices : np.ndarray, optional
+    orientation_matrices : numpy.ndarray, optional
         Orientation matrices for each crystallographic direction.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Mask for the reciprocal space vectors.
     """
     g = hkl @ reciprocal_cell(cell)
@@ -320,18 +320,18 @@ def retrieve_structure_factor_values(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         The raveled array.
-    hkl_source : np.ndarray
+    hkl_source : numpy.ndarray
         The reciprocal space vectors as Miller indices for the source array.
-    hkl_destination : np.ndarray
+    hkl_destination : numpy.ndarray
         The reciprocal space vectors as Miller indices for the destination array.
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The 3D array.
     """
 
@@ -359,16 +359,16 @@ def are_vectors_orthogonal(v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) ->
     """
     Check if two vectors are orthogonal within a given tolerance.
 
-    Parameters:
+    Parameters
     ----------
-    v1 : np.ndarray
+    v1 : numpy.ndarray
         The first vector.
-    v2 : np.ndarray
+    v2 : numpy.ndarray
         The second vector.
     tol : float
         The tolerance for floating-point comparison.
 
-    Returns:
+    Returns
     --------
     bool
         True if the vectors are orthogonal within the given tolerance, False otherwise.
@@ -381,14 +381,14 @@ def check_orthogonality(vectors: np.ndarray, tol: float = 1e-9) -> bool:
     """
     Check if three vectors are pairwise orthogonal within a given tolerance.
 
-    Parameters:
+    Parameters
     ----------
-    vectors : np.ndarray
+    vectors : numpy.ndarray
         A 2D array where each row is a vector.
     tol : float
         The tolerance for floating-point comparison.
 
-    Returns:
+    Returns
     --------
     bool
         True if all pairs of vectors are orthogonal within the given tolerance, False
@@ -409,7 +409,7 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
     """
     Returns the relative positions for each lattice centering type.
 
-    Returns:
+    Returns
     --------
     dict
         A dictionary where the keys are the centering types and the values are the
@@ -466,14 +466,14 @@ def all_positions_have_relative_periodic_pair(
     """
     Check if all positions have a relative periodic pair.
 
-    Parameters:
+    Parameters
     ----------
-    positions : np.ndarray
+    positions : numpy.ndarray
         The positions to check.
-    relative_positions : np.ndarray
+    relative_positions : numpy.ndarray
         The possible relative shifts of each position.
 
-    Returns:
+    Returns
     --------
     bool
         True if all positions have a relative periodic pair, False otherwise.
@@ -501,14 +501,14 @@ def auto_detect_centering(
     """
     Automatically detect the lattice centering of a crystal structure.
 
-    Parameters:
+    Parameters
     ----------
     atoms : Atoms
         The crystal structure.
     centerings_to_check : set, optional
         The centering types to check. If None, all centering types are checked.
 
-    Returns:
+    Returns
     --------
     str
         The detected lattice centering type.
