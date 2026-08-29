@@ -383,15 +383,33 @@ def _configure_cufft_cache():
                      Plans are reused for repeated same-shape transforms but the
                      total persistent workspace is bounded.
     * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
+    * ``auto``     — 25 % of the device's total memory, resolved per device.
+
+    The abTEM default is ``auto``. The bound must scale with the card: batch
+    auto-sizing targets ~8 % of VRAM per batch and the live plan workspace is
+    ~1x the batch bytes on fast-radix shapes (~2x on Bluestein shapes), so the
+    live working set of a production scan is ~10-17 % of VRAM on any card — a
+    fixed byte bound either evicts live plans on large cards (a flat 2 GB was
+    measured to cost ~7 % on a 40 GB A100) or is needlessly tight on small
+    ones. 25 % clears the live set with margin, while still capping the stale
+    workspace an unlimited cache accumulates across the distinct batch shapes
+    of successive computations. The limit is a ceiling, not a reservation —
+    unused headroom costs no memory.
     """
     global _CUFFT_CACHE_STATE
-    raw = config.get("cupy.fft-cache-size", "0 MB")
+    raw = config.get("cupy.fft-cache-size", "auto")
 
-    # Fast path: config hasn't changed since we last applied it.
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == raw:
+    # The plan cache and the resolved "auto" limit are per device, so the
+    # applied state is keyed on the current device as well as the raw value.
+    device = cp.cuda.Device()
+    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
         return
 
-    if isinstance(raw, str):
+    if raw is None:
+        limit = -1  # null = no bound, matching the sibling keys' convention
+    elif raw == "auto":
+        limit = device.mem_info[1] // 4
+    elif isinstance(raw, str):
         from dask.utils import parse_bytes
         limit = parse_bytes(raw)
     else:
@@ -401,10 +419,65 @@ def _configure_cufft_cache():
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
     elif limit > 0:
+        if cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
         cache.set_memsize(limit)
-    # limit < 0 → leave at CuPy default (unlimited)
+    else:
+        # Explicitly restore "unlimited": an earlier bound (e.g. from the
+        # "auto" default) must be undoable at runtime -- the oversized-plan
+        # warning recommends exactly this.
+        if cache.get_size() == 0:
+            cache.set_size(16)
+        cache.set_memsize(-1)
 
-    _CUFFT_CACHE_STATE = (raw, limit)
+    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
+
+
+_warned_plan_cache_bypass = False
+
+
+def _cupy_fft_with_cache_fallback(func, x, **kwargs):
+    """Run a CuPy FFT, bypassing the plan cache for oversized plans.
+
+    A bounded plan cache refuses to admit a single plan larger than its
+    memsize bound, and CuPy raises instead of running the transform uncached
+    (CUDA only; the ROCm path does not track plan memsize). Retry such calls
+    with the cache temporarily disabled: the plan is built, used and
+    discarded, costing replanning time per call instead of a crash.
+    """
+    global _warned_plan_cache_bypass
+    try:
+        return func(x, **kwargs)
+    except RuntimeError as exc:
+        if "plan memsize is too large" not in str(exc).lower():
+            raise
+    cache = cp.fft.config.get_plan_cache()
+    size = cache.get_size()
+    memsize = cache.get_memsize()
+    if not _warned_plan_cache_bypass:
+        _warned_plan_cache_bypass = True
+        # The exceeded bound is positive in practice (CuPy only raises the
+        # too-large error for bounded caches); guard the arithmetic anyway.
+        bound = f" of {memsize / 1e9:.1f} GB" if memsize > 0 else ""
+        suggested = f"{2 * memsize / 1e9:.0f} GB" if memsize > 0 else "32 GB"
+        warnings.warn(
+            f"A single cuFFT plan for shape {x.shape} exceeds the plan-cache "
+            f"bound{bound}; running the transform uncached, which replans on "
+            "every call for this shape. To avoid the replanning cost, either "
+            "raise the bound, e.g. abtem.config.set({'cupy.fft-cache-size': "
+            f"'{suggested}'"
+            "}) (-1 = unlimited), or reduce the wave-function batch size, "
+            "e.g. probe.scan(..., max_batch=8). Grid sizes with prime "
+            "factors larger than 7 (Bluestein fallback) make plans several "
+            "times larger -- an FFT-friendly gpts choice avoids this "
+            "entirely."
+        )
+    cache.set_size(0)
+    try:
+        return func(x, **kwargs)
+    finally:
+        cache.set_size(size)
+        cache.set_memsize(memsize)
 
 
 def _fft_dispatch(
@@ -440,7 +513,9 @@ def _fft_dispatch(
     if isinstance(x, cp.ndarray):
         _configure_cufft_cache()
         _warn_slow_fft_size(x.shape, func_name, kwargs)
-        return getattr(cp.fft, func_name)(x, **kwargs)
+        return _cupy_fft_with_cache_fallback(
+            getattr(cp.fft, func_name), x, **kwargs
+        )
 
 
 @overload

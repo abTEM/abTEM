@@ -724,11 +724,18 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
-    waves_input = waves.copy()
+    # Keep a pristine reference to the incoming batch. It is only ever read:
+    # each potential configuration below works on its own copy, so no copy is
+    # needed here -- copying would just hold a redundant duplicate of the
+    # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
+    waves_input = waves
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
+        # The incoming batch may be a task input shared with other tasks
+        # (e.g. frozen-phonon configurations partitioned across tasks), so the
+        # in-place multislice steps must operate on a copy.
         waves = waves_input.copy()
         exit_plane_index = 0
 
