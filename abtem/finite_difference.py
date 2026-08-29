@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import cuda, njit  # type: ignore
+from numba import njit  # type: ignore
 
 from abtem.antialias import AntialiasAperture
-from abtem.core.backend import get_array_module
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.utils import get_dtype
 
@@ -191,6 +191,68 @@ def _laplace_stencil_array(accuracy):
     return stencil
 
 
+_LAPLACE_STENCIL_KERNEL = r"""
+#include <cupy/complex.cuh>
+
+// Batched 2-D Laplacian finite-difference stencil: for each batch element m,
+// out[m, i, j] = sum_k c[k + n] * (a[m, i + k, j] + a[m, i, j + k]) over
+// k in [-n, n], evaluated on the interior i, j in [n, H - n) x [n, W - n).
+// The boundary is left zero; the caller handles it via wrap padding.
+//
+// Grid: x covers W (fastest axis, coalesced), y covers H, z strides over the
+// batch so any batch size is supported.
+//
+// Template parameter T is the complex floating-point type.
+template<typename T>
+__device__ __forceinline__ void laplace_stencil_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c,
+    const int n,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < n || i >= H - n || j < n || j >= W - n) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n; k <= n; k++) {
+            cumul += c[k + n] * (am[(long long)(i + k) * W + j]
+                                 + am[(long long)i * W + (j + k)]);
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul;
+    }
+}
+
+extern "C" __global__ void laplace_stencil_c64(
+    complex<float>* out, const complex<float>* a, const complex<float>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_impl<complex<float> >(out, a, c, n, M, H, W);
+}
+
+extern "C" __global__ void laplace_stencil_c128(
+    complex<double>* out, const complex<double>* a, const complex<double>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_impl<complex<double> >(out, a, c, n, M, H, W);
+}
+"""
+
+_laplace_stencil_c64 = None
+_laplace_stencil_c128 = None
+
+
+def _init_laplace_stencil_kernels():
+    global _laplace_stencil_c64, _laplace_stencil_c128
+    if _laplace_stencil_c64 is None:
+        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL, options=("--std=c++14",))
+        _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
+        _laplace_stencil_c128 = mod.get_function("laplace_stencil_c128")
+
+
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
@@ -219,35 +281,46 @@ def _laplace_operator_stencil(
                     out[m, i, j] = cumul
         return out
 
-    @cuda.jit
-    def stencil_func_gpu_batch(a, out):
-        m, i, j = cuda.grid(3)
-        M, H, W = a.shape
-        if m < M and n <= i < H - n and n <= j < W - n:
-            cumul = dtype(0.0)
-            for k in range(-n, n + 1):
-                cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
-            out[m, i, j] = cumul
+    if device == "gpu":
+        check_cupy_is_installed()
+        # the kernel indexes the coefficients in natural order (index k + n for
+        # offset k), so undo the roll applied for the CPU stencil above
+        c_gpu = cp.asarray(np.roll(c, n))
 
     def _laplace_stencil_gpu(a):
         xp = get_array_module(a)
+        a = xp.ascontiguousarray(a)
         out = xp.zeros_like(a)
 
         M, H, W = a.shape
 
-        threads_x = 8
-        threads_y = 8
+        _init_laplace_stencil_kernels()
+        if a.dtype == xp.complex128:
+            kernel = _laplace_stencil_c128
+        else:
+            kernel = _laplace_stencil_c64
 
-        target_threads = 256
-        threads_m = max(1, target_threads // (threads_x * threads_y))
-
-        threadsperblock = (threads_m, threads_x, threads_y)
-
-        blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
-        blockspergrid_x = math.ceil(a.shape[1] / threadsperblock[1])
-        blockspergrid_y = math.ceil(a.shape[2] / threadsperblock[2])
-        blockspergrid = (blockspergrid_m, blockspergrid_x, blockspergrid_y)
-        stencil_func_gpu_batch[blockspergrid, threadsperblock](a, out)
+        threads_x = 16
+        threads_y = 16
+        block = (threads_x, threads_y, 1)
+        grid = (
+            math.ceil(W / threads_x),
+            math.ceil(H / threads_y),
+            min(M, 65535),
+        )
+        kernel(
+            grid,
+            block,
+            (
+                out,
+                a,
+                c_gpu.astype(a.dtype, copy=False),
+                np.int32(n),
+                np.int32(M),
+                np.int32(H),
+                np.int32(W),
+            ),
+        )
 
         return out
 
