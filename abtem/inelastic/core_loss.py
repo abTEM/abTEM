@@ -862,14 +862,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
 
-        local_potential = self.local_potential(space="real").sum(0)
         array = abs2(waves.array)
 
-        local_potential = copy_to_device(local_potential, array)
+        # This runs once per task; reuse the local potential computed in
+        # __init__ and its cached device copy instead of re-deriving and
+        # re-uploading both on every call.
+        local_potential = self._local_potential_on_device(array)
 
+        complex_dtype = get_dtype(complex=True)
         overlap = fft2_convolve(
-            local_potential[(None,) * (len(array.shape) - 2)].astype(np.complex64),
-            fft2(array.astype(np.complex64)),
+            local_potential[(None,) * (len(array.shape) - 2)].astype(complex_dtype),
+            fft2(array.astype(complex_dtype)),
         ).real
 
         overlap = copy_to_device(overlap, "cpu")
@@ -903,7 +906,16 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         Cached per device so repeated calls reuse the upload; the cache is
         dropped when the local potential itself is recomputed.
         """
-        device = device_name_from_array_module(get_array_module(like))
+        xp = get_array_module(like)
+        device = device_name_from_array_module(xp)
+        if device == "gpu":
+            try:
+                # One process can drive several GPUs (outside the dask-cuda
+                # process-per-GPU layout); an array cached for one device
+                # must not be handed to a kernel running on another.
+                device = ("gpu", int(xp.cuda.Device().id))
+            except Exception:  # noqa: BLE001 -- single gpu bucket fallback
+                pass
         cache = getattr(self, "_local_potential_device_cache", None)
         if cache is not None and cache[0] == device:
             return cache[1]
@@ -912,11 +924,23 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         self._local_potential_device_cache = (device, on_device)
         return on_device
 
+    def __getstate__(self):
+        # The device cache is a per-process convenience and may hold a cupy
+        # array; letting it ride through pickle would bloat every dask task
+        # carrying this object and break unpickling on CPU-only workers.
+        state = self.__dict__.copy()
+        state["_local_potential_device_cache"] = None
+        return state
+
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
 
-        validated_sites = self.validate_sites(sites)
+        # The mask below is computed over the validated array, which subsets
+        # an Atoms input to this element -- index that same array at the end,
+        # not the caller's object, or the two lengths disagree.
+        sites = self.validate_sites(sites)
+        validated_sites = sites
 
         if threshold is not None and threshold > 0.0:
             xp = get_array_module(waves.array)
@@ -1060,6 +1084,14 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_batch: int = "auto",
         threshold=None,
     ):
+        # Match before filtering: filter_sites reads self.sampling, and the
+        # scatter path used to run this match first -- keep the immediate,
+        # informative error for a grid mismatch.
+        self.grid.match(waves)
+        self.accelerator.match(waves)
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
         sites = self.validate_sites(sites)
 
         # Filter once for the whole set rather than inside every chunk.
