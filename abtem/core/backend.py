@@ -43,6 +43,18 @@ except ImportError:
     cupyx_ndimage = None
 
 
+try:
+    # cupyx.scipy exposes submodules lazily; signal must be imported explicitly
+    # before ``get_scipy_module(...).signal`` can resolve it (the import emits a
+    # FutureWarning about the experimental cupyx.jit interface it uses
+    # internally)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import cupyx.scipy.signal  # type: ignore  # noqa: F401
+except ImportError:
+    assert cupyx is None
+
+
 ArrayModule = Union[ModuleType, str]
 
 logger = logging.getLogger(__name__)
