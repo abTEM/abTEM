@@ -38,7 +38,7 @@ def expm(a: np.ndarray) -> np.ndarray:
 
     Notes
     -----
-    Uses (a simplified) version of Algorithm 2.3 of [1]_:
+    Uses (a simplified) version of Algorithm 2.3 of Higham (2005):
     a [13 / 13] Pade approximant with scaling and squaring.
 
     Simplifications:
@@ -48,8 +48,8 @@ def expm(a: np.ndarray) -> np.ndarray:
 
     References
     ----------
-    .. [1] N. Higham, SIAM J. MATRIX ANAL. APPL. Vol. 26(4), p. 1179 (2005)
-       https://doi.org/10.1137/04061101X
+    Higham, N. SIAM J. MATRIX ANAL. APPL. Vol. 26(4), p. 1179 (2005).
+        https://doi.org/10.1137/04061101X
 
     """
     if a.size == 0:

@@ -1648,13 +1648,13 @@ class CTF(_HasAberrations, BaseAperture):
     in HRTEM and specifies how the condenser system shapes the probe in STEM.
 
     abTEM implements phase aberrations up to 5th order using polar coefficients.
-    See Eq. 2.22 in the reference [1]_.
+    See Eq. 2.22 in Kirkland (2010).
 
     Cartesian coefficients can be converted to polar using the utility function
     `abtem.transfer.cartesian2polar`.
 
     Partial coherence is included as envelopes in the quasi-coherent approximation.
-    See Chapter 3.2 in reference [1]_.
+    See Chapter 3.2 in Kirkland (2010).
 
     Parameters
     ----------
@@ -1696,8 +1696,8 @@ class CTF(_HasAberrations, BaseAperture):
 
     References
     ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
-       Springer.
+    Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
+        Springer.
 
     """
 
