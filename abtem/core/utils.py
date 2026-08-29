@@ -21,6 +21,12 @@ T = TypeVar("T", float, int, bool)
 np.ndarray(())
 
 
+def cos_sin_deg(angle: float) -> tuple[float, float]:
+    """Cosine and sine of an angle given in degrees."""
+    angle_rad = np.deg2rad(angle)
+    return np.cos(angle_rad), np.sin(angle_rad)
+
+
 def number_to_tuple(
     value: T | tuple[T, ...], dimension: Optional[int] = None
 ) -> tuple[T, ...]:

@@ -240,6 +240,12 @@ class BaseAperture(BaseTransferFunction):
         metadata = {}
         if not isinstance(self.semiangle_cutoff, BaseDistribution):
             metadata["semiangle_cutoff"] = self.semiangle_cutoff
+        if self.energy is not None:
+            # Ensures the resolved energy reaches the output waves' metadata
+            # (via ArrayObjectTransform._out_metadata's merge) even when the
+            # input waves carried no energy of their own and relied on this
+            # aperture/CTF to supply it.
+            metadata["energy"] = self.energy
         return metadata
 
     @property

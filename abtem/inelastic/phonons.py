@@ -783,7 +783,20 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             else self._energies[item[0]]
         )
         if new_snapshots.ndim < 2:
-            new_snapshots = new_snapshots.reshape(1, -1)
+            # `snapshots` is (n_energies, n_configs). A 1D result means one
+            # of the two axes collapsed to a scalar index -- which one
+            # determines whether the surviving values are energies (config
+            # axis collapsed, item[1] is an int) or configs (energy axis
+            # collapsed, the ordinary `ensemble[k]`/`ensemble[k, :]` case).
+            energy_axis_collapsed = not (
+                isinstance(item, tuple)
+                and len(item) > 1
+                and not isinstance(item[0], (int, np.integer))
+            )
+            if energy_axis_collapsed:
+                new_snapshots = new_snapshots.reshape(1, -1)
+            else:
+                new_snapshots = new_snapshots.reshape(-1, 1)
         if np.ndim(new_energies) == 0:
             new_energies = np.atleast_1d(new_energies)
         kwargs = self._copy_kwargs(

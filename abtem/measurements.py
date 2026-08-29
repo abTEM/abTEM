@@ -59,6 +59,7 @@ from abtem.core.units import get_conversion_factor
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    cos_sin_deg,
     get_dtype,
     is_broadcastable,
     label_to_index,
@@ -413,14 +414,15 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def _get_energy(self) -> float:
         """Return the electron energy [eV].
 
-        Resolution order:
-        1. ``metadata["energy"]`` — always present for single-energy
-           measurements and for indexed members of an energy ensemble
-           (populated by :meth:`EnergyAxis.item_metadata` during indexing).
-        2. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` —
-           reached only for a full (un-indexed) energy-ensemble measurement.
-           This is an imprecise convenience fallback; callers that need the
-           exact per-member energy should index the ensemble first.
+        Shares its first two resolution steps with
+        :func:`abtem.core.energy.resolve_energy` (``metadata["energy"]``,
+        then a single-element ``EnergyAxis``). For a full, un-indexed
+        energy-ensemble measurement that resolver returns ``None``, so this
+        falls back further to the maximum value of an ``EnergyAxis`` in
+        ``ensemble_axes_metadata`` — the highest energy (shortest
+        wavelength), mirroring :attr:`Waves.angular_sampling`'s conservative
+        convention. This fallback is an imprecise convenience; callers that
+        need the exact per-member energy should index the ensemble first.
 
         Raises
         ------
@@ -428,13 +430,14 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             If no energy can be found in metadata or ensemble axes metadata.
         """
         from abtem.core.axes import EnergyAxis
+        from abtem.core.energy import resolve_energy
 
-        energy = self.metadata.get("energy")
+        energy = resolve_energy(None, self.metadata, self.ensemble_axes_metadata)
         if energy is not None:
             return energy
         for axis in self.ensemble_axes_metadata:
             if isinstance(axis, EnergyAxis):
-                return float(axis.values[0])
+                return float(max(axis.values))
         raise RuntimeError("energy not in measurement metadata.")
 
     def _check_is_complex(self):
@@ -6042,9 +6045,10 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             )
             data = array[full] if full else array
             # array may be GPU-resident (cupy); np.asarray() cannot convert a
-            # cupy array implicitly (cupy deliberately blocks it), so prefer
-            # .get() when available, matching the convention used elsewhere
-            # (e.g. noise.py) for a possibly-cupy, possibly-numpy array.
+            # cupy array implicitly (cupy deliberately blocks it). Duck-type
+            # on .get() rather than using asnumpy(), which is a no-op when
+            # the cupy package itself isn't installed and so would not
+            # convert a genuinely GPU-resident array in that environment.
             data = data.get() if hasattr(data, "get") else np.asarray(data)
             if data.shape != (n_q, n_e):
                 raise ValueError(
@@ -6533,8 +6537,7 @@ def momentum_resolved_spectrum(
         width_inv = detector.width * mrad_to_inv_ang
         sampling_inv = min(dp.sampling)
 
-        angle_rad = np.deg2rad(detector.angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(detector.angle)
 
         # Sample directly from q_min to q_max along the slit direction.
         # For q_min=0 this naturally includes q=0 as the first point.
@@ -6598,8 +6601,7 @@ def momentum_resolved_spectrum(
         n_steps = max(2, round((q_max - detector.q_min) / q_step) + 1)
         q_values = np.linspace(detector.q_min, q_max, n_steps)
 
-        angle_rad = np.deg2rad(detector.sweep_angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(detector.sweep_angle)
 
         xp = get_array_module(dp.array)
         gpts = dp.shape[-2:]

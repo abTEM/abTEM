@@ -518,24 +518,17 @@ class Waves(BaseWaves, ArrayObject):
     def _valid_energy(self) -> float:
         """Return a scalar energy [eV] for this object.
 
-        Resolution order:
-        1. ``accelerator.energy`` — set for ordinary single-energy waves.
-        2. ``_metadata["energy"]`` — populated by :meth:`EnergyAxis.item_metadata`
-           when this object was produced by indexing an energy-ensemble.
-        3. A single-element ``EnergyAxis`` in ``ensemble_axes_metadata`` — the
-           residual case during per-member partitioned computation.
+        See :func:`abtem.core.energy.resolve_energy` for the resolution
+        order.
         """
-        from abtem.core.energy import EnergyUndefinedError
-        from abtem.core.axes import EnergyAxis
-        if self.energy is not None:
-            return self.energy
-        energy = self._metadata.get("energy")
-        if energy is not None:
-            return float(energy)
-        for axis in self.ensemble_axes_metadata:
-            if isinstance(axis, EnergyAxis) and len(axis.values) == 1:
-                return float(axis.values[0])
-        raise EnergyUndefinedError("Energy is not defined")
+        from abtem.core.energy import EnergyUndefinedError, resolve_energy
+
+        energy = resolve_energy(
+            self.energy, self._metadata, self.ensemble_axes_metadata
+        )
+        if energy is None:
+            raise EnergyUndefinedError("Energy is not defined")
+        return energy
 
     @property
     def angular_sampling(self) -> tuple[float, float]:

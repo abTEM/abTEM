@@ -51,64 +51,32 @@ class TestPlaneWaveEnergyEnsemble:
         waves = pw.build(lazy=False)
         assert waves.shape == (3, 32, 32)
 
-    def test_to_zarr_from_zarr(self):
+    @pytest.mark.parametrize("filename", ["waves.zarr", "waves.zarr.zip"])
+    def test_to_zarr_from_zarr(self, filename):
         pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
         waves = pw.build(lazy=False)
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "waves.zarr")
+            path = os.path.join(tmp, filename)
             waves.to_zarr(path)
             loaded = Waves.from_zarr(path)
         assert loaded.shape == (3, 32, 32)
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
 
-    def test_to_zarr_zip_from_zarr(self):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        waves = pw.build(lazy=False)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "waves.zarr.zip")
-            waves.to_zarr(path)
-            loaded = Waves.from_zarr(path)
-        assert loaded.shape == (3, 32, 32)
-        assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
-        assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
-
-    def test_multislice_eager(self):
-        """PlaneWave with list energy completes multislice without EnergyUndefinedError."""
-        unit_cell = ase.Atoms(
-            symbols="SrTiO3",
-            scaled_positions=[
-                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
-                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
-            ],
-            cell=[3.9127, 3.9127, 3.9127],
-            pbc=True,
+    @pytest.mark.parametrize(
+        "algorithm", [None, RealSpaceMultislice(order=1)], ids=["default", "realspace"]
+    )
+    def test_multislice_eager(self, algorithm):
+        """PlaneWave with list energy completes multislice without EnergyUndefinedError,
+        for both the default and RealSpaceMultislice algorithms."""
+        potential_unit = abtem.Potential(
+            _srtio3_atoms(), sampling=0.1, projection="finite"
         )
-        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
         potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
         pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
         pw.grid.match(potential)
-        result = pw.multislice(potential).compute()
-        assert result.array.shape[0] == 3
-
-    def test_realspace_multislice_eager(self):
-        """PlaneWave with list energy completes RealSpaceMultislice without EnergyUndefinedError."""
-        unit_cell = ase.Atoms(
-            symbols="SrTiO3",
-            scaled_positions=[
-                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
-                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
-            ],
-            cell=[3.9127, 3.9127, 3.9127],
-            pbc=True,
-        )
-        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
-        potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
-        pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
-        pw.grid.match(potential)
-        result = pw.multislice(
-            potential, algorithm=RealSpaceMultislice(order=1)
-        ).compute()
+        kwargs = {} if algorithm is None else {"algorithm": algorithm}
+        result = pw.multislice(potential, **kwargs).compute()
         assert result.array.shape[0] == 3
 
 
@@ -264,10 +232,12 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert all(a > 0 for a in dp.angular_sampling)
 
     def test_dp_get_energy_fallback(self):
-        """Full ensemble: _get_energy() falls back to the first EnergyAxis value."""
+        """Full ensemble: _get_energy() falls back to the max EnergyAxis value,
+        mirroring Waves.angular_sampling's conservative (shortest-wavelength)
+        convention for un-indexed multi-energy ensembles."""
         dp = self._exit_waves().diffraction_patterns()
         assert dp.metadata.get("energy") is None   # no scalar energy on full ensemble
-        assert dp._get_energy() == 80e3            # resolved from EnergyAxis
+        assert dp._get_energy() == 120e3           # max of EnergyAxis values
 
     def test_indexed_member_has_correct_energy(self):
         """Indexing a member propagates the per-member energy into metadata."""
