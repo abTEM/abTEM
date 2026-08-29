@@ -205,3 +205,36 @@ def test_scan_scatters_without_user_involvement(client):
         reference = _run_scan(probe, potential, tp, scan, sites)
 
     assert np.allclose(result, reference, rtol=1e-6, atol=0)
+
+
+def _run_prism_scan(potential, tp, scan, sites):
+    import abtem
+    import numpy as np
+
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+    )
+    measurement = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=scan,
+        detectors=abtem.FlexibleAnnularDetector(), sites=sites,
+        double_channel=False, lazy=True,
+    ).integrate_radial(inner=0, outer=40)
+    return np.asarray(measurement.compute(progress_bar=False).to_cpu().array)
+
+
+def test_prism_scan_scatters_without_user_involvement(client):
+    """The PRISM-EELS driver scatters its transition potentials too."""
+    from abtem.core import config
+    from abtem.core.backend import _worker_inputs
+
+    potential, tp, _, scan, sites = _small_eels_setup()
+
+    with config.set({"device": "cpu", "dask.scatter-large-inputs": "1 kB"}):
+        before = len(_worker_inputs)
+        result = _run_prism_scan(potential, tp, scan, sites)
+        assert len(_worker_inputs) > before  # abTEM scattered it itself
+
+    with config.set({"device": "cpu", "dask.scatter-large-inputs": False}):
+        reference = _run_prism_scan(potential, tp, scan, sites)
+
+    assert np.allclose(result, reference, rtol=1e-6, atol=0)

@@ -24,7 +24,14 @@ from abtem.core.axes import (
     UnknownAxis,
     WaveVectorAxis,
 )
-from abtem.core.backend import copy_to_device, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    copy_to_device,
+    cp,
+    get_array_module,
+    maybe_scatter_large_input,
+    resolve_scattered,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -5036,6 +5043,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         inelastic_crop=None,
     ):
         s_matrix = s_matrix.item()
+        # The transition potentials may be a handle to a value scattered onto
+        # the workers instead of embedded in this task (see scatter_to_workers).
+        transition_potentials = resolve_scattered(transition_potentials)
         measurements = s_matrix._eager_transition_potential_scan(
             scan=scan,
             detectors=detectors,
@@ -5150,6 +5160,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         chunks += scan.shape
 
+        # Built transition potentials are embedded in every ensemble block's
+        # task; for a frozen-phonon ensemble that is a copy of the array per
+        # configuration. Place large ones on the workers instead.
+        transition_potentials_arg = maybe_scatter_large_input(
+            transition_potentials
+        )
+
         arrays = blocks.map_blocks(
             self._lazy_transition_potential_scan,
             drop_axis=drop_axis,
@@ -5157,7 +5174,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             chunks=chunks,
             scan=scan,
             detectors=detectors,
-            transition_potentials=transition_potentials,
+            transition_potentials=transition_potentials_arg,
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
