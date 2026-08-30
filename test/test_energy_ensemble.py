@@ -126,6 +126,56 @@ class TestProbeEnergyEnsemble:
         assert tuple(energy_axes[0].values) == (40e3, 60e3, 80e3)
 
 
+class TestWavesBuilderEnergyProperty:
+    """Regression tests: PlaneWave.energy / Probe.energy must return the
+    unwrapped value (float or BaseDistribution), not the internal
+    EnergyEnsemble wrapper -- and detector.show() must accept a WavesBuilder
+    directly (not just a built Waves object)."""
+
+    def test_probe_energy_is_plain_float(self):
+        probe = Probe(energy=100e3, gpts=32, sampling=0.1, semiangle_cutoff=30)
+        assert probe.energy == 100e3
+        assert isinstance(probe.energy, float)
+
+    def test_plane_wave_energy_is_plain_float(self):
+        pw = PlaneWave(energy=100e3, gpts=32, sampling=0.1)
+        assert pw.energy == 100e3
+        assert isinstance(pw.energy, float)
+
+    def test_probe_energy_ensemble_is_distribution(self):
+        from abtem.distributions import BaseDistribution
+
+        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
+        assert isinstance(probe.energy, BaseDistribution)
+
+    def test_annular_detector_show_unbuilt_probe(self):
+        """AnnularDetector.show() must accept a Probe directly, without build()."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        probe = Probe(
+            energy=80e3, semiangle_cutoff=20, sampling=0.1, extent=10
+        )
+        abtem.AnnularDetector(inner=40, outer=80).show(probe)
+        plt.close("all")
+
+    def test_segmented_detector_show_unbuilt_plane_wave(self):
+        """SegmentedDetector.show() must accept a PlaneWave directly, without build()."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from abtem.detectors import SegmentedDetector
+
+        pw = PlaneWave(energy=80e3, sampling=0.1, extent=10)
+        SegmentedDetector(
+            nbins_radial=2, nbins_azimuthal=4, inner=10, outer=80
+        ).show(pw)
+        plt.close("all")
+
+
 class TestWavesEnergyEnsemble:
     def test_list_energy(self):
         arr = np.ones((3, 32, 32), dtype=complex)
