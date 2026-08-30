@@ -1763,7 +1763,15 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
     @property
     def _ensembles(self):
-        return {name: getattr(self, name) for name in self._ensemble_names}
+        # "energy" is special-cased to read the private EnergyEnsemble wrapper
+        # directly: the public `.energy` property (defined by subclasses)
+        # unwraps it to a plain float/BaseDistribution for external
+        # consumers, but the ensemble machinery here needs the wrapper
+        # itself (it has `.ensemble_shape`, `.ensemble_axes_metadata`, etc.).
+        return {
+            name: self._energy if name == "energy" else getattr(self, name)
+            for name in self._ensemble_names
+        }
 
     @property
     def _ensemble_shapes(self):
@@ -2018,7 +2026,7 @@ class PlaneWave(WavesBuilder):
 
     @property
     def energy(self):
-        return self._energy
+        return self._energy.energy
 
     @energy.setter
     def energy(self, value):
@@ -2311,7 +2319,7 @@ class Probe(WavesBuilder):
 
     @property
     def energy(self):
-        return self._energy
+        return self._energy.energy
 
     @energy.setter
     def energy(self, value):
