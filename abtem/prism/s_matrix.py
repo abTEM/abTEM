@@ -145,6 +145,38 @@ class BaseSMatrix(BaseWaves):
         return self._device
 
     @property
+    def _xp(self):
+        """The array module (numpy or cupy) for this S-matrix's device."""
+        return get_array_module(self._device)
+
+    @property
+    def _complex_dtype(self):
+        """The complex dtype to use, honouring ``config['precision']``."""
+        return get_dtype(complex=True)
+
+    # element budget (independent of dtype) for the plane-wave expansion and
+    # compression row/pixel batching in CompressedSMatrixArray and SMatrix;
+    # a fixed ceiling rather than a device-VRAM-aware limit (unlike
+    # CompressedSMatrixArray._reduce_memory_budget, which is `inf` on the
+    # host and would disable batching there entirely).
+    _EXPANSION_BATCH_ELEMENTS = 256**3
+    # byte budget for the fixed intermediate-block ceilings that scale with
+    # dtype size (see :meth:`_row_batch_size`), independently tuned from
+    # `_EXPANSION_BATCH_ELEMENTS` above.
+    _EXPANSION_BATCH_BYTES = 2**30
+
+    def _row_batch_size(self, elements_per_row: int, dtype, budget_bytes: int) -> int:
+        """Rows of *elements_per_row* elements each (of *dtype*) that fit in
+        *budget_bytes*."""
+        bytes_per_row = max(elements_per_row, 1) * np.dtype(dtype).itemsize
+        return max(1, int(budget_bytes // bytes_per_row))
+
+    def _expansion_batch_size(self, elements_per_row: int) -> int:
+        """Rows of *elements_per_row* elements each that fit in
+        :attr:`_EXPANSION_BATCH_ELEMENTS`, independent of dtype."""
+        return max(1, int(self._EXPANSION_BATCH_ELEMENTS / max(elements_per_row, 1)))
+
+    @property
     @abstractmethod
     def interpolation(self):
         """Interpolation factor in the `x` and `y` directions"""
@@ -1004,7 +1036,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         positions,
         position_coefficients,
     ):
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         if self._device == "gpu" and isinstance(array, np.ndarray):
             array = xp.asarray(array)
@@ -1088,7 +1120,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
         )
 
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         if self._device == "gpu" and isinstance(self.waves.array, np.ndarray):
             array = cp.asarray(self.waves.array)
@@ -1700,7 +1732,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
 
     def _calculate_ctf_coefficients(self, ctf: CTF):
-        xp = get_array_module(self._device)
+        xp = self._xp
         wave_vectors = xp.asarray(self.wave_vectors)
 
         alpha = (
@@ -1713,8 +1745,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
     def _coefficient_values(self, coefficients):
         """The dense plane-wave amplitudes of each mode of the expansion."""
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
         return values * xp.asarray(coefficients, dtype=dtype)[None]
@@ -1727,7 +1759,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         reducing with the restricted (and renormalized) coefficients yields the
         wave functions of the PRISM algorithm from the same compressed factors.
         """
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         indices = np.asarray(self._dense_indices)
         mask = (indices[:, 0] % self._interpolation[0] == 0) & (
@@ -1749,7 +1781,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         bright-field disk, the plane-wave reduction outside it, with the soft
         aperture edge as the transition.
         """
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         if isinstance(blend_angle, str):
             if blend_angle != "aperture":
@@ -1871,8 +1903,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         returned on the full grid indexed by the displacement from the probe
         (used by the full-window mode reduction, which keeps the absolute frame).
         """
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         gpts = self.gpts
         window_gpts = self.window_gpts
@@ -1907,7 +1939,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
     # memory budget of one gathered block in the batched mode contractions;
     # the modes are chunked so several probe positions fit in every batch even
-    # at large ranks, keeping the device operations big and few
+    # at large ranks, keeping the device operations big and few.
     _REDUCE_BATCH_BYTES = 2**30
     _REDUCE_MODE_CHUNK = 64
     # the lattice reduction re-gathers a halo of window / step scan rows per
@@ -1953,8 +1985,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         contiguous, so the chunks are free views and no transpose is needed
         anywhere.
         """
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         num_positions = flat_indices.shape[0]
         out_shape = flat_indices.shape[1:]
@@ -2087,8 +2119,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         by extracting ``G[p + a, a]``. The matrix products reuse both operands
         across the whole block, which is what the gather formulation cannot do.
         """
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         gpts = self.gpts
         # modes-first: (K, window_x, window_y) and (K, gpts_x, gpts_y)
@@ -2236,7 +2268,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             extra_ensemble_axes_metadata=[],
         )
 
-        xp = get_array_module(self._device)
+        xp = self._xp
         # modes-first, no transpose: _contract_modes_batched consumes (K, ...)
         u_modes = xp.asarray(self._u)
         window = self.window_gpts
@@ -2363,6 +2395,19 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         return tuple(measurements)
 
+    def _flat_indices(self, anchor, span, gpts):
+        """Flat index into a ``(gpts[0], gpts[1])`` array visited by a window
+        of shape *span*, starting at *anchor* (shape ``(n, 2)``) and wrapping
+        periodically. Shared by :meth:`_reduce_to_waves_batched` (windowed:
+        ``anchor = snapped_pixels - window_gpts // 2``, ``span = window_gpts``)
+        and :meth:`_reduce_to_waves_absolute` (full-grid: ``anchor =
+        -snapped_pixels``, ``span = gpts``)."""
+        xp = self._xp
+
+        x = (anchor[:, 0, None] + xp.arange(span[0])[None]) % gpts[0]
+        y = (anchor[:, 1, None] + xp.arange(span[1])[None]) % gpts[1]
+        return (x[:, :, None] * gpts[1] + y[:, None, :]).astype(np.int32)
+
     def _reduce_to_waves_batched(self, u_windows, snapped_pixels, kernel):
         """Vectorized equivalent of :meth:`_reduce_to_waves`: the windows of the
         left singular vectors are gathered for batches of probe positions and
@@ -2371,7 +2416,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         The per-position loop of :meth:`_reduce_to_waves` evaluates thousands of
         small kernels, which is launch-overhead bound on the GPU.
         """
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         gpts = self.gpts
         window_gpts = self.window_gpts
@@ -2381,11 +2426,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             - xp.asarray((window_gpts[0] // 2, window_gpts[1] // 2))[None]
         ) % xp.asarray(gpts)[None]
 
-        window_x = (corners[:, 0, None] + xp.arange(window_gpts[0])[None]) % gpts[0]
-        window_y = (corners[:, 1, None] + xp.arange(window_gpts[1])[None]) % gpts[1]
-        flat_indices = (
-            window_x[:, :, None] * gpts[1] + window_y[:, None, :]
-        ).astype(np.int32)
+        flat_indices = self._flat_indices(corners, window_gpts, gpts)
 
         return self._contract_modes_batched(
             u_windows, flat_indices, kernel, gather_kernel=False
@@ -2399,15 +2440,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         indexed by the displacement from the probe; the result matches the
         reduction of the expanded scattering matrix to floating point precision.
         """
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         gpts = self.gpts
 
-        shift_x = (xp.arange(gpts[0])[None] - snapped_pixels[:, 0, None]) % gpts[0]
-        shift_y = (xp.arange(gpts[1])[None] - snapped_pixels[:, 1, None]) % gpts[1]
-        flat_indices = (
-            shift_x[:, :, None] * gpts[1] + shift_y[:, None, :]
-        ).astype(np.int32)
+        flat_indices = self._flat_indices(-snapped_pixels, gpts, gpts)
 
         return self._contract_modes_batched(
             u_full, flat_indices, kernel, gather_kernel=True
@@ -2429,7 +2466,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             Reduction kernel with the mode axis FIRST, of shape
             (K, window_gpts_x, window_gpts_y).
         """
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         if xp is not np:
             # per-position loops are launch-overhead bound on the GPU
@@ -2551,15 +2588,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         if getattr(self, "_s_matrix_array", None) is not None:
             return self._s_matrix_array
 
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         gpts = self.gpts
 
         n_dense = len(self.wave_vectors)
         array = xp.empty((n_dense,) + tuple(gpts), dtype=dtype)
 
-        max_batch = max(1, int(256**3 / np.prod(gpts)))
+        max_batch = self._expansion_batch_size(np.prod(gpts))
         for start in range(0, n_dense, max_batch):
             stop = min(start + max_batch, n_dense)
             slab = self._expanded_slab(start, stop, xp, dtype)
@@ -2590,6 +2627,66 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
         return self._s_matrix_array
 
+    def _new_batch_reduce_measurements(
+        self, scan: BaseScan, ctf: CTF, detectors: list[BaseDetector], pbar: bool
+    ) -> tuple[tuple[BaseMeasurements | Waves, ...], TqdmWrapper]:
+        """Shared head of ``_batch_reduce_to_measurements`` and
+        ``_streamed_batch_reduce_to_measurements``: allocate the output
+        measurements and the progress bar."""
+        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+
+        measurements = allocate_multislice_measurements(
+            dummy_probes,
+            detectors,
+            extra_ensemble_axes_shape=(),
+            extra_ensemble_axes_metadata=[],
+        )
+
+        n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
+        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
+
+        return measurements, pbar
+
+    def _finalize_batch_measurement(
+        self,
+        waves_array,
+        scan_shape: tuple[int, ...],
+        sub_ctf,
+        detectors: list[BaseDetector],
+        measurements: tuple[BaseMeasurements | Waves, ...],
+        ctf_slics: tuple,
+        slics: tuple,
+        pbar: TqdmWrapper,
+        n_reduced: int,
+    ) -> None:
+        """Shared tail of ``_batch_reduce_to_measurements`` and
+        ``_streamed_batch_reduce_to_measurements``: wrap the computed wave
+        array as a ``Waves`` object with the correct ensemble metadata,
+        detect it, and write the result into each measurement's array
+        slice."""
+        ensemble_axes_metadata = [
+            UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+        ]
+        ensemble_axes_metadata += [ScanAxis() for _ in range(len(scan_shape))]
+
+        if self._detects_the_wave(detectors):
+            waves_array = self._to_exit_reference(waves_array)
+
+        waves = Waves(
+            waves_array,
+            sampling=tuple(self.sampling),
+            energy=self.energy,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
+
+        indices = ctf_slics + slics
+
+        pbar.update_if_exists(n_reduced)
+
+        for detector, measurement in zip(detectors, measurements):
+            measurement.array[indices] = detector.detect(waves).array
+
     def _batch_reduce_to_measurements(
         self,
         scan: BaseScan,
@@ -2602,21 +2699,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_component: str = None,
         blend_taper: float = None,
     ) -> tuple[BaseMeasurements | Waves, ...]:
-        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
-
-        measurements = allocate_multislice_measurements(
-            dummy_probes,
-            detectors,
-            extra_ensemble_axes_shape=(),
-            extra_ensemble_axes_metadata=[],
+        measurements, pbar = self._new_batch_reduce_measurements(
+            scan, ctf, detectors, pbar
         )
 
-        xp = get_array_module(self._device)
+        xp = self._xp
 
         u_windows = xp.asarray(self._u)
-
-        n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
-        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
 
         sampling = xp.asarray(self.sampling)
 
@@ -2699,28 +2788,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     (1,) * len(sub_ctf.ensemble_shape) + scan_shape + self.window_gpts
                 )
 
-                ensemble_axes_metadata = [
-                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
-                ]
-                ensemble_axes_metadata += [ScanAxis() for _ in range(len(scan_shape))]
-
-                if self._detects_the_wave(detectors):
-                    waves_array = self._to_exit_reference(waves_array)
-
-                waves = Waves(
+                self._finalize_batch_measurement(
                     waves_array,
-                    sampling=tuple(self.sampling),
-                    energy=self.energy,
-                    ensemble_axes_metadata=ensemble_axes_metadata,
-                    metadata=self.metadata,
+                    scan_shape,
+                    sub_ctf,
+                    detectors,
+                    measurements,
+                    ctf_slics,
+                    slics,
+                    pbar,
+                    len(positions),
                 )
-
-                indices = ctf_slics + slics
-
-                pbar.update_if_exists(len(positions))
-
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
 
@@ -2750,23 +2828,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         position phases and the same globally normalized CTF coefficients), so
         the streamed and expanded reductions agree to floating point precision.
         """
-        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
-
-        measurements = allocate_multislice_measurements(
-            dummy_probes,
-            detectors,
-            extra_ensemble_axes_shape=(),
-            extra_ensemble_axes_metadata=[],
+        measurements, pbar = self._new_batch_reduce_measurements(
+            scan, ctf, detectors, pbar
         )
 
-        xp = get_array_module(self._device)
-        dtype = get_dtype(complex=True)
+        xp = self._xp
+        dtype = self._complex_dtype
 
         wave_vectors = xp.asarray(self.wave_vectors)
         n_dense = len(wave_vectors)
-
-        n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
-        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
 
         for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
             sub_ctf = sub_ctf.item()
@@ -2824,30 +2894,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         coefficients[..., start:stop], slab, axes=[-1, -3]
                     )
 
-                ensemble_axes_metadata = [
-                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
-                ]
-                ensemble_axes_metadata += [
-                    ScanAxis() for _ in range(len(sub_scan.shape))
-                ]
-
-                if self._detects_the_wave(detectors):
-                    waves_array = self._to_exit_reference(waves_array)
-
-                waves = Waves(
+                self._finalize_batch_measurement(
                     waves_array,
-                    sampling=tuple(self.sampling),
-                    energy=self.energy,
-                    ensemble_axes_metadata=ensemble_axes_metadata,
-                    metadata=self.metadata,
+                    sub_scan.shape,
+                    sub_ctf,
+                    detectors,
+                    measurements,
+                    ctf_slics,
+                    slics,
+                    pbar,
+                    int(np.prod(sub_scan.shape)),
                 )
-
-                indices = ctf_slics + slics
-
-                pbar.update_if_exists(int(np.prod(sub_scan.shape)))
-
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
 
@@ -4333,7 +4390,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         coefficients = xp.fft.fft2(functions, axes=(-2, -1))
         coefficients /= get_dtype(complex=False)(np.prod(shape))
 
-        dtype = get_dtype(complex=True)
+        dtype = self._complex_dtype
         kernels = ()
         for i, (bound, length) in enumerate(zip(bounds, shape)):
             frequencies = xp.fft.fftfreq(length, d=1 / length).astype(int)
@@ -4432,7 +4489,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         exactly without ever forming it.
         """
         xp = get_array_module(array)
-        dtype = get_dtype(complex=True)
+        dtype = self._complex_dtype
 
         gpts = array.shape[-2:]
         extent = self.extent
@@ -4462,7 +4519,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # it. The transform and the phase are independent per beam, so
             # batching is exact and the result is written back in place.
             propagator = self._reference_propagator(gpts, xp, 1.0)[None]
-            reference_batch = max(1, int(2**30 // (np.prod(gpts) * 8)))
+            reference_batch = self._row_batch_size(
+                np.prod(gpts), dtype, self._EXPANSION_BATCH_BYTES
+            )
             for start in range(0, len(array), reference_batch):
                 stop = min(start + reference_batch, len(array))
                 array[start:stop] = ifft2(fft2(array[start:stop]) * propagator)
@@ -4472,7 +4531,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         defocus_phase = self._defocus_phase(wave_vectors).conj()
 
         normalization = np.prod(self.interpolation).astype(real_dtype)
-        max_batch = max(1, int(256**3 / np.prod(gpts)))
+        max_batch = self._expansion_batch_size(np.prod(gpts))
         for start in range(0, len(array), max_batch):
             chunk = slice(start, start + max_batch)
             phase = complex_exponential(
@@ -4496,7 +4555,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # eigenvalues near the round-off floor (the coarse expansion is rank
         # deficient) are dropped.
         gram = xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
-        pixel_batch = max(1, int(256**3 / max(len(matrix), 1)))
+        pixel_batch = self._expansion_batch_size(len(matrix))
         for start in range(0, matrix.shape[1], pixel_batch):
             chunk = matrix[:, start : start + pixel_batch].astype(np.complex128)
             gram += chunk @ chunk.T.conj()
@@ -4685,10 +4744,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                         [union_wv_dict[(float(q[0]), float(q[1]))] for q in r.wave_vectors]
                     )
                     if isinstance(r.array, da.Array):
-                        new_chunks = (n_union,) + r.array.chunks[1:]
-                        embedded = r.array.map_blocks(
+                        # _embed_wave_vectors assumes it receives the whole
+                        # per-energy array in one call (indices/n_union are
+                        # sized to the full wave-vector axis); force a single
+                        # chunk along that axis so map_blocks cannot invoke it
+                        # once per pre-existing block with only a chunk-sized
+                        # arr.
+                        array = r.array.rechunk({0: -1})
+                        new_chunks = (n_union,) + array.chunks[1:]
+                        embedded = array.map_blocks(
                             _embed_wave_vectors,
-                            dtype=r.array.dtype,
+                            dtype=array.dtype,
                             chunks=new_chunks,
                             indices=indices,
                             n_union=n_union,

@@ -17,7 +17,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
 from abtem.core.units import units_type
-from abtem.core.utils import get_dtype
+from abtem.core.utils import cos_sin_deg, get_dtype
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -44,25 +44,13 @@ else:
 
 
 def _energy_from_waves(waves) -> Optional[float]:
-    """Return a scalar electron energy [eV] from *waves*.
+    """Return a scalar electron energy [eV] from *waves*, or ``None`` for a
+    full, un-indexed multi-energy ensemble. Uses the same resolution order as
+    ``Waves._valid_energy`` (see :func:`abtem.core.energy.resolve_energy`),
+    but returns ``None`` instead of raising when unresolved."""
+    from abtem.core.energy import resolve_energy
 
-    Resolution order mirrors ``Waves._valid_energy``:
-    1. ``waves.energy`` — set for ordinary single-energy waves.
-    2. ``waves.metadata["energy"]`` — populated by ``EnergyAxis.item_metadata``
-       when *waves* was produced by indexing an energy-ensemble.
-    3. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` — used as
-       a fallback when the full multi-member ensemble has not been indexed yet.
-    """
-    from abtem.core.axes import EnergyAxis
-
-    energy = waves.energy
-    if energy is None:
-        energy = waves.metadata.get("energy")
-    if energy is None:
-        for axis in waves.ensemble_axes_metadata:
-            if isinstance(axis, EnergyAxis):
-                return float(axis.values[0])
-    return energy
+    return resolve_energy(waves.energy, waves.metadata, waves.ensemble_axes_metadata)
 
 
 def _gpts_and_sampling_from_obj(obj):
@@ -834,8 +822,7 @@ def _slit_detector_mask(
     kx2d = kx[:, None] * xp.ones((1, gpts[1]))
     ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
 
-    angle_rad = np.deg2rad(angle)
-    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    cos_a, sin_a = cos_sin_deg(angle)
     dx = kx2d - center[0]
     dy = ky2d - center[1]
     local_x = dx * cos_a + dy * sin_a
@@ -877,8 +864,7 @@ def _corners_from_slit_params(
     corners_local = np.array(
         [[-half_e, -half_w], [-half_e, half_w], [half_e, -half_w], [half_e, half_w]]
     )
-    angle_rad = np.deg2rad(angle)
-    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    cos_a, sin_a = cos_sin_deg(angle)
     R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
     corners_world = corners_local @ R.T + np.array(offset)
     kx_min, ky_min = corners_world.min(axis=0)
@@ -1026,8 +1012,7 @@ class SpectralSlitDetector(BaseDetector):
             self._angle = float(angle)
             # Physical slit extent and centre: spans from q_min to q_max along
             # the slit direction, centred at offset + (q_min+q_max)/2 * direction.
-            angle_rad = np.deg2rad(float(angle))
-            cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+            cos_a, sin_a = cos_sin_deg(float(angle))
             slit_center = (
                 offset[0] + (q_min + q_max) / 2.0 * cos_a,
                 offset[1] + (q_min + q_max) / 2.0 * sin_a,
@@ -1082,6 +1067,19 @@ class SpectralSlitDetector(BaseDetector):
     def corners(self) -> tuple[float, float, float, float]:
         """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
         return self._corners
+
+    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
+        """Radial bounds [mrad] of the acceptance region, for grid-sufficiency
+        checks. The slit has no rotationally-symmetric inner exclusion, so
+        the inner bound is 0; the outer bound is the farthest distance from
+        the origin reached by the bounding rectangle's corners."""
+        kx_min, kx_max, ky_min, ky_max = self.corners
+        outer = max(
+            float(np.hypot(kx, ky))
+            for kx in (kx_min, kx_max)
+            for ky in (ky_min, ky_max)
+        )
+        return 0.0, outer
 
     def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
         metadata = super()._out_metadata(array_object)[0]
@@ -1227,8 +1225,7 @@ class SpectralSlitDetector(BaseDetector):
             mx, my = self._show_pattern_bg(ax, waves, power)
 
         # Compute world-space corners of the rotated rectangle.
-        angle_rad = np.deg2rad(self._angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(self._angle)
         half_e = self._extent / 2.0
         half_w = self._width / 2.0
         # Centre of the slit rectangle in world coords
@@ -1467,8 +1464,7 @@ class SpectralAnnularDetector(AnnularDetector):
         n_steps = max(2, round((q_max - self.q_min) / step) + 1)
         q_vals = np.linspace(self.q_min, q_max, n_steps)
 
-        angle_rad = np.deg2rad(self._sweep_angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(self._sweep_angle)
 
         for q in q_vals:
             cx, cy = q * cos_a, q * sin_a
