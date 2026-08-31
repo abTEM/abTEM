@@ -407,7 +407,8 @@ class TestBlochWavesEnergyEnsemble:
     shaped, stacked results without requiring manual loops."""
 
     @pytest.fixture(scope="class")
-    def bw_multi(self):
+    @classmethod
+    def bw_multi(cls):
         """Shared BlochWaves object with multiple energies (expensive to create)."""
         atoms = _srtio3_atoms()
         return BlochWaves(
@@ -415,22 +416,26 @@ class TestBlochWavesEnergyEnsemble:
         )
 
     @pytest.fixture(scope="class")
-    def dp_single(self, bw_multi):
+    @classmethod
+    def dp_single(cls, bw_multi):
         """Cached single-thickness diffraction patterns (used by multiple tests)."""
         return bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
 
     @pytest.fixture(scope="class")
-    def dp_multi(self, bw_multi):
+    @classmethod
+    def dp_multi(cls, bw_multi):
         """Cached multi-thickness diffraction patterns."""
         return bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS).compute()
 
     @pytest.fixture(scope="class")
-    def ew_single(self, bw_multi):
+    @classmethod
+    def ew_single(cls, bw_multi):
         """Cached single-thickness exit waves."""
         return bw_multi.calculate_exit_waves(BLOCH_THICKNESS[0]).compute()
 
     @pytest.fixture(scope="class")
-    def ew_multi(self, bw_multi):
+    @classmethod
+    def ew_multi(cls, bw_multi):
         """Cached multi-thickness exit waves."""
         return bw_multi.calculate_exit_waves(BLOCH_THICKNESS).compute()
 
