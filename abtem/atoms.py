@@ -329,7 +329,7 @@ def rotation_matrix_to_euler(
 
     Parameters
     ----------
-    R : np.ndarray
+    R : numpy.ndarray
         Rotation array of dimension 3x3.
     axes : str
         String representation of Cartesian axes.
@@ -456,7 +456,7 @@ def decompose_affine_transform(
 
     Parameters
     ----------
-    affine_transform : np.ndarray
+    affine_transform : numpy.ndarray
         Matrix representation of an affine transformation of dimension 3x3.
 
     Returns
@@ -488,7 +488,7 @@ def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]
 
     Parameters
     ----------
-    decomposed : tuple of np.ndarray
+    decomposed : tuple of numpy.ndarray
         Tuple of length 3 whose items are arrays of dimension 3 representing rotation,
         scale and shear.
     """
@@ -645,7 +645,7 @@ def rotation_matrix_from_plane(
 
     Returns
     -------
-    rotation : np.ndarray
+    rotation : numpy.ndarray
         Rotation matrix of dimension 3x3.
     """
     if isinstance(plane, str):
@@ -786,7 +786,7 @@ def best_orthogonal_cell(
 
     Parameters
     ----------
-    cell : np.ndarray
+    cell : numpy.ndarray
         Cell of dimensions 3x3.
     max_repetitions : int
         Maximum number of allowed repetitions (default is 5).
@@ -795,7 +795,7 @@ def best_orthogonal_cell(
 
     Returns
     -------
-    cell : np.ndarray
+    cell : numpy.ndarray
         Closest orthogonal cell found.
     """
     zero_vectors = np.linalg.norm(cell, axis=0) < eps
@@ -850,6 +850,30 @@ def best_orthogonal_cell(
 
     cell = np.dot(new_vectors, np.array(cell))
     return np.linalg.norm(cell, axis=0)
+
+
+def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> None:
+    """
+    Snap scaled positions that are within `tolerance` (in Angstrom, along the
+    relevant lattice vector) of a cell boundary to exactly 0.
+
+    Relaxed structures from DFT or machine-learned potentials often leave atoms
+    that are physically on a cell boundary or corner with a tiny numerical
+    residual, e.g. a scaled coordinate of -1e-9 instead of exactly 0. Since
+    `ase.build.tools.cut` (used to build the orthogonal supercell) computes
+    scaled positions with a plain `% 1.0`, such a residual wraps to just below
+    1.0 rather than staying just above 0.0 depending on its sign, and is then
+    silently excluded by `cut`'s boundary mask. This makes `orthogonalize_cell`
+    non-deterministic under sub-tolerance numerical noise, dropping atoms for
+    some inputs but not others even though they represent the same structure.
+    """
+    scaled = atoms.get_scaled_positions(wrap=False)
+    lengths = atoms.cell.lengths()
+    lengths[lengths == 0] = 1.0
+    eps = tolerance / lengths
+    near_boundary = np.abs(scaled - np.round(scaled)) < eps
+    scaled[near_boundary] = np.round(scaled[near_boundary])
+    atoms.set_scaled_positions(scaled % 1.0)
 
 
 def orthogonalize_cell(
@@ -943,23 +967,66 @@ def orthogonalize_cell(
         if is_cell_orthogonal(atoms.cell):
             if return_transform:
                 return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            elif return_transform_matrix:
+                return atoms, np.eye(3)
             else:
                 return atoms
-        # Early-exit bug: diag==box with non-orthogonal cell -> GS fallback
-        if not return_transform and not return_transform_matrix:
-            from numpy import dot
-            _cell = np.array(atoms.cell, dtype=float)
-            v1, v2, v3 = _cell[0], _cell[1], _cell[2]
-            v2_new = v2 - dot(v2, v1) / dot(v1, v1) * v1
-            from ase import Atoms as _Atoms
-            atoms = _Atoms(symbols=atoms.get_chemical_symbols(),
-                           positions=atoms.get_positions().copy(),
-                           cell=np.array([v1, v2_new, v3]), pbc=atoms.pbc)
-            atoms.wrap()
+
+        # `best_orthogonal_cell` computes box lengths as norms of (possibly
+        # repeated) lattice vectors. For a near-orthorhombic cell whose
+        # off-diagonal components are smaller than about 2e-8 relative to the
+        # corresponding diagonal entry, those norms round to the exact
+        # diagonal entries in float64, so `diag(cell) == box` can be True
+        # even though `is_cell_orthogonal` (tol=1e-12) still correctly
+        # reports the cell as non-orthogonal. This is a relative, not
+        # absolute, effect: a 5000 A cell can carry noise up to ~1e-4 A and
+        # still trip it, while a 5 A cell only does so below ~1e-7 A. No
+        # repetition is needed in this case, just removal of the numerical
+        # residual, so remove it by zeroing the off-diagonal components
+        # directly, rather than falling through to the general repeat-and-cut
+        # path below (which assumes real repetition is needed to reach
+        # `box`).
+        #
+        # A Gram-Schmidt process on the three vectors would only guarantee
+        # they end up mutually orthogonal, not axis-aligned: if the noise
+        # sits in the first vector (whose direction seeds the process), the
+        # result is a valid orthogonal box rotated slightly off the
+        # coordinate axes, which is not what the rest of this function
+        # assumes. Since reaching this branch already means every
+        # off-diagonal component is at or below float64's ~2e-8 relative
+        # rounding floor (see above), zeroing them directly is both simpler
+        # and correct; anything larger is guarded against below rather than
+        # silently discarded.
+        cell = np.array(atoms.cell, dtype=float)
+        off_diagonal = cell[~np.eye(3, dtype=bool)]
+        max_off_diagonal = np.max(np.abs(off_diagonal))
+        relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
+        if relative_off_diagonal > 1e-6:
+            raise RuntimeError(
+                "Cell is not orthogonal and the off-diagonal components "
+                f"({max_off_diagonal:.3e} A, {relative_off_diagonal:.3e} "
+                "relative to the cell size) are too large to be numerical "
+                "noise; refusing to silently drop them. This should not "
+                "normally happen; please report this cell."
+            )
+
+        orthogonal_cell = np.diag(np.diag(cell))
+
+        atoms = atoms.copy()
+        atoms.set_cell(orthogonal_cell)
+        atoms.wrap()
+
+        if return_transform:
+            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+        elif return_transform_matrix:
+            return atoms, np.eye(3)
+        else:
             return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
+
+    _snap_scaled_positions_to_cell_boundary(atoms, tolerance)
 
     inv = np.linalg.inv(atoms.cell)
     vectors = np.dot(np.diag(box), inv)

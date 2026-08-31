@@ -57,19 +57,21 @@ def _fresnel_propagator_array(
 
     if not grid.is_orthogonal:
         # Non-orthogonal (skewed) grid: the free-space propagator is still diagonal in
-        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell.
+        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell. The
+        # exact/order-1 formulas below depend only on k2 (not on kx, ky separately), so
+        # they generalise to a skewed grid unchanged once k2 uses the correct metric;
+        # only the order-2 term (untested for a skewed metric) stays unsupported.
         if order == 2:
             raise NotImplementedError(
                 "the order-2 Fourier propagator is not implemented for non-orthogonal "
-                "grids; use order=1 or the realspace multislice"
+                "grids; use order=1, order='exact', or the realspace multislice"
             )
         k2 = grid.k_squared(xp)
-        return complex_exponential(-k2 * np.pi * thickness * wavelength)
-
-    # Orthogonal grid: keep the separable form (bit-identical to the previous code).
-    kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
-    kx, ky = kx[:, None], ky[None]
-    k2 = kx**2 + ky**2
+    else:
+        # Orthogonal grid: keep the separable form (bit-identical to the previous code).
+        kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
+        kx, ky = kx[:, None], ky[None]
+        k2 = kx**2 + ky**2
 
     # Split into propagating and evanescent waves
     x = wavelength**2 * k2
@@ -119,6 +121,7 @@ def _fresnel_propagator_array(
             grid._valid_gpts,
             grid._valid_sampling,
             get_array_module(device),
+            cell=grid.cell,
         )[propagating]
 
         max_phase_error = float((phase_error * aperture).max())
@@ -196,7 +199,7 @@ class FresnelPropagator:
 
         Returns
         -------
-        array : np.ndarray
+        array : numpy.ndarray
             The Fresnel propagator as an array.
         """
         key: tuple[Any, ...] = (
@@ -736,11 +739,18 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
-    waves_input = waves.copy()
+    # Keep a pristine reference to the incoming batch. It is only ever read:
+    # each potential configuration below works on its own copy, so no copy is
+    # needed here -- copying would just hold a redundant duplicate of the
+    # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
+    waves_input = waves
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
+        # The incoming batch may be a task input shared with other tasks
+        # (e.g. frozen-phonon configurations partitioned across tasks), so the
+        # in-place multislice steps must operate on a copy.
         waves = waves_input.copy()
         exit_plane_index = 0
 
@@ -930,7 +940,7 @@ def transition_potential_multislice_and_detect(
 
     Returns
     -------
-    measurements : Waves or tuple of :class:`.BaseMeasurement`
+    measurements : :class:`.Waves` or tuple of :class:`.BaseMeasurements`
         Exit waves or detected measurements or lists of measurements.
     """
 
@@ -1400,6 +1410,34 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         )
 
     def _calculate_new_array(self, waves: Waves):
+        from abtem.core.axes import EnergyAxis
+
+        # Eager energy-ensemble path: iterate per-energy so that each call
+        # receives a single-energy Waves and _valid_energy resolves correctly.
+        energy_axis_idx = next(
+            (
+                i
+                for i, ax in enumerate(waves.ensemble_axes_metadata)
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1
+            ),
+            None,
+        )
+        if energy_axis_idx is not None:
+            import numpy as np
+
+            energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
+            per_energy = []
+            for j in range(len(energy_axis.values)):
+                idx = (slice(None),) * energy_axis_idx + (j,)
+                member = waves.__class__(**waves.get_items(idx))
+                per_energy.append(self._calculate_new_array(member))
+            if isinstance(per_energy[0], tuple):
+                return tuple(
+                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
+                    for k in range(len(per_energy[0]))
+                )
+            return np.stack(per_energy, axis=energy_axis_idx)
+
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

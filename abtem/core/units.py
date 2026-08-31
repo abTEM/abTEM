@@ -11,7 +11,7 @@ _unit_categories = {
     "real_space": ("Å", "Angstrom", "nm", "um", "mm", "m"),
     "reciprocal_space": ("1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"),
     "angular": ["rad", "mrad", "deg"],
-    "energy": ["eV", "keV"],
+    "energy": ["eV", "keV", "meV"],
 }
 
 # A mapping from unit to unit category
@@ -33,6 +33,9 @@ _conversion_factors = {
     "mrad": 1,
     "rad": 1e3,
     "deg": 1e3 / np.pi * 180.0,
+    "eV": 1,
+    "keV": 1e-3,
+    "meV": 1e3,
 }
 
 _tex_units = {
@@ -133,7 +136,7 @@ def validate_units(
             units = "1/Å"
 
         return units
-    elif units_type[units] == "angular":
+    elif units_type[units] in ("angular", "energy"):
         return units
     else:
         raise ValueError(f"Invalid units: {units}")

@@ -14,6 +14,43 @@ from abtem.core.backend import device_name_from_array_module, get_array_module
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 
+def _fast_fft_rounding_mode() -> str:
+    """
+    Normalize the ``grid.round-to-fast-fft`` configuration to a mode string.
+
+    Returns
+    -------
+    str
+        ``'never'``, ``'auto'`` (only grids abTEM derives on its own) or
+        ``'always'`` (additionally grids derived from a numeric sampling).
+    """
+    value = config.get("grid.round-to-fast-fft", "auto")
+
+    if value is True:
+        return "always"
+    if value is False:
+        return "never"
+    if isinstance(value, str) and value.lower() == "auto":
+        return "auto"
+
+    raise ValueError(
+        "configuration 'grid.round-to-fast-fft' must be True, False or 'auto', "
+        f"got {value!r}"
+    )
+
+
+def round_auto_derived_gpts() -> bool:
+    """
+    Whether grids abTEM derives on its own are rounded to fast FFT lengths.
+
+    This covers grids abTEM chooses without a user-supplied sampling, such as
+    ``Potential(..., sampling='auto')``. Grids derived from a numeric sampling
+    are governed separately (they are only rounded in the ``'always'`` mode),
+    because rounding those changes the result of an existing script.
+    """
+    return _fast_fft_rounding_mode() != "never"
+
+
 def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
     """
     Ensure that the prodived grid points are valid.
@@ -108,6 +145,13 @@ class Grid(CopyMixin, EqualityMixin):
         If true the gpts cannot be modified. Default is False.
     lock_sampling : bool
         If true the sampling cannot be modified. Default is False.
+    fft_grid : bool
+        Whether this grid is ever Fourier transformed. Governs automatic
+        rounding to a fast FFT length (the ``grid.round-to-fast-fft``
+        configuration option): grids that are never transformed, such as a
+        ``GridScan``'s probe positions, are exempt, since a fast length buys
+        them nothing and would silently change what is simulated. Default is
+        True.
     cell : np.ndarray, optional
         Optional 2x2 real-space cell whose rows are the two in-plane lattice vectors,
         allowing a non-orthogonal (skewed) grid. If ``None`` (default) the grid is
@@ -125,9 +169,14 @@ class Grid(CopyMixin, EqualityMixin):
         lock_extent: bool = False,
         lock_gpts: bool = False,
         lock_sampling: bool = False,
+        fft_grid: bool = True,
         cell: Optional[np.ndarray] = None,
     ):
         self._dimensions = dimensions
+        # Only a grid that is Fourier transformed benefits from a fast FFT
+        # length. A scan grid samples probe positions, so rounding it would
+        # silently change the number of probes and the scan step for nothing.
+        self._fft_grid = fft_grid
 
         if isinstance(endpoint, bool):
             endpoint = (endpoint,) * dimensions
@@ -222,6 +271,7 @@ class Grid(CopyMixin, EqualityMixin):
 
     @extent.setter
     def extent(self, extent: float | Sequence[float] | None):
+        rescaled_cell = None
         if extent is not None:
             if (
                 self._lock_extent
@@ -232,6 +282,19 @@ class Grid(CopyMixin, EqualityMixin):
 
             validated_extent = self._validate(extent, dtype=float)
 
+            if self._cell is not None and self.extent is not None:
+                # Keep an already-set skewed cell consistent with a changed extent:
+                # rescale each lattice-vector row to match its axis' new length,
+                # preserving direction. Without this a cell's row lengths silently
+                # desync from the grid's extent (previously only checked once, at
+                # Grid construction, by _validate_cell) -- e.g. via Grid.match()
+                # overwriting self.extent to match another grid's slightly different
+                # extent.
+                old_extent = np.array(self.extent, dtype=float)
+                new_extent = np.array(validated_extent, dtype=float)
+                cell_arr = np.array(self._cell, dtype=float)
+                rescaled_cell = cell_arr * (new_extent / old_extent)[:, None]
+
             if self._lock_sampling or (self.gpts is None):
                 self._adjust_gpts(validated_extent, self.sampling)
                 self._adjust_sampling(validated_extent, self.gpts)
@@ -241,6 +304,9 @@ class Grid(CopyMixin, EqualityMixin):
             validated_extent = None
 
         self._extent = validated_extent
+
+        if rescaled_cell is not None:
+            self._cell = self._validate_cell(rescaled_cell)
 
     @property
     def gpts(self) -> tuple[int, ...] | None:
@@ -372,7 +438,7 @@ class Grid(CopyMixin, EqualityMixin):
             )
 
         dtype = get_dtype(complex=False)
-        reciprocal = np.linalg.inv(self._effective_cell()).T  # rows b1, b2
+        reciprocal = reciprocal_cell(self._effective_cell())
         h1, h2 = _integer_frequencies(self._valid_gpts, xp)
         h1, h2 = h1[:, None].astype(dtype), h2[None, :].astype(dtype)
         gx = h1 * reciprocal[0, 0] + h2 * reciprocal[1, 0]
@@ -412,6 +478,17 @@ class Grid(CopyMixin, EqualityMixin):
                 int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
+
+            if self._fft_grid and _fast_fft_rounding_mode() == "always":
+                from abtem.core.fft import next_fast_fft_size
+
+                # Round upward only, so the realized sampling is never coarser
+                # than requested. Endpoint grids are not periodic FFT grids and
+                # keep the exact ceil-derived size.
+                self._gpts = tuple(
+                    n if e else next_fast_fft_size(n)
+                    for n, e in zip(self._gpts, self._endpoint)
+                )
 
     def _adjust_sampling(
         self, extent: tuple[float, ...] | None, gpts: tuple[int, ...] | None
@@ -522,14 +599,24 @@ class Grid(CopyMixin, EqualityMixin):
         self, powers: Optional[int | list[int]] = None
     ) -> tuple[int, ...]:
         """
-        Round the grid gpts up to the nearest value that is a power of n. Fourier
-        transforms are faster for arrays of whose size can be factored into small primes
-        (2, 3, 5 and 7).
+        Round the grid gpts up to a whole power of one of the given bases.
+
+        Each gpts becomes ``base ** k`` for whichever base gives the smallest
+        such value at or above it -- a *pure* power, not a product of several
+        bases, so 2623 rounds to 4096 rather than to 2625. That is a much
+        larger grid than fast FFTs actually require: see
+        :meth:`round_to_fast_fft`, which rounds to the nearest length whose
+        prime factors all lie in {2, 3, 5, 7} and is what "faster for arrays
+        whose size factorizes into small primes" normally means.
+
+        (For a handful of inputs that are already exact powers of 5 or 7 --
+        125, 15625, 16807 -- floating-point ``log`` rounds the exponent up and
+        the result overshoots to the next power.)
 
         Parameters
         ----------
-        powers : int
-            The gpts will be a power of this number.
+        powers : int or list of int, optional
+            The bases to consider. Default [2, 3, 5, 7].
         """
         if powers is None:
             powers = [2, 3, 5, 7]
@@ -545,6 +632,50 @@ class Grid(CopyMixin, EqualityMixin):
             int(min(power ** np.ceil(np.log(n) / np.log(power)) for power in powers))
             for n in self.gpts
         )
+
+        self.gpts = gpts
+
+        return gpts
+
+    def round_to_fast_fft(self) -> tuple[int, ...]:
+        """
+        Round the grid gpts up to the nearest fast FFT lengths.
+
+        Fast lengths factorize completely into the primes 2, 3, 5 and 7, for
+        which FFT libraries (FFTW, pocketfft, MKL and cuFFT) ship optimized
+        kernels; any other length falls back to a slower generic algorithm --
+        on cuFFT the Bluestein algorithm, which additionally allocates a
+        workspace of several times the transform size. Rounding is always
+        upward, so the realized sampling is never coarser than before.
+
+        Every gpts is rounded, including on an endpoint grid -- unlike the
+        automatic rounding, which leaves endpoint grids alone because they are
+        not periodic FFT grids.
+
+        Automatic rounding is governed by the configuration option
+        ``grid.round-to-fast-fft``: ``'auto'`` (the default) rounds the grids
+        abTEM derives on its own, such as ``Potential(sampling='auto')``;
+        ``True`` additionally rounds gpts derived from a numeric sampling;
+        ``False`` disables it everywhere.
+
+        Grids that are never Fourier transformed (``fft_grid=False``, e.g. the
+        probe positions of a ``GridScan``) are returned unchanged: a fast
+        length buys them nothing, and changing them would change what is
+        simulated rather than how fast it runs.
+
+        Returns
+        -------
+        tuple of int
+            The rounded gpts.
+        """
+        from abtem.core.fft import next_fast_fft_size
+
+        assert self.gpts is not None
+
+        if not self._fft_grid:
+            return self.gpts
+
+        gpts = tuple(next_fast_fft_size(n) for n in self.gpts)
 
         self.gpts = gpts
 
@@ -714,6 +845,13 @@ def _integer_frequencies(gpts: tuple[int, int], xp=np):
     return h1, h2
 
 
+def reciprocal_cell(cell: np.ndarray) -> np.ndarray:
+    """Reciprocal-lattice basis of a 2x2 real-space cell: rows ``b1, b2`` such that
+    ``a_i . b_j = delta_ij``. A reciprocal-space Fourier component with integer
+    indices ``(h1, h2)`` sits at physical position ``h1 * b1 + h2 * b2``."""
+    return np.linalg.inv(np.asarray(cell, dtype=float)).T
+
+
 def spatial_frequencies(
     gpts: tuple[int, ...],
     sampling: tuple[float, ...],
@@ -736,9 +874,9 @@ def spatial_frequencies(
 
     Returns
     -------
-    spatial_frequencies : tuple of np.ndarray
+    spatial_frequencies : tuple of numpy.ndarray
         Tuple of spatial frequencies in each dimension.
-    spatial_frequencies_grid : np.ndarray
+    spatial_frequencies_grid : numpy.ndarray
         If return_grid is True, the spatial frequencies as a single meshgrid array.
     """
     dtype = get_dtype(complex=False)
@@ -777,7 +915,7 @@ def polar_spatial_frequencies(
 
     Returns
     -------
-    k_and_phi : tuple of np.ndarray
+    k_and_phi : tuple of numpy.ndarray
         Tuple of spatial frequencies in polar coordinates. First element is the radial
         frequency and the second element is the azimuthal angle.
     """
@@ -814,7 +952,7 @@ def disk_meshgrid(r: int) -> np.ndarray:
 
     Returns
     -------
-    disc_indices : np.ndarray
+    disc_indices : numpy.ndarray
     """
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r

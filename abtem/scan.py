@@ -42,7 +42,7 @@ def validate_scan(
 
     Parameters
     ----------
-    scan : Sequence or np.ndarray or BaseScan
+    scan : Sequence or numpy.ndarray or BaseScan
         The scan or scan positions to validate. If None, a scan with a single position
         at (0, 0) is returned.
     probe : Probe or None
@@ -157,7 +157,7 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         Returns
         -------
-        kernel : np.ndarray or dask.array.Array
+        kernel : numpy.ndarray or dask.array.Array
         """
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -253,7 +253,7 @@ class CustomScan(BaseScan):
 
     Parameters
     ----------
-    positions : np.ndarray, optional
+    positions : numpy.ndarray, optional
         Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 2)
         is accepted. Default is (0., 0.).
     """
@@ -919,7 +919,12 @@ class GridScan(HasGrid2DMixin, BaseScan):
             extent = None
 
         self._grid = Grid(
-            extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+            dimensions=2,
+            endpoint=endpoint,
+            fft_grid=False,
         )
         self._cell = None  # set by match_probe for skew grids
 

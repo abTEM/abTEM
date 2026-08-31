@@ -21,14 +21,27 @@ dask:
   # Automatically distribute gpu computations over all visible gpus by starting a
   # dask-cuda cluster. Requires the optional dask-cuda package.
   multi-gpu: false
+  # Optional RMM memory-pool size per multi-gpu worker (e.g. "20 GB").
+  # null disables the RMM pool.
+  multi-gpu-rmm-pool: null
+  # Optional subset of GPUs for the multi-gpu cluster, as a list of device
+  # indices (e.g. [0, 1]) or a comma-separated string (e.g. "0,1").
+  # null spans all visible GPUs.
+  multi-gpu-devices: null
 cupy:
   # Maximum GPU memory (bytes) used by the cuFFT plan cache.
   # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache
+  # auto  — 25% of the device's total memory, resolved per device: scales
+  #          with the card like the auto-sized batches whose plans it holds,
+  #          keeping live plans hot while capping stale-plan retention. A
+  #          ceiling, not a reservation — unused headroom costs no memory.
   # 0 MB  — disable caching entirely (workspace freed after every FFT call;
   #          use when VRAM is tight and large-grid OOMs occur).
   # > 0   — bound cached workspace to this many bytes (e.g. "512 MB").
-  # -1    — unlimited (CuPy default; fastest but accumulates workspace).
-  fft-cache-size: -1
+  # -1    — unlimited (CuPy default; fastest but accumulates workspace,
+  #          which on Bluestein-fallback grid sizes can reach tens of GB).
+  # null  — same as -1 (no bound).
+  fft-cache-size: auto
 mkl:
   # The number of threads to use for mkl
   threads: 2
@@ -43,6 +56,16 @@ fftw:
   planning_timelimit: 60
   # Whether to allow falling back to not using wisdom if the cache fails
   allow_fallback: true
+grid:
+  # Round automatically derived gpts up to the next fast FFT length (all prime
+  # factors in {2, 3, 5, 7}). Fast lengths avoid the slow, memory-hungry
+  # Bluestein FFT fallback on GPU and speed up CPU FFTs as well. Rounding is
+  # upward only, so a grid derived from a numeric sampling never comes out
+  # coarser than requested. gpts given explicitly are never altered.
+  #   'auto'  round only grids abTEM derives on its own (sampling='auto')
+  #   true    additionally round gpts derived from a numeric sampling
+  #   false   never round
+  round-to-fast-fft: auto
 warnings:
   # Show the dask warning about the blockwise performance when the number are increased dramatically
   dask-blockwise-performance: false

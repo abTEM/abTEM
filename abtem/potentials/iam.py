@@ -39,7 +39,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -58,6 +58,8 @@ from abtem.slicing import (
     SlicedAtoms,
     SliceIndexedAtoms,
     _validate_slice_thickness,
+    commensurate_gpts,
+    commensurate_slice_thickness,
     slice_limits,
 )
 
@@ -1016,7 +1018,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
-        elif tuple(np.diag(atoms.cell)) != self.box:
+        # `diag(atoms.cell) == self.box` is not by itself proof the cell is
+        # orthogonal: for a near-orthorhombic cell with off-diagonal noise
+        # below ~2e-8 relative, best_orthogonal_cell's box norms round to
+        # the exact diagonal entries in float64 (see the matching guard in
+        # atoms.py's orthogonalize_cell). Also require is_cell_orthogonal
+        # so such noisy cells still reach orthogonalize_cell below instead
+        # of being silently used as-is.
+        elif tuple(np.diag(atoms.cell)) != self.box or not is_cell_orthogonal(
+            atoms.cell
+        ):
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,
@@ -1058,6 +1069,18 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # outside all bins and is silently dropped.  Snap those back to 0.
             cell_z = atoms.cell[2, 2]
             atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+
+            if not getattr(self, "_non_orthogonal", False):
+                # Same issue for x and y on the orthogonal (or legacy-orthogonalised)
+                # path: orthogonalize_cell can produce -0.0 or tiny-negative values
+                # from matrix multiplication. wrap(eps=0.0) maps -ε to L-ε rather than
+                # 0, placing the atom's FFT peak at the wrong position. (The
+                # skew-native path below has its own equivalent fix, since a diagonal
+                # atoms.cell[ax, ax] is not the right boundary for a skewed cell.)
+                for ax in (0, 1):
+                    L = atoms.cell[ax, ax]
+                    atoms.positions[atoms.positions[:, ax] > L - 1e-10, ax] = 0.0
+                    atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
 
             if getattr(self, "_non_orthogonal", False):
                 # The same wrap(eps=0.0) issue affects the in-plane axes of a skewed
@@ -1152,7 +1175,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1310,7 +1333,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def _from_partitioned_args(self, *args, **kwargs):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
+        # integrator is excluded from the deep-copied kwargs and passed through
+        # by reference: generate_blocks()/ensemble_blocks() reconstruct a fresh
+        # Potential per ensemble member, and integrators (e.g.
+        # QuadratureProjectionIntegrals) lazily cache per-symbol projection
+        # tables and, on GPU, device-resident arrays specifically so repeated
+        # calls across many slices don't re-upload them (see the PR #309
+        # discussion in integrals.py). Deep-copying the integrator per member
+        # silently defeats that cache for every single ensemble member -- on
+        # GPU this means a real device-to-device copy of the cached arrays for
+        # every member, for no benefit, since the copy is used once and
+        # discarded.
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling", "integrator"))
+        kwargs["integrator"] = self.integrator
 
         return partial(
             self._from_partitioned_args_func,
@@ -1365,16 +1400,31 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Number of grid points in `x` and `y` describing each slice of the potential.
         Provide either "sampling" (spacing between consecutive grid points) or "gpts"
         (total number of grid points).
-    sampling : one or two float, optional
+    sampling : one or two float or 'auto', optional
         Sampling of the potential in `x` and `y` [Å].
-        Provide either "sampling" or "gpts".
-    slice_thickness : float or sequence of float, optional
+        Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
+        to be commensurate with the atom positions (closest to a default of 0.05 Å)
+        and, whenever compatible with commensurability, a fast FFT size (all prime
+        factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
+        when it is already such a size. Set the configuration option
+        'grid.round-to-fast-fft' to False for the plain commensurate grid. The
+        commensurability search follows the lattice vectors, so it is correct for
+        a non-orthogonal (skewed) cell too.
+        For an `AtomsEnsemble` with more than one configuration (e.g. an MD
+        trajectory), each configuration is an independent, generally
+        non-commensurate snapshot, so commensurability is not attempted and the
+        target sampling is used directly (rounded up to a fast FFT size).
+    slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
         (default is 1 Å).
         If given as a float, the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
         the sum of slice thicknesses is not equal to the height of the atoms.
+        If 'auto', slice boundaries are aligned with the crystal planes, with slices
+        merged to stay close to a default of 1.0 Å. As with `sampling`, this
+        commensurability search is skipped for an `AtomsEnsemble` with more than
+        one configuration, which uses a uniform 1.0 Å target thickness instead.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential
         for each element. Two of the most accurate parametrizations are available
@@ -1437,8 +1487,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         self,
         atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
-        sampling: float | tuple[float, float] | None = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        sampling: float | tuple[float, float] | str | None = None,
+        slice_thickness: float | tuple[float, ...] | str = 1,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] | None = None,
@@ -1452,6 +1502,125 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         device: str | None = None,
         non_orthogonal: bool | None = None,
     ):
+        frozen_phonons = _validate_frozen_phonons(atoms)
+        atoms_obj = frozen_phonons.atoms
+        # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no
+        # shared reference lattice: each configuration is an independent,
+        # generally non-commensurate snapshot, and `atoms_obj` here is only the
+        # first frame. A single-configuration `AtomsEnsemble` has no such
+        # ambiguity -- that one frame *is* the configuration, just as it would be
+        # if passed as plain `Atoms` -- so only skip commensurability search when
+        # there is genuinely more than one configuration to be ambiguous about.
+        has_multiple_configs = (
+            isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
+        )
+
+        if sampling == "auto":
+            if gpts is not None:
+                raise ValueError("Cannot specify both gpts and sampling='auto'")
+            cell = np.array(atoms_obj.cell, dtype=float)
+            if not atoms_obj.pbc[:2].all() or has_multiple_configs:
+                # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
+                # translationally repeated, so commensurability has no meaning and
+                # the period-search algorithm may produce spurious results for
+                # arbitrary rotations. A multi-configuration `AtomsEnsemble` has
+                # the same problem: the chosen grid is applied to every frame
+                # regardless, and searching for commensurate planes in one
+                # arbitrary frame is meaningless. Just use the target sampling
+                # directly, rounded up to a fast FFT size (no commensurability
+                # constrains the grid here, so rounding is free).
+                from abtem.core.fft import next_fast_fft_size
+
+                if box is not None:
+                    extent = box[:2]
+                else:
+                    extent = tuple(np.linalg.norm(cell[:2, :2], axis=1))
+                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+                if round_auto_derived_gpts():
+                    gpts = tuple(next_fast_fft_size(n) for n in gpts)
+            else:
+                # Decide skew-native vs. legacy orthogonalising using the same
+                # criteria as _FieldBuilder.__init__'s own `use_skew` detection,
+                # so the grid this chooses is commensurate with whichever
+                # geometry the potential actually ends up built on. Deciding
+                # this here (rather than always calling _require_cell_transform,
+                # which predates skew-native support and knows nothing about
+                # `non_orthogonal`) is what makes 'auto' sampling correct for a
+                # skewed cell: without it, the target grid would be computed for
+                # an orthogonalised auxiliary supercell and then silently reused
+                # as the gpts of an entirely different (skewed) grid.
+                if non_orthogonal is None:
+                    use_skew = (
+                        not is_cell_orthogonal(cell)
+                        and is_cell_ab_in_plane(cell)
+                        and isinstance(plane, str)
+                        and plane == "xy"
+                        and box is None
+                    )
+                else:
+                    use_skew = bool(non_orthogonal)
+
+                if use_skew:
+                    cell_2d = cell[:2, :2]
+                    extent = tuple(np.linalg.norm(cell_2d, axis=1))
+                    gpts = commensurate_gpts(
+                        extent,
+                        atoms_obj.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                        cell=cell_2d,
+                    )
+                elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                    if not isinstance(plane, str):
+                        raise NotImplementedError
+                    axes = plane_to_axes(plane)
+                    cell_2d = cell[:, list(axes)]
+                    auto_box = tuple(best_orthogonal_cell(cell_2d))
+                    extent = auto_box[:2]
+                    # Transform atoms to orthogonal cell so positions match the extent
+                    _auto_atoms = orthogonalize_cell(
+                        atoms_obj,
+                        box=auto_box,
+                        plane=plane,
+                        origin=origin,
+                        return_transform=False,
+                        allow_transform=True,
+                    )
+                    gpts = commensurate_gpts(
+                        extent,
+                        _auto_atoms.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                    )
+                else:
+                    if box is not None:
+                        extent = box[:2]
+                        _auto_atoms = atoms_obj
+                    else:
+                        extent = tuple(np.linalg.norm(cell[:2, :2], axis=1))
+                        _auto_atoms = atoms_obj
+                    gpts = commensurate_gpts(
+                        extent,
+                        _auto_atoms.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                    )
+            sampling = None
+
+        if slice_thickness == "auto":
+            if atoms_obj.pbc[2] and not has_multiple_configs:
+                # Periodic in z: align slice boundaries with crystal planes.
+                slice_thickness = commensurate_slice_thickness(
+                    atoms_obj, target_thickness=1.0
+                )
+            else:
+                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or a
+                # multi-configuration `AtomsEnsemble` (independent snapshots with
+                # no shared commensurate lattice, see the sampling branch above):
+                # crystal-plane commensurability is not applicable; use a uniform
+                # target thickness and let _validate_slice_thickness divide evenly.
+                slice_thickness = 1.0
+
         if integrator is None:
             if projection == "finite":
                 integrator = QuadratureProjectionIntegrals(
@@ -1535,8 +1704,11 @@ class FieldArray(BaseField, ArrayObject):
     def metadata(self) -> dict:
         cell = self.grid.cell
         if cell is not None:
-            # store the non-orthogonal cell so it survives array/metadata round-trips
+            # the grid cell takes precedence so a non-orthogonal cell stays consistent
+            # with the grid (and overrides any stale cell carried in the metadata)
             self._metadata["cell"] = tuple(map(tuple, cell.tolist()))
+        else:
+            self._metadata.pop("cell", None)
         return self._metadata
 
     @property
@@ -1577,7 +1749,7 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -2074,7 +2246,7 @@ class PotentialArray(BasePotential, FieldArray):
 
     Parameters
     ----------
-    array: 3D np.ndarray
+    array: 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness: float
@@ -2174,6 +2346,7 @@ class PotentialArray(BasePotential, FieldArray):
             slice_thickness=self.slice_thickness,
             extent=self.extent,
             energy=energy,
+            cell=self.cell,
         )
         return t
 
@@ -2204,7 +2377,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
     Parameters
     ----------
-    array : 3D np.ndarray
+    array : 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness : float
@@ -2226,9 +2399,10 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         energy: Optional[float] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(array, slice_thickness, extent, sampling)
+        super().__init__(array, slice_thickness, extent, sampling, cell=cell)
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]
@@ -2239,6 +2413,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             self.slice_thickness[first_slice:last_slice],
             extent=self.extent,
             energy=self.energy,
+            cell=self.cell,
         )
 
     def transmission_function(self, energy) -> TransmissionFunction:
@@ -2696,7 +2871,7 @@ class CrystalPotential(_PotentialBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         # if hasattr(self.potential_unit, "array")

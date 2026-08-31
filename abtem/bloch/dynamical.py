@@ -39,7 +39,7 @@ from abtem.bloch.utils import (
     retrieve_structure_factor_values,
 )
 from abtem.core import config
-from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
+from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
 from abtem.core.backend import cp, get_array_module, validate_device
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
@@ -47,7 +47,7 @@ from abtem.core.constants import kappa
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import fft_interpolate
+from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
@@ -82,7 +82,7 @@ def calculate_scattering_factors(
 
     Parameters
     ----------
-    g_vec : np.ndarray
+    g_vec : numpy.ndarray
         Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
         plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
         shape (N_g, 3); passing magnitudes with anisotropic sigmas raises an error.
@@ -181,7 +181,7 @@ def calculate_structure_factors(
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     atoms : Atoms
         The Atoms object.
@@ -200,7 +200,7 @@ def calculate_structure_factors(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The structure factors.
     """
 
@@ -241,9 +241,9 @@ def structure_factor_1d_to_3d(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     gpts : tuple of ints
@@ -251,7 +251,7 @@ def structure_factor_1d_to_3d(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The 3D structure factors.
     """
     xp = get_array_module(structure_factor)
@@ -267,9 +267,9 @@ def structure_factor_to_potential(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     gpts : tuple of ints
@@ -277,11 +277,17 @@ def structure_factor_to_potential(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The potential.
     """
     xp = get_array_module(structure_factor)
     structure_factor = structure_factor_1d_to_3d(structure_factor, hkl, gpts)
+    # Deliberately xp.fft rather than abtem.core.fft.ifftn: the FFTW backend
+    # behind that wrapper only ever transforms the trailing two axes, so it
+    # would silently turn this 3D transform into a 2D one on CPU. The slow-FFT
+    # diagnostic is requested explicitly instead -- this grid follows from
+    # g_max and the cell, so it is essentially never a fast length.
+    warn_if_slow_gpu_fft(structure_factor, "ifftn")
     potential = xp.fft.ifftn(structure_factor)
     potential = potential * np.prod(potential.shape) / kappa
     potential -= potential.min()
@@ -556,7 +562,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D potential.
         """
         return self.build(lazy=lazy).get_potential_3d()
@@ -597,9 +603,9 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     cell : Cell
@@ -674,7 +680,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D structure factors.
         """
         if self.is_lazy:
@@ -696,7 +702,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D potential.
         """
         if self.is_lazy:
@@ -838,7 +844,7 @@ def calculate_M_matrix(
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -847,7 +853,7 @@ def calculate_M_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The M matrix.
     """
     g = hkl @ reciprocal_cell(cell)
@@ -869,12 +875,12 @@ def calculate_structure_matrix(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices corresponding to the structure
         factors. Given as a (N, 3) array.
-    hkl_selected : np.ndarray
+    hkl_selected : numpy.ndarray
         The reciprocal space vectors as Miller indices for which the structure matrix is
         calculated. Given as a (N, 3) array.
     cell : Cell
@@ -889,7 +895,7 @@ def calculate_structure_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The structure matrix.
     """
     xp = get_array_module(structure_factor)
@@ -915,7 +921,7 @@ def calculate_structure_matrix(
 
     Mii = xp.asarray(Mii)
 
-    A *= prefactor * Mii[None] * Mii[:, None]
+    A = A * prefactor * Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
@@ -942,9 +948,9 @@ def calculate_dynamical_scattering(
 
     Parameters
     ----------
-    structure_matrix : np.ndarray
+    structure_matrix : numpy.ndarray
         The structure matrix as a (N, N) array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -955,7 +961,7 @@ def calculate_dynamical_scattering(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The dynamical scattering as a complex array with shape
         (len(thicknesses), len(hkl)).
     """
@@ -995,12 +1001,12 @@ def expm(A: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    A : np.ndarray
+    A : numpy.ndarray
         Input with last two dimensions are square.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The resulting matrix exponential with the same shape of A.
     """
     xp = get_array_module(A)
@@ -1023,9 +1029,9 @@ def calculate_scattering_matrix(
 
     Parameters
     ----------
-    A : np.ndarray
+    A : numpy.ndarray
         The structure matrix. The last two dimensions must be square.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -1042,7 +1048,7 @@ def calculate_scattering_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The scattering matrix.
     """
     xp = get_array_module(A)
@@ -1113,18 +1119,18 @@ def plane_wave_basis(
 
     Parameters
     ----------
-    g : np.ndarray
+    g : numpy.ndarray
         The reciprocal space vectors as an Nx3 array [1 / Å].
-    x : np.ndarray
+    x : numpy.ndarray
         The x positions as a 1D array [Å].
-    y : np.ndarray
+    y : numpy.ndarray
         The y positions as a 1D array [Å].
-    z : np.ndarray
+    z : numpy.ndarray
         The z positions as a 1D array [Å].
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The plane wave basis at the given positions.
     """
     plane_waves_x = complex_exponential(
@@ -1164,14 +1170,14 @@ def allowed_chars(s: str, allowed_chars: str) -> bool:
     """
     Check if the string `s` only contains characters from `allowed_chars`.
 
-    Parameters:
+    Parameters
     ----------
     s : str
         The string to check.
     allowed_chars : str
         A string containing all allowed characters.
 
-    Returns:
+    Returns
     --------
     bool
         True if `s` only contains characters from `allowed_chars`, False otherwise.
@@ -1232,13 +1238,17 @@ class BlochWaves:
     ----------
     structure_factor : StructureFactor
         The structure factor.
-    energy : float
-        The energy of the electrons [eV].
+    energy : float or list of float
+        Electron energy [eV]. A single float runs a standard single-energy
+        calculation. A list or array of floats runs the calculation at each
+        energy, using a union of the allowed reciprocal-space vectors across
+        all energies; beams that are inactive at a given energy are set to
+        zero. The output gains a leading :class:`.EnergyAxis` dimension.
     sg_max : float
         The maximum excitation error [1/Å].
     g_max : float
         The maximum scattering vector length [1/Å].
-    orientation_matrix : np.ndarray
+    orientation_matrix : numpy.ndarray
         An optional orientation matrix given as a (3, 3) array. If provided, the unit
         cell is rotated.
         Instead of providing an orientation matrix, the `.rotate` method can be used.
@@ -1254,7 +1264,7 @@ class BlochWaves:
     def __init__(
         self,
         structure_factor: BaseStructureFactor | Atoms,
-        energy: float,
+        energy: float | list | np.ndarray,
         sg_max: float,
         g_max: Optional[float] = None,
         orientation_matrix: Optional[np.ndarray] = None,
@@ -1279,7 +1289,6 @@ class BlochWaves:
             centering = structure_factor.centering
 
         self._structure_factor = structure_factor
-        self._energy = energy
         self._sg_max = sg_max
         self._g_max = g_max
         self._cell = cell
@@ -1287,14 +1296,67 @@ class BlochWaves:
         self._use_wave_eq = use_wave_eq
         self._device = validate_device(device)
 
-        self._hkl_mask = filter_reciprocal_space_vectors(
-            hkl=structure_factor.hkl,
-            cell=cell,
-            energy=energy,
-            sg_max=sg_max,
-            g_max=self._g_max,
-            centering=centering,
-        )
+        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        self._energy = float(energies[0])  # always scalar; .energy property is backward-compat
+        self._energies = energies          # full array for multi-energy paths
+        if len(energies) == 1:
+            # Scalar path — unchanged behaviour
+            self._hkl_mask = filter_reciprocal_space_vectors(
+                hkl=structure_factor.hkl,
+                cell=cell,
+                energy=float(energies[0]),
+                sg_max=sg_max,
+                g_max=self._g_max,
+                centering=centering,
+            )
+            self._energy_hkl_masks: np.ndarray | None = None
+        else:
+            # Compute per-energy masks, then take their union so all energies
+            # share the same reciprocal-space basis (higher energy → more beams,
+            # so the union equals the mask at the highest energy, but OR-ing is
+            # more rigorous and mirrors BlochwaveEnsemble.get_ensemble_hkl_mask).
+            per_energy = [
+                filter_reciprocal_space_vectors(
+                    hkl=structure_factor.hkl,
+                    cell=cell,
+                    energy=float(e),
+                    sg_max=sg_max,
+                    g_max=self._g_max,
+                    centering=centering,
+                )
+                for e in energies
+            ]
+            union_mask = per_energy[0].copy()
+            for m in per_energy[1:]:
+                union_mask |= m
+            self._hkl_mask = union_mask
+            # Boolean submask within the union for each energy:
+            # _energy_hkl_masks[i] is True at positions (in union_hkl) where
+            # energy[i]'s beams are active. Zeros fill inactive positions.
+            self._energy_hkl_masks = np.stack(
+                [m[union_mask] for m in per_energy], axis=0
+            )
+
+    def _with_energy(self, idx: int, e: float) -> "BlochWaves":
+        """Return a single-energy clone using only the beams valid at energy *e*.
+
+        The clone's ``_hkl_mask`` is narrowed to the per-energy subset of the
+        union mask so that the structure-matrix and dynamical-scattering
+        calculation work only on the active beams.  The caller embeds the
+        result back into the union-sized output array using
+        ``self._energy_hkl_masks[idx]``.
+        """
+        clone = object.__new__(BlochWaves)
+        clone.__dict__.update(self.__dict__)  # shallow copy all attrs
+        clone._energy = float(e)
+        clone._energies = np.array([float(e)])
+        # Translate _energy_hkl_masks[idx] (boolean over union_hkl) back to a
+        # boolean mask over the full structure_factor.hkl index space.
+        e_mask = np.zeros(len(self._hkl_mask), dtype=bool)
+        e_mask[self._hkl_mask] = self._energy_hkl_masks[idx]
+        clone._hkl_mask = e_mask
+        clone._energy_hkl_masks = None  # scalar clone — no further splitting
+        return clone
 
     @property
     def device(self) -> str:
@@ -1464,7 +1526,7 @@ class BlochWaves:
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The scattering matrix.
         """
         A = self.calculate_structure_matrix()
@@ -1542,6 +1604,58 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The dynamical diffraction patterns.
         """
+        # --- Multi-energy ensemble path ---
+        if len(self._energies) > 1:
+            energies = self._energies
+            n_union = int(self._hkl_mask.sum())
+
+            def _embed_beams(arr, active_mask, n_total):
+                """Embed (..., n_active) array into (..., n_total) with zeros."""
+                out = np.zeros(arr.shape[:-1] + (n_total,), dtype=arr.dtype)
+                out[..., active_mask] = arr
+                return out
+
+            padded_arrays = []
+            first_result = None
+            for i, e in enumerate(energies):
+                clone = self._with_energy(i, float(e))
+                res = clone.calculate_diffraction_patterns(
+                    thicknesses, return_complex=return_complex, lazy=lazy
+                )
+                if first_result is None:
+                    first_result = res
+                active = self._energy_hkl_masks[i]
+                new_chunks = res.array.chunks[:-1] + ((n_union,),)
+                padded = res.array.map_blocks(
+                    _embed_beams,
+                    active_mask=active,
+                    n_total=n_union,
+                    dtype=res.array.dtype,
+                    chunks=new_chunks,
+                )
+                padded_arrays.append(padded)
+
+            stacked = da.stack(padded_arrays, axis=0)
+            energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
+            rlv = first_result.reciprocal_lattice_vectors
+            if rlv.ndim == 3:
+                rlv = rlv[0]
+            return IndexedDiffractionPatterns(
+                miller_indices=self.hkl,  # union hkl
+                array=stacked,
+                reciprocal_lattice_vectors=rlv,
+                ensemble_axes_metadata=[energy_ax]
+                + first_result.ensemble_axes_metadata,
+                metadata={
+                    "energy": list(energies),
+                    "sg_max": self.sg_max,
+                    "g_max": self.g_max,
+                    "label": "Intensity",
+                    "units": "arb. unit",
+                },
+            )
+
+        # --- Single-energy path (unchanged) ---
         ensemble_axes_metadata: list[AxisMetadata]
         if isinstance(thicknesses, (int, float)):
             ensemble_axes_metadata = []
@@ -1622,6 +1736,32 @@ class BlochWaves:
             The exit waves.
         """
 
+        # --- Multi-energy ensemble path ---
+        if len(self._energies) > 1:
+            energies = self._energies
+            results = [
+                self._with_energy(i, float(e)).calculate_exit_waves(
+                    thicknesses,
+                    gpts=gpts,
+                    extent=extent,
+                    normalization=normalization,
+                    g_max=g_max,
+                    lazy=lazy,
+                )
+                for i, e in enumerate(energies)
+            ]
+            stacked = da.stack([r.array for r in results], axis=0)
+            energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
+            return Waves(
+                array=stacked,
+                extent=results[0].extent,
+                energy=None,
+                ensemble_axes_metadata=[energy_ax]
+                + results[0].ensemble_axes_metadata,
+                metadata=results[0].metadata,
+            )
+
+        # --- Single-energy path (unchanged) ---
         if extent is None:
             extent = tuple(cell_bounds(self.cell)[:2])
 
@@ -1744,38 +1884,10 @@ class BlochWaves:
         Parameters
         ----------
         args : sequence of (str, float)
-            The rotation axes and angles. The axes must be given as a string of 'x', 'y'
-             or 'z',
-            representing a sequence of rotation axes.
+            The rotation axes and angles. The axes must be given as a string of 'x',
+            'y' or 'z', representing a sequence of rotation axes.
         degrees : bool
             If True, the angles are given in degrees. Default is False.
-
-        Examples
-        --------
-        Rotate the unit cell by 45 degrees around the x-axis:
-
-        >>> rotated = bloch.rotate('x', 45)
-        >>> rotated
-        BlochWaves
-        >>> rotated.ensemble_shape
-        ()
-
-        Rotate the unit cell by 0 and 45 degrees around the x-axis. For each x-rotation,
-         do the same around the y-axis:
-
-        >>> rotated = bloch.rotate('x', [0, 45], 'y', [0, 45], units="deg")
-        >>> rotated
-        BlochWavesEnsemble
-        >>> print(rotated.ensemble_shape)
-        (2, 2)
-
-        Rotate the unit cell by (0, 0) and (45, 45) degress in (x, y).
-
-        >>> bloch.rotate('xy', [[0, 0], [45, 45]], units="deg")
-        >>> rotated
-        BlochWavesEnsemble
-        >>> rotated.ensemble_shape
-        (2,)
 
         Returns
         -------
@@ -1881,7 +1993,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The mask selecting the reciprocal space vectors.
         """
         hkl = self._structure_factor.hkl
@@ -1901,7 +2013,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The orientation matrices. The shape is the ensemble shape + (3, 3).
         """
         orientation_matrices = np.eye(3)

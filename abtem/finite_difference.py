@@ -487,7 +487,7 @@ class LaplaceOperator:
             Cached stencil function with waves prefactor, on specified device
         """
         key = (
-            waves.wavelength,
+            energy2wavelength(waves._valid_energy),
             waves.sampling,
             getattr(waves.grid, "_cell", None),
             waves.gpts,
@@ -595,7 +595,7 @@ def conventional_operator(
         Waves object to apply multislice operator on
     laplace: Callable
         Fast laplace operator stencil function
-    transmission_function: np.ndarray,
+    transmission_function: numpy.ndarray,
         Scaled potential slice to multiply incoming waves with
     wavelength: float
         Waves wavelength

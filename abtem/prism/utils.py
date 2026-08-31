@@ -5,6 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
+from abtem.core.grid import reciprocal_cell
 from abtem.core.utils import expand_dims_to_broadcast
 
 
@@ -168,7 +169,7 @@ def prism_wave_vectors(
 
     # non-orthogonal cell: enumerate reciprocal-lattice points g = n*ix*b1 + m*iy*b2
     # (b1, b2 are the reciprocal basis vectors) and keep those within the cutoff sphere.
-    reciprocal = np.linalg.inv(np.asarray(cell, dtype=float)).T  # rows b1, b2
+    reciprocal = reciprocal_cell(cell)
     nx = (n[:, None] * np.float32(interpolation[0]))
     my = (m[None, :] * np.float32(interpolation[1]))
     kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]

@@ -7,7 +7,7 @@ from utils import gpu
 
 import abtem
 from abtem import CompressedSMatrixArray, CustomScan, GridScan, Potential, Probe, SMatrix
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.prism.s_matrix import SMatrixArray
 
 # Every test that runs array code is parametrized over the device: the
@@ -31,7 +31,7 @@ def _array(measurement):
     through this.
     """
     array = measurement.array if hasattr(measurement, "array") else measurement
-    return array.get() if hasattr(array, "get") else np.asarray(array)
+    return asnumpy(array)
 
 
 def _relative_error(measurement, reference):
@@ -100,13 +100,22 @@ def test_upsample_rank_one_in_vacuum(device):
 
 
 @devices
-def test_upsample_matches_multislice_no_interpolation(device):
+@pytest.mark.parametrize(
+    "positions",
+    [
+        pytest.param([(2.2, 3.3), (5.0, 5.0)], id="on_grid"),
+        pytest.param(
+            [(2.6180339, 4.1415926), (7.7182818, 3.3025851)], id="off_grid"
+        ),
+    ],
+)
+def test_upsample_matches_multislice_no_interpolation(device, positions):
     potential = _small_potential(device=device)
 
     probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
     probe.grid.match(potential)
 
-    scan = CustomScan([(2.2, 3.3), (5.0, 5.0)])
+    scan = CustomScan(positions)
 
     probe_diffraction_patterns = probe.multislice(
         potential=potential, scan=scan, lazy=False
@@ -173,39 +182,6 @@ def test_upsample_beats_prism_at_same_interpolation(device):
     # interpolation as error; the band-limited interpolant must keep the
     # absolute error small, not just smaller than PRISM
     assert upsampled_error < 0.05
-
-
-@devices
-def test_upsample_off_grid_positions(device):
-    potential = _small_potential(device=device)
-
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-
-    scan = CustomScan([(2.6180339, 4.1415926), (7.7182818, 3.3025851)])
-
-    probe_diffraction_patterns = probe.multislice(
-        potential=potential, scan=scan, lazy=False
-    ).diffraction_patterns(max_angle=50)
-
-    s_matrix = SMatrix(
-        potential=potential,
-        energy=100e3,
-        semiangle_cutoff=20,
-        interpolation=1,
-        upsample=True,
-        tolerance=1e-6,
-        max_rank=10_000,
-        device=device,
-    )
-
-    diffraction_patterns = s_matrix.reduce(scan=scan, lazy=False).diffraction_patterns(
-        max_angle=50
-    )
-
-    assert np.allclose(
-        _array(diffraction_patterns), _array(probe_diffraction_patterns), atol=1e-5
-    )
 
 
 @devices
