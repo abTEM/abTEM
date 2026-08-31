@@ -759,6 +759,103 @@ def test_integrate_disc(gpts, radius, sampling, position):
 #     assert np.allclose(image1.array, image2.array)
 
 
+def test_diffraction_patterns_metric_detector_binning():
+    """Annular binning of a DiffractionPatterns uses the reciprocal metric when a
+    non-orthogonal cell is present, and is unchanged (bit-exact) otherwise."""
+    rng = np.random.default_rng(0)
+    arr = rng.random((64, 64)).astype(np.float32)
+    a = 20.0
+    cell = (
+        (a, 0.0),
+        (a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))),
+    )
+    sampling = (1 / a, 1 / a)  # reciprocal sampling = 1 / extent
+
+    skew = DiffractionPatterns(
+        arr, sampling=sampling, metadata={"energy": 100e3, "cell": cell}
+    )
+    ortho = DiffractionPatterns(arr, sampling=sampling, metadata={"energy": 100e3})
+
+    # a mid-range annulus selects different pixels under the metric vs the oblique angle
+    s = float(np.array(skew.integrate_radial(20.0, 50.0).array))
+    o = float(np.array(ortho.integrate_radial(20.0, 50.0).array))
+    assert np.isfinite(s) and np.isfinite(o)
+    assert not np.isclose(s, o)
+
+    # flexible + segmented binning also run on a skewed pattern
+    assert skew.radial_binning(step_size=10.0, inner=0.0, outer=50.0).array.shape == (5, 1)
+    assert skew.polar_binning(3, 4, inner=0.0, outer=50.0).array.shape == (3, 4)
+
+
+def test_diffraction_patterns_to_cartesian():
+    """A skewed diffraction pattern resamples onto a regular Cartesian grid with the
+    central beam centred; an orthogonal pattern is returned unchanged."""
+    a = 12.0
+    cell = (
+        (a, 0.0),
+        (a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))),
+    )
+    sampling = (1 / a, 1 / a)
+    # a single bright pixel away from the corner, on a skewed grid
+    arr = np.zeros((48, 48), dtype=np.float32)
+    arr[0, 0] = 1.0  # the direct (zero-frequency) beam in fft order
+    dp = DiffractionPatterns(
+        arr, sampling=sampling, fftshift=False, metadata={"energy": 100e3, "cell": cell}
+    )
+
+    cart = dp.to_cartesian()
+    assert "cell" not in cart.metadata
+    cart_arr = np.asarray(cart.array)
+    # the direct beam must sit at the centre of the Cartesian (fftshifted) pattern
+    center = (cart_arr.shape[0] // 2, cart_arr.shape[1] // 2)
+    assert np.unravel_index(np.argmax(cart_arr), cart_arr.shape) == center
+
+    # orthogonal pattern -> identity
+    ortho = DiffractionPatterns(arr, sampling=sampling, metadata={"energy": 100e3})
+    assert ortho.to_cartesian() is ortho
+
+
+def test_skew_diffraction_to_cartesian_and_indexing():
+    """to_cartesian resamples a skew pattern onto an orthogonal grid, and
+    index_diffraction_spots reads symmetry-equivalent reflections equally."""
+    from ase import Atoms
+    from ase.cell import Cell
+
+    import abtem
+
+    a, cz, nz = 3.0, 2.0, 8
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (1, 1, nz)
+    dp = (
+        abtem.PlaneWave(energy=100e3)
+        .multislice(abtem.Potential(atoms, gpts=(120, 120), slice_thickness=cz))
+        .compute()
+        .diffraction_patterns(max_angle="full", fftshift=True)
+    )
+    assert "cell" in dp.metadata
+
+    # to_cartesian returns an orthogonal pattern (no cell) of the requested shape
+    cart = dp.to_cartesian()
+    assert "cell" not in cart.metadata
+    assert cart.array.shape == dp.array.shape
+
+    # the six first-order hexagonal reflections must be indexed with equal intensity
+    idx = dp.index_diffraction_spots(cell=Cell(cell))
+    hkl = np.asarray(idx.miller_indices)
+    inten = np.asarray(idx.array).ravel()
+
+    def intensity(h):
+        m = np.all(hkl == np.array(h), axis=1)
+        return float(inten[m][0])
+
+    six = [intensity(h) for h in [(1, 0, 0), (0, 1, 0), (1, 1, 0), (-1, 0, 0), (0, -1, 0), (-1, -1, 0)]]
+    # equal to the skew multislice numerical floor (~1e-5); the broken
+    # (non-metric) mapping gave a spread of order 1.
+    assert (max(six) - min(six)) / np.mean(six) < 1e-3
+
+
 # ---------------------------------------------------------------------------
 # Images — crop, complex accessors, abs, scan_noise, normalize_ensemble
 # ---------------------------------------------------------------------------

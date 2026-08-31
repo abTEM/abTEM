@@ -123,12 +123,17 @@ def reciprocal_space_gpts(
     cell: np.ndarray | Cell,
     g_max: float,
 ) -> tuple[int, int, int]:
-    dk = 1 / cell_bounds(cell)
+    # The largest Miller index along axis i over the ellipsoid {hkl : |hkl @ B| <= g_max}
+    # is g_max * sqrt((B B^T)^-1)_ii = g_max * |a_i| (the lattice-vector length). Using the
+    # Cartesian bounding box instead under-sizes the grid for a non-orthogonal cell (the
+    # box can be smaller than |a_i| along some axis), dropping reflection differences from
+    # the dynamical matrix. For an orthogonal cell |a_i| equals the bounding box.
+    lengths = np.linalg.norm(np.array(cell, dtype=float), axis=1)
 
     gpts = (
-        int(np.ceil(g_max / dk[0])) * 2 + 1,
-        int(np.ceil(g_max / dk[1])) * 2 + 1,
-        int(np.ceil(g_max / dk[2])) * 2 + 1,
+        int(np.ceil(g_max * lengths[0])) * 2 + 1,
+        int(np.ceil(g_max * lengths[1])) * 2 + 1,
+        int(np.ceil(g_max * lengths[2])) * 2 + 1,
     )
     return gpts
 
@@ -347,7 +352,7 @@ def retrieve_structure_factor_values(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.loc[hkl_destination].to_numpy()
+    array = df.loc[hkl_destination].to_numpy().copy()
 
     if convert_to_numpy:
         array = cp.asarray(array)

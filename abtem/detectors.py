@@ -740,6 +740,8 @@ class AnnularDetector(_AbstractRadialDetector):
             rotation=0.0,
             offset=self.offset,
             return_indices=False,
+            cell=waves.grid.cell,
+            wavelength=energy2wavelength(waves.energy),
         )
         assert isinstance(array, np.ndarray)
         return array >= 0

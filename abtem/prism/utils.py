@@ -5,6 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
+from abtem.core.grid import reciprocal_cell
 from abtem.core.utils import expand_dims_to_broadcast
 
 
@@ -137,25 +138,46 @@ def prism_wave_vectors(
     energy: float,
     interpolation: Tuple[int, int],
     xp=np,
+    cell: np.ndarray = None,
 ) -> np.ndarray:
+    """Cartesian transverse wave vectors ``(kx, ky)`` [1/Å] of the PRISM plane-wave
+    expansion. The retained vectors are reciprocal-lattice points of the (interpolated)
+    cell that fall within the radial ``cutoff`` [mrad]. ``cell`` is an optional 2x2
+    real-space cell (rows are the in-plane lattice vectors); when ``None`` the cell is
+    assumed orthogonal and the result is bit-identical to the original implementation."""
     wavelength = energy2wavelength(energy)
 
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
     n = np.arange(-n_max, n_max + 1, dtype=np.float32)
-    w = np.asarray(extent[0], dtype=np.float32)
     m = np.arange(-m_max, m_max + 1, dtype=np.float32)
-    h = np.asarray(extent[1], dtype=np.float32)
 
-    kx = n / w * np.float32(interpolation[0])
-    ky = m / h * np.float32(interpolation[1])
+    if cell is None:
+        w = np.asarray(extent[0], dtype=np.float32)
+        h = np.asarray(extent[1], dtype=np.float32)
 
-    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
+        kx = n / w * np.float32(interpolation[0])
+        ky = m / h * np.float32(interpolation[1])
 
-    kx, ky = np.meshgrid(kx, ky, indexing="ij")
-    kx = kx[mask]
-    ky = ky[mask]
+        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
+
+        kx, ky = np.meshgrid(kx, ky, indexing="ij")
+        kx = kx[mask]
+        ky = ky[mask]
+        return xp.asarray([kx, ky]).T
+
+    # non-orthogonal cell: enumerate reciprocal-lattice points g = n*ix*b1 + m*iy*b2
+    # (b1, b2 are the reciprocal basis vectors) and keep those within the cutoff sphere.
+    reciprocal = reciprocal_cell(cell)
+    nx = (n[:, None] * np.float32(interpolation[0]))
+    my = (m[None, :] * np.float32(interpolation[1]))
+    kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]
+    ky = nx * reciprocal[0, 1] + my * reciprocal[1, 1]
+
+    mask = kx**2 + ky**2 < (cutoff / 1.0e3 / wavelength) ** 2
+    kx = kx[mask].astype(np.float32)
+    ky = ky[mask].astype(np.float32)
     return xp.asarray([kx, ky]).T
 
 
@@ -164,17 +186,49 @@ def plane_waves(
     extent: Tuple[float, float],
     gpts: Tuple[int, int],
     reverse: bool = False,
+    cell: np.ndarray = None,
 ) -> np.ndarray:
+    """Build the plane waves ``exp(2 pi i g . r)`` sampled on the grid for each Cartesian
+    wave vector ``g``. For a non-orthogonal ``cell`` (2x2, rows are the in-plane lattice
+    vectors) the grid points sit at ``r = i a1 + j a2`` with sampling vectors
+    ``a1 = cell[0] / gpts[0]``, ``a2 = cell[1] / gpts[1]``, so the phase stays separable in
+    the pixel indices via ``g . a1`` and ``g . a2``. When ``cell`` is ``None`` the grid is
+    orthogonal and the result is bit-identical to the original implementation."""
     xp = get_array_module(wave_vectors)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
 
     sign = -1.0 if reverse else 1.0
 
+    if cell is None:
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+
+        array = complex_exponential(
+            sign * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
+        ) * complex_exponential(
+            sign * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]
+        )
+
+        return array
+
+    cell = np.asarray(cell, dtype=float)
+    a1 = cell[0] / gpts[0]  # sampling vector along axis 0 (Cartesian x, y)
+    a2 = cell[1] / gpts[1]  # sampling vector along axis 1
+
+    # per-pixel phase increment along each grid axis for every wave vector
+    phase_i = (wave_vectors[:, 0] * a1[0] + wave_vectors[:, 1] * a1[1]).astype(
+        np.float32
+    )
+    phase_j = (wave_vectors[:, 0] * a2[0] + wave_vectors[:, 1] * a2[1]).astype(
+        np.float32
+    )
+
+    i = xp.arange(gpts[0], dtype=np.float32)
+    j = xp.arange(gpts[1], dtype=np.float32)
+
     array = complex_exponential(
-        sign * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
+        sign * 2 * np.pi * phase_i[:, None, None] * i[None, :, None]
     ) * complex_exponential(
-        sign * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]
+        sign * 2 * np.pi * phase_j[:, None, None] * j[None, None, :]
     )
 
     return array

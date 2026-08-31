@@ -155,10 +155,70 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
         cell = cell.cell
 
     cell = np.array(cell)
+    n = cell.shape[0]
 
-    assert isinstance(cell, np.ndarray)
+    return not np.any(np.abs(cell[~np.eye(n, dtype=bool)]) > tol)
 
-    return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
+
+def is_cell_z_separable(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12) -> bool:
+    """
+    Check whether the `z`-axis is decoupled from the `xy`-plane, i.e. the third
+    lattice vector is along `z` and the first two lie in the `xy`-plane. This is the
+    requirement for slicing along the beam direction; the in-plane cell may still be
+    non-orthogonal (a skewed grid).
+
+    Parameters
+    ----------
+    cell : ase.Atoms, ase.cell.Cell or np.ndarray
+        The cell to check.
+    tol : float
+        Components below this value are considered zero.
+
+    Returns
+    -------
+    z_separable : bool
+        True if the `z`-axis is perpendicular to the `xy`-plane.
+    """
+    if hasattr(cell, "cell"):
+        cell = cell.cell
+
+    cell = np.array(cell)
+
+    z_coupling = np.abs([cell[0, 2], cell[1, 2], cell[2, 0], cell[2, 1]])
+    return not np.any(z_coupling > tol)
+
+
+def is_cell_ab_in_plane(cell: Atoms | Cell | np.ndarray, tol: float = 1e-9) -> bool:
+    """
+    Check whether the first two lattice vectors (`a`, `b`) lie in the `xy`-plane, i.e.
+    their `z`-components vanish. The third lattice vector (`c`) may be tilted out of the
+    `z`-axis.
+
+    This is the requirement for slicing along the beam (`z`): every slice perpendicular
+    to `z` has a well-defined in-plane (`a`, `b`) periodicity, while a tilted `c` only
+    shifts the atomic positions laterally with depth -- which is captured automatically
+    by placing the atoms at their true coordinates (no orthogonalisation needed). It is
+    a strict relaxation of :func:`is_cell_z_separable`, which additionally requires `c`
+    to be along `z`.
+
+    Parameters
+    ----------
+    cell : ase.Atoms, ase.cell.Cell or np.ndarray
+        The cell to check.
+    tol : float
+        Components below this value are considered zero.
+
+    Returns
+    -------
+    ab_in_plane : bool
+        True if `a` and `b` lie in the `xy`-plane.
+    """
+    if hasattr(cell, "cell"):
+        cell = cell.cell
+
+    cell = np.array(cell)
+
+    return bool(abs(cell[0, 2]) <= tol and abs(cell[1, 2]) <= tol)
 
 
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
@@ -1148,11 +1208,22 @@ def pad_atoms(
 
     reps = [1, 1, 1]
     for axis, margin in zip(axes, margins):
-        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+        # Use the true lattice-vector length (not the diagonal cell entry) so a
+        # skewed axis is padded enough to actually cover the margin.
+        axis_length = np.linalg.norm(atoms.cell[axis])
+        reps[axis] = int(1 + 2 * np.ceil(margin / axis_length))
 
     if any([rep > 1 for rep in reps]):
         atoms = atoms * reps
-        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
+        # Recentre the repeated block on the original cell by shifting back by
+        # (rep // 2) copies of each lattice vector. ``old_cell.sum(axis=0) *
+        # [rep // 2 for rep in reps]`` only computes this correctly when all three
+        # rep // 2 values are equal (it mixes Cartesian components across lattice
+        # vectors otherwise), which silently shifts atoms on a skewed cell whenever
+        # the per-axis repetition counts differ.
+        atoms.positions[:] -= sum(
+            (rep // 2) * old_cell[axis] for axis, rep in enumerate(reps)
+        )
         atoms.cell = old_cell
 
     atoms = atoms_in_cell(atoms, margins)

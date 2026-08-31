@@ -145,6 +145,18 @@ class Grid(CopyMixin, EqualityMixin):
         If true the gpts cannot be modified. Default is False.
     lock_sampling : bool
         If true the sampling cannot be modified. Default is False.
+    fft_grid : bool
+        Whether this grid is ever Fourier transformed. Governs automatic
+        rounding to a fast FFT length (the ``grid.round-to-fast-fft``
+        configuration option): grids that are never transformed, such as a
+        ``GridScan``'s probe positions, are exempt, since a fast length buys
+        them nothing and would silently change what is simulated. Default is
+        True.
+    cell : np.ndarray, optional
+        Optional 2x2 real-space cell whose rows are the two in-plane lattice vectors,
+        allowing a non-orthogonal (skewed) grid. If ``None`` (default) the grid is
+        orthogonal (axis-aligned) and behaviour is unchanged. Only valid for a
+        two-dimensional grid. When given, the row lengths should match ``extent``.
     """
 
     def __init__(
@@ -158,6 +170,7 @@ class Grid(CopyMixin, EqualityMixin):
         lock_gpts: bool = False,
         lock_sampling: bool = False,
         fft_grid: bool = True,
+        cell: Optional[np.ndarray] = None,
     ):
         self._dimensions = dimensions
         # Only a grid that is Fourier transformed benefits from a fast FFT
@@ -195,6 +208,30 @@ class Grid(CopyMixin, EqualityMixin):
 
         if sampling is None or extent is not None:
             self._adjust_sampling(self.extent, self.gpts)
+
+        self._cell = self._validate_cell(cell)
+
+    def _validate_cell(self, cell):
+        if cell is None:
+            return None
+
+        if self._dimensions != 2:
+            raise ValueError("a non-orthogonal cell is only supported for 2D grids")
+
+        cell = np.array(cell, dtype=float)
+        if cell.shape != (2, 2):
+            raise ValueError(f"cell must be a 2x2 array, got shape {cell.shape}")
+
+        if self.extent is not None:
+            lengths = np.linalg.norm(cell, axis=1)
+            if not np.allclose(lengths, self.extent, rtol=1e-6):
+                raise ValueError(
+                    f"cell row lengths {tuple(lengths)} are inconsistent with the grid "
+                    f"extent {self.extent}"
+                )
+
+        # store as a nested tuple so equality/copy behave (None vs ndarray is brittle)
+        return tuple(map(tuple, cell))
 
     def _validate(
         self, value: Optional[T | Sequence[T]], dtype: Callable[[T], U]
@@ -234,6 +271,7 @@ class Grid(CopyMixin, EqualityMixin):
 
     @extent.setter
     def extent(self, extent: float | Sequence[float] | None):
+        rescaled_cell = None
         if extent is not None:
             if (
                 self._lock_extent
@@ -244,6 +282,19 @@ class Grid(CopyMixin, EqualityMixin):
 
             validated_extent = self._validate(extent, dtype=float)
 
+            if self._cell is not None and self.extent is not None:
+                # Keep an already-set skewed cell consistent with a changed extent:
+                # rescale each lattice-vector row to match its axis' new length,
+                # preserving direction. Without this a cell's row lengths silently
+                # desync from the grid's extent (previously only checked once, at
+                # Grid construction, by _validate_cell) -- e.g. via Grid.match()
+                # overwriting self.extent to match another grid's slightly different
+                # extent.
+                old_extent = np.array(self.extent, dtype=float)
+                new_extent = np.array(validated_extent, dtype=float)
+                cell_arr = np.array(self._cell, dtype=float)
+                rescaled_cell = cell_arr * (new_extent / old_extent)[:, None]
+
             if self._lock_sampling or (self.gpts is None):
                 self._adjust_gpts(validated_extent, self.sampling)
                 self._adjust_sampling(validated_extent, self.gpts)
@@ -253,6 +304,9 @@ class Grid(CopyMixin, EqualityMixin):
             validated_extent = None
 
         self._extent = validated_extent
+
+        if rescaled_cell is not None:
+            self._cell = self._validate_cell(rescaled_cell)
 
     @property
     def gpts(self) -> tuple[int, ...] | None:
@@ -309,6 +363,102 @@ class Grid(CopyMixin, EqualityMixin):
             and self.extent is not None
         )
         return tuple(1 / (n * d) for n, d in zip(self.gpts, self.sampling))
+
+    @property
+    def cell(self) -> np.ndarray | None:
+        """Real-space cell (2x2, rows are the in-plane lattice vectors). ``None`` for
+        an orthogonal (axis-aligned) grid."""
+        if self._cell is None:
+            return None
+        return np.array(self._cell, dtype=float)
+
+    @property
+    def is_orthogonal(self) -> bool:
+        """Whether the grid is orthogonal (axis-aligned)."""
+        if self._cell is None:
+            return True
+        return bool(
+            abs(self._cell[0][1]) < 1e-12 and abs(self._cell[1][0]) < 1e-12
+        )
+
+    def _effective_cell(self) -> np.ndarray:
+        """The 2x2 cell, falling back to ``diag(extent)`` for an orthogonal grid."""
+        if self._cell is not None:
+            return np.array(self._cell, dtype=float)
+        return np.diag(np.array(self._valid_extent, dtype=float))
+
+    @property
+    def reciprocal_metric(self) -> np.ndarray:
+        """Reciprocal metric tensor ``M = (C C^T)^-1`` of the 2D cell ``C``, with
+        ``M[i, j] = b_i . b_j`` [1/Å^2]. The squared length of the Fourier component
+        with integer indices ``(h1, h2)`` is ``[h1 h2] M [h1 h2]^T``."""
+        cell = self._effective_cell()
+        return np.linalg.inv(cell @ cell.T)
+
+    def k_squared(self, xp=np) -> np.ndarray:
+        """Squared spatial frequency ``|g|^2`` of every Fourier component [1/Å^2].
+
+        Uses the reciprocal metric for a skewed cell; for an orthogonal grid this is
+        the sum of the squared per-axis spatial frequencies (identical to
+        ``spatial_frequencies``)."""
+        self.check_is_defined()
+        xp = get_array_module(xp)
+        gpts = self._valid_gpts
+        dtype = get_dtype(complex=False)
+
+        if self.is_orthogonal:
+            freqs = spatial_frequencies(gpts, self._valid_sampling, xp=xp)
+            k2 = xp.zeros(gpts, dtype=dtype)
+            for i, k in enumerate(freqs):
+                shape = [1] * len(gpts)
+                shape[i] = -1
+                k2 = k2 + xp.reshape(k, shape).astype(dtype) ** 2
+            return k2
+
+        metric = self.reciprocal_metric
+        h1, h2 = _integer_frequencies(gpts, xp)
+        h1, h2 = h1[:, None].astype(dtype), h2[None, :].astype(dtype)
+        return (
+            metric[0, 0] * h1**2
+            + 2.0 * metric[0, 1] * h1 * h2
+            + metric[1, 1] * h2**2
+        ).astype(dtype)
+
+    def k_components(self, xp=np) -> tuple[np.ndarray, np.ndarray]:
+        """Physical reciprocal-space components ``(gx, gy)`` of every Fourier component
+        [1/Å]. ``gx**2 + gy**2`` equals :meth:`k_squared`. Two-dimensional grids only."""
+        self.check_is_defined()
+        xp = get_array_module(xp)
+        if self._dimensions != 2:
+            raise ValueError("k_components is only defined for 2D grids")
+
+        if self.is_orthogonal:
+            return spatial_frequencies(
+                self._valid_gpts, self._valid_sampling, return_grid=True, xp=xp
+            )
+
+        dtype = get_dtype(complex=False)
+        reciprocal = reciprocal_cell(self._effective_cell())
+        h1, h2 = _integer_frequencies(self._valid_gpts, xp)
+        h1, h2 = h1[:, None].astype(dtype), h2[None, :].astype(dtype)
+        gx = h1 * reciprocal[0, 0] + h2 * reciprocal[1, 0]
+        gy = h1 * reciprocal[0, 1] + h2 * reciprocal[1, 1]
+        return gx, gy
+
+    def polar_spatial_frequencies(self, xp=np) -> tuple[np.ndarray, np.ndarray]:
+        """Physical polar spatial frequencies ``(k, phi)`` [1/Å, rad] of every Fourier
+        component. For a skewed cell these use the reciprocal metric; for an orthogonal
+        grid this reduces exactly to :func:`polar_spatial_frequencies`. 2D grids only."""
+        self.check_is_defined()
+        xp = get_array_module(xp)
+        if self.is_orthogonal:
+            return polar_spatial_frequencies(
+                self._valid_gpts, self._valid_sampling, xp=xp
+            )
+        gx, gy = self.k_components(xp=xp)
+        k = xp.sqrt(gx**2 + gy**2)
+        phi = xp.arctan2(gy, gx)
+        return k, phi
 
     def _adjust_extent(
         self, gpts: tuple[int, ...] | None, sampling: tuple[float, ...] | None
@@ -412,6 +562,16 @@ class Grid(CopyMixin, EqualityMixin):
             np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
         ):
             self.sampling = other.sampling
+
+        # Propagate a non-orthogonal cell between matched grids in both directions:
+        # the potential carries the cell and the wave starts without one, so whichever
+        # side has it shares it with the other during multislice setup.
+        other_grid = other if isinstance(other, Grid) else getattr(other, "grid", other)
+        other_cell = getattr(other_grid, "_cell", None)
+        if other_cell is not None and self._cell is None:
+            self._cell = other_cell
+        elif other_cell is None and self._cell is not None:
+            other_grid._cell = self._cell
 
     def check_match(self, other: Grid | HasGrid2DMixin):
         """
@@ -666,6 +826,30 @@ class HasGrid2DMixin:
         k = self.grid.reciprocal_space_sampling
         assert len(k) == 2
         return k
+
+    @property
+    def cell(self) -> np.ndarray | None:
+        """Real-space cell (2x2, rows are the in-plane lattice vectors), or ``None``
+        for an orthogonal (axis-aligned) grid."""
+        return self.grid.cell
+
+
+def _integer_frequencies(gpts: tuple[int, int], xp=np):
+    """Wrapped integer Fourier indices ``(h1, h2)`` matching ``fft2`` order.
+
+    ``rint(n * fftfreq(n))`` reproduces ``[0, 1, ..., n//2-1, -n//2, ..., -1]`` exactly
+    (rounding avoids a 94.999...->94 truncation at high frequencies)."""
+    n1, n2 = gpts
+    h1 = xp.rint(n1 * xp.fft.fftfreq(n1))
+    h2 = xp.rint(n2 * xp.fft.fftfreq(n2))
+    return h1, h2
+
+
+def reciprocal_cell(cell: np.ndarray) -> np.ndarray:
+    """Reciprocal-lattice basis of a 2x2 real-space cell: rows ``b1, b2`` such that
+    ``a_i . b_j = delta_ij``. A reciprocal-space Fourier component with integer
+    indices ``(h1, h2)`` sits at physical position ``h1 * b1 + h2 * b2``."""
+    return np.linalg.inv(np.asarray(cell, dtype=float)).T
 
 
 def spatial_frequencies(
