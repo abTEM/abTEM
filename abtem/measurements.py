@@ -6067,15 +6067,21 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             nrows = (n + ncols - 1) // ncols
             if figsize is None:
                 figsize = (4 * ncols, 3.5 * nrows)
+            # Axes are linked explicitly below rather than via plt.subplots'
+            # own sharex=True/sharey=True: that path reads back the object
+            # array slot it just allocated (matplotlib/gridspec.py's
+            # `axarr[0, 0]`) before every axes is created, and on some numpy
+            # builds that slot is not reliably None on first read.
             fig, axes_arr = plt.subplots(
                 nrows,
                 ncols,
                 figsize=figsize,
                 squeeze=False,
-                sharex=True,
-                sharey=True,
             )
             axes_flat = axes_arr.flatten()
+            for ax in axes_flat[1:]:
+                ax.sharex(axes_flat[0])
+                ax.sharey(axes_flat[0])
 
             # Shared colour scale across panels so the single colorbar applies to
             # every panel (otherwise the norm autoscales to the first panel only).
