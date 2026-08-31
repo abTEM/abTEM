@@ -1113,15 +1113,16 @@ class _BaseMeasurement2D(BaseMeasurements):
         # *reciprocal*-lattice basis change, landing on the wrong fraction for any
         # non-symmetric cell). `metadata["cell"]` always holds the real-space
         # lattice; a reciprocal-space measurement (e.g. DiffractionPatterns) instead
-        # needs the reciprocal lattice vectors (rows b1, b2), matching
-        # Grid.k_components / artists._build_skew_mesh's own real-vs-reciprocal
-        # branch -- using the real-space cell directly here would silently apply an
-        # Å-scale transform to 1/Å-scale positions.
+        # needs the reciprocal lattice vectors (rows b1, b2) -- reciprocal_cell()
+        # is the same shared helper Grid.k_components / artists._build_skew_mesh use
+        # for this real-vs-reciprocal distinction, so using the real-space cell
+        # directly here would silently apply an Å-scale transform to 1/Å-scale
+        # positions.
         conversion_cell = None
         if skewed:
             cell_arr = np.asarray(cell, dtype=float)
             if isinstance(self.base_axes_metadata[0], ReciprocalSpaceAxis):
-                conversion_cell = np.linalg.inv(cell_arr).T
+                conversion_cell = reciprocal_cell(cell_arr)
             else:
                 conversion_cell = cell_arr
 
