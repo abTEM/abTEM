@@ -8,6 +8,7 @@ import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from functools import lru_cache
 from numbers import Number
 from types import ModuleType
 from typing import (
@@ -261,6 +262,58 @@ def _spatial_frequency_squared(
     return kx[:, None] ** 2 + ky[None] ** 2
 
 
+@lru_cache(maxsize=32)
+def _radial_weight_map(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    sensitivity: Callable,
+    fftshift: bool = False,
+    xp: ModuleType = np,
+) -> np.ndarray:
+    """
+    Build a per-pixel radial sensitivity weight map for a diffraction pattern grid.
+
+    The weight of each pixel is given by evaluating ``sensitivity`` at the radial
+    scattering angle (in mrad) of that pixel.
+
+    The map depends only on the grid/sensitivity, not on any diffraction pattern data,
+    so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp) is
+    evaluated once and reused across dask blocks/scan positions instead of being
+    recomputed (including, for a measured sensitivity curve, the GPU-to-CPU round trip
+    of the interpolation) on every call.
+
+    Parameters
+    ----------
+    gpts : two int
+        Number of grid points of the diffraction pattern.
+    sampling : two float
+        Angular sampling of the diffraction pattern [mrad].
+    sensitivity : callable
+        Function mapping radial scattering angle [mrad] to a sensitivity weight.
+    fftshift : bool, optional
+        If True, the zero-frequency is shifted to the center of the array.
+    xp : module, optional
+        The array module (``numpy`` or ``cupy``) of the returned weight map.
+
+    Returns
+    -------
+    weights : np.ndarray
+        Per-pixel sensitivity weights with shape ``gpts``.
+    """
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
+
+    alpha = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+
+    weights = xp.asarray(sensitivity(alpha), dtype=get_dtype(complex=False))
+
+    if fftshift:
+        weights = xp.fft.fftshift(weights)
+
+    return weights
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -270,11 +323,28 @@ def _annular_detector_mask(
     fftshift: bool = False,
     xp: ModuleType = np,
     k2: Optional[np.ndarray] = None,
+    sensitivity: Optional[Callable] = None,
 ) -> np.ndarray | list[np.ndarray]:
     if k2 is None:
         k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
+
+    if sensitivity is not None:
+        # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
+        # float mask is rolled and fftshifted below, so the weights are computed here
+        # without an fftshift. Select (rather than multiply) by the weight so that a
+        # sensitivity callable that is undefined (e.g. NaN) outside [inner, outer] does
+        # not corrupt pixels the mask already excludes: 0 * nan is nan, but
+        # where(False, weights, 0) is always exactly 0.
+        weights = _radial_weight_map(
+            gpts=gpts,
+            sampling=sampling,
+            sensitivity=sensitivity,
+            fftshift=False,
+            xp=xp,
+        )
+        bins = xp.where(bins, weights, 0.0)
 
     if np.any(np.array(offset) != 0.0):
         offset = (
@@ -3697,8 +3767,19 @@ class DiffractionPatterns(_BaseMeasurement2D):
         fftshift,
         rotation,
         offset,
+        sensitivity=None,
     ):
         xp = get_array_module(array)
+
+        if sensitivity is not None:
+            weights = _radial_weight_map(
+                gpts=array.shape[-2:],
+                sampling=sampling,
+                sensitivity=sensitivity,
+                fftshift=fftshift,
+                xp=xp,
+            )
+            array = array * weights
 
         indices = _polar_detector_bins(
             gpts=array.shape[-2:],
@@ -3754,6 +3835,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         outer: Optional[float] = None,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[Callable] = None,
     ):
         """
         Create polar measurements from the diffraction patterns by binning the
@@ -3781,6 +3863,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         offset : two float
             Offset of the bins from the origin in `x` and `y` [mrad].
             Default is (0.0, 0.0).
+        sensitivity : callable, optional
+            Function mapping radial scattering angle [mrad] to a per-pixel sensitivity
+            weight. If given, the diffraction patterns are weighted by this factor before
+            binning, simulating a radially varying detector sensitivity. By default the
+            bins are uniformly sensitive.
 
         Returns
         -------
@@ -3808,6 +3895,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                sensitivity=sensitivity,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 chunks=self.array.chunks[:-2]
                 + (
@@ -3831,6 +3919,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                sensitivity=sensitivity,
             )
 
         radial_sampling = (outer - inner) / nbins_radial
@@ -3880,7 +3969,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.polar_binning(nbins_radial, 1, inner, outer)
 
     @staticmethod
-    def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):
+    def _integrate_fourier_space(
+        array, sampling, inner, outer, fftshift, offset, sensitivity=None
+    ):
         xp = get_array_module(array)
 
         bins = _annular_detector_mask(
@@ -3891,6 +3982,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             fftshift=fftshift,
             offset=offset,
             xp=xp,
+            sensitivity=sensitivity,
         )
 
         return xp.sum(array * bins, axis=(-2, -1))
@@ -3900,6 +3992,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         inner: float,
         outer: float = None,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[Callable] = None,
     ) -> Images:
         """
         Create images by integrating the diffraction patterns over an annulus defined by
@@ -3913,6 +4006,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Outer integration limit [mrad].
         offset : tuple of float
             Offset of center of annular integration region [mrad].
+        sensitivity : callable, optional
+            Function mapping radial scattering angle [mrad] to a per-pixel sensitivity
+            weight. If given, the diffraction patterns are weighted by this factor before
+            integration, simulating a radially varying detector sensitivity. By default
+            the detector is uniformly sensitive within the integration limits.
 
         Returns
         -------
@@ -3928,7 +4026,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 inners = inner
 
             measurements = [
-                self.integrate_radial(inner=inner, outer=outer)
+                self.integrate_radial(inner=inner, outer=outer, sensitivity=sensitivity)
                 for inner, outer in zip(inners, outers)
             ]
 
@@ -3955,6 +4053,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                sensitivity=sensitivity,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 meta=xp.array((), dtype=get_dtype(complex=False)),
             )
@@ -3966,6 +4065,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                sensitivity=sensitivity,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
