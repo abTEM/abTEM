@@ -874,9 +874,9 @@ def spatial_frequencies(
 
     Returns
     -------
-    spatial_frequencies : tuple of np.ndarray
+    spatial_frequencies : tuple of numpy.ndarray
         Tuple of spatial frequencies in each dimension.
-    spatial_frequencies_grid : np.ndarray
+    spatial_frequencies_grid : numpy.ndarray
         If return_grid is True, the spatial frequencies as a single meshgrid array.
     """
     dtype = get_dtype(complex=False)
@@ -915,7 +915,7 @@ def polar_spatial_frequencies(
 
     Returns
     -------
-    k_and_phi : tuple of np.ndarray
+    k_and_phi : tuple of numpy.ndarray
         Tuple of spatial frequencies in polar coordinates. First element is the radial
         frequency and the second element is the azimuthal angle.
     """
@@ -952,7 +952,7 @@ def disk_meshgrid(r: int) -> np.ndarray:
 
     Returns
     -------
-    disc_indices : np.ndarray
+    disc_indices : numpy.ndarray
     """
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r

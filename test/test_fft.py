@@ -190,3 +190,111 @@ def test_warn_slow_fft_size_thread_safe():
             t.join()
 
     assert len(calls) == 1
+
+
+def test_cufft_cache_auto_resolves_device_relative():
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no GPU available")
+    except Exception:
+        pytest.skip("no usable CUDA/HIP runtime")
+
+    from abtem.core import config
+    from abtem.core import fft as abtem_fft
+
+    expected = cp.cuda.Device().mem_info[1] // 4
+
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": "auto"}):
+        abtem_fft._configure_cufft_cache()
+        assert abtem_fft._CUFFT_CACHE_STATE is not None
+        assert abtem_fft._CUFFT_CACHE_STATE[1] == expected
+        assert cp.fft.config.get_plan_cache().get_memsize() == expected
+
+    # -1 must still mean unlimited (no memsize bound applied).
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": -1}):
+        abtem_fft._configure_cufft_cache()
+        assert abtem_fft._CUFFT_CACHE_STATE[1] == -1
+
+
+def test_oversized_plan_bypasses_cache():
+    cp = pytest.importorskip("cupy")
+
+    from abtem.core import fft as abtem_fft
+
+    calls = []
+
+    def fake_fft(x, **kwargs):
+        calls.append(cp.fft.config.get_plan_cache().get_size())
+        if len(calls) == 1:
+            raise RuntimeError("The plan memsize is too large.")
+        return x
+
+    abtem_fft._warned_plan_cache_bypass = False
+    x = cp.zeros((2, 8, 8), dtype="complex64")
+    with pytest.warns(UserWarning, match="uncached"):
+        out = abtem_fft._cupy_fft_with_cache_fallback(fake_fft, x)
+
+    assert out is x
+    assert len(calls) == 2
+    assert calls[1] == 0  # the retry ran with the cache disabled
+    assert cp.fft.config.get_plan_cache().get_size() > 0  # and it was restored
+
+
+def test_unrelated_runtime_error_propagates():
+    pytest.importorskip("cupy")
+
+    from abtem.core import fft as abtem_fft
+
+    def fake_fft(x, **kwargs):
+        raise RuntimeError("something else entirely")
+
+    with pytest.raises(RuntimeError, match="something else"):
+        abtem_fft._cupy_fft_with_cache_fallback(fake_fft, object())
+
+
+def test_cufft_cache_config_edge_values():
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no GPU available")
+    except Exception:
+        pytest.skip("no usable CUDA/HIP runtime")
+
+    from abtem.core import config
+    from abtem.core import fft as abtem_fft
+
+    cache = cp.fft.config.get_plan_cache()
+
+    # -1 must undo an earlier bound (the oversized-plan warning recommends it).
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": "auto"}):
+        abtem_fft._configure_cufft_cache()
+        assert cache.get_memsize() > 0
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": -1}):
+        abtem_fft._configure_cufft_cache()
+        assert cache.get_memsize() == -1
+
+    # null means "no bound" rather than crashing.
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": None}):
+        abtem_fft._configure_cufft_cache()
+        assert cache.get_memsize() == -1
+
+    # A positive bound re-enables a previously disabled cache.
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": "0 MB"}):
+        abtem_fft._configure_cufft_cache()
+        assert cache.get_size() == 0
+    abtem_fft._CUFFT_CACHE_STATE = None
+    with config.set({"cupy.fft-cache-size": "1 GB"}):
+        abtem_fft._configure_cufft_cache()
+        assert cache.get_size() > 0
+        assert cache.get_memsize() == 10**9
+
+    # Restore the shipped default for subsequent tests.
+    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._configure_cufft_cache()

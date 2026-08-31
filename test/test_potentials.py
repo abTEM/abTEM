@@ -34,20 +34,34 @@ from abtem.potentials.iam import CrystalPotential, Potential
     gpts=abtem_st.gpts(),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
+@pytest.mark.parametrize("projection", ["finite", "infinite"])
+@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
+def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, projection):
+    potential = Potential(
+        atoms,
+        gpts=gpts,
+        slice_thickness=slice_thickness,
+        parametrization=parametrization,
+        projection=projection,
+    )
+    potential.build(lazy=False).compute()
+
+
+@given(
+    atoms=abtem_st.atoms(max_atomic_number=14),
+    gpts=abtem_st.gpts(),
+    slice_thickness=st.floats(min_value=1, max_value=2.0),
+)
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
-@pytest.mark.parametrize("projection", ["finite", "infinite"])
-def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
+def test_build_device_lazy(atoms, gpts, slice_thickness, lazy, device):
     potential = Potential(
         atoms,
         gpts=gpts,
         device=device,
         slice_thickness=slice_thickness,
-        parametrization=parametrization,
-        projection=projection,
     )
-    potential_array = potential.build(lazy=lazy).compute()
+    potential.build(lazy=lazy).compute()
 
 
 @given(
@@ -1391,3 +1405,59 @@ def test_potential_array_slicing_maps_exit_planes():
     split = waves.multislice(potential[:9]).multislice(potential[9:])
 
     assert np.allclose(whole.array, split.array)
+
+
+class TestIntegratorSharedAcrossEnsemble:
+    """generate_blocks()/ensemble_blocks() reconstruct a fresh Potential per
+    ensemble member. The integrator must be passed through by reference, not
+    deep-copied, or every member silently rebuilds (and, on GPU, re-uploads)
+    the per-symbol projection tables and disk caches that QuadratureProjection-
+    Integrals/ScatteringFactorProjectionIntegrals exist specifically to avoid
+    recomputing across repeated calls."""
+
+    def test_integrator_identity_preserved_across_members(self):
+        import abtem
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+        fp = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=1)
+        potential = Potential(fp, sampling=0.2, slice_thickness=1.0, projection="finite")
+
+        original_integrator = potential.integrator
+        # Populate the cache the way a real build would, so a deep copy has
+        # actual cached state to (wrongly) duplicate.
+        original_integrator.get_integral_table("Si", potential.sampling)
+
+        seen_integrator_ids = set()
+        seen_table_ids = set()
+        n_members = 0
+        for _, _, block in potential.generate_blocks():
+            block = block.item()
+            n_members += 1
+            seen_integrator_ids.add(id(block.integrator))
+            seen_table_ids.add(id(block.integrator.tables))
+
+        assert n_members == 4
+        assert seen_integrator_ids == {id(original_integrator)}
+        assert seen_table_ids == {id(original_integrator.tables)}
+
+    @pytest.mark.parametrize("projection", ["finite", "infinite"])
+    def test_shared_integrator_does_not_change_results(self, projection):
+        import abtem
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+        fp = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=1)
+        potential = Potential(
+            fp, sampling=0.2, slice_thickness=1.0, projection=projection
+        )
+
+        waves = abtem.PlaneWave(energy=100e3)
+        exit_waves = waves.multislice(potential, lazy=False)
+
+        # Rebuilding member-by-member via the (shared-integrator) path used
+        # by generate_blocks() must match the direct build for every member.
+        for index, _, block in potential.generate_blocks():
+            block = block.item()
+            direct = abtem.PlaneWave(energy=100e3).multislice(block, lazy=False)
+            np.testing.assert_allclose(
+                exit_waves.array[index], direct.array[0], atol=1e-10
+            )

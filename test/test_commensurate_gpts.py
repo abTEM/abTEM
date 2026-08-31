@@ -340,7 +340,7 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     n_target = int(np.ceil(cell / 0.05))
     assert gpts[0] <= n_target * 1.12
     # The period is what the fallback exists to preserve, so it survives.
-    assert gpts[0] % m == 0
+    assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0
 
 
 # ---------------------------------------------------------------------------

@@ -62,7 +62,7 @@ def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
 
     Parameters
     ----------
-    vector_field : np.ndarray
+    vector_field : numpy.ndarray
         Array representing a vector field of dimension 3.
     cell : ase.cell.Cell
         ASE `Cell` object defining the region of space where the vector field is
@@ -70,7 +70,7 @@ def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
 
     Returns
     -------
-    curl : np.ndarray
+    curl : numpy.ndarray
         Array representing the curl of the vector field.
     """
 
@@ -97,7 +97,7 @@ def integrate_gradient_fourier(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array representing a gradient of dimension 3.
     cell : ase.cell.Cell
         ASE `Cell` object defining the region of space where the gradient is integrated.
@@ -108,7 +108,7 @@ def integrate_gradient_fourier(
 
     Returns
     -------
-    integrated : np.ndarray
+    integrated : numpy.ndarray
         Integrated gradient.
     """
 
@@ -225,7 +225,7 @@ def add_point_charges_fourier(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array representing 3D charge density to which the point charges are added.
     atoms : ase.Atoms
         Atoms from which the nuclear charges with magnitudes and positions are
@@ -238,7 +238,7 @@ def add_point_charges_fourier(
 
     Returns
     -------
-    density : np.ndarray
+    density : numpy.ndarray
         3D charge density with added nuclear charges in reciprocal space.
     """
     # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for an
@@ -404,7 +404,7 @@ class ChargeDensityPotential(_PotentialBuilder):
     atoms : Atoms or FrozenPhonons
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
-    charge_density : np.ndarray
+    charge_density : numpy.ndarray
         Charge density as a 3D NumPy array [electrons / Å^3].
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
@@ -680,7 +680,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             Index of the last slice of the generated potential.
         Returns
         -------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:

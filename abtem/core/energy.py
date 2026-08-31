@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, TypeVar, cast
+from typing import Optional, Sequence, TypeVar, cast
 
 import numpy as np
 from ase import units  # type: ignore
@@ -129,6 +129,43 @@ class EnergyUndefinedError(Exception):
     """
 
 
+def resolve_energy(
+    energy: Optional[float],
+    metadata: Optional[dict],
+    ensemble_axes_metadata: Sequence,
+) -> Optional[float]:
+    """Resolve a scalar energy [eV] shared by ``Waves``, ``_energy_from_waves``
+    and ``BaseMeasurements._get_energy``.
+
+    Resolution order:
+    1. ``energy`` if not None (e.g. ``accelerator.energy`` for a ``Waves``-like
+       object).
+    2. ``metadata["energy"]`` -- populated by ``EnergyAxis.item_metadata`` when
+       the object was produced by indexing an energy-ensemble.
+    3. A single-element ``EnergyAxis`` in ``ensemble_axes_metadata`` -- the
+       residual case during per-member partitioned computation.
+
+    Returns
+    -------
+    float or None
+        None if no scalar energy can be resolved this way -- notably for a
+        full, un-indexed multi-energy ensemble. Callers decide what to do
+        about that case (raise, return None, or fall back to an approximate
+        value).
+    """
+    from abtem.core.axes import EnergyAxis
+
+    if energy is not None:
+        return float(energy)
+    energy = metadata.get("energy") if metadata else None
+    if energy is not None:
+        return float(energy)
+    for axis in ensemble_axes_metadata:
+        if isinstance(axis, EnergyAxis) and len(axis.values) == 1:
+            return float(axis.values[0])
+    return None
+
+
 class Accelerator(EqualityMixin, CopyMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
@@ -194,10 +231,17 @@ class Accelerator(EqualityMixin, CopyMixin):
         other: Accelerator object
             The accelerator that should be checked.
         """
+        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
+        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
+        other_energy = (
+            other.energy
+            if isinstance(other, Accelerator)
+            else other.accelerator.energy
+        )
         if (
             (self.energy is not None)
-            and (other.energy is not None)
-            and (self.energy != other.energy)
+            and (other_energy is not None)
+            and (self.energy != other_energy)
         ):
             raise RuntimeError("Inconsistent energies")
 
@@ -219,11 +263,22 @@ class Accelerator(EqualityMixin, CopyMixin):
         if check_match:
             self.check_match(other)
 
-        if other.energy is None:
-            other.energy = self.energy
+        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
+        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
+        other_energy = (
+            other.energy
+            if isinstance(other, Accelerator)
+            else other.accelerator.energy
+        )
 
-        elif self.energy != other.energy:
-            self.energy = other.energy
+        if other_energy is None:
+            if isinstance(other, Accelerator):
+                other.energy = self.energy
+            else:
+                other.accelerator.energy = self.energy
+
+        elif self.energy != other_energy:
+            self.energy = other_energy
 
 
 class HasAcceleratorMixin:

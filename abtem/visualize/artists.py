@@ -657,9 +657,9 @@ class ScaledCircleCollection(Collection):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array of data values. Used to calculate the radii of the circles. The shape should be (n,).
-    offsets : np.ndarray
+    offsets : numpy.ndarray
         Array of offsets for the circles. The shape should be (n, 2) where n is the number of circles.
     scale : float, optional
         Scaling factor for the radii, by default 1.0.

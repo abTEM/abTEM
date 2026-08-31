@@ -21,6 +21,12 @@ T = TypeVar("T", float, int, bool)
 np.ndarray(())
 
 
+def cos_sin_deg(angle: float) -> tuple[float, float]:
+    """Cosine and sine of an angle given in degrees."""
+    angle_rad = np.deg2rad(angle)
+    return np.cos(angle_rad), np.sin(angle_rad)
+
+
 def number_to_tuple(
     value: T | tuple[T, ...], dimension: Optional[int] = None
 ) -> tuple[T, ...]:
@@ -283,9 +289,9 @@ def expand_dims_to_broadcast(
 
     Parameters
     ----------
-    arr1 : np.ndarray
+    arr1 : numpy.ndarray
         The first array.
-    arr2 : np.ndarray
+    arr2 : numpy.ndarray
         The second array.
     match_dims : list, optional
         A list of two tuples, each containing the dimensions that should match (i.e. not
@@ -336,7 +342,7 @@ def label_to_index(
 
     Parameters
     ----------
-    labels : np.ndarray
+    labels : numpy.ndarray
         An array of integers.
     max_label : int, optional
         The assumed maximum label in the array. If None, the maximum the array is used.

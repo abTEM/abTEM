@@ -890,7 +890,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
-        elif tuple(np.diag(atoms.cell)) != self.box:
+        # `diag(atoms.cell) == self.box` is not by itself proof the cell is
+        # orthogonal: for a near-orthorhombic cell with off-diagonal noise
+        # below ~2e-8 relative, best_orthogonal_cell's box norms round to
+        # the exact diagonal entries in float64 (see the matching guard in
+        # atoms.py's orthogonalize_cell). Also require is_cell_orthogonal
+        # so such noisy cells still reach orthogonalize_cell below instead
+        # of being silently used as-is.
+        elif tuple(np.diag(atoms.cell)) != self.box or not is_cell_orthogonal(
+            atoms.cell
+        ):
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,
@@ -1038,7 +1047,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1196,7 +1205,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def _from_partitioned_args(self, *args, **kwargs):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
+        # integrator is excluded from the deep-copied kwargs and passed through
+        # by reference: generate_blocks()/ensemble_blocks() reconstruct a fresh
+        # Potential per ensemble member, and integrators (e.g.
+        # QuadratureProjectionIntegrals) lazily cache per-symbol projection
+        # tables and, on GPU, device-resident arrays specifically so repeated
+        # calls across many slices don't re-upload them (see the PR #309
+        # discussion in integrals.py). Deep-copying the integrator per member
+        # silently defeats that cache for every single ensemble member -- on
+        # GPU this means a real device-to-device copy of the cached arrays for
+        # every member, for no benefit, since the copy is used once and
+        # discarded.
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling", "integrator"))
+        kwargs["integrator"] = self.integrator
 
         return partial(
             self._from_partitioned_args_func,
@@ -1581,7 +1602,7 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1903,7 +1924,7 @@ class PotentialArray(BasePotential, FieldArray):
 
     Parameters
     ----------
-    array: 3D np.ndarray
+    array: 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness: float
@@ -2034,7 +2055,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
     Parameters
     ----------
-    array : 3D np.ndarray
+    array : 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness : float
@@ -2528,7 +2549,7 @@ class CrystalPotential(_PotentialBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         # if hasattr(self.potential_unit, "array")

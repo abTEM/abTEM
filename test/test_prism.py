@@ -8,13 +8,6 @@ from utils import assert_array_matches_device, gpu
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 
-from hypothesis import HealthCheck, settings
-
-settings.register_profile(
-    "my_profile", suppress_health_check=[HealthCheck.filter_too_much]
-)
-settings.load_profile("my_profile")
-
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
@@ -131,6 +124,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
     assert s_matrix_measurement == probe_measurement
 
 
+@pytest.mark.slow
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 @pytest.mark.parametrize(
@@ -153,7 +147,6 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
         abtem_st.annular_detector,
     ],
 )
-# @settings(verbosity=Verbosity.verbose, phases=[Phase.generate])
 def test_prism_scan(
     data, interpolation, detector, downsample, lazy, frozen_phonons, device
 ):

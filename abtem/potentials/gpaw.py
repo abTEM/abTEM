@@ -447,7 +447,7 @@ class GPAWPotential(_PotentialBuilder):
             Index of the last slice of the generated potential.
         Returns
         -------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
