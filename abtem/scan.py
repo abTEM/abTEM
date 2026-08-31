@@ -905,7 +905,12 @@ class GridScan(HasGrid2DMixin, BaseScan):
             extent = None
 
         self._grid = Grid(
-            extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+            dimensions=2,
+            endpoint=endpoint,
+            fft_grid=False,
         )
         self._cell = None  # set by match_probe for skew grids
 

@@ -1,5 +1,7 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
+import math
+import threading
 import warnings
 from itertools import product as _product
 from typing import Tuple, TypeVar, overload
@@ -35,6 +37,181 @@ except ImportError:
             "change your configuration to use CPU."
         )
     cp = None
+
+
+# Deliberately NOT scipy.fft.next_fast_len's set: scipy targets pocketfft,
+# whose kernels go up to radix 11, so next_fast_len returns 11-smooth lengths
+# (next_fast_len(121) == 121 == 11**2). cuFFT documents optimized kernels only
+# for sizes of the form 2^a * 3^b * 5^c * 7^d, so a factor-11 length falls off
+# exactly the GPU fast path this module exists to protect. {2, 3, 5, 7} is the
+# intersection guaranteed fast on every backend abTEM uses (FFTW, pocketfft,
+# MKL, cuFFT, hipFFT).
+_FAST_FFT_PRIMES = (2, 3, 5, 7)
+
+
+def is_fast_fft_size(n: int) -> bool:
+    """
+    Whether an FFT of length ``n`` runs on fast radix kernels.
+
+    FFT libraries only ship optimized kernels for lengths whose prime factors
+    are small (2, 3, 5 and 7 are supported everywhere). A length with a larger
+    prime factor triggers a generic fallback -- on cuFFT the Bluestein
+    algorithm, which pads internally to a power of two, costing several times
+    the arithmetic and, on GPU, a workspace of several times the transform
+    size.
+
+    Parameters
+    ----------
+    n : int
+        The transform length.
+
+    Returns
+    -------
+    bool
+        True if ``n`` factorizes completely into 2, 3, 5 and 7.
+    """
+    n = int(n)
+    if n < 1:
+        return False
+    for p in _FAST_FFT_PRIMES:
+        while n % p == 0:
+            n //= p
+    return n == 1
+
+
+def next_fast_fft_size(n: int) -> int:
+    """
+    The smallest length >= ``n`` whose prime factors are all in {2, 3, 5, 7}.
+
+    Useful for choosing grid sizes (``gpts``) that avoid the slow
+    large-workspace Bluestein fallback on GPU. Stricter than
+    ``scipy.fft.next_fast_len``, which returns 11-smooth lengths (fast for
+    pocketfft on CPU, but off cuFFT's documented fast path).
+
+    Parameters
+    ----------
+    n : int
+        The minimum transform length.
+
+    Returns
+    -------
+    int
+        The next fast transform length.
+    """
+    n = max(1, int(n))
+    while not is_fast_fft_size(n):
+        n += 1
+    return n
+
+
+_warned_slow_fft_shapes: set = set()
+# _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
+# on the shape set must be atomic or the same shape can warn more than once.
+_warned_slow_fft_shapes_lock = threading.Lock()
+
+# Bluestein overhead only matters for large transforms; small odd-sized arrays
+# (e.g. interpolated measurements) are not worth a warning.
+_SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
+
+
+def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int, ...]:
+    """
+    The array lengths a transform actually acts on.
+
+    Only the transformed axes matter for the Bluestein fallback: batch axes are
+    looped over, whatever their length. Which axes those are depends on the
+    function -- ``fftn`` transforms all of them unless ``axes`` says otherwise,
+    ``fft2`` the trailing two, ``fft`` a single one -- so reading the trailing
+    two axes unconditionally misreports every non-2D transform.
+    """
+    kwargs = kwargs or {}
+    axes = kwargs.get("axes")
+    # An explicit `s` overrides the array lengths (None entries keep theirs).
+    s = kwargs.get("s")
+
+    if axes is None:
+        if func_name.endswith("fftn"):
+            # numpy and cupy apply `s` to the TRAILING len(s) axes when no axes
+            # are given, so deriving the axes from the array rank alone would
+            # pair `s` with the wrong ones.
+            count = len(s) if s is not None else len(shape)
+            axes = tuple(range(len(shape) - count, len(shape)))
+        elif func_name.endswith("fft2"):
+            axes = (-2, -1)
+        else:
+            axes = (kwargs.get("axis", -1),)
+
+    # Drop axes the array does not have. cupy's fft2 quietly reduces the axes
+    # for arrays of fewer than two dimensions, and this runs ahead of every GPU
+    # transform: raising here would break a transform that would otherwise
+    # succeed, rather than merely skipping a diagnostic.
+    ndim = len(shape)
+    axes = tuple(axis for axis in axes if -ndim <= axis < ndim)
+
+    lengths = []
+    for i, axis in enumerate(axes):
+        length = shape[axis]
+        if s is not None and i < len(s) and s[i] is not None:
+            length = s[i]
+        lengths.append(int(length))
+
+    return tuple(lengths)
+
+
+def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
+    """Warn once per large transform whose transformed lengths force Bluestein."""
+    lengths = _transform_lengths(shape, func_name, kwargs)
+
+    if not lengths:
+        return
+
+    # Test cheaply first, and record only shapes that actually warn: the
+    # memo then holds at most one entry per warning ever emitted, and a run
+    # whose grid is fast never touches the lock on the FFT hot path.
+    if math.prod(lengths) < _SLOW_FFT_WARN_MIN_ELEMENTS:
+        return
+    if all(is_fast_fft_size(n) for n in lengths):
+        return
+
+    with _warned_slow_fft_shapes_lock:
+        if lengths in _warned_slow_fft_shapes:
+            return
+        _warned_slow_fft_shapes.add(lengths)
+
+    shown = " x ".join(str(n) for n in lengths)
+    suggestion = " x ".join(str(next_fast_fft_size(n)) for n in lengths)
+    # Only a 2D transform of the trailing axes is the wave-function grid the
+    # user sets with gpts; for anything else (e.g. the 3D structure-factor
+    # grid, which follows from g_max and the cell) that advice would be wrong.
+    remedy = (
+        ", e.g. by setting gpts explicitly, or -- if this grid was derived from "
+        "a numeric sampling -- with "
+        "abtem.config.set({'grid.round-to-fast-fft': True})"
+        if len(lengths) == 2 and len(shape) >= 2 and tuple(shape[-2:]) == lengths
+        else ""
+    )
+    warnings.warn(
+        f"FFT size {shown} contains prime factors larger than 7; "
+        "cuFFT falls back to the Bluestein algorithm, which is several times "
+        "slower and allocates a workspace of several times the array size. "
+        f"Consider adjusting the transformed grid to {suggestion}{remedy}.",
+        UserWarning,
+    )
+
+
+def warn_if_slow_gpu_fft(x, func_name: str = "fft2", **kwargs):
+    """
+    Emit the slow-FFT diagnostic for a transform run outside ``_fft_dispatch``.
+
+    A few transforms call ``xp.fft`` directly rather than through the wrappers
+    in this module -- ``structure_factor_to_potential`` does, because the FFTW
+    backend here only ever transforms the trailing two axes and would silently
+    turn its 3D transform into a 2D one. They still deserve the diagnostic, so
+    they can call this alongside. Only GPU arrays are considered: the Bluestein
+    workspace this warns about is a cuFFT concern.
+    """
+    if cp is not None and isinstance(x, cp.ndarray):
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
 
 
 def _raise_fft_lib_not_present(lib_name: str):
@@ -262,6 +439,7 @@ def _fft_dispatch(
 
     if isinstance(x, cp.ndarray):
         _configure_cufft_cache()
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
