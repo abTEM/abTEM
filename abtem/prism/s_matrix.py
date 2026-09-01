@@ -5039,9 +5039,19 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def _eager_transition_potential_scan(
         self, scan, detectors, transition_potentials, sites, double_channel,
         inelastic_crop=None,
+        reduction="real_space",
+        partitions_s1=None,
+        partitions_s2=None,
+        n_angular=6,
+        mag_preserve=True,
+        collection_angle=None,
+        focal_backprop=None,
         squeeze=True,
     ):
-        from abtem.inelastic.core_loss import prism_transition_potential_scan
+        from abtem.inelastic.core_loss import (
+            prism_transition_potential_scan,
+            prism_transition_potential_scan_beam_basis,
+        )
 
         extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
             self._build_ensemble_shape_metadata()
@@ -5058,12 +5068,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             measurements = None
 
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-
-            new_measurements = ensure_list(
-                prism_transition_potential_scan(
+        def _run_block(s_matrix):
+            if reduction in ("beam_basis", "bipartite"):
+                return prism_transition_potential_scan_beam_basis(
                     s_matrix=s_matrix,
                     transition_potentials=transition_potentials,
                     scan=scan,
@@ -5071,8 +5078,28 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     sites=sites,
                     double_channel=double_channel,
                     inelastic_crop=inelastic_crop,
+                    partitions_s1=partitions_s1,
+                    partitions_s2=partitions_s2,
+                    n_angular=n_angular,
+                    mag_preserve=mag_preserve,
+                    collection_angle=collection_angle,
+                    focal_backprop=focal_backprop,
                 )
+            return prism_transition_potential_scan(
+                s_matrix=s_matrix,
+                transition_potentials=transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
             )
+
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
+
+            new_measurements = ensure_list(_run_block(s_matrix))
 
             if measurements is None:
                 measurements = new_measurements
@@ -5100,6 +5127,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def _lazy_transition_potential_scan(
         s_matrix, scan, detectors, transition_potentials, sites, double_channel,
         inelastic_crop=None,
+        reduction="real_space",
+        partitions_s1=None,
+        partitions_s2=None,
+        n_angular=6,
+        mag_preserve=True,
+        collection_angle=None,
+        focal_backprop=None,
     ):
         s_matrix = s_matrix.item()
         measurements = s_matrix._eager_transition_potential_scan(
@@ -5109,6 +5143,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
+            reduction=reduction,
+            partitions_s1=partitions_s1,
+            partitions_s2=partitions_s2,
+            n_angular=n_angular,
+            mag_preserve=mag_preserve,
+            collection_angle=collection_angle,
+            focal_backprop=focal_backprop,
             squeeze=False,
         )
 
@@ -5125,6 +5166,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         double_channel: bool = False,
         inelastic_crop=None,
         lazy: bool = None,
+        reduction: str = "real_space",
+        partitions_s1: int | None = None,
+        partitions_s2: int | None = None,
+        n_angular: int = 6,
+        mag_preserve: bool = True,
+        collection_angle: float | None = None,
+        focal_backprop: str | float | None = None,
     ):
         """**Experimental** PRISM-based core-loss scan.
 
@@ -5168,6 +5216,38 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         lazy : bool, optional
             If True, create the measurements lazily using Dask; otherwise,
             compute eagerly. Defaults to the user configuration value.
+        reduction : {"real_space", "beam_basis", "bipartite"}, optional
+            Reduction backend. ``"real_space"`` (default) is the production
+            windowed real-space driver
+            (:func:`~abtem.inelastic.core_loss.prism_transition_potential_scan`).
+            ``"beam_basis"``/``"bipartite"`` use the dual-scattering-matrix
+            beam-basis driver
+            (:func:`~abtem.inelastic.core_loss.prism_transition_potential_scan_beam_basis`),
+            which supports **BiP-PRISM** beam partitioning. Any of
+            ``partitions_s1``, ``partitions_s2`` or ``collection_angle`` being set
+            auto-selects the beam-basis backend.
+        partitions_s1, partitions_s2 : int or None, optional
+            BiP-PRISM (paper Alg. 5) beam partitioning: build ``S1`` (aperture) and
+            ``S2`` (detector) on sparse hex-ring parent beams with this many radial
+            rings and reconstruct locally at each atom by windowed natural-neighbor
+            interpolation. ``None`` builds the full matrices. Requires the
+            beam-basis backend.
+        n_angular : int, optional
+            Base azimuthal parent sampling for the hex rings (default 6).
+        mag_preserve : bool, optional
+            Magnitude-preserving reconstruction (paper eq-magpreserve, default
+            ``True``) — needed for quantitative absolute intensities.
+        collection_angle : float or None, optional
+            ``S2`` detector-collection semiangle [mrad] limiting the ``S2`` beams to
+            the detector disk (BiP-PRISM map regime); leaves the detector-integrated
+            map unchanged while making ``partitions_s2`` accurate and cheap. Requires
+            the beam-basis backend.
+        focal_backprop : {"centroid"}, float or None, optional
+            S1-only accuracy lever (paper Sec. 3.3.6): back-propagate the ``S1``
+            parent columns to the scattering-centroid plane before windowed NNW
+            interpolation and forward-propagate afterwards, reducing the on-atom
+            probe reconstruction error for thick specimens. Requires ``partitions_s1``
+            and the beam-basis backend.
 
         Returns
         -------
@@ -5177,6 +5257,21 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         from abtem.inelastic.core_loss import (
             prism_transition_potential_scan,
         )
+
+        if reduction not in ("real_space", "beam_basis", "bipartite"):
+            raise ValueError(
+                f"unknown reduction {reduction!r} (use 'real_space', "
+                "'beam_basis' or 'bipartite')"
+            )
+        # Partition / collection kwargs only apply to the beam-basis backend;
+        # auto-select it so the user does not have to set both.
+        if reduction == "real_space" and (
+            partitions_s1 is not None
+            or partitions_s2 is not None
+            or collection_angle is not None
+            or focal_backprop is not None
+        ):
+            reduction = "beam_basis"
 
         if scan is None:
             scan = GridScan(
@@ -5197,6 +5292,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 sites=sites,
                 double_channel=double_channel,
                 inelastic_crop=inelastic_crop,
+                reduction=reduction,
+                partitions_s1=partitions_s1,
+                partitions_s2=partitions_s2,
+                n_angular=n_angular,
+                mag_preserve=mag_preserve,
+                collection_angle=collection_angle,
+                focal_backprop=focal_backprop,
             )
             return _wrap_measurements(measurements)
 
@@ -5227,6 +5329,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
+            reduction=reduction,
+            partitions_s1=partitions_s1,
+            partitions_s2=partitions_s2,
+            n_angular=n_angular,
+            mag_preserve=mag_preserve,
+            collection_angle=collection_angle,
+            focal_backprop=focal_backprop,
             meta=np.array((), dtype=object),
         )
 
