@@ -305,6 +305,38 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     assert inter_tile_std > 100 * single_config_floor
 
 
+def test_crystal_potential_phase_scramble_mixing_with_lateral_tiling():
+    """Regression for a stride-0 broadcast bug: ``combined[None]`` (numpy's
+    newaxis) gives the new leading axis a stride of 0, which a mismatch
+    between pyfftw's plan-creation dummy (``np.zeros_like``, which does not
+    preserve a stride-0 axis) and the real array turned into a
+    "Invalid input striding" crash from ``generate_slices()`` -- but only
+    once the pool's unit potential is laterally *tiled* (``repetitions[0]``
+    or ``repetitions[1]`` > 1), which changes the combined-slice grid size
+    and so the array shape that first hits pyfftw's FFTW-wisdom cache.
+    ``repetitions=(1, 1, N)`` (a pool already spanning the full lateral
+    extent) never tiles and so never exercised this path."""
+    import ase
+
+    import abtem
+
+    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    fp = abtem.FrozenPhonons(si, num_configs=4, sigmas=0.078, directions="xy", seed=1)
+    unit = Potential(fp, gpts=(48, 48), slice_thickness=5.43 / 4).build(lazy=False)
+
+    cryst = CrystalPotential(
+        unit,
+        repetitions=(2, 2, 4),
+        mixing="phase_scramble",
+        num_frozen_phonons=1,
+        seeds=(0,),
+    )
+    slices = list(cryst.generate_slices(energy=200e3))
+    assert len(slices) == 4 * len(unit)
+    for slic in slices:
+        assert np.all(np.isfinite(slic.array))
+
+
 @pytest.mark.parametrize("device", [gpu, "cpu"])
 def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     """When the frozen-phonon pool is smaller than the number of lateral tiles,

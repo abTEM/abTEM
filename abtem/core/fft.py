@@ -259,6 +259,7 @@ class CachedFFTWConvolution:
     ) -> np.ndarray:
         if array.shape != self._shape:
             self._fftw_objects = None
+            self._shape = array.shape
 
         if self._fftw_objects is None:
             fftw_objects = {
@@ -268,8 +269,9 @@ class CachedFFTWConvolution:
 
         if not overwrite_x:
             array = array.copy()
-            self._fftw_objects["fft2"].update_arrays(array, array)
-            self._fftw_objects["ifft2"].update_arrays(array, array)
+
+        self._fftw_objects["fft2"].update_arrays(array, array)
+        self._fftw_objects["ifft2"].update_arrays(array, array)
 
         array = self._fftw_objects["fft2"]()
         array *= kernel
