@@ -162,9 +162,20 @@ class AxisMetadata:
         )
 
     def _to_blocks(self, chunks):
+        # Mirrors `ArrayObject._partition_ensemble_axes_metadata`'s
+        # `axis[slic] if hasattr(axis, "__getitem__") else axis.copy()`
+        # fallback. Any axis whose metadata depends on WHICH range of the
+        # array it covers (e.g. LinearAxis's offset) must define
+        # __getitem__ to shift that dependent state per block -- without it,
+        # every block silently gets an identical copy of the GLOBAL axis,
+        # including state that is only valid for the first block.
+        # `OrdinalAxis` overrides this method directly rather than relying
+        # on the fallback, since its `values` tuple needs no per-block
+        # adjustment beyond slicing, which `__getitem__` already does.
         arr = np.empty((len(chunks[0]),), dtype=object)
+        has_getitem = hasattr(self, "__getitem__")
         for i, slic in iterate_chunk_ranges(chunks):
-            arr[i] = copy(self)
+            arr[i] = self[slic] if has_getitem else copy(self)
         arr = da.from_array(arr, chunks=1)
         return arr
 
@@ -237,6 +248,70 @@ class LinearAxis(AxisMetadata):
         return tuple(
             np.linspace(self.offset, self.offset + self.sampling * n, n, endpoint=False)
         )
+
+    def __getitem__(self, item):
+        """Return the axis restricted to a contiguous sub-range, with `offset`
+        shifted to match.
+
+        Without this, `_partition_ensemble_axes_metadata` (dask ensemble
+        partitioning) falls back to `hasattr(axis, "__getitem__")` being
+        False and uses `axis.copy()` instead: every chunk gets an identical
+        copy of the GLOBAL axis, including its global `offset`, regardless
+        of which chunk it actually is. A `LinearAxis` (offset + sampling)
+        does not store its own length, so unlike `OrdinalAxis.__getitem__`
+        (which slices an explicit `values` tuple), only `offset` needs to
+        change here -- the number of points continues to come from the
+        array's own shape wherever this axis is used.
+
+        Only simple, positive-step, non-empty slices/indices -- which is all
+        `iterate_chunk_ranges` chunk partitioning ever produces -- are
+        represented exactly; anything else raises TypeError rather than
+        silently returning an axis with the wrong offset. TypeError
+        specifically: `ArrayObject._get_ensemble_axes_metadata_items`
+        (general user-facing indexing, e.g. `waves[::-1]`) already wraps
+        `axis[item]` in `try/except TypeError` and falls back to a plain
+        copy for whatever an axis can't represent exactly -- the same
+        fallback this axis relied on before it had a `__getitem__` at all.
+        Chunk partitioning is unaffected either way, since it never
+        constructs a slice this doesn't support.
+        """
+        kwargs = dataclasses.asdict(self)
+
+        # `iterate_chunk_ranges` always yields a tuple of slices, one per
+        # axis, even when partitioning a single axis on its own (as
+        # `_to_blocks` does) -- numpy's indexing unwraps a length-1 tuple to
+        # its element automatically, which is what makes this transparent
+        # for `OrdinalAxis` (a plain array index); do the same here.
+        if isinstance(item, tuple):
+            if len(item) != 1:
+                raise TypeError(
+                    f"{type(self).__name__} indices must be a single "
+                    f"int/slice or a length-1 tuple of one, got {item!r}"
+                )
+            item = item[0]
+
+        if isinstance(item, Number):
+            start = item
+        elif isinstance(item, slice):
+            if item.step not in (None, 1):
+                raise TypeError(
+                    f"{type(self).__name__} does not support a strided "
+                    f"slice, got step={item.step}"
+                )
+            start = item.start or 0
+            if start < 0 or (item.stop is not None and item.stop <= start):
+                raise TypeError(
+                    f"{type(self).__name__} does not support a negative "
+                    f"or empty slice, got {item}"
+                )
+        else:
+            raise TypeError(
+                f"{type(self).__name__} indices must be an int or a simple "
+                f"positive-step slice, got {type(item).__name__}"
+            )
+
+        kwargs["offset"] = self.offset + start * self.sampling
+        return self.__class__(**kwargs)
 
     def to_ordinal_axis(self, n):
         values = tuple(self.coordinates(n))
@@ -425,6 +500,21 @@ class TiltAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class SpinAxis(OrdinalAxis):
+    """
+    Labeled axis holding the two components of a spinor wave function.
+
+    The two components are mixed by the Pauli multislice solver, unlike
+    ordinary ensemble axes whose members evolve independently, so this
+    axis must never be split across dask chunks. Locate it by isinstance,
+    never by position.
+    """
+
+    label: str = "spin"
+    values: tuple = ("up", "down")
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class ThicknessAxis(NonLinearAxis):
     label: str = "thickness"
     units: str = "Å"
@@ -433,6 +523,59 @@ class ThicknessAxis(NonLinearAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ParameterAxis(NonLinearAxis):
     label: str = ""
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyAxis(NonLinearAxis):
+    label: str = "Energy"
+    units: str = "eV"
+
+    def item_metadata(self, item, metadata=None):
+        # Use the lowercase "energy" key to match the metadata convention used
+        # everywhere else in the codebase (metadata["energy"]).  The inherited
+        # OrdinalAxis implementation would use self.label ("Energy") which would
+        # silently miss all lookups that check for "energy".
+        return {"energy": self.values[item]}
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy in keV regardless of stored eV units."""
+        if formatting is None:
+            formatting = ".3g"
+        value_kev = self.values[0] / 1000.0
+        formatted = f"{value_kev:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} keV"
+        else:
+            return f"{formatted} keV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyLossAxis(NonLinearAxis):
+    """Ensemble axis for energy loss (e.g. phonon/TDS or EELS), distinct from
+    the accelerating beam :class:`.EnergyAxis` so the two never collide in
+    metadata or in code that pattern-matches on ``isinstance(ax, EnergyAxis)``.
+    """
+
+    label: str = "energy loss"
+    units: str = "eV"
+
+    def item_metadata(self, item, metadata=None):
+        return {"energy_loss": self.values[item]}
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy loss in meV."""
+        if formatting is None:
+            formatting = ".3g"
+        value_meV = self.values[0] * 1000.0
+        formatted = f"{value_meV:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} meV"
+        else:
+            return f"{formatted} meV"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

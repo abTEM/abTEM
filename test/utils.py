@@ -119,3 +119,29 @@ def assert_scanned_measurement_as_expected(
 
 
 gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
+
+
+def _gpu_count() -> int:
+    if cp is None:
+        return 0
+    try:
+        return cp.cuda.runtime.getDeviceCount()
+    except Exception:  # pragma: no cover -- driver/runtime hiccup
+        return 0
+
+
+try:
+    import dask_cuda as _dask_cuda  # noqa: F401
+
+    _HAS_DASK_CUDA = True
+except ImportError:
+    _HAS_DASK_CUDA = False
+
+
+# Skip marker for tests that genuinely need to distribute across GPUs: they
+# require both >=2 GPUs and dask-cuda (one worker process per GPU). Use together
+# with `pytest.mark.multigpu` so the suite can be selected with `-m multigpu`.
+requires_multigpu = pytest.mark.skipif(
+    _gpu_count() < 2 or not _HAS_DASK_CUDA,
+    reason="requires >=2 GPUs and dask-cuda",
+)

@@ -17,7 +17,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
 from abtem.core.units import units_type
-from abtem.core.utils import get_dtype
+from abtem.core.utils import cos_sin_deg, get_dtype
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -41,6 +41,42 @@ else:
     Waves = object
     ArrayObject = object
     ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
+
+
+def _energy_from_waves(waves) -> Optional[float]:
+    """Return a scalar electron energy [eV] from *waves*, or ``None`` for a
+    full, un-indexed multi-energy ensemble. Uses the same resolution order as
+    ``Waves._valid_energy`` (see :func:`abtem.core.energy.resolve_energy`),
+    but returns ``None`` instead of raising when unresolved."""
+    from abtem.core.energy import resolve_energy
+
+    return resolve_energy(waves.energy, waves.metadata, waves.ensemble_axes_metadata)
+
+
+def _gpts_and_sampling_from_obj(obj):
+    """Extract grid parameters from waves *or* a DiffractionPatterns object.
+
+    Returns
+    -------
+    gpts : tuple[int, int]
+    angular_sampling : tuple[float, float]   [mrad]
+    reciprocal_space_sampling : tuple[float, float]   [1/Å]
+    energy : float or None   [eV]
+    """
+    from abtem.measurements import DiffractionPatterns
+
+    if isinstance(obj, DiffractionPatterns):
+        gpts = obj.shape[-2:]
+        angular_sampling = obj.angular_sampling
+        reciprocal_space_sampling = obj.sampling
+        energy = obj.metadata.get("energy")
+    else:
+        # BaseWaves
+        gpts = obj._gpts_within_angle("cutoff")
+        angular_sampling = obj.angular_sampling
+        reciprocal_space_sampling = obj.reciprocal_space_sampling
+        energy = _energy_from_waves(obj)
+    return gpts, angular_sampling, reciprocal_space_sampling, energy
 
 
 def validate_detectors(
@@ -181,23 +217,6 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         measurements = waves.apply_transform(self)
         assert isinstance(measurements, (BaseMeasurements, Waves))
         return measurements
-
-    @abstractmethod
-    def angular_limits(self, waves: Waves) -> tuple[float, float]:
-        """
-        The outer limits of the detected scattering angles in x and y [mrad] for the
-        given waves.
-
-        Parameters
-        ----------
-        waves : BaseWaves
-            The waves to derive the detector limits from.
-
-        Returns
-        -------
-        limits : tuple of float
-        """
-
 
 class _AbstractRadialDetector(BaseDetector):
     def __init__(
@@ -427,7 +446,7 @@ class _AbstractRadialDetector(BaseDetector):
                 )
             segmented_regions = self.get_detector_regions(waves)
             diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
-            energy = waves.energy
+            energy = _energy_from_waves(waves)
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
@@ -674,8 +693,9 @@ class AnnularDetector(_AbstractRadialDetector):
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
+        offset = self.offset if self.offset is not None else (0.0, 0.0)
         measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer
+            inner=self.inner, outer=outer, offset=offset,
         )
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
@@ -704,13 +724,14 @@ class AnnularDetector(_AbstractRadialDetector):
         return measurements
 
     def _get_detector_region_array(
-        self, waves: BaseWaves, fftshift: bool = True
+        self, waves, fftshift: bool = True
     ) -> np.ndarray:
         inner, outer = self.angular_limits(waves)
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
 
         array = _polar_detector_bins(
-            gpts=waves._gpts_within_angle("cutoff"),
-            sampling=waves.angular_sampling,
+            gpts=gpts,
+            sampling=angular_sampling,
             inner=inner,
             outer=outer,
             nbins_radial=1,
@@ -723,33 +744,759 @@ class AnnularDetector(_AbstractRadialDetector):
         assert isinstance(array, np.ndarray)
         return array >= 0
 
-    def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
+    def get_detector_region(self, waves, fftshift: bool = True):
         """
         Get the annular detector region as a diffraction pattern.
 
         Parameters
         ----------
-        waves : BaseWaves
-            The waves to derive the annular detector region from.
+        waves : BaseWaves or DiffractionPatterns
+            The waves or diffraction patterns used to derive grid calibration.
         fftshift : bool, optional
-            If True, the zero-frequency of the detector region if shifted to the center
-            of the array, otherwise the center is at (0, 0).
+            If True, the zero-frequency of the detector region is shifted to the
+            centre of the array, otherwise the centre is at (0, 0).
 
         Returns
         -------
         detector_region : DiffractionPatterns
         """
-
         array = self._get_detector_region_array(waves, fftshift=fftshift)
+        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
         metadata = {
-            "energy": waves.energy,
+            "energy": energy,
             "label": "detector efficiency",
             "units": "%",
         }
         diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
+            array, metadata=metadata, sampling=reciprocal_space_sampling
         )
         return diffraction_patterns
+
+
+def _slit_detector_mask(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    center: tuple[float, float],
+    angle: float,
+    extent: float,
+    width: float,
+    fftshift: bool = False,
+    xp=np,
+) -> np.ndarray:
+    """Boolean mask for a rectangular slit in reciprocal space.
+
+    The rectangle is centred at *center*, with its long axis (full length
+    *extent*) rotated by *angle* from kx and full perpendicular width
+    *width*. Membership is tested by rotating the grid into the slit's local
+    frame (long axis along local x) rather than testing against an
+    axis-aligned bounding box, so this is correct for any *angle* — an
+    axis-aligned box only coincides with the true rotated rectangle when
+    *angle* is a multiple of 90 degrees.
+
+    Parameters
+    ----------
+    gpts : (int, int)
+        Grid points.
+    sampling : (float, float)
+        Angular sampling [mrad/pixel].
+    center : (kx, ky)
+        Centre of the slit rectangle [mrad].
+    angle : float
+        Rotation of the long axis [degrees, CCW from kx].
+    extent : float
+        Full length of the slit along its long axis [mrad].
+    width : float
+        Full width of the slit perpendicular to its long axis [mrad].
+    fftshift : bool
+        If True, zero frequency is at the centre of the array.
+    xp : array module
+    """
+    from abtem.core.grid import spatial_frequencies
+
+    kx, ky = spatial_frequencies(
+        gpts,
+        (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]),
+        False,
+        xp,
+    )
+    kx2d = kx[:, None] * xp.ones((1, gpts[1]))
+    ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
+
+    cos_a, sin_a = cos_sin_deg(angle)
+    dx = kx2d - center[0]
+    dy = ky2d - center[1]
+    local_x = dx * cos_a + dy * sin_a
+    local_y = -dx * sin_a + dy * cos_a
+
+    half_extent = extent / 2.0
+    half_width = width / 2.0
+    mask = (
+        (local_x >= -half_extent)
+        & (local_x < half_extent)
+        & (local_y >= -half_width)
+        & (local_y < half_width)
+    )
+
+    if fftshift:
+        mask = xp.fft.fftshift(mask)
+
+    return mask
+
+
+def _corners_from_slit_params(
+    offset: tuple[float, float],
+    angle: float,
+    extent: float,
+    width: float,
+) -> tuple[float, float, float, float]:
+    """Convert slit geometry parameters to axis-aligned corners after rotation.
+
+    The slit is centred at *offset*, has its long axis along *angle* (degrees,
+    CCW from the kx axis), full length *extent* and full width *width*.
+
+    Returns the rotated corners as ``(kx_min, kx_max, ky_min, ky_max)`` in the
+    *rotated* frame — the mask function works in this frame after rotating the
+    coordinate grid by ``-angle``.
+    """
+    half_e = extent / 2.0
+    half_w = width / 2.0
+    # corners in the rotated frame, centred at origin
+    corners_local = np.array(
+        [[-half_e, -half_w], [-half_e, half_w], [half_e, -half_w], [half_e, half_w]]
+    )
+    cos_a, sin_a = cos_sin_deg(angle)
+    R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    corners_world = corners_local @ R.T + np.array(offset)
+    kx_min, ky_min = corners_world.min(axis=0)
+    kx_max, ky_max = corners_world.max(axis=0)
+    return float(kx_min), float(kx_max), float(ky_min), float(ky_max)
+
+
+class SpectralSlitDetector(BaseDetector):
+    """
+    A rectangular slit detector in reciprocal (diffraction) space.
+
+    The slit can be defined in two ways:
+
+    **Geometry mode** — specify size, q-range and orientation:
+
+    Parameters
+    ----------
+    width : float
+        **Full** width of the slit perpendicular to its long axis [mrad].
+        This is the full integration aperture, *not* the half-width.  For
+        equivalent integration coverage perpendicular to the q-scan direction
+        as a :class:`SpectralAnnularDetector` with acceptance radius
+        ``outer=r``, use ``width = 2 * r`` (the disk diameter, not the
+        radius).
+    q_min : float, optional
+        Start of the q-axis [mrad].  Default is 0, which includes q=0 (the
+        direct beam direction) as the first point of the spectrum.  Set to a
+        positive value to exclude the low-q / direct-beam region, e.g.
+        ``q_min=10`` to start at 10 mrad.  Directly comparable to the
+        ``q_min`` parameter of :class:`SpectralAnnularDetector`.
+    q_max : float
+        Maximum scattering vector along the slit's long axis [mrad].  Directly
+        comparable to the ``q_max`` parameter of
+        :class:`SpectralAnnularDetector`.
+    angle : float, optional
+        Rotation of the long axis of the slit [degrees, CCW from kx axis].
+        Default is 0.
+    offset : two floats, optional
+        Origin of the q-axis sweep ``(kx, ky)`` [mrad].  The q-axis starts
+        here (at ``q_min``) and extends in the direction given by ``angle``.
+        Default is ``(0, 0)``, i.e. the sweep starts from the diffraction
+        pattern centre.
+    q_sampling : float, optional
+        Desired q-axis bin size [mrad].  If None (default) the native
+        pixel sampling of the diffraction pattern is used.  Setting a
+        larger value bins adjacent line samples together, producing fewer
+        q-points and a faster spectrum.
+
+    **Corner mode** — specify the four sides directly:
+
+    Parameters
+    ----------
+    corners : (kx_min, kx_max, ky_min, ky_max)
+        Axis-aligned bounds of the rectangle [mrad], with signs measured from
+        the diffraction-pattern origin.  Incompatible with *offset*, *angle*,
+        *q_min*, *q_max* and *width*.  The q-axis origin is taken as
+        ``(kx_min, (ky_min+ky_max)/2)``, so ``q=0`` maps to the left edge of
+        the rectangle.
+
+    Common parameters
+    -----------------
+    to_cpu : bool, optional
+        Copy result to CPU after detection.  Default is True.
+    url : str, optional
+        Save path for the measurement.
+
+    Notes
+    -----
+    **Comparing slit and annular detectors**
+
+    Both detector types share the same ``q_min``/``q_max`` convention — the
+    same numerical value gives the same scattering-vector range in the output
+    spectrum.  The perpendicular acceptance differs: the slit integrates a
+    rectangle of full width ``width``, while the annular detector integrates a
+    disk of radius ``outer``.
+
+    ===========================  =================================
+    SpectralSlitDetector         SpectralAnnularDetector
+    ===========================  =================================
+    ``width`` — full slit width  ``outer`` — acceptance **radius**
+    ``q_min`` — start q (≥ 0)    ``q_min`` — start q (≥ 0)
+    ``q_max`` — max q            ``q_max`` — max q
+    ``angle`` — sweep direction  ``angle`` — sweep direction
+    ===========================  =================================
+
+    For equivalent perpendicular acceptance and the same q-range::
+
+        SpectralSlitDetector(width=2*r, q_min=Q0, q_max=Q)
+        SpectralAnnularDetector(outer=r, q_min=Q0, q_max=Q)
+
+    Note that ``width = 2 * outer``: the slit ``width`` is the full aperture
+    diameter, whereas ``outer`` is the acceptance *radius*.
+    """
+
+    def __init__(
+        self,
+        width: Optional[float] = None,
+        q_min: float = 0.0,
+        q_max: Optional[float] = None,
+        angle: float = 0.0,
+        offset: tuple[float, float] = (0.0, 0.0),
+        corners: Optional[tuple[float, float, float, float]] = None,
+        q_sampling: Optional[float] = None,
+        to_cpu: bool = True,
+        url: Optional[str] = None,
+    ):
+        self._q_sampling = float(q_sampling) if q_sampling is not None else None
+        if corners is not None:
+            if (
+                q_max is not None
+                or width is not None
+                or angle != 0.0
+                or offset != (0.0, 0.0)
+                or q_min != 0.0
+            ):
+                raise ValueError(
+                    "Provide either 'corners' or 'offset'/'angle'/'q_min'/'q_max'/'width', not both."
+                )
+            if len(corners) != 4:
+                raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
+            self._corners = tuple(float(c) for c in corners)
+            # offset = start of q-sweep (left edge, ky-centre), consistent with
+            # geometry mode where offset is the q=0 origin.
+            self._offset = (
+                float(corners[0]),
+                (corners[2] + corners[3]) / 2.0,
+            )
+            self._angle = 0.0
+            self._extent = float(corners[1] - corners[0])
+            self._width = float(corners[3] - corners[2])
+            self._q_min = 0.0
+            self._center = (
+                (corners[0] + corners[1]) / 2.0,
+                (corners[2] + corners[3]) / 2.0,
+            )
+        else:
+            if q_max is None or width is None:
+                raise ValueError("Provide both 'q_max' and 'width' when not using 'corners'.")
+            q_min = float(q_min)
+            q_max = float(q_max)
+            if q_min < 0 or q_min >= q_max:
+                raise ValueError(f"q_min must satisfy 0 <= q_min < q_max, got q_min={q_min}, q_max={q_max}.")
+            self._q_min = q_min
+            self._offset = tuple(float(v) for v in offset)
+            self._angle = float(angle)
+            # Physical slit extent and centre: spans from q_min to q_max along
+            # the slit direction, centred at offset + (q_min+q_max)/2 * direction.
+            cos_a, sin_a = cos_sin_deg(float(angle))
+            slit_center = (
+                offset[0] + (q_min + q_max) / 2.0 * cos_a,
+                offset[1] + (q_min + q_max) / 2.0 * sin_a,
+            )
+            self._extent = q_max - q_min
+            self._width = float(width)
+            self._center = slit_center
+            # AABB retained only for introspection/display via the `corners`
+            # property; the detector mask itself uses _center/_angle directly
+            # (see _slit_detector_mask) so it is correct for any angle.
+            self._corners = _corners_from_slit_params(
+                slit_center, self._angle, self._extent, self._width
+            )
+        super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def offset(self) -> tuple[float, float]:
+        """Origin of the q-axis sweep (kx, ky) [mrad].  The q-axis starts here."""
+        return self._offset
+
+    @property
+    def angle(self) -> float:
+        """Long-axis rotation angle [degrees]."""
+        return self._angle
+
+    @property
+    def q_min(self) -> float:
+        """Start of the q-axis [mrad]."""
+        return self._q_min
+
+    @property
+    def q_max(self) -> float:
+        """Maximum scattering vector along the slit's long axis [mrad] (= q_min + extent)."""
+        return self._q_min + self._extent
+
+    @property
+    def extent(self) -> float:
+        """Physical length of the slit along its long axis [mrad] (= q_max - q_min)."""
+        return self._extent
+
+    @property
+    def q_sampling(self) -> Optional[float]:
+        """q-axis bin size [mrad], or None for native DP sampling."""
+        return self._q_sampling
+
+    @property
+    def width(self) -> float:
+        """Full width perpendicular to the long axis [mrad]."""
+        return self._width
+
+    @property
+    def corners(self) -> tuple[float, float, float, float]:
+        """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
+        return self._corners
+
+    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
+        """Radial bounds [mrad] of the acceptance region, for grid-sufficiency
+        checks. The slit has no rotationally-symmetric inner exclusion, so
+        the inner bound is 0; the outer bound is the farthest distance from
+        the origin reached by the bounding rectangle's corners."""
+        kx_min, kx_max, ky_min, ky_max = self.corners
+        outer = max(
+            float(np.hypot(kx, ky))
+            for kx in (kx_min, kx_max)
+            for ky in (ky_min, ky_max)
+        )
+        return 0.0, outer
+
+    def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
+        metadata = super()._out_metadata(array_object)[0]
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        return (metadata,)
+
+    def _out_ensemble_axes_metadata(
+        self, waves: WavesType
+    ) -> tuple[list[AxisMetadata]]:
+        source = _scan_axes(waves)
+        scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
+        ensemble_axes_metadata = [
+            m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
+        ]
+        return (ensemble_axes_metadata + scan_axes_metadata,)
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        return ([],)
+
+    def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
+        ensemble_shapes = super()._out_ensemble_shape(waves)
+        if len(_scan_shape(waves)) == 0:
+            return ensemble_shapes
+        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
+
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
+        return (_scan_shape(waves),)
+
+    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
+        return (get_dtype(complex=False),)
+
+    def _out_type(
+        self, waves: WavesType
+    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
+        return (_scanned_measurement_type(waves),)
+
+    def _get_detector_region_array(
+        self, waves, fftshift: bool = True
+    ) -> np.ndarray:
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+        xp = np
+        return _slit_detector_mask(
+            gpts=gpts,
+            sampling=angular_sampling,
+            center=self._center,
+            angle=self._angle,
+            extent=self._extent,
+            width=self._width,
+            fftshift=fftshift,
+            xp=xp,
+        )
+
+    def get_detector_region(self, waves, fftshift: bool = True):
+        """
+        Get the slit detector region as a DiffractionPatterns object.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            The waves or diffraction patterns used to derive grid calibration.
+        fftshift : bool, optional
+            If True, the zero-frequency component is shifted to the centre.
+        """
+        array = self._get_detector_region_array(waves, fftshift=fftshift)
+        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
+        metadata = {
+            "energy": energy,
+            "label": "detector efficiency",
+            "units": "%",
+        }
+        return DiffractionPatterns(
+            array, metadata=metadata, sampling=reciprocal_space_sampling
+        )
+
+    @staticmethod
+    def _show_pattern_bg(ax, waves, power):
+        """Render the summed DP as a grayscale imshow background."""
+        from abtem.measurements import DiffractionPatterns
+
+        if not isinstance(waves, DiffractionPatterns):
+            raise ValueError(
+                "show_pattern=True requires a DiffractionPatterns object"
+            )
+        arr = np.array(
+            waves.array.compute() if hasattr(waves.array, "compute") else waves.array
+        )
+        if arr.ndim > 2:
+            arr = arr.sum(axis=tuple(range(arr.ndim - 2)))
+        if not getattr(waves, "fftshift", True):
+            arr = np.fft.fftshift(arr)
+        if power != 1.0:
+            arr = np.abs(arr) ** power
+        mx, my = waves.max_angles
+        from abtem.core import config
+
+        cmap = config.get("visualize.cmap", "viridis")
+        ax.imshow(
+            arr,
+            extent=[-mx, mx, -my, my],
+            origin="lower",
+            cmap=cmap,
+            aspect="equal",
+        )
+        return mx, my
+
+    def show(
+        self,
+        waves,
+        show_pattern: bool = False,
+        power: float = 0.5,
+        ax=None,
+        figsize=None,
+        **kwargs,
+    ):
+        """
+        Show the slit detector region as a polygon patch.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            Provides grid calibration.  When *show_pattern* is True, the
+            diffraction pattern (summed over all ensemble axes) is shown as a
+            grayscale background and *waves* must be a
+            :class:`~abtem.measurements.DiffractionPatterns`.
+        show_pattern : bool, optional
+            Overlay the patch on the summed diffraction pattern.  Requires a
+            :class:`~abtem.measurements.DiffractionPatterns` as *waves*.
+        power : float, optional
+            Exponent applied to the pattern before display (default 0.5 →
+            square-root stretch).  Ignored when *show_pattern* is False.
+        ax : matplotlib Axes, optional
+        figsize : tuple, optional
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Polygon as MplPolygon
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize or (6, 6))
+
+        mx = my = None
+        if show_pattern:
+            mx, my = self._show_pattern_bg(ax, waves, power)
+
+        # Compute world-space corners of the rotated rectangle.
+        cos_a, sin_a = cos_sin_deg(self._angle)
+        half_e = self._extent / 2.0
+        half_w = self._width / 2.0
+        # Centre of the slit rectangle in world coords
+        center = np.array([
+            self._offset[0] + (self._q_min + half_e) * cos_a,
+            self._offset[1] + (self._q_min + half_e) * sin_a,
+        ])
+        R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        local = np.array([
+            [-half_e, -half_w],
+            [half_e, -half_w],
+            [half_e, half_w],
+            [-half_e, half_w],
+        ])
+        world = local @ R.T + center
+
+        patch = MplPolygon(
+            world,
+            closed=True,
+            facecolor="red",
+            alpha=0.25,
+            edgecolor="red",
+            linewidth=1.5,
+        )
+        ax.add_patch(patch)
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("kx [mrad]")
+        ax.set_ylabel("ky [mrad]")
+        if not show_pattern:
+            ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+            ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if mx is not None:
+            ax.set_xlim(-mx, mx)
+            ax.set_ylim(-my, my)
+        else:
+            lim = (self.q_max + self._width) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+        ax.set_title(
+            f"SpectralSlitDetector  width={self._width} mrad  angle={self._angle}°"
+        )
+        return ax
+
+    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
+        xp = get_array_module(waves.array)
+
+        diffraction_patterns = waves.diffraction_patterns(
+            max_angle="full", parity="same", fftshift=False
+        )
+        gpts = diffraction_patterns.shape[-2:]
+        sampling = diffraction_patterns.angular_sampling
+
+        mask = _slit_detector_mask(
+            gpts=gpts,
+            sampling=sampling,
+            center=self._center,
+            angle=self._angle,
+            extent=self._extent,
+            width=self._width,
+            fftshift=False,
+            xp=xp,
+        )
+        intensity = xp.sum(
+            diffraction_patterns._eager_array * mask, axis=(-2, -1)
+        )
+
+        if self.to_cpu and hasattr(intensity, "get"):
+            intensity = intensity.get()
+
+        return intensity
+
+    def detect(
+        self, waves: WavesType
+    ) -> Images | RealSpaceLineProfiles | MeasurementsEnsemble:
+        """
+        Detect the given waves producing images.
+
+        Parameters
+        ----------
+        waves : Waves
+
+        Returns
+        -------
+        measurement : Images or RealSpaceLineProfiles
+        """
+        measurements = self.apply(waves)
+        assert isinstance(
+            measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
+        )
+        return measurements
+
+
+class SpectralAnnularDetector(AnnularDetector):
+    """
+    Sweeps an offset circular acceptance region over q to build S(q, E).
+
+    The acceptance disk (radius ``outer``, inner always 0) is centred at
+    ``(q·cos(angle), q·sin(angle))`` for each q in ``[q_min, q_max)``.
+    Pass to :func:`abtem.momentum_resolved_spectrum` together with
+    energy-resolved diffraction patterns to obtain a
+    :class:`~abtem.measurements.MomentumResolvedSpectrum`.
+
+    Parameters
+    ----------
+    outer : float
+        Acceptance **radius** [mrad] of the integration disk at each q-point.
+        The full disk diameter is ``2 * outer``.  The q-axis in the resulting
+        :class:`~abtem.measurements.MomentumResolvedSpectrum` runs from
+        ``q_min`` to ``q_max`` in approximately ``outer``-sized steps.  For
+        equivalent perpendicular
+        acceptance as a :class:`SpectralSlitDetector` with ``width=w``, use
+        ``outer = w / 2``.
+    q_min : float, optional
+        Start of the q sweep [mrad].  Default is 0.
+    q_max : float, optional
+        End of the q sweep [mrad].  If None (default), the diffraction-pattern
+        cutoff angle is used at call time.  To cover the same q-range as a
+        :class:`SpectralSlitDetector` with ``q_max=Q``, use the same
+        ``q_max=Q``.
+    angle : float, optional
+        Direction of the q sweep [degrees, CCW from kx].  Default is 0.
+    q_sampling : float, optional
+        Step between q-points [mrad].  If None (default) the step equals
+        ``outer`` (one disk-radius per step).  Setting a larger value
+        produces fewer q-points and a faster spectrum.
+    to_cpu : bool, optional
+    url : str, optional
+
+    Notes
+    -----
+    **Comparing annular and slit detectors**
+
+    =========================  ====================================
+    SpectralAnnularDetector    SpectralSlitDetector
+    =========================  ====================================
+    ``outer`` — disk radius    ``width/2`` — half-width
+    ``q_max`` — max q          ``q_max`` — max q
+    =========================  ====================================
+
+    For equivalent perpendicular acceptance and the same q-range::
+
+        SpectralAnnularDetector(outer=r, q_max=Q)
+        SpectralSlitDetector(q_max=Q, width=2*r)
+    """
+
+    def __init__(
+        self,
+        outer: float,
+        q_min: float = 0.0,
+        q_max: Optional[float] = None,
+        angle: float = 0.0,
+        q_sampling: Optional[float] = None,
+        to_cpu: bool = True,
+        url: Optional[str] = None,
+    ):
+        self._q_min = float(q_min)
+        self._q_max = q_max
+        self._sweep_angle = float(angle)
+        self._q_sampling = float(q_sampling) if q_sampling is not None else None
+        super().__init__(
+            inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
+        )
+
+    @property
+    def q_min(self) -> float:
+        """Start of the q sweep [mrad]."""
+        return self._q_min
+
+    @property
+    def q_max(self) -> Optional[float]:
+        """End of the q sweep [mrad], or None to use the DP cutoff angle."""
+        return self._q_max
+
+    @property
+    def q_sampling(self) -> Optional[float]:
+        """Step between q-points [mrad], or None to use ``outer``."""
+        return self._q_sampling
+
+    @property
+    def sweep_angle(self) -> float:
+        """Direction of the q sweep [degrees, CCW from kx]."""
+        return self._sweep_angle
+
+    def show(
+        self,
+        waves,
+        show_pattern: bool = False,
+        power: float = 0.5,
+        ax=None,
+        figsize=None,
+        **kwargs,
+    ):
+        """
+        Show all acceptance-disk positions along the q-sweep.
+
+        Each disk (radius ``outer``) is drawn at the q-position it would be
+        centred on when computing a spectrum, so the full sweep from ``q_min``
+        to ``q_max`` is visible at once.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            Provides grid calibration and, when *show_pattern* is True, the
+            diffraction data.  Must be a
+            :class:`~abtem.measurements.DiffractionPatterns` when
+            *show_pattern* is True.
+        show_pattern : bool, optional
+            Overlay the disks on the summed diffraction pattern shown as a
+            grayscale background.
+        power : float, optional
+            Exponent applied to the pattern before display (default 0.5 →
+            square-root stretch).  Ignored when *show_pattern* is False.
+        ax : matplotlib Axes, optional
+        figsize : tuple, optional
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+
+        from abtem.measurements import DiffractionPatterns
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize or (6, 6))
+
+        mx = my = None
+        if show_pattern:
+            mx, my = SpectralSlitDetector._show_pattern_bg(ax, waves, power)
+
+        # q-values that will be swept
+        if isinstance(waves, DiffractionPatterns):
+            q_max_dp = min(waves.max_angles)
+        else:
+            q_max_dp = min(waves.cutoff_angles)
+        q_max = self.q_max if self.q_max is not None else q_max_dp
+        step = self.q_sampling if self.q_sampling is not None else self.outer
+        n_steps = max(2, round((q_max - self.q_min) / step) + 1)
+        q_vals = np.linspace(self.q_min, q_max, n_steps)
+
+        cos_a, sin_a = cos_sin_deg(self._sweep_angle)
+
+        for q in q_vals:
+            cx, cy = q * cos_a, q * sin_a
+            ax.add_patch(
+                Circle(
+                    (cx, cy),
+                    self.outer,
+                    fill=False,
+                    edgecolor="red",
+                    linewidth=0.8,
+                    alpha=0.6,
+                )
+            )
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("kx [mrad]")
+        ax.set_ylabel("ky [mrad]")
+        if not show_pattern:
+            ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+            ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if mx is not None:
+            ax.set_xlim(-mx, mx)
+            ax.set_ylim(-my, my)
+        else:
+            lim = (q_max + self.outer) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+        ax.set_title(
+            f"SpectralAnnularDetector  outer={self.outer} mrad"
+            f"  angle={self._sweep_angle}°"
+        )
+        return ax
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
@@ -919,17 +1666,18 @@ class PixelatedDetector(BaseDetector):
     max_angle : float or {'cutoff', 'valid', 'full'}
         The diffraction patterns will be detected up to this angle [mrad].
         If str, it must be one of:
-            ``cutoff`` :
-                The maximum scattering angle will be the cutoff of the antialiasing
-                aperture.
-            ``valid`` :
-                The maximum scattering angle will be the largest rectangle that fits
-                inside the circular antialiasing aperture (default).
-            ``full`` :
-                Diffraction patterns will not be cropped and will include angles outside
-                the antialiasing aperture.
+
+        ``cutoff``
+            The maximum scattering angle will be the cutoff of the antialiasing
+            aperture.
+        ``valid``
+            The maximum scattering angle will be the largest rectangle that fits
+            inside the circular antialiasing aperture (default).
+        ``full``
+            Diffraction patterns will not be cropped and will include angles outside
+            the antialiasing aperture.
     resample : str or False
-        If 'uniform', the diffraction patterns from rectangular cells will be ¨
+        If 'uniform', the diffraction patterns from rectangular cells will be
         downsampled to a uniform angular sampling.
     reciprocal_space : bool, optional
         If True (default), the diffraction pattern intensities are detected, otherwise

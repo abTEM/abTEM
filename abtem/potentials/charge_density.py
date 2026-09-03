@@ -18,7 +18,7 @@ from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.utils import itemset
+from abtem.core.utils import get_dtype, itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -62,7 +62,7 @@ def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
 
     Parameters
     ----------
-    vector_field : np.ndarray
+    vector_field : numpy.ndarray
         Array representing a vector field of dimension 3.
     cell : ase.cell.Cell
         ASE `Cell` object defining the region of space where the vector field is
@@ -70,7 +70,7 @@ def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
 
     Returns
     -------
-    curl : np.ndarray
+    curl : numpy.ndarray
         Array representing the curl of the vector field.
     """
 
@@ -97,7 +97,7 @@ def integrate_gradient_fourier(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array representing a gradient of dimension 3.
     cell : ase.cell.Cell
         ASE `Cell` object defining the region of space where the gradient is integrated.
@@ -108,7 +108,7 @@ def integrate_gradient_fourier(
 
     Returns
     -------
-    integrated : np.ndarray
+    integrated : numpy.ndarray
         Integrated gradient.
     """
 
@@ -188,7 +188,7 @@ def add_point_charges_fourier(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array representing 3D charge density to which the point charges are added.
     atoms : ase.Atoms
         Atoms from which the nuclear charges with magnitudes and positions are
@@ -198,7 +198,7 @@ def add_point_charges_fourier(
 
     Returns
     -------
-    density : np.ndarray
+    density : numpy.ndarray
         3D charge density with added nuclear charges in reciprocal space.
     """
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
@@ -321,7 +321,7 @@ class ChargeDensityPotential(_PotentialBuilder):
     atoms : Atoms or FrozenPhonons
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
-    charge_density : np.ndarray
+    charge_density : numpy.ndarray
         Charge density as a 3D NumPy array [electrons / Å^3].
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
@@ -396,7 +396,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         else:
             raise RuntimeError()
 
-        self._charge_density = charge_density.astype(np.float32)
+        self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
 
         cell = self._frozen_phonons.atoms.cell * repetitions
@@ -595,7 +595,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             Index of the last slice of the generated potential.
         Returns
         -------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:

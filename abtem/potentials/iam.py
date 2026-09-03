@@ -36,10 +36,10 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
-from abtem.core.complex import complex_exponential
+from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -58,6 +58,8 @@ from abtem.slicing import (
     SlicedAtoms,
     SliceIndexedAtoms,
     _validate_slice_thickness,
+    commensurate_gpts,
+    commensurate_slice_thickness,
     slice_limits,
 )
 
@@ -104,6 +106,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
+        if len(exit_planes) == 0:
+            return np.zeros(len(self), dtype=bool)
+
         if exit_planes[0] == -1:
             exit_plane_index += 1
 
@@ -135,6 +140,97 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     @abstractmethod
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Previously, ``build()`` always placed the entire slice dimension into a
+        single dask chunk — meaning the full ``(num_slices, gpts_y, gpts_x)``
+        array had to fit in memory (or VRAM) at once. There was no slice-level
+        chunking. This method introduces that missing middle ground: it eagerly
+        builds a group of contiguous slices that fits within a configurable
+        memory budget, yields it as a ``PotentialArray``, and the caller can
+        discard it after propagation before the next chunk is built. This
+        bounds peak memory and enables simulations of systems whose full
+        potential would not fit in memory.
+
+        On GPU this is especially important: dask uses a synchronous scheduler,
+        so the full potential chunk would be materialized at once in VRAM.
+        Chunking over slices keeps VRAM usage bounded while still feeding the
+        GPU enough data per chunk for efficient computation.
+
+        This default implementation collects slices from ``generate_slices()``
+        and stacks them. Subclasses may override for more efficient
+        implementations (e.g. ``_FieldBuilderFromAtoms`` uses
+        ``build(first_slice, last_slice)`` to avoid intermediate single-slice
+        allocations).
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget (``dask.chunk-size`` on CPU,
+            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
+
+        Yields
+        ------
+        PotentialArray
+            A chunk of contiguous potential slices with correctly assigned
+            exit planes.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            arrays = []
+            slice_thicknesses = []
+            for slic in self.generate_slices(chunk_start, chunk_end):
+                arrays.append(slic.array)
+                slice_thicknesses.extend(slic.slice_thickness)
+
+            array = xp.concatenate(arrays, axis=0)
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = PotentialArray(
+                array,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
 
     @abstractmethod
     def build(
@@ -727,7 +823,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
-        elif tuple(np.diag(atoms.cell)) != self.box:
+        # `diag(atoms.cell) == self.box` is not by itself proof the cell is
+        # orthogonal: for a near-orthorhombic cell with off-diagonal noise
+        # below ~2e-8 relative, best_orthogonal_cell's box norms round to
+        # the exact diagonal entries in float64 (see the matching guard in
+        # atoms.py's orthogonalize_cell). Also require is_cell_orthogonal
+        # so such noisy cells still reach orthogonalize_cell below instead
+        # of being silently used as-is.
+        elif tuple(np.diag(atoms.cell)) != self.box or not is_cell_orthogonal(
+            atoms.cell
+        ):
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,
@@ -769,6 +874,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # outside all bins and is silently dropped.  Snap those back to 0.
             cell_z = atoms.cell[2, 2]
             atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+            # Same issue for x and y: orthogonalize_cell can produce -0.0 or tiny-
+            # negative values from matrix multiplication.  wrap(eps=0.0) maps -ε to
+            # L-ε rather than 0, placing the atom's FFT peak at the wrong position.
+            for ax in (0, 1):
+                L = atoms.cell[ax, ax]
+                atoms.positions[atoms.positions[:, ax] > L - 1e-10, ax] = 0.0
+                atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -824,7 +936,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -891,6 +1003,72 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             else:
                 yield potential_array
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Overrides the base class to use ``build(first_slice, last_slice,
+        lazy=False)`` for each chunk range. This eagerly computes a contiguous
+        block of slices directly into a single allocation, avoiding the
+        overhead of building and stacking individual slices. Each chunk is
+        discarded by the caller after propagation, so only one chunk needs
+        to reside in memory (or VRAM) at a time.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            An eagerly computed chunk of contiguous potential slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            chunk = self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
+
+            # Remap exit planes to chunk-local indices (build() sets the
+            # full potential's exit_planes which are global indices).
+            chunk._exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            yield chunk
+
     @property
     def ensemble_axes_metadata(self):
         return self.frozen_phonons.ensemble_axes_metadata
@@ -914,7 +1092,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def _from_partitioned_args(self, *args, **kwargs):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
+        # integrator is excluded from the deep-copied kwargs and passed through
+        # by reference: generate_blocks()/ensemble_blocks() reconstruct a fresh
+        # Potential per ensemble member, and integrators (e.g.
+        # QuadratureProjectionIntegrals) lazily cache per-symbol projection
+        # tables and, on GPU, device-resident arrays specifically so repeated
+        # calls across many slices don't re-upload them (see the PR #309
+        # discussion in integrals.py). Deep-copying the integrator per member
+        # silently defeats that cache for every single ensemble member -- on
+        # GPU this means a real device-to-device copy of the cached arrays for
+        # every member, for no benefit, since the copy is used once and
+        # discarded.
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling", "integrator"))
+        kwargs["integrator"] = self.integrator
 
         return partial(
             self._from_partitioned_args_func,
@@ -969,16 +1159,29 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Number of grid points in `x` and `y` describing each slice of the potential.
         Provide either "sampling" (spacing between consecutive grid points) or "gpts"
         (total number of grid points).
-    sampling : one or two float, optional
+    sampling : one or two float or 'auto', optional
         Sampling of the potential in `x` and `y` [Å].
-        Provide either "sampling" or "gpts".
-    slice_thickness : float or sequence of float, optional
+        Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
+        to be commensurate with the atom positions (closest to a default of 0.05 Å)
+        and, whenever compatible with commensurability, a fast FFT size (all prime
+        factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
+        when it is already such a size. Set the configuration option
+        'grid.round-to-fast-fft' to False for the plain commensurate grid.
+        For an `AtomsEnsemble` with more than one configuration (e.g. an MD
+        trajectory), each configuration is an independent, generally
+        non-commensurate snapshot, so commensurability is not attempted and the
+        target sampling is used directly (rounded up to a fast FFT size).
+    slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
         (default is 1 Å).
         If given as a float, the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
         the sum of slice thicknesses is not equal to the height of the atoms.
+        If 'auto', slice boundaries are aligned with the crystal planes, with slices
+        merged to stay close to a default of 1.0 Å. As with `sampling`, this
+        commensurability search is skipped for an `AtomsEnsemble` with more than
+        one configuration, which uses a uniform 1.0 Å target thickness instead.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential
         for each element. Two of the most accurate parametrizations are available
@@ -1033,8 +1236,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         self,
         atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
-        sampling: float | tuple[float, float] | None = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        sampling: float | tuple[float, float] | str | None = None,
+        slice_thickness: float | tuple[float, ...] | str = 1,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] | None = None,
@@ -1047,6 +1250,95 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
     ):
+        frozen_phonons = _validate_frozen_phonons(atoms)
+        atoms_obj = frozen_phonons.atoms
+        # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no
+        # shared reference lattice: each configuration is an independent,
+        # generally non-commensurate snapshot, and `atoms_obj` here is only the
+        # first frame. A single-configuration `AtomsEnsemble` has no such
+        # ambiguity — that one frame *is* the configuration, just as it would be
+        # if passed as plain `Atoms` — so only skip commensurability search when
+        # there is genuinely more than one configuration to be ambiguous about.
+        has_multiple_configs = (
+            isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
+        )
+
+        if sampling == "auto":
+            if gpts is not None:
+                raise ValueError(
+                    "Cannot specify both gpts and sampling='auto'"
+                )
+            cell = np.array(atoms_obj.cell)
+            if not atoms_obj.pbc[:2].all() or has_multiple_configs:
+                # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
+                # translationally repeated, so commensurability has no meaning and
+                # the period-search algorithm may produce spurious results for
+                # arbitrary rotations. A multi-configuration `AtomsEnsemble` has
+                # the same problem: the chosen grid is applied to every frame
+                # regardless, and searching for commensurate planes in one
+                # arbitrary frame is meaningless. Just use the target sampling
+                # directly, rounded up to a fast FFT size (no commensurability
+                # constrains the grid here, so rounding is free).
+                from abtem.core.fft import next_fast_fft_size
+
+                if box is not None:
+                    extent = box[:2]
+                else:
+                    extent = (float(cell[0, 0]), float(cell[1, 1]))
+                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+                if round_auto_derived_gpts():
+                    gpts = tuple(next_fast_fft_size(n) for n in gpts)
+            elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                if not isinstance(plane, str):
+                    raise NotImplementedError
+                axes = plane_to_axes(plane)
+                cell_2d = cell[:, list(axes)]
+                auto_box = tuple(best_orthogonal_cell(cell_2d))
+                extent = auto_box[:2]
+                # Transform atoms to orthogonal cell so positions match the extent
+                _auto_atoms = orthogonalize_cell(
+                    atoms_obj,
+                    box=auto_box,
+                    plane=plane,
+                    origin=origin,
+                    return_transform=False,
+                    allow_transform=True,
+                )
+                gpts = commensurate_gpts(
+                    extent,
+                    _auto_atoms.positions,
+                    target_sampling=0.05,
+                    round_to_fast_fft=round_auto_derived_gpts(),
+                )
+            else:
+                if box is not None:
+                    extent = box[:2]
+                    _auto_atoms = atoms_obj
+                else:
+                    extent = (float(cell[0, 0]), float(cell[1, 1]))
+                    _auto_atoms = atoms_obj
+                gpts = commensurate_gpts(
+                    extent,
+                    _auto_atoms.positions,
+                    target_sampling=0.05,
+                    round_to_fast_fft=round_auto_derived_gpts(),
+                )
+            sampling = None
+
+        if slice_thickness == "auto":
+            if atoms_obj.pbc[2] and not has_multiple_configs:
+                # Periodic in z: align slice boundaries with crystal planes.
+                slice_thickness = commensurate_slice_thickness(
+                    atoms_obj, target_thickness=1.0
+                )
+            else:
+                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or a
+                # multi-configuration `AtomsEnsemble` (independent snapshots with
+                # no shared commensurate lattice, see the sampling branch above):
+                # crystal-plane commensurability is not applicable; use a uniform
+                # target thickness and let _validate_slice_thickness divide evenly.
+                slice_thickness = 1.0
+
         if integrator is None:
             if projection == "finite":
                 integrator = QuadratureProjectionIntegrals(
@@ -1141,7 +1433,7 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        slices : generator of np.ndarray
+        slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
@@ -1168,6 +1460,81 @@ class FieldArray(BaseField, ArrayObject):
             stop += 1
 
             yield slic
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        For a pre-built ``PotentialArray`` the data is already in memory
+        (or backed by a dask array whose single chunk spans all slices).
+        This method yields views into the existing array without any new
+        allocation or copy, so chunking only controls iteration grouping.
+
+        Note: if the array is dask-backed, the full potential is still
+        materialized as a single chunk when computed (dask never chunks
+        along the slice axis). To benefit from true memory-bounded
+        slice chunking, pass an unbuilt :class:`.Potential` to the
+        multislice algorithm instead.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            A view into the existing array covering a chunk of slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            s = (0,) * (len(self.array.shape) - 3) + (
+                slice(chunk_start, chunk_end),
+            )
+            chunk_array = self.array[s]
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = self.__class__(
+                chunk_array,
+                slice_thickness=self.slice_thickness[chunk_start:chunk_end],
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
 
     def __getitem__(self, items):
         if isinstance(items, (Number, slice)):
@@ -1206,6 +1573,20 @@ class FieldArray(BaseField, ArrayObject):
         kwargs["array"] = array
         kwargs["slice_thickness"] = slice_thickness
         kwargs["sampling"] = None
+
+        # the exit planes index the slices, hence they have to be mapped into the
+        # sliced potential; those falling outside it are dropped, and if none
+        # remain the exit plane defaults to the last slice of the new potential
+        selected = np.atleast_1d(
+            np.arange(potential_array.num_slices)[slic_items[0]]
+        )
+        exit_planes = tuple(
+            int(np.flatnonzero(selected == plane)[0])
+            for plane in potential_array.exit_planes
+            if plane in selected
+        )
+        kwargs["exit_planes"] = exit_planes if exit_planes else None
+
         return potential_array.__class__(**kwargs)
 
     def tile(self, repetitions: tuple[int, int] | tuple[int, int, int]):
@@ -1229,9 +1610,12 @@ class FieldArray(BaseField, ArrayObject):
 
         assert len(repetitions) == 3
 
-        new_array = np.tile(
-            self.array, (repetitions[2], repetitions[0], repetitions[1])
-        )
+        tile_reps = [1] * len(self.array.shape)
+        tile_reps[-self._base_dims] = repetitions[2]
+        tile_reps[-2] = repetitions[0]
+        tile_reps[-1] = repetitions[1]
+
+        new_array = np.tile(self.array, tuple(tile_reps))
 
         if self.extent is not None:
             new_extent = (
@@ -1362,7 +1746,7 @@ class PotentialArray(BasePotential, FieldArray):
 
     Parameters
     ----------
-    array: 3D np.ndarray
+    array: 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness: float
@@ -1415,9 +1799,9 @@ class PotentialArray(BasePotential, FieldArray):
 
     @staticmethod
     def _transmission_function(array, energy):
-        xp = get_array_module(array)
-        sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
-        array = complex_exponential(sigma * array)
+        # complex_exponential_scaled fuses the sigma multiplication into the
+        # GPU sin/cos kernel, avoiding one slice-sized real temporary.
+        array = complex_exponential_scaled(array, energy2sigma(energy))
         return array
 
     @classmethod
@@ -1490,7 +1874,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
     Parameters
     ----------
-    array : 3D np.ndarray
+    array : 3D numpy.ndarray
         The array representing the potential slices. The first dimension is the slice
         index and the last two are the spatial dimensions.
     slice_thickness : float
@@ -2027,10 +2411,13 @@ class CrystalPotential(_PotentialBuilder):
 
         rng = np.random.default_rng(member_seed)
 
+        if last_slice is None:
+            last_slice = len(self)
+
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
         # Without it each (z-rep, unit-slice) pair re-tiles the same array via
@@ -2181,13 +2568,33 @@ class CrystalPotential(_PotentialBuilder):
         for i in range(self.repetitions[2]):
             # Draw an independent displaced realisation per unit cell in the x,
             # y and z supercell directions. For a single-config pool this
-            # collapses to the cheap cached ``.tile()`` path below.
+            # collapses to the cheap cached ``.tile()`` path below. Always draw
+            # (even for z-repetitions skipped below) so the frozen-phonon
+            # sequence and the pool budget accounting stay consistent
+            # regardless of first_slice -- different chunks of the same
+            # crystal must see the same per-layer configuration draws. Not
+            # drawn for phase scrambling, which combines every pool
+            # configuration instead of selecting one per tile.
             if n_configs > 1 and not use_phase_scramble:
                 config_tiles = _draw_config_tiles()
             else:
                 config_tiles = None
 
-            for j in range(len(self.potential_unit)):
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # advance the counter and skip.
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
+            for j in range(unit_slices):
+                # Iterate j from 0 even for slices before first_slice in a
+                # partially-overlapping rep, so the unit generator advances in
+                # order (j=0, j=1, ...). The tiling cache ensures each
+                # (config, j) pair is tiled at most once.
                 if use_phase_scramble:
                     # Phase scrambling algorithm (Mendis 2023, eq. 7c):
                     # Q'_n(R) = sum_j P(j) * exp(i*theta_j) * Q_{n,j}(R), with
@@ -2240,23 +2647,100 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     slic = _mosaic_slice(config_tiles, j)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    # Mutating the cached slice's exit_planes is safe: consumer
+                    # reads exit_planes immediately on each yield and holds no
+                    # back-reference across iterations.
+                    slic._exit_planes = exit_planes
 
-                # Mutating the cached slice is safe in the standard sequential
-                # consumption pattern (the consumer reads ``slic.exit_planes``
-                # immediately upon receiving the yield and never holds a back-
-                # reference across iterations — see multislice.py:672). Reset
-                # the value on every yield so re-entering the same cached
-                # slice on a different z-rep still carries the right metadata.
-                slic._exit_planes = exit_planes
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                start += 1
-                stop += 1
+                global_idx += 1
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
+                if global_idx >= last_slice:
+                    return
 
-                if j == last_slice:
-                    break
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Unlike the base-class implementation, this override builds the unit
+        potential **once** (not once per chunk) and fills each output chunk
+        array in-place, slice by slice, using ``xp.tile``.  This avoids the
+        ~2× peak-memory spike that the base class incurs from accumulating
+        per-slice tiled arrays into a list before concatenating them.
+
+        The dtype of the output follows the unit potential's array dtype,
+        which is set by the abtem ``precision`` config key (float32 / float64).
+        """
+        from abtem.core.chunks import estimate_potential_chunk_size, generate_chunks
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(self.gpts, self.device)
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        # Build the unit potential once; the base class would re-build it on
+        # every chunk (one generate_slices() call per chunk).
+        if not isinstance(self.potential_unit, PotentialArray):
+            unit_built = self.potential_unit.build(lazy=False)
+        else:
+            unit_built = self.potential_unit
+
+        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
+        if unit_arr.ndim == 3:
+            unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
+
+        rng = np.random.default_rng(self.seeds[0] if self.seeds is not None else None)
+        unit_slices = len(self.potential_unit)
+        n_configs = unit_arr.shape[0]
+
+        # Pre-draw frozen-phonon config indices — one per z-repetition —
+        # to match the sequence that generate_slices() would produce.
+        config_indices = rng.integers(0, n_configs, size=self.repetitions[2])
+
+        unit_st = self.potential_unit.slice_thickness
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            n = chunk_end - chunk_start
+            out = None
+            slice_thicknesses = []
+
+            for k, global_idx in enumerate(range(chunk_start, chunk_end)):
+                rep_i, unit_j = divmod(global_idx, unit_slices)
+                slc = unit_arr[config_indices[rep_i], unit_j]   # (h, w)
+                tiled = xp.tile(slc, self.repetitions[:2])       # (full_h, full_w)
+
+                if out is None:
+                    out = xp.empty((n,) + tiled.shape, dtype=tiled.dtype)
+                out[k] = tiled
+                slice_thicknesses.append(unit_st[unit_j])
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+            chunk = PotentialArray(
+                out,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk

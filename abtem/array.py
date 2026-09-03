@@ -45,7 +45,10 @@ from abtem.core.backend import (
     copy_to_device,
     cp,
     device_name_from_array_module,
+    ensure_cuda_cluster,
     get_array_module,
+    is_gpu_dask_client,
+    push_config_to_workers,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -232,6 +235,7 @@ class ComputableList(list):
         **kwargs: Any,
     ):
         """Write data to a zarr file.
+
         Parameters
         ----------
         url : str
@@ -239,6 +243,11 @@ class ComputableList(list):
             For directory stores, use .zarr extension or a directory path.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
+            Note that the returned delayed write nests an ``array.compute()``
+            executed under whatever scheduler is active when the caller
+            finally computes it -- the multi-GPU bootstrap and the forced
+            synchronous GPU scheduler apply only to ``compute=True``. On GPU,
+            prefer ``compute=True`` or compute the result before saving.
         overwrite : bool
             If given array already exists, overwrite=False will cause an error, where
             overwrite=True will replace the existing data.
@@ -328,7 +337,6 @@ class ComputableList(list):
 
         if is_zip:
             # Use ZipStore for .zip files
-            @dask.delayed
             def write_to_zipstore(
                 computed_arrays,
                 url,
@@ -369,16 +377,10 @@ class ComputableList(list):
 
                 return url
 
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite, compressors=compressors
-            )
+            write_func = write_to_zipstore
 
         else:
             # Use directory store for non-.zip files
-            @dask.delayed
             def write_to_directory(computed_arrays, url, metadata_list, overwrite):
                 import shutil
 
@@ -408,20 +410,44 @@ class ComputableList(list):
 
                 return url
 
+            write_func = write_to_directory
+
+        if not compute:
             delayed_arrays = [
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
-            delayed_write = write_to_directory(
+            return dask.delayed(write_func)(
                 delayed_arrays, url, metadata_list, overwrite
             )
 
-        if not compute:
-            return delayed_write
+        # Compute the arrays first -- resolving the GPU execution context the
+        # same way as ArrayObject.compute, so the opt-in multi-GPU cluster
+        # (``dask.multi-gpu``) is started on this path too -- then write the
+        # gathered results eagerly. Writing through a delayed task that itself
+        # calls array.compute() would nest a compute inside a scheduler task:
+        # the synchronous scheduler then needs a global config override to
+        # reach the nested call, and under a distributed client the nested
+        # compute would run on the local scheduler inside a single worker,
+        # serializing the whole computation onto one GPU.
+        is_gpu = config.get("device") == "gpu" or any(
+            _is_gpu_array_object(obj) for obj in self
+        )
+        _push_config_to_active_client()
 
-        with _compute_context(
+        if is_gpu:
+            kwargs = _resolve_gpu_scheduler(dict(kwargs))
+
+        with _nested_compute_guard(kwargs), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            output = dask.compute(delayed_write, **kwargs)[0]
+            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+
+        output = write_func(
+            [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
+            url,
+            metadata_list,
+            overwrite,
+        )
 
         profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
         if profilers:
@@ -491,6 +517,119 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays.
+
+    Detects GPU even when the output array has numpy meta, e.g. when a detector
+    with to_cpu=True produces CPU-resident results from GPU wave computations.
+    ArrayObject.device checks _device first (set in apply_transform when the source
+    was GPU), so this correctly handles the to_cpu=True case.
+    """
+    return hasattr(obj, "device") and obj.device == "gpu"
+
+
+def _resolve_gpu_scheduler(kwargs: dict) -> dict:
+    """Resolve the dask scheduler for a GPU computation.
+
+    Starts the opt-in multi-GPU cluster (``dask.multi-gpu``) when more than one
+    GPU is visible and no client or explicit scheduler is already in charge.
+    When no suitable single-threaded dask-cuda client ends up handling the
+    computation, the synchronous scheduler is selected instead: the threaded
+    scheduler and multi-threaded workers share a single CUDA context per
+    process, which cannot be used with CuPy, and concurrent tasks would load
+    multiple potential/wave chunks into a single GPU's memory at once.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments destined for ``dask.compute``. A ``scheduler`` key
+        set by the caller is always respected.
+
+    Returns
+    -------
+    dict
+        The keyword arguments, with ``scheduler="synchronous"`` injected when
+        no suitable client is available.
+    """
+    check_cupy_is_installed()
+
+    from distributed import get_client
+
+    try:
+        client = get_client()
+    except ValueError:
+        client = None
+
+    multi_gpu = config.get("dask.multi-gpu", False)
+
+    # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
+    # enabled, no client is already handling the computation, and the user has
+    # not explicitly requested a scheduler.
+    if client is None and "scheduler" not in kwargs and multi_gpu:
+        if cp.cuda.runtime.getDeviceCount() > 1:
+            client = ensure_cuda_cluster()
+        else:
+            warnings.warn(
+                "dask.multi-gpu is enabled but only one GPU is visible; "
+                "computing on a single GPU with the synchronous scheduler.",
+                UserWarning,
+            )
+
+    if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
+        if client is not None and multi_gpu:
+            warnings.warn(
+                "dask.multi-gpu is enabled but the active dask client is not a "
+                "single-threaded one-worker-per-GPU (dask-cuda) client; "
+                "falling back to the synchronous scheduler on a single GPU.",
+                UserWarning,
+            )
+        kwargs["scheduler"] = "synchronous"
+
+    if is_gpu_dask_client(client):
+        push_config_to_workers(client)
+
+    return kwargs
+
+
+@contextmanager
+def _nested_compute_guard(kwargs: dict):
+    """Extend a forced synchronous scheduler to nested computes.
+
+    Passing ``scheduler="synchronous"`` to ``dask.compute`` governs only that
+    call's graph. A task body may itself call ``.compute()`` -- e.g.
+    ``CrystalPotential.generate_slices`` pooling a lazy multi-configuration
+    ``potential_unit`` -- and a nested compute reads the process-wide default
+    scheduler: the threaded one, which must not execute CuPy tasks
+    concurrently. Mirror the forced choice into the dask configuration for the
+    duration of the outer compute. When no scheduler is forced (a distributed
+    client is in charge, or the caller chose one), the configuration is left
+    alone so client routing is unaffected.
+    """
+    if kwargs.get("scheduler") == "synchronous":
+        with dask.config.set(scheduler="synchronous"):
+            yield
+    else:
+        yield
+
+
+def _push_config_to_active_client():
+    """Mirror the configuration onto an active distributed client's workers.
+
+    The silently-defaulted-configuration bug is not specific to the multi-GPU
+    cluster: any distributed client (a CPU LocalCluster, a SLURMCluster, ...)
+    executes tasks in worker processes that never saw the client's
+    ``abtem.config.set``. Deduplicated inside push_config_to_workers, so
+    calling this on every dispatch is cheap.
+    """
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return
+    push_config_to_workers(client)
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -499,22 +638,15 @@ def _compute(
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
     is_gpu = config.get("device") == "gpu" or any(
-        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+        _is_gpu_array_object(obj) for obj in array_objects
     )
 
+    _push_config_to_active_client()
+
     if is_gpu:
-        check_cupy_is_installed()
+        kwargs = _resolve_gpu_scheduler(kwargs)
 
-        if "scheduler" not in kwargs:
-            kwargs["scheduler"] = "synchronous"
-
-        if "num_workers" not in kwargs:
-            kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
-
-        if "threads_per_worker" not in kwargs:
-            kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
-
-    with _compute_context(
+    with _nested_compute_guard(kwargs), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
         arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
@@ -832,6 +964,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        # _device may be set explicitly (e.g. for CPU-resident measurements that
+        # were produced by GPU computation) following the WavesBuilder convention.
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1261,7 +1397,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if i not in squeezed
         ]
 
-        return self.__class__(**kwargs)
+        result = self.__class__(**kwargs)
+        if hasattr(self, "_device"):
+            result._device = self._device
+        return result
 
     def ensure_lazy(self, chunks: Chunks = "auto") -> Self:
         """Creates an equivalent lazy version of the array object.
@@ -1297,7 +1436,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         resource_profiler: bool = False,
         **kwargs,
     ) -> Self | tuple[Self, tuple]:
-        """Turn a lazy *ab*TEM object into its in-memory equivalent.
+        """Turn a lazy abTEM object into its in-memory equivalent.
 
         Parameters
         ----------
@@ -1532,6 +1671,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self.base_shape))
+            elif max_batch == "auto" and self.device == "gpu":
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(
+                    self.base_shape, self.dtype, "gpu"
+                )
+                # Convert probes → total elements so validate_chunks
+                # receives an int and skips its own config-based "auto" path.
+                max_batch = int(n_probes * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
 
@@ -1619,6 +1767,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
+            # When the source was on GPU but the output is CPU-resident
+            # Record the computation device on the output so _compute()
+            # selects the synchronous scheduler for GPU work.  Check
+            # self.device (which honours _device on lazy arrays) rather
+            # than inspecting the dask-array module, which always returns
+            # numpy for a not-yet-computed lazy array.
+            if self.device == "gpu":
+                output._device = "gpu"
             outputs.append(output)
 
         if len(outputs) > 1:
@@ -2106,7 +2262,10 @@ def _from_zarr_legacy(root, chunks, decode_types):
         i += 1
 
     for i, cls_name in enumerate(types):
-        cls = getattr(abtem.measurements, cls_name)
+        # Legacy files (written by abTEM <= 1.0.9) may hold any ArrayObject
+        # subclass, e.g. Waves or PotentialArray, not just measurements; all
+        # of them are exported from the top-level abtem namespace.
+        cls = getattr(abtem, cls_name)
 
         packed_kwargs = decode_types(root.attrs[f"kwargs{i}"])
         kwargs = cls._unpack_kwargs(packed_kwargs)
@@ -2167,7 +2326,7 @@ def stack(
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict] = None,
     axis: int = 0,
 ) -> ArrayObjectType:
-    """Stack multiple array objects (e.g. Waves and BaseMeasurement) along a new
+    """Stack multiple array objects (e.g. Waves and BaseMeasurements) along a new
     ensemble axis.
 
     Parameters

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, SupportsFloat
 
 import numpy as np
 
-from abtem.core.axes import AxisMetadata, OrdinalAxis, ParameterAxis
+from abtem.core.axes import AxisMetadata, EnergyAxis, OrdinalAxis, ParameterAxis
 from abtem.core.backend import cp, get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
@@ -43,15 +43,60 @@ class BaseTransferFunction(
 
     def __init__(
         self,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         distributions: tuple[str, ...] = (),
     ):
+        # Unwrap EnergyEnsemble (passed from Probe.ctf / SMatrix with ensemble energy)
+        if hasattr(energy, "energy"):
+            energy = energy.energy  # EnergyEnsemble → scalar or BaseDistribution
+        # A list/array of energies becomes an energy-ensemble distribution,
+        # consistent with PlaneWave/Probe/SMatrix accepting a list of energies.
+        if isinstance(energy, (list, tuple, np.ndarray)):
+            energy = validate_distribution(energy)
+        if isinstance(energy, BaseDistribution):
+            self._energy_distribution = energy
+            energy = None
+        else:
+            self._energy_distribution = None
         self._accelerator = Accelerator(energy=energy)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        super().__init__(distributions=distributions)
+        super().__init__(distributions=("energy",) + tuple(distributions))
+
+    @property
+    def energy(self) -> float | BaseDistribution | None:
+        """Electron energy [eV], or a distribution of energies for ensembles."""
+        if self._energy_distribution is not None:
+            return self._energy_distribution
+        return self._accelerator.energy
+
+    @energy.setter
+    def energy(self, value: float | BaseDistribution | None) -> None:
+        if hasattr(value, "energy"):
+            value = value.energy  # unwrap EnergyEnsemble
+        if isinstance(value, (list, tuple, np.ndarray)):
+            value = validate_distribution(value)
+        if isinstance(value, BaseDistribution):
+            self._energy_distribution = value
+            self._accelerator.energy = None
+        else:
+            self._energy_distribution = None
+            self._accelerator.energy = value
+
+    @property
+    def _energy_ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        if isinstance(self._energy_distribution, BaseDistribution):
+            return [EnergyAxis(values=tuple(self._energy_distribution.values))]
+        return []
+
+    @property
+    def _valid_wavelength(self) -> float:
+        """Wavelength [Å], using first ensemble energy when energy is a distribution."""
+        if isinstance(self._energy_distribution, BaseDistribution):
+            return energy2wavelength(float(self._energy_distribution.values[0]))
+        return self.wavelength
 
     @abstractmethod
     def _evaluate_from_angular_grid(
@@ -85,8 +130,15 @@ class BaseTransferFunction(
 
         Returns
         -------
-        kernel : np.ndarray or dask.array.Array
+        kernel : numpy.ndarray or dask.array.Array
         """
+        if isinstance(self._energy_distribution, BaseDistribution):
+            arrays = []
+            for e in self._energy_distribution.values:
+                member = self.copy()
+                member.energy = float(e)
+                arrays.append(member._evaluate_kernel(waves))
+            return np.stack(arrays, axis=0)
 
         if waves is None:
             device = "cpu"
@@ -134,7 +186,7 @@ class BaseTransferFunction(
             elif max_angle is None:
                 raise RuntimeError()
 
-            sampling = 1 / (max_angle * 1e-3) / 2 * self.wavelength
+            sampling = 1 / (max_angle * 1e-3) / 2 * self._valid_wavelength
         else:
             sampling = self.sampling
 
@@ -188,11 +240,17 @@ class BaseAperture(BaseTransferFunction):
         metadata = {}
         if not isinstance(self.semiangle_cutoff, BaseDistribution):
             metadata["semiangle_cutoff"] = self.semiangle_cutoff
+        if self.energy is not None:
+            # Ensures the resolved energy reaches the output waves' metadata
+            # (via ArrayObjectTransform._out_metadata's merge) even when the
+            # input waves carried no energy of their own and relied on this
+            # aperture/CTF to supply it.
+            metadata["energy"] = self.energy
         return metadata
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        return []
+        return self._energy_ensemble_axes_metadata
 
     @property
     def _max_semiangle_cutoff(self) -> float:
@@ -260,7 +318,7 @@ def soft_aperture(
 
     Returns
     -------
-    soft_aperture_array : 2D or 3D np.ndarray
+    soft_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
 
@@ -314,7 +372,7 @@ def hard_aperture(
 
     Returns
     -------
-    hard_aperture_array : 2D or 3D np.ndarray
+    hard_aperture_array : 2D or 3D numpy.ndarray
     """
     xp = get_array_module(alpha)
     return xp.array(alpha <= semiangle_cutoff).astype(get_dtype(complex=False))
@@ -367,9 +425,9 @@ class Aperture(BaseAperture):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata: list[AxisMetadata] = []
+        axes = self._energy_ensemble_axes_metadata
         if isinstance(self.semiangle_cutoff, BaseDistribution):
-            ensemble_axes_metadata = [
+            axes = axes + [
                 ParameterAxis(
                     label="semiangle_cutoff",
                     values=tuple(self.semiangle_cutoff),
@@ -378,7 +436,7 @@ class Aperture(BaseAperture):
                     _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
-        return ensemble_axes_metadata
+        return axes
 
     @property
     def soft(self) -> bool:
@@ -413,16 +471,35 @@ class Bullseye(BaseAperture):
     """
     Bullseye aperture.
 
+    The aperture is divided radially into `num_rings` periods, each consisting of an
+    open annulus followed by an opaque gap; `ring_width` is the open fraction of each
+    period. The open annulus width is
+    ``ds = semiangle_cutoff * ring_width / (ring_width + num_rings - 1)``, and a
+    `ring_width` of 1 gives a fully open disk. Opaque spokes cross all rings except
+    the central disk; each spoke is a straight bar of constant linear width
+    ``spoke_width * ds`` (in the same reciprocal-angle units as `ds`), not a wedge of
+    constant angular width. Consequently `spoke_width` has no meaningful upper bound
+    of 1 the way `ring_width` does: a fixed `spoke_width` blocks a larger angular
+    fraction of rings closer to the center than rings farther out, so increasing it
+    reduces transmission monotonically but not linearly, with rings saturating to
+    fully blocked from the center outward. The central disk is never affected by
+    spokes, so transmission approaches (but never reaches) "central disk only" as
+    `spoke_width` grows.
+
     Parameters
     ----------
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of spokes [deg].
+        Width of the opaque spokes, as a multiple of the open annulus width `ds`
+        (see above) rather than an angular fraction. Must be non-negative; unlike
+        `ring_width`, values greater than 1 are valid and simply widen the spokes
+        further.
     num_rings : int
         Number of rings.
     ring_width : float
-        Width of rings [mrad].
+        Open fraction of each radial ring period. Must be in the interval (0, 1],
+        where 1 gives a fully open disk.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
@@ -455,6 +532,10 @@ class Bullseye(BaseAperture):
         edge_softness: float = 0.0,
         corner_radius: float = 0.0,
     ):
+        if not 0.0 < ring_width <= 1.0:
+            raise ValueError("ring_width must be in the interval (0, 1]")
+        if spoke_width < 0.0:
+            raise ValueError("spoke_width must be non-negative")
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
         self._num_rings = num_rings
@@ -469,7 +550,7 @@ class Bullseye(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-    
+
     @property
     def soft(self) -> bool:
         """True if the aperture has a soft edge"""
@@ -482,7 +563,7 @@ class Bullseye(BaseAperture):
 
     @property
     def spoke_width(self) -> float:
-        """Width of spokes [deg]."""
+        """Width of the opaque spokes as a multiple of the open annulus width."""
         return self._spoke_width
 
     @property
@@ -492,8 +573,9 @@ class Bullseye(BaseAperture):
 
     @property
     def ring_width(self) -> float:
-        """Width of rings [mrad]."""
+        """Open fraction of each radial ring period."""
         return self._ring_width
+
     @property
     def edge_softness(self) -> float:
         """Edge softness [mrads]"""
@@ -947,7 +1029,6 @@ class TemporalEnvelope(BaseTransferFunction):
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
     ):
-        self._accelerator = Accelerator(energy=energy)
         self._focal_spread = validate_distribution(focal_spread)
         super().__init__(
             distributions=("focal_spread",),
@@ -968,7 +1049,7 @@ class TemporalEnvelope(BaseTransferFunction):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        return self._get_axes_metadata_from_distributions(
+        return self._energy_ensemble_axes_metadata + self._get_axes_metadata_from_distributions(
             focal_spread={"units": "Å"}
         )
 
@@ -1275,13 +1356,13 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata = [
+        return [
+            *self._energy_ensemble_axes_metadata,
             *self._phase_aberrations_ensemble_axes_metadata,
             *self._get_axes_metadata_from_distributions(
                 angular_spread={"units": "mrad"}
             ),
         ]
-        return ensemble_axes_metadata
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
@@ -1459,7 +1540,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        return self._phase_aberrations_ensemble_axes_metadata
+        return self._energy_ensemble_axes_metadata + self._phase_aberrations_ensemble_axes_metadata
 
     @property
     def defocus(self) -> float | BaseDistribution:
@@ -1573,13 +1654,13 @@ class CTF(_HasAberrations, BaseAperture):
     in HRTEM and specifies how the condenser system shapes the probe in STEM.
 
     abTEM implements phase aberrations up to 5th order using polar coefficients.
-    See Eq. 2.22 in the reference [1]_.
+    See Eq. 2.22 in Kirkland (2010).
 
     Cartesian coefficients can be converted to polar using the utility function
     `abtem.transfer.cartesian2polar`.
 
     Partial coherence is included as envelopes in the quasi-coherent approximation.
-    See Chapter 3.2 in reference [1]_.
+    See Chapter 3.2 in Kirkland (2010).
 
     Parameters
     ----------
@@ -1621,8 +1702,8 @@ class CTF(_HasAberrations, BaseAperture):
 
     References
     ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
-       Springer.
+    Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
+        Springer.
 
     """
 
@@ -1700,7 +1781,7 @@ class CTF(_HasAberrations, BaseAperture):
     def _aberrations(self) -> Aberrations:
         return Aberrations(
             aberration_coefficients=self.aberration_coefficients,
-            energy=self.energy,
+            energy=self._accelerator.energy,
             extent=self.extent,
             gpts=self.gpts,
         )
@@ -1710,7 +1791,7 @@ class CTF(_HasAberrations, BaseAperture):
         return Aperture(
             semiangle_cutoff=self.semiangle_cutoff,
             soft=self._soft,
-            energy=self.energy,
+            energy=self._accelerator.energy,
             extent=self.extent,
             gpts=self.gpts,
         )
@@ -1720,20 +1801,21 @@ class CTF(_HasAberrations, BaseAperture):
         return SpatialEnvelope(
             aberration_coefficients=self.aberration_coefficients,
             angular_spread=self.angular_spread,
-            energy=self.energy,
+            energy=self._accelerator.energy,
         )
 
     @property
     def _temporal_envelope(self) -> TemporalEnvelope:
         return TemporalEnvelope(
             focal_spread=self.focal_spread,
-            energy=self.energy,
+            energy=self._accelerator.energy,
         )
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return (
-            self._spatial_envelope.ensemble_axes_metadata
+            self._energy_ensemble_axes_metadata
+            + self._spatial_envelope.ensemble_axes_metadata
             + self._temporal_envelope.ensemble_axes_metadata
             + self._aperture.ensemble_axes_metadata
         )

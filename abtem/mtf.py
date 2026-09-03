@@ -11,14 +11,14 @@ def default_mtf_func(k: np.ndarray, c0: float, c1: float, c2: float, c3: float):
 
     Parameters
     ----------
-    k : float or np.ndarray
+    k : float or numpy.ndarray
         Spatial frequencies at which to evaluate the MTF.
     c : float
         Coefficients for the MTF.
 
     Returns
     -------
-    mtf : float or np.ndarray
+    mtf : float or numpy.ndarray
         Modulation transfer function for given spatial frequencies.
     """
     return (c0 - c1) / (1 + (k / (2 * c2)) ** np.abs(c3)) + c1
@@ -49,12 +49,12 @@ class MTF:
 
         Parameters
         ----------
-        measurement : BaseMeasurement
+        measurement : BaseMeasurements
             The original measurement.
 
         Returns
         -------
-        modulated_measurement : BaseMeasurement
+        modulated_measurement : BaseMeasurements
             The measurement with the MTF applied.
         """
         # Get sampling from measurement

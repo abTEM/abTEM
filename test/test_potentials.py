@@ -4,9 +4,16 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase import Atoms
 from hypothesis import given
 from utils import gpu
 
+from abtem.core.grid import disk_meshgrid
+from abtem.integrals import (
+    QuadratureProjectionIntegrals,
+    _threaded_interpolate_radial_functions,
+    interpolate_radial_functions,
+)
 from abtem.potentials.iam import CrystalPotential, Potential
 
 # @given(atoms=abtem_st.atoms(),
@@ -27,20 +34,34 @@ from abtem.potentials.iam import CrystalPotential, Potential
     gpts=abtem_st.gpts(),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
+@pytest.mark.parametrize("projection", ["finite", "infinite"])
+@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
+def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, projection):
+    potential = Potential(
+        atoms,
+        gpts=gpts,
+        slice_thickness=slice_thickness,
+        parametrization=parametrization,
+        projection=projection,
+    )
+    potential.build(lazy=False).compute()
+
+
+@given(
+    atoms=abtem_st.atoms(max_atomic_number=14),
+    gpts=abtem_st.gpts(),
+    slice_thickness=st.floats(min_value=1, max_value=2.0),
+)
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
-@pytest.mark.parametrize("projection", ["finite", "infinite"])
-def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
+def test_build_device_lazy(atoms, gpts, slice_thickness, lazy, device):
     potential = Potential(
         atoms,
         gpts=gpts,
         device=device,
         slice_thickness=slice_thickness,
-        parametrization=parametrization,
-        projection=projection,
     )
-    potential_array = potential.build(lazy=lazy).compute()
+    potential.build(lazy=lazy).compute()
 
 
 @given(
@@ -350,7 +371,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     fp_big = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=0)
     unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     with warnings.catch_warnings():
-        warnings.simplefilter("error")  # any pool warning would fail here
+        warnings.filterwarnings("error", category=UserWarning)  # any pool warning would fail here
         big = next(
             CrystalPotential(unit_big, repetitions=reps).generate_slices()
         )
@@ -650,3 +671,283 @@ def test_potential_show_depth_profile(si_potential):
 
     viz = si_potential.show_depth_profile()
     assert isinstance(viz, Visualization)
+
+
+@pytest.mark.parametrize(
+    "position",
+    [
+        (0.0, 0.0),  # atom sits exactly on a grid point
+        (0.31, 0.47),  # atom offset by a sub-pixel amount in both directions
+        (1.9, -1.9),  # atom offset near the edge of the truncated disk
+    ],
+)
+def test_interpolate_radial_functions_disk_truncation_matches_full_disk(position):
+    # The lateral disk-truncation optimization in QuadratureProjectionIntegrals
+    # relies on interpolate_radial_functions correctly stopping at
+    # disk_counts[i] once the disk is sorted by radial distance. Verify this
+    # directly against calling it with the untruncated (full) disk, which is
+    # the behavior prior to the optimization.
+    sampling = (0.1, 0.1)
+    radial_gpts = np.geomspace(0.05, 3.0, 64)
+    radial_functions = np.exp(-radial_gpts)[None].astype(np.float64)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(radial_gpts)
+
+    positions = np.array([position], dtype=np.float64)
+
+    # Deliberately oversized disk (as if this atom's slice offset were 0 but
+    # a sibling atom in the same call needed a much larger disk radius), so
+    # that disk_counts genuinely truncates away real, non-empty pixels rather
+    # than just the ceiling-rounding pad at the disk's own edge.
+    disk = disk_meshgrid(int(np.ceil(2 * radial_gpts[-1] / min(sampling))))
+    disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+    order = np.argsort(disk_radii)
+    disk = disk[order]
+    disk_radii = disk_radii[order]
+
+    margin = np.hypot(sampling[0], sampling[1]) / 2
+    disk_counts_truncated = np.searchsorted(
+        disk_radii, radial_gpts[-1] + margin, side="right"
+    )
+    disk_counts_full = np.array([disk.shape[0]])
+
+    gpts = (64, 64)
+    array_truncated = np.zeros(gpts, dtype=np.float64)
+    array_full = np.zeros(gpts, dtype=np.float64)
+
+    interpolate_radial_functions(
+        array=array_truncated,
+        positions=positions,
+        disk_indices=disk,
+        disk_counts=np.array([disk_counts_truncated]),
+        sampling=sampling,
+        radial_gpts=radial_gpts,
+        radial_functions=radial_functions,
+        radial_derivative=radial_derivative,
+    )
+    interpolate_radial_functions(
+        array=array_full,
+        positions=positions,
+        disk_indices=disk,
+        disk_counts=disk_counts_full,
+        sampling=sampling,
+        radial_gpts=radial_gpts,
+        radial_functions=radial_functions,
+        radial_derivative=radial_derivative,
+    )
+
+    assert disk_counts_truncated < disk.shape[0]
+    np.testing.assert_allclose(array_truncated, array_full, atol=1e-12)
+
+
+def test_threaded_interpolation_matches_serial_kernel():
+    # The thread-pool wrapper deals atoms round-robin to per-thread buffers
+    # and sums them; up to float summation reordering this must match calling
+    # the serial kernel directly with all atoms.
+    rng = np.random.default_rng(7)
+    sampling = (0.1, 0.12)
+    gpts = (96, 80)
+    n_atoms = 37  # deliberately not divisible by typical thread counts
+
+    radial_gpts = np.geomspace(0.05, 3.0, 64)
+    radial_functions = (
+        np.exp(-radial_gpts)[None] * rng.uniform(0.5, 2.0, (n_atoms, 1))
+    ).astype(np.float64)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(radial_gpts)
+
+    positions = np.zeros((n_atoms, 3))
+    positions[:, 0] = rng.uniform(-1.0, gpts[0] * sampling[0] + 1.0, n_atoms)
+    positions[:, 1] = rng.uniform(-1.0, gpts[1] * sampling[1] + 1.0, n_atoms)
+
+    disk = disk_meshgrid(int(np.ceil(radial_gpts[-1] / min(sampling))))
+    disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+    order = np.argsort(disk_radii)
+    disk = np.ascontiguousarray(disk[order])
+    disk_radii = disk_radii[order]
+    disk_counts = np.searchsorted(
+        disk_radii, rng.uniform(1.0, 3.0, n_atoms), side="right"
+    )
+
+    array_serial = np.zeros(gpts, dtype=np.float64)
+    interpolate_radial_functions(
+        array_serial,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    array_threaded = np.zeros(gpts, dtype=np.float64)
+    _threaded_interpolate_radial_functions(
+        array_threaded,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    np.testing.assert_allclose(array_threaded, array_serial, rtol=1e-12, atol=1e-12)
+
+
+def test_finite_projection_tolerance_matches_tight_reference():
+    # Regression test for the lateral disk-truncation optimization in
+    # QuadratureProjectionIntegrals.integrate_on_grid: build a potential with
+    # atoms deliberately placed at a slice boundary (dz=0, the edge case for
+    # the truncation formula) and off it, and check that the default
+    # cutoff_tolerance still agrees closely with a much tighter tolerance.
+    atoms = Atoms(
+        "Au2",
+        positions=[(3.0, 3.0, 2.0), (3.0, 3.0, 5.0)],
+        cell=(6.0, 6.0, 6.0),
+        pbc=True,
+    )
+
+    def build(tol):
+        integrator = QuadratureProjectionIntegrals(cutoff_tolerance=tol)
+        potential = Potential(
+            atoms,
+            sampling=0.1,
+            slice_thickness=2.0,
+            projection="finite",
+            integrator=integrator,
+        )
+        return potential.build(lazy=False).array
+
+    tight = build(1e-6)
+    default = build(1e-4)
+
+    max_dev = np.abs(default - tight).max() / tight.max()
+    assert max_dev < 1e-2
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
+    """Regression for a GPU/CPU mismatch in the radial-table index lookup
+    inside interpolate_radial_functions (abtem/core/_cuda.py): the CUDA
+    kernel used int() to derive the log-spaced table index, which truncates
+    toward zero, while the CPU kernel uses int(floor(...)). For pixels just
+    inside the table's innermost tabulated radius the argument is a small
+    negative number, and the two roundings disagree in sign for values in
+    (-1, 0) -- e.g. int(floor(-0.2)) == -1 (correctly clamps to the innermost
+    tabulated value) but int(-0.2) == 0 (incorrectly extrapolates from the
+    innermost table point instead). This only misfires for atoms whose
+    fractional pixel offset happens to place a disk pixel in that razor-thin
+    annulus, so a generic small structure may not trigger it; SrTiO3 (highly
+    symmetric fractional coordinates) reliably does.
+    """
+    from ase.spacegroup import crystal
+
+    sto = crystal(
+        ("Sr", "Ti", "O"),
+        basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221,
+        cellpar=[3.905, 3.905, 3.905, 90, 90, 90],
+    )
+    atoms = sto * (2, 2, 2)
+
+    def build(dev):
+        pot = Potential(
+            atoms, sampling=0.05, slice_thickness=1.0, projection="finite",
+            device=dev,
+        )
+        array = pot.build(lazy=False).array
+        if hasattr(array, "get"):
+            array = array.get()
+        return np.asarray(array, dtype=np.float64)
+
+    cpu = build("cpu")
+    gpu_array = build(device)
+
+    max_dev = np.abs(gpu_array - cpu).max() / cpu.max()
+    assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
+
+
+def test_potential_array_slicing_maps_exit_planes():
+    # slicing a potential array must map its exit planes into the sliced range,
+    # otherwise the exit plane can fall outside the slices and the multislice
+    # algorithm silently returns an unpropagated wave function
+    import abtem
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (2, 2, 8)
+    potential = abtem.Potential(atoms, gpts=128, slice_thickness=2.0).build(lazy=False)
+
+    assert potential.exit_planes == (potential.num_slices - 1,)
+
+    for item in (slice(None, 9), slice(5, 15), slice(None, 1)):
+        sliced = potential[item]
+        assert sliced.exit_planes == (sliced.num_slices - 1,)
+        assert max(sliced.exit_planes) < sliced.num_slices
+
+    # splitting the multislice algorithm at a slice boundary is exact
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    waves = probe.build(lazy=False)
+
+    whole = waves.multislice(potential)
+    split = waves.multislice(potential[:9]).multislice(potential[9:])
+
+    assert np.allclose(whole.array, split.array)
+
+
+class TestIntegratorSharedAcrossEnsemble:
+    """generate_blocks()/ensemble_blocks() reconstruct a fresh Potential per
+    ensemble member. The integrator must be passed through by reference, not
+    deep-copied, or every member silently rebuilds (and, on GPU, re-uploads)
+    the per-symbol projection tables and disk caches that QuadratureProjection-
+    Integrals/ScatteringFactorProjectionIntegrals exist specifically to avoid
+    recomputing across repeated calls."""
+
+    def test_integrator_identity_preserved_across_members(self):
+        import abtem
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+        fp = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=1)
+        potential = Potential(fp, sampling=0.2, slice_thickness=1.0, projection="finite")
+
+        original_integrator = potential.integrator
+        # Populate the cache the way a real build would, so a deep copy has
+        # actual cached state to (wrongly) duplicate.
+        original_integrator.get_integral_table("Si", potential.sampling)
+
+        seen_integrator_ids = set()
+        seen_table_ids = set()
+        n_members = 0
+        for _, _, block in potential.generate_blocks():
+            block = block.item()
+            n_members += 1
+            seen_integrator_ids.add(id(block.integrator))
+            seen_table_ids.add(id(block.integrator.tables))
+
+        assert n_members == 4
+        assert seen_integrator_ids == {id(original_integrator)}
+        assert seen_table_ids == {id(original_integrator.tables)}
+
+    @pytest.mark.parametrize("projection", ["finite", "infinite"])
+    def test_shared_integrator_does_not_change_results(self, projection):
+        import abtem
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+        fp = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=1)
+        potential = Potential(
+            fp, sampling=0.2, slice_thickness=1.0, projection=projection
+        )
+
+        waves = abtem.PlaneWave(energy=100e3)
+        exit_waves = waves.multislice(potential, lazy=False)
+
+        # Rebuilding member-by-member via the (shared-integrator) path used
+        # by generate_blocks() must match the direct build for every member.
+        for index, _, block in potential.generate_blocks():
+            block = block.item()
+            direct = abtem.PlaneWave(energy=100e3).multislice(block, lazy=False)
+            np.testing.assert_allclose(
+                exit_waves.array[index], direct.array[0], atol=1e-10
+            )

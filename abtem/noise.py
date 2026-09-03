@@ -170,7 +170,7 @@ def _single_axis_distortion(
 
     Parameters
     ----------
-    time : np.ndarray
+    time : numpy.ndarray
         Time constant for the distortion in s.
     max_frequency : float
         Maximum noise frequency in 1 / s.
@@ -201,7 +201,7 @@ def _make_displacement_field(
 
     Parameters
     ----------
-    time : np.ndarray
+    time : numpy.ndarray
        Time constant for the distortion in s.
     max_frequency : float
        Maximum noise frequency in 1 / s.
@@ -348,6 +348,11 @@ class ScanNoiseTransform(EnsembleTransform):
     @property
     def metadata(self) -> dict:
         return {"units": "electrons", "label": "Counts"}
+
+    def apply(
+        self, array_object: ArrayObject, max_batch: int | str = "auto"
+    ) -> ArrayObject:
+        return array_object.apply_transform(self)
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
