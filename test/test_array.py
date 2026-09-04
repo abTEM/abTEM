@@ -1,3 +1,4 @@
+import os
 from numbers import Number
 
 import hypothesis.extra.numpy as numpy_st
@@ -270,6 +271,107 @@ def test_from_zarr_legacy_format(data, has_array, url):
 
     has_array_from_zarr = from_zarr(url).compute()
     assert has_array_from_zarr == has_array
+
+
+# ---- large-array zarr chunking (regression: whole-array single chunk hit a
+# codec's 2**31-1 byte buffer limit, and a write that failed partway left a
+# store with valid-looking metadata but silently-all-zero data) -------------
+
+
+def test_safe_zarr_chunks_stays_under_budget():
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1025, 512, 512)
+    chunks = _safe_zarr_chunks(shape, itemsize=8, max_bytes=10_000_000)
+
+    nbytes = 8
+    for c in chunks:
+        nbytes *= c
+    assert nbytes <= 10_000_000
+    assert all(0 < c <= s for c, s in zip(chunks, shape))
+
+
+def test_safe_zarr_chunks_no_op_when_already_small():
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (4, 8, 8)
+    assert _safe_zarr_chunks(shape, itemsize=8) == shape
+
+
+def _make_dp(n_energy, gpts, seed=0):
+    import dask.array as da
+    import numpy as np
+
+    import abtem
+    from abtem.measurements import DiffractionPatterns
+
+    rng = np.random.default_rng(seed)
+    array = rng.random((n_energy, gpts, gpts))
+    lazy_array = da.from_array(array, chunks=(1, gpts, gpts))
+    dp = DiffractionPatterns.from_array_and_metadata(
+        lazy_array,
+        axes_metadata=[
+            OrdinalAxis(label="energy", values=tuple(range(n_energy))),
+            abtem.core.axes.ReciprocalSpaceAxis(sampling=0.1, label="x", units="1/A"),
+            abtem.core.axes.ReciprocalSpaceAxis(sampling=0.1, label="y", units="1/A"),
+        ],
+    )
+    return dp, array
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_writes_multiple_chunks_not_one_giant_chunk(tmp_path, monkeypatch, suffix):
+    """A single whole-array zarr chunk hits a codec's 2**31-1 byte buffer
+    limit for any reasonably large array (regression: this used to always
+    happen via chunks=computed_array.shape). Force a tiny budget so a small
+    test array reproduces the same "must be split" condition, and check the
+    written array is actually split -- and still round-trips correctly."""
+    import numpy as np
+    import zarr
+
+    import abtem.array as abtem_array_module
+
+    monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 10_000)
+
+    dp, array = _make_dp(n_energy=8, gpts=16)
+    url = str(tmp_path / f"dp{suffix}")
+    dp.to_zarr(url)
+
+    if suffix == ".zip":
+        store = zarr.storage.ZipStore(url, mode="r")
+        root = zarr.open(store=store, mode="r")
+    else:
+        root = zarr.open(url, mode="r")
+
+    zarr_array = root["array0"]
+    assert zarr_array.chunks != zarr_array.shape
+
+    if suffix == ".zip":
+        store.close()
+
+    loaded = abtem_array_module.from_zarr(url).compute()
+    np.testing.assert_allclose(loaded.array, array)
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_cleans_up_on_failed_write(tmp_path, monkeypatch, suffix):
+    """A write that fails partway (e.g. a chunk still over a codec's buffer
+    limit) must not leave behind a store with valid-looking metadata but
+    missing chunk data -- previously silently readable back as all zeros
+    (zarr's fill_value for a declared-but-never-written chunk)."""
+    import zarr
+
+    def _raising_create_array(self, *args, **kwargs):
+        raise ValueError("Codec does not support buffers of > 2147483647 bytes")
+
+    monkeypatch.setattr(zarr.Group, "create_array", _raising_create_array)
+
+    dp, _ = _make_dp(n_energy=4, gpts=8)
+    url = str(tmp_path / f"dp{suffix}")
+    with pytest.raises(ValueError, match="Codec does not support buffers"):
+        dp.to_zarr(url)
+
+    assert not os.path.exists(url)
 
 
 @given(data=st.data())
