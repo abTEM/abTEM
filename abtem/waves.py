@@ -1460,6 +1460,28 @@ class Waves(BaseWaves, ArrayObject):
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
 
+    @staticmethod
+    def _stack_over_transitions(measurements, transition_potentials):
+        """Stack one detector's measurements over the transition-potential axis."""
+        if len(measurements) == 1:
+            return reduce_ensemble(measurements[0])
+
+        axis_metadata = OrdinalAxis(
+            label="Z, n, l",
+            values=tuple(
+                ",".join(
+                    (
+                        str(transition_potential.metadata["Z"]),
+                        str(transition_potential.metadata["n"]),
+                        str(transition_potential.metadata["l"]),
+                    )
+                )
+                for transition_potential in transition_potentials
+            ),
+            tex_label=r"$Z, n, \ell$",
+        )
+        return reduce_ensemble(stack_array_object(measurements, axis_metadata))
+
     def transition_potential_multislice(
         self,
         potential: BasePotential,
@@ -1480,7 +1502,11 @@ class Waves(BaseWaves, ArrayObject):
 
         potential = _prebuild_reused_potential(potential, self)
 
-        measurements: list[Waves | BaseMeasurements] = []
+        # One entry per transition potential, each a list over detectors. The
+        # elastic multislice and the scattered waves are shared across
+        # detectors, so several can be filled in a single pass; this used to
+        # assert on the list that apply_transform returns for more than one.
+        per_transition: list[list[Waves | BaseMeasurements]] = []
         for transition_potential in transition_potentials:
             multislice_transform = MultisliceTransform(
                 potential=potential,
@@ -1491,8 +1517,26 @@ class Waves(BaseWaves, ArrayObject):
                 **multislice_func_kwargs,
             )
             new_measurements = self.apply_transform(multislice_transform)
-            assert isinstance(new_measurements, (Waves, BaseMeasurements))
-            measurements.append(new_measurements)
+            if not isinstance(new_measurements, list):
+                new_measurements = [new_measurements]
+            per_transition.append(new_measurements)
+
+        num_detectors = len(per_transition[0])
+        if any(len(entry) != num_detectors for entry in per_transition):
+            raise RuntimeError(
+                "every transition potential must produce the same number of "
+                "measurements"
+            )
+
+        if num_detectors > 1:
+            return [
+                self._stack_over_transitions(
+                    [entry[i] for entry in per_transition], transition_potentials
+                )
+                for i in range(num_detectors)
+            ]
+
+        measurements = [entry[0] for entry in per_transition]
 
         if len(measurements) > 1:
             axis_metadata = OrdinalAxis(
