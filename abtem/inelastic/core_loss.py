@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import os
+import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
 from typing import TYPE_CHECKING
@@ -40,7 +41,7 @@ from abtem.core.energy import (
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
-from abtem.core.utils import CopyMixin
+from abtem.core.utils import CopyMixin, get_dtype
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
@@ -127,19 +128,25 @@ class RadialWavefunction:
 
         self._radial_grid = radial_grid
         self._radial_values = radial_values
+        self._interpolator = None
 
     def __call__(self, r):
-        f = interp1d(
-            self._radial_grid,
-            self._radial_values,
-            kind=2,
-            fill_value="extrapolate",
-        )
-        return f(r)
+        # Built once and reused: the overlap integral evaluates each radial
+        # function several times, and the continuum grid can hold millions of
+        # points at low continuum energy.
+        if self._interpolator is None:
+            self._interpolator = interp1d(
+                self._radial_grid,
+                self._radial_values,
+                kind=2,
+                fill_value="extrapolate",
+            )
+        return self._interpolator(r)
 
     @property
     def bound(self):
-        return self.n > 0
+        # Continuum states carry n=None, so comparing n to 0 raised TypeError.
+        return self._n is not None
 
     @property
     def energy(self):
@@ -259,6 +266,123 @@ def radial_schroedinger_equation(ef, l, r, vr):
     return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
 
 
+# Radial step of the continuum integration grid [Bohr], and the largest grid we
+# are willing to build before giving up on resolving the asymptotic region.
+_CONTINUUM_STEP = 20.0 / (1000000 - 1)
+_CONTINUUM_MAX_RADIUS = 150.0
+
+# The outer region must span this many oscillations, and the centrifugal term
+# throughout it must be this small a fraction of the kinetic energy, for the
+# wave to be free-particle-like enough to read off its amplitude. The envelope
+# of a free wave is exactly constant, so one oscillation is enough to sample it;
+# the spread of the envelope is checked separately as a diagnostic.
+_CONTINUUM_PERIODS = 1.0
+_CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
+
+# Fraction of the grid, measured from the outer edge, used to read the amplitude.
+_ASYMPTOTIC_REGION_FRACTION = 0.25
+
+
+def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
+    """
+    Radial grid whose outer quarter is asymptotically free.
+
+    The amplitude of the continuum wave can only be read off where the
+    centrifugal barrier is negligible and the wave has completed several
+    oscillations. Both conditions are hardest to satisfy at low continuum
+    energy and high angular momentum, so the grid is extended as needed.
+
+    Parameters
+    ----------
+    ef : float
+        Continuum energy [Rydberg].
+    lprime : int
+        Angular momentum of the continuum state.
+
+    Returns
+    -------
+    r : np.ndarray
+        Radial grid [Bohr].
+    """
+    k = np.sqrt(ef)
+
+    fraction = _ASYMPTOTIC_REGION_FRACTION
+
+    # The outer region spans `fraction` of the grid and must contain enough
+    # oscillations to sample the envelope.
+    radius = max(20.0, _CONTINUUM_PERIODS * 2 * np.pi / (k * fraction))
+
+    if lprime > 0:
+        # The centrifugal term is largest at the inner edge of the outer region.
+        free_radius = np.sqrt(
+            lprime * (lprime + 1) / (_CONTINUUM_CENTRIFUGAL_TOLERANCE * ef)
+        )
+        radius = max(radius, free_radius / (1.0 - fraction))
+
+    if radius > _CONTINUUM_MAX_RADIUS:
+        warnings.warn(
+            f"the continuum state (epsilon={ef * units.Rydberg:.3g} eV, "
+            f"l'={lprime}) does not reach its asymptotic form within "
+            f"{_CONTINUUM_MAX_RADIUS} Bohr; its normalisation, and hence the "
+            "absolute scale of the transition potential, may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        radius = _CONTINUUM_MAX_RADIUS
+
+    return np.linspace(1e-12, radius, int(round(radius / _CONTINUUM_STEP)) + 1)
+
+
+def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
+    """
+    Amplitude of the asymptotic oscillation ``u(r) -> A sin(k r + delta)``.
+
+    Taken from the envelope ``sqrt(u^2 + (u'/k)^2)`` over the outer region,
+    which is constant wherever the wave is free.
+
+    Using ``max(u)`` instead, as earlier versions of abTEM did, is wrong in two
+    regimes: at low continuum energy the grid spans less than one oscillation,
+    and for ``l' >= 2`` the envelope overshoots its asymptotic value near the
+    turning point of the centrifugal barrier, so the maximum is attained well
+    inside the atom.
+
+    Parameters
+    ----------
+    r : np.ndarray
+        Radial grid [Bohr].
+    u : np.ndarray
+        Radial wavefunction on that grid.
+    k : float
+        Asymptotic wavenumber [1/Bohr].
+
+    Returns
+    -------
+    amplitude : float
+    """
+    outer = r > (1.0 - _ASYMPTOTIC_REGION_FRACTION) * r[-1]
+
+    du = np.gradient(u, r)
+    envelope = np.sqrt(u[outer] ** 2 + (du[outer] / k) ** 2)
+
+    mean = float(np.mean(envelope))
+    if mean <= 0.0:
+        raise RuntimeError(
+            "the continuum wavefunction vanishes in the asymptotic region"
+        )
+
+    spread = float(np.std(envelope)) / mean
+    if spread > 0.05:
+        warnings.warn(
+            f"the continuum wavefunction amplitude varies by {spread:.1%} over "
+            "the asymptotic region, so it has not reached its free-particle "
+            "form; its normalisation may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    return float(np.median(envelope))
+
+
 def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
@@ -286,11 +410,16 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     ef = epsilon / units.Rydberg
 
-    r = np.linspace(1e-12, 20, 1000000)
+    r = _continuum_radial_grid(ef, lprime)
     f = radial_schroedinger_equation(ef, lprime, r, vr)
 
     ur = numerov(f, 0.0, 1e-12, r[1] - r[0])
-    ur = ur / ur.max() / (np.sqrt(np.pi) * ef ** (1 / 4))
+
+    # Energy normalisation, <eps|eps'> = delta(eps - eps') with eps in Rydberg:
+    # u(r) -> sin(k r + delta) / sqrt(pi k), so the asymptotic amplitude is
+    # 1 / sqrt(pi k) with k = sqrt(ef).
+    ur = ur / _asymptotic_amplitude(r, ur, k=np.sqrt(ef))
+    ur = ur / (np.sqrt(np.pi) * ef ** (1 / 4))
 
     return RadialWavefunction(
         n=None,
@@ -631,7 +760,11 @@ class TransitionPotential(BaseTransitionPotential):
         cumulative = np.cumsum(integrated_intensities / integrated_intensities.sum())
 
         n = np.searchsorted(cumulative, threshold) + 1
-        transitions = self.transitions[:n]
+
+        # Keep the n strongest transitions. Earlier versions sliced the
+        # unsorted list instead, which kept an arbitrary subset; the sibling
+        # TransitionPotentialArray.filter_by_intensity has always used `order`.
+        transitions = [self.transitions[i] for i in order[:n]]
 
         if not len(transitions) > 0:
             raise RuntimeError()
@@ -645,7 +778,9 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        array = np.zeros((len(self._transitions),) + self.gpts, dtype=np.complex64)
+        array = np.zeros(
+            (len(self._transitions),) + self.gpts, dtype=get_dtype(complex=True)
+        )
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
@@ -668,9 +803,10 @@ class TransitionPotential(BaseTransitionPotential):
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
-        array = array / np.prod(self.sampling)
-
-        # array = array.astype(xp.complex64)
+        # In place: `array / np.prod(...)` divides by a float64 numpy scalar,
+        # which under NEP 50 promotes the whole array to complex128 and silently
+        # discards the dtype the array was allocated with.
+        array /= np.prod(self.sampling)
 
         return TransitionPotentialArray(
             self.Z,
@@ -769,13 +905,6 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
 
-    def set_threshold(self, wave, threshold):
-        local_potentials = self.local_potential(space="real")
-        local_potential = local_potentials.sum(0)
-
-        c = np.fft.irfft2(np.fft.rfft2(local_potential) * np.fft.rfft2(wave.array))
-        c = np.sort(c.ravel())[::-1]
-
     def local_potential(self, max_angle=None, space="reciprocal"):
         """
         Parameters
@@ -858,9 +987,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         local_potential = copy_to_device(local_potential, array)
 
+        complex_dtype = get_dtype(complex=True)
         overlap = fft2_convolve(
-            local_potential[(None,) * (len(array.shape) - 2)].astype(np.complex64),
-            fft2(array.astype(np.complex64)),
+            local_potential[(None,) * (len(array.shape) - 2)].astype(complex_dtype),
+            fft2(array.astype(complex_dtype)),
         ).real
 
         overlap = copy_to_device(overlap, "cpu")
@@ -878,14 +1008,14 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             if sites.number == self.Z:
                 sites = sites.position[:2]
             else:
-                sites = np.zeros((0, 2), dtype=np.float32)
+                sites = np.zeros((0, 2), dtype=get_dtype())
         else:
             sites = np.array(sites)
 
         if len(sites.shape) == 1:
             sites = sites[None]
 
-        sites = np.array(sites, dtype=np.float32)
+        sites = np.array(sites, dtype=get_dtype())
         return sites
 
     def filter_sites(self, waves, sites, threshold):
@@ -994,7 +1124,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             self._array = copy_to_device(self.array, waves.array)
             sites = copy_to_device(sites, waves.array)
 
-            sites = sites / xp.array(self.sampling, dtype=xp.float32)
+            sites = sites / xp.array(self.sampling, dtype=get_dtype())
 
             array = ifft2(
                 self.array[None]
@@ -1106,7 +1236,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     import types as _types
 
     from abtem.antialias import AntialiasAperture
-    from abtem.core.utils import get_dtype
     from abtem.detectors import FlexibleAnnularDetector, validate_detectors
     from abtem.multislice import FresnelPropagator, conventional_multislice_step
     from abtem.prism.utils import plane_waves
@@ -1146,7 +1275,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     n_k = len(wave_vectors_np)
 
     s_array = plane_waves(
-        xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts
+        xp.asarray(wave_vectors_np, dtype=get_dtype()), extent, gpts
     )
     s_array = s_array * (
         np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:])
@@ -1177,16 +1306,16 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     sites = _extract_scattering_sites(potential, sites)
 
     positions_np = np.asarray(scan.get_positions()).reshape((-1, 2))
-    positions = xp.asarray(positions_np, dtype=np.float32)
+    positions = xp.asarray(positions_np, dtype=get_dtype())
     n_positions = positions.shape[0]
-    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=np.float32)
+    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=get_dtype())
 
     position_coefficients = complex_exponential(
-        -2.0 * np.float32(np.pi)
+        -2.0 * get_dtype()(np.pi)
         * positions[:, 0:1]
         * wave_vectors_xp[None, :, 0]
     ) * complex_exponential(
-        -2.0 * np.float32(np.pi)
+        -2.0 * get_dtype()(np.pi)
         * positions[:, 1:2]
         * wave_vectors_xp[None, :, 1]
     )
@@ -1195,7 +1324,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     ctf.grid.match(s_matrix.dummy_probes())
     alpha = (
         xp.sqrt(wave_vectors_xp[:, 0] ** 2 + wave_vectors_xp[:, 1] ** 2)
-        * np.float32(ctf.wavelength)
+        * get_dtype()(ctf.wavelength)
     )
     phi = xp.arctan2(wave_vectors_xp[:, 1], wave_vectors_xp[:, 0])
     ctf_array = ctf._evaluate_from_angular_grid(alpha, phi)
@@ -1207,7 +1336,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     )
 
     full_sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
-    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+    full_sampling_arr = np.array(full_sampling, dtype=get_dtype())
 
     return _types.SimpleNamespace(
         transition_potential=transition_potential,
@@ -1303,7 +1432,7 @@ def prism_transition_potential_scan(
     import warnings
 
     from abtem.core.fft import fft_interpolate
-    from abtem.core.utils import get_dtype, safe_ceiling_int
+    from abtem.core.utils import safe_ceiling_int
     from abtem.multislice import (
         FresnelPropagator,
         _potential_ensemble_shape_and_metadata,
@@ -1449,10 +1578,10 @@ def prism_transition_potential_scan(
         extent=inelastic_window_extent,
         ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
     )
-    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+    full_sampling_arr = np.array(full_sampling, dtype=get_dtype())
 
     # Reduction helpers operate in the downsampled grid.
-    pixel_positions = positions / xp.asarray(ds_sampling, dtype=np.float32)
+    pixel_positions = positions / xp.asarray(ds_sampling, dtype=get_dtype())
     reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
         pixel_positions, output_window_gpts
     )
@@ -1483,7 +1612,7 @@ def prism_transition_potential_scan(
 
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
-        ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
+        ds_sampling_arr = np.array(ds_sampling, dtype=get_dtype())
         site_pixel_ds = site_xy / ds_sampling_arr
         site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
         site_crop_corner_ds = (
@@ -1559,12 +1688,12 @@ def prism_transition_potential_scan(
 
     def _scatter_at_site(atom):
         site_xy = np.array(
-            [atom.position[0], atom.position[1]], dtype=np.float32
+            [atom.position[0], atom.position[1]], dtype=get_dtype()
         )
         site_pixel = site_xy / full_sampling_arr
         site_pixel_int = np.rint(site_pixel).astype(int)
         sub_pixel = xp.asarray(
-            (site_pixel - site_pixel_int).reshape(1, 2), dtype=np.float32,
+            (site_pixel - site_pixel_int).reshape(1, 2), dtype=get_dtype(),
         )
         site_crop_corner = (
             int(site_pixel_int[0]) - inelastic_window_gpts[0] // 2,
@@ -1974,7 +2103,7 @@ def prism_transition_potential_scan_beam_basis(
 
         for atom in sites_this_slice:
             site_xy = np.array(
-                [atom.position[0], atom.position[1]], dtype=np.float32
+                [atom.position[0], atom.position[1]], dtype=get_dtype()
             )
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
@@ -1984,7 +2113,7 @@ def prism_transition_potential_scan_beam_basis(
             )
 
             shift_k = fft_shift_kernel(
-                xp.asarray(site_pixel.reshape(1, 2), dtype=np.float32), gpts
+                xp.asarray(site_pixel.reshape(1, 2), dtype=get_dtype()), gpts
             )[0]
             H_full = ifft2(tp_k * shift_k)  # (n_T, *gpts), shifted to true site position
             H_crop = wrapped_crop_2d(H_full, crop_corner, window_gpts)

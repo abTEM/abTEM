@@ -1028,11 +1028,13 @@ def transition_potential_multislice_and_detect(
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
-        if potential.exit_planes[0] == -1:
-            measurement_index = _validate_potential_ensemble_indices(
-                potential_index, 0, potential
-            )
-            _update_measurements(waves, detectors, measurements, measurement_index)
+
+        # The entrance exit plane at t = 0 stays zero: no material has been
+        # traversed, so no ionisation has happened. Detecting the incident
+        # *elastic* wave here, as the elastic driver correctly does, wrote the
+        # full unscattered intensity into the t = 0 bin of a core-loss
+        # measurement. Measurements are allocated zeroed, so there is nothing
+        # to do.
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
