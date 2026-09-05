@@ -53,6 +53,9 @@ extra = [
 gpaw = [
     "hankel",
     "sympy",
+    # X-ray emission data for EDX. Core-loss already requires GPAW for the
+    # atomic wave functions, so EDX users always have this extra anyway.
+    "xraydb",
 ]
 # Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
 # are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
