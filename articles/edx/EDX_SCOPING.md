@@ -592,9 +592,12 @@ points) or cross-checked against SIGMAK.
 - Extend the Bote-Salvat comparison (§6c-ter) to more elements/edges (e.g. Ag,
   Au K or L) and lower overvoltages, and cross-check against Egerton's
   SIGMAK/SIGMAL where it overlaps.
-- Reproduce a published absolute-scale measurement. Chen et al.,
-  *Ultramicroscopy* 168 (2016) 7-16 reports counts/s/nA/srad and was itself
-  validated against uSTEM.
+- Chen et al. (§6k): Sr-K done. Ti-K, Sr-L, O-K are digitized (accurately, all
+  four panels) but not yet run through abTEM at the validated settings
+  (gpts=160, slice=lat/2, lateral cell checked, order=3) for comparison.
+- A ~200-300 um SDD active layer closes most of the Sr-K gap but is inferred,
+  not confirmed against Schlossmacher et al.'s actual (paywalled) efficiency
+  curve.
 
 
 ## 6d. Joint EELS and EDX in one pass
@@ -867,6 +870,173 @@ phonons the multislice route keeps the configuration axis while the PRISM route
 averages over it, because `_eager_ionization_scan` follows the `_ensemble_mean`
 handling of `SMatrix.transition_potential_scan`.
 
+## 6k. Reproducing a published measurement: Chen et al. 2016
+
+Attempt to reproduce Fig. 3 of Chen, Weyland, Sang, Wu, Dycus, LeBeau,
+D'Alfonso, Allen, Findlay, "Quantitative atomic resolution elemental mapping
+via absolute-scale energy dispersive X-ray spectroscopy," *Ultramicroscopy*
+168 (2016) 7-16 -- the mean Sr-K/Ti-K/Sr-L/O-K signal (counts/s/nA) vs.
+SrTiO3 thickness at three convergence angles (13.7/21.8/45.7 mrad) plus a
+non-channelling reference, at 200 keV. Scoped to this figure specifically
+because the paper's own text says the mean signal is independent of probe
+aberrations (only of convergence angle), so it needs no source-size
+deconvolution -- unlike the 2D atomic-resolution maps of their Fig. 1.
+
+Parameters not stated in the visible text were taken from the literature:
+SrTiO3 thermal displacement parameters from LeBeau & Stemmer (2008) --
+`B_Sr=0.411`, `B_Ti=0.316`, `B_O=0.629` A^2, the same lineage this group's
+later papers reuse -- converted to abTEM's per-axis RMS convention via
+`sigma = sqrt(B / 8 pi^2)`.
+
+### Method (once converged, see below)
+
+- `CrystalPotential` with a small unit-cell `Potential` (a pool of frozen-phonon
+  configurations) tiled to the target thickness, `exit_planes=1` for the whole
+  depth series in one pass.
+- Non-channelling reference: the single-atom cross section (`effective_ionization_potential().sum() * sampling`,
+  the same quantity as the Bote-Salvat validation in 6c-ter) times layer count
+  divided by cell area -- a closed-form kinematic limit, not a multislice run.
+  A normalised `PlaneWave.ionization_multislice` run was tried first and
+  rejected: it still undergoes real dynamical channelling as it propagates,
+  which is *not* what "non-channelling" means in the paper (there, dynamical
+  scattering is switched off entirely).
+- Finite-angle curves: `Probe.ionization_scan` with an 8x8 real-space grid
+  averaged over one unit cell.
+- Counts: `XrayDetector.from_sdd(solid_angle=0.7)` (windowless, matching their
+  SuperX system) times xraydb's own fluorescence yield, scaled by
+  `6.242e9` electrons/s per nA.
+
+### Convergence -- three real issues found, in order
+
+**gpts.** The first pass used `gpts=64` per unit cell. A sweep to 96/128/160/192
+showed it was nowhere near converged: increments of +31%/+13%/+6%/+2%, i.e.
+`gpts=64` was roughly 60% low on the non-channelling cross-section. `gpts=160`
+is within ~2% of the 192-point value and was adopted as "converged enough."
+
+**Slice thickness.** `slice_thickness = lat` (one slice per unit cell) vs.
+`lat/2` gives a clean +12% change at fixed `gpts=128` -- also under-converged.
+Testing `lat/4` gave a non-monotonic result at first, traced to the *same*
+atom-on-slice-boundary degeneracy described next, recurring because the test
+structure's fixed z-offset happened to coincide with the `lat/4` grid's own
+boundaries. `lat/2` (which aligns with SrTiO3's natural Ti/O sublayer) was
+adopted.
+
+**Lateral cell size.** A 1x1-unit-cell lateral repetition under-counts by
+~5-8% relative to 2x2/3x3 (converged by 2x2). This is not the transition
+potential's inelastic delocalisation -- computed directly, Sr K's is 0.085 A,
+utterly negligible against the 3.905 A cell -- it is the *elastic probe's*
+own diffraction extent: a 13.7 mrad probe's first Airy zero (2.24 A) is over
+half the unit cell, so a 1x1 lateral cell aliases the probe against its own
+periodic image.
+
+A fourth thing turned out **not** to be a bug, after a real scare: building a
+`Potential` directly on a large repeated-atom `Atoms` object with
+`FrozenPhonons` and `exit_planes=1` produced depth profiles with duplicate/
+zero-increment values that looked exactly like the class of frozen-phonon
+ensemble bug fixed in PRs #292/#333/#267/#306. It was not that class of bug
+(verified: it reproduced even with a *single* frozen-phonon configuration,
+which those PRs' mechanism cannot touch). It was the test structure placing
+an atom exactly on a slice boundary (`slice_thickness` equal to the full unit
+cell height, atom at fractional z=0), making that atom's slice assignment
+flip on the sign of an arbitrarily small thermal displacement -- confirmed by
+offsetting the structure by `lat/4` and watching the pathology disappear.
+`CrystalPotential`'s per-tile pool draws only happen during actual multislice
+consumption, not via a raw `.build()` call, which was the second red herring.
+
+None of this is a criticism of `CrystalPotential` or `Potential` -- both gave
+correct, mutually consistent answers once driven properly and once the test
+structure avoided the boundary degeneracy.
+
+One more non-convergence pitfall: `PlaneWave(normalize=False)` (the default)
+has constant real-space amplitude, not an L2-normalised profile, so its
+`ionization_multislice` output is not on the same absolute scale as
+`Probe.ionization_scan`'s "probability per incident electron" -- the ratio
+between them was off by nearly six orders of magnitude before catching it.
+`PlaneWave(normalize=True)` puts it on the same scale.
+
+### Detector efficiency, and the digitization correction
+
+At the validated settings (`gpts=160`, `slice=lat/2`, lateral checked,
+`order=3`) with the default `XrayDetector.from_sdd` (450 um Si active layer,
+matching a fairly generic assumption, not the actual SuperX detector), the
+simulation *overshot* five eyeballed points read off the paper's Fig. 3(a) by
+50-80%. Reducing the assumed active layer to ~200 um -- physically ordinary,
+not a stretch, and self-consistently required across all four
+independently-computed curves (each needed `eff(Ka1) ~ 0.39-0.47`) -- brought
+the eyeballed comparison to within ~11%. Schlossmacher et al.'s actual
+efficiency curve is paywalled and could not be checked directly.
+
+That "closed the loop" conclusion needed correcting once the paper's curves
+were digitized properly (see below) rather than eyeballed at five points:
+against the *accurate* Sr-K theory curve, the same 200 um-active-layer
+simulation undershoots by 15-27% (0.73-0.86), not the ~0.89-1.07 the eyeballed
+comparison suggested. Redoing the needed-efficiency estimate with the accurate
+numbers points to something closer to a 290-300 um active layer. This is
+itself the clearest illustration in this document of why eyeballing a
+compressed plot image is a poor substitute for digitizing it: five points
+read from a 2500-count-tall axis were wrong by up to 25%, enough to flip a
+"closed" conclusion back open.
+
+### Digitizing the theoretical curves
+
+The figure's own caption: filled symbols are experimental, **open symbols and
+dashed lines are simulated** -- the quantity abTEM should be compared against.
+Digitized all four panels of Fig. 3 (not just Sr-K) by column-by-column
+pixel tracing of the dashed lines (denser and far more robust than trying to
+locate every discrete marker), rendering the PDF at 1200 dpi and calibrating
+pixel-to-data coordinates from the detected tick-mark positions. ~1750-1900
+points per curve, 16 curves total. The extracted (thickness, counts) points
+are saved as `chen2016_fig3_digitized.npz` in this directory (keys
+`{srK,tiK,srL,oK}_{13p7,21p8,45p7,nonchan}`) -- numerical data read off the
+published figure, not a reproduction of the figure itself.
+
+Getting there took several real bugs, each a useful lesson for anyone doing
+this again:
+
+- **Grayscale "darkness" is not colour-neutral.** `gray < threshold` also
+  fires on saturated red (mean RGB of e.g. (230,30,30) is dark), silently
+  merging the red curve into the "black" mask at one point. Fixed by also
+  requiring `max(RGB) - min(RGB)` to be small.
+- **Filled (experimental) markers contaminate a black-only trace.** Solid
+  circles have a much higher fill-ratio in their bounding box than a hollow
+  ring or a thin dash; removing high-fill-ratio compact blobs before tracing
+  keeps the open-symbol theory line intact.
+- **The plot's own axis border is a perfect distractor.** It is dark,
+  colour-neutral, and present in literally every column -- a greedy
+  nearest-position tracker will happily lock onto it instead of a curve that
+  is moving away, because the border never violates the distance tolerance.
+  Fixed by erasing a border margin from the mask before tracing.
+- **Title text exclusion boxes need the *actual* text extent, checked by
+  crop, not guessed.** Got this wrong twice on panel (a) alone -- once too
+  narrow (left it capturing part of "Sr K mean"), once too wide in the wrong
+  direction (clipped the real endpoint marker, which happened to sit at
+  similar pixel height to the title). The fix both times was the same:
+  crop the region and look, rather than estimate from a low-resolution
+  preview.
+- **A ring marker's own top/bottom edges can masquerade as "two curves."**
+  The two black curves (finite-angle theory, non-channelling) are separated
+  by clustering column pixels into two y-groups; near an open-circle marker,
+  the ring's top and bottom edge are themselves two y-clusters ~30 px apart,
+  which is a different failure mode from the real two-curve gap (hundreds of
+  pixels) but can still fool a naive "column has >=2 clusters" check into
+  picking a bad starting column. Fixed by requiring a minimum real-world gap
+  (200 px) before accepting a column as a valid two-curve starting point.
+- **A greedy nearest-position tracker needs enough tolerance to survive a
+  dash gap coinciding with a marker.** Where a nonchan-curve dash gap
+  happened to coincide with a 13.7 mrad marker splitting into two nearby
+  sub-clusters, a 60 px matching tolerance let the tracker latch onto the
+  wrong sub-cluster and then never recover (every subsequent real cluster
+  was more than 60 px from the now-wrong internal position). Widening to
+  150 px let it re-acquire the correct curve; verified this did not cause
+  cross-contamination between the two black curves anywhere else (both
+  panels' point counts and endpoint values stayed correct after the change).
+
+### Status
+
+Sr-K fully compared (with the caveats above); Ti-K, Sr-L, O-K digitized but
+not yet compared against equivalent abTEM runs at the validated settings --
+see "Still to validate."
+
 ## 7. Status
 
 | phase | state |
@@ -893,8 +1063,10 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
   PWBA/DWBA gap at default settings that grows at lower overvoltage -- see
   §6c-ter. Extending it to more elements/edges/energies, and to SIGMAK, is
   still open.
-- Reproduce a published absolute-scale measurement, e.g. Chen et al.,
-  *Ultramicroscopy* 168 (2016) 7-16.
+- **Chen et al. reproduction (§6k)**: Sr-K done against accurately digitized
+  theory curves (abTEM 15-27% low at default detector assumptions once gpts/
+  slice/lateral/order are all converged). Ti-K, Sr-L, O-K remain -- digitized,
+  not yet simulated.
 - Site coordinates in the PRISM helpers of `prism/` (outside `core_loss.py`)
   have not been audited for hardcoded dtypes.
 - Consider whether `SubshellTransitions`'s default `order=1` should be
