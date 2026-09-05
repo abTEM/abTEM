@@ -16,6 +16,7 @@ from abtem.detectors import (
     SpectralSlitDetector,
     WavesDetector,
 )
+from abtem.inelastic.core_loss import EnergyIntegral, SubshellTransitions
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     EnergyResolvedAtomsEnsemble,
@@ -59,6 +60,8 @@ __all__ = [
     "PixelatedDetector",
     "WavesDetector",
     "IonizationDetector",
+    "SubshellTransitions",
+    "EnergyIntegral",
     "XrayDetector",
     "SDDEfficiency",
     "TabulatedEfficiency",

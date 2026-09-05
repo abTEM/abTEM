@@ -6,6 +6,7 @@ import os
 import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -282,6 +283,11 @@ _CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
 # Fraction of the grid, measured from the outer edge, used to read the amplitude.
 _ASYMPTOTIC_REGION_FRACTION = 0.25
 
+# A cell smaller than this many delocalisation lengths truncates the transition
+# potential enough to matter; calibrated on the carbon K edge, which converges by
+# about four.
+_DELOCALISATION_MARGIN = 4.0
+
 
 def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
     """
@@ -383,8 +389,15 @@ def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
     return float(np.median(envelope))
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
-    # from gpaw.atom.all_electron import AllElectron
+@lru_cache(maxsize=8)
+def _all_electron_potential(Z: int, xc: str):
+    """
+    Scalar-relativistic radial potential of the neutral atom.
+
+    Cached because it depends on neither the continuum energy nor the angular
+    momentum, while an energy-integrated transition potential asks for many of
+    both.
+    """
     from gpaw.atom.aeatom import AllElectronAtom
 
     def f(self, *args, **kwargs):
@@ -392,21 +405,20 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     AllElectronAtom.log = f
 
-    check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
-
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
-    # ae.f_j[subshell_index] -= 0.0
     ae.run()
     ae.scalar_relativistic = True
     ae.refine()
 
-    vr = interp1d(
+    return interp1d(
         ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
     )
+
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+    check_valid_quantum_number(Z, n, l)
+
+    vr = _all_electron_potential(Z, xc)
 
     ef = epsilon / units.Rydberg
 
@@ -443,6 +455,95 @@ class BaseTransitionCollection:
         pass
 
 
+class EnergyIntegral(CopyMixin):
+    """
+    Quadrature over the continuum energy of an ionisation edge.
+
+    A transition potential built at a single continuum energy ``epsilon`` is
+    differential in energy loss. Techniques that collect the whole edge, EDX
+    above all, need it integrated over the continuum instead. This class
+    supplies the sample energies and the weights that perform that integral.
+
+    The integrand is close to flat just above threshold and then falls off as a
+    slow power law, so the nodes are placed by Gauss-Legendre quadrature in
+    ``log(epsilon)``, which handles both regimes with few points.
+
+    Parameters
+    ----------
+    stop : float
+        Upper limit of the integration [eV], measured from the ionisation
+        threshold. The integrand decays slowly, so this should be several times
+        the edge energy and must be convergence-tested; integrating only over a
+        typical EELS window captures a small fraction of the total.
+    start : float, optional
+        Lower limit [eV], measured from threshold. Default is 1.0. The
+        contribution of the neglected interval below it is small because the
+        integrand is finite at threshold.
+    num : int, optional
+        Number of quadrature nodes. Default is 16.
+
+    Examples
+    --------
+    >>> integral = EnergyIntegral(stop=4000.0, num=16)  # doctest: +SKIP
+    >>> transitions = SubshellTransitions(14, 1, 0, epsilon=integral)  # doctest: +SKIP
+    """
+
+    def __init__(self, stop: float, start: float = 1.0, num: int = 16):
+        stop = float(stop)
+        start = float(start)
+        num = int(num)
+
+        if not 0.0 < start < stop:
+            raise ValueError(
+                f"require 0 < start < stop, got start={start}, stop={stop}"
+            )
+        if num < 1:
+            raise ValueError(f"'num' must be at least 1, got {num}")
+
+        self._start = start
+        self._stop = stop
+        self._num = num
+
+    @property
+    def start(self) -> float:
+        """Lower integration limit above threshold [eV]."""
+        return self._start
+
+    @property
+    def stop(self) -> float:
+        """Upper integration limit above threshold [eV]."""
+        return self._stop
+
+    @property
+    def num(self) -> int:
+        """Number of quadrature nodes."""
+        return self._num
+
+    def __len__(self) -> int:
+        return self._num
+
+    @property
+    def _nodes_and_weights(self) -> tuple[np.ndarray, np.ndarray]:
+        nodes, weights = np.polynomial.legendre.leggauss(self._num)
+
+        a, b = np.log(self._start), np.log(self._stop)
+        log_energies = 0.5 * (b - a) * nodes + 0.5 * (a + b)
+        energies = np.exp(log_energies)
+
+        # Change of variable: integral f d(eps) = integral f eps d(log eps).
+        return energies, weights * 0.5 * (b - a) * energies
+
+    @property
+    def energies(self) -> np.ndarray:
+        """Continuum energies at which the transition potential is evaluated [eV]."""
+        return self._nodes_and_weights[0]
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Quadrature weights [eV], such that ``sum(weights * f(energies))`` is the integral."""
+        return self._nodes_and_weights[1]
+
+
 class SubshellTransitions(BaseTransitionCollection):
     def __init__(
         self,
@@ -451,7 +552,7 @@ class SubshellTransitions(BaseTransitionCollection):
         l: int,
         order: int = 1,
         min_contrast: float = 1.0,
-        epsilon: float = 1.0,
+        epsilon: float | EnergyIntegral = 1.0,
         xc: str = "PBE",
     ):
         check_valid_quantum_number(Z, n, l)
@@ -511,22 +612,63 @@ class SubshellTransitions(BaseTransitionCollection):
         )
         return wave_functions
 
+    @property
+    def continuum_energies(self) -> np.ndarray:
+        """Continuum energies at which the transition potential is evaluated [eV]."""
+        if isinstance(self._epsilon, EnergyIntegral):
+            return self._epsilon.energies
+        return np.array([float(self._epsilon)])
+
+    @property
+    def continuum_weights(self) -> np.ndarray:
+        """
+        Quadrature weight of each continuum energy [eV].
+
+        All ones for a single energy, in which case the transition potential
+        stays differential in energy loss.
+        """
+        if isinstance(self._epsilon, EnergyIntegral):
+            return self._epsilon.weights
+        return np.ones(1)
+
+    @property
+    def energy_integrated(self) -> bool:
+        """The transition potential is integrated over the continuum energy."""
+        return isinstance(self._epsilon, EnergyIntegral)
+
     def get_excited_wave_functions(self):
         wave_functions = [
             calculate_continuum_radial_wavefunction(
-                Z=self.Z, n=self.n, l=self.l, lprime=lprime, epsilon=self.epsilon
+                Z=self.Z, n=self.n, l=self.l, lprime=lprime, epsilon=epsilon
             )
             for lprime in self.lprimes
+            for epsilon in self.continuum_energies
         ]
         return wave_functions
+
+    def get_transition_weights(self) -> np.ndarray:
+        """
+        Quadrature weight of each transition, ordered as :meth:`get_transitions`.
+
+        Different final states -- including different continuum energies -- are
+        distinct and add incoherently, so these weights apply to the intensity.
+        """
+        excited_weights = np.concatenate(
+            [
+                np.repeat(self.continuum_weights, 2 * lprime + 1)
+                for lprime in self.lprimes
+            ]
+        )
+        return np.tile(excited_weights, 2 * self.l + 1)
 
     def get_transition_quantum_numbers(self):
         bound_states = [(self.n, self.l, ml) for ml in range(-self.l, self.l + 1)]
 
         excited_states = []
         for lprime in self.lprimes:
-            for mlprime in range(-lprime, lprime + 1):
-                excited_states.append((None, lprime, mlprime))
+            for _ in self.continuum_energies:
+                for mlprime in range(-lprime, lprime + 1):
+                    excited_states.append((None, lprime, mlprime))
 
         transitions = []
         for bound_state, excited_state in itertools.product(
@@ -570,6 +712,7 @@ class SubshellTransitions(BaseTransitionCollection):
         return TransitionPotential(
             self.Z,
             transitions,
+            weights=self.get_transition_weights(),
             extent=extent,
             gpts=gpts,
             sampling=sampling,
@@ -616,6 +759,7 @@ class TransitionPotential(BaseTransitionPotential):
         self,
         Z: int,
         transitions,
+        weights=None,
         orbital_filling_factor: bool = True,
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
@@ -626,7 +770,24 @@ class TransitionPotential(BaseTransitionPotential):
         self._Z = Z
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
+
+        if weights is None:
+            weights = np.ones(len(transitions))
+        else:
+            weights = np.asarray(weights, dtype=float)
+            if weights.shape != (len(transitions),):
+                raise ValueError(
+                    f"expected one weight per transition, got {weights.shape} "
+                    f"for {len(transitions)} transitions"
+                )
+        self._weights = weights
+
         super().__init__(Z, extent, gpts, sampling, energy, double_channel)
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Quadrature weight of each transition [eV]."""
+        return self._weights
 
     def __len__(self) -> int:
         return len(self._transitions)
@@ -649,17 +810,26 @@ class TransitionPotential(BaseTransitionPotential):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        values = [
-            f"{bound[1:]} → {excited[1:]}"
-            for (bound, excited) in self.transition_quantum_numbers
-        ]
+        energies = [excited.energy for (_, excited) in self._transitions]
+        resolved_in_energy = len(set(np.round(energies, 6))) > 1
+
+        values = []
+        for (bound, excited), energy in zip(
+            self.transition_quantum_numbers, energies
+        ):
+            label = f"{bound[1:]} → {excited[1:]}"
+            if resolved_in_energy:
+                label = f"{label}, {energy:.3g} eV"
+            values.append(label)
+
+        label = "(l,ml)→(l',ml')"
+        tex_label = r"$(\ell, m_l) → (\ell', m_l')$"
+        if resolved_in_energy:
+            label = f"{label}, epsilon"
+            tex_label = r"$(\ell, m_l) → (\ell', m_l'), \epsilon$"
 
         return [
-            OrdinalAxis(
-                values=values,
-                label="(l,ml)→(l',ml')",
-                tex_label=r"$(\ell, m_l) → (\ell', m_l')$",
-            )
+            OrdinalAxis(values=values, label=label, tex_label=tex_label)
         ]
 
     @property
@@ -764,19 +934,57 @@ class TransitionPotential(BaseTransitionPotential):
         # Keep the n strongest transitions. Earlier versions sliced the
         # unsorted list instead, which kept an arbitrary subset; the sibling
         # TransitionPotentialArray.filter_by_intensity has always used `order`.
-        transitions = [self.transitions[i] for i in order[:n]]
+        included = order[:n]
+        transitions = [self.transitions[i] for i in included]
 
         if not len(transitions) > 0:
             raise RuntimeError()
 
-        kwargs = self._copy_kwargs(exclude=("transitions",))
+        kwargs = self._copy_kwargs(exclude=("transitions", "weights"))
         kwargs["transitions"] = transitions
+        kwargs["weights"] = self._weights[included]
 
         return self.__class__(**kwargs)
 
     def build(self) -> TransitionPotentialArray:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
+        # The scattered electron must be left with positive energy. Without this
+        # check an epsilon range reaching past the beam energy fails much deeper
+        # down, in energy2wavelength, with no hint of the cause.
+        losses = [
+            excited.energy - bound.energy for (bound, excited) in self._transitions
+        ]
+        max_loss = max(losses)
+        if max_loss >= self.energy:
+            threshold = -min(bound.energy for (bound, _) in self._transitions)
+            raise ValueError(
+                f"the largest energy loss ({max_loss:.0f} eV) exceeds the beam "
+                f"energy ({self.energy:.0f} eV). The loss is the ionisation "
+                f"threshold ({threshold:.0f} eV) plus the continuum energy, so "
+                "reduce 'stop' of the EnergyIntegral, or raise the beam energy"
+            )
+
+        # An inelastic event has a delocalisation length b ~ hbar v / dE, and a
+        # cell smaller than a few b truncates the transition potential. The error
+        # grows with beam energy, so an unconverged cell biases not just the
+        # magnitude but its energy dependence: a carbon K edge in an 8 A cell is
+        # 6 % high at 60 keV and 41 % high at 300 keV.
+        min_loss = min(losses)
+        gamma = 1 + self.energy / 510998.95
+        beta = np.sqrt(1 - 1 / gamma**2)
+        delocalisation = 1973.27 * beta / min_loss  # [A]
+        if min(self.extent) < _DELOCALISATION_MARGIN * delocalisation:
+            warnings.warn(
+                f"the cell ({min(self.extent):.1f} A) is small compared with the "
+                f"inelastic delocalisation ({delocalisation:.1f} A at "
+                f"{min_loss:.0f} eV loss); the transition potential is truncated "
+                "and the cross-section overestimated. Increase the extent until "
+                "the result converges",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         array = np.zeros(
             (len(self._transitions),) + self.gpts, dtype=get_dtype(complex=True)
@@ -802,6 +1010,14 @@ class TransitionPotential(BaseTransitionPotential):
             array[i] *= relativistic_mass_correction(self.energy) / (
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
+
+            # The continuum states are energy-normalised in Rydberg, but
+            # _calculate_overlap_integral already divides by sqrt(units.Rydberg)
+            # to convert to a per-eV normalisation, so the form factor is
+            # differential per eV and the weights, also in eV, apply directly.
+            # Distinct final states add incoherently, so the weight belongs to
+            # the intensity and enters the amplitude as its square root.
+            array[i] *= np.sqrt(self._weights[i])
 
         # In place: `array / np.prod(...)` divides by a float64 numpy scalar,
         # which under NEP 50 promotes the whole array to complex128 and silently
@@ -904,6 +1120,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
+
 
     def local_potential(self, max_angle=None, space="reciprocal"):
         """
@@ -2167,3 +2384,5 @@ def prism_transition_potential_scan_beam_basis(
     if len(measurements) == 1:
         return measurements[0]
     return measurements
+
+
