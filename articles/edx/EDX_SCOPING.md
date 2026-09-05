@@ -502,12 +502,96 @@ independent tabulation (Bote & Salvat 2008, or Egerton's SIGMAK), which is not
 available offline here. **Light and medium edges are validated; heavy edges are
 not, and cannot be by this route.**
 
+### 6c-ter. Direct comparison against Bote & Salvat (2008)
+
+§6c-bis concluded a heavy edge needs a *direct*, single-energy comparison
+against an independent tabulation, and that neither Bethe slope method can
+substitute for one. NIST publishes exactly that as public-domain code:
+[usnistgov/BoteSalvatICX.jl](https://github.com/usnistgov/BoteSalvatICX.jl)
+implements Bote & Salvat's (2008) analytical parameterisation with the full
+coefficient tables (Z = 1-99, K/L1-L3/M1-M5), fitted to a composite
+distorted-wave/plane-wave Born calculation. Ported the coefficient table and
+the `ionizationcrosssection` formula to Python (`bote_salvat.py`, this
+directory) and sanity-checked it: zero below threshold, continuous across its
+two fit regimes (0.06% jump at the `overV = 16` seam for Cu K), and the
+expected rise-peak-fall shape with energy.
+
+**First pass looked like a clean validation and was not one.** At abTEM's
+usual settings (`order=1`, the `EnergyIntegral` cut off at `stop = 4 x E_K`),
+Cu K matched Bote-Salvat to 0.6% at 100 keV -- but was 15-24% off at 60, 200
+and 300 keV, with no consistent sign. Chasing that inconsistency rather than
+reporting the 100 keV number was the right call: both `order` and `stop`
+turned out to be under-converged, and their errors partly cancelled at 100 keV
+by coincidence.
+
+Disentangling the two at 300 keV, where the overvoltage (33x) affords a much
+larger `stop_factor` without exceeding the beam energy (ratio = abTEM / Bote-Salvat):
+
+| order | stop=4xE_K | stop=10xE_K | stop=20xE_K | stop=30xE_K |
+|---|---|---|---|---|
+| 1 | 0.812 | 0.842 | 0.849 | 0.851 |
+| 2 | 0.944 | 0.997 | 1.010 | 1.014 |
+| 3 | 0.973 | 1.039 | 1.060 | 1.065 |
+
+Both truncations push the cross-section up as they relax, and neither is
+converged by the previous defaults. `order` is the dominant effect --
+`order=1` alone plateaus (as `stop_factor` grows) at only ~85% of its
+`order=3` value, so it is missing real physics, not rounding. `stop_factor`
+contributes a smaller ~5% here (bigger, ~9%, at 100 keV, where the tail is a
+larger fraction of the available energy-loss range).
+
+The order-to-order increments shrink geometrically (~30% of the previous
+step each time: 4->10->20->30 stop_factor gives order 1->2 steps of 0.163,
+then order 2->3 steps of 0.053). Extrapolating both series to convergence
+puts the fully-converged cross-section at **~1.08-1.10x Bote-Salvat at
+300 keV** -- abTEM's non-relativistic (mass-corrected) plane-wave Born
+transition-potential theory sitting genuinely above the Bote-Salvat
+distorted-wave value, by an amount consistent with the textbook PWBA-vs-DWBA
+gap for a mid-to-heavy element. That gap is expected: DWBA accounts for the
+distortion of the incident and scattered electron waves by the target's
+Coulomb field, which a plane-wave treatment cannot.
+
+The gap should widen at lower overvoltage, and the (`stop_factor = 4` only,
+not stop-converged) order sweep at other energies is at least consistent
+with that:
+
+| order | 60 keV | 100 keV | 200 keV | 300 keV |
+|---|---|---|---|---|
+| 1 | 1.240 | 1.006 | 0.865 | 0.812 |
+| 2 | 1.527 | 1.205 | 1.014 | 0.944 |
+| 3 | 1.606 | 1.253 | 1.047 | 0.973 |
+
+Each added multipole raises the ratio by *more* at 60 keV than at 300 keV
+(order 1->3 adds 0.366 at 60 keV vs 0.161 at 300 keV), so the fully-converged
+excess over Bote-Salvat is larger at low overvoltage -- the expected
+direction, though this was not run to the same `stop_factor` convergence as
+the 300 keV grid above. It could not be -- there is little headroom: at
+60 keV `overV` is only 6.7, so `stop_factor` cannot exceed ~5.7 before the
+energy loss would exceed the beam energy, and 100 keV (`overV` ~ 11) only
+reaches `stop_factor` ~ 10 before the same limit. A clean low-overvoltage comparison
+needs a lower-Z edge (smaller `E_K`, more headroom at the same beam energy)
+or accepting the coarser bound this table already gives.
+
+**Conclusion.** The comparison abTEM needed is now possible and has been done
+once, properly. It does not show agreement to the percent level cited in an
+earlier pass at this investigation -- that number was a coincidence between
+two under-converged truncations. What it does show is a real, bounded,
+physically-understood ~9-10% excess from the missing distorted-wave
+correction at high overvoltage, growing at lower overvoltage as the Born
+approximation is expected to degrade for a Z=29 target. Practically: an
+absolute EDX cross-section from abTEM at default settings (`order=1`) should
+be treated as good to no better than ~20% for a heavy edge; getting closer
+requires `order>=3` and a `stop_factor` large enough for the beam energy in
+use, and even then a several-percent PWBA/DWBA gap remains at the highest
+achievable overvoltages, growing beyond that at lower ones. This has not been
+repeated for other elements/edges (Ag, Au K or L would be natural next
+points) or cross-checked against SIGMAK.
+
 ### Still to validate
 
-- Total ionisation cross-sections against an independent source -- Bote & Salvat
-  (2008) or Egerton's SIGMAK/SIGMAL -- for a few edges spanning Z and voltage.
-  The chain currently gives sigma_K(Si) = 2.17e-5 A^2 = 2.2e-21 cm^2 at 100 keV;
-  **this has not been checked against anything.**
+- Extend the Bote-Salvat comparison (§6c-ter) to more elements/edges (e.g. Ag,
+  Au K or L) and lower overvoltages, and cross-check against Egerton's
+  SIGMAK/SIGMAL where it overlaps.
 - Reproduce a published absolute-scale measurement. Chen et al.,
   *Ultramicroscopy* 168 (2016) 7-16 reports counts/s/nA/srad and was itself
   validated against uSTEM.
@@ -791,7 +875,7 @@ handling of `SMatrix.transition_potential_scan`.
 | 2. `XrayDetector` (`xray.py`) | done |
 | 3. Energy integration (`EnergyIntegral`) | done |
 | 4. Effective-potential multislice | done, lazy + eager |
-| 5. Validation | done (§6c); no structural error found |
+| 5. Validation | light/medium edges done (§6c); heavy edges cross-checked against Bote-Salvat, real ~9-10%+ PWBA/DWBA gap found (§6c-ter) |
 | 6. PRISM port | done, interpolation supported (§6e) |
 
 Public API: `abtem.XrayDetector`, `abtem.SDDEfficiency`,
@@ -804,15 +888,16 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
 
 ### Remaining
 
-- **Share the diffraction pattern across radial detectors** in one detection
-  pass; a second angular detector currently costs +92 % because it recomputes
-  the same FFT (§6d). General to abTEM, not specific to EDX.
-- **Cross-shell Coster-Kronig for M shells** is implemented but untested
-  against anything; only the L-shell identity is verified (§6g).
-- **Heavy-edge absolute validation** needs a direct comparison against an
-  independent tabulation (Bote & Salvat, or SIGMAK). Neither Bethe slope method
-  can do it -- see §6c-bis.
+- **Heavy-edge absolute validation** is now done for one edge/energy pair
+  (Cu K, 300 keV, against Bote & Salvat) and shows a real, bounded ~9-10%+
+  PWBA/DWBA gap at default settings that grows at lower overvoltage -- see
+  §6c-ter. Extending it to more elements/edges/energies, and to SIGMAK, is
+  still open.
 - Reproduce a published absolute-scale measurement, e.g. Chen et al.,
   *Ultramicroscopy* 168 (2016) 7-16.
 - Site coordinates in the PRISM helpers of `prism/` (outside `core_loss.py`)
   have not been audited for hardcoded dtypes.
+- Consider whether `SubshellTransitions`'s default `order=1` should be
+  documented more prominently as under-converged for absolute cross-section
+  work on heavy edges (§6c-ter finds it ~15-20% low at the multipole level
+  alone, before the DWBA gap).
