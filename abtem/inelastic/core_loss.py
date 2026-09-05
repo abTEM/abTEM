@@ -1546,16 +1546,19 @@ def prism_transition_potential_scan(
             + list(scan_axes_metadata),
         )
 
-        for det_idx, detector in enumerate(detectors):
-            m = detector.detect(position_waves)
-            m = m.sum((0,))
-            if isinstance(exit_idx, int):
-                idx = () if n_exit == 1 else (exit_idx,)
-                measurements[det_idx].array[idx] += m.array
-            else:
-                measurements[det_idx].array[exit_idx] += (
-                    m.array[(None,) * len(exit_idx)]
-                )
+        # All detectors here see the same, not-yet-mutated ``position_waves``
+        # -- share one diffraction-pattern FFT across them.
+        with position_waves._share_diffraction_pattern_fft():
+            for det_idx, detector in enumerate(detectors):
+                m = detector.detect(position_waves)
+                m = m.sum((0,))
+                if isinstance(exit_idx, int):
+                    idx = () if n_exit == 1 else (exit_idx,)
+                    measurements[det_idx].array[idx] += m.array
+                else:
+                    measurements[det_idx].array[exit_idx] += (
+                        m.array[(None,) * len(exit_idx)]
+                    )
 
     def _scatter_at_site(atom):
         site_xy = np.array(
@@ -1935,17 +1938,22 @@ def prism_transition_potential_scan_beam_basis(
                 OrdinalAxis(values=tuple(range(int(mask.sum())))),
             ],
         )
-        for det_idx, detector in enumerate(detectors):
-            m = detector.detect(wave)
-            m = m.sum((0,))
-            full_partial = xp.zeros(
-                (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
-            )
-            full_partial[mask] = m.array
-            full_partial = copy_to_device(full_partial, measurements[det_idx].array)
-            measurements[det_idx].array += full_partial.reshape(
-                scan_shape + m.array.shape[1:]
-            )
+        # All detectors here see the same, not-yet-mutated ``wave`` -- share
+        # one diffraction-pattern FFT across them.
+        with wave._share_diffraction_pattern_fft():
+            for det_idx, detector in enumerate(detectors):
+                m = detector.detect(wave)
+                m = m.sum((0,))
+                full_partial = xp.zeros(
+                    (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
+                )
+                full_partial[mask] = m.array
+                full_partial = copy_to_device(
+                    full_partial, measurements[det_idx].array
+                )
+                measurements[det_idx].array += full_partial.reshape(
+                    scan_shape + m.array.shape[1:]
+                )
 
     # --- Main loop ---
     for slice_index, transmission in enumerate(transmissions):
