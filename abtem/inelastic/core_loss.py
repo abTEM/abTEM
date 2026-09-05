@@ -2680,3 +2680,339 @@ def effective_ionization_multislice_and_detect(
     return measurements
 
 
+def _ionization_window_gpts(
+    mu: np.ndarray, tolerance: float = 1e-3
+) -> tuple[int, int]:
+    """
+    Smallest window around the origin holding all but ``tolerance`` of ``mu``.
+
+    The effective ionisation potential is localised on the atom, so the
+    ``S^dagger diag(mu) S`` integral only needs a window around each site rather
+    than the whole grid. Sizing it from the potential itself keeps the choice
+    honest: a window that clips ``mu`` would silently lose signal.
+    """
+    centred = np.fft.fftshift(asnumpy(mu))
+    total = centred.sum()
+    if total <= 0.0:
+        return tuple(int(n) for n in centred.shape)  # type: ignore[return-value]
+
+    centre = (centred.shape[0] // 2, centred.shape[1] // 2)
+    limit = min(*centre)
+
+    for half in range(1, limit + 1):
+        window = centred[
+            centre[0] - half : centre[0] + half,
+            centre[1] - half : centre[1] + half,
+        ]
+        if window.sum() >= (1.0 - tolerance) * total:
+            size = 2 * half
+            return (
+                min(size, centred.shape[0]),
+                min(size, centred.shape[1]),
+            )
+
+    return tuple(int(n) for n in centred.shape)  # type: ignore[return-value]
+
+
+def prism_effective_ionization_scan(
+    s_matrix,
+    transition_potentials,
+    scan=None,
+    detectors=None,
+    sites: SliceIndexedAtoms | Atoms | None = None,
+    inelastic_crop: float | tuple[float, float] | None = None,
+) -> list[BaseMeasurements]:
+    r"""
+    PRISM ionisation scan using the effective local ionisation potential.
+
+    For an angle-unrestricted measurement the signal at probe position
+    :math:`\mathbf{r}_p` is
+
+    .. math::
+        I(\mathbf{r}_p) = \int |\psi_p(\mathbf{r})|^2 \mu(\mathbf{r})\,d\mathbf{r},
+        \qquad
+        \psi_p = \sum_k c_k(\mathbf{r}_p)\, S_k ,
+
+    so writing :math:`M_{kk'} = \int S_k^* \mu S_{k'}` gives
+    :math:`I(\mathbf{r}_p) = c_p^\dagger M c_p`. The matrix :math:`M` is
+    independent of the probe position: it is accumulated slice by slice as the
+    S-matrix propagates, and the scan is then a single quadratic form per
+    position.
+
+    This is the PRISM counterpart of
+    :func:`effective_ionization_multislice_and_detect`, and inherits the same
+    property that no scattered waves are formed and double channelling is exact
+    rather than approximated.
+
+    Parameters
+    ----------
+    s_matrix : SMatrix
+        The scattering matrix.
+    transition_potentials : BaseTransitionPotential
+        Transition potential of the ionised subshell. A single potential only,
+        matching the other PRISM-EELS drivers.
+    scan : BaseScan or array of xy-positions, optional
+        Probe positions.
+    detectors : list of IonizationDetector, optional
+        Ignored apart from their count; the signal is angle-integrated by
+        construction. One accumulator is used if not given.
+    sites : SliceIndexedAtoms or Atoms, optional
+        The ionised atoms. Taken from the potential if not given.
+    inelastic_crop : float or tuple of float, optional
+        Real-space side length [Angstrom] of the window around each site used
+        for the ``S^dagger diag(mu) S`` integral, matching the parameter of the
+        same name on :meth:`~abtem.SMatrix.transition_potential_scan`. If not
+        given, it is chosen automatically as the smallest window holding all but
+        0.1 % of the effective ionisation potential, which for a real transition
+        potential is a few Angstrom. Values exceeding the cell are clamped.
+
+    Returns
+    -------
+    measurements : list of BaseMeasurements
+        Ionisation probability per incident electron over the scan, resolved
+        over the exit planes of the potential.
+
+    Notes
+    -----
+    **Interpolation.** With interpolation the PRISM wave function is periodic
+    with period ``window_extent``, so a probe illuminates only the sites inside
+    its own window; the copies elsewhere are aliasing artifacts. Integrating
+    :math:`\mu` over the whole cell would count every copy against every site,
+    which overshoots by more than an order of magnitude. The driver therefore
+    builds one matrix per site and applies it only to the probes whose window
+    contains that site. At interpolation 1 the window is the whole cell, every
+    site counts, and the cheaper single-matrix path is used instead.
+
+    Building :math:`M` costs ``n_k**2`` times the grid size per slice, times the
+    number of sites when interpolating. That is
+    cheap when the number of beams is modest, which is the regime PRISM is used
+    in, but it does grow quadratically with the number of beams; restricting the
+    integral to windows around the sites, as the scattered-wave PRISM drivers
+    already do, would remove the dependence on the full grid.
+    """
+    from abtem.multislice import (
+        _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+    )
+    from abtem.waves import Waves
+
+    interpolation = tuple(np.atleast_1d(s_matrix.interpolation).tolist())
+    ctx = _prism_eels_common_setup(
+        s_matrix, transition_potentials, scan, detectors, sites
+    )
+
+    xp = ctx.xp
+    transition_potential = ctx.transition_potential
+    potential = ctx.potential
+    scan = ctx.scan
+
+    if detectors is None:
+        detectors = [IonizationDetector()]
+    elif not isinstance(detectors, list):
+        detectors = [detectors]
+
+    if not all(isinstance(detector, IonizationDetector) for detector in detectors):
+        raise RuntimeError(
+            "the effective-potential PRISM driver forms no scattered waves, so "
+            "it only accepts IonizationDetector; use "
+            "SMatrix.transition_potential_scan for angle-resolved detectors"
+        )
+
+    def _step(waves, transmission):
+        return conventional_multislice_step(
+            waves,
+            potential_slice=transmission,
+            propagator=ctx.propagator,
+            antialias_aperture=ctx.antialias_aperture,
+        )
+
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
+    dummy_scan_waves = Waves(
+        xp.zeros(scan.shape + tuple(ctx.gpts), dtype=ctx.complex_dtype),
+        energy=ctx.energy,
+        extent=ctx.extent,
+        ensemble_axes_metadata=scan.ensemble_axes_metadata,
+    )
+    measurements = allocate_multislice_measurements(
+        dummy_scan_waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    )
+
+    coefficients = ctx.coefficients  # (n_positions, n_k)
+    n_k = ctx.n_k
+
+    s_waves = ctx.s_waves
+
+    # One accumulator per detector, because the photon yield is applied per
+    # slice: an XrayDetector modelling self-absorption weights each depth
+    # differently, so the depth cannot be summed over first.
+    m_matrices = [
+        xp.zeros((n_k, n_k), dtype=ctx.complex_dtype) for _ in detectors
+    ]
+
+    # With interpolation the PRISM wave function is periodic with period
+    # window_extent, so a probe illuminates only the sites inside its own
+    # window; the copies elsewhere are aliasing artifacts. Integrating mu over
+    # the whole cell would count every copy against every site. At
+    # interpolation 1 the window is the whole cell and every site counts, which
+    # is the cheap branch below.
+    windowed = any(factor != 1 for factor in interpolation)
+    positions_np = asnumpy(ctx.positions)
+    window_extent = np.asarray(s_matrix.window_extent, dtype=float)
+    cell_extent = np.asarray(ctx.extent, dtype=float)
+    runnings = [
+        xp.zeros(len(positions_np), dtype=get_dtype(complex=False))
+        for _ in detectors
+    ]
+
+    def _positions_illuminating(site_xy: np.ndarray) -> np.ndarray:
+        # Signed separation wrapped into [-cell/2, cell/2), then a half-open
+        # window so a site sitting on a boundary belongs to exactly one probe
+        # replica rather than to both.
+        separation = positions_np - site_xy[None, :]
+        separation = (
+            separation + cell_extent[None, :] / 2
+        ) % cell_extent[None, :] - cell_extent[None, :] / 2
+        half = window_extent[None, :] / 2
+        return np.all((separation >= -half) & (separation < half), axis=1)
+
+    def _quadratic_form(matrix, c):
+        return xp.einsum("pk,kl,pl->p", c.conj(), matrix, c).real
+
+    def _record(exit_plane_index):
+        index = _validate_potential_ensemble_indices(0, exit_plane_index, potential)
+
+        for i, measurement in enumerate(measurements):
+            # I(p) = c_p^dagger M c_p, real by construction since M is Hermitian.
+            values = runnings[i] if windowed else _quadratic_form(
+                m_matrices[i], coefficients
+            )
+            # Match IonizationDetector, which reports a fraction of the incident
+            # intensity by scaling the grid sum by prod(gpts). The quadratic
+            # form is a bare grid sum, so it needs the same factor.
+            #
+            # Interpolation replicates the wave function across the cell, and
+            # the reduction normalises each replica to unit intensity, so the
+            # cell carries prod(interpolation) times the intensity of one probe.
+            # Divide it back out to report per incident electron.
+            values = values * np.prod(ctx.gpts) / np.prod(interpolation)
+            measurement.array[index] = asnumpy(values).reshape(scan.shape)
+
+    exit_planes = potential.exit_planes
+    if exit_planes[0] == -1:
+        # Nothing traversed yet, so no ionisation; the array is already zeroed.
+        pass
+
+    from abtem.prism.utils import wrapped_crop_2d
+
+    sampling = ctx.transition_potential.sampling
+
+    # Size the window from the effective potential itself, unless the caller
+    # pins it with inelastic_crop (same parameter, units and clamping as
+    # SMatrix.transition_potential_scan).
+    if inelastic_crop is None:
+        window_gpts = _ionization_window_gpts(
+            transition_potential.effective_ionization_potential()
+        )
+    else:
+        from abtem.core.utils import safe_ceiling_int
+
+        if np.isscalar(inelastic_crop):
+            inelastic_crop = (inelastic_crop, inelastic_crop)
+        requested = (
+            safe_ceiling_int(inelastic_crop[0] / sampling[0]),
+            safe_ceiling_int(inelastic_crop[1] / sampling[1]),
+        )
+        window_gpts = (
+            min(requested[0], int(ctx.gpts[0])),
+            min(requested[1], int(ctx.gpts[1])),
+        )
+        if requested != window_gpts:
+            warnings.warn(
+                f"inelastic_crop {tuple(inelastic_crop)} A exceeds the PRISM "
+                f"cell; clamped to {tuple(ctx.extent)} A",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    slice_thicknesses = potential.slice_thickness
+    depth = 0.0
+
+    for slice_index, transmission in enumerate(ctx.transmissions):
+        s_waves = _step(s_waves, transmission)
+        depth += float(slice_thicknesses[slice_index])
+
+        edge = {**transition_potential.metadata, "depth": depth}
+        yields = [detector._photon_yield(edge) for detector in detectors]
+
+        sites_slice = ctx.sites.get_atoms_in_slices(
+            slice_index, atomic_number=ctx.Z
+        )
+
+        # Cropping trades one full-grid matmul for one per site. When the
+        # window was chosen automatically it is purely a performance knob, so
+        # fall back to the batched full-grid path whenever that is cheaper. A
+        # window the caller pinned with inelastic_crop is an accuracy choice,
+        # matching SMatrix.transition_potential_scan, and is always honoured.
+        batched = (
+            not windowed
+            and inelastic_crop is None
+            and len(sites_slice) * np.prod(window_gpts) >= np.prod(ctx.gpts)
+        )
+
+        if batched and len(sites_slice) > 0:
+            mu = transition_potential.effective_ionization_potential(sites_slice)
+            flat = s_waves.array.reshape(n_k, -1)
+            matrix = (flat.conj() * mu.reshape(1, -1)) @ flat.T
+            for i, photon_yield in enumerate(yields):
+                m_matrices[i] += photon_yield * matrix
+            sites_slice = []
+
+        for atom in sites_slice:
+            site_xy = np.asarray(atom.position[:2], dtype=float)
+
+            illuminated = None
+            if windowed:
+                illuminated = _positions_illuminating(site_xy)
+                if not illuminated.any():
+                    continue
+
+            mu = transition_potential.effective_ionization_potential(site_xy[None])
+
+            # Restrict S^dagger diag(mu) S to a window around the site. mu is
+            # localised on the atom, so this is exact to the window tolerance
+            # and turns the grid size in the n_k^2 matmul into the window size.
+            site_pixel = np.rint(site_xy / np.asarray(sampling)).astype(int)
+            corner = (
+                int(site_pixel[0]) - window_gpts[0] // 2,
+                int(site_pixel[1]) - window_gpts[1] // 2,
+            )
+            mu_crop = wrapped_crop_2d(mu, corner, window_gpts)
+            s_crop = wrapped_crop_2d(s_waves.array, corner, window_gpts)
+
+            flat = s_crop.reshape(n_k, -1)
+            site_matrix = (flat.conj() * mu_crop.reshape(1, -1)) @ flat.T
+
+            if not windowed:
+                # Every probe sees this site.
+                for i, photon_yield in enumerate(yields):
+                    m_matrices[i] += photon_yield * site_matrix
+            else:
+                contribution = _quadratic_form(
+                    site_matrix, coefficients[illuminated]
+                )
+                for i, photon_yield in enumerate(yields):
+                    runnings[i][illuminated] += photon_yield * contribution
+
+        if slice_index in exit_planes:
+            _record(exit_planes.index(slice_index))
+
+    return measurements

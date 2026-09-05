@@ -672,6 +672,258 @@ class TestPrecisionConfig:
         )
 
 
+class TestPrismEffectiveIonization:
+    """PRISM port: I(p) = c_p^dagger M c_p with M = S^dagger diag(mu) S.
+
+    M does not depend on the probe position, so it is accumulated once as the
+    S-matrix propagates and the scan is a quadratic form per position.
+    """
+
+    @staticmethod
+    def _setup(device="cpu", nz=2, exit_planes=None, slice_thickness=None):
+        unit = ase.build.bulk("Si", cubic=True)
+        atoms = unit * (1, 1, nz)
+        if slice_thickness is None:
+            slice_thickness = float(unit.cell[2, 2])
+        potential = abtem.Potential(
+            atoms,
+            gpts=(32, 32),
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            device=device,
+        )
+        return atoms, potential
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_matches_multislice_at_interpolation_one(self, device):
+        atoms, potential = self._setup(device)
+        cutoff = 20.0
+
+        def make_tp():
+            return _transition_potential(
+                potential.extent, potential.gpts, device=device, band_limited=True
+            )
+
+        probe = abtem.Probe(
+            energy=ENERGY, semiangle_cutoff=cutoff, device=device
+        )
+        probe.grid.match(potential)
+        scan = np.array([[0.0, 0.0], [1.3, 2.1]])
+
+        reference = effective_ionization_multislice_and_detect(
+            probe.build(scan).compute(), potential, make_tp(), sites=atoms
+        )[0]
+
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=cutoff,
+            interpolation=1,
+            downsample=False,
+            device=device,
+        )
+        got = s_matrix.ionization_scan(make_tp(), scan=scan, sites=atoms)
+
+        np.testing.assert_allclose(
+            np.asarray(abtem.core.backend.asnumpy(got.array)),
+            np.asarray(abtem.core.backend.asnumpy(reference.array)),
+            rtol=1e-4,
+        )
+
+    def test_exit_planes_are_resolved_and_monotonic(self):
+        # `exit_planes=3` counts slices, so the cell needs many thin slices to
+        # produce several planes; with one slice per cell it yields just one.
+        atoms, potential = self._setup(nz=3, exit_planes=3, slice_thickness=1.4)
+        assert len(potential.exit_planes) > 1
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        got = s_matrix.ionization_scan(
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            sites=atoms,
+        )
+        values = np.asarray(got.array).ravel()
+        assert values[0] == 0.0  # entrance plane, nothing traversed
+        assert np.all(np.diff(values) >= -1e-12), values
+
+    def test_signal_is_real_and_non_negative(self):
+        atoms, potential = self._setup()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        got = s_matrix.ionization_scan(
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2)),
+            sites=atoms,
+        )
+        array = np.asarray(got.array)
+        assert np.isrealobj(array)
+        assert np.all(array >= 0.0)
+
+    def test_scan_shape_is_preserved(self):
+        atoms, potential = self._setup()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        got = s_matrix.ionization_scan(
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(3, 4)),
+            sites=atoms,
+        )
+        assert got.shape[-2:] == (3, 4)
+
+    def test_angle_resolved_detector_is_rejected(self):
+        from abtem.inelastic.core_loss import prism_effective_ionization_scan
+
+        atoms, potential = self._setup()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        with pytest.raises(RuntimeError, match="only accepts IonizationDetector"):
+            prism_effective_ionization_scan(
+                s_matrix,
+                _transition_potential(potential.extent, potential.gpts),
+                scan=np.array([[0.0, 0.0]]),
+                detectors=abtem.AnnularDetector(inner=0.0, outer=None),
+                sites=atoms,
+            )
+
+    @pytest.mark.parametrize("interpolation", [1, 2])
+    def test_interpolation_matches_multislice(self, interpolation):
+        """Interpolation replicates the PRISM wave function across the cell.
+
+        Two corrections are needed and both are exact: each probe may only see
+        the sites inside its own window, and the reduction normalises every
+        replica to unit intensity so the cell carries prod(interpolation) times
+        one probe's worth.
+        """
+        atoms, potential = self._setup()
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20.0)
+        probe.grid.match(potential)
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
+
+        def make_tp():
+            return _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            )
+
+        reference = effective_ionization_multislice_and_detect(
+            probe.build(scan).compute(), potential, make_tp(), sites=atoms
+        )[0]
+
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=interpolation,
+            downsample=False,
+        )
+        got = s_matrix.ionization_scan(make_tp(), scan=scan, sites=atoms)
+
+        # The band-limited fixture has a far more compact mu than a real
+        # transition potential, so this tolerance is optimistic: on a real Si K
+        # potential interpolation 2 runs about 4 % low with 15 % at the worst
+        # position, which is the PRISM interpolation error for a delocalised
+        # potential rather than a defect here.
+        rtol = 1e-6 if interpolation == 1 else 2e-2
+        np.testing.assert_allclose(
+            np.asarray(got.array), np.asarray(reference.array), rtol=rtol
+        )
+
+    def test_interpolation_does_not_scale_the_signal(self):
+        """A missing 1/prod(interpolation) showed up as an exact factor of 4."""
+        atoms, potential = self._setup()
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
+
+        def run(interpolation):
+            s_matrix = abtem.SMatrix(
+                potential=potential,
+                energy=ENERGY,
+                semiangle_cutoff=20.0,
+                interpolation=interpolation,
+                downsample=False,
+            )
+            return np.asarray(
+                s_matrix.ionization_scan(
+                    _transition_potential(
+                        potential.extent, potential.gpts, band_limited=True
+                    ),
+                    scan=scan,
+                    sites=atoms,
+                ).array
+            )
+
+        np.testing.assert_allclose(run(2), run(1), rtol=2e-2)
+
+    def test_window_assigns_a_boundary_site_to_one_probe_only(self):
+        """A symmetric window double-counted sites sitting on the boundary."""
+        atoms, potential = self._setup()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=2,
+            downsample=False,
+        )
+        # A scan straddling the window edge is where double counting showed.
+        window = np.asarray(s_matrix.window_extent)
+        scan = np.array([[0.0, 0.0], [window[0] / 2, 0.0], [window[0], 0.0]])
+        got = np.asarray(
+            s_matrix.ionization_scan(
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=scan,
+                sites=atoms,
+            ).array
+        )
+        # Positions one window apart are equivalent by the PRISM periodicity.
+        assert got[0] == pytest.approx(got[2], rel=1e-5)
+
+    def test_interpolated_smatrix_still_works_via_the_scattered_wave_route(self):
+        # The documented fallback must actually run.
+        atoms, potential = self._setup()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=2,
+            downsample=False,
+        )
+        got = s_matrix.transition_potential_scan(
+            transition_potentials=_transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            detectors=abtem.IonizationDetector(),
+            sites=atoms,
+        )
+        assert np.all(np.asarray(got.compute().array) >= 0.0)
+
+
 class TestXrayDetectorAsDetector:
     """XrayDetector models the experiment, so it goes straight into a scan.
 
@@ -765,6 +1017,42 @@ class TestXrayDetectorAsDetector:
         waves = probe.build(np.array([[0.0, 0.0]])).compute()
         with pytest.raises(RuntimeError, match="which edge was ionised"):
             abtem.XrayDetector(solid_angle=0.7).detect(waves)
+
+    def test_prism_applies_the_yield_too(self):
+        atoms, potential, probe = self._setup()
+        from abtem.inelastic.core_loss import prism_effective_ionization_scan
+
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        xray = abtem.XrayDetector(solid_angle=0.7)
+
+        bare = s_matrix.ionization_scan(
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            sites=atoms,
+        )
+        counts = prism_effective_ionization_scan(
+            s_matrix,
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            detectors=[xray],
+            sites=atoms,
+        )[0]
+
+        np.testing.assert_allclose(
+            np.asarray(counts.array),
+            np.asarray(bare.array) * xray.total_yield("Si", 1, 0),
+            rtol=1e-6,
+        )
 
 
 class TestPlaneWaveEntryPoint:
@@ -866,3 +1154,330 @@ class TestPlaneWaveEntryPoint:
         )
 
 
+class TestIonizationWindow:
+    """The S^dagger diag(mu) S integral only needs a window around each site."""
+
+    def test_window_is_a_physical_size_not_a_pixel_count(self):
+        from abtem.inelastic.core_loss import (
+            SubshellTransitions,
+            _ionization_window_gpts,
+        )
+
+        pytest.importorskip("gpaw")
+
+        sizes = []
+        for extent, gpts in [(10.0, 128), (10.0, 256)]:
+            tp = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
+                extent=extent, gpts=gpts, energy=ENERGY
+            ).build()
+            window = _ionization_window_gpts(tp.effective_ionization_potential())
+            sizes.append(window[0] * extent / gpts)
+
+        # Same physical window from both grids, to within a pixel or two.
+        assert sizes[0] == pytest.approx(sizes[1], rel=0.1)
+
+    def test_window_shrinks_for_a_localised_potential(self):
+        from abtem.inelastic.core_loss import (
+            SubshellTransitions,
+            _ionization_window_gpts,
+        )
+
+        pytest.importorskip("gpaw")
+
+        tp = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
+            extent=20.0, gpts=256, energy=ENERGY
+        ).build()
+        window = _ionization_window_gpts(tp.effective_ionization_potential())
+        assert np.prod(window) < 0.25 * np.prod(tp.gpts)
+
+    def test_delocalised_potential_keeps_the_whole_grid(self):
+        from abtem.inelastic.core_loss import _ionization_window_gpts
+
+        # White noise spread over the cell must not be clipped.
+        tp = _transition_potential(10.0, (64, 64))
+        window = _ionization_window_gpts(tp.effective_ionization_potential())
+        assert window == (64, 64)
+
+    def test_tighter_tolerance_gives_a_larger_window(self):
+        from abtem.inelastic.core_loss import (
+            SubshellTransitions,
+            _ionization_window_gpts,
+        )
+
+        pytest.importorskip("gpaw")
+
+        mu = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
+            extent=20.0, gpts=256, energy=ENERGY
+        ).build().effective_ionization_potential()
+
+        loose = _ionization_window_gpts(mu, tolerance=1e-2)
+        tight = _ionization_window_gpts(mu, tolerance=1e-4)
+        assert np.prod(tight) > np.prod(loose)
+
+
+class TestInelasticCropConsistency:
+    """The window parameter must match SMatrix.transition_potential_scan.
+
+    PR #289 established ``inelastic_crop`` as a real-space side length in
+    Angstrom, scalar or pair, clamped to the cell with a warning. The
+    effective-potential driver takes the same parameter with the same meaning
+    rather than inventing a second window concept.
+    """
+
+    @staticmethod
+    def _setup():
+        unit = ase.build.bulk("Si", cubic=True)
+        atoms = unit * (1, 1, 2)
+        potential = abtem.Potential(
+            atoms, gpts=(32, 32), slice_thickness=float(unit.cell[2, 2])
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        return atoms, potential, s_matrix
+
+    def _run(self, s_matrix, potential, atoms, **kwargs):
+        return np.asarray(
+            s_matrix.ionization_scan(
+                _transition_potential(potential.extent, potential.gpts),
+                scan=np.array([[0.0, 0.0]]),
+                sites=atoms,
+                **kwargs,
+            ).array
+        )
+
+    def test_the_transition_potential_scan_also_takes_it(self):
+        # Same name, same units, on both PRISM entry points.
+        import inspect
+
+        assert "inelastic_crop" in inspect.signature(
+            abtem.SMatrix.transition_potential_scan
+        ).parameters
+        assert "inelastic_crop" in inspect.signature(
+            abtem.SMatrix.ionization_scan
+        ).parameters
+
+    def test_oversized_crop_is_clamped_with_a_warning(self):
+        atoms, potential, s_matrix = self._setup()
+        with pytest.warns(RuntimeWarning, match="exceeds the PRISM cell"):
+            clamped = self._run(
+                s_matrix, potential, atoms, inelastic_crop=1000.0
+            )
+        full = self._run(s_matrix, potential, atoms)
+        np.testing.assert_allclose(clamped, full, rtol=1e-6)
+
+    def test_a_tight_crop_is_honoured_not_silently_widened(self):
+        # A crop the caller asked for is an accuracy choice, so it must be
+        # applied even where the full-grid path would be cheaper.
+        atoms, potential, s_matrix = self._setup()
+        cropped = self._run(s_matrix, potential, atoms, inelastic_crop=2.0)
+        full = self._run(s_matrix, potential, atoms)
+        assert cropped < full
+
+    def test_a_scalar_and_a_pair_agree(self):
+        atoms, potential, s_matrix = self._setup()
+        np.testing.assert_allclose(
+            self._run(s_matrix, potential, atoms, inelastic_crop=2.0),
+            self._run(s_matrix, potential, atoms, inelastic_crop=(2.0, 2.0)),
+            rtol=1e-6,
+        )
+
+    def test_no_double_channel_option(self):
+        # Absent by design: with no angular restriction the elastic propagation
+        # of the ejected-state wave is unitary, so double channelling cannot
+        # change the total count. `lazy` is supported, like the sibling method.
+        import inspect
+
+        parameters = inspect.signature(abtem.SMatrix.ionization_scan).parameters
+        assert "double_channel" not in parameters
+        assert "lazy" in parameters
+
+
+class TestLazyMatchesEagerEverywhere:
+    """Every entry point and feature must give the same answer either way."""
+
+    UNIT = ase.build.bulk("Si", cubic=True)
+
+    @classmethod
+    def _potential(cls, exit_planes=None, num_configs=None):
+        atoms = cls.UNIT * (1, 1, 2)
+        source = atoms
+        if num_configs is not None:
+            source = abtem.FrozenPhonons(
+                atoms, num_configs=num_configs, sigmas=0.05, seed=1
+            )
+        potential = abtem.Potential(
+            source,
+            gpts=(32, 32),
+            slice_thickness=float(cls.UNIT.cell[2, 2]),
+            exit_planes=exit_planes,
+        )
+        return atoms, potential
+
+    @staticmethod
+    def _array(measurement):
+        if hasattr(measurement, "compute"):
+            measurement = measurement.compute()
+        return np.asarray(measurement.array)
+
+    def _assert_same(self, eager, lazy):
+        a, b = self._array(eager), self._array(lazy)
+        assert a.shape == b.shape
+        np.testing.assert_allclose(a, b, rtol=1e-6, atol=0)
+
+    @pytest.mark.parametrize(
+        "exit_planes, num_configs",
+        [(None, None), (1, None), (None, 2)],
+        ids=["plain", "exit-planes", "frozen-phonons"],
+    )
+    def test_probe_scan(self, exit_planes, num_configs):
+        atoms, potential = self._potential(exit_planes, num_configs)
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+        probe.grid.match(potential)
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 3))
+
+        def run(lazy):
+            return probe.ionization_scan(
+                potential,
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=scan,
+                sites=atoms,
+                lazy=lazy,
+            )
+
+        self._assert_same(run(False), run(True))
+
+    def test_plane_wave(self):
+        atoms, potential = self._potential()
+        plane_wave = abtem.PlaneWave(energy=ENERGY)
+        plane_wave.grid.match(potential)
+
+        def run(lazy):
+            return plane_wave.ionization_multislice(
+                potential,
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                sites=atoms,
+                lazy=lazy,
+            )
+
+        self._assert_same(run(False), run(True))
+
+    @pytest.mark.parametrize("interpolation", [1, 2])
+    def test_smatrix_scan(self, interpolation):
+        atoms, potential = self._potential()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=interpolation,
+            downsample=False,
+        )
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 3))
+
+        def run(lazy):
+            return s_matrix.ionization_scan(
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=scan,
+                sites=atoms,
+                lazy=lazy,
+            )
+
+        self._assert_same(run(False), run(True))
+
+    @pytest.mark.parametrize(
+        "kwargs_name",
+        ["xray", "absorption", "inelastic-crop", "frozen-phonons"],
+    )
+    def test_smatrix_features(self, kwargs_name):
+        from abtem.inelastic.xray import SpecimenAbsorption
+
+        num_configs = 2 if kwargs_name == "frozen-phonons" else None
+        atoms, potential = self._potential(num_configs=num_configs)
+
+        kwargs = {}
+        if kwargs_name == "xray":
+            kwargs["detectors"] = abtem.XrayDetector(0.7)
+        elif kwargs_name == "absorption":
+            kwargs["detectors"] = abtem.XrayDetector(
+                0.7, absorption=SpecimenAbsorption("Si")
+            )
+        elif kwargs_name == "inelastic-crop":
+            kwargs["inelastic_crop"] = 2.0
+
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 3))
+
+        def run(lazy):
+            return s_matrix.ionization_scan(
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=scan,
+                sites=atoms,
+                lazy=lazy,
+                **kwargs,
+            )
+
+        self._assert_same(run(False), run(True))
+
+    def test_joint_eels_and_edx(self):
+        atoms, potential = self._potential()
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+        probe.grid.match(potential)
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 3))
+
+        def run(lazy):
+            return probe.transition_potential_scan(
+                potential=potential,
+                transition_potentials=_transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=scan,
+                detectors=[
+                    abtem.AnnularDetector(0.0, 30.0),
+                    abtem.XrayDetector(0.7),
+                ],
+                double_channel=False,
+                lazy=lazy,
+                sites=atoms,
+            )
+
+        eager, lazy = run(False), run(True)
+        assert len(eager) == len(lazy) == 2
+        for e, l in zip(eager, lazy):
+            self._assert_same(e, l)
+
+    def test_smatrix_lazy_is_actually_lazy(self):
+        atoms, potential = self._potential()
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+        )
+        got = s_matrix.ionization_scan(
+            _transition_potential(
+                potential.extent, potential.gpts, band_limited=True
+            ),
+            scan=abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 3)),
+            sites=atoms,
+            lazy=True,
+        )
+        assert got.is_lazy
