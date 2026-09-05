@@ -538,6 +538,129 @@ class TestCrossShellCosterKronig:
         assert "L3" in {line.initial_level for line in lines.values()}
 
 
+class TestCrossShellCosterKronigMShell:
+    """The same cross-shell migration as TestCrossShellCosterKronig, but for
+    the 5-level M shell (M1..M5), which exercises transfers that skip levels
+    (e.g. M1 -> M4 directly, not only M1 -> M2 -> ... -> M4) and elements
+    where some channels are simply untabulated (rate 0).
+
+    M-shell Coster-Kronig data is only tabulated for the heavier elements
+    where the sub-levels are resolved, so these tests use Au, Pb, W and U.
+    """
+
+    HEAVY_ELEMENTS = ["W", "Au", "Pb", "U"]
+
+    def test_m1_vacancies_migrate_across_the_whole_shell(self):
+        distribution = vacancy_distribution("Au", 3, 0)
+        assert set(distribution) == {"M1", "M2", "M3", "M4", "M5"}
+        assert distribution["M1"] < 0.2  # most of it leaves
+        assert sum(distribution.values()) == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
+    def test_migration_matches_a_manual_cascade_of_the_direct_rates(self, element):
+        # Redo the cascade from raw ck_probability(..., total=False) calls,
+        # independently of _coster_kronig_cascade, following the same
+        # decreasing-binding-energy processing order the module documents.
+        levels = ["M1", "M2", "M3", "M4", "M5"]
+        vacancies = {level: 0.0 for level in levels}
+        vacancies["M1"] = 1.0
+
+        for i, upper in enumerate(levels):
+            if vacancies[upper] == 0.0:
+                continue
+            transfers = {
+                lower: vacancies[upper]
+                * xraydb.ck_probability(element, upper, lower, total=False)
+                for lower in levels[i + 1 :]
+            }
+            vacancies[upper] -= sum(transfers.values())
+            for lower, amount in transfers.items():
+                vacancies[lower] += amount
+
+        distribution = vacancy_distribution(element, 3, 0)
+        for level in levels:
+            assert distribution.get(level, 0.0) == pytest.approx(
+                vacancies[level], abs=1e-9
+            ), f"{element} {level}"
+
+    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
+    def test_cascade_reproduces_the_tabulated_total_rate(self, element):
+        # xraydb's total=True is the cumulative probability a vacancy ever
+        # passes through "lower", not the final resting population -- for an
+        # intermediate level (M2, M3, M4) part of that keeps moving on down
+        # the shell, so total > the final distribution fraction there. Only
+        # M5, the last level in the shell, has nowhere further to go, so
+        # cumulative arrivals there equals the final population -- the same
+        # reason the L-shell version of this test only checks L3.
+        distribution = vacancy_distribution(element, 3, 0)
+        assert distribution["M5"] == pytest.approx(
+            xraydb.ck_probability(element, "M1", "M5", total=True)
+        )
+
+    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
+    def test_intermediate_levels_leak_less_than_their_cumulative_total(self, element):
+        # For a non-terminal level, the tabulated "total" (cumulative
+        # pass-through) must be >= the final resting population, since some
+        # of what arrives at M2/M3/M4 continues cascading onward to M5.
+        distribution = vacancy_distribution(element, 3, 0)
+        for lower in ["M2", "M3", "M4"]:
+            total = xraydb.ck_probability(element, "M1", lower, total=True)
+            assert distribution[lower] <= total + 1e-9, f"{element} {lower}"
+
+    def test_m2_ionisation_does_not_feed_back_into_m1(self):
+        # M1 has higher binding energy than M2, so an M2 (3p1/2) vacancy can
+        # only cascade forward to M3, M4, M5.
+        distribution = vacancy_distribution("Au", 3, 1)
+        assert "M1" not in distribution
+        assert set(distribution) <= {"M2", "M3", "M4", "M5"}
+        assert sum(distribution.values()) == pytest.approx(1.0)
+
+    def test_m4_ionisation_only_cascades_to_m5(self):
+        # The (n=3, l=2) subshell is M4 and M5; M4 can only feed M5.
+        distribution = vacancy_distribution("Au", 3, 2)
+        assert set(distribution) == {"M4", "M5"}
+        f45 = xraydb.ck_probability("Au", "M4", "M5", total=False)
+        m4_weight, m5_weight = statistical_weights(2)
+        assert distribution["M4"] == pytest.approx(m4_weight * (1 - f45))
+        assert distribution["M5"] == pytest.approx(
+            m5_weight + m4_weight * f45
+        )
+
+    def test_missing_ck_channels_are_treated_as_zero(self):
+        # M4 -> M5 is untabulated (0.0) for lighter elements with otherwise
+        # complete M-shell CK data; the cascade must not crash or lose
+        # vacancies over it, it just carries nothing through that channel.
+        assert xraydb.ck_probability("Ag", "M4", "M5", total=False) == 0.0
+        distribution = vacancy_distribution("Ag", 3, 2)
+        m4_weight, m5_weight = statistical_weights(2)
+        assert distribution["M4"] == pytest.approx(m4_weight)
+        assert distribution["M5"] == pytest.approx(m5_weight)
+        assert sum(distribution.values()) == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
+    @pytest.mark.parametrize("n, l", [(3, 0), (3, 1), (3, 2)])
+    def test_vacancies_conserved_for_every_m_subshell(self, element, n, l):
+        distribution = vacancy_distribution(element, n, l)
+        assert sum(distribution.values()) == pytest.approx(1.0)
+
+    def test_lines_come_from_levels_the_vacancy_reached(self):
+        # An M1 ionisation of a heavy element must produce M3/M4/M5 lines
+        # after the cascade -- not just whatever M1 itself radiates.
+        lines = emission_lines("Au", 3, 0)
+        initial_levels = {line.initial_level for line in lines.values()}
+        assert initial_levels & {"M3", "M4", "M5"}
+        assert "M1" not in initial_levels  # too little M1 population left
+
+    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
+    def test_m1_yield_exceeds_its_own_level(self, element):
+        # Most of an M1 vacancy ends up at M4/M5, which fluoresce far more
+        # strongly than M1 itself, so the cascaded yield should be well
+        # above the bare tabulated M1 omega.
+        edges = xraydb.xray_edges(element)
+        combined = fluorescence_yield(element, 3, 0)
+        assert combined > 5 * edges["M1"].fyield
+
+
 class TestCombineSubshells:
     @staticmethod
     def _image(value):
