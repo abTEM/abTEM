@@ -12,6 +12,8 @@ reproduces the existing scattered-wave route.
 
 from __future__ import annotations
 
+import importlib.util
+
 import ase
 import numpy as np
 import pytest
@@ -33,6 +35,13 @@ except ImportError:
 
 from utils import gpu  # noqa: E402
 
+# The fluorescence yield comes from xraydb, so anything converting an
+# ionisation probability into photons needs it; the ionisation probability
+# itself does not.
+requires_xraydb = pytest.mark.skipif(
+    importlib.util.find_spec("xraydb") is None,
+    reason="X-ray emission data requires xraydb",
+)
 
 ENERGY = 100e3
 
@@ -399,6 +408,7 @@ class TestPublicEntryPoints:
                 detectors=[abtem.AnnularDetector(inner=0.0, outer=None)],
             )
 
+    @requires_xraydb
     def test_xray_detector_converts_the_scan(self):
         potential, probe = _si_setup()
         scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
@@ -924,6 +934,7 @@ class TestPrismEffectiveIonization:
         assert np.all(np.asarray(got.compute().array) >= 0.0)
 
 
+@requires_xraydb
 class TestXrayDetectorAsDetector:
     """XrayDetector models the experiment, so it goes straight into a scan.
 
@@ -1132,6 +1143,7 @@ class TestPlaneWaveEntryPoint:
         assert np.all(values >= 0.0)
         assert np.all(np.diff(values) >= -1e-12), values
 
+    @requires_xraydb
     def test_xray_detector_converts_the_result(self):
         atoms, potential = self._setup()
         plane_wave = abtem.PlaneWave(energy=ENERGY)
@@ -1399,6 +1411,9 @@ class TestLazyMatchesEagerEverywhere:
         ["xray", "absorption", "inelastic-crop", "frozen-phonons"],
     )
     def test_smatrix_features(self, kwargs_name):
+        if kwargs_name in ("xray", "absorption"):
+            pytest.importorskip("xraydb", reason="X-ray data requires xraydb")
+
         from abtem.inelastic.xray import SpecimenAbsorption
 
         num_configs = 2 if kwargs_name == "frozen-phonons" else None
@@ -1436,6 +1451,7 @@ class TestLazyMatchesEagerEverywhere:
 
         self._assert_same(run(False), run(True))
 
+    @requires_xraydb
     def test_joint_eels_and_edx(self):
         atoms, potential = self._potential()
         probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)

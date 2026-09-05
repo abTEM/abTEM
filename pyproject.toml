@@ -90,6 +90,9 @@ test = [
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.8.0",
     "sympy",
+    # Also in the `gpaw` extra. Listed here, like sympy, so CI exercises the
+    # core-loss and EDX tests rather than skipping them.
+    "xraydb",
     "tox>=4.34.1",
 ]
 
