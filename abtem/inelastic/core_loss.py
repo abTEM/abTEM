@@ -29,8 +29,9 @@ except ImportError:
 
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
-from abtem.core.backend import copy_to_device, get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.core.chunks import validate_chunks
+from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -43,10 +44,19 @@ from abtem.core.energy import (
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin, get_dtype
-from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
+from abtem.detectors import IonizationDetector
+from abtem.measurements import (
+    Images,
+    RealSpaceLineProfiles,
+    _polar_detector_bins,
+    _scan_axes,
+)
 
 if TYPE_CHECKING:
+    from abtem.measurements import BaseMeasurements
+    from abtem.potentials.iam import BasePotential
     from abtem.prism.s_matrix import SMatrix
+    from abtem.slicing import SliceIndexedAtoms
     from abtem.waves import Waves
 
 azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
@@ -1121,6 +1131,83 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
 
+    def effective_ionization_potential(
+        self,
+        sites: Atoms | Atom | np.ndarray | None = None,
+        max_batch: int = 16,
+    ) -> np.ndarray:
+        r"""
+        The effective local ionisation potential :math:`\mu(r)`.
+
+        Summed over every final state, so that the ionisation probability of a
+        wave function is the single real-space integral
+
+        .. math::
+            P = \int |\psi(r)|^2 \mu(r) \, dr,
+
+        with no angular restriction and no scattered waves to propagate. This
+        is exact for a detector that collects all scattering angles, which is
+        the case for X-ray emission: Parseval's theorem turns the sum over
+        final states of :math:`\int |H_f \psi|^2` into
+        :math:`\int |\psi|^2 \sum_f |H_f|^2`.
+
+        Parameters
+        ----------
+        sites : Atoms or Atom or np.ndarray, optional
+            Positions of the ionised atoms. If given, the potential is summed
+            over them; if None (default) a single site at the origin is
+            returned.
+
+        Returns
+        -------
+        mu : np.ndarray
+            Real-valued array on the simulation grid.
+
+        max_batch : int, optional
+            Maximum number of sites to shift at once. Default is 16.
+
+        Notes
+        -----
+        Unlike the scattered-wave route this does not truncate the ionisation
+        signal at the antialiasing cutoff, so it is the more accurate of the
+        two for an angle-unrestricted measurement.
+
+        The sites are applied to the transition potential *amplitudes* and the
+        intensities are summed afterwards, exactly as :meth:`scatter` does.
+        Shifting the summed intensity instead would be cheaper -- one
+        convolution with the site structure factor -- but wrong: the intensity
+        has twice the bandwidth of the amplitude, so a sub-pixel Fourier shift
+        of it rings, and mu picks up negative values of several percent.
+        """
+        self.accelerator.check_is_defined()
+        self.grid.check_is_defined()
+
+        xp = get_array_module(self.array)
+
+        # The interaction constant enters the scattered amplitude in `scatter`,
+        # so it enters mu squared.
+        prefactor = energy2sigma(self.energy) ** 2
+
+        if sites is None:
+            return abs2(ifft2(self.array)).sum(0) * prefactor
+
+        sites = self.validate_sites(sites)
+
+        mu = xp.zeros(self.gpts, dtype=get_dtype(complex=False))
+
+        if len(sites) == 0:
+            return mu
+
+        sites = copy_to_device(sites, self.array)
+        sites = sites / xp.asarray(self.sampling, dtype=sites.dtype)
+
+        for start in range(0, len(sites), max_batch):
+            batch = sites[start : start + max_batch]
+            shift = fft_shift_kernel(batch, self.gpts)
+            shifted = ifft2(self.array[None] * shift[:, None])
+            mu += abs2(shifted).sum((0, 1)) * prefactor
+
+        return mu
 
     def local_potential(self, max_angle=None, space="reciprocal"):
         """
@@ -1364,6 +1451,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         d = waves._copy_kwargs(exclude=("array",))
         d["array"] = array
+
+        # Carry the ionised edge onto the scattered waves, so that a detector
+        # can tell which transition produced them. XrayDetector needs it to look
+        # up the fluorescence yield.
+        d["metadata"] = {**d.get("metadata", {}), **self.metadata}
 
         ensemble_axes_metadata = [AxisMetadata(label="sites")]
 
@@ -2383,6 +2475,208 @@ def prism_transition_potential_scan_beam_basis(
 
     if len(measurements) == 1:
         return measurements[0]
+    return measurements
+
+
+def effective_ionization_multislice_and_detect(
+    waves: Waves,
+    potential: BasePotential,
+    transition_potential: TransitionPotential | TransitionPotentialArray,
+    detectors: list[IonizationDetector] | None = None,
+    sites: SliceIndexedAtoms | Atoms | None = None,
+    algorithm=None,
+    pbar: bool = False,
+) -> list[BaseMeasurements]:
+    r"""
+    Ionisation probability accumulated through an ordinary elastic multislice.
+
+    Rather than scattering the wave function at every site and propagating the
+    result, this integrates the intensity against the effective local ionisation
+    potential :math:`\mu(r)` slice by slice. For a measurement that collects all
+    scattering angles -- X-ray emission -- the two are equivalent, because the
+    elastic propagation of the ejected-state wave is unitary and cannot change
+    the total count. See
+    :meth:`TransitionPotentialArray.effective_ionization_potential`.
+
+    Building mu costs one FFT per site per final state in each slice, but it is
+    independent of the probe position, so it is paid once per slice for the whole
+    scan rather than once per position. Detection itself is then a single
+    elementwise product per slice. There are no scattered waves to propagate.
+
+    Parameters
+    ----------
+    waves : Waves
+        The incident wave functions.
+    potential : BasePotential
+        The elastic potential.
+    transition_potential : TransitionPotential or TransitionPotentialArray
+        Transition potential of the ionised subshell. Use an
+        :class:`EnergyIntegral` for ``epsilon`` to obtain an edge-integrated
+        result.
+    detectors : list of IonizationDetector, optional
+        Accumulators to fill. One is created if not given. Any other detector
+        type is rejected, since this driver never forms scattered waves.
+    sites : SliceIndexedAtoms or Atoms, optional
+        The ionised atoms. Taken from the potential if not given.
+    algorithm : FourierMultislice or RealSpaceMultislice, optional
+        Multislice operator. Default is ``FourierMultislice()``.
+    pbar : bool, optional
+        Show a progress bar. Default is False.
+
+    Returns
+    -------
+    measurements : list of BaseMeasurements
+        One per detector: the ionisation probability per incident electron,
+        resolved over the exit planes of the potential.
+    """
+    from abtem.multislice import (
+        FourierMultislice,
+        LaplaceOperator,
+        RealSpaceMultislice,
+        _generate_potential_configurations,
+        _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+        realspace_multislice_step,
+    )
+    from abtem.antialias import AntialiasAperture
+    from abtem.multislice import FresnelPropagator
+
+    if algorithm is None:
+        algorithm = FourierMultislice()
+
+    waves = waves.ensure_real_space()
+
+    if isinstance(algorithm, FourierMultislice):
+        antialias_aperture = AntialiasAperture()
+        propagator = FresnelPropagator()
+
+        def multislice_step(waves, potential_slice):
+            return conventional_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                antialias_aperture=antialias_aperture,
+                propagator=propagator,
+                conjugate=algorithm.conjugate,
+                transpose=algorithm.transpose,
+                order=algorithm.order,
+            )
+
+    else:
+        laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+
+        def multislice_step(waves, potential_slice):
+            return realspace_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                next_slice=None,
+                laplace=laplace_operator,
+                max_terms=algorithm.max_terms,
+                order=algorithm.order,
+                fully_corrected=algorithm.expansion_scope == "full",
+            )
+
+    transition_potential.grid.match(waves)
+    transition_potential.accelerator.match(waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
+    transition_potential = transition_potential.copy_to_device(waves.device)
+
+    sites = _extract_scattering_sites(potential, sites)
+
+    n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
+    if n_sites == 0:
+        raise RuntimeError(
+            "No scattering sites matching transition potential for element "
+            f"{transition_potential.Z}"
+        )
+
+    if detectors is None:
+        detectors = [IonizationDetector()]
+
+    if not all(isinstance(detector, IonizationDetector) for detector in detectors):
+        raise RuntimeError(
+            "the effective-potential driver forms no scattered waves, so it "
+            "only accepts IonizationDetector; use "
+            "transition_potential_multislice for angle-resolved detectors"
+        )
+
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
+    measurements = allocate_multislice_measurements(
+        waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    )
+
+    tqdm_pbar = TqdmWrapper(
+        enabled=pbar,
+        total=int(potential.num_slices * potential.num_configurations),
+        leave=False,
+        desc="ionisation multislice",
+    )
+
+    waves_input = waves.copy()
+
+    for potential_index, configuration in _generate_potential_configurations(
+        potential
+    ):
+        waves = waves_input.copy()
+        # These are elastic waves, so they carry no edge identity of their own.
+        waves.metadata.update(transition_potential.metadata)
+
+        # Running total of the ionisation probability with depth. The entrance
+        # exit plane, if present, sees no material and stays zero.
+        running = None
+
+        # The entrance exit plane at t = 0 stays zero; measurements are
+        # allocated zeroed, so there is nothing to write there.
+        exit_plane_index = 0
+        depth = 0.0
+        for slice_index, potential_slice in enumerate(
+            configuration.generate_slices()
+        ):
+            waves = multislice_step(waves, potential_slice)
+            tqdm_pbar.update_if_exists(1)
+
+            depth += potential_slice.axes_metadata[0].values[0]
+            waves.metadata.update(transition_potential.metadata)
+            waves.metadata["depth"] = depth
+
+            sites_slice = sites.get_atoms_in_slices(
+                slice_index, atomic_number=transition_potential.Z
+            )
+
+            if len(sites_slice) > 0:
+                mu = transition_potential.effective_ionization_potential(sites_slice)
+                contributions = []
+                for detector in detectors:
+                    detector.mu = mu
+                    contributions.append(detector.detect(waves).array)
+                running = (
+                    contributions
+                    if running is None
+                    else [a + b for a, b in zip(running, contributions)]
+                )
+
+            if slice_index in potential.exit_planes:
+                exit_plane_index = potential.exit_planes.index(slice_index)
+                index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential
+                )
+                if running is not None:
+                    for measurement, value in zip(measurements, running):
+                        measurement.array[index] = value
+
+    tqdm_pbar.close_if_exists()
+
     return measurements
 
 
