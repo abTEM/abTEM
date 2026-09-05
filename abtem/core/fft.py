@@ -1,5 +1,6 @@
 """Module for handling Fourier transforms and convolution in abTEM."""
 
+import contextlib
 import math
 import threading
 import warnings
@@ -552,6 +553,84 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     Using the FFT library specified in the configuration.
     """
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
+
+
+# --- Shared diffraction-pattern FFT ----------------------------------------
+#
+# Several radial detectors (AnnularDetector, FlexibleAnnularDetector,
+# SegmentedDetector, PixelatedDetector, ...) each derive their measurement
+# from ``Waves.diffraction_patterns``, which starts with a 2D FFT of the wave
+# function array. When several such detectors are evaluated against the same
+# array in one detection pass (once per detector, per site batch, per slice
+# in e.g. ``transition_potential_multislice_and_detect``), that FFT would
+# otherwise be recomputed once per detector even though the input and
+# normalization are identical every time. ``share_diffraction_pattern_fft``
+# below lets a caller precompute that FFT once and attach it directly to the
+# specific ``Waves`` object it was computed from, for the duration of a
+# ``with`` block; the (cheap) crop / intensity / fftshift that turns it into
+# a specific detector's diffraction pattern still runs once per call.
+#
+# Deliberately NOT a cache keyed by array identity: several in-place
+# multislice steps (e.g. propagating a wave with ``overwrite_x=True``)
+# legitimately reuse the exact same array object across multislice depths
+# while overwriting its contents, so identity alone cannot tell "the same
+# data" apart from "the same object, now holding different data." Attaching
+# the precomputed value as a plain attribute on one specific ``Waves``
+# instance sidesteps that: there is nothing to key or invalidate, because a
+# read only ever consults *that* object's own attribute, and the attribute
+# only exists for the lifetime of the ``with`` block that put it there.
+#
+#   * No global or thread-local state: the shared value lives on the Waves
+#     object itself, so a dask worker thread naturally only ever sees the
+#     ``waves``/``scattered_waves`` object local to its own call stack.
+#   * A caller not using ``share_diffraction_pattern_fft`` (any standalone
+#     ``detector.detect(waves)``, or any code path that hasn't opted in)
+#     never sees a ``_shared_diffraction_pattern_fft`` attribute at all, so
+#     it is unconditionally identical to the pre-sharing behavior.
+#   * The one rule callers must follow: do not mutate ``waves.array`` (e.g.
+#     run a multislice step) between entering and exiting the block. A
+#     mistake here can only affect reads of *that* object within *that*
+#     block -- there is no shared slot it could leak into for some later,
+#     unrelated array to read.
+
+
+@contextlib.contextmanager
+def share_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Attach ``compute()`` to ``waves`` as its shared diffraction-pattern FFT
+    for the duration of this block, so several detectors evaluated against
+    this exact, not-yet-mutated ``waves`` object can each reuse it via
+    ``get_shared_diffraction_pattern_fft`` instead of recomputing their own.
+    See the module comment above for the full rationale.
+
+    Do not mutate ``waves.array`` (e.g. run a multislice step) while this
+    block is active. Safe to nest on the same ``waves`` object: an outer
+    block's value (if any) is saved and restored around a nested one,
+    rather than a nested block's exit deleting an outer block's value.
+    """
+    previous = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    waves._shared_diffraction_pattern_fft = (normalize, compute())
+    try:
+        yield
+    finally:
+        if previous is None:
+            del waves._shared_diffraction_pattern_fft
+        else:
+            waves._shared_diffraction_pattern_fft = previous
+
+
+def get_shared_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Return ``compute()``, reusing the value attached to ``waves`` by an
+    enclosing ``share_diffraction_pattern_fft(waves, normalize, ...)`` if one
+    is active and its ``normalize`` matches; otherwise calls ``compute()``
+    directly. See the module comment above ``share_diffraction_pattern_fft``.
+    """
+    shared = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    if shared is not None:
+        shared_normalize, shared_fft = shared
+        if shared_normalize == normalize:
+            return shared_fft
+
+    return compute()
 
 
 @overload

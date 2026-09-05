@@ -492,13 +492,16 @@ def _update_measurements(
 ) -> None:
     assert len(detectors) == len(measurements)
 
-    for i, detector in enumerate(detectors):
-        new_measurement = detector.detect(waves)
+    # All detectors here see the same, not-yet-mutated ``waves`` -- share one
+    # diffraction-pattern FFT across them (see Waves._share_diffraction_pattern_fft).
+    with waves._share_diffraction_pattern_fft():
+        for i, detector in enumerate(detectors):
+            new_measurement = detector.detect(waves)
 
-        if additive:
-            measurements[i].array[measurement_index] += new_measurement.array
-        else:
-            measurements[i].array[measurement_index] = new_measurement.array
+            if additive:
+                measurements[i].array[measurement_index] += new_measurement.array
+            else:
+                measurements[i].array[measurement_index] = new_measurement.array
     return
 
 
@@ -797,10 +800,11 @@ def multislice_and_detect(
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
-        measurements = [
-            detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
-            for detector in detectors
-        ]
+        with waves._share_diffraction_pattern_fft():
+            measurements = [
+                detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                for detector in detectors
+            ]
 
     elif return_backscattered:
         _back_propagate_backscattered_waves(
@@ -939,10 +943,18 @@ def transition_potential_multislice_and_detect(
                 potential_index, exit_plane_index, potential
             )
 
-            for i, detector in enumerate(detectors):
-                new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum((0,))
-                measurements[i].array[measurement_index] += new_measurement.array
+            # All detectors here see the same, not-yet-mutated ``waves`` at
+            # this exit plane -- share one diffraction-pattern FFT across
+            # them (see Waves._share_diffraction_pattern_fft). The block is
+            # re-entered fresh each call, so a later call at a *different*
+            # slice_index/depth (waves whose ``.array`` some in-place
+            # multislice steps reuse across depths) never sees a value
+            # computed for an earlier one.
+            with waves._share_diffraction_pattern_fft():
+                for i, detector in enumerate(detectors):
+                    new_measurement = detector.detect(waves)
+                    new_measurement = new_measurement.sum((0,))
+                    measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
 
@@ -1151,13 +1163,19 @@ def transition_potential_multislice_and_detect(
                         )
                         measurement_plane_indices = (exit_planes,)
 
-                    for i, detector in enumerate(detectors):
-                        new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_plane_indices] += (
-                            new_measurement.array[
-                                (None,) * len(measurement_plane_indices)
-                            ]
-                        )
+                    # All detectors here see the same, not-yet-mutated
+                    # ``scattered_waves`` -- share one diffraction-pattern
+                    # FFT across them (see Waves._share_diffraction_pattern_fft).
+                    with scattered_waves._share_diffraction_pattern_fft():
+                        for i, detector in enumerate(detectors):
+                            new_measurement = detector.detect(scattered_waves).sum(
+                                (0,)
+                            )
+                            measurements[i].array[measurement_plane_indices] += (
+                                new_measurement.array[
+                                    (None,) * len(measurement_plane_indices)
+                                ]
+                            )
 
     tqdm_pbar.close_if_exists()
 
