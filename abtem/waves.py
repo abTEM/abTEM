@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import warnings
 from abc import abstractmethod
@@ -34,7 +35,14 @@ from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import fft2, fft_crop, fft_interpolate, ifft2
+from abtem.core.fft import (
+    fft2,
+    fft_crop,
+    fft_interpolate,
+    get_shared_diffraction_pattern_fft,
+    ifft2,
+    share_diffraction_pattern_fft,
+)
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
@@ -1234,14 +1242,29 @@ class Waves(BaseWaves, ArrayObject):
         return self.__class__(**kwargs)
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
-        xp = get_array_module(array)
-
+    def _diffraction_pattern_fft(array, normalize):
+        """Compute the (un-cropped) FFT that all diffraction-pattern flavours
+        (full/cutoff/valid crop, real or complex, block-direct or not) are
+        derived from. Factored out of ``_diffraction_pattern`` so it can be
+        shared (and cached) across several downstream cropping calls that
+        differ only in ``new_gpts``/``return_complex``/``fftshift``.
+        """
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
 
-        array = fft2(array, overwrite_x=False)
+        return fft2(array, overwrite_x=False)
 
+    @staticmethod
+    def _diffraction_pattern_from_fft(fft_array, new_gpts, return_complex, fftshift):
+        """Crop/intensity/shift an already-computed FFT (see
+        ``_diffraction_pattern_fft``) into the requested diffraction pattern.
+        This part is comparatively cheap, so sharing the FFT above across
+        multiple detectors is what makes a second (or third) radial
+        detector nearly free.
+        """
+        xp = get_array_module(fft_array)
+
+        array = fft_array
         if array.shape[-2:] != new_gpts:
             array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
 
@@ -1252,6 +1275,51 @@ class Waves(BaseWaves, ArrayObject):
             return xp.fft.fftshift(array, axes=(-1, -2))
 
         return array
+
+    @staticmethod
+    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
+        fft_array = Waves._diffraction_pattern_fft(array, normalize)
+        return Waves._diffraction_pattern_from_fft(
+            fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
+        )
+
+    @staticmethod
+    def _diffraction_pattern_should_normalize(metadata, renormalize=True):
+        """Whether ``diffraction_patterns`` should renormalize the intensity
+        for the given ``metadata`` (see its ``renormalize`` parameter).
+        Factored out so callers sharing a diffraction-pattern FFT across
+        several detectors (see ``abtem.core.fft.share_diffraction_pattern_fft``)
+        can compute the same boolean the shared FFT must be keyed on.
+        """
+        if renormalize and "normalization" in metadata:
+            if metadata["normalization"] == "values":
+                return True
+            elif metadata["normalization"] != "reciprocal_space":
+                raise RuntimeError(
+                    f"normalization {metadata['normalization']} not recognized"
+                )
+        return False
+
+    @contextlib.contextmanager
+    def _share_diffraction_pattern_fft(self, renormalize: bool = True):
+        """Precompute this waves object's diffraction-pattern FFT once and
+        share it with every ``detector.detect(self)`` call made inside this
+        block, instead of each detector computing its own (see
+        ``abtem.core.fft.share_diffraction_pattern_fft``).
+
+        Wrap exactly a loop over several detectors that are known, by
+        construction, to see this exact, not-yet-mutated waves object --
+        e.g. one pass over several detectors at a fixed multislice depth.
+        Do not mutate ``self.array`` (e.g. run a multislice step) while this
+        block is active.
+        """
+        normalize = self._diffraction_pattern_should_normalize(
+            self.metadata, renormalize
+        )
+        with share_diffraction_pattern_fft(
+            self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+        ):
+            yield
 
     def diffraction_patterns(
         self,
@@ -1319,14 +1387,7 @@ class Waves(BaseWaves, ArrayObject):
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
-        normalize = False
-        if renormalize and "normalization" in metadata:
-            if metadata["normalization"] == "values":
-                normalize = True
-            elif metadata["normalization"] != "reciprocal_space":
-                raise RuntimeError(
-                    f"normalization {metadata['normalization']} not recognized"
-                )
+        normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
             dtype = get_dtype(complex=return_complex)
@@ -1342,12 +1403,21 @@ class Waves(BaseWaves, ArrayObject):
                 meta=xp.array((), dtype=dtype),
             )
         else:
-            pattern = self._diffraction_pattern(
-                self.array,
+            # Reuse the FFT precomputed for this exact ``self`` by an
+            # enclosing ``share_diffraction_pattern_fft(self, ...)`` (see
+            # abtem.core.fft), if one is active -- e.g. another detector
+            # evaluated against the same waves in the same detection pass.
+            # Only the FFT is shared; cropping/intensity/shift below still
+            # runs per call, so this is bit-for-bit identical to calling
+            # ``_diffraction_pattern`` directly.
+            fft_array = get_shared_diffraction_pattern_fft(
+                self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+            )
+            pattern = self._diffraction_pattern_from_fft(
+                fft_array,
                 new_gpts=new_gpts,
                 return_complex=return_complex,
                 fftshift=fftshift,
-                normalize=normalize,
             )
 
         diffraction_patterns = DiffractionPatterns(
@@ -1460,6 +1530,28 @@ class Waves(BaseWaves, ArrayObject):
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
 
+    @staticmethod
+    def _stack_over_transitions(measurements, transition_potentials):
+        """Stack one detector's measurements over the transition-potential axis."""
+        if len(measurements) == 1:
+            return reduce_ensemble(measurements[0])
+
+        axis_metadata = OrdinalAxis(
+            label="Z, n, l",
+            values=tuple(
+                ",".join(
+                    (
+                        str(transition_potential.metadata["Z"]),
+                        str(transition_potential.metadata["n"]),
+                        str(transition_potential.metadata["l"]),
+                    )
+                )
+                for transition_potential in transition_potentials
+            ),
+            tex_label=r"$Z, n, \ell$",
+        )
+        return reduce_ensemble(stack_array_object(measurements, axis_metadata))
+
     def transition_potential_multislice(
         self,
         potential: BasePotential,
@@ -1480,7 +1572,11 @@ class Waves(BaseWaves, ArrayObject):
 
         potential = _prebuild_reused_potential(potential, self)
 
-        measurements: list[Waves | BaseMeasurements] = []
+        # One entry per transition potential, each a list over detectors. The
+        # expensive part -- the elastic multislice and forming the scattered
+        # waves -- is shared across detectors, so an EELS aperture and an
+        # angle-unrestricted (EDX) detector can be filled in a single pass.
+        per_transition: list[list[Waves | BaseMeasurements]] = []
         for transition_potential in transition_potentials:
             multislice_transform = MultisliceTransform(
                 potential=potential,
@@ -1491,8 +1587,26 @@ class Waves(BaseWaves, ArrayObject):
                 **multislice_func_kwargs,
             )
             new_measurements = self.apply_transform(multislice_transform)
-            assert isinstance(new_measurements, (Waves, BaseMeasurements))
-            measurements.append(new_measurements)
+            if not isinstance(new_measurements, list):
+                new_measurements = [new_measurements]
+            per_transition.append(new_measurements)
+
+        num_detectors = len(per_transition[0])
+        if any(len(entry) != num_detectors for entry in per_transition):
+            raise RuntimeError(
+                "every transition potential must produce the same number of "
+                "measurements"
+            )
+
+        if num_detectors > 1:
+            return [
+                self._stack_over_transitions(
+                    [entry[i] for entry in per_transition], transition_potentials
+                )
+                for i in range(num_detectors)
+            ]
+
+        measurements = [entry[0] for entry in per_transition]
 
         if len(measurements) > 1:
             axis_metadata = OrdinalAxis(
@@ -1519,6 +1633,81 @@ class Waves(BaseWaves, ArrayObject):
             stacked_measurements = measurements[0]
 
         return reduce_ensemble(stacked_measurements)
+
+    def ionization_multislice(
+        self,
+        potential: BasePotential,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        **multislice_func_kwargs,
+    ) -> Waves | BaseMeasurements:
+        """Ionisation probability accumulated through an elastic multislice.
+
+        Integrates the wave intensity against the effective local ionisation
+        potential at every slice rather than scattering and propagating a wave
+        per site per final state. Equivalent for a measurement that collects all
+        scattering angles, which is the case for X-ray emission, and much
+        cheaper; see
+        :func:`~abtem.inelastic.core_loss.effective_ionization_multislice_and_detect`.
+
+        Parameters
+        ----------
+        potential : BasePotential
+            The elastic potential.
+        transition_potentials : BaseTransitionPotential or list of BaseTransitionPotential
+            Transition potential(s) of the ionised subshell(s).
+        sites : SliceIndexedAtoms or Atoms, optional
+            The ionised atoms. Taken from the potential if not given.
+
+        Returns
+        -------
+        measurement : BaseMeasurements
+            Ionisation probability per incident electron.
+        """
+        from abtem.detectors import IonizationDetector
+        from abtem.inelastic.core_loss import (
+            effective_ionization_multislice_and_detect,
+        )
+
+        if not isinstance(transition_potentials, (list, tuple)):
+            transition_potentials = [transition_potentials]
+
+        potential = validate_potential(potential, self)
+        sites = _extract_scattering_sites(potential, sites)
+        potential = _prebuild_reused_potential(potential, self)
+
+        measurements: list[Waves | BaseMeasurements] = []
+        for transition_potential in transition_potentials:
+            multislice_transform = MultisliceTransform(
+                potential=potential,
+                detectors=[IonizationDetector()],
+                multislice_func=effective_ionization_multislice_and_detect,
+                transition_potential=transition_potential,
+                sites=sites,
+                **multislice_func_kwargs,
+            )
+            new_measurements = self.apply_transform(multislice_transform)
+            assert isinstance(new_measurements, (Waves, BaseMeasurements))
+            measurements.append(new_measurements)
+
+        if len(measurements) == 1:
+            return measurements[0]
+
+        axis_metadata = OrdinalAxis(
+            label="Z, n, l",
+            values=tuple(
+                ",".join(
+                    (
+                        str(transition_potential.metadata["Z"]),
+                        str(transition_potential.metadata["n"]),
+                        str(transition_potential.metadata["l"]),
+                    )
+                )
+                for transition_potential in transition_potentials
+            ),
+            tex_label=r"$Z, n, \ell$",
+        )
+        return reduce_ensemble(stack_array_object(measurements, axis_metadata))
 
     def multislice(
         self,
@@ -2197,6 +2386,58 @@ class PlaneWave(WavesBuilder):
 
         return reduce_ensemble(measurements)
 
+    def ionization_multislice(
+        self,
+        potential: BasePotential | Atoms,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        max_batch: int | str = "auto",
+        lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
+    ) -> BaseMeasurements | Waves:
+        """Ionisation probability of a plane wave passing through the potential.
+
+        The plane-wave counterpart of :meth:`abtem.Probe.ionization_scan`. With
+        an incident plane wave of unit intensity the result is the ionisation
+        cross-section per unit area, which is the natural way to obtain absolute
+        cross-sections; a probe scan gives the position-resolved map instead.
+
+        Uses the effective local ionisation potential, which is exact for a
+        measurement collecting all scattering angles -- what X-ray emission
+        requires. Pass the result to :meth:`abtem.XrayDetector.to_counts` to
+        convert it into detected counts.
+
+        Parameters
+        ----------
+        potential : BasePotential or Atoms
+            The scattering potential.
+        transition_potentials : BaseTransitionPotential or list of BaseTransitionPotential
+            Transition potential(s) of the ionised subshell(s). Give ``epsilon``
+            as an :class:`~abtem.EnergyIntegral` to integrate over the edge.
+        sites : SliceIndexedAtoms or Atoms, optional
+            The ionised atoms. Taken from the potential if not given.
+        max_batch : int or str, optional
+            Chunk size for the wave functions.
+        lazy : bool, optional
+            Build a lazy dask graph instead of computing eagerly.
+
+        Returns
+        -------
+        measurement : BaseMeasurements
+            Ionisation probability per incident electron.
+        """
+        potential = validate_potential(potential)
+        self.grid.match(potential)
+
+        waves = self._build_validated(lazy=lazy, max_batch=max_batch)
+
+        return waves.ionization_multislice(
+            potential=potential,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            **multislice_func_kwargs,
+        )
+
 
 class Probe(WavesBuilder):
     """Represents electron-probe wave functions for simulating experiments with a
@@ -2632,6 +2873,69 @@ class Probe(WavesBuilder):
             potential=potential,
             transition_potentials=transition_potentials,
             detectors=detectors,
+            sites=sites,
+            **multislice_func_kwargs,
+        )
+
+    def ionization_scan(
+        self,
+        potential: BasePotential | Atoms,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        scan: Optional[BaseScan | Sequence] = None,
+        sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        max_batch: int | str = "auto",
+        lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
+    ) -> BaseMeasurements | Waves:
+        """Scan the probe, accumulating the ionisation probability per position.
+
+        Uses the effective local ionisation potential rather than explicit
+        scattered waves, which is exact for a measurement collecting all
+        scattering angles and is what X-ray emission requires. Pass the result
+        to :meth:`abtem.XrayDetector.to_counts` to convert it into detected counts.
+
+        For an angle-resolved (EELS) measurement use
+        :meth:`transition_potential_scan` instead.
+
+        Parameters
+        ----------
+        potential : BasePotential or Atoms
+            The scattering potential.
+        transition_potentials : BaseTransitionPotential or list of BaseTransitionPotential
+            Transition potential(s) of the ionised subshell(s). Give ``epsilon``
+            as an :class:`~abtem.EnergyIntegral` to integrate over the edge,
+            which X-ray emission requires.
+        scan : BaseScan or array of xy-positions, optional
+            Probe positions. Defaults to the whole potential at Nyquist sampling.
+        sites : SliceIndexedAtoms or Atoms, optional
+            The ionised atoms. Taken from the potential if not given.
+        max_batch : int or str, optional
+            Maximum number of probe positions per batch.
+        lazy : bool, optional
+            Build a lazy dask graph instead of computing eagerly.
+
+        Returns
+        -------
+        measurement : BaseMeasurements
+            Ionisation probability per incident electron.
+
+        Examples
+        --------
+        >>> integral = abtem.EnergyIntegral(stop=7000.0, num=8)  # doctest: +SKIP
+        >>> transitions = SubshellTransitions(14, 1, 0, epsilon=integral)  # doctest: +SKIP
+        >>> ionisation = probe.ionization_scan(potential, transitions)  # doctest: +SKIP
+        >>> counts = abtem.XrayDetector(0.7).apply(ionisation, "Si", 1, 0)  # doctest: +SKIP
+        """
+        probe = self
+        if potential is not None:
+            potential = validate_potential(potential, probe)
+            probe.grid.match(potential)
+
+        waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
+
+        return waves.ionization_multislice(
+            potential=potential,
+            transition_potentials=transition_potentials,
             sites=sites,
             **multislice_func_kwargs,
         )

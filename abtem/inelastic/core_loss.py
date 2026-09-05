@@ -3,8 +3,10 @@ from __future__ import annotations
 import contextlib
 import itertools
 import os
+import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -27,8 +29,9 @@ except ImportError:
 
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
-from abtem.core.backend import copy_to_device, get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.core.chunks import validate_chunks
+from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -40,11 +43,20 @@ from abtem.core.energy import (
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
-from abtem.core.utils import CopyMixin
-from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
+from abtem.core.utils import CopyMixin, get_dtype
+from abtem.detectors import IonizationDetector
+from abtem.measurements import (
+    Images,
+    RealSpaceLineProfiles,
+    _polar_detector_bins,
+    _scan_axes,
+)
 
 if TYPE_CHECKING:
+    from abtem.measurements import BaseMeasurements
+    from abtem.potentials.iam import BasePotential
     from abtem.prism.s_matrix import SMatrix
+    from abtem.slicing import SliceIndexedAtoms
     from abtem.waves import Waves
 
 azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
@@ -127,19 +139,25 @@ class RadialWavefunction:
 
         self._radial_grid = radial_grid
         self._radial_values = radial_values
+        self._interpolator = None
 
     def __call__(self, r):
-        f = interp1d(
-            self._radial_grid,
-            self._radial_values,
-            kind=2,
-            fill_value="extrapolate",
-        )
-        return f(r)
+        # Built once and reused: the overlap integral evaluates each radial
+        # function several times, and the continuum grid can hold millions of
+        # points at low continuum energy.
+        if self._interpolator is None:
+            self._interpolator = interp1d(
+                self._radial_grid,
+                self._radial_values,
+                kind=2,
+                fill_value="extrapolate",
+            )
+        return self._interpolator(r)
 
     @property
     def bound(self):
-        return self.n > 0
+        # Continuum states carry n=None, so comparing n to 0 raised TypeError.
+        return self._n is not None
 
     @property
     def energy(self):
@@ -259,8 +277,137 @@ def radial_schroedinger_equation(ef, l, r, vr):
     return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
-    # from gpaw.atom.all_electron import AllElectron
+# Radial step of the continuum integration grid [Bohr], and the largest grid we
+# are willing to build before giving up on resolving the asymptotic region.
+_CONTINUUM_STEP = 20.0 / (1000000 - 1)
+_CONTINUUM_MAX_RADIUS = 150.0
+
+# The outer region must span this many oscillations, and the centrifugal term
+# throughout it must be this small a fraction of the kinetic energy, for the
+# wave to be free-particle-like enough to read off its amplitude. The envelope
+# of a free wave is exactly constant, so one oscillation is enough to sample it;
+# the spread of the envelope is checked separately as a diagnostic.
+_CONTINUUM_PERIODS = 1.0
+_CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
+
+# Fraction of the grid, measured from the outer edge, used to read the amplitude.
+_ASYMPTOTIC_REGION_FRACTION = 0.25
+
+# A cell smaller than this many delocalisation lengths truncates the transition
+# potential enough to matter; calibrated on the carbon K edge, which converges by
+# about four.
+_DELOCALISATION_MARGIN = 4.0
+
+
+def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
+    """
+    Radial grid whose outer quarter is asymptotically free.
+
+    The amplitude of the continuum wave can only be read off where the
+    centrifugal barrier is negligible and the wave has completed several
+    oscillations. Both conditions are hardest to satisfy at low continuum
+    energy and high angular momentum, so the grid is extended as needed.
+
+    Parameters
+    ----------
+    ef : float
+        Continuum energy [Rydberg].
+    lprime : int
+        Angular momentum of the continuum state.
+
+    Returns
+    -------
+    r : np.ndarray
+        Radial grid [Bohr].
+    """
+    k = np.sqrt(ef)
+
+    fraction = _ASYMPTOTIC_REGION_FRACTION
+
+    # The outer region spans `fraction` of the grid and must contain enough
+    # oscillations to sample the envelope.
+    radius = max(20.0, _CONTINUUM_PERIODS * 2 * np.pi / (k * fraction))
+
+    if lprime > 0:
+        # The centrifugal term is largest at the inner edge of the outer region.
+        free_radius = np.sqrt(
+            lprime * (lprime + 1) / (_CONTINUUM_CENTRIFUGAL_TOLERANCE * ef)
+        )
+        radius = max(radius, free_radius / (1.0 - fraction))
+
+    if radius > _CONTINUUM_MAX_RADIUS:
+        warnings.warn(
+            f"the continuum state (epsilon={ef * units.Rydberg:.3g} eV, "
+            f"l'={lprime}) does not reach its asymptotic form within "
+            f"{_CONTINUUM_MAX_RADIUS} Bohr; its normalisation, and hence the "
+            "absolute scale of the transition potential, may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        radius = _CONTINUUM_MAX_RADIUS
+
+    return np.linspace(1e-12, radius, int(round(radius / _CONTINUUM_STEP)) + 1)
+
+
+def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
+    """
+    Amplitude of the asymptotic oscillation ``u(r) -> A sin(k r + delta)``.
+
+    Taken from the envelope ``sqrt(u^2 + (u'/k)^2)`` over the outer region,
+    which is constant wherever the wave is free.
+
+    Using ``max(u)`` instead, as earlier versions of abTEM did, is wrong in two
+    regimes: at low continuum energy the grid spans less than one oscillation,
+    and for ``l' >= 2`` the envelope overshoots its asymptotic value near the
+    turning point of the centrifugal barrier, so the maximum is attained well
+    inside the atom.
+
+    Parameters
+    ----------
+    r : np.ndarray
+        Radial grid [Bohr].
+    u : np.ndarray
+        Radial wavefunction on that grid.
+    k : float
+        Asymptotic wavenumber [1/Bohr].
+
+    Returns
+    -------
+    amplitude : float
+    """
+    outer = r > (1.0 - _ASYMPTOTIC_REGION_FRACTION) * r[-1]
+
+    du = np.gradient(u, r)
+    envelope = np.sqrt(u[outer] ** 2 + (du[outer] / k) ** 2)
+
+    mean = float(np.mean(envelope))
+    if mean <= 0.0:
+        raise RuntimeError(
+            "the continuum wavefunction vanishes in the asymptotic region"
+        )
+
+    spread = float(np.std(envelope)) / mean
+    if spread > 0.05:
+        warnings.warn(
+            f"the continuum wavefunction amplitude varies by {spread:.1%} over "
+            "the asymptotic region, so it has not reached its free-particle "
+            "form; its normalisation may be inaccurate",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    return float(np.median(envelope))
+
+
+@lru_cache(maxsize=8)
+def _all_electron_potential(Z: int, xc: str):
+    """
+    Scalar-relativistic radial potential of the neutral atom.
+
+    Cached because it depends on neither the continuum energy nor the angular
+    momentum, while an energy-integrated transition potential asks for many of
+    both.
+    """
     from gpaw.atom.aeatom import AllElectronAtom
 
     def f(self, *args, **kwargs):
@@ -268,29 +415,33 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     AllElectronAtom.log = f
 
-    check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
-
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
-    # ae.f_j[subshell_index] -= 0.0
     ae.run()
     ae.scalar_relativistic = True
     ae.refine()
 
-    vr = interp1d(
+    return interp1d(
         ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
     )
 
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+    check_valid_quantum_number(Z, n, l)
+
+    vr = _all_electron_potential(Z, xc)
+
     ef = epsilon / units.Rydberg
 
-    r = np.linspace(1e-12, 20, 1000000)
+    r = _continuum_radial_grid(ef, lprime)
     f = radial_schroedinger_equation(ef, lprime, r, vr)
 
     ur = numerov(f, 0.0, 1e-12, r[1] - r[0])
-    ur = ur / ur.max() / (np.sqrt(np.pi) * ef ** (1 / 4))
+
+    # Energy normalisation, <eps|eps'> = delta(eps - eps') with eps in Rydberg:
+    # u(r) -> sin(k r + delta) / sqrt(pi k), so the asymptotic amplitude is
+    # 1 / sqrt(pi k) with k = sqrt(ef).
+    ur = ur / _asymptotic_amplitude(r, ur, k=np.sqrt(ef))
+    ur = ur / (np.sqrt(np.pi) * ef ** (1 / 4))
 
     return RadialWavefunction(
         n=None,
@@ -314,6 +465,95 @@ class BaseTransitionCollection:
         pass
 
 
+class EnergyIntegral(CopyMixin):
+    """
+    Quadrature over the continuum energy of an ionisation edge.
+
+    A transition potential built at a single continuum energy ``epsilon`` is
+    differential in energy loss. Techniques that collect the whole edge, EDX
+    above all, need it integrated over the continuum instead. This class
+    supplies the sample energies and the weights that perform that integral.
+
+    The integrand is close to flat just above threshold and then falls off as a
+    slow power law, so the nodes are placed by Gauss-Legendre quadrature in
+    ``log(epsilon)``, which handles both regimes with few points.
+
+    Parameters
+    ----------
+    stop : float
+        Upper limit of the integration [eV], measured from the ionisation
+        threshold. The integrand decays slowly, so this should be several times
+        the edge energy and must be convergence-tested; integrating only over a
+        typical EELS window captures a small fraction of the total.
+    start : float, optional
+        Lower limit [eV], measured from threshold. Default is 1.0. The
+        contribution of the neglected interval below it is small because the
+        integrand is finite at threshold.
+    num : int, optional
+        Number of quadrature nodes. Default is 16.
+
+    Examples
+    --------
+    >>> integral = EnergyIntegral(stop=4000.0, num=16)  # doctest: +SKIP
+    >>> transitions = SubshellTransitions(14, 1, 0, epsilon=integral)  # doctest: +SKIP
+    """
+
+    def __init__(self, stop: float, start: float = 1.0, num: int = 16):
+        stop = float(stop)
+        start = float(start)
+        num = int(num)
+
+        if not 0.0 < start < stop:
+            raise ValueError(
+                f"require 0 < start < stop, got start={start}, stop={stop}"
+            )
+        if num < 1:
+            raise ValueError(f"'num' must be at least 1, got {num}")
+
+        self._start = start
+        self._stop = stop
+        self._num = num
+
+    @property
+    def start(self) -> float:
+        """Lower integration limit above threshold [eV]."""
+        return self._start
+
+    @property
+    def stop(self) -> float:
+        """Upper integration limit above threshold [eV]."""
+        return self._stop
+
+    @property
+    def num(self) -> int:
+        """Number of quadrature nodes."""
+        return self._num
+
+    def __len__(self) -> int:
+        return self._num
+
+    @property
+    def _nodes_and_weights(self) -> tuple[np.ndarray, np.ndarray]:
+        nodes, weights = np.polynomial.legendre.leggauss(self._num)
+
+        a, b = np.log(self._start), np.log(self._stop)
+        log_energies = 0.5 * (b - a) * nodes + 0.5 * (a + b)
+        energies = np.exp(log_energies)
+
+        # Change of variable: integral f d(eps) = integral f eps d(log eps).
+        return energies, weights * 0.5 * (b - a) * energies
+
+    @property
+    def energies(self) -> np.ndarray:
+        """Continuum energies at which the transition potential is evaluated [eV]."""
+        return self._nodes_and_weights[0]
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Quadrature weights [eV], such that ``sum(weights * f(energies))`` is the integral."""
+        return self._nodes_and_weights[1]
+
+
 class SubshellTransitions(BaseTransitionCollection):
     def __init__(
         self,
@@ -322,7 +562,7 @@ class SubshellTransitions(BaseTransitionCollection):
         l: int,
         order: int = 1,
         min_contrast: float = 1.0,
-        epsilon: float = 1.0,
+        epsilon: float | EnergyIntegral = 1.0,
         xc: str = "PBE",
     ):
         check_valid_quantum_number(Z, n, l)
@@ -382,22 +622,63 @@ class SubshellTransitions(BaseTransitionCollection):
         )
         return wave_functions
 
+    @property
+    def continuum_energies(self) -> np.ndarray:
+        """Continuum energies at which the transition potential is evaluated [eV]."""
+        if isinstance(self._epsilon, EnergyIntegral):
+            return self._epsilon.energies
+        return np.array([float(self._epsilon)])
+
+    @property
+    def continuum_weights(self) -> np.ndarray:
+        """
+        Quadrature weight of each continuum energy [eV].
+
+        All ones for a single energy, in which case the transition potential
+        stays differential in energy loss.
+        """
+        if isinstance(self._epsilon, EnergyIntegral):
+            return self._epsilon.weights
+        return np.ones(1)
+
+    @property
+    def energy_integrated(self) -> bool:
+        """The transition potential is integrated over the continuum energy."""
+        return isinstance(self._epsilon, EnergyIntegral)
+
     def get_excited_wave_functions(self):
         wave_functions = [
             calculate_continuum_radial_wavefunction(
-                Z=self.Z, n=self.n, l=self.l, lprime=lprime, epsilon=self.epsilon
+                Z=self.Z, n=self.n, l=self.l, lprime=lprime, epsilon=epsilon
             )
             for lprime in self.lprimes
+            for epsilon in self.continuum_energies
         ]
         return wave_functions
+
+    def get_transition_weights(self) -> np.ndarray:
+        """
+        Quadrature weight of each transition, ordered as :meth:`get_transitions`.
+
+        Different final states -- including different continuum energies -- are
+        distinct and add incoherently, so these weights apply to the intensity.
+        """
+        excited_weights = np.concatenate(
+            [
+                np.repeat(self.continuum_weights, 2 * lprime + 1)
+                for lprime in self.lprimes
+            ]
+        )
+        return np.tile(excited_weights, 2 * self.l + 1)
 
     def get_transition_quantum_numbers(self):
         bound_states = [(self.n, self.l, ml) for ml in range(-self.l, self.l + 1)]
 
         excited_states = []
         for lprime in self.lprimes:
-            for mlprime in range(-lprime, lprime + 1):
-                excited_states.append((None, lprime, mlprime))
+            for _ in self.continuum_energies:
+                for mlprime in range(-lprime, lprime + 1):
+                    excited_states.append((None, lprime, mlprime))
 
         transitions = []
         for bound_state, excited_state in itertools.product(
@@ -441,6 +722,7 @@ class SubshellTransitions(BaseTransitionCollection):
         return TransitionPotential(
             self.Z,
             transitions,
+            weights=self.get_transition_weights(),
             extent=extent,
             gpts=gpts,
             sampling=sampling,
@@ -487,6 +769,7 @@ class TransitionPotential(BaseTransitionPotential):
         self,
         Z: int,
         transitions,
+        weights=None,
         orbital_filling_factor: bool = True,
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
@@ -497,7 +780,24 @@ class TransitionPotential(BaseTransitionPotential):
         self._Z = Z
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
+
+        if weights is None:
+            weights = np.ones(len(transitions))
+        else:
+            weights = np.asarray(weights, dtype=float)
+            if weights.shape != (len(transitions),):
+                raise ValueError(
+                    f"expected one weight per transition, got {weights.shape} "
+                    f"for {len(transitions)} transitions"
+                )
+        self._weights = weights
+
         super().__init__(Z, extent, gpts, sampling, energy, double_channel)
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Quadrature weight of each transition [eV]."""
+        return self._weights
 
     def __len__(self) -> int:
         return len(self._transitions)
@@ -520,17 +820,26 @@ class TransitionPotential(BaseTransitionPotential):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        values = [
-            f"{bound[1:]} → {excited[1:]}"
-            for (bound, excited) in self.transition_quantum_numbers
-        ]
+        energies = [excited.energy for (_, excited) in self._transitions]
+        resolved_in_energy = len(set(np.round(energies, 6))) > 1
+
+        values = []
+        for (bound, excited), energy in zip(
+            self.transition_quantum_numbers, energies
+        ):
+            label = f"{bound[1:]} → {excited[1:]}"
+            if resolved_in_energy:
+                label = f"{label}, {energy:.3g} eV"
+            values.append(label)
+
+        label = "(l,ml)→(l',ml')"
+        tex_label = r"$(\ell, m_l) → (\ell', m_l')$"
+        if resolved_in_energy:
+            label = f"{label}, epsilon"
+            tex_label = r"$(\ell, m_l) → (\ell', m_l'), \epsilon$"
 
         return [
-            OrdinalAxis(
-                values=values,
-                label="(l,ml)→(l',ml')",
-                tex_label=r"$(\ell, m_l) → (\ell', m_l')$",
-            )
+            OrdinalAxis(values=values, label=label, tex_label=tex_label)
         ]
 
     @property
@@ -631,13 +940,19 @@ class TransitionPotential(BaseTransitionPotential):
         cumulative = np.cumsum(integrated_intensities / integrated_intensities.sum())
 
         n = np.searchsorted(cumulative, threshold) + 1
-        transitions = self.transitions[:n]
+
+        # Keep the n strongest transitions. Earlier versions sliced the
+        # unsorted list instead, which kept an arbitrary subset; the sibling
+        # TransitionPotentialArray.filter_by_intensity has always used `order`.
+        included = order[:n]
+        transitions = [self.transitions[i] for i in included]
 
         if not len(transitions) > 0:
             raise RuntimeError()
 
-        kwargs = self._copy_kwargs(exclude=("transitions",))
+        kwargs = self._copy_kwargs(exclude=("transitions", "weights"))
         kwargs["transitions"] = transitions
+        kwargs["weights"] = self._weights[included]
 
         return self.__class__(**kwargs)
 
@@ -645,7 +960,45 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        array = np.zeros((len(self._transitions),) + self.gpts, dtype=np.complex64)
+        # The scattered electron must be left with positive energy. Without this
+        # check an epsilon range reaching past the beam energy fails much deeper
+        # down, in energy2wavelength, with no hint of the cause.
+        losses = [
+            excited.energy - bound.energy for (bound, excited) in self._transitions
+        ]
+        max_loss = max(losses)
+        if max_loss >= self.energy:
+            threshold = -min(bound.energy for (bound, _) in self._transitions)
+            raise ValueError(
+                f"the largest energy loss ({max_loss:.0f} eV) exceeds the beam "
+                f"energy ({self.energy:.0f} eV). The loss is the ionisation "
+                f"threshold ({threshold:.0f} eV) plus the continuum energy, so "
+                "reduce 'stop' of the EnergyIntegral, or raise the beam energy"
+            )
+
+        # An inelastic event has a delocalisation length b ~ hbar v / dE, and a
+        # cell smaller than a few b truncates the transition potential. The error
+        # grows with beam energy, so an unconverged cell biases not just the
+        # magnitude but its energy dependence: a carbon K edge in an 8 A cell is
+        # 6 % high at 60 keV and 41 % high at 300 keV.
+        min_loss = min(losses)
+        gamma = 1 + self.energy / 510998.95
+        beta = np.sqrt(1 - 1 / gamma**2)
+        delocalisation = 1973.27 * beta / min_loss  # [A]
+        if min(self.extent) < _DELOCALISATION_MARGIN * delocalisation:
+            warnings.warn(
+                f"the cell ({min(self.extent):.1f} A) is small compared with the "
+                f"inelastic delocalisation ({delocalisation:.1f} A at "
+                f"{min_loss:.0f} eV loss); the transition potential is truncated "
+                "and the cross-section overestimated. Increase the extent until "
+                "the result converges",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        array = np.zeros(
+            (len(self._transitions),) + self.gpts, dtype=get_dtype(complex=True)
+        )
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
@@ -668,9 +1021,18 @@ class TransitionPotential(BaseTransitionPotential):
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
-        array = array / np.prod(self.sampling)
+            # The continuum states are energy-normalised in Rydberg, but
+            # _calculate_overlap_integral already divides by sqrt(units.Rydberg)
+            # to convert to a per-eV normalisation, so the form factor is
+            # differential per eV and the weights, also in eV, apply directly.
+            # Distinct final states add incoherently, so the weight belongs to
+            # the intensity and enters the amplitude as its square root.
+            array[i] *= np.sqrt(self._weights[i])
 
-        # array = array.astype(xp.complex64)
+        # In place: `array / np.prod(...)` divides by a float64 numpy scalar,
+        # which under NEP 50 promotes the whole array to complex128 and silently
+        # discards the dtype the array was allocated with.
+        array /= np.prod(self.sampling)
 
         return TransitionPotentialArray(
             self.Z,
@@ -769,12 +1131,83 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
 
-    def set_threshold(self, wave, threshold):
-        local_potentials = self.local_potential(space="real")
-        local_potential = local_potentials.sum(0)
+    def effective_ionization_potential(
+        self,
+        sites: Atoms | Atom | np.ndarray | None = None,
+        max_batch: int = 16,
+    ) -> np.ndarray:
+        r"""
+        The effective local ionisation potential :math:`\mu(r)`.
 
-        c = np.fft.irfft2(np.fft.rfft2(local_potential) * np.fft.rfft2(wave.array))
-        c = np.sort(c.ravel())[::-1]
+        Summed over every final state, so that the ionisation probability of a
+        wave function is the single real-space integral
+
+        .. math::
+            P = \int |\psi(r)|^2 \mu(r) \, dr,
+
+        with no angular restriction and no scattered waves to propagate. This
+        is exact for a detector that collects all scattering angles, which is
+        the case for X-ray emission: Parseval's theorem turns the sum over
+        final states of :math:`\int |H_f \psi|^2` into
+        :math:`\int |\psi|^2 \sum_f |H_f|^2`.
+
+        Parameters
+        ----------
+        sites : Atoms or Atom or np.ndarray, optional
+            Positions of the ionised atoms. If given, the potential is summed
+            over them; if None (default) a single site at the origin is
+            returned.
+
+        Returns
+        -------
+        mu : np.ndarray
+            Real-valued array on the simulation grid.
+
+        max_batch : int, optional
+            Maximum number of sites to shift at once. Default is 16.
+
+        Notes
+        -----
+        Unlike the scattered-wave route this does not truncate the ionisation
+        signal at the antialiasing cutoff, so it is the more accurate of the
+        two for an angle-unrestricted measurement.
+
+        The sites are applied to the transition potential *amplitudes* and the
+        intensities are summed afterwards, exactly as :meth:`scatter` does.
+        Shifting the summed intensity instead would be cheaper -- one
+        convolution with the site structure factor -- but wrong: the intensity
+        has twice the bandwidth of the amplitude, so a sub-pixel Fourier shift
+        of it rings, and mu picks up negative values of several percent.
+        """
+        self.accelerator.check_is_defined()
+        self.grid.check_is_defined()
+
+        xp = get_array_module(self.array)
+
+        # The interaction constant enters the scattered amplitude in `scatter`,
+        # so it enters mu squared.
+        prefactor = energy2sigma(self.energy) ** 2
+
+        if sites is None:
+            return abs2(ifft2(self.array)).sum(0) * prefactor
+
+        sites = self.validate_sites(sites)
+
+        mu = xp.zeros(self.gpts, dtype=get_dtype(complex=False))
+
+        if len(sites) == 0:
+            return mu
+
+        sites = copy_to_device(sites, self.array)
+        sites = sites / xp.asarray(self.sampling, dtype=sites.dtype)
+
+        for start in range(0, len(sites), max_batch):
+            batch = sites[start : start + max_batch]
+            shift = fft_shift_kernel(batch, self.gpts)
+            shifted = ifft2(self.array[None] * shift[:, None])
+            mu += abs2(shifted).sum((0, 1)) * prefactor
+
+        return mu
 
     def local_potential(self, max_angle=None, space="reciprocal"):
         """
@@ -858,9 +1291,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         local_potential = copy_to_device(local_potential, array)
 
+        complex_dtype = get_dtype(complex=True)
         overlap = fft2_convolve(
-            local_potential[(None,) * (len(array.shape) - 2)].astype(np.complex64),
-            fft2(array.astype(np.complex64)),
+            local_potential[(None,) * (len(array.shape) - 2)].astype(complex_dtype),
+            fft2(array.astype(complex_dtype)),
         ).real
 
         overlap = copy_to_device(overlap, "cpu")
@@ -878,14 +1312,14 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             if sites.number == self.Z:
                 sites = sites.position[:2]
             else:
-                sites = np.zeros((0, 2), dtype=np.float32)
+                sites = np.zeros((0, 2), dtype=get_dtype())
         else:
             sites = np.array(sites)
 
         if len(sites.shape) == 1:
             sites = sites[None]
 
-        sites = np.array(sites, dtype=np.float32)
+        sites = np.array(sites, dtype=get_dtype())
         return sites
 
     def filter_sites(self, waves, sites, threshold):
@@ -994,7 +1428,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             self._array = copy_to_device(self.array, waves.array)
             sites = copy_to_device(sites, waves.array)
 
-            sites = sites / xp.array(self.sampling, dtype=xp.float32)
+            sites = sites / xp.array(self.sampling, dtype=get_dtype())
 
             array = ifft2(
                 self.array[None]
@@ -1017,6 +1451,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         d = waves._copy_kwargs(exclude=("array",))
         d["array"] = array
+
+        # Carry the ionised edge onto the scattered waves, so that a detector
+        # can tell which transition produced them. XrayDetector needs it to look
+        # up the fluorescence yield.
+        d["metadata"] = {**d.get("metadata", {}), **self.metadata}
 
         ensemble_axes_metadata = [AxisMetadata(label="sites")]
 
@@ -1106,7 +1545,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     import types as _types
 
     from abtem.antialias import AntialiasAperture
-    from abtem.core.utils import get_dtype
     from abtem.detectors import FlexibleAnnularDetector, validate_detectors
     from abtem.multislice import FresnelPropagator, conventional_multislice_step
     from abtem.prism.utils import plane_waves
@@ -1146,7 +1584,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     n_k = len(wave_vectors_np)
 
     s_array = plane_waves(
-        xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts
+        xp.asarray(wave_vectors_np, dtype=get_dtype()), extent, gpts
     )
     s_array = s_array * (
         np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:])
@@ -1177,16 +1615,16 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     sites = _extract_scattering_sites(potential, sites)
 
     positions_np = np.asarray(scan.get_positions()).reshape((-1, 2))
-    positions = xp.asarray(positions_np, dtype=np.float32)
+    positions = xp.asarray(positions_np, dtype=get_dtype())
     n_positions = positions.shape[0]
-    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=np.float32)
+    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=get_dtype())
 
     position_coefficients = complex_exponential(
-        -2.0 * np.float32(np.pi)
+        -2.0 * get_dtype()(np.pi)
         * positions[:, 0:1]
         * wave_vectors_xp[None, :, 0]
     ) * complex_exponential(
-        -2.0 * np.float32(np.pi)
+        -2.0 * get_dtype()(np.pi)
         * positions[:, 1:2]
         * wave_vectors_xp[None, :, 1]
     )
@@ -1195,7 +1633,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     ctf.grid.match(s_matrix.dummy_probes())
     alpha = (
         xp.sqrt(wave_vectors_xp[:, 0] ** 2 + wave_vectors_xp[:, 1] ** 2)
-        * np.float32(ctf.wavelength)
+        * get_dtype()(ctf.wavelength)
     )
     phi = xp.arctan2(wave_vectors_xp[:, 1], wave_vectors_xp[:, 0])
     ctf_array = ctf._evaluate_from_angular_grid(alpha, phi)
@@ -1207,7 +1645,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     )
 
     full_sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
-    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+    full_sampling_arr = np.array(full_sampling, dtype=get_dtype())
 
     return _types.SimpleNamespace(
         transition_potential=transition_potential,
@@ -1303,7 +1741,7 @@ def prism_transition_potential_scan(
     import warnings
 
     from abtem.core.fft import fft_interpolate
-    from abtem.core.utils import get_dtype, safe_ceiling_int
+    from abtem.core.utils import safe_ceiling_int
     from abtem.multislice import (
         FresnelPropagator,
         _potential_ensemble_shape_and_metadata,
@@ -1449,10 +1887,10 @@ def prism_transition_potential_scan(
         extent=inelastic_window_extent,
         ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
     )
-    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+    full_sampling_arr = np.array(full_sampling, dtype=get_dtype())
 
     # Reduction helpers operate in the downsampled grid.
-    pixel_positions = positions / xp.asarray(ds_sampling, dtype=np.float32)
+    pixel_positions = positions / xp.asarray(ds_sampling, dtype=get_dtype())
     reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
         pixel_positions, output_window_gpts
     )
@@ -1483,7 +1921,7 @@ def prism_transition_potential_scan(
 
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
-        ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
+        ds_sampling_arr = np.array(ds_sampling, dtype=get_dtype())
         site_pixel_ds = site_xy / ds_sampling_arr
         site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
         site_crop_corner_ds = (
@@ -1546,25 +1984,28 @@ def prism_transition_potential_scan(
             + list(scan_axes_metadata),
         )
 
-        for det_idx, detector in enumerate(detectors):
-            m = detector.detect(position_waves)
-            m = m.sum((0,))
-            if isinstance(exit_idx, int):
-                idx = () if n_exit == 1 else (exit_idx,)
-                measurements[det_idx].array[idx] += m.array
-            else:
-                measurements[det_idx].array[exit_idx] += (
-                    m.array[(None,) * len(exit_idx)]
-                )
+        # All detectors here see the same, not-yet-mutated ``position_waves``
+        # -- share one diffraction-pattern FFT across them.
+        with position_waves._share_diffraction_pattern_fft():
+            for det_idx, detector in enumerate(detectors):
+                m = detector.detect(position_waves)
+                m = m.sum((0,))
+                if isinstance(exit_idx, int):
+                    idx = () if n_exit == 1 else (exit_idx,)
+                    measurements[det_idx].array[idx] += m.array
+                else:
+                    measurements[det_idx].array[exit_idx] += (
+                        m.array[(None,) * len(exit_idx)]
+                    )
 
     def _scatter_at_site(atom):
         site_xy = np.array(
-            [atom.position[0], atom.position[1]], dtype=np.float32
+            [atom.position[0], atom.position[1]], dtype=get_dtype()
         )
         site_pixel = site_xy / full_sampling_arr
         site_pixel_int = np.rint(site_pixel).astype(int)
         sub_pixel = xp.asarray(
-            (site_pixel - site_pixel_int).reshape(1, 2), dtype=np.float32,
+            (site_pixel - site_pixel_int).reshape(1, 2), dtype=get_dtype(),
         )
         site_crop_corner = (
             int(site_pixel_int[0]) - inelastic_window_gpts[0] // 2,
@@ -1935,17 +2376,22 @@ def prism_transition_potential_scan_beam_basis(
                 OrdinalAxis(values=tuple(range(int(mask.sum())))),
             ],
         )
-        for det_idx, detector in enumerate(detectors):
-            m = detector.detect(wave)
-            m = m.sum((0,))
-            full_partial = xp.zeros(
-                (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
-            )
-            full_partial[mask] = m.array
-            full_partial = copy_to_device(full_partial, measurements[det_idx].array)
-            measurements[det_idx].array += full_partial.reshape(
-                scan_shape + m.array.shape[1:]
-            )
+        # All detectors here see the same, not-yet-mutated ``wave`` -- share
+        # one diffraction-pattern FFT across them.
+        with wave._share_diffraction_pattern_fft():
+            for det_idx, detector in enumerate(detectors):
+                m = detector.detect(wave)
+                m = m.sum((0,))
+                full_partial = xp.zeros(
+                    (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
+                )
+                full_partial[mask] = m.array
+                full_partial = copy_to_device(
+                    full_partial, measurements[det_idx].array
+                )
+                measurements[det_idx].array += full_partial.reshape(
+                    scan_shape + m.array.shape[1:]
+                )
 
     # --- Main loop ---
     for slice_index, transmission in enumerate(transmissions):
@@ -1974,7 +2420,7 @@ def prism_transition_potential_scan_beam_basis(
 
         for atom in sites_this_slice:
             site_xy = np.array(
-                [atom.position[0], atom.position[1]], dtype=np.float32
+                [atom.position[0], atom.position[1]], dtype=get_dtype()
             )
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
@@ -1984,7 +2430,7 @@ def prism_transition_potential_scan_beam_basis(
             )
 
             shift_k = fft_shift_kernel(
-                xp.asarray(site_pixel.reshape(1, 2), dtype=np.float32), gpts
+                xp.asarray(site_pixel.reshape(1, 2), dtype=get_dtype()), gpts
             )[0]
             H_full = ifft2(tp_k * shift_k)  # (n_T, *gpts), shifted to true site position
             H_crop = wrapped_crop_2d(H_full, crop_corner, window_gpts)
@@ -2037,4 +2483,544 @@ def prism_transition_potential_scan_beam_basis(
 
     if len(measurements) == 1:
         return measurements[0]
+    return measurements
+
+
+def effective_ionization_multislice_and_detect(
+    waves: Waves,
+    potential: BasePotential,
+    transition_potential: TransitionPotential | TransitionPotentialArray,
+    detectors: list[IonizationDetector] | None = None,
+    sites: SliceIndexedAtoms | Atoms | None = None,
+    algorithm=None,
+    pbar: bool = False,
+) -> list[BaseMeasurements]:
+    r"""
+    Ionisation probability accumulated through an ordinary elastic multislice.
+
+    Rather than scattering the wave function at every site and propagating the
+    result, this integrates the intensity against the effective local ionisation
+    potential :math:`\mu(r)` slice by slice. For a measurement that collects all
+    scattering angles -- X-ray emission -- the two are equivalent, because the
+    elastic propagation of the ejected-state wave is unitary and cannot change
+    the total count. See
+    :meth:`TransitionPotentialArray.effective_ionization_potential`.
+
+    Building mu costs one FFT per site per final state in each slice, but it is
+    independent of the probe position, so it is paid once per slice for the whole
+    scan rather than once per position. Detection itself is then a single
+    elementwise product per slice. There are no scattered waves to propagate.
+
+    Parameters
+    ----------
+    waves : Waves
+        The incident wave functions.
+    potential : BasePotential
+        The elastic potential.
+    transition_potential : TransitionPotential or TransitionPotentialArray
+        Transition potential of the ionised subshell. Use an
+        :class:`EnergyIntegral` for ``epsilon`` to obtain an edge-integrated
+        result.
+    detectors : list of IonizationDetector, optional
+        Accumulators to fill. One is created if not given. Any other detector
+        type is rejected, since this driver never forms scattered waves.
+    sites : SliceIndexedAtoms or Atoms, optional
+        The ionised atoms. Taken from the potential if not given.
+    algorithm : FourierMultislice or RealSpaceMultislice, optional
+        Multislice operator. Default is ``FourierMultislice()``.
+    pbar : bool, optional
+        Show a progress bar. Default is False.
+
+    Returns
+    -------
+    measurements : list of BaseMeasurements
+        One per detector: the ionisation probability per incident electron,
+        resolved over the exit planes of the potential.
+    """
+    from abtem.multislice import (
+        FourierMultislice,
+        LaplaceOperator,
+        RealSpaceMultislice,
+        _generate_potential_configurations,
+        _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+        realspace_multislice_step,
+    )
+    from abtem.antialias import AntialiasAperture
+    from abtem.multislice import FresnelPropagator
+
+    if algorithm is None:
+        algorithm = FourierMultislice()
+
+    waves = waves.ensure_real_space()
+
+    if isinstance(algorithm, FourierMultislice):
+        antialias_aperture = AntialiasAperture()
+        propagator = FresnelPropagator()
+
+        def multislice_step(waves, potential_slice):
+            return conventional_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                antialias_aperture=antialias_aperture,
+                propagator=propagator,
+                conjugate=algorithm.conjugate,
+                transpose=algorithm.transpose,
+                order=algorithm.order,
+            )
+
+    else:
+        laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+
+        def multislice_step(waves, potential_slice):
+            return realspace_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                next_slice=None,
+                laplace=laplace_operator,
+                max_terms=algorithm.max_terms,
+                order=algorithm.order,
+                fully_corrected=algorithm.expansion_scope == "full",
+            )
+
+    transition_potential.grid.match(waves)
+    transition_potential.accelerator.match(waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
+    transition_potential = transition_potential.copy_to_device(waves.device)
+
+    sites = _extract_scattering_sites(potential, sites)
+
+    n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
+    if n_sites == 0:
+        raise RuntimeError(
+            "No scattering sites matching transition potential for element "
+            f"{transition_potential.Z}"
+        )
+
+    if detectors is None:
+        detectors = [IonizationDetector()]
+
+    if not all(isinstance(detector, IonizationDetector) for detector in detectors):
+        raise RuntimeError(
+            "the effective-potential driver forms no scattered waves, so it "
+            "only accepts IonizationDetector; use "
+            "transition_potential_multislice for angle-resolved detectors"
+        )
+
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
+    measurements = allocate_multislice_measurements(
+        waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    )
+
+    tqdm_pbar = TqdmWrapper(
+        enabled=pbar,
+        total=int(potential.num_slices * potential.num_configurations),
+        leave=False,
+        desc="ionisation multislice",
+    )
+
+    waves_input = waves.copy()
+
+    for potential_index, configuration in _generate_potential_configurations(
+        potential
+    ):
+        waves = waves_input.copy()
+        # These are elastic waves, so they carry no edge identity of their own.
+        waves.metadata.update(transition_potential.metadata)
+
+        # Running total of the ionisation probability with depth. The entrance
+        # exit plane, if present, sees no material and stays zero.
+        running = None
+
+        # The entrance exit plane at t = 0 stays zero; measurements are
+        # allocated zeroed, so there is nothing to write there.
+        exit_plane_index = 0
+        depth = 0.0
+        for slice_index, potential_slice in enumerate(
+            configuration.generate_slices()
+        ):
+            waves = multislice_step(waves, potential_slice)
+            tqdm_pbar.update_if_exists(1)
+
+            depth += potential_slice.axes_metadata[0].values[0]
+            waves.metadata.update(transition_potential.metadata)
+            waves.metadata["depth"] = depth
+
+            sites_slice = sites.get_atoms_in_slices(
+                slice_index, atomic_number=transition_potential.Z
+            )
+
+            if len(sites_slice) > 0:
+                mu = transition_potential.effective_ionization_potential(sites_slice)
+                contributions = []
+                for detector in detectors:
+                    detector.mu = mu
+                    contributions.append(detector.detect(waves).array)
+                running = (
+                    contributions
+                    if running is None
+                    else [a + b for a, b in zip(running, contributions)]
+                )
+
+            if slice_index in potential.exit_planes:
+                exit_plane_index = potential.exit_planes.index(slice_index)
+                index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential
+                )
+                if running is not None:
+                    for measurement, value in zip(measurements, running):
+                        measurement.array[index] = value
+
+    tqdm_pbar.close_if_exists()
+
+    return measurements
+
+
+def _ionization_window_gpts(
+    mu: np.ndarray, tolerance: float = 1e-3
+) -> tuple[int, int]:
+    """
+    Smallest window around the origin holding all but ``tolerance`` of ``mu``.
+
+    The effective ionisation potential is localised on the atom, so the
+    ``S^dagger diag(mu) S`` integral only needs a window around each site rather
+    than the whole grid. Sizing it from the potential itself keeps the choice
+    honest: a window that clips ``mu`` would silently lose signal.
+    """
+    centred = np.fft.fftshift(asnumpy(mu))
+    total = centred.sum()
+    if total <= 0.0:
+        return tuple(int(n) for n in centred.shape)  # type: ignore[return-value]
+
+    centre = (centred.shape[0] // 2, centred.shape[1] // 2)
+    limit = min(*centre)
+
+    for half in range(1, limit + 1):
+        window = centred[
+            centre[0] - half : centre[0] + half,
+            centre[1] - half : centre[1] + half,
+        ]
+        if window.sum() >= (1.0 - tolerance) * total:
+            size = 2 * half
+            return (
+                min(size, centred.shape[0]),
+                min(size, centred.shape[1]),
+            )
+
+    return tuple(int(n) for n in centred.shape)  # type: ignore[return-value]
+
+
+def prism_effective_ionization_scan(
+    s_matrix,
+    transition_potentials,
+    scan=None,
+    detectors=None,
+    sites: SliceIndexedAtoms | Atoms | None = None,
+    inelastic_crop: float | tuple[float, float] | None = None,
+) -> list[BaseMeasurements]:
+    r"""
+    PRISM ionisation scan using the effective local ionisation potential.
+
+    For an angle-unrestricted measurement the signal at probe position
+    :math:`\mathbf{r}_p` is
+
+    .. math::
+        I(\mathbf{r}_p) = \int |\psi_p(\mathbf{r})|^2 \mu(\mathbf{r})\,d\mathbf{r},
+        \qquad
+        \psi_p = \sum_k c_k(\mathbf{r}_p)\, S_k ,
+
+    so writing :math:`M_{kk'} = \int S_k^* \mu S_{k'}` gives
+    :math:`I(\mathbf{r}_p) = c_p^\dagger M c_p`. The matrix :math:`M` is
+    independent of the probe position: it is accumulated slice by slice as the
+    S-matrix propagates, and the scan is then a single quadratic form per
+    position.
+
+    This is the PRISM counterpart of
+    :func:`effective_ionization_multislice_and_detect`, and inherits the same
+    property that no scattered waves are formed and double channelling is exact
+    rather than approximated.
+
+    Parameters
+    ----------
+    s_matrix : SMatrix
+        The scattering matrix.
+    transition_potentials : BaseTransitionPotential
+        Transition potential of the ionised subshell. A single potential only,
+        matching the other PRISM-EELS drivers.
+    scan : BaseScan or array of xy-positions, optional
+        Probe positions.
+    detectors : list of IonizationDetector, optional
+        Ignored apart from their count; the signal is angle-integrated by
+        construction. One accumulator is used if not given.
+    sites : SliceIndexedAtoms or Atoms, optional
+        The ionised atoms. Taken from the potential if not given.
+    inelastic_crop : float or tuple of float, optional
+        Real-space side length [Angstrom] of the window around each site used
+        for the ``S^dagger diag(mu) S`` integral, matching the parameter of the
+        same name on :meth:`~abtem.SMatrix.transition_potential_scan`. If not
+        given, it is chosen automatically as the smallest window holding all but
+        0.1 % of the effective ionisation potential, which for a real transition
+        potential is a few Angstrom. Values exceeding the cell are clamped.
+
+    Returns
+    -------
+    measurements : list of BaseMeasurements
+        Ionisation probability per incident electron over the scan, resolved
+        over the exit planes of the potential.
+
+    Notes
+    -----
+    **Interpolation.** With interpolation the PRISM wave function is periodic
+    with period ``window_extent``, so a probe illuminates only the sites inside
+    its own window; the copies elsewhere are aliasing artifacts. Integrating
+    :math:`\mu` over the whole cell would count every copy against every site,
+    which overshoots by more than an order of magnitude. The driver therefore
+    builds one matrix per site and applies it only to the probes whose window
+    contains that site. At interpolation 1 the window is the whole cell, every
+    site counts, and the cheaper single-matrix path is used instead.
+
+    Building :math:`M` costs ``n_k**2`` times the grid size per slice, times the
+    number of sites when interpolating. That is
+    cheap when the number of beams is modest, which is the regime PRISM is used
+    in, but it does grow quadratically with the number of beams; restricting the
+    integral to windows around the sites, as the scattered-wave PRISM drivers
+    already do, would remove the dependence on the full grid.
+    """
+    from abtem.multislice import (
+        _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+    )
+    from abtem.waves import Waves
+
+    interpolation = tuple(np.atleast_1d(s_matrix.interpolation).tolist())
+    ctx = _prism_eels_common_setup(
+        s_matrix, transition_potentials, scan, detectors, sites
+    )
+
+    xp = ctx.xp
+    transition_potential = ctx.transition_potential
+    potential = ctx.potential
+    scan = ctx.scan
+
+    if detectors is None:
+        detectors = [IonizationDetector()]
+    elif not isinstance(detectors, list):
+        detectors = [detectors]
+
+    if not all(isinstance(detector, IonizationDetector) for detector in detectors):
+        raise RuntimeError(
+            "the effective-potential PRISM driver forms no scattered waves, so "
+            "it only accepts IonizationDetector; use "
+            "SMatrix.transition_potential_scan for angle-resolved detectors"
+        )
+
+    def _step(waves, transmission):
+        return conventional_multislice_step(
+            waves,
+            potential_slice=transmission,
+            propagator=ctx.propagator,
+            antialias_aperture=ctx.antialias_aperture,
+        )
+
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
+    dummy_scan_waves = Waves(
+        xp.zeros(scan.shape + tuple(ctx.gpts), dtype=ctx.complex_dtype),
+        energy=ctx.energy,
+        extent=ctx.extent,
+        ensemble_axes_metadata=scan.ensemble_axes_metadata,
+    )
+    measurements = allocate_multislice_measurements(
+        dummy_scan_waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    )
+
+    coefficients = ctx.coefficients  # (n_positions, n_k)
+    n_k = ctx.n_k
+
+    s_waves = ctx.s_waves
+
+    # One accumulator per detector, because the photon yield is applied per
+    # slice: an XrayDetector modelling self-absorption weights each depth
+    # differently, so the depth cannot be summed over first.
+    m_matrices = [
+        xp.zeros((n_k, n_k), dtype=ctx.complex_dtype) for _ in detectors
+    ]
+
+    # With interpolation the PRISM wave function is periodic with period
+    # window_extent, so a probe illuminates only the sites inside its own
+    # window; the copies elsewhere are aliasing artifacts. Integrating mu over
+    # the whole cell would count every copy against every site. At
+    # interpolation 1 the window is the whole cell and every site counts, which
+    # is the cheap branch below.
+    windowed = any(factor != 1 for factor in interpolation)
+    positions_np = asnumpy(ctx.positions)
+    window_extent = np.asarray(s_matrix.window_extent, dtype=float)
+    cell_extent = np.asarray(ctx.extent, dtype=float)
+    runnings = [
+        xp.zeros(len(positions_np), dtype=get_dtype(complex=False))
+        for _ in detectors
+    ]
+
+    def _positions_illuminating(site_xy: np.ndarray) -> np.ndarray:
+        # Signed separation wrapped into [-cell/2, cell/2), then a half-open
+        # window so a site sitting on a boundary belongs to exactly one probe
+        # replica rather than to both.
+        separation = positions_np - site_xy[None, :]
+        separation = (
+            separation + cell_extent[None, :] / 2
+        ) % cell_extent[None, :] - cell_extent[None, :] / 2
+        half = window_extent[None, :] / 2
+        return np.all((separation >= -half) & (separation < half), axis=1)
+
+    def _quadratic_form(matrix, c):
+        return xp.einsum("pk,kl,pl->p", c.conj(), matrix, c).real
+
+    def _record(exit_plane_index):
+        index = _validate_potential_ensemble_indices(0, exit_plane_index, potential)
+
+        for i, measurement in enumerate(measurements):
+            # I(p) = c_p^dagger M c_p, real by construction since M is Hermitian.
+            values = runnings[i] if windowed else _quadratic_form(
+                m_matrices[i], coefficients
+            )
+            # Match IonizationDetector, which reports a fraction of the incident
+            # intensity by scaling the grid sum by prod(gpts). The quadratic
+            # form is a bare grid sum, so it needs the same factor.
+            #
+            # Interpolation replicates the wave function across the cell, and
+            # the reduction normalises each replica to unit intensity, so the
+            # cell carries prod(interpolation) times the intensity of one probe.
+            # Divide it back out to report per incident electron.
+            values = values * np.prod(ctx.gpts) / np.prod(interpolation)
+            measurement.array[index] = asnumpy(values).reshape(scan.shape)
+
+    exit_planes = potential.exit_planes
+    if exit_planes[0] == -1:
+        # Nothing traversed yet, so no ionisation; the array is already zeroed.
+        pass
+
+    from abtem.prism.utils import wrapped_crop_2d
+
+    sampling = ctx.transition_potential.sampling
+
+    # Size the window from the effective potential itself, unless the caller
+    # pins it with inelastic_crop (same parameter, units and clamping as
+    # SMatrix.transition_potential_scan).
+    if inelastic_crop is None:
+        window_gpts = _ionization_window_gpts(
+            transition_potential.effective_ionization_potential()
+        )
+    else:
+        from abtem.core.utils import safe_ceiling_int
+
+        if np.isscalar(inelastic_crop):
+            inelastic_crop = (inelastic_crop, inelastic_crop)
+        requested = (
+            safe_ceiling_int(inelastic_crop[0] / sampling[0]),
+            safe_ceiling_int(inelastic_crop[1] / sampling[1]),
+        )
+        window_gpts = (
+            min(requested[0], int(ctx.gpts[0])),
+            min(requested[1], int(ctx.gpts[1])),
+        )
+        if requested != window_gpts:
+            warnings.warn(
+                f"inelastic_crop {tuple(inelastic_crop)} A exceeds the PRISM "
+                f"cell; clamped to {tuple(ctx.extent)} A",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    slice_thicknesses = potential.slice_thickness
+    depth = 0.0
+
+    for slice_index, transmission in enumerate(ctx.transmissions):
+        s_waves = _step(s_waves, transmission)
+        depth += float(slice_thicknesses[slice_index])
+
+        edge = {**transition_potential.metadata, "depth": depth}
+        yields = [detector._photon_yield(edge) for detector in detectors]
+
+        sites_slice = ctx.sites.get_atoms_in_slices(
+            slice_index, atomic_number=ctx.Z
+        )
+
+        # Cropping trades one full-grid matmul for one per site. When the
+        # window was chosen automatically it is purely a performance knob, so
+        # fall back to the batched full-grid path whenever that is cheaper. A
+        # window the caller pinned with inelastic_crop is an accuracy choice,
+        # matching SMatrix.transition_potential_scan, and is always honoured.
+        batched = (
+            not windowed
+            and inelastic_crop is None
+            and len(sites_slice) * np.prod(window_gpts) >= np.prod(ctx.gpts)
+        )
+
+        if batched and len(sites_slice) > 0:
+            mu = transition_potential.effective_ionization_potential(sites_slice)
+            flat = s_waves.array.reshape(n_k, -1)
+            matrix = (flat.conj() * mu.reshape(1, -1)) @ flat.T
+            for i, photon_yield in enumerate(yields):
+                m_matrices[i] += photon_yield * matrix
+            sites_slice = []
+
+        for atom in sites_slice:
+            site_xy = np.asarray(atom.position[:2], dtype=float)
+
+            illuminated = None
+            if windowed:
+                illuminated = _positions_illuminating(site_xy)
+                if not illuminated.any():
+                    continue
+
+            mu = transition_potential.effective_ionization_potential(site_xy[None])
+
+            # Restrict S^dagger diag(mu) S to a window around the site. mu is
+            # localised on the atom, so this is exact to the window tolerance
+            # and turns the grid size in the n_k^2 matmul into the window size.
+            site_pixel = np.rint(site_xy / np.asarray(sampling)).astype(int)
+            corner = (
+                int(site_pixel[0]) - window_gpts[0] // 2,
+                int(site_pixel[1]) - window_gpts[1] // 2,
+            )
+            mu_crop = wrapped_crop_2d(mu, corner, window_gpts)
+            s_crop = wrapped_crop_2d(s_waves.array, corner, window_gpts)
+
+            flat = s_crop.reshape(n_k, -1)
+            site_matrix = (flat.conj() * mu_crop.reshape(1, -1)) @ flat.T
+
+            if not windowed:
+                # Every probe sees this site.
+                for i, photon_yield in enumerate(yields):
+                    m_matrices[i] += photon_yield * site_matrix
+            else:
+                contribution = _quadratic_form(
+                    site_matrix, coefficients[illuminated]
+                )
+                for i, photon_yield in enumerate(yields):
+                    runnings[i][illuminated] += photon_yield * contribution
+
+        if slice_index in exit_planes:
+            _record(exit_planes.index(slice_index))
+
     return measurements

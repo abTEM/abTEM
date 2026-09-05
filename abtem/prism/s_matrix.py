@@ -1182,8 +1182,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
                 pbar.update_if_exists(len(sub_scan))
 
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
+                # All detectors here see the same, not-yet-mutated ``waves``
+                # -- share one diffraction-pattern FFT across them.
+                with waves._share_diffraction_pattern_fft():
+                    for detector, measurement in zip(detectors, measurements):
+                        measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
 
@@ -2386,8 +2389,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                     pbar.update_if_exists((stop - start) * scan_shape[1])
 
-                    for detector, measurement in zip(detectors, measurements):
-                        measurement.array[indices] = detector.detect(waves).array
+                    # All detectors here see the same, not-yet-mutated
+                    # ``waves`` -- share one diffraction-pattern FFT across
+                    # them.
+                    with waves._share_diffraction_pattern_fft():
+                        for detector, measurement in zip(detectors, measurements):
+                            measurement.array[indices] = detector.detect(waves).array
 
                 del interpolated, plane_wave
 
@@ -2684,8 +2691,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         pbar.update_if_exists(n_reduced)
 
-        for detector, measurement in zip(detectors, measurements):
-            measurement.array[indices] = detector.detect(waves).array
+        # All detectors here see the same, not-yet-mutated ``waves`` --
+        # share one diffraction-pattern FFT across them.
+        with waves._share_diffraction_pattern_fft():
+            for detector, measurement in zip(detectors, measurements):
+                measurement.array[indices] = detector.detect(waves).array
 
     def _batch_reduce_to_measurements(
         self,
@@ -5115,6 +5125,215 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         itemset(array, 0, measurements)
         return array
+
+    def _eager_ionization_scan(
+        self,
+        scan,
+        detectors,
+        transition_potentials,
+        sites,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import prism_effective_ionization_scan
+
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
+
+        if self.ensemble_shape:
+            dummy_waves = self.build(lazy=True).dummy_probes(scan)
+            measurements = allocate_multislice_measurements(
+                dummy_waves,
+                detectors,
+                extra_ensemble_axes_shape,
+                extra_ensemble_axes_metadata,
+            )
+        else:
+            measurements = None
+
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
+
+            new_measurements = ensure_list(
+                prism_effective_ionization_scan(
+                    s_matrix=s_matrix,
+                    transition_potentials=transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    inelastic_crop=inelastic_crop,
+                )
+            )
+
+            if measurements is None:
+                measurements = new_measurements
+            else:
+                for measurement, new_measurement in zip(
+                    measurements, new_measurements
+                ):
+                    if measurement.axes_metadata[0]._ensemble_mean:
+                        measurement.array[:] += new_measurement.array
+                    else:
+                        measurement.array[i] = new_measurement.array
+
+            num_blocks += 1
+
+        for idx, measurement in enumerate(measurements):
+            if measurement.axes_metadata[0]._ensemble_mean:
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[idx] = measurement.squeeze((0,))
+
+        return measurements
+
+    @staticmethod
+    def _lazy_ionization_scan(
+        s_matrix, scan, detectors, transition_potentials, sites,
+        inelastic_crop=None,
+    ):
+        s_matrix = s_matrix.item()
+        measurements = s_matrix._eager_ionization_scan(
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            inelastic_crop=inelastic_crop,
+            squeeze=False,
+        )
+
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
+        itemset(array, 0, measurements)
+        return array
+
+    def ionization_scan(
+        self,
+        transition_potentials,
+        scan=None,
+        detectors=None,
+        sites=None,
+        inelastic_crop=None,
+        lazy=None,
+    ):
+        """PRISM ionisation scan via the effective local ionisation potential.
+
+        The S-matrix counterpart of :meth:`abtem.Probe.ionization_scan`: it
+        forms no scattered waves, and is exact for a measurement that collects
+        all scattering angles, which is what X-ray emission requires. Pass the
+        result to :meth:`abtem.XrayDetector.to_counts` to convert it into detected
+        counts.
+
+        For an angle-resolved (EELS) measurement use
+        :meth:`transition_potential_scan` instead.
+
+        At ``interpolation=(1, 1)`` the result matches
+        :meth:`abtem.Probe.ionization_scan` to float32 noise.
+
+        There is no ``double_channel`` option, and that is not an omission:
+        with no angular restriction the elastic propagation of the
+        ejected-state wave is unitary, so double channelling cannot change the
+        total count.
+
+        See :func:`abtem.inelastic.core_loss.prism_effective_ionization_scan`
+        for the algorithm.
+
+        Parameters
+        ----------
+        transition_potentials : BaseTransitionPotential
+            Transition potential of the ionised subshell (a single instance).
+            Give ``epsilon`` as an :class:`~abtem.EnergyIntegral` to integrate
+            over the edge, which X-ray emission requires.
+        scan : BaseScan or tuple, optional
+            Scan positions. Defaults to a ``GridScan`` at Nyquist sampling.
+        detectors : BaseDetector or list of BaseDetector, optional
+            Accumulators to fill. Defaults to a single
+            :class:`~abtem.IonizationDetector`, which reports the bare
+            ionisation probability; pass an :class:`~abtem.XrayDetector` to get
+            photon counts directly.
+        sites : SliceIndexedAtoms or Atoms, optional
+            The ionised atoms. Taken from the potential if not given.
+        inelastic_crop : float or tuple of float, optional
+            Real-space side length [Angstrom] of the window around each site,
+            as on :meth:`transition_potential_scan`. Chosen automatically from
+            the effective ionisation potential if not given.
+        lazy : bool, optional
+            If True, build a Dask graph; otherwise compute eagerly. Defaults to
+            the user configuration value.
+
+        Returns
+        -------
+        measurement : BaseMeasurements or list of BaseMeasurements
+            Ionisation probability per incident electron, or one measurement
+            per detector.
+        """
+        from abtem.detectors import IonizationDetector
+
+        if detectors is None:
+            detectors = [IonizationDetector()]
+
+        if scan is None:
+            scan = GridScan(
+                start=(0, 0),
+                end=self.extent,
+                sampling=self.dummy_probes().aperture.nyquist_sampling,
+            )
+
+        detectors = validate_detectors(detectors)
+        scan = validate_scan(scan, self)
+        lazy = validate_lazy(lazy)
+
+        if not lazy:
+            measurements = self._eager_ionization_scan(
+                scan=scan,
+                detectors=detectors,
+                transition_potentials=transition_potentials,
+                sites=sites,
+                inelastic_crop=inelastic_crop,
+            )
+            return _wrap_measurements(measurements)
+
+        blocks = self.ensemble_blocks(1)
+
+        chunks = ()
+        drop_axis = ()
+        if not self.ensemble_shape:
+            blocks = blocks[None]
+            drop_axis = (0,)
+            new_axis = tuple_range(offset=0, length=len(scan.shape))
+        else:
+            chunks += blocks.chunks
+            new_axis = tuple_range(
+                offset=len(blocks.shape), length=len(scan.shape)
+            )
+
+        chunks += scan.shape
+
+        arrays = blocks.map_blocks(
+            self._lazy_ionization_scan,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            inelastic_crop=inelastic_crop,
+            meta=np.array((), dtype=object),
+        )
+
+        waves = self.build(lazy=True).dummy_probes(scan=scan)
+
+        extra_axes_metadata = []
+        if self.potential is not None:
+            extra_axes_metadata = self.potential.ensemble_axes_metadata
+
+        measurements = _finalize_lazy_measurements(
+            arrays, waves, detectors, extra_axes_metadata
+        )
+
+        return _wrap_measurements(measurements)
 
     def transition_potential_scan(
         self,

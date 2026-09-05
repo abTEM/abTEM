@@ -9,17 +9,20 @@ from abtem.core import axes, config
 from abtem.detectors import (
     AnnularDetector,
     FlexibleAnnularDetector,
+    IonizationDetector,
     PixelatedDetector,
     SegmentedDetector,
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
 )
+from abtem.inelastic.core_loss import EnergyIntegral, SubshellTransitions
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
 )
+from abtem.inelastic.xray import SDDEfficiency, TabulatedEfficiency, XrayDetector
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -56,6 +59,12 @@ __all__ = [
     "FlexibleAnnularDetector",
     "PixelatedDetector",
     "WavesDetector",
+    "IonizationDetector",
+    "SubshellTransitions",
+    "EnergyIntegral",
+    "XrayDetector",
+    "SDDEfficiency",
+    "TabulatedEfficiency",
     "Images",
     "DiffractionPatterns",
     "RealSpaceLineProfiles",

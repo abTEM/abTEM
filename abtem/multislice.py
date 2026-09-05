@@ -492,13 +492,16 @@ def _update_measurements(
 ) -> None:
     assert len(detectors) == len(measurements)
 
-    for i, detector in enumerate(detectors):
-        new_measurement = detector.detect(waves)
+    # All detectors here see the same, not-yet-mutated ``waves`` -- share one
+    # diffraction-pattern FFT across them (see Waves._share_diffraction_pattern_fft).
+    with waves._share_diffraction_pattern_fft():
+        for i, detector in enumerate(detectors):
+            new_measurement = detector.detect(waves)
 
-        if additive:
-            measurements[i].array[measurement_index] += new_measurement.array
-        else:
-            measurements[i].array[measurement_index] = new_measurement.array
+            if additive:
+                measurements[i].array[measurement_index] += new_measurement.array
+            else:
+                measurements[i].array[measurement_index] = new_measurement.array
     return
 
 
@@ -797,10 +800,11 @@ def multislice_and_detect(
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
-        measurements = [
-            detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
-            for detector in detectors
-        ]
+        with waves._share_diffraction_pattern_fft():
+            measurements = [
+                detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                for detector in detectors
+            ]
 
     elif return_backscattered:
         _back_propagate_backscattered_waves(
@@ -939,10 +943,18 @@ def transition_potential_multislice_and_detect(
                 potential_index, exit_plane_index, potential
             )
 
-            for i, detector in enumerate(detectors):
-                new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum((0,))
-                measurements[i].array[measurement_index] += new_measurement.array
+            # All detectors here see the same, not-yet-mutated ``waves`` at
+            # this exit plane -- share one diffraction-pattern FFT across
+            # them (see Waves._share_diffraction_pattern_fft). The block is
+            # re-entered fresh each call, so a later call at a *different*
+            # slice_index/depth (waves whose ``.array`` some in-place
+            # multislice steps reuse across depths) never sees a value
+            # computed for an earlier one.
+            with waves._share_diffraction_pattern_fft():
+                for i, detector in enumerate(detectors):
+                    new_measurement = detector.detect(waves)
+                    new_measurement = new_measurement.sum((0,))
+                    measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
 
@@ -1028,11 +1040,13 @@ def transition_potential_multislice_and_detect(
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
-        if potential.exit_planes[0] == -1:
-            measurement_index = _validate_potential_ensemble_indices(
-                potential_index, 0, potential
-            )
-            _update_measurements(waves, detectors, measurements, measurement_index)
+
+        # The entrance exit plane at t = 0 stays zero: no material has been
+        # traversed, so no ionisation has happened. Detecting the incident
+        # *elastic* wave here, as the elastic driver correctly does, wrote the
+        # full unscattered intensity into the t = 0 bin of a core-loss
+        # measurement. Measurements are allocated zeroed, so there is nothing
+        # to do.
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
@@ -1086,6 +1100,10 @@ def transition_potential_multislice_and_detect(
             depth += potential_slice.axes_metadata[0].values[0]
 
             _update_plasmon_axes(waves, depth)
+
+            # An X-ray detector modelling self-absorption needs to know how deep
+            # the emission happened; scatter() carries the metadata through.
+            waves.metadata["depth"] = depth
 
             sites_slice = sites.get_atoms_in_slices(
                 scatter_index, atomic_number=transition_potential.Z
@@ -1151,13 +1169,19 @@ def transition_potential_multislice_and_detect(
                         )
                         measurement_plane_indices = (exit_planes,)
 
-                    for i, detector in enumerate(detectors):
-                        new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_plane_indices] += (
-                            new_measurement.array[
-                                (None,) * len(measurement_plane_indices)
-                            ]
-                        )
+                    # All detectors here see the same, not-yet-mutated
+                    # ``scattered_waves`` -- share one diffraction-pattern
+                    # FFT across them (see Waves._share_diffraction_pattern_fft).
+                    with scattered_waves._share_diffraction_pattern_fft():
+                        for i, detector in enumerate(detectors):
+                            new_measurement = detector.detect(scattered_waves).sum(
+                                (0,)
+                            )
+                            measurements[i].array[measurement_plane_indices] += (
+                                new_measurement.array[
+                                    (None,) * len(measurement_plane_indices)
+                                ]
+                            )
 
     tqdm_pbar.close_if_exists()
 
