@@ -1015,7 +1015,15 @@ class TransitionPotential(BaseTransitionPotential):
             array[i] = self._calculate_form_factor(bound, excited, k, phi, theta)
 
             if self._orbital_filling_factor:
-                array[i] *= np.sqrt(4 * bound.l + 2)
+                # 4*l+2 is the full subshell's electron count: spin (2) times
+                # orbital degeneracy (2*l+1). The orbital part is already
+                # realised explicitly -- SubshellTransitions.get_transitions
+                # builds one bound state per ml and this array is summed
+                # incoherently over all of them -- so only the spin factor
+                # belongs here. Applying 4*l+2 per ml double-counts the
+                # orbital degeneracy by (2*l+1); invisible for l=0, where
+                # 4*l+2 reduces to the spin-only factor of 2.
+                array[i] *= np.sqrt(2)
 
             array[i] *= relativistic_mass_correction(self.energy) / (
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
