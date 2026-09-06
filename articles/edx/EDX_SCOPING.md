@@ -1252,17 +1252,110 @@ own convergence settings (lateral cell, gpts) were never independently
 re-validated the way Sr L's were in 6l. Left as an open loose end rather
 than over-interpreted.
 
+## 6n. Rigid transition-potential placement, tested directly
+
+Section 6m's leftover, channelling-specific, thickness-decaying residual
+was tentatively attributed to a documented simplification:
+`CrystalPotential.get_sliced_atoms()` returns the *equilibrium* (mean,
+unrattled) atomic positions by design, since the pool mechanism draws an
+independent random unit-cell configuration per z-repetition and there is
+no single displaced realisation to fall back on. Transition potentials are
+therefore always placed at the ideal lattice sites, while the elastic
+potential they scatter within is built from thermally displaced (rattled)
+configurations.
+
+**First pass (superseded below):** reran the same Sr L2,3 setup as 6m's
+table (post (2l+1)-fix, gpts=96, 2x2 lateral, N=110, order=3) with `sites=`
+passed explicitly as one Gaussian-rattled realisation of the full
+tiled+repeated crystal (drawn independently from the same LeBeau-Stemmer
+sigmas), instead of the default ideal sites. This is *not* self-consistent
+with the elastic potential's own independent per-tile, per-z-repetition
+pool draws -- a single global independent redraw decorrelates the
+ionisation sites from whichever specific configuration the probe's
+elastic wavefunction actually channelled through in each unit cell, which
+turned out to overstate the effect (see below): decay reduction 46-92%
+across the three angles.
+
+### `CrystalPotential.get_realised_atoms`: doing it properly
+
+Built the proper version: `CrystalPotential.get_realised_atoms(seed=...)`
+(new public method) replays the *exact* mosaic draw `generate_slices` used
+to build the elastic potential for a given seed -- which pool configuration
+landed at every lateral tile of every z-repetition, and that
+configuration's own exact displacement -- rather than one independent
+global redraw. Requires `seeds=` fixed on the `CrystalPotential` (the
+mosaic's per-call RNG draw is otherwise fresh and irreproducible each call,
+by design); the same seed then reproduces both the elastic build and the
+site reconstruction. Implementation notes, since two real bugs surfaced
+while building this:
+
+- `FrozenPhonons`'s own `validate_seeds` treats a bare `int` as a *master*
+  seed to derive new seeds from (matching a top-level
+  `FrozenPhonons(..., seed=<int>)` call expanding one seed into
+  `num_configs`), not as a literal seed to reuse -- passing a config's own
+  already-expanded seed back in as a bare int silently re-derives a
+  different value. Fixed by passing it as a 1-tuple, which is reused
+  literally (matching what the internal per-block ensemble reconstruction
+  actually does).
+- The mosaic's per-tile, per-z-repetition configuration-index draw
+  (previously an inline closure in `generate_slices`) was refactored into a
+  standalone, shared generator (`_iter_balanced_config_tiles`) so both
+  `generate_slices` (building the potential) and `get_realised_atoms`
+  (building the sites) consume an identically seeded RNG in the same order
+  -- the only way the two can agree on which configuration landed where.
+
+Verified bit-exact (not just "close"): with a pool sized to exactly match
+the tile count (no reuse), the atoms `get_realised_atoms` places at each
+tile, rebuilt as an isolated single-unit-cell potential, are byte-identical
+to that tile's own block of the real mosaic-built array
+(`test_crystal_potential_get_realised_atoms_matches_mosaic_per_tile`,
+`test/test_potentials.py`) -- exactly how `generate_slices` constructs that
+block in the first place. (A full merged-crystal rebuild does *not* match
+the mosaic array exactly, even with correct placement -- the mosaic method
+treats every unit cell as self-periodic when computing its own potential,
+so it never sees genuine cross-tile-boundary interactions the way an
+explicit single-cell build does; that is an inherent, expected mosaic
+approximation, not a placement bug, and the per-tile isolated-block test
+above is the right way to check placement without that confound.)
+
+### The corrected, self-consistent result
+
+Rerunning the same comparison with `sites=crystal.get_realised_atoms()`
+(same seed on both the crystal and the site reconstruction):
+
+| angle | decay, ideal sites | decay, self-consistent rattle | decay, superseded global-1 draw | reduction (self-consistent) |
+|---|---|---|---|---|
+| 13.7 mrad | 1.360 -> 1.142 (delta 0.218) | 1.260 -> 1.152 (delta 0.108) | delta 0.018 | ~50% |
+| 21.8 mrad | 1.333 -> 1.117 (delta 0.216) | 1.285 -> 1.109 (delta 0.176) | delta 0.116 | ~19% |
+| 45.7 mrad | 1.245 -> 1.099 (delta 0.146) | 1.222 -> 1.110 (delta 0.112) | delta 0.075 | ~23% |
+
+The self-consistent result sits, as expected, *between* the ideal-site
+baseline and the superseded global-independent-draw approximation: real,
+but roughly half to a third the size the first-pass script implied. A
+single independent redraw scrambles the correlation between the
+ionisation site and the specific configuration the probe's channelling
+pattern actually formed on in that unit cell, which artificially
+exaggerates how much rattling "helps." **Corrected conclusion: rigid
+(unrattled) transition-potential placement explains roughly 20-50% of the
+channelling-specific thickness-decaying residual, not 46-92% as the first,
+non-self-consistent pass suggested.** The remaining 50-80% of that
+decaying residual is still unexplained.
+
 ### Still to validate
 
-- The channelling-specific, thickness-decaying residual seen in Sr K/Sr L,
-  tentatively attributed above to rigid (unrattled) transition-potential
-  placement -- not yet tested directly.
-- O K's anomalous rising non-channelling ratio -- likely a self-absorption
-  or convergence artefact specific to O K's short attenuation length,
-  not yet isolated.
-- Ti K was not included in this thickness-resolved check (its residual in
-  6l, ~1.4-1.6x, sits between Sr L and O K but was only compared at the
-  single endpoint thickness).
+- What explains the *majority* of the channelling-specific thickness decay,
+  now that rigid transition-potential placement accounts for only
+  ~20-50% of it, not most of it.
+- Whether averaging `get_realised_atoms` over multiple independent seeds
+  (rather than the single seed used above) changes these percentages
+  materially, or whether one seed is already representative given the
+  scan already averages over 64 probe positions per angle.
+- O K's anomalous rising non-channelling ratio (6m) -- likely a
+  self-absorption or convergence artefact specific to O K's short
+  attenuation length, not yet isolated.
+- Ti K was not included in the thickness-resolved check in 6m (its
+  residual in 6l, ~1.4-1.6x, sits between Sr L and O K but was only
+  compared at the single endpoint thickness).
 - Extending Bote-Salvat heavy-edge validation to more elements/edges, and
   to SIGMAK, is still open (unchanged from 6c-ter).
 
@@ -1292,18 +1385,27 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
   PWBA/DWBA gap at default settings that grows at lower overvoltage -- see
   §6c-ter. Extending it to more elements/edges/energies, and to SIGMAK, is
   still open.
-- **Chen et al. reproduction (§6k, §6l, §6m)**: all four edges now simulated
-  and compared against accurately digitized theory curves, converging on
-  one common ~1.05-1.6x residual (down from an initial edge-dependent
-  0.73-3.82x spread that turned out to be mostly a real abTEM bug -- see
-  next item). Resolved into two pieces (§6m): a flat, edge-independent
-  ~1.25-1.29x baseline reproduced independently by Sr K and Sr L, most
-  plausibly solid angle (implied ~0.55 sr vs. the nominal 0.7 sr used
-  here); and a separate, channelling-specific, thickness-decaying residual
-  that solid angle cannot explain (wrong sign) and is tentatively
-  attributed to rigid (unrattled) transition-potential placement, not yet
-  tested directly. O K does not cleanly fit this picture and is flagged as
-  an open loose end, likely tied to its unusually short attenuation length.
+- **Chen et al. reproduction (§6k, §6l, §6m, §6n)**: all four edges now
+  simulated and compared against accurately digitized theory curves,
+  converging on one common ~1.05-1.6x residual (down from an initial
+  edge-dependent 0.73-3.82x spread that turned out to be mostly a real
+  abTEM bug -- see next item). Resolved into two pieces (§6m): a flat,
+  edge-independent ~1.25-1.29x baseline reproduced independently by Sr K
+  and Sr L, most plausibly solid angle (implied ~0.55 sr vs. the nominal
+  0.7 sr used here); and a separate, channelling-specific,
+  thickness-decaying residual that solid angle cannot explain (wrong
+  sign). Tested directly in §6n, properly self-consistently via the new
+  `CrystalPotential.get_realised_atoms` (replays the exact per-tile,
+  per-z-repetition mosaic draw the elastic potential itself used, verified
+  bit-exact per tile): placing transition potentials at that realised
+  thermal displacement instead of the ideal lattice sites
+  `get_sliced_atoms` returns by design cuts the decaying residual by
+  ~20-50% across the three convergence angles -- real, but a minority of
+  the effect (a first, non-self-consistent single-global-draw pass had
+  overstated this at 46-92%; superseded). What explains the *majority* of
+  the channelling-specific decay is still open. O K does not cleanly fit
+  the §6m picture and is flagged as an open loose end, likely tied to its
+  unusually short attenuation length.
 - **A real `(2l+1)` orbital-degeneracy double-count** in
   `TransitionPotential.build()` was found and fixed while extending the
   Chen comparison to an L-edge for the first time (§6l). Every L-edge or
