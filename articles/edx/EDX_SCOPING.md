@@ -1031,11 +1031,146 @@ this again:
   cross-contamination between the two black curves anywhere else (both
   panels' point counts and endpoint values stayed correct after the change).
 
-### Status
+### Status (superseded by 6l below)
 
 Sr-K fully compared (with the caveats above); Ti-K, Sr-L, O-K digitized but
 not yet compared against equivalent abTEM runs at the validated settings --
 see "Still to validate."
+
+## 6l. A real bug, found by extending the comparison to Ti-K, Sr-L, O-K
+
+Running the validated Sr-K settings for the other three panels surfaced a
+genuinely inconsistent picture: Ti-K overshot the digitized theory curve by a
+roughly uniform ~1.4-1.6x, Sr-L by ~3.1-3.8x, and O-K by a mix of under- and
+over-shoot depending on curve (0.73x non-channelling, ~1.75-1.80x for the
+three finite angles) -- three edges, three different stories, none of them
+matching Sr-K's own residual. That inconsistency, not the Chen comparison in
+isolation, is what triggered the deeper physics/detector sanity check below.
+
+### Sanity checks, isolated from each other
+
+**Raw ionisation cross-sections against Bote-Salvat, no detector at all.**
+Every l=0 edge checked -- Ti K, O K, Sr K, Sr L1 (2s) -- landed in the
+ordinary 0.83-1.14 band already established in 6c-ter. The one l=1 edge, Sr
+L2,3, read 2.53-2.89x high across order=1,2,3 -- not shrinking with order,
+so not a convergence artefact.
+
+**Detector efficiency, checked component by component.** Omega/4pi = 0.0557;
+omega (fluorescence yield) = 0.665/0.218/0.0254/0.0058 for Sr-K/Ti-K/Sr-L/O-K;
+implied SDD efficiency at each line energy = 0.41/0.99/0.97/0.87. Every
+number is individually within literature range -- nothing here is off by a
+factor of 3-4x. Sweeping the Si active-layer thickness confirmed the
+saturation: Ti-Kalpha, Sr-Lalpha and O-Kalpha are all >=87% efficient and
+essentially flat from 100 um upward (only Sr-Kalpha, at 14.4 keV, is
+sensitive to this parameter at all), and sweeping the front dead-layer/
+contact-layer thickness shows the opposite pattern -- O-K collapses from 95%
+to 0.5% over the same range that leaves Sr-Kalpha untouched (<1% change).
+No single Si-layer parameter, in any combination, can move three edges by a
+uniform ~1.3x while leaving the fourth's efficiency-sensitive behaviour
+intact -- **detector efficiency is not, and structurally cannot be, the
+common residual.**
+
+**Missing physics, quantified rather than hand-waved.** Two real gaps:
+
+- abTEM's non-channelling reference formula assumed one atom of the ionised
+  species per unit cell -- true for Sr and Ti, wrong by 3x for O (SrTiO3 has
+  3 O per cell). Found by simply counting atoms; fixed by multiplying by the
+  correct per-cell count. Only affects O-K's non-channelling curve.
+- Specimen self-absorption, which `abtem.inelastic.xray.SpecimenAbsorption`
+  supports but none of the Chen runs enabled. Depth-averaged transmission
+  through 430 A of SrTiO3 at an 18 degree take-off: 0.999 (Sr Kalpha), 0.990
+  (Ti Kalpha), 0.966 (Sr Lalpha), and a large, thickness-dependent **0.672**
+  (O Kalpha, softest line, shortest attenuation length by two orders of
+  magnitude). Negligible for the hard lines, real for O-K.
+
+### The actual bug: (2l+1) orbital-degeneracy double-counting
+
+Dividing Sr L2,3's excess by (2l+1)=3 landed it at 0.96 -- squarely in the
+l=0 band. That is the whole story, confirmed properly rather than patched
+over: `TransitionPotential.build()` multiplies every explicit bound `ml`
+state by `sqrt(4*l+2)`, the full subshell electron count (spin 2 times
+orbital degeneracy 2l+1). But `SubshellTransitions.get_transitions()`
+already realises the orbital degeneracy explicitly -- it builds one distinct
+bound state per `ml` and the array is summed incoherently over all of them
+-- so applying `4*l+2` per already-explicit `ml` double-counts the orbital
+part by exactly `(2*l+1)`. Invisible for l=0, where `4*l+2` reduces to the
+spin-only factor of 2, which is exactly why six K-edge validations this
+session (Si, C, Cu, Ti, O, Sr) never caught it.
+
+Confirmed mechanistically, not just numerically, across two elements and
+three `l` values (order=1, so the multipole-convergence question doesn't
+confound it):
+
+| edge | l | 2l+1 | abTEM/Bote-Salvat | ratio / (2l+1) |
+|---|---|---|---|---|
+| Ti K | 0 | 1 | 0.833 | 0.833 |
+| Au L2,3 | 1 | 3 | 2.683 | 0.894 |
+| Au M4,5 | 2 | 5 | 4.247 | 0.849 |
+
+All three land in the same tight band once divided by `(2l+1)`. Fixed by
+supplying only the spin factor (`sqrt(2)`, not `sqrt(4*l+2)`) -- identical
+result for l=0, so no K-edge changes. **Affects every L-edge or M-edge EELS
+or EDX simulation built via `SubshellTransitions`: p-subshells were 3x too
+large, d-subshells 5x.** Landed as [PR #368](https://github.com/abTEM/abTEM/pull/368)
+against `dev`, with a regression test that isolates a single explicit `ml`
+transition and checks the `orbital_filling_factor` multiplier is exactly 2
+(confirmed to fail against the pre-fix code, with precisely the
+`(4*l+2)/2` ratio, before verifying the fix). Full suite: 1321 passed, 0 new
+failures (the usual 7 pre-existing `test_gpaw.py` failures aside). Cherry-
+picked into this branch as well, since the Chen comparison needs it.
+
+### The consolidated picture, after the fix
+
+Re-ran Sr-L at the (cheaper -- see below) validated settings with the fix
+applied:
+
+| curve | abTEM | digitized | ratio |
+|---|---|---|---|
+| non-channelling | 3043 | 2392 | 1.27 |
+| 13.7 mrad | 5246 | 4593 | 1.14 |
+| 21.8 mrad | 4283 | 3836 | 1.12 |
+| 45.7 mrad | 3459 | 3147 | 1.10 |
+
+Sr-L now sits at 1.10-1.27, next to Ti-K (1.39-1.57) and O-K (1.18-1.47,
+with the atom-count and self-absorption corrections applied) -- not the old
+3.1-3.8x outlier. **All four edges, sixteen curves, now occupy one common
+band of roughly 1.05-1.6x, down from the pre-fix 0.73-3.82x (a 5.2x spread
+collapsing to about 1.5x).** That is the signature of one shared,
+understood, unmodeled effect -- not four separate mysteries. The leading
+candidate is the effective solid angle: Chen et al. compute a
+geometry-and-absorption-corrected value smaller than their nominal 0.7 sr
+(they state it shrinks by about 50% at their thickest sample), while every
+abTEM run here used a flat nominal 0.7 sr throughout. Not yet checked
+quantitatively -- see "Still to validate."
+
+### Convergence settings were more expensive than necessary for Sr-L
+
+The gpts convergence sweep that justified `gpts=160` was run for Sr-K
+*before* `slice_thickness=lat/2` was established -- so it was confounded
+with the slice-thickness error, not measuring gpts alone. Re-swept for Sr-L
+with the slice thickness already fixed: `gpts=64,96,128,160` spans only
+~4%, non-monotonically -- noise, not a real trend, nothing like Sr-K's
+original +60% span. `gpts=96` (re-used for the consolidated Sr-L run above)
+cut the wall-clock cost to 1053 s from the original ~2900 s. Lateral cell
+size (~3% monotonic 1x1->2x2->3x3, matching Sr-K), frozen-phonon pool
+(~3% noise, 8/16/32), and scan grid (4x4 is a real outlier at +29%, 8x8 vs
+16x16 differ by ~4%) all re-validated at the same settings used before. This
+was not re-checked for Ti-K or O-K, which are cheaper per-transition (l=0)
+and were not the compute bottleneck.
+
+### Still to validate
+
+- Whether the paper's effective (geometry- and absorption-reduced) solid
+  angle, rather than a flat nominal 0.7 sr, accounts for the residual
+  1.05-1.6x -- the leading candidate, not yet checked quantitatively.
+- Whether the residual has any remaining thickness-dependence once solid
+  angle is modeled (self-absorption already explains O-K's; the others were
+  not checked for a depth trend beyond the single endpoint compared here).
+- The plane-wave/probe self-consistency question flagged earlier this
+  session (whether the elastic potential should also see the ionised atom's
+  thermal displacement, i.e. "rattled" transition potentials) -- a
+  documented simplification, judged unlikely to explain a multiplicative
+  effect of this size, not chased further.
 
 ## 7. Status
 
@@ -1045,7 +1180,7 @@ see "Still to validate."
 | 2. `XrayDetector` (`xray.py`) | done |
 | 3. Energy integration (`EnergyIntegral`) | done |
 | 4. Effective-potential multislice | done, lazy + eager |
-| 5. Validation | light/medium edges done (§6c); heavy edges cross-checked against Bote-Salvat, real ~9-10%+ PWBA/DWBA gap found (§6c-ter) |
+| 5. Validation | light/medium edges done (§6c); heavy edges cross-checked against Bote-Salvat, real ~9-10%+ PWBA/DWBA gap found (§6c-ter); a real `(2l+1)` orbital-degeneracy bug found and fixed for all L/M edges (§6l, PR #368) |
 | 6. PRISM port | done, interpolation supported (§6e) |
 
 Public API: `abtem.XrayDetector`, `abtem.SDDEfficiency`,
@@ -1063,10 +1198,20 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
   PWBA/DWBA gap at default settings that grows at lower overvoltage -- see
   §6c-ter. Extending it to more elements/edges/energies, and to SIGMAK, is
   still open.
-- **Chen et al. reproduction (§6k)**: Sr-K done against accurately digitized
-  theory curves (abTEM 15-27% low at default detector assumptions once gpts/
-  slice/lateral/order are all converged). Ti-K, Sr-L, O-K remain -- digitized,
-  not yet simulated.
+- **Chen et al. reproduction (§6k, §6l)**: all four edges now simulated and
+  compared against accurately digitized theory curves, converging on one
+  common ~1.05-1.6x residual (down from an initial edge-dependent
+  0.73-3.82x spread that turned out to be mostly a real abTEM bug -- see
+  next item). The leading remaining candidate for that residual is the
+  paper's effective (geometry-reduced) solid angle vs. the flat nominal
+  0.7 sr used here -- not yet checked quantitatively.
+- **A real `(2l+1)` orbital-degeneracy double-count** in
+  `TransitionPotential.build()` was found and fixed while extending the
+  Chen comparison to an L-edge for the first time (§6l). Every L-edge or
+  M-edge EELS/EDX simulation via `SubshellTransitions` was overestimating
+  by `(2l+1)` -- 3x for p-subshells, 5x for d-subshells -- invisible for
+  every K edge. Fixed in [PR #368](https://github.com/abTEM/abTEM/pull/368),
+  cherry-picked into this branch.
 - Site coordinates in the PRISM helpers of `prism/` (outside `core_loss.py`)
   have not been audited for hardcoded dtypes.
 - Consider whether `SubshellTransitions`'s default `order=1` should be
