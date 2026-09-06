@@ -1065,6 +1065,7 @@ def test_subshell_transitions_real_gpaw_pipeline():
 
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
     """Regression test for a (2*l+1) orbital-degeneracy double-count.
 
