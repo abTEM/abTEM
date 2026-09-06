@@ -1058,3 +1058,51 @@ def test_subshell_transitions_real_gpaw_pipeline():
     array = np.asarray(result.array)
     assert np.isfinite(array).all()
     assert np.any(array != 0)
+
+
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
+    """Regression test for a (2*l+1) orbital-degeneracy double-count.
+
+    ``SubshellTransitions.get_transitions()`` already realises a subshell's
+    orbital degeneracy explicitly: it builds one distinct bound state per
+    ``ml`` in ``range(-l, l+1)`` and ``TransitionPotential.build()`` sums
+    their contributions incoherently. ``orbital_filling_factor`` must
+    therefore contribute only the *remaining* spin degeneracy (2), not the
+    full subshell occupancy ``4*l+2 = spin(2) * orbital(2*l+1)`` -- applying
+    ``4*l+2`` per already-explicit ``ml`` inflates the total by exactly
+    ``(2*l+1)``. This was invisible for every K edge (l=0), where
+    ``4*l+2`` reduces to the spin-only factor of 2, which is exactly why it
+    went undetected: only checked directly against an independent
+    tabulation (Bote & Salvat) does a p- or d-subshell reveal it, at 3x and
+    5x respectively.
+
+    Checked here without any external data: for a single explicit bound
+    ``ml`` state, turning ``orbital_filling_factor`` on must scale the
+    intensity by exactly 2 (spin), regardless of ``l`` -- not by ``4*l+2``.
+    """
+    from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+
+    for Z, n, l in [(14, 1, 0), (14, 2, 1), (22, 3, 2)]:
+        transitions = SubshellTransitions(Z, n, l, epsilon=25.0)
+        one_ml_transitions = [
+            t for t in transitions.get_transitions() if t[0].ml == 0
+        ]
+        assert len(one_ml_transitions) > 0
+
+        kwargs = dict(extent=6.0, gpts=32, energy=100e3, double_channel=False)
+        with_factor = TransitionPotential(
+            Z, one_ml_transitions, orbital_filling_factor=True, **kwargs,
+        ).build()
+        without_factor = TransitionPotential(
+            Z, one_ml_transitions, orbital_filling_factor=False, **kwargs,
+        ).build()
+
+        intensity_with = float((np.abs(with_factor.array) ** 2).sum())
+        intensity_without = float((np.abs(without_factor.array) ** 2).sum())
+
+        assert intensity_with == pytest.approx(2.0 * intensity_without, rel=1e-6), (
+            f"l={l}: orbital_filling_factor should apply spin degeneracy (2x "
+            f"intensity), not the full shell occupancy "
+            f"({4 * l + 2}x intensity, from the old 4*l+2 formula)"
+        )
