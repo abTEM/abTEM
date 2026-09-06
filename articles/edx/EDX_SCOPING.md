@@ -1318,7 +1318,7 @@ explicit single-cell build does; that is an inherent, expected mosaic
 approximation, not a placement bug, and the per-tile isolated-block test
 above is the right way to check placement without that confound.)
 
-### The corrected, self-consistent result
+### The corrected, self-consistent result: Sr L
 
 Rerunning the same comparison with `sites=crystal.get_realised_atoms()`
 (same seed on both the crystal and the site reconstruction):
@@ -1335,27 +1335,85 @@ but roughly half to a third the size the first-pass script implied. A
 single independent redraw scrambles the correlation between the
 ionisation site and the specific configuration the probe's channelling
 pattern actually formed on in that unit cell, which artificially
-exaggerates how much rattling "helps." **Corrected conclusion: rigid
-(unrattled) transition-potential placement explains roughly 20-50% of the
-channelling-specific thickness-decaying residual, not 46-92% as the first,
-non-self-consistent pass suggested.** The remaining 50-80% of that
-decaying residual is still unexplained.
+exaggerates how much rattling "helps." For Sr L alone this reads as
+"rigid transition-potential placement explains roughly 20-50% of the
+channelling-specific thickness-decaying residual" -- but extending the
+same self-consistent test to the other two edges (below) shows this is
+*not* a general rule.
+
+### Extending to Sr K and O K: the effect is not one-directional
+
+Same self-consistent-vs-ideal test, same seed convention, at each edge's
+own already-validated settings (Sr K: gpts=160, no lateral tiling,
+`repetitions=(1,1,110)`, order=3, matching the §6l/6m Sr K baseline; O K:
+gpts=160, 3x3 lateral, order=3, with the same depth-resolved
+self-absorption correction from §6m applied to both curves for a fair
+comparison):
+
+| edge | angle | ratio, ideal sites (t=51->429 A) | ratio, self-consistent rattle |
+|---|---|---|---|
+| Sr K | 13.7 mrad | 1.784 -> 1.243 | 2.081 -> 1.714 |
+| Sr K | 21.8 mrad | 1.747 -> 1.255 | 2.055 -> 1.709 |
+| Sr K | 45.7 mrad | 1.550 -> 1.451 | 1.862 -> 1.664 |
+| O K | 13.7 mrad | 1.103 -> 1.197 | 1.060 -> 1.175 |
+| O K | 21.8 mrad | 1.140 -> 1.181 | 1.114 -> 1.172 |
+| O K | 45.7 mrad | 1.148 -> 1.214 | 1.132 -> 1.203 |
+
+**Sr K's self-consistent ratio is higher than the ideal-site ratio at
+*every* thickness and angle -- rattling makes Sr K's agreement with the
+paper *worse*, not better.** The thickness-decay itself does shrink for
+two of the three angles (13.7 mrad: delta 0.541 -> 0.367; 21.8 mrad: delta
+0.492 -> 0.346) but *grows* for the third (45.7 mrad: delta 0.099 ->
+0.198) -- inconsistent even within one edge. O K, by contrast, barely
+moves either way (a few percent, mostly a small further improvement) --
+consistent with §6m's note that O K does not cleanly fit the Sr K/Sr L
+channelling-decay pattern to begin with.
+
+A plausible (untested) reason for the sign flip: Sr K's setup has no
+lateral tiling at all (`repetitions=(1,1,110)`) -- the crystal is a single,
+laterally periodic atomic column whose position simply wobbles with depth,
+with no neighbouring column at a *different* random displacement to
+scatter into. Sr L's setup tiles 2x2, giving genuine lateral disorder
+(different columns independently displaced side by side) that the elastic
+wave can diffusely scatter from. Self-consistent site placement may
+increase the ionisation signal when there is no competing lateral disorder
+(the transition potential more accurately tracks wherever the channelled
+probe's intensity peak actually is, depth by depth) while a different
+balance applies once neighbouring, independently-disordered columns are
+present. This is speculation, not a confirmed mechanism -- it was not
+tested by, for instance, rerunning Sr L with `repetitions=(1,1,110)` (no
+lateral tiling) to see whether it then also shows an increase.
+
+**Corrected conclusion, superseding the single-edge one above: rigid
+(unrattled) transition-potential placement is a real, non-negligible
+effect on the channelling-specific residual, but it is not a general
+explanation for the shared thickness-decay pattern noted in §6m --
+its sign and magnitude vary by edge and lateral geometry, improving
+agreement for Sr L, worsening it for Sr K, and barely mattering for O K.**
+The shared decaying pattern itself (§6m, established independently for Sr
+K and Sr L using the *ideal*-site simulations, which this section leaves
+unchanged) therefore still has no single confirmed cause.
 
 ### Still to validate
 
-- What explains the *majority* of the channelling-specific thickness decay,
-  now that rigid transition-potential placement accounts for only
-  ~20-50% of it, not most of it.
+- What actually explains the shared channelling-specific thickness-decay
+  pattern in §6m, now that rigid transition-potential placement is ruled
+  out as a general (edge-independent) explanation.
+- The lateral-disorder hypothesis above for the Sr K/Sr L sign difference
+  -- untested; the direct test is rerunning Sr L (or Sr K) with the other
+  edge's lateral tiling to see whether the sign tracks geometry rather
+  than element/energy.
 - Whether averaging `get_realised_atoms` over multiple independent seeds
-  (rather than the single seed used above) changes these percentages
-  materially, or whether one seed is already representative given the
-  scan already averages over 64 probe positions per angle.
+  (rather than the single seed used above, per edge) changes any of these
+  numbers materially, or whether one seed is already representative given
+  each scan already averages over 64 probe positions per angle.
 - O K's anomalous rising non-channelling ratio (6m) -- likely a
   self-absorption or convergence artefact specific to O K's short
   attenuation length, not yet isolated.
-- Ti K was not included in the thickness-resolved check in 6m (its
-  residual in 6l, ~1.4-1.6x, sits between Sr L and O K but was only
-  compared at the single endpoint thickness).
+- Ti K was not included in the thickness-resolved check in 6m or in this
+  section's self-consistent rattle test (its residual in 6l, ~1.4-1.6x,
+  sits between Sr L and O K but was only compared at the single endpoint
+  thickness).
 - Extending Bote-Salvat heavy-edge validation to more elements/edges, and
   to SIGMAK, is still open (unchanged from 6c-ter).
 
@@ -1399,11 +1457,14 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
   per-z-repetition mosaic draw the elastic potential itself used, verified
   bit-exact per tile): placing transition potentials at that realised
   thermal displacement instead of the ideal lattice sites
-  `get_sliced_atoms` returns by design cuts the decaying residual by
-  ~20-50% across the three convergence angles -- real, but a minority of
-  the effect (a first, non-self-consistent single-global-draw pass had
-  overstated this at 46-92%; superseded). What explains the *majority* of
-  the channelling-specific decay is still open. O K does not cleanly fit
+  `get_sliced_atoms` returns by design is a real, non-negligible effect,
+  but **not a general explanation** for the shared decay -- it improves
+  agreement for Sr L (cuts the decaying residual ~20-50%; a first,
+  non-self-consistent single-global-draw pass had overstated this at
+  46-92%, superseded), *worsens* it for Sr K (ratio higher at every
+  thickness and angle than the ideal-site baseline), and barely moves O K
+  either way. What actually explains the shared channelling-specific decay
+  pattern across Sr K and Sr L is still open. O K does not cleanly fit
   the §6m picture and is flagged as an open loose end, likely tied to its
   unusually short attenuation length.
 - **A real `(2l+1)` orbital-degeneracy double-count** in
