@@ -1158,19 +1158,113 @@ size (~3% monotonic 1x1->2x2->3x3, matching Sr-K), frozen-phonon pool
 was not re-checked for Ti-K or O-K, which are cheaper per-transition (l=0)
 and were not the compute bottleneck.
 
+### Still to validate (superseded by 6m below)
+
+## 6m. The solid-angle question: ratio vs. thickness
+
+Section 6l left one open question: does the paper's effective (geometry-
+and absorption-reduced) solid angle -- which Chen et al. state shrinks by
+about 50% at their thickest sample, relative to the nominal 0.7 sr used
+uniformly here -- account for the remaining 1.05-1.6x residual? If it does,
+the abTEM/digitized ratio should *grow* with thickness, tracking the
+detector's shrinking effective acceptance as the specimen thickens.
+
+Tested directly by computing abTEM/digitized ratio vs. thickness for every
+curve in three edges (Sr K, Sr L, O K; Ti K not run, see below), each
+against depth-resolved specimen self-absorption -- every depth slice's own
+*incremental* signal weighted by that depth's own transmission
+`exp(-mu*z/sin(takeoff))` via `cumsum(diff(cumulative) * T)`, rather than a
+single depth-averaged factor applied to the whole thickness (needed
+because channelling curves are not generated uniformly with depth, so a
+flat depth-average biases the ratio at intermediate thicknesses).
+
+| t (A) | Sr K nonchan | Sr K 13.7 | Sr K 21.8 | Sr K 45.7 |
+|---|---|---|---|---|
+| 50.8 | 1.279 | 1.784 | 1.747 | 1.550 |
+| 150.3 | 1.266 | 1.475 | 1.467 | 1.633 |
+| 249.9 | 1.260 | 1.394 | 1.363 | 1.555 |
+| 349.5 | 1.255 | 1.357 | 1.302 | 1.521 |
+| 429.5 | 1.255 | 1.243 | 1.254 | 1.450 |
+
+| t (A) | Sr L nonchan | Sr L 13.7 | Sr L 21.8 | Sr L 45.7 |
+|---|---|---|---|---|
+| 50.8 | 1.277 | 1.353 | 1.327 | 1.240 |
+| 150.3 | 1.251 | 1.145 | 1.249 | 1.175 |
+| 249.9 | 1.238 | 1.173 | 1.176 | 1.125 |
+| 349.5 | 1.232 | 1.128 | 1.138 | 1.096 |
+| 429.5 | 1.229 | 1.108 | 1.083 | 1.064 |
+
+| t (A) | O K nonchan | O K 13.7 | O K 21.8 | O K 45.7 |
+|---|---|---|---|---|
+| 50.8 | 0.853 | 1.103 | 1.140 | 1.148 |
+| 150.3 | 1.386 | 1.057 | 1.130 | 1.159 |
+| 249.9 | 1.435 | 1.151 | 1.177 | 1.201 |
+| 349.5 | 1.455 | 1.157 | 1.190 | 1.216 |
+| 429.5 | 1.469 | 1.197 | 1.181 | 1.214 |
+
+**Sr K and Sr L -- two unrelated elements at very different energies
+(14.4 keV vs. 1.8 keV) -- agree strikingly well.** Both show a
+non-channelling ratio that is close to *flat* across the full 50-430 A
+range (Sr K: 1.25-1.29, Sr L: 1.23-1.28), and both show the three
+finite-angle (channelling) curves clearly *decaying toward that same flat
+floor* as thickness grows (Sr K 13.7 mrad: 1.78->1.24; Sr L 13.7 mrad:
+1.35->1.11). Because non-channelling carries no angle-dependence, a flat,
+edge-independent, energy-independent floor reproduced independently by two
+different edges is exactly the signature of one shared geometric or
+calibration factor -- most plausibly solid angle. Taking the flat value as
+literal: implied effective solid angle = 0.7 sr / 1.27 ~= 0.55 sr against
+the nominal 0.7 sr used throughout, broadly consistent in direction and
+rough magnitude with the paper's own statement that its effective
+acceptance is reduced from nominal.
+
+**But the thickness trend rules solid angle out as the explanation for the
+channelling-specific piece.** A solid angle that shrinks *with* thickness
+(Chen et al.'s stated ~50% reduction at their thickest sample) would make
+the abTEM/digitized ratio *grow* with thickness. The opposite happens: the
+gap between the finite-angle curves and the flat non-channelling floor is
+*largest at small thickness and shrinks toward zero as the specimen
+thickens* -- for both Sr K and Sr L. Solid angle explains the shared flat
+baseline; it does not explain, and predicts the wrong sign for, the extra
+decaying piece that rides on top of it in the channelling curves.
+
+That leftover, channelling-specific, thickness-decaying piece is
+tentatively consistent with the "ideal-lattice transition potential
+placement" simplification flagged earlier this session: the transition
+potentials are placed at the mean, unrattled atomic sites, while the
+elastic wave that channels through the column does see the real, thermally
+displaced potential. That mismatch should matter most while the probe is
+still tightly channelled and peaked on the column -- i.e. at small
+thickness -- and matter proportionally less as the beam de-channels and
+spreads at larger thickness, which is exactly the observed trend. This is
+a plausible explanation consistent with all the evidence gathered so far,
+not a confirmed one -- it has not been tested by actually placing
+transition potentials at rattled positions.
+
+**O K does not reproduce this pattern**, and is not used to support the
+conclusion above. Its non-channelling ratio *rises* from 0.85 to 1.47
+rather than sitting flat, while its finite-angle curves are comparatively
+flat (1.05-1.23) rather than clearly decaying. Two reasons to discount this
+rather than treat it as contradicting evidence: O K's attenuation length is
+two orders of magnitude shorter than Sr K/L's, so its self-absorption
+correction is by far the largest and most sensitive of the three to any
+error in the depth-generation-profile assumption; and unlike Sr L, O K's
+own convergence settings (lateral cell, gpts) were never independently
+re-validated the way Sr L's were in 6l. Left as an open loose end rather
+than over-interpreted.
+
 ### Still to validate
 
-- Whether the paper's effective (geometry- and absorption-reduced) solid
-  angle, rather than a flat nominal 0.7 sr, accounts for the residual
-  1.05-1.6x -- the leading candidate, not yet checked quantitatively.
-- Whether the residual has any remaining thickness-dependence once solid
-  angle is modeled (self-absorption already explains O-K's; the others were
-  not checked for a depth trend beyond the single endpoint compared here).
-- The plane-wave/probe self-consistency question flagged earlier this
-  session (whether the elastic potential should also see the ionised atom's
-  thermal displacement, i.e. "rattled" transition potentials) -- a
-  documented simplification, judged unlikely to explain a multiplicative
-  effect of this size, not chased further.
+- The channelling-specific, thickness-decaying residual seen in Sr K/Sr L,
+  tentatively attributed above to rigid (unrattled) transition-potential
+  placement -- not yet tested directly.
+- O K's anomalous rising non-channelling ratio -- likely a self-absorption
+  or convergence artefact specific to O K's short attenuation length,
+  not yet isolated.
+- Ti K was not included in this thickness-resolved check (its residual in
+  6l, ~1.4-1.6x, sits between Sr L and O K but was only compared at the
+  single endpoint thickness).
+- Extending Bote-Salvat heavy-edge validation to more elements/edges, and
+  to SIGMAK, is still open (unchanged from 6c-ter).
 
 ## 7. Status
 
@@ -1198,13 +1292,18 @@ Tests: `test/test_xray.py`, `test/test_energy_integral.py`,
   PWBA/DWBA gap at default settings that grows at lower overvoltage -- see
   §6c-ter. Extending it to more elements/edges/energies, and to SIGMAK, is
   still open.
-- **Chen et al. reproduction (§6k, §6l)**: all four edges now simulated and
-  compared against accurately digitized theory curves, converging on one
-  common ~1.05-1.6x residual (down from an initial edge-dependent
+- **Chen et al. reproduction (§6k, §6l, §6m)**: all four edges now simulated
+  and compared against accurately digitized theory curves, converging on
+  one common ~1.05-1.6x residual (down from an initial edge-dependent
   0.73-3.82x spread that turned out to be mostly a real abTEM bug -- see
-  next item). The leading remaining candidate for that residual is the
-  paper's effective (geometry-reduced) solid angle vs. the flat nominal
-  0.7 sr used here -- not yet checked quantitatively.
+  next item). Resolved into two pieces (§6m): a flat, edge-independent
+  ~1.25-1.29x baseline reproduced independently by Sr K and Sr L, most
+  plausibly solid angle (implied ~0.55 sr vs. the nominal 0.7 sr used
+  here); and a separate, channelling-specific, thickness-decaying residual
+  that solid angle cannot explain (wrong sign) and is tentatively
+  attributed to rigid (unrattled) transition-potential placement, not yet
+  tested directly. O K does not cleanly fit this picture and is flagged as
+  an open loose end, likely tied to its unusually short attenuation length.
 - **A real `(2l+1)` orbital-degeneracy double-count** in
   `TransitionPotential.build()` was found and fixed while extending the
   Chen comparison to an L-edge for the first time (§6l). Every L-edge or
