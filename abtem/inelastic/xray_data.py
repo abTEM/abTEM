@@ -248,6 +248,7 @@ def _coster_kronig_cascade(
     return vacancies
 
 
+@lru_cache(maxsize=None)
 def _vacancy_distribution(
     symbol: str, n: int, l: int, coster_kronig: bool
 ) -> tuple[tuple[str, float], ...]:
@@ -305,6 +306,7 @@ def vacancy_distribution(
     return dict(_vacancy_distribution(_symbol(element), n, l, coster_kronig))
 
 
+@lru_cache(maxsize=None)
 def fluorescence_yield(
     element: int | str, n: int, l: int, coster_kronig: bool = True
 ) -> float:
@@ -382,8 +384,23 @@ def emission_lines(
     >>> round(lines["Ka1"].energy, 1)  # doctest: +SKIP
     8046.3
     """
-    xraydb = _xraydb()
     symbol = _symbol(element)
+    # A fresh dict per call (cached work lives in _emission_lines, keyed
+    # independent of min_intensity so callers asking for different cutoffs
+    # share the one xraydb-backed computation), so a caller mutating the
+    # result cannot poison the cache behind it -- same reasoning as
+    # vacancy_distribution above.
+    lines = dict(_emission_lines(symbol, n, l, coster_kronig))
+    return {
+        name: line for name, line in lines.items() if line.intensity >= min_intensity
+    }
+
+
+@lru_cache(maxsize=None)
+def _emission_lines(
+    symbol: str, n: int, l: int, coster_kronig: bool
+) -> dict[str, EmissionLine]:
+    xraydb = _xraydb()
     edges = xraydb.xray_edges(symbol)
 
     distribution = vacancy_distribution(symbol, n, l, coster_kronig)
@@ -435,13 +452,7 @@ def emission_lines(
                 final_level=line.final_level,
             )
 
-    lines = {
-        name: line
-        for name, line in collected.items()
-        if line.intensity >= min_intensity
-    }
-
-    return dict(sorted(lines.items(), key=lambda kv: -kv[1].intensity))
+    return dict(sorted(collected.items(), key=lambda kv: -kv[1].intensity))
 
 
 def line_families(lines: dict[str, EmissionLine]) -> dict[str, list[EmissionLine]]:
@@ -475,6 +486,7 @@ def line_families(lines: dict[str, EmissionLine]) -> dict[str, list[EmissionLine
     )
 
 
+@lru_cache(maxsize=None)
 def natural_width(element: int | str, n: int, l: int) -> float:
     """
     Core-hole lifetime broadening of an ``(n, l)`` subshell [eV].
@@ -511,6 +523,7 @@ def natural_width(element: int | str, n: int, l: int) -> float:
     return total
 
 
+@lru_cache(maxsize=None)
 def absorption_edge(element: int | str, n: int, l: int) -> float:
     """
     Ionisation threshold of an ``(n, l)`` subshell [eV].

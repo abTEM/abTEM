@@ -24,6 +24,7 @@ Emission is assumed isotropic and specimen self-absorption is neglected.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, cast
 
 import numpy as np
@@ -53,6 +54,29 @@ _INSTALL_HINT = (
     "Install it with `pip install abtem[gpaw]` or `pip install xraydb`. "
     "Alternatively pass a measured efficiency curve to XrayDetector."
 )
+
+
+@lru_cache(maxsize=None)
+def _cached_material_mu(
+    formula: str, energies: tuple[float, ...], density: Optional[float], kind: str
+) -> tuple[float, ...]:
+    """Linear attenuation coefficient, cached on (formula, energies, density,
+    kind) alone -- it depends on none of the things that actually vary from
+    call to call in a multislice run (e.g. depth in SpecimenAbsorption), so
+    without this every slice would re-query xraydb for the same answer.
+    Shared by SDDEfficiency and SpecimenAbsorption, and by any future code
+    that needs a material's attenuation coefficient, rather than each one
+    growing its own cache.
+    """
+    try:
+        import xraydb
+    except ImportError as e:
+        raise ImportError(_INSTALL_HINT) from e
+
+    mu = xraydb.material_mu(
+        formula, np.array(energies, dtype=get_dtype()), density=density, kind=kind
+    )
+    return tuple(float(m) for m in np.atleast_1d(mu))
 
 
 def _validate_layer(layer, name: str) -> Optional[tuple[str, float]]:
@@ -171,23 +195,17 @@ class SDDEfficiency:
         return tuple(layer for layer in layers if layer is not None)
 
     def _mu(self, formula: str, energies: np.ndarray, kind: str) -> np.ndarray:
-        try:
-            import xraydb
-        except ImportError as e:
-            raise ImportError(_INSTALL_HINT) from e
-
         # material_mu returns the linear attenuation coefficient in 1/cm. Note
         # that mu_elam returns the *mass* attenuation coefficient in cm^2/g and
-        # must not be used here without multiplying by the density.
-        return np.asarray(
-            xraydb.material_mu(
-                formula,
-                np.asarray(energies, dtype=get_dtype()),
-                density=self.densities.get(formula),
-                kind=kind,
-            ),
-            dtype=get_dtype(),
+        # must not be used here without multiplying by the density. Rounded to
+        # collapse float noise into the same cache key -- the tabulation has
+        # nowhere near eV-level resolution, so this loses nothing real.
+        energies = np.atleast_1d(np.asarray(energies, dtype=get_dtype()))
+        key = tuple(np.round(energies, 3).tolist())
+        mu = _cached_material_mu(
+            formula, key, self.densities.get(formula), kind
         )
+        return np.asarray(mu, dtype=get_dtype())
 
     def __call__(self, energies) -> np.ndarray:
         energies = np.atleast_1d(np.asarray(energies, dtype=get_dtype()))
@@ -254,17 +272,6 @@ class SpecimenAbsorption:
         if self.density is not None and self.density <= 0.0:
             raise ValueError(f"'density' must be positive, got {self.density}")
 
-        # mu(formula, energies, density) doesn't depend on depth, but
-        # transmission() is called once per depth (once per exit plane, i.e.
-        # per slice, in a multislice run with self-absorption enabled) -- so
-        # without caching, xraydb.material_mu gets re-queried from scratch at
-        # every single slice for what is always the same answer. Cache it,
-        # keyed by the (rounded, to collapse float noise) energies actually
-        # asked for; instance is frozen, so the cache is a plain mutable dict
-        # installed via object.__setattr__, the same pattern already used
-        # above for the validated layer fields.
-        object.__setattr__(self, "_mu_cache", {})
-
     def transmission(self, energies, depth: float) -> np.ndarray:
         """
         Fraction of photons escaping from a given depth.
@@ -286,19 +293,16 @@ class SpecimenAbsorption:
         if depth <= 0.0:
             return np.ones_like(energies)
 
+        # mu(formula, energies, density) doesn't depend on depth, but
+        # transmission() is called once per depth -- once per exit plane, i.e.
+        # per slice, in a multislice run with self-absorption enabled -- so
+        # _cached_material_mu (shared with SDDEfficiency) is what keeps this
+        # from re-querying xraydb on every single slice for the same answer.
         key = tuple(np.round(energies, 3).tolist())
-        mu = self._mu_cache.get(key)
-        if mu is None:
-            try:
-                import xraydb  # type: ignore[import-untyped]
-            except ImportError as e:
-                raise ImportError(_INSTALL_HINT) from e
-
-            mu = np.asarray(
-                xraydb.material_mu(self.formula, energies, density=self.density),
-                dtype=get_dtype(),
-            )
-            self._mu_cache[key] = mu
+        mu = np.asarray(
+            _cached_material_mu(self.formula, key, self.density, "total"),
+            dtype=get_dtype(),
+        )
 
         # mu is per cm; the path is the depth divided by the sine of the
         # take-off angle, converted from Angstrom.
@@ -400,11 +404,6 @@ class XrayDetector(IonizationDetector):
         self._lines = lines
         self._coster_kronig = coster_kronig
         self._absorption = absorption
-        # detected_lines(element, n, l) doesn't depend on depth, but
-        # _photon_yield calls it once per depth (once per slice, in a
-        # multislice run) -- cache it so the underlying xraydb line/edge
-        # lookups happen once per (element, n, l) instead of once per slice.
-        self._detected_lines_cache: dict[tuple[int | str, int, int], dict] = {}
 
         super().__init__(mu=None, to_cpu=to_cpu)
 
@@ -538,11 +537,6 @@ class XrayDetector(IonizationDetector):
             ``intensity`` is the number of photons detected per ionisation of
             the subshell, sorted by decreasing intensity.
         """
-        cache_key = (element, n, l)
-        cached = self._detected_lines_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
         lines = emission_lines(element, n, l, coster_kronig=self._coster_kronig)
 
         selected = {
@@ -574,9 +568,7 @@ class XrayDetector(IonizationDetector):
             for (name, line), efficiency in zip(selected.items(), efficiencies)
         }
 
-        result = dict(sorted(detected.items(), key=lambda kv: -kv[1].intensity))
-        self._detected_lines_cache[cache_key] = result
-        return result
+        return dict(sorted(detected.items(), key=lambda kv: -kv[1].intensity))
 
     def detected_families(
         self, element: int | str, n: int, l: int

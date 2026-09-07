@@ -451,11 +451,23 @@ class TestWithoutXraydb:
         monkeypatch.setitem(sys.modules, "xraydb", None)
 
     def test_data_layer_points_at_the_extra(self, monkeypatch):
+        # fluorescence_yield is lru_cache'd at module level and could in
+        # principle already be warm for this exact argument combination from
+        # another test; clear it so this genuinely exercises the "xraydb
+        # absent" path rather than depending on test execution order.
+        fluorescence_yield.cache_clear()
         self._hide_xraydb(monkeypatch)
         with pytest.raises(ImportError, match=r"abtem\[gpaw\]"):
             fluorescence_yield("Cu", 1, 0, coster_kronig=False)
 
     def test_efficiency_model_points_at_the_extra(self, monkeypatch):
+        # _cached_material_mu is module-level and can be warm from an
+        # earlier test for this exact (formula, energy, density, kind);
+        # clear it so this test genuinely exercises the "xraydb absent"
+        # first-call path rather than silently hitting a stale cache entry.
+        from abtem.inelastic.xray import _cached_material_mu
+
+        _cached_material_mu.cache_clear()
         self._hide_xraydb(monkeypatch)
         with pytest.raises(ImportError, match=r"abtem\[gpaw\]"):
             SDDEfficiency()(8000.0)
@@ -783,12 +795,16 @@ class TestSpecimenAbsorption:
         """mu(formula, energies, density) doesn't depend on depth, but
         transmission() is called once per depth -- once per exit plane, i.e.
         per slice, in a real multislice run with self-absorption enabled.
+        The cache (_cached_material_mu, shared with SDDEfficiency) is
+        module-level, so it can be warm from an earlier test -- clear it
+        first for a deterministic first-call/later-calls split.
         Regression for querying xraydb.material_mu freshly on every slice for
         what is always the same answer."""
         import xraydb
 
-        from abtem.inelastic.xray import SpecimenAbsorption
+        from abtem.inelastic.xray import SpecimenAbsorption, _cached_material_mu
 
+        _cached_material_mu.cache_clear()
         absorption = SpecimenAbsorption("Si")
         calls = []
         original = xraydb.material_mu
@@ -805,32 +821,90 @@ class TestSpecimenAbsorption:
         assert len(calls) == 1
 
 
+class TestXrayDataFunctionsAreCached:
+    """absorption_edge, fluorescence_yield, natural_width and the private
+    vacancy-distribution/emission-line helpers are all pure functions of
+    hashable atomic-data arguments (never depending on anything that varies
+    slice to slice, like depth) -- lru_cache'd directly at their definition,
+    the same pattern already used for shell_levels above, so every current
+    and future caller shares one cache instead of each needing its own."""
+
+    def test_absorption_edge_and_fluorescence_yield_and_natural_width_cached(self):
+        from abtem.inelastic import xray_data
+
+        for func, args in [
+            (xray_data.absorption_edge, ("Ag", 1, 0)),
+            (xray_data.fluorescence_yield, ("Ag", 1, 0)),
+            (xray_data.natural_width, ("Ag", 1, 0)),
+        ]:
+            func.cache_clear()
+            for _ in range(5):
+                func(*args)
+            info = func.cache_info()
+            assert info.hits == 4
+            assert info.misses == 1
+
+    def test_vacancy_distribution_helper_is_cached(self):
+        from abtem.inelastic.xray_data import _vacancy_distribution
+
+        _vacancy_distribution.cache_clear()
+        for _ in range(5):
+            _vacancy_distribution("Fe", 2, 1, True)
+        info = _vacancy_distribution.cache_info()
+        assert info.hits == 4
+        assert info.misses == 1
+
+
 class TestDetectedLinesCaching:
     """detected_lines(element, n, l) doesn't depend on depth, but
     _photon_yield calls it once per depth -- once per slice, in a real
-    multislice run with self-absorption enabled. Regression for re-deriving
-    the same emission-line data (an xraydb-backed lookup) from scratch on
+    multislice run with self-absorption enabled. The underlying xraydb
+    lookups are cached in abtem.inelastic.xray_data (emission_lines' private
+    _emission_lines helper, lru_cache'd on (symbol, n, l, coster_kronig)) --
+    a general fix at the source shared by every caller, current or future,
+    not something each detector/consumer class re-implements for itself.
+    Regression for re-deriving the same emission-line data from scratch on
     every slice."""
 
-    def test_emission_lines_is_queried_once_across_repeated_calls(self):
-        import abtem.inelastic.xray as xray_module
+    def test_xraydb_is_queried_once_across_repeated_calls(self):
+        import xraydb
 
         detector = XrayDetector.from_sdd(solid_angle=0.7, active_layer=("Si", 200.0))
         calls = []
-        original = xray_module.emission_lines
+        original_edges = xraydb.xray_edges
+        original_lines = xraydb.xray_lines
 
-        def counting_emission_lines(*args, **kwargs):
-            calls.append(1)
-            return original(*args, **kwargs)
+        def counting_edges(*args, **kwargs):
+            calls.append("edges")
+            return original_edges(*args, **kwargs)
+
+        def counting_lines(*args, **kwargs):
+            calls.append("lines")
+            return original_lines(*args, **kwargs)
 
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(xray_module, "emission_lines", counting_emission_lines)
-            first = detector.detected_lines("O", 1, 0)
+            mp.setattr(xraydb, "xray_edges", counting_edges)
+            mp.setattr(xraydb, "xray_lines", counting_lines)
+            first = detector.detected_lines("Ge", 1, 0)  # an element not used elsewhere in this test module, to avoid a warm cache from a prior test
             for _ in range(4):
-                detector.detected_lines("O", 1, 0)
+                detector.detected_lines("Ge", 1, 0)
 
-        assert len(calls) == 1
-        assert detector.detected_lines("O", 1, 0) == first
+        # One xray_edges call and one xray_lines call per detected level (K
+        # has one level), not one pair per detected_lines() call.
+        assert calls.count("edges") == 1
+        assert calls.count("lines") == 1
+        assert detector.detected_lines("Ge", 1, 0) == first
+
+    def test_emission_lines_result_is_a_fresh_dict_each_call(self):
+        """emission_lines() must return a dict a caller can safely mutate --
+        the lru_cache lives one level down, on a private helper, precisely so
+        the public function can still hand back a fresh copy every time."""
+        from abtem.inelastic.xray_data import emission_lines
+
+        first = emission_lines("Cu", 1, 0)
+        first["Ka1_mutated_marker"] = first["Ka1"]
+        second = emission_lines("Cu", 1, 0)
+        assert "Ka1_mutated_marker" not in second
 
     def test_different_edges_are_cached_independently(self):
         detector = XrayDetector.from_sdd(solid_angle=0.7, active_layer=("Si", 200.0))
