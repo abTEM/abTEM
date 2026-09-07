@@ -6062,12 +6062,14 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             # white background shows through, easy to mistake for missing
             # data. These pixels are real, valid, just-below-the-log-floor
             # intensity, not missing data, so colour them as the darkest end
-            # of the scale instead of leaving a blank gap. Resolve cmap to an
-            # actual (copied, so this never mutates a shared registered
-            # colormap) Colormap object here rather than in pcolormesh itself
-            # so this applies uniformly to every panel below.
-            cmap = plt.get_cmap(cmap).copy()
-            cmap.set_bad(cmap(0.0))
+            # of the scale instead of leaving a blank gap. with_extremes()
+            # returns a new Colormap rather than mutating in place (set_bad()
+            # does the latter and is being deprecated), so this can never
+            # affect the shared, globally registered colormap. Resolved here
+            # rather than in pcolormesh itself so it applies uniformly to
+            # every panel below.
+            resolved_cmap = plt.get_cmap(cmap)
+            cmap = resolved_cmap.with_extremes(bad=resolved_cmap(0.0))
 
         def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
             # Exploded axes take their grid value; other ensemble axes collapse
