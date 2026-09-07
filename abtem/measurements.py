@@ -5952,6 +5952,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         explode: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
@@ -5980,7 +5981,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             from the global min/max across all panels so the shared colorbar is
             meaningful.
         power : float
-            Display on a power scale.
+            Display on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show the spectrum on a logarithmic intensity scale. Cannot
+            be used together with ``power != 1.0``. Non-positive values are
+            masked (log scale is undefined there).
         explode : bool or sequence of int
             If True, explode all ensemble axes into a panel grid. If a sequence
             of ints, explode only those ensemble-axis indices (the remaining
@@ -6004,7 +6009,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         import warnings
 
         import matplotlib.pyplot as plt
-        from matplotlib.colors import PowerNorm
+
+        from abtem.visualize.artists import _get_norm
 
         array = self.array
         if hasattr(array, "compute"):
@@ -6088,7 +6094,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             panels = [panel_data(idx).T for idx in indices]
             _vmin = min(float(p.min()) for p in panels) if vmin is None else vmin
             _vmax = max(float(p.max()) for p in panels) if vmax is None else vmax
-            norm = PowerNorm(gamma=power, vmin=_vmin, vmax=_vmax)
+            norm = _get_norm(vmin=_vmin, vmax=_vmax, power=power, logscale=logscale)
 
             im = None
             for k, (idx, data_t) in enumerate(zip(indices, panels)):
@@ -6150,7 +6156,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         else:
             fig = ax.get_figure()
 
-        norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        norm = _get_norm(vmin=vmin, vmax=vmax, power=power, logscale=logscale)
         im = ax.pcolormesh(
             q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
         )
