@@ -354,6 +354,28 @@ def _make_dp(n_energy, gpts, seed=0):
     return dp, array
 
 
+def test_from_zarr_auto_chunks_never_splits_base_axes(tmp_path):
+    """from_zarr(url, chunks="auto") must not let dask's own auto-chunking
+    heuristic split an ArrayObject's base (measurement) axes -- several of
+    abTEM's own lazy operations (e.g. interpolate_line) assume those are
+    never chunked. chunks=None (the default) already avoids this by
+    mirroring whatever to_zarr actually wrote (which itself never splits
+    base axes); explicitly requesting "auto" used to bypass that protection
+    since dask's own heuristic doesn't know which axes are which."""
+    import dask
+
+    import abtem.array as abtem_array_module
+
+    dp, _ = _make_dp(n_energy=2, gpts=64)
+    url = str(tmp_path / "dp_auto.zarr")
+    dp.to_zarr(url)
+
+    with dask.config.set({"array.chunk-size": "1KiB"}):
+        loaded = abtem_array_module.from_zarr(url, chunks="auto")
+
+    assert loaded.array.chunks[-2:] == ((64,), (64,))
+
+
 @pytest.mark.parametrize("suffix", ["", ".zip"])
 def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
     """Regression: the spatial (base) axes of a DiffractionPatterns are much

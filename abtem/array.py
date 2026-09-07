@@ -2308,7 +2308,16 @@ def _from_zarr_canonical(root, chunks, decode_types):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = "auto"
+            # Respect cls._base_dims the same way the legacy loader below
+            # already does: dask's own "auto" heuristic doesn't know which
+            # trailing axes are an ArrayObject's base (measurement) axes, and
+            # several of abTEM's own lazy operations (e.g. interpolate_line)
+            # assume those are never split across chunks. chunks=None (the
+            # default) already avoids this by mirroring whatever to_zarr
+            # actually wrote, which itself never splits base axes -- this
+            # branch only matters if a caller explicitly opts into "auto".
+            num_ensemble_axes = zarr_array.ndim - cls._base_dims
+            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:
