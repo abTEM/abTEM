@@ -1056,16 +1056,32 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
+            # Move every leading ensemble axis (loss order and/or frozen-phonon
+            # configuration) back to the front; tensordot left them just before
+            # the grid axes.
+            n_ensemble = len(self.waves.shape) - 3
+            if n_ensemble > 0:
+                array = xp.moveaxis(
+                    array,
+                    tuple(range(-2 - n_ensemble, -2)),
+                    tuple(range(n_ensemble)),
+                )
 
             array = batch_crop_2d(array, corners, self.window_gpts)
 
         else:
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
+            # Move every leading ensemble axis (loss order and/or frozen-phonon
+            # configuration) back to the front; tensordot left them just before
+            # the grid axes.
+            n_ensemble = len(self.waves.shape) - 3
+            if n_ensemble > 0:
+                array = xp.moveaxis(
+                    array,
+                    tuple(range(-2 - n_ensemble, -2)),
+                    tuple(range(n_ensemble)),
+                )
 
         return array
 
@@ -1127,6 +1143,25 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         else:
             array = self.waves.array
 
+        # Plasmon scattering is non-unitary; the S-matrix beams were left
+        # un-renormalized (renormalizing per beam distorts their relative
+        # weights). Renormalize each recombined probe to the incident-probe
+        # intensity instead — equivalent to the single-probe behaviour by
+        # linearity of the reduction.
+        plasmon_renormalize = self.metadata.get("plasmon_renormalize", False)
+        plasmon_order_resolved = self.metadata.get("plasmon_order_resolved", False)
+        plasmon_target_norm = None
+        if plasmon_renormalize:
+            incident = dummy_probes.build(lazy=False)
+            # ``incident.array`` is on the reduction device (CuPy on GPU); keep
+            # everything in ``xp`` rather than forcing a NumPy conversion.
+            incident_intensity = (
+                xp.abs(xp.asarray(incident.array)).astype(xp.float64) ** 2
+            )
+            plasmon_target_norm = float(
+                incident_intensity.sum(axis=(-2, -1)).max()
+            )
+
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
 
         pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
@@ -1168,6 +1203,20 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
 
+                if plasmon_renormalize:
+                    # Sum over the grid (and, when order-resolved, the leading
+                    # loss-order axis) so each probe position is renormalized to
+                    # the incident-probe intensity with a single scale shared
+                    # across loss orders.
+                    sum_axes = (0, -2, -1) if plasmon_order_resolved else (-2, -1)
+                    current = (
+                        xp.abs(waves_array).astype(xp.float64) ** 2
+                    ).sum(axis=sum_axes, keepdims=True)
+                    scale = xp.sqrt(plasmon_target_norm / current).astype(
+                        waves_array.dtype
+                    )
+                    waves_array = waves_array * scale
+
                 waves = Waves(
                     waves_array,
                     sampling=self.sampling,
@@ -1186,6 +1235,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
+
+        if plasmon_renormalize:
+            # Average the frozen-phonon (phase-scramble repetition) ensemble,
+            # which carries the plasmon statistical convergence. This eager path
+            # does not otherwise reduce it; ``reduce_ensemble`` leaves the
+            # non-ensemble-mean loss-order axis intact. (The lazy reduction
+            # performs the equivalent averaging itself.)
+            measurements = [
+                m.reduce_ensemble() if hasattr(m, "reduce_ensemble") else m
+                for m in measurements
+            ]
 
         return tuple(measurements)
 
@@ -3700,11 +3760,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
         store_on_host: bool = False,
+        plasmons=None,
     ):
         if downsample is True:
             downsample = "cutoff"
 
         self._device = validate_device(device)
+        self._plasmons = plasmons
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         if potential is None:
@@ -3951,6 +4013,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def potential(self, potential: BasePotential):
         self._potential = potential
         self._grid = potential.grid
+
+    @property
+    def plasmons(self):
+        """Plasmon energy-loss model applied during the S-matrix build, if any."""
+        return self._plasmons
 
     @property
     def semiangle_cutoff(self) -> float:
@@ -4272,8 +4339,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
         if s_matrix.potential is not None:
+            # Plasmon scattering is applied to each basis beam, but the
+            # non-unitary renormalization is deferred to after probe
+            # recombination (renormalizing per beam would distort their relative
+            # weights — see SMatrixArray._batch_reduce_to_measurements).
             waves = multislice_and_detect(
-                waves, s_matrix.potential, [WavesDetector()], pbar=pbar
+                waves,
+                s_matrix.potential,
+                [WavesDetector()],
+                plasmons=s_matrix.plasmons,
+                renormalize_plasmons=False,
+                pbar=pbar,
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
@@ -4779,6 +4855,21 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         # --- Single-energy path (unchanged) ---
+        # Order-resolved plasmons prepend a leading loss-order axis to the
+        # S-matrix (before any frozen-phonon configuration axis).
+        order_resolved = (
+            self.plasmons is not None and self.plasmons.max_loss_order is not None
+        )
+        order_axis = None
+        n_orders = 1
+        if order_resolved:
+            n_orders = self.plasmons.max_loss_order + 1
+            order_axis = OrdinalAxis(
+                label="Plasmon order",
+                values=("Zero loss",)
+                + tuple(f"{n}-plasmon" for n in range(1, n_orders)),
+            )
+
         downsampled_gpts = self.downsampled_gpts
 
         s_matrix_blocks = self.ensemble_blocks(1)
@@ -4819,6 +4910,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.potential is None or not self.potential.ensemble_shape:
                 symbols = symbols[1:]
 
+            # Order-resolved builds emit a leading loss-order axis (index 4),
+            # a new output axis not present in any input block.
+            new_axes = None
+            if order_resolved:
+                symbols = (4,) + symbols
+                new_axes = {4: n_orders}
+
             pbar = config.get("diagnostics.task_progress", False)
 
             array = da.blockwise(
@@ -4830,6 +4928,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 (0, 1, 2, 3),
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
+                new_axes=new_axes,
                 pbar=pbar,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
@@ -4839,26 +4938,23 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
-            if self.store_on_host:
-                array = np.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
-            else:
-                array = xp.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
+            # Leading axes are (loss order, frozen-phonon configuration); either
+            # may be absent. The order axis comes first so renormalization can
+            # always sum over axis 0.
+            leading_shape = (
+                (n_orders,) if order_resolved else ()
+            ) + self.ensemble_shape
+            zeros = np.zeros if self.store_on_host else xp.zeros
+            array = zeros(
+                leading_shape + (len(self),) + self.downsampled_gpts,
+                dtype=np.complex64,
+            )
 
             pbar = config.get("diagnostics.task_progress", False)
 
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
-                    items = (slice(start, stop),)
-                    if self.ensemble_shape:
-                        items = i + items
-
                     new_array = self._build_s_matrix(
                         s_matrix, slice(start, stop), pbar=pbar
                     )
@@ -4866,20 +4962,41 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     if self.store_on_host:
                         new_array = xp.asnumpy(new_array)
 
+                    # new_array is (n_orders, beam_block, gy, gx) when
+                    # order-resolved, else (beam_block, gy, gx). A frozen-phonon
+                    # block also carries a singleton configuration axis from the
+                    # multislice; drop it (the build's own loop indexes configs).
+                    items = i + (slice(start, stop),)
+                    if order_resolved:
+                        new_array = new_array.reshape(
+                            (n_orders,) + new_array.shape[-3:]
+                        )
+                        items = (slice(None),) + items
                     array[items] = new_array
 
+        leading_axes = (
+            [order_axis] if order_resolved else []
+        ) + self.ensemble_axes_metadata
         waves = Waves(
             array,
             energy=self.energy,
             extent=self.extent,
-            ensemble_axes_metadata=self.ensemble_axes_metadata
-            + self.base_axes_metadata[:1],
+            ensemble_axes_metadata=leading_axes + self.base_axes_metadata[:1],
         )
 
         if self.downsampled_gpts != self.gpts:
             waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
                 self.window_gpts, self.sampling
             )
+
+        if self.plasmons is not None:
+            # The S-matrix beams carry un-renormalized plasmon scattering; flag the
+            # reduction to renormalize each recombined probe (conserving the
+            # incident electron count) before detection.
+            waves.metadata["plasmon_renormalize"] = True
+            if order_resolved:
+                # The reduction must sum over loss orders when renormalizing.
+                waves.metadata["plasmon_order_resolved"] = True
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,

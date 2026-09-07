@@ -391,6 +391,13 @@ def _multislice_exponential_series(
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
+    # A zero wave is a fixed point of the (linear) propagation series; the
+    # relative-amplitude convergence test below would divide by zero. This
+    # arises legitimately for the empty higher-order channels of order-resolved
+    # plasmon scattering before any loss events have populated them.
+    if initial_amplitude == 0:
+        return waves
+
     if fully_corrected:
         temp = full_series(
             waves, laplace, transmission_function, order, wavelength, thickness
