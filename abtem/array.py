@@ -231,8 +231,28 @@ _MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
 
 
 def _safe_zarr_chunks(
-    shape: tuple[int, ...], itemsize: int, max_bytes: Optional[int] = None
+    shape: tuple[int, ...],
+    itemsize: int,
+    max_bytes: Optional[int] = None,
+    n_fixed_trailing_axes: int = 0,
 ) -> tuple[int, ...]:
+    """Pick a chunk shape that stays under ``max_bytes``, preferring to
+    shrink leading (ensemble) axes and never touching the trailing
+    ``n_fixed_trailing_axes`` (an ArrayObject's ``_base_dims``) unless there
+    is no other choice.
+
+    Several of abTEM's own lazy dask operations on measurements (e.g.
+    ``interpolate_line``'s ``da.map_blocks(..., drop_axis=...)``) require
+    their base/measurement axes to be a single dask chunk -- splitting them
+    doesn't raise, it silently produces wrong results (confirmed by direct
+    reproduction: a DiffractionPatterns array whose spatial axes were split
+    this way, then reloaded lazily, gave an all-zero momentum-resolved
+    spectrum while eagerly-computed data from the same file was correct).
+    Chunking only the ensemble axes keeps a round-tripped array safe for
+    every lazy operation that already assumes whole base-axis chunks,
+    matching e.g. ``PotentialArray``'s own ``("auto",) * n + (-1,) *
+    _base_dims`` convention elsewhere in this module.
+    """
     if max_bytes is None:
         # Read fresh rather than as a default-argument value, so overriding
         # the module-level budget (e.g. in tests) takes effect.
@@ -246,6 +266,18 @@ def _safe_zarr_chunks(
             n *= c
         return n
 
+    n_fixed = min(n_fixed_trailing_axes, len(chunks))
+    splittable = list(range(len(chunks) - n_fixed))
+
+    while nbytes() > max_bytes and any(chunks[i] > 1 for i in splittable):
+        i = max(splittable, key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    # Only reached if the base axes are themselves so large that shrinking
+    # every ensemble axis to 1 still isn't enough (e.g. a single very large
+    # image with little to no ensemble axis to shrink) -- fall back to
+    # splitting them too rather than failing outright; this is the one case
+    # where the lazy-op hazard described above is genuinely unavoidable.
     while nbytes() > max_bytes and any(c > 1 for c in chunks):
         i = max(range(len(chunks)), key=lambda j: chunks[j])
         chunks[i] = max(1, chunks[i] // 2)
@@ -348,6 +380,7 @@ class ComputableList(list):
 
         arrays_to_write = []
         metadata_list = []
+        base_dims_by_index = {}
 
         for i, has_array in enumerate(self):
             has_array = has_array.ensure_lazy()
@@ -365,6 +398,7 @@ class ComputableList(list):
 
             arrays_to_write.append((i, array))
             metadata_list.append({f"metadata{i}": metadata_dict})
+            base_dims_by_index[i] = has_array._base_dims
 
         if is_zip:
             # Use ZipStore for .zip files
@@ -402,6 +436,7 @@ class ComputableList(list):
                                 chunks=_safe_zarr_chunks(
                                     computed_array.shape,
                                     computed_array.dtype.itemsize,
+                                    n_fixed_trailing_axes=base_dims_by_index[i],
                                 ),
                                 overwrite=True,
                                 compressors=compressors,
@@ -454,6 +489,7 @@ class ComputableList(list):
                             chunks=_safe_zarr_chunks(
                                 computed_array.shape,
                                 computed_array.dtype.itemsize,
+                                n_fixed_trailing_axes=base_dims_by_index[i],
                             ),
                             overwrite=True,
                         )

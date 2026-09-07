@@ -298,6 +298,41 @@ def test_safe_zarr_chunks_no_op_when_already_small():
     assert _safe_zarr_chunks(shape, itemsize=8) == shape
 
 
+def test_safe_zarr_chunks_never_splits_trailing_axes_when_avoidable():
+    """Splitting an ArrayObject's base (measurement) axes -- e.g. a
+    DiffractionPatterns' 2D image plane -- doesn't just change chunk
+    granularity: several of abTEM's own lazy dask operations assume those
+    axes are never chunked and silently compute wrong results if they are
+    (see test_measure.py's interpolate_line regression). n_fixed_trailing_axes
+    must be respected whenever shrinking the leading (ensemble) axis alone is
+    enough to fit the budget."""
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1024, 256, 256)
+    chunks = _safe_zarr_chunks(
+        shape, itemsize=8, max_bytes=1_000_000, n_fixed_trailing_axes=2
+    )
+    assert chunks[-2:] == shape[-2:]
+    assert chunks[0] < shape[0]
+
+
+def test_safe_zarr_chunks_falls_back_to_trailing_axes_if_unavoidable():
+    """If even a single element along every leading axis still exceeds the
+    budget, there is no choice but to also split the trailing axes -- this
+    must not raise or loop forever."""
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1, 2048, 2048)
+    chunks = _safe_zarr_chunks(
+        shape, itemsize=8, max_bytes=1_000_000, n_fixed_trailing_axes=2
+    )
+    nbytes = 8
+    for c in chunks:
+        nbytes *= c
+    assert nbytes <= 1_000_000
+    assert chunks[-2:] != shape[-2:]
+
+
 def _make_dp(n_energy, gpts, seed=0):
     import dask.array as da
     import numpy as np
@@ -317,6 +352,37 @@ def _make_dp(n_energy, gpts, seed=0):
         ],
     )
     return dp, array
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
+    """Regression: the spatial (base) axes of a DiffractionPatterns are much
+    larger than its ensemble (energy) axis here, so a naive "always shrink
+    the largest axis" policy would chunk the spatial plane first -- which
+    several lazy dask operations (e.g. interpolate_line) silently compute
+    wrong results against. to_zarr must chunk only the ensemble axis."""
+    import zarr
+
+    import abtem.array as abtem_array_module
+
+    monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 1_000_000)
+
+    dp, _ = _make_dp(n_energy=8, gpts=256)
+    url = str(tmp_path / f"dp_base{suffix}")
+    dp.to_zarr(url)
+
+    if suffix == ".zip":
+        store = zarr.storage.ZipStore(url, mode="r")
+        root = zarr.open(store=store, mode="r")
+    else:
+        root = zarr.open(url, mode="r")
+
+    zarr_array = root["array0"]
+    assert zarr_array.chunks[-2:] == zarr_array.shape[-2:]
+    assert zarr_array.chunks[0] < zarr_array.shape[0]
+
+    if suffix == ".zip":
+        store.close()
 
 
 @pytest.mark.parametrize("suffix", ["", ".zip"])
