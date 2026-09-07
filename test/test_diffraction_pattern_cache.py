@@ -59,6 +59,19 @@ except ImportError:
 from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
 
 
+def to_numpy(array):
+    """Convert array to numpy, handling both CPU and GPU arrays.
+
+    CuPy refuses implicit conversion (``np.asarray`` on a CuPy array raises
+    ``TypeError: Implicit conversion to a NumPy array is not allowed``), so
+    go through ``.get()`` first. Same helper as in test_simulate.py /
+    test_realspace_multislice.py.
+    """
+    if hasattr(array, "get"):  # CuPy array
+        return np.asarray(array.get())
+    return np.asarray(array)
+
+
 class _FakeWaves:
     """Minimal stand-in for a Waves object in the low-level primitive tests
     below -- just something ``share_diffraction_pattern_fft`` can attach a
@@ -292,11 +305,8 @@ def test_transition_potential_multiple_radial_detectors_match_uncached(
             double_channel=double_channel,
         )[0]
 
-        combined_array = np.asarray(combined_result.array)
-        solo_array = np.asarray(solo.array)
-        if device == "gpu":
-            combined_array = cp.asnumpy(combined_array)
-            solo_array = cp.asnumpy(solo_array)
+        combined_array = to_numpy(combined_result.array)
+        solo_array = to_numpy(solo.array)
 
         np.testing.assert_allclose(
             combined_array,
@@ -349,14 +359,29 @@ def test_standalone_detect_calls_never_share(si_atoms, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_in_place_multislice_reuses_array_identity(si_atoms, device):
-    """Sanity check for the hazard this design guards against:
-    ``FresnelPropagator.propagate(..., in_place=True)`` (used by
-    ``conventional_multislice_step``) legitimately reuses the very same
-    ``waves.array`` Python object across multislice depths while
-    overwriting its contents. If this ever stops being true, the other
-    tests in this module would no longer be exercising the hazard they
-    claim to."""
+def test_multislice_step_array_identity_and_contents(si_atoms, device):
+    """Sanity check for the hazard this design guards against, and for the
+    premise the other tests in this module rely on.
+
+    Two separate things are checked:
+
+    * The wave data really does change at every multislice depth (both
+      devices). Without this, the "did a stale value leak across depths?"
+      tests below would pass trivially.
+    * On CPU, ``FresnelPropagator.propagate(..., in_place=True)`` (used by
+      every ``conventional_multislice_step``) reuses the very same
+      ``waves.array`` Python object across depths while overwriting its
+      contents -- so array identity does NOT imply identical data, which is
+      exactly why the sharing design attaches its precomputed FFT to a
+      ``Waves`` object for the lifetime of a ``with`` block rather than
+      keying a cache on array identity.
+
+    That identity reuse is a CPU/FFTW-path property: on GPU, CuPy's FFT
+    returns a freshly allocated array per step, so each depth gets a new
+    object. The design deliberately does not depend on which of the two
+    happens, so the identity assertion is made only where it is meaningful
+    rather than pinning backend-specific allocation behaviour on GPU.
+    """
     potential = _make_potential(si_atoms, device)
     probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
     probe.grid.match(potential)
@@ -367,20 +392,38 @@ def test_in_place_multislice_reuses_array_identity(si_atoms, device):
 
     w = waves.copy()
     array_ids = set()
+    fingerprints = []
     for potential_slice in potential.generate_slices():
         w = conventional_multislice_step(w, potential_slice, propagator, aperture)
         array_ids.add(id(w.array))
+        fingerprints.append(float(to_numpy(w.array).real.sum()))
 
-    assert len(array_ids) == 1
+    assert len(fingerprints) == potential.num_slices
+    for depth in range(1, len(fingerprints)):
+        # Scale-invariant: the absolute magnitude of the summed wave depends
+        # on grid/normalization, so compare relatively rather than rounding.
+        assert not np.isclose(
+            fingerprints[depth], fingerprints[depth - 1], rtol=1e-6, atol=0.0
+        ), (
+            "wave data must change at every depth for the staleness tests "
+            "below to be meaningful"
+        )
+
+    if device == "cpu":
+        assert len(array_ids) == 1, (
+            "the CPU in-place propagate path is expected to reuse one array "
+            "object across depths -- if this changed, revisit the rationale "
+            "documented in abtem.core.fft.share_diffraction_pattern_fft"
+        )
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device):
     """A bare loop calling ``detector.detect(w)`` once per multislice depth,
     with no ``_share_diffraction_pattern_fft`` block, must give the same
-    per-depth results as an uncached reference -- even though ``w.array``
-    keeps the same identity across depths (see
-    ``test_in_place_multislice_reuses_array_identity``). This is the
+    per-depth results as an uncached reference -- on CPU even though
+    ``w.array`` keeps the same identity across depths (see
+    ``test_multislice_step_array_identity_and_contents``). This is the
     scenario that would silently break with a cache keyed on array identity
     alone.
     """
@@ -398,10 +441,7 @@ def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device
         results = []
         for potential_slice in potential.generate_slices():
             w = conventional_multislice_step(w, potential_slice, propagator, aperture)
-            result = detector.detect(w).array
-            if device == "gpu":
-                result = cp.asnumpy(result)
-            results.append(np.array(result, copy=True))
+            results.append(to_numpy(detector.detect(w).array).copy())
         return results
 
     reference = run_pass()
@@ -460,10 +500,7 @@ def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
                 else:
                     r1 = d1.detect(w).array
                     r2 = d2.detect(w).array
-                if device == "gpu":
-                    r1 = cp.asnumpy(r1)
-                    r2 = cp.asnumpy(r2)
-                results.append((np.array(r1, copy=True), np.array(r2, copy=True)))
+                results.append((to_numpy(r1).copy(), to_numpy(r2).copy()))
         finally:
             Waves._diffraction_pattern_fft = staticmethod(original)
         return results, len(calls)
