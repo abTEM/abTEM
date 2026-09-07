@@ -438,11 +438,12 @@ def test_pseudo_voigtian_filter_lazy():
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_images_interpolate_line(data, lazy, device):
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
-    image = wave.build((0, 0), lazy=False).intensity()
+    image = wave.build((0, 0), lazy=lazy).intensity()
 
     line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.0)
     assert np.allclose(
-        image.to_cpu().array[0], line.to_cpu().array, rtol=1e-6, atol=1e-6
+        image.to_cpu().compute().array[0], line.to_cpu().compute().array,
+        rtol=1e-6, atol=1e-6,
     )
 
     coordinate = st.floats(min_value=0, max_value=wave.extent[0])
@@ -451,15 +452,66 @@ def test_images_interpolate_line(data, lazy, device):
     angle2 = data.draw(st.floats(min_value=0, max_value=360.0))
     width = data.draw(st.floats(min_value=0, max_value=2.0))
 
-    image = wave.build(center, lazy=False).intensity()
+    image = wave.build(center, lazy=lazy).intensity()
     line1 = image.interpolate_line_at_position(
         center=center, angle=angle1, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu()
+    ).to_cpu().compute()
     line2 = image.interpolate_line_at_position(
         center=center, angle=angle2, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu()
+    ).to_cpu().compute()
 
     assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
+
+
+def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
+    """Regression: interpolate_line's lazy path computed drop_axis/new_axis
+    as if the base (spatial) axes were the *first* axes of the array
+    (range(len(base_shape))), rather than the actual trailing axes after any
+    ensemble axis. This never raised -- it silently produced wrong output
+    (extra, duplicated blocks) once an ensemble axis had more than one dask
+    chunk, and silently wrong values once *both* base axes had more than one
+    chunk each (reproduced via a DiffractionPatterns array whose spatial
+    axes were split by a large zarr save/reload -- an all-zero
+    momentum-resolved spectrum from the lazy load vs. a correct one from the
+    eagerly-computed data)."""
+    import dask.array as da
+
+    from abtem.core.axes import EnergyLossAxis, ReciprocalSpaceAxis
+    from abtem.measurements import DiffractionPatterns
+
+    n_energy, gpts = 6, 64
+    rng = np.random.default_rng(0)
+    array = rng.random((n_energy, gpts, gpts))
+    energies = tuple(float(e) for e in np.linspace(0.01, 0.1, n_energy))
+
+    def make_dp(chunks):
+        lazy = da.from_array(array, chunks=chunks)
+        return DiffractionPatterns.from_array_and_metadata(
+            lazy,
+            axes_metadata=[
+                EnergyLossAxis(values=energies),
+                ReciprocalSpaceAxis(sampling=0.02, label="x", units="1/A"),
+                ReciprocalSpaceAxis(sampling=0.02, label="y", units="1/A"),
+            ],
+            metadata={"energy": 100e3},
+        )
+
+    truth = make_dp((n_energy, gpts, gpts)).interpolate_line(
+        start=(0.0, 0.0), end=(0.0, gpts * 0.02), gpts=20, width=0.3, order=1,
+        endpoint=True,
+    ).compute().array
+
+    for name, chunks in [
+        ("multi_chunk_ensemble_axis", (1, gpts, gpts)),
+        ("both_base_axes_chunked", (n_energy, gpts // 2, gpts // 2)),
+    ]:
+        dp = make_dp(chunks)
+        line = dp.interpolate_line(
+            start=(0.0, 0.0), end=(0.0, gpts * 0.02), gpts=20, width=0.3, order=1,
+            endpoint=True,
+        ).compute()
+        assert line.array.shape == truth.shape, name
+        np.testing.assert_allclose(line.array, truth, err_msg=name)
 
 
 @given(
