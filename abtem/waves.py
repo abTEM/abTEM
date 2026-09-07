@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import warnings
 from abc import abstractmethod
@@ -34,7 +35,14 @@ from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import fft2, fft_crop, fft_interpolate, ifft2
+from abtem.core.fft import (
+    fft2,
+    fft_crop,
+    fft_interpolate,
+    get_shared_diffraction_pattern_fft,
+    ifft2,
+    share_diffraction_pattern_fft,
+)
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
@@ -1234,14 +1242,29 @@ class Waves(BaseWaves, ArrayObject):
         return self.__class__(**kwargs)
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
-        xp = get_array_module(array)
-
+    def _diffraction_pattern_fft(array, normalize):
+        """Compute the (un-cropped) FFT that all diffraction-pattern flavours
+        (full/cutoff/valid crop, real or complex, block-direct or not) are
+        derived from. Factored out of ``_diffraction_pattern`` so it can be
+        shared (and cached) across several downstream cropping calls that
+        differ only in ``new_gpts``/``return_complex``/``fftshift``.
+        """
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
 
-        array = fft2(array, overwrite_x=False)
+        return fft2(array, overwrite_x=False)
 
+    @staticmethod
+    def _diffraction_pattern_from_fft(fft_array, new_gpts, return_complex, fftshift):
+        """Crop/intensity/shift an already-computed FFT (see
+        ``_diffraction_pattern_fft``) into the requested diffraction pattern.
+        This part is comparatively cheap, so sharing the FFT above across
+        multiple detectors is what makes a second (or third) radial
+        detector nearly free.
+        """
+        xp = get_array_module(fft_array)
+
+        array = fft_array
         if array.shape[-2:] != new_gpts:
             array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
 
@@ -1252,6 +1275,51 @@ class Waves(BaseWaves, ArrayObject):
             return xp.fft.fftshift(array, axes=(-1, -2))
 
         return array
+
+    @staticmethod
+    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
+        fft_array = Waves._diffraction_pattern_fft(array, normalize)
+        return Waves._diffraction_pattern_from_fft(
+            fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
+        )
+
+    @staticmethod
+    def _diffraction_pattern_should_normalize(metadata, renormalize=True):
+        """Whether ``diffraction_patterns`` should renormalize the intensity
+        for the given ``metadata`` (see its ``renormalize`` parameter).
+        Factored out so callers sharing a diffraction-pattern FFT across
+        several detectors (see ``abtem.core.fft.share_diffraction_pattern_fft``)
+        can compute the same boolean the shared FFT must be keyed on.
+        """
+        if renormalize and "normalization" in metadata:
+            if metadata["normalization"] == "values":
+                return True
+            elif metadata["normalization"] != "reciprocal_space":
+                raise RuntimeError(
+                    f"normalization {metadata['normalization']} not recognized"
+                )
+        return False
+
+    @contextlib.contextmanager
+    def _share_diffraction_pattern_fft(self, renormalize: bool = True):
+        """Precompute this waves object's diffraction-pattern FFT once and
+        share it with every ``detector.detect(self)`` call made inside this
+        block, instead of each detector computing its own (see
+        ``abtem.core.fft.share_diffraction_pattern_fft``).
+
+        Wrap exactly a loop over several detectors that are known, by
+        construction, to see this exact, not-yet-mutated waves object --
+        e.g. one pass over several detectors at a fixed multislice depth.
+        Do not mutate ``self.array`` (e.g. run a multislice step) while this
+        block is active.
+        """
+        normalize = self._diffraction_pattern_should_normalize(
+            self.metadata, renormalize
+        )
+        with share_diffraction_pattern_fft(
+            self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+        ):
+            yield
 
     def diffraction_patterns(
         self,
@@ -1319,14 +1387,7 @@ class Waves(BaseWaves, ArrayObject):
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
-        normalize = False
-        if renormalize and "normalization" in metadata:
-            if metadata["normalization"] == "values":
-                normalize = True
-            elif metadata["normalization"] != "reciprocal_space":
-                raise RuntimeError(
-                    f"normalization {metadata['normalization']} not recognized"
-                )
+        normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
             dtype = get_dtype(complex=return_complex)
@@ -1342,12 +1403,21 @@ class Waves(BaseWaves, ArrayObject):
                 meta=xp.array((), dtype=dtype),
             )
         else:
-            pattern = self._diffraction_pattern(
-                self.array,
+            # Reuse the FFT precomputed for this exact ``self`` by an
+            # enclosing ``share_diffraction_pattern_fft(self, ...)`` (see
+            # abtem.core.fft), if one is active -- e.g. another detector
+            # evaluated against the same waves in the same detection pass.
+            # Only the FFT is shared; cropping/intensity/shift below still
+            # runs per call, so this is bit-for-bit identical to calling
+            # ``_diffraction_pattern`` directly.
+            fft_array = get_shared_diffraction_pattern_fft(
+                self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+            )
+            pattern = self._diffraction_pattern_from_fft(
+                fft_array,
                 new_gpts=new_gpts,
                 return_complex=return_complex,
                 fftshift=fftshift,
-                normalize=normalize,
             )
 
         diffraction_patterns = DiffractionPatterns(

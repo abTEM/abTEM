@@ -1182,8 +1182,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
                 pbar.update_if_exists(len(sub_scan))
 
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
+                # All detectors here see the same, not-yet-mutated ``waves``
+                # -- share one diffraction-pattern FFT across them.
+                with waves._share_diffraction_pattern_fft():
+                    for detector, measurement in zip(detectors, measurements):
+                        measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
 
@@ -2386,8 +2389,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                     pbar.update_if_exists((stop - start) * scan_shape[1])
 
-                    for detector, measurement in zip(detectors, measurements):
-                        measurement.array[indices] = detector.detect(waves).array
+                    # All detectors here see the same, not-yet-mutated
+                    # ``waves`` -- share one diffraction-pattern FFT across
+                    # them.
+                    with waves._share_diffraction_pattern_fft():
+                        for detector, measurement in zip(detectors, measurements):
+                            measurement.array[indices] = detector.detect(waves).array
 
                 del interpolated, plane_wave
 
@@ -2684,8 +2691,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         pbar.update_if_exists(n_reduced)
 
-        for detector, measurement in zip(detectors, measurements):
-            measurement.array[indices] = detector.detect(waves).array
+        # All detectors here see the same, not-yet-mutated ``waves`` --
+        # share one diffraction-pattern FFT across them.
+        with waves._share_diffraction_pattern_fft():
+            for detector, measurement in zip(detectors, measurements):
+                measurement.array[indices] = detector.detect(waves).array
 
     def _batch_reduce_to_measurements(
         self,
