@@ -1075,8 +1075,21 @@ class _BaseMeasurement2D(BaseMeasurements):
             # raise NotImplementedError("Lazy interpolation not implemented.")
             # TDOO: Implement lazy interpolation
 
-            base_axes = tuple(range(len(self.base_shape)))
-            chunks = self.array.chunks[:-2] + (positions.shape[0],)
+            # The base (spatial) axes are the *last* len(self.base_shape) axes
+            # of self.array -- any ensemble axes come first. da.map_blocks's
+            # drop_axis must name their actual positions; previously this used
+            # range(len(self.base_shape)) == (0, 1), i.e. the *first* two axes,
+            # which is only correct for a bare 2D array with no ensemble axes.
+            # With any ensemble axis present this silently mismatches dask's
+            # block bookkeeping: it doesn't raise, but produces wrong output
+            # (extra, duplicated blocks) the moment an ensemble axis has more
+            # than one chunk, or wrong values once BOTH base axes have more
+            # than one chunk each (confirmed by direct reproduction -- e.g. a
+            # DiffractionPatterns array whose spatial axes were chunked by a
+            # sufficiently large zarr save/reload).
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
+            chunks = self.array.chunks[:-n_base] + (positions.shape[0],)
             new_axis = (base_axes[0],)
 
             if width:
