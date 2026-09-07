@@ -254,6 +254,17 @@ class SpecimenAbsorption:
         if self.density is not None and self.density <= 0.0:
             raise ValueError(f"'density' must be positive, got {self.density}")
 
+        # mu(formula, energies, density) doesn't depend on depth, but
+        # transmission() is called once per depth (once per exit plane, i.e.
+        # per slice, in a multislice run with self-absorption enabled) -- so
+        # without caching, xraydb.material_mu gets re-queried from scratch at
+        # every single slice for what is always the same answer. Cache it,
+        # keyed by the (rounded, to collapse float noise) energies actually
+        # asked for; instance is frozen, so the cache is a plain mutable dict
+        # installed via object.__setattr__, the same pattern already used
+        # above for the validated layer fields.
+        object.__setattr__(self, "_mu_cache", {})
+
     def transmission(self, energies, depth: float) -> np.ndarray:
         """
         Fraction of photons escaping from a given depth.
@@ -275,15 +286,19 @@ class SpecimenAbsorption:
         if depth <= 0.0:
             return np.ones_like(energies)
 
-        try:
-            import xraydb  # type: ignore[import-untyped]
-        except ImportError as e:
-            raise ImportError(_INSTALL_HINT) from e
+        key = tuple(np.round(energies, 3).tolist())
+        mu = self._mu_cache.get(key)
+        if mu is None:
+            try:
+                import xraydb  # type: ignore[import-untyped]
+            except ImportError as e:
+                raise ImportError(_INSTALL_HINT) from e
 
-        mu = np.asarray(
-            xraydb.material_mu(self.formula, energies, density=self.density),
-            dtype=get_dtype(),
-        )
+            mu = np.asarray(
+                xraydb.material_mu(self.formula, energies, density=self.density),
+                dtype=get_dtype(),
+            )
+            self._mu_cache[key] = mu
 
         # mu is per cm; the path is the depth divided by the sine of the
         # take-off angle, converted from Angstrom.
@@ -385,6 +400,11 @@ class XrayDetector(IonizationDetector):
         self._lines = lines
         self._coster_kronig = coster_kronig
         self._absorption = absorption
+        # detected_lines(element, n, l) doesn't depend on depth, but
+        # _photon_yield calls it once per depth (once per slice, in a
+        # multislice run) -- cache it so the underlying xraydb line/edge
+        # lookups happen once per (element, n, l) instead of once per slice.
+        self._detected_lines_cache: dict[tuple[int | str, int, int], dict] = {}
 
         super().__init__(mu=None, to_cpu=to_cpu)
 
@@ -518,6 +538,11 @@ class XrayDetector(IonizationDetector):
             ``intensity`` is the number of photons detected per ionisation of
             the subshell, sorted by decreasing intensity.
         """
+        cache_key = (element, n, l)
+        cached = self._detected_lines_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         lines = emission_lines(element, n, l, coster_kronig=self._coster_kronig)
 
         selected = {
@@ -549,7 +574,9 @@ class XrayDetector(IonizationDetector):
             for (name, line), efficiency in zip(selected.items(), efficiencies)
         }
 
-        return dict(sorted(detected.items(), key=lambda kv: -kv[1].intensity))
+        result = dict(sorted(detected.items(), key=lambda kv: -kv[1].intensity))
+        self._detected_lines_cache[cache_key] = result
+        return result
 
     def detected_families(
         self, element: int | str, n: int, l: int

@@ -779,5 +779,64 @@ class TestSpecimenAbsorption:
         with pytest.raises(RuntimeError, match="depth at which the photon"):
             detector._photon_yield({"Z": 14, "n": 1, "l": 0})
 
+    def test_material_mu_is_cached_across_depths(self):
+        """mu(formula, energies, density) doesn't depend on depth, but
+        transmission() is called once per depth -- once per exit plane, i.e.
+        per slice, in a real multislice run with self-absorption enabled.
+        Regression for querying xraydb.material_mu freshly on every slice for
+        what is always the same answer."""
+        import xraydb
+
+        from abtem.inelastic.xray import SpecimenAbsorption
+
+        absorption = SpecimenAbsorption("Si")
+        calls = []
+        original = xraydb.material_mu
+
+        def counting_mu(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(xraydb, "material_mu", counting_mu)
+            for depth in [10.0, 50.0, 100.0, 200.0, 300.0]:
+                absorption.transmission(1740.0, depth)
+
+        assert len(calls) == 1
+
+
+class TestDetectedLinesCaching:
+    """detected_lines(element, n, l) doesn't depend on depth, but
+    _photon_yield calls it once per depth -- once per slice, in a real
+    multislice run with self-absorption enabled. Regression for re-deriving
+    the same emission-line data (an xraydb-backed lookup) from scratch on
+    every slice."""
+
+    def test_emission_lines_is_queried_once_across_repeated_calls(self):
+        import abtem.inelastic.xray as xray_module
+
+        detector = XrayDetector.from_sdd(solid_angle=0.7, active_layer=("Si", 200.0))
+        calls = []
+        original = xray_module.emission_lines
+
+        def counting_emission_lines(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(xray_module, "emission_lines", counting_emission_lines)
+            first = detector.detected_lines("O", 1, 0)
+            for _ in range(4):
+                detector.detected_lines("O", 1, 0)
+
+        assert len(calls) == 1
+        assert detector.detected_lines("O", 1, 0) == first
+
+    def test_different_edges_are_cached_independently(self):
+        detector = XrayDetector.from_sdd(solid_angle=0.7, active_layer=("Si", 200.0))
+        cu = detector.detected_lines("Cu", 1, 0)
+        o = detector.detected_lines("O", 1, 0)
+        assert set(cu) != set(o) or cu != o
+
     def test_absorption_is_off_by_default(self):
         assert XrayDetector(0.7).absorption is None
