@@ -222,6 +222,37 @@ def multi_output_blockwise(
     return outputs
 
 
+# Codecs (Blosc/zlib) reject a single buffer over 2**31 - 1 bytes. Writing a
+# whole array as one zarr chunk -- as this module used to always do -- hits
+# that limit for any reasonably large array, especially at float64. Stay well
+# under it (also a more sensible chunk size for parallel IO in general) by
+# halving the largest axis of the chunk shape until it fits the budget.
+_MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
+
+
+def _safe_zarr_chunks(
+    shape: tuple[int, ...], itemsize: int, max_bytes: Optional[int] = None
+) -> tuple[int, ...]:
+    if max_bytes is None:
+        # Read fresh rather than as a default-argument value, so overriding
+        # the module-level budget (e.g. in tests) takes effect.
+        max_bytes = _MAX_ZARR_CHUNK_BYTES
+
+    chunks = list(shape)
+
+    def nbytes() -> int:
+        n = itemsize
+        for c in chunks:
+            n *= c
+        return n
+
+    while nbytes() > max_bytes and any(c > 1 for c in chunks):
+        i = max(range(len(chunks)), key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    return tuple(chunks)
+
+
 class ComputableList(list):
     """A list with methods for conveniently computing its items."""
 
@@ -368,11 +399,26 @@ class ComputableList(list):
                             root.create_array(
                                 name=f"array{i}",
                                 data=computed_array,
-                                chunks=computed_array.shape,
+                                chunks=_safe_zarr_chunks(
+                                    computed_array.shape,
+                                    computed_array.dtype.itemsize,
+                                ),
                                 overwrite=True,
                                 compressors=compressors,
                             )
-                    finally:
+                    except BaseException:
+                        # A failed write (e.g. a chunk still over a codec's
+                        # buffer limit) can leave a .zip with valid-looking
+                        # metadata (shape/dtype/chunks) but no actual chunk
+                        # data -- silently readable later as all zeros
+                        # (zarr's fill_value for a declared-but-missing
+                        # chunk) instead of raising again. Don't leave that
+                        # behind.
+                        store.close()
+                        if os.path.exists(url):
+                            os.remove(url)
+                        raise
+                    else:
                         store.close()
 
                 return url
@@ -389,6 +435,13 @@ class ComputableList(list):
 
                 root = zarr.open(url, mode="w")
 
+                def _close():
+                    store = getattr(root, "store", None)
+                    if store is not None:
+                        close_fn = getattr(store, "close", None)
+                        if callable(close_fn):
+                            close_fn()
+
                 try:
                     for metadata_dict in metadata_list:
                         for key, value in metadata_dict.items():
@@ -398,15 +451,22 @@ class ComputableList(list):
                         root.create_array(
                             name=f"array{i}",
                             data=computed_array,
-                            chunks=computed_array.shape,
+                            chunks=_safe_zarr_chunks(
+                                computed_array.shape,
+                                computed_array.dtype.itemsize,
+                            ),
                             overwrite=True,
                         )
-                finally:
-                    store = getattr(root, "store", None)
-                    if store is not None:
-                        close_fn = getattr(store, "close", None)
-                        if callable(close_fn):
-                            close_fn()
+                except BaseException:
+                    # See the matching comment in write_to_zipstore: don't
+                    # leave a partially-written store with valid-looking
+                    # metadata but missing/incomplete chunk data.
+                    _close()
+                    if os.path.exists(url):
+                        shutil.rmtree(url)
+                    raise
+                else:
+                    _close()
 
                 return url
 
