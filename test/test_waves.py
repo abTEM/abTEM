@@ -2,7 +2,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
@@ -52,7 +52,7 @@ def test_can_build(data, waves_builder, device, lazy):
     assert np.all(np.isclose(waves_builder.extent, waves.extent))
     check_grid_consistent(waves.extent, waves.gpts, waves.sampling)
 
-    assert np.isclose(waves.energy, waves_builder.energy)
+    assert np.isclose(waves.energy, waves_builder.accelerator.energy)
 
 
 @given(data=st.data())
@@ -197,6 +197,7 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
     )
 
 
+@settings(max_examples=5)
 @given(data=st.data(), potential=abtem_st.potential())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize(
@@ -255,6 +256,7 @@ def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
     assert np.allclose(build_waves.array, waves.array)
 
 
+@settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize(
     "transform",

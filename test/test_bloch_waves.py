@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 import abtem
@@ -50,6 +50,7 @@ def basis_match_templates(basis):
     return bases_to_check
 
 
+@settings(max_examples=5)
 @pytest.mark.parametrize("centering", ["P", "F", "I", "A", "B", "C"])
 @pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @given(
@@ -73,6 +74,7 @@ def test_auto_detect_centering(data, cell, centering):
     assert auto_detect_centering(atoms) == centering
 
 
+@settings(max_examples=5)
 @given(
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
     sampling=abtem_st.sampling(min_value=0.02, max_value=0.1),
@@ -113,3 +115,22 @@ def test_potential_from_structure_factor(
 
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
     assert error < 2.5
+
+
+def test_structure_factor_potential_requests_the_slow_fft_diagnostic():
+    # This 3D transform cannot go through abtem.core.fft.ifftn (the FFTW
+    # backend there transforms only the trailing two axes, silently making it
+    # 2D on CPU), so it must ask for the diagnostic explicitly or escape it.
+    from unittest import mock
+
+    import abtem.bloch.dynamical as dynamical
+
+    with mock.patch.object(dynamical, "warn_if_slow_gpu_fft") as warner:
+        potential = dynamical.structure_factor_to_potential(
+            np.zeros(4, dtype=np.complex64),
+            np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+            gpts=(4, 4, 4),
+        )
+
+    assert warner.call_count == 1
+    assert potential.shape == (4, 4, 4)

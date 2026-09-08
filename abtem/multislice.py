@@ -185,7 +185,7 @@ class FresnelPropagator:
 
         Returns
         -------
-        array : np.ndarray
+        array : numpy.ndarray
             The Fresnel propagator as an array.
         """
         key: tuple[Any, ...] = (
@@ -492,13 +492,16 @@ def _update_measurements(
 ) -> None:
     assert len(detectors) == len(measurements)
 
-    for i, detector in enumerate(detectors):
-        new_measurement = detector.detect(waves)
+    # All detectors here see the same, not-yet-mutated ``waves`` -- share one
+    # diffraction-pattern FFT across them (see Waves._share_diffraction_pattern_fft).
+    with waves._share_diffraction_pattern_fft():
+        for i, detector in enumerate(detectors):
+            new_measurement = detector.detect(waves)
 
-        if additive:
-            measurements[i].array[measurement_index] += new_measurement.array
-        else:
-            measurements[i].array[measurement_index] = new_measurement.array
+            if additive:
+                measurements[i].array[measurement_index] += new_measurement.array
+            else:
+                measurements[i].array[measurement_index] = new_measurement.array
     return
 
 
@@ -724,11 +727,18 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
-    waves_input = waves.copy()
+    # Keep a pristine reference to the incoming batch. It is only ever read:
+    # each potential configuration below works on its own copy, so no copy is
+    # needed here -- copying would just hold a redundant duplicate of the
+    # batch in memory for the whole loop (a full extra batch of VRAM on GPU).
+    waves_input = waves
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
+        # The incoming batch may be a task input shared with other tasks
+        # (e.g. frozen-phonon configurations partitioned across tasks), so the
+        # in-place multislice steps must operate on a copy.
         waves = waves_input.copy()
         exit_plane_index = 0
 
@@ -790,10 +800,11 @@ def multislice_and_detect(
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
-        measurements = [
-            detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
-            for detector in detectors
-        ]
+        with waves._share_diffraction_pattern_fft():
+            measurements = [
+                detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                for detector in detectors
+            ]
 
     elif return_backscattered:
         _back_propagate_backscattered_waves(
@@ -918,7 +929,7 @@ def transition_potential_multislice_and_detect(
 
     Returns
     -------
-    measurements : Waves or tuple of :class:`.BaseMeasurement`
+    measurements : :class:`.Waves` or tuple of :class:`.BaseMeasurements`
         Exit waves or detected measurements or lists of measurements.
     """
 
@@ -932,10 +943,18 @@ def transition_potential_multislice_and_detect(
                 potential_index, exit_plane_index, potential
             )
 
-            for i, detector in enumerate(detectors):
-                new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum((0,))
-                measurements[i].array[measurement_index] += new_measurement.array
+            # All detectors here see the same, not-yet-mutated ``waves`` at
+            # this exit plane -- share one diffraction-pattern FFT across
+            # them (see Waves._share_diffraction_pattern_fft). The block is
+            # re-entered fresh each call, so a later call at a *different*
+            # slice_index/depth (waves whose ``.array`` some in-place
+            # multislice steps reuse across depths) never sees a value
+            # computed for an earlier one.
+            with waves._share_diffraction_pattern_fft():
+                for i, detector in enumerate(detectors):
+                    new_measurement = detector.detect(waves)
+                    new_measurement = new_measurement.sum((0,))
+                    measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
 
@@ -1021,11 +1040,13 @@ def transition_potential_multislice_and_detect(
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
-        if potential.exit_planes[0] == -1:
-            measurement_index = _validate_potential_ensemble_indices(
-                potential_index, 0, potential
-            )
-            _update_measurements(waves, detectors, measurements, measurement_index)
+
+        # The entrance exit plane at t = 0 stays zero: no material has been
+        # traversed, so no ionisation has happened. Detecting the incident
+        # *elastic* wave here, as the elastic driver correctly does, wrote the
+        # full unscattered intensity into the t = 0 bin of a core-loss
+        # measurement. Measurements are allocated zeroed, so there is nothing
+        # to do.
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
@@ -1144,13 +1165,19 @@ def transition_potential_multislice_and_detect(
                         )
                         measurement_plane_indices = (exit_planes,)
 
-                    for i, detector in enumerate(detectors):
-                        new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_plane_indices] += (
-                            new_measurement.array[
-                                (None,) * len(measurement_plane_indices)
-                            ]
-                        )
+                    # All detectors here see the same, not-yet-mutated
+                    # ``scattered_waves`` -- share one diffraction-pattern
+                    # FFT across them (see Waves._share_diffraction_pattern_fft).
+                    with scattered_waves._share_diffraction_pattern_fft():
+                        for i, detector in enumerate(detectors):
+                            new_measurement = detector.detect(scattered_waves).sum(
+                                (0,)
+                            )
+                            measurements[i].array[measurement_plane_indices] += (
+                                new_measurement.array[
+                                    (None,) * len(measurement_plane_indices)
+                                ]
+                            )
 
     tqdm_pbar.close_if_exists()
 
@@ -1388,6 +1415,34 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         )
 
     def _calculate_new_array(self, waves: Waves):
+        from abtem.core.axes import EnergyAxis
+
+        # Eager energy-ensemble path: iterate per-energy so that each call
+        # receives a single-energy Waves and _valid_energy resolves correctly.
+        energy_axis_idx = next(
+            (
+                i
+                for i, ax in enumerate(waves.ensemble_axes_metadata)
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1
+            ),
+            None,
+        )
+        if energy_axis_idx is not None:
+            import numpy as np
+
+            energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
+            per_energy = []
+            for j in range(len(energy_axis.values)):
+                idx = (slice(None),) * energy_axis_idx + (j,)
+                member = waves.__class__(**waves.get_items(idx))
+                per_energy.append(self._calculate_new_array(member))
+            if isinstance(per_energy[0], tuple):
+                return tuple(
+                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
+                    for k in range(len(per_energy[0]))
+                )
+            return np.stack(per_energy, axis=energy_axis_idx)
+
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

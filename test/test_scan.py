@@ -1,12 +1,15 @@
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase.build import bulk
 from hypothesis import given
 from hypothesis import strategies as st
+from utils import gpu
 
 from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
-from abtem.scan import CustomScan, LineScan
+from abtem.potentials.iam import Potential
+from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.waves import Probe
 
 
@@ -100,6 +103,61 @@ def test_custom_scan_detector_ensemble_shape(detector_cls, kwargs):
     measurement = detector.detect(waves)
     # The scan positions axis must appear somewhere in the measurement shape
     assert measurement.ensemble_shape == (3,)
+
+
+# --- GridScan tests ---
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_single_point_grid_scan_partition_round_trip(endpoint):
+    """A GridScan with gpts=(1, 1) has a degenerate extent, but a well-defined
+    position. Partitioning it into blocks and rebuilding the scan from those blocks
+    must not raise and must give back the same position."""
+    scan = GridScan(
+        start=(1.0, 1.0), end=(1.0 + 4.05, 1.0 + 4.05), gpts=(1, 1), endpoint=endpoint
+    )
+
+    blocks = scan._partition_args(chunks=(1, 1), lazy=False)
+    args = tuple(block[0] for block in blocks)
+    block_scan = scan._from_partitioned_args()(*args).item()
+
+    assert block_scan.shape == (1, 1)
+    assert np.allclose(block_scan.get_positions(), scan.get_positions())
+    assert np.allclose(block_scan.get_positions().ravel(), (1.0, 1.0))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_single_point_grid_scan_lazy(device, endpoint):
+    """Regression test: building the wave functions of a one-point GridScan lazily used
+    to raise "scan extent must be positive" from the partitioning path. The lazy result
+    must match the eager one and the equivalent CustomScan."""
+    potential = Potential(
+        bulk("Al", "fcc", a=4.05, cubic=True), gpts=64, slice_thickness=1.0
+    )
+    scan = GridScan(
+        start=(1.0, 1.0), end=(1.0 + 4.05, 1.0 + 4.05), gpts=(1, 1), endpoint=endpoint
+    )
+
+    def multislice(scan, lazy):
+        probe = Probe(energy=100e3, semiangle_cutoff=15.0, device=device)
+        probe.grid.match(potential)
+        waves = probe.build(scan=scan, lazy=lazy).multislice(potential).compute()
+        return waves.to_cpu()
+
+    lazy_waves = multislice(scan, lazy=True)
+    eager_waves = multislice(scan, lazy=False)
+    custom_waves = multislice(CustomScan([[1.0, 1.0]]), lazy=False)
+
+    assert lazy_waves.shape == (1, 1) + potential.gpts
+    assert np.allclose(lazy_waves.array, eager_waves.array)
+    assert np.allclose(lazy_waves.array.reshape(custom_waves.shape), custom_waves.array)
+
+
+def test_grid_scan_zero_extent_rejected():
+    """A degenerate extent is only allowed for a single-point scan."""
+    with pytest.raises(ValueError, match="scan extent must be positive"):
+        GridScan(start=(1.0, 1.0), end=(1.0, 1.0), gpts=(4, 4))
 
 
 # def test_source_offset():

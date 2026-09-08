@@ -8,11 +8,7 @@ from abtem.waves import PlaneWave
 
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 @pytest.mark.parametrize("projection", ["infinite", "finite"])
-@pytest.mark.parametrize("integral_space", ["real", "fourier"])
-def test_fig_5_12(projection, lazy, integral_space):
-    if integral_space == "real" and projection == "infinite":
-        pytest.skip("invalid parameter combination")
-
+def test_fig_5_12(projection, lazy):
     atoms = Atoms(
         "CSiCuAuU",
         positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)],

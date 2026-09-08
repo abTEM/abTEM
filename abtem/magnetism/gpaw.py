@@ -52,14 +52,14 @@ def rotate_vector_field(
 
     Parameters
     ----------
-    vector_field : np.ndarray
+    vector_field : numpy.ndarray
         3xNxMxK array representing the 3D vector field.
     euler_angles : tuple
         Euler angles (xyz) for the rotation.
 
     Returns
     -------
-    rotated_field : np.ndarray
+    rotated_field : numpy.ndarray
         Rotated 3D vector field.
     """
     rotation_matrix = R.from_euler("xyz", euler_angles).as_matrix()
@@ -591,9 +591,24 @@ def gpaw_magnetic_fields(
         `magnetic_calculator` must be given explicitly, since
         `GPAWVectorPotential`/`GPAWMagneticField` only support a single
         calculator.
-    gpts, sampling, slice_thickness, exit_planes, plane, origin, box,
-    periodic, device : see `GPAWPotential`, `GPAWVectorPotential`
-        Forwarded to all built components.
+    gpts : one or two int, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    sampling : one or two float, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    slice_thickness : float or sequence of float, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    exit_planes : int or tuple of int, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    plane : str or two tuples of three float, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    origin : three float, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    box : three float, optional
+        Forwarded to all built components. See `GPAWPotential`.
+    periodic : bool
+        Forwarded to all built components. See `GPAWPotential`.
+    device : str, optional
+        Forwarded to all built components. See `GPAWPotential`.
     frozen_phonons : BaseFrozenPhonons, optional
         Forwarded to `GPAWPotential` only.
     rotate_field : tuple of three float, "auto", or None

@@ -112,7 +112,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        scaled_parameters : np.ndarray
+        scaled_parameters : numpy.ndarray
         """
 
         pass
@@ -506,11 +506,11 @@ class LobatoParametrization(Parametrization):
         ----------
         Z : int
             Atomic number the fit is stored under.
-        k : np.ndarray
+        k : numpy.ndarray
             Sample points in reciprocal space [1/Å].
-        f : np.ndarray
+        f : numpy.ndarray
             Scattering factor values at `k`.
-        guess : np.ndarray, optional
+        guess : numpy.ndarray, optional
             Initial parameter guess. Defaults to this element's own tabulated
             parameters if already present, else the reference `lobato.json`
             values.
@@ -600,7 +600,7 @@ class PengParametrization(Parametrization):
 
     References
     ----------
-    L. Peng. Micron, 30(6):625–648, 1999.
+    Peng, L. Micron, 30(6):625–648, 1999.
     """
 
     _functions = {

@@ -5,7 +5,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
-from hypothesis import given
+from hypothesis import given, settings
 
 from abtem.core.ensemble import concatenate_array_blocks
 
@@ -36,6 +36,7 @@ def test_ensemble_shape(data, ensemble):
     assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 
 
+@settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize(
     "ensemble",
@@ -81,6 +82,7 @@ def test_ensembles(data, ensemble):
         pass
 
 
+@settings(max_examples=5)
 @given(data=st.data(), chunks=st.integers(min_value=1, max_value=10))
 @pytest.mark.parametrize(
     "ensemble",

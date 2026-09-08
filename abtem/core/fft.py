@@ -1,5 +1,8 @@
-"""Module for handling Fourier transforms and convolution in *ab*TEM."""
+"""Module for handling Fourier transforms and convolution in abTEM."""
 
+import contextlib
+import math
+import threading
 import warnings
 from itertools import product as _product
 from typing import Tuple, TypeVar, overload
@@ -35,6 +38,181 @@ except ImportError:
             "change your configuration to use CPU."
         )
     cp = None
+
+
+# Deliberately NOT scipy.fft.next_fast_len's set: scipy targets pocketfft,
+# whose kernels go up to radix 11, so next_fast_len returns 11-smooth lengths
+# (next_fast_len(121) == 121 == 11**2). cuFFT documents optimized kernels only
+# for sizes of the form 2^a * 3^b * 5^c * 7^d, so a factor-11 length falls off
+# exactly the GPU fast path this module exists to protect. {2, 3, 5, 7} is the
+# intersection guaranteed fast on every backend abTEM uses (FFTW, pocketfft,
+# MKL, cuFFT, hipFFT).
+_FAST_FFT_PRIMES = (2, 3, 5, 7)
+
+
+def is_fast_fft_size(n: int) -> bool:
+    """
+    Whether an FFT of length ``n`` runs on fast radix kernels.
+
+    FFT libraries only ship optimized kernels for lengths whose prime factors
+    are small (2, 3, 5 and 7 are supported everywhere). A length with a larger
+    prime factor triggers a generic fallback -- on cuFFT the Bluestein
+    algorithm, which pads internally to a power of two, costing several times
+    the arithmetic and, on GPU, a workspace of several times the transform
+    size.
+
+    Parameters
+    ----------
+    n : int
+        The transform length.
+
+    Returns
+    -------
+    bool
+        True if ``n`` factorizes completely into 2, 3, 5 and 7.
+    """
+    n = int(n)
+    if n < 1:
+        return False
+    for p in _FAST_FFT_PRIMES:
+        while n % p == 0:
+            n //= p
+    return n == 1
+
+
+def next_fast_fft_size(n: int) -> int:
+    """
+    The smallest length >= ``n`` whose prime factors are all in {2, 3, 5, 7}.
+
+    Useful for choosing grid sizes (``gpts``) that avoid the slow
+    large-workspace Bluestein fallback on GPU. Stricter than
+    ``scipy.fft.next_fast_len``, which returns 11-smooth lengths (fast for
+    pocketfft on CPU, but off cuFFT's documented fast path).
+
+    Parameters
+    ----------
+    n : int
+        The minimum transform length.
+
+    Returns
+    -------
+    int
+        The next fast transform length.
+    """
+    n = max(1, int(n))
+    while not is_fast_fft_size(n):
+        n += 1
+    return n
+
+
+_warned_slow_fft_shapes: set = set()
+# _fft_dispatch runs concurrently in dask worker threads, so the check-then-add
+# on the shape set must be atomic or the same shape can warn more than once.
+_warned_slow_fft_shapes_lock = threading.Lock()
+
+# Bluestein overhead only matters for large transforms; small odd-sized arrays
+# (e.g. interpolated measurements) are not worth a warning.
+_SLOW_FFT_WARN_MIN_ELEMENTS = 1024 * 1024
+
+
+def _transform_lengths(shape, func_name: str = "fft2", kwargs=None) -> tuple[int, ...]:
+    """
+    The array lengths a transform actually acts on.
+
+    Only the transformed axes matter for the Bluestein fallback: batch axes are
+    looped over, whatever their length. Which axes those are depends on the
+    function -- ``fftn`` transforms all of them unless ``axes`` says otherwise,
+    ``fft2`` the trailing two, ``fft`` a single one -- so reading the trailing
+    two axes unconditionally misreports every non-2D transform.
+    """
+    kwargs = kwargs or {}
+    axes = kwargs.get("axes")
+    # An explicit `s` overrides the array lengths (None entries keep theirs).
+    s = kwargs.get("s")
+
+    if axes is None:
+        if func_name.endswith("fftn"):
+            # numpy and cupy apply `s` to the TRAILING len(s) axes when no axes
+            # are given, so deriving the axes from the array rank alone would
+            # pair `s` with the wrong ones.
+            count = len(s) if s is not None else len(shape)
+            axes = tuple(range(len(shape) - count, len(shape)))
+        elif func_name.endswith("fft2"):
+            axes = (-2, -1)
+        else:
+            axes = (kwargs.get("axis", -1),)
+
+    # Drop axes the array does not have. cupy's fft2 quietly reduces the axes
+    # for arrays of fewer than two dimensions, and this runs ahead of every GPU
+    # transform: raising here would break a transform that would otherwise
+    # succeed, rather than merely skipping a diagnostic.
+    ndim = len(shape)
+    axes = tuple(axis for axis in axes if -ndim <= axis < ndim)
+
+    lengths = []
+    for i, axis in enumerate(axes):
+        length = shape[axis]
+        if s is not None and i < len(s) and s[i] is not None:
+            length = s[i]
+        lengths.append(int(length))
+
+    return tuple(lengths)
+
+
+def _warn_slow_fft_size(shape, func_name: str = "fft2", kwargs=None):
+    """Warn once per large transform whose transformed lengths force Bluestein."""
+    lengths = _transform_lengths(shape, func_name, kwargs)
+
+    if not lengths:
+        return
+
+    # Test cheaply first, and record only shapes that actually warn: the
+    # memo then holds at most one entry per warning ever emitted, and a run
+    # whose grid is fast never touches the lock on the FFT hot path.
+    if math.prod(lengths) < _SLOW_FFT_WARN_MIN_ELEMENTS:
+        return
+    if all(is_fast_fft_size(n) for n in lengths):
+        return
+
+    with _warned_slow_fft_shapes_lock:
+        if lengths in _warned_slow_fft_shapes:
+            return
+        _warned_slow_fft_shapes.add(lengths)
+
+    shown = " x ".join(str(n) for n in lengths)
+    suggestion = " x ".join(str(next_fast_fft_size(n)) for n in lengths)
+    # Only a 2D transform of the trailing axes is the wave-function grid the
+    # user sets with gpts; for anything else (e.g. the 3D structure-factor
+    # grid, which follows from g_max and the cell) that advice would be wrong.
+    remedy = (
+        ", e.g. by setting gpts explicitly, or -- if this grid was derived from "
+        "a numeric sampling -- with "
+        "abtem.config.set({'grid.round-to-fast-fft': True})"
+        if len(lengths) == 2 and len(shape) >= 2 and tuple(shape[-2:]) == lengths
+        else ""
+    )
+    warnings.warn(
+        f"FFT size {shown} contains prime factors larger than 7; "
+        "cuFFT falls back to the Bluestein algorithm, which is several times "
+        "slower and allocates a workspace of several times the array size. "
+        f"Consider adjusting the transformed grid to {suggestion}{remedy}.",
+        UserWarning,
+    )
+
+
+def warn_if_slow_gpu_fft(x, func_name: str = "fft2", **kwargs):
+    """
+    Emit the slow-FFT diagnostic for a transform run outside ``_fft_dispatch``.
+
+    A few transforms call ``xp.fft`` directly rather than through the wrappers
+    in this module -- ``structure_factor_to_potential`` does, because the FFTW
+    backend here only ever transforms the trailing two axes and would silently
+    turn its 3D transform into a 2D one. They still deserve the diagnostic, so
+    they can call this alongside. Only GPU arrays are considered: the Bluestein
+    workspace this warns about is a cuFFT concern.
+    """
+    if cp is not None and isinstance(x, cp.ndarray):
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
 
 
 def _raise_fft_lib_not_present(lib_name: str):
@@ -113,7 +291,7 @@ def get_fftw_object(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to create the FFT object for.
     name : str
         Name of the FFT function.
@@ -206,15 +384,33 @@ def _configure_cufft_cache():
                      Plans are reused for repeated same-shape transforms but the
                      total persistent workspace is bounded.
     * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
+    * ``auto``     — 25 % of the device's total memory, resolved per device.
+
+    The abTEM default is ``auto``. The bound must scale with the card: batch
+    auto-sizing targets ~8 % of VRAM per batch and the live plan workspace is
+    ~1x the batch bytes on fast-radix shapes (~2x on Bluestein shapes), so the
+    live working set of a production scan is ~10-17 % of VRAM on any card — a
+    fixed byte bound either evicts live plans on large cards (a flat 2 GB was
+    measured to cost ~7 % on a 40 GB A100) or is needlessly tight on small
+    ones. 25 % clears the live set with margin, while still capping the stale
+    workspace an unlimited cache accumulates across the distinct batch shapes
+    of successive computations. The limit is a ceiling, not a reservation —
+    unused headroom costs no memory.
     """
     global _CUFFT_CACHE_STATE
-    raw = config.get("cupy.fft-cache-size", "0 MB")
+    raw = config.get("cupy.fft-cache-size", "auto")
 
-    # Fast path: config hasn't changed since we last applied it.
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == raw:
+    # The plan cache and the resolved "auto" limit are per device, so the
+    # applied state is keyed on the current device as well as the raw value.
+    device = cp.cuda.Device()
+    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
         return
 
-    if isinstance(raw, str):
+    if raw is None:
+        limit = -1  # null = no bound, matching the sibling keys' convention
+    elif raw == "auto":
+        limit = device.mem_info[1] // 4
+    elif isinstance(raw, str):
         from dask.utils import parse_bytes
         limit = parse_bytes(raw)
     else:
@@ -224,10 +420,65 @@ def _configure_cufft_cache():
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
     elif limit > 0:
+        if cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
         cache.set_memsize(limit)
-    # limit < 0 → leave at CuPy default (unlimited)
+    else:
+        # Explicitly restore "unlimited": an earlier bound (e.g. from the
+        # "auto" default) must be undoable at runtime -- the oversized-plan
+        # warning recommends exactly this.
+        if cache.get_size() == 0:
+            cache.set_size(16)
+        cache.set_memsize(-1)
 
-    _CUFFT_CACHE_STATE = (raw, limit)
+    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
+
+
+_warned_plan_cache_bypass = False
+
+
+def _cupy_fft_with_cache_fallback(func, x, **kwargs):
+    """Run a CuPy FFT, bypassing the plan cache for oversized plans.
+
+    A bounded plan cache refuses to admit a single plan larger than its
+    memsize bound, and CuPy raises instead of running the transform uncached
+    (CUDA only; the ROCm path does not track plan memsize). Retry such calls
+    with the cache temporarily disabled: the plan is built, used and
+    discarded, costing replanning time per call instead of a crash.
+    """
+    global _warned_plan_cache_bypass
+    try:
+        return func(x, **kwargs)
+    except RuntimeError as exc:
+        if "plan memsize is too large" not in str(exc).lower():
+            raise
+    cache = cp.fft.config.get_plan_cache()
+    size = cache.get_size()
+    memsize = cache.get_memsize()
+    if not _warned_plan_cache_bypass:
+        _warned_plan_cache_bypass = True
+        # The exceeded bound is positive in practice (CuPy only raises the
+        # too-large error for bounded caches); guard the arithmetic anyway.
+        bound = f" of {memsize / 1e9:.1f} GB" if memsize > 0 else ""
+        suggested = f"{2 * memsize / 1e9:.0f} GB" if memsize > 0 else "32 GB"
+        warnings.warn(
+            f"A single cuFFT plan for shape {x.shape} exceeds the plan-cache "
+            f"bound{bound}; running the transform uncached, which replans on "
+            "every call for this shape. To avoid the replanning cost, either "
+            "raise the bound, e.g. abtem.config.set({'cupy.fft-cache-size': "
+            f"'{suggested}'"
+            "}) (-1 = unlimited), or reduce the wave-function batch size, "
+            "e.g. probe.scan(..., max_batch=8). Grid sizes with prime "
+            "factors larger than 7 (Bluestein fallback) make plans several "
+            "times larger -- an FFT-friendly gpts choice avoids this "
+            "entirely."
+        )
+    cache.set_size(0)
+    try:
+        return func(x, **kwargs)
+    finally:
+        cache.set_size(size)
+        cache.set_memsize(memsize)
 
 
 def _fft_dispatch(
@@ -262,7 +513,10 @@ def _fft_dispatch(
 
     if isinstance(x, cp.ndarray):
         _configure_cufft_cache()
-        return getattr(cp.fft, func_name)(x, **kwargs)
+        _warn_slow_fft_size(x.shape, func_name, kwargs)
+        return _cupy_fft_with_cache_fallback(
+            getattr(cp.fft, func_name), x, **kwargs
+        )
 
 
 @overload
@@ -299,6 +553,84 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     Using the FFT library specified in the configuration.
     """
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
+
+
+# --- Shared diffraction-pattern FFT ----------------------------------------
+#
+# Several radial detectors (AnnularDetector, FlexibleAnnularDetector,
+# SegmentedDetector, PixelatedDetector, ...) each derive their measurement
+# from ``Waves.diffraction_patterns``, which starts with a 2D FFT of the wave
+# function array. When several such detectors are evaluated against the same
+# array in one detection pass (once per detector, per site batch, per slice
+# in e.g. ``transition_potential_multislice_and_detect``), that FFT would
+# otherwise be recomputed once per detector even though the input and
+# normalization are identical every time. ``share_diffraction_pattern_fft``
+# below lets a caller precompute that FFT once and attach it directly to the
+# specific ``Waves`` object it was computed from, for the duration of a
+# ``with`` block; the (cheap) crop / intensity / fftshift that turns it into
+# a specific detector's diffraction pattern still runs once per call.
+#
+# Deliberately NOT a cache keyed by array identity: several in-place
+# multislice steps (e.g. propagating a wave with ``overwrite_x=True``)
+# legitimately reuse the exact same array object across multislice depths
+# while overwriting its contents, so identity alone cannot tell "the same
+# data" apart from "the same object, now holding different data." Attaching
+# the precomputed value as a plain attribute on one specific ``Waves``
+# instance sidesteps that: there is nothing to key or invalidate, because a
+# read only ever consults *that* object's own attribute, and the attribute
+# only exists for the lifetime of the ``with`` block that put it there.
+#
+#   * No global or thread-local state: the shared value lives on the Waves
+#     object itself, so a dask worker thread naturally only ever sees the
+#     ``waves``/``scattered_waves`` object local to its own call stack.
+#   * A caller not using ``share_diffraction_pattern_fft`` (any standalone
+#     ``detector.detect(waves)``, or any code path that hasn't opted in)
+#     never sees a ``_shared_diffraction_pattern_fft`` attribute at all, so
+#     it is unconditionally identical to the pre-sharing behavior.
+#   * The one rule callers must follow: do not mutate ``waves.array`` (e.g.
+#     run a multislice step) between entering and exiting the block. A
+#     mistake here can only affect reads of *that* object within *that*
+#     block -- there is no shared slot it could leak into for some later,
+#     unrelated array to read.
+
+
+@contextlib.contextmanager
+def share_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Attach ``compute()`` to ``waves`` as its shared diffraction-pattern FFT
+    for the duration of this block, so several detectors evaluated against
+    this exact, not-yet-mutated ``waves`` object can each reuse it via
+    ``get_shared_diffraction_pattern_fft`` instead of recomputing their own.
+    See the module comment above for the full rationale.
+
+    Do not mutate ``waves.array`` (e.g. run a multislice step) while this
+    block is active. Safe to nest on the same ``waves`` object: an outer
+    block's value (if any) is saved and restored around a nested one,
+    rather than a nested block's exit deleting an outer block's value.
+    """
+    previous = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    waves._shared_diffraction_pattern_fft = (normalize, compute())
+    try:
+        yield
+    finally:
+        if previous is None:
+            del waves._shared_diffraction_pattern_fft
+        else:
+            waves._shared_diffraction_pattern_fft = previous
+
+
+def get_shared_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Return ``compute()``, reusing the value attached to ``waves`` by an
+    enclosing ``share_diffraction_pattern_fft(waves, normalize, ...)`` if one
+    is active and its ``normalize`` matches; otherwise calls ``compute()``
+    directly. See the module comment above ``share_diffraction_pattern_fft``.
+    """
+    shared = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    if shared is not None:
+        shared_normalize, shared_fft = shared
+        if shared_normalize == normalize:
+            return shared_fft
+
+    return compute()
 
 
 @overload
@@ -364,16 +696,16 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
 
     Parameters
     ----------
-    x : np.ndarray or da.core.Array
+    x : numpy.ndarray or da.core.Array
         Array to convolve.
-    kernel : np.ndarray
+    kernel : numpy.ndarray
         Convolution kernel.
     overwrite_x : bool, optional
         Overwrite the input array.
 
     Returns
     -------
-    np.ndarray or da.core.Array
+    numpy.ndarray or da.core.Array
         Convolved array.
     """
     xp = get_array_module(x)
@@ -402,7 +734,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
 
     Parameters
     ----------
-    positions : np.ndarray
+    positions : numpy.ndarray
         Array of positions to shift the array to. The last dimension should be the
         number of dimensions to shift.
     shape : tuple
@@ -410,7 +742,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Array representing the phase ramp(s).
     """
     xp = get_array_module(positions)
@@ -447,15 +779,15 @@ def fft_shift(array: np.ndarray, positions: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to shift.
-    positions : np.ndarray
+    positions : numpy.ndarray
         Array of positions to shift the array to. The last dimension should be
         the number of dimensions to shift.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Shifted array
     """
     return ifft2(fft2(array) * fft_shift_kernel(positions, array.shape[-2:]))
@@ -507,7 +839,7 @@ def fft_interpolation_masks(
 
     Returns
     -------
-    tuple of np.ndarray
+    tuple of numpy.ndarray
         Masks for the input and output arrays.
     """
     mask1_1d = []
@@ -564,7 +896,7 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to crop.
     new_shape : tuple of int
         New shape of the array. If the new shape is smaller than the input array,
@@ -574,7 +906,7 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Cropped array.
     """
     xp = get_array_module(array)
@@ -619,7 +951,7 @@ def fft_interpolate(
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array to interpolate.
     new_shape : tuple of int
         New shape of the array.
@@ -630,7 +962,7 @@ def fft_interpolate(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         Interpolated array.
     """
     old_size = np.prod(array.shape[-len(new_shape) :])
