@@ -15,6 +15,7 @@ from utils import gpu
 import abtem
 from abtem.core.axes import SpinAxis
 from abtem.core.energy import energy2wavelength
+from abtem.finite_difference import DivergedError
 from abtem.magnetism.iam import (
     MagneticField,
     MagneticFieldArray,
@@ -423,6 +424,55 @@ def test_average_field_vortex_orbital_phase(device, method):
     assert abs(avg - 2 * expected) < 0.05 * abs(2 * expected)
     # ... and agrees with the explicitly-supplied-A route
     assert abs(avg - explicit) < 0.05 * abs(2 * expected)
+
+
+@pytest.mark.parametrize("method", ["series", "split"])
+def test_average_field_transverse_diverges_loudly(method):
+    """A transverse (non-axial) `average_field` makes the non-periodic
+    A_np = 1/2 B_avg x (r - r0) grow with propagation depth (r0's z sits
+    at the sample mid-thickness, so |A_np| there scales with roughly half
+    the total sample thickness) -- unlike the x/y case, there is no
+    periodic wrapping along z to bound it. Deep/strong enough, the
+    per-slice A.grad Taylor series leaves its radius of convergence.
+
+    Both algorithms must raise `DivergedError` rather than return a
+    silently wrong result. `RealSpaceMultislice` already did, via
+    `_multislice_exponential_series`'s existing growing-term/non-finite
+    guard; `FourierMultislice`'s own split-step A.grad series lacked the
+    equivalent check and would instead return a finite-but-unphysical
+    result for this exact configuration (verified directly: amplitude
+    ~1e65, not even a NaN, so a naive `isfinite()` check downstream would
+    not have caught it either)."""
+    gpts, extent = 128, 40.0
+    n_slices, dz = 100, 10.0
+    B0 = 5e4  # T, transverse (x) -- deliberately unphysical, to converge fast
+    l = 2
+
+    x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
+        -(X**2 + Y**2) / (2 * 6.0**2)
+    )
+    vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
+
+    potential = vacuum_potential(n_slices, gpts, extent, dz)
+    A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
+
+    waves = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device="cpu").build(
+        lazy=False
+    )
+    waves._array = vortex.astype(to_numpy(waves.array).dtype)
+    spinor = waves.to_spinor((1, 0))
+
+    with pytest.raises(DivergedError):
+        pauli_multislice(
+            spinor,
+            potential,
+            vector_potential=A_zero,
+            magnetic_field=B_zero,
+            average_field=(B0, 0, 0),
+            algorithm=ALGORITHMS[method],
+        )
 
 
 def test_collinear_matches_adjusted_potential():

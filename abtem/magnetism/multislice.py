@@ -49,7 +49,11 @@ from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
 from abtem.core.utils import get_dtype
 from abtem.detectors import BaseDetector, validate_detectors
-from abtem.finite_difference import LaplaceOperator, _multislice_exponential_series
+from abtem.finite_difference import (
+    DivergedError,
+    LaplaceOperator,
+    _multislice_exponential_series,
+)
 from abtem.magnetism.gpaw import GPAWMagneticFields
 from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
 from abtem.magnetism.pauli import ADotGradientOperator
@@ -470,8 +474,28 @@ def _pauli_multislice_step_split(
                 / i
             )
             array += term
-            if xp.abs(term).sum() / initial_amplitude <= tolerance:
+            term_amplitude = xp.abs(term).sum()
+            if term_amplitude / initial_amplitude <= tolerance:
                 break
+            # Same guard `_multislice_exponential_series` (the RealSpaceMultislice
+            # path) already applies: a growing or non-finite term means this
+            # per-slice Taylor series has left its radius of convergence, most
+            # often because `average_field` has a transverse (non-axial)
+            # component and the sample is thick enough that the non-periodic
+            # A_np = 1/2 B_avg x (r - r0) has grown large at this depth (there
+            # is no periodic wrapping available along z the way there is for
+            # x/y). Without this check the loop would silently run to
+            # max_terms accumulating inf/nan into `array` and return it as if
+            # nothing were wrong -- this raises instead.
+            if not xp.all(xp.isfinite(term)) or term_amplitude > initial_amplitude:
+                raise DivergedError(
+                    "the split-step A.grad series diverged -- if `average_field` "
+                    "has a nonzero transverse (x or y) component, this is likely "
+                    "the non-periodic vector potential A_np growing large with "
+                    "propagation depth (see the `average_field` docstring on "
+                    "`pauli_multislice`); a purely axial average_field does not "
+                    "have this failure mode"
+                )
 
     waves._array = array
     return waves
@@ -1014,6 +1038,28 @@ def pauli_multislice(
         uniform field for a slab magnetized along its normal. See
         `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
         for the quantitative details and for mitigations.
+
+        A SEPARATE growth direction, along z, applies whenever
+        `average_field` has a nonzero component transverse to the beam
+        (x or y): the same A_np = 1/2 B_avg x (r - r0) then also grows
+        linearly with propagation depth (r0's z-component sits at the
+        sample mid-thickness, so |A_np| there scales with roughly half the
+        total sample thickness). Unlike the x/y case, there is no periodic
+        wrapping available along z to bound this -- the multislice sample
+        has a genuine entrance and exit, not a repeating unit -- so this is
+        not just an accuracy caveat but a real numerical failure mode for
+        thick samples: the per-slice A.grad Taylor series this evolution
+        uses can leave its radius of convergence, raising `DivergedError`
+        for both `RealSpaceMultislice` and `FourierMultislice` (the latter
+        only since abTEM commit a631400c or later -- earlier commits could
+        let this pass silently as a finite but unphysical result, not even
+        reliably a NaN). A purely axial `average_field` (only the z
+        component nonzero) never
+        triggers this, and is also the only direction `gauge_origin="probe"`
+        supports -- there is currently no equivalent depth mitigation for a
+        transverse `average_field` beyond keeping the sample thin enough
+        for the resulting A_np to stay small compared to the natural scale
+        set by the wavelength and slice thickness.
 
         For a beam significantly wider than the unit cell (e.g. a
         large-OAM vortex probe), the interaction with this uniform field
