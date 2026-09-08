@@ -570,25 +570,6 @@ def test_show_suptitle_sets_whole_figure_title_exploded():
     assert fig._suptitle.get_text() == "Whole-figure title"
 
 
-def test_show_logscale_masked_pixels_are_not_transparent():
-    """Masked (non-positive-under-LogNorm) pixels used to render fully
-    transparent (a Colormap's default "bad" color), letting the figure's
-    white background show through -- easy to mistake for missing data
-    rather than what it actually is, harmless near-zero numerical noise.
-    They should instead render opaque, matching the colormap's own lowest
-    (floor) color."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    spec, array = _make_simple_spectrum()
-    array[0, 0] = -1e-9  # tiny negative, e.g. catastrophic-cancellation noise
-    fig, ax = spec.show(logscale=True)
-    mesh = ax.collections[0]
-    bad_rgba = mesh.cmap(np.ma.masked)
-    assert bad_rgba[3] == 1.0, "masked pixels must be opaque, not transparent"
-    assert bad_rgba == mesh.cmap(0.0), "masked color should match the colormap floor"
-
-
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------
 
 

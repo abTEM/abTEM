@@ -6036,9 +6036,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
         import matplotlib.pyplot as plt
 
-        from abtem.visualize.artists import _get_norm, validate_cmap
-
-        cmap = validate_cmap(cmap, self, logscale=logscale)
+        from abtem.visualize.artists import _get_norm
 
         array = self.array
         if hasattr(array, "compute"):
