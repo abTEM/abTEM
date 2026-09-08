@@ -418,7 +418,7 @@ def default_cbar_scalar_formatter():
     return format
 
 
-def validate_cmap(cmap, measurement, complex_conversion="none"):
+def validate_cmap(cmap, measurement, complex_conversion="none", logscale=False):
     if cmap is None:
         if measurement.is_complex and complex_conversion in ("none", "phase"):
             cmap = config.get("visualize.phase_cmap", "hsluv")
@@ -429,6 +429,19 @@ def validate_cmap(cmap, measurement, complex_conversion="none"):
         cmap = hsluv_cmap
     elif isinstance(cmap, str) and cmap[:5] == "solid":
         cmap = colors.ListedColormap([cmap.split(" ")[-1]])
+
+    if logscale:
+        # LogNorm masks values <= 0 as invalid; a Colormap's default "bad"
+        # color is fully transparent, so those pixels silently show through
+        # to the figure background (white, on the default light theme) --
+        # easy to mistake for missing data rather than what it actually is
+        # here, harmless floating-point noise scattered around zero (e.g.
+        # I_incoherent - I_coherent's catastrophic-cancellation floor, see
+        # phonon_loss_diffraction_patterns). Paint "bad" the same as the
+        # colormap's own lowest value instead, so those pixels read as
+        # (visually, correctly) "near zero" rather than as a hole in the data.
+        cmap = plt.get_cmap(cmap).copy()
+        cmap.set_bad(cmap(0.0))
 
     return cmap
 
@@ -491,7 +504,7 @@ class ImageArtist(Artist2D):
 
         extent = get_extent(measurement, units=units)
 
-        cmap = validate_cmap(cmap, measurement)
+        cmap = validate_cmap(cmap, measurement, logscale=logscale)
 
         self._axes_image = ax.imshow(
             measurement.array.T,
@@ -844,7 +857,7 @@ class ScatterArtist(Artist2D):
             units, old_units="1/Å", energy=energy
         )
 
-        cmap = validate_cmap(cmap, measurement)
+        cmap = validate_cmap(cmap, measurement, logscale=logscale)
 
         self._circles = ScaledCircleCollection(
             array=measurement.array,
@@ -998,7 +1011,7 @@ class DomainColoringArtist(Artist2D):
 
         extent = get_extent(measurement, units=units)
 
-        cmap = validate_cmap(cmap, measurement)
+        cmap = validate_cmap(cmap, measurement, logscale=logscale)
 
         self._phase_axes_image = ax.imshow(
             np.angle(measurement.array).T,

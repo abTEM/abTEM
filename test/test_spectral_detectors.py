@@ -522,6 +522,73 @@ def test_show_logscale_masks_nonpositive_values_without_error():
     assert ax.collections[0].norm.vmin is None or ax.collections[0].norm.vmin > 0
 
 
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_explode_title_shows_label_only_on_first_panel():
+    """Matches the convention used elsewhere (e.g. DiffractionPatterns'
+    exploded grids): only the first panel along each exploded axis carries
+    the "Label = value" form; the rest show just the bare value, since
+    repeating the label on every panel of a single row/column is
+    redundant."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_multiaxis_spectrum()
+
+    fig, axes = spec.show(explode=[1])  # axis1 has 3 values -> one row of 3
+    axes_flat = axes.flatten()
+    titles = [ax.get_title() for ax in axes_flat[:3]]
+
+    assert titles[0] == "axis1 = 0"
+    assert titles[1] == "1"
+    assert titles[2] == "2"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_suptitle_sets_whole_figure_title_single_panel():
+    """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
+    per-panel `title` -- and must be a dedicated parameter, not something
+    picked up from **kwargs: kwargs here goes straight to pcolormesh (an
+    Axes/Artist-level call), so a caller passing suptitle that way gets a
+    bare matplotlib AttributeError instead of what they wanted."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()  # no ensemble axes -- no collapse warning
+    fig, _ = spec.show(suptitle="Whole-figure title")
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole-figure title"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_suptitle_sets_whole_figure_title_exploded():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_multiaxis_spectrum()
+    fig, _ = spec.show(explode=[1], suptitle="Whole-figure title")
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole-figure title"
+
+
+def test_show_logscale_masked_pixels_are_not_transparent():
+    """Masked (non-positive-under-LogNorm) pixels used to render fully
+    transparent (a Colormap's default "bad" color), letting the figure's
+    white background show through -- easy to mistake for missing data
+    rather than what it actually is, harmless near-zero numerical noise.
+    They should instead render opaque, matching the colormap's own lowest
+    (floor) color."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, array = _make_simple_spectrum()
+    array[0, 0] = -1e-9  # tiny negative, e.g. catastrophic-cancellation noise
+    fig, ax = spec.show(logscale=True)
+    mesh = ax.collections[0]
+    bad_rgba = mesh.cmap(np.ma.masked)
+    assert bad_rgba[3] == 1.0, "masked pixels must be opaque, not transparent"
+    assert bad_rgba == mesh.cmap(0.0), "masked color should match the colormap floor"
+
+
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------
 
 

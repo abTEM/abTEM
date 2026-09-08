@@ -158,3 +158,16 @@ def test_abutting_panels_have_nonzero_gap(two_by_two_diffraction_patterns):
                 (pos_j.x0 - pos_i.x1) if pos_j.x0 >= pos_i.x1 else (pos_i.x0 - pos_j.x1)
             )
             assert gap * fig_width_inches > min_gap_inches
+
+
+def test_suptitle_sets_whole_figure_title(two_by_two_diffraction_patterns):
+    """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
+    per-panel `title` -- must be a dedicated parameter passed through
+    Visualization, not something picked up from **kwargs (which here goes
+    to the underlying imshow/pcolormesh Artist call, not the Figure)."""
+    dp = two_by_two_diffraction_patterns
+    plt.close("all")
+    visualization = dp.show(explode=True, suptitle="Whole-figure title")
+    fig = visualization.get_figure()
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole-figure title"

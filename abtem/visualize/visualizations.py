@@ -159,6 +159,7 @@ class Visualization:
         cbar: bool = False,
         interactive: bool = True,
         title: str = None,
+        suptitle: str = None,
         xlim: tuple[float, float] = None,
         ylim: tuple[float, float] = None,
         convert_complex: str = "none",
@@ -241,6 +242,9 @@ class Visualization:
 
         if isinstance(title, str):
             self.set_column_titles(title)
+
+        if suptitle:
+            self.get_figure().suptitle(suptitle)
 
         elif title and len(explode) > 0:
             axes_metadata = measurement.axes_metadata[explode[0]].to_ordinal_axis(
