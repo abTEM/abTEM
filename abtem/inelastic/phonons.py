@@ -26,6 +26,7 @@ from abtem.core.axes import (
     AxisMetadata,
     EnergyLossAxis,
     FrozenPhononsAxis,
+    PhononParityAxis,
     UnknownAxis,
 )
 from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
@@ -681,11 +682,31 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     Parameters
     ----------
     energy_resolved_snapshots : list of lists of ASE Atoms, or 2D numpy.ndarray
-        Outer index is energy, inner index is configuration.
+        Outer index is energy, inner index is configuration. If
+        ``parity_projection`` is True, this must still be given in this
+        ordinary (real-configuration-only) shape -- the displacement-reversed
+        twin is built automatically.
     energies : array-like
         Energy values [eV] corresponding to each outer entry.
+    equilibrium_atoms : ASE.Atoms, optional
+        The shared undisplaced/equilibrium structure every snapshot in
+        ``energy_resolved_snapshots`` is a displacement of. Required if
+        ``parity_projection`` is True (used to build each snapshot's
+        displacement-reversed twin, ``2 * equilibrium_atoms.positions -
+        snapshot.positions``); unused otherwise.
+    parity_projection : bool, optional
+        If True (default False), separate one-phonon from multi-phonon
+        scattering by also propagating, for every snapshot, its
+        displacement-reversed twin -- see issue #373. This adds a leading
+        :class:`~abtem.core.axes.PhononParityAxis` (``values=("real",
+        "twin")``) to the ensemble. Requires ``equilibrium_atoms``. Since
+        the whole point is to keep every individual configuration's exit
+        wave (rather than only their mean), ``ensemble_mean`` is forced to
+        False automatically when this is True -- averaging over frozen
+        phonons before forming the parity combination would defeat it.
     ensemble_mean : bool, optional
         If True (default), average over frozen-phonon configurations.
+        Ignored (forced to False) if ``parity_projection`` is True.
     cell : Cell, optional
     """
 
@@ -693,10 +714,23 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         self,
         energy_resolved_snapshots: list[Sequence[Atoms]] | np.ndarray,
         energies: np.ndarray | Sequence[float],
+        equilibrium_atoms: Optional[Atoms] = None,
+        parity_projection: bool = False,
         ensemble_mean: bool = True,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         cell: Optional[Cell] = None,
     ):
+        if parity_projection and equilibrium_atoms is None:
+            raise ValueError(
+                "parity_projection=True requires equilibrium_atoms (the "
+                "shared undisplaced structure every snapshot displaces "
+                "from), used to build each snapshot's displacement-reversed "
+                "twin."
+            )
+
+        if parity_projection:
+            ensemble_mean = False
+
         energies = np.asarray(energies)
 
         if isinstance(energy_resolved_snapshots, np.ndarray):
@@ -720,6 +754,22 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 for j, atoms in enumerate(trajectory):
                     itemset(snapshots, (i, j), atoms)
 
+        if parity_projection and snapshots.ndim == 2:
+            # Fresh, real-configuration-only input (the public contract of
+            # this constructor): build the displacement-reversed twin and
+            # stack it as a new leading axis. A `snapshots.ndim == 3` input
+            # here means this is instead a dask/chunk reconstruction of an
+            # ensemble that already has the parity axis baked in (see
+            # `_from_partition_args_func` below) -- must not be re-twinned.
+            eq_positions = equilibrium_atoms.positions
+            twin = np.empty_like(snapshots)
+            for index in np.ndindex(snapshots.shape):
+                atoms = snapshots[index]
+                twin_atoms = atoms.copy()
+                twin_atoms.positions = 2 * eq_positions - atoms.positions
+                itemset(twin, index, twin_atoms)
+            snapshots = np.stack([snapshots, twin], axis=0)
+
         atoms = snapshots.ravel()[0]
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
             atoms, None, cell
@@ -727,6 +777,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
         self._snapshots = snapshots
         self._energies = energies
+        self._equilibrium_atoms = equilibrium_atoms
+        self._parity_projection = parity_projection
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -735,23 +787,41 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         if ensemble_axes_metadata is not None:
             self._ensemble_axes_metadata = ensemble_axes_metadata
         else:
-            self._ensemble_axes_metadata = [
+            energy_and_config_axes = [
                 EnergyLossAxis(
                     values=tuple(float(e) for e in energies),
                     units="eV",
                 ),
                 FrozenPhononsAxis(_ensemble_mean=ensemble_mean),
             ]
+            if parity_projection:
+                self._ensemble_axes_metadata = [
+                    PhononParityAxis(values=("real", "twin"))
+                ] + energy_and_config_axes
+            else:
+                self._ensemble_axes_metadata = energy_and_config_axes
 
     @property
     def snapshots(self) -> np.ndarray:
-        """2D object array of Atoms ``(n_energies, n_configs)``."""
+        """Object array of Atoms, ``(n_energies, n_configs)`` normally, or
+        ``(2, n_energies, n_configs)`` if ``parity_projection`` is True."""
         return self._snapshots
 
     @property
     def energies(self) -> np.ndarray:
         """Energy values [eV] for each snapshot group."""
         return self._energies
+
+    @property
+    def equilibrium_atoms(self) -> Optional[Atoms]:
+        """The shared undisplaced/equilibrium structure, if given."""
+        return self._equilibrium_atoms
+
+    @property
+    def parity_projection(self) -> bool:
+        """Whether this ensemble carries the displacement-reversed twin
+        needed to separate one-phonon from multi-phonon scattering."""
+        return self._parity_projection
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -763,7 +833,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
     @property
     def num_configs(self) -> int:
-        return self._snapshots.shape[1]
+        return self._snapshots.shape[-1]
 
     @property
     def atoms(self) -> Atoms:
@@ -776,6 +846,13 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         return len(self._energies)
 
     def __getitem__(self, item):
+        if self._parity_projection:
+            raise NotImplementedError(
+                "Indexing a parity_projection=True EnergyResolvedAtomsEnsemble "
+                "is not supported; slice energy_resolved_snapshots/energies "
+                "before constructing it instead."
+            )
+
         new_snapshots = self._snapshots[item]
         new_energies = (
             self._energies[item]
@@ -824,7 +901,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             array = np.empty(tuple(len(c) for c in chunks), dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
                 snapshots_chunk = self._snapshots[slic]
-                energies_chunk = self._energies[slic[0]]
+                energies_chunk = self._energies[slic[-2]]
                 lazy_args = dask.delayed(_wrap_with_array)(
                     (snapshots_chunk, energies_chunk), ndims=1
                 )
@@ -843,7 +920,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             array = np.empty(tuple(len(c) for c in chunks), dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
                 snapshots_chunk = snapshots[slic]
-                energies_chunk = self._energies[slic[0]]
+                energies_chunk = self._energies[slic[-2]]
                 itemset(
                     array,
                     index,

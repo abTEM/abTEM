@@ -6262,6 +6262,157 @@ def _thermal_weight_tds(
     return result_array, e_values_signed
 
 
+def _phonon_loss_diffraction_patterns_parity_projection(
+    exit_waves,
+    parity_axis_idx: int,
+    max_angle: str | float,
+    parity: str,
+    block_direct: bool | float,
+    temperature: Optional[float],
+) -> "DiffractionPatterns":
+    """Separate one-phonon from multi-phonon scattering (issue #373) from
+    ``exit_waves`` carrying a fully-expanded (``"real", "twin", "static"``)
+    :class:`~abtem.core.axes.PhononParityAxis` -- see
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``parity_projection``.
+
+    Returns an ensemble of diffraction patterns stacked along a new
+    ``phonon_order`` axis with values ``("all", "one_phonon",
+    "multi_phonon")``:
+
+    - ``"all"``: identical to the ordinary (non-parity) path with
+      ``component="tds"`` -- ``component`` is not otherwise exposed here,
+      since once the parity axis has forced ``ensemble_mean=False`` the
+      coherent/incoherent split is no longer the interesting choice.
+    - ``"one_phonon"``: ``mean_j |psi_odd_j|²`` where
+      ``psi_odd = (psi_real - psi_twin) / 2`` -- no coherent subtraction
+      (the elastic/Bragg term is even in displacement, so it cancels
+      exactly, sidestepping the catastrophic-cancellation floor of
+      ``I_incoherent - I_coherent``).
+    - ``"multi_phonon"``: ``mean_j |psi_diff_j|²`` where
+      ``psi_diff = (psi_real + psi_twin) / 2 - psi_static`` isolates the
+      even-but-non-static (``u²`` and higher) content.
+    """
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+
+    parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
+    if tuple(parity_axis.values) != ("real", "twin", "static"):
+        raise ValueError(
+            "phonon_loss_diffraction_patterns requires a fully expanded "
+            "PhononParityAxis with values ('real', 'twin', 'static'), got "
+            f"{tuple(parity_axis.values)}. Build the Potential from a "
+            "parity_projection=True EnergyResolvedAtomsEnsemble and run "
+            "multislice (with a WavesDetector, so the exit waves stay "
+            "complex) before calling this function."
+        )
+
+    n_axes = len(exit_waves.ensemble_axes_metadata)
+
+    def _select(index):
+        slicing = tuple(
+            index if j == parity_axis_idx else slice(None) for j in range(n_axes)
+        )
+        return exit_waves[slicing]
+
+    waves_real = _select(0)
+    waves_twin = _select(1)
+    waves_static = _select(2)
+
+    fp_axis_idx = None
+    energy_axis_idx = None
+    for i, ax in enumerate(waves_real.ensemble_axes_metadata):
+        if isinstance(ax, FrozenPhononsAxis):
+            fp_axis_idx = i
+        if isinstance(ax, EnergyLossAxis):
+            energy_axis_idx = i
+    if fp_axis_idx is None or energy_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have both a FrozenPhononsAxis and an "
+            "EnergyLossAxis in addition to the PhononParityAxis."
+        )
+
+    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
+
+    # --- "all": identical to the non-parity path, forced to component="tds" ---
+    dp_all = phonon_loss_diffraction_patterns(
+        waves_real,
+        component="tds",
+        max_angle=max_angle,
+        parity=parity,
+        block_direct=False,
+        temperature=temperature,
+    )
+    I_all = dp_all.array
+
+    # --- "one_phonon": psi_odd = (real - twin) / 2, no coherent subtraction ---
+    psi_odd = (waves_real.array - waves_twin.array) / 2
+    waves_odd = waves_real.__class__(
+        psi_odd, **waves_real._copy_kwargs(exclude=("array",))
+    )
+    I_one_phonon = waves_odd.diffraction_patterns(**dp_kwargs).array.mean(
+        axis=fp_axis_idx
+    )
+
+    # --- "multi_phonon": (real + twin)/2 - static, isolates u^2 and higher ---
+    psi_diff = (waves_real.array + waves_twin.array) / 2 - waves_static.array
+    waves_diff = waves_real.__class__(
+        psi_diff, **waves_real._copy_kwargs(exclude=("array",))
+    )
+    I_multi_phonon = waves_diff.diffraction_patterns(**dp_kwargs).array.mean(
+        axis=fp_axis_idx
+    )
+
+    remaining_axes = [
+        ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
+    ]
+
+    if temperature is not None:
+        remaining_energy_axis_idx = next(
+            i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
+        )
+        e_values = np.asarray(
+            waves_real.ensemble_axes_metadata[energy_axis_idx].values, dtype=float
+        )
+        I_one_phonon, _ = _thermal_weight_tds(
+            I_one_phonon, e_values, remaining_energy_axis_idx, temperature
+        )
+        I_multi_phonon, _ = _thermal_weight_tds(
+            I_multi_phonon, e_values, remaining_energy_axis_idx, temperature
+        )
+        # dp_all's own energy axis is already the signed/unfolded one,
+        # computed by the recursive call above -- reuse it directly rather
+        # than recomputing e_values_signed a third time.
+        remaining_axes[remaining_energy_axis_idx] = next(
+            ax for ax in dp_all.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        )
+
+    xp = get_array_module(I_all)
+    stack_fn = _array_module_fn(I_all, xp, "stack")
+    result_array = stack_fn([I_all, I_one_phonon, I_multi_phonon], axis=0)
+
+    phonon_order_axis = OrdinalAxis(
+        label="phonon_order", values=("all", "one_phonon", "multi_phonon")
+    )
+    remaining_axes = [phonon_order_axis] + remaining_axes
+
+    metadata = dict(dp_all.metadata)
+    metadata["phonon_loss_component"] = "parity_projection"
+
+    result = DiffractionPatterns(
+        result_array,
+        sampling=dp_all.sampling,
+        fftshift=dp_all.fftshift,
+        ensemble_axes_metadata=remaining_axes,
+        metadata=metadata,
+    )
+
+    if block_direct:
+        radius = block_direct if isinstance(block_direct, (int, float)) else None
+        result = result.block_direct(radius=radius)
+
+    return result
+
+
 def phonon_loss_diffraction_patterns(
     exit_waves,
     component: str = "tds",
@@ -6329,9 +6480,33 @@ def phonon_loss_diffraction_patterns(
     DiffractionPatterns
         Intensity patterns with the ``FrozenPhononsAxis`` removed and the
         ``EnergyLossAxis`` preserved (or replaced by its signed loss/gain
-        unfolding if ``temperature`` is given).
+        unfolding if ``temperature`` is given). If ``exit_waves`` carries a
+        :class:`~abtem.core.axes.PhononParityAxis` (built from a
+        ``parity_projection=True``
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` and
+        run through multislice), this instead returns an ensemble stacked
+        along a new ``phonon_order`` axis with values ``("all",
+        "one_phonon", "multi_phonon")`` -- separating one-phonon from
+        multi-phonon scattering (issue #373). In that case ``component`` is
+        ignored: the ``"all"`` slot always uses ``component="tds"``.
     """
-    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+    from abtem.core.axes import (
+        EnergyLossAxis,
+        FrozenPhononsAxis,
+        OrdinalAxis,
+        PhononParityAxis,
+    )
+
+    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
+        if isinstance(ax, PhononParityAxis):
+            return _phonon_loss_diffraction_patterns_parity_projection(
+                exit_waves,
+                i,
+                max_angle=max_angle,
+                parity=parity,
+                block_direct=block_direct,
+                temperature=temperature,
+            )
 
     # --- validate ensemble axes ---
     fp_axis_idx = None

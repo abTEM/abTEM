@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from ase import units
 
-from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
+from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
 from abtem.measurements import phonon_loss_diffraction_patterns
 from abtem.waves import Waves
 
@@ -24,6 +24,44 @@ def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
         energy=100e3,
         sampling=0.1,
         ensemble_axes_metadata=[
+            EnergyLossAxis(values=tuple(float(e) for e in e_values)),
+            FrozenPhononsAxis(_ensemble_mean=False),
+        ],
+    )
+
+
+def _make_parity_exit_waves(
+    e_values, n_configs=6, gpts=24, seed=0, lazy=False, real=None, twin=None,
+    static=None,
+):
+    rng = np.random.default_rng(seed)
+    n_energies = len(e_values)
+    shape = (n_energies, n_configs, gpts, gpts)
+
+    def _random_complex():
+        return (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+
+    if real is None:
+        real = _random_complex()
+    if twin is None:
+        twin = _random_complex()
+    if static is None:
+        static = (
+            rng.normal(size=(gpts, gpts)) + 1j * rng.normal(size=(gpts, gpts))
+        ).astype(np.complex64)
+        static = np.broadcast_to(static, shape)
+
+    array = np.stack([real, twin, static], axis=0)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 1, 1, gpts, gpts))
+    return Waves(
+        array,
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            PhononParityAxis(values=("real", "twin", "static")),
             EnergyLossAxis(values=tuple(float(e) for e in e_values)),
             FrozenPhononsAxis(_ensemble_mean=False),
         ],
@@ -199,6 +237,138 @@ class TestLazyExitWaves:
 
         dp_eager = phonon_loss_diffraction_patterns(waves_eager, component="all")
         dp_lazy = phonon_loss_diffraction_patterns(waves_lazy, component="all")
+
+        assert isinstance(dp_lazy.array, da.core.Array)
+        np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)
+
+
+class TestParityProjection:
+    """Tests for the phonon_order=("all", "one_phonon", "multi_phonon")
+    ensemble output when exit_waves carries a PhononParityAxis (issue #373).
+    """
+
+    def test_shape_and_axes(self):
+        e_values = [0.02, 0.05, 0.10]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+
+        dp = phonon_loss_diffraction_patterns(waves)
+
+        from abtem.core.axes import OrdinalAxis
+
+        phonon_order_axis = next(
+            ax for ax in dp.ensemble_axes_metadata
+            if isinstance(ax, OrdinalAxis) and ax.label == "phonon_order"
+        )
+        assert phonon_order_axis.values == ("all", "one_phonon", "multi_phonon")
+        assert dp.array.shape[0] == 3
+
+        energy_axis = next(
+            ax for ax in dp.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        )
+        assert len(energy_axis.values) == 3
+        # FrozenPhononsAxis and PhononParityAxis must both be gone
+        assert not any(
+            isinstance(ax, FrozenPhononsAxis) for ax in dp.ensemble_axes_metadata
+        )
+        assert not any(
+            isinstance(ax, PhononParityAxis) for ax in dp.ensemble_axes_metadata
+        )
+
+    def test_all_slot_matches_direct_tds_call(self):
+        e_values = [0.02, 0.05, 0.10]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+
+        dp = phonon_loss_diffraction_patterns(waves)
+
+        waves_real = waves[(0, slice(None), slice(None))]
+        dp_direct = phonon_loss_diffraction_patterns(waves_real, component="tds")
+
+        np.testing.assert_allclose(dp.array[0], dp_direct.array)
+
+    def test_one_phonon_and_multi_phonon_isolate_known_signals(self):
+        """Construct real/twin/static so that psi_odd and psi_diff are
+        exactly known, independently-verifiable signals."""
+        e_values = [0.02, 0.05]
+        n_configs, gpts = 4, 16
+        shape = (len(e_values), n_configs, gpts, gpts)
+        rng = np.random.default_rng(1)
+
+        static = (
+            rng.normal(size=(gpts, gpts)) + 1j * rng.normal(size=(gpts, gpts))
+        ).astype(np.complex64)
+        delta = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+        eps = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+        static_b = np.broadcast_to(static, shape)
+
+        # real = static + delta + eps, twin = static - delta + eps
+        #   => psi_odd  = (real - twin) / 2 = delta          (one-phonon)
+        #   => psi_diff = (real + twin) / 2 - static = eps   (multi-phonon)
+        real = static_b + delta + eps
+        twin = static_b - delta + eps
+
+        waves = _make_parity_exit_waves(
+            e_values, n_configs=n_configs, gpts=gpts,
+            real=real, twin=twin, static=static_b,
+        )
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+
+        # independent reference: FFT delta/eps directly and average |.|^2
+        # over the frozen-phonon axis (axis=1 of shape (n_e, n_c, gpts, gpts))
+        delta_waves = Waves(
+            delta, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        eps_waves = Waves(
+            eps, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        I_one_phonon_ref = delta_waves.diffraction_patterns(
+            max_angle="full"
+        ).array.mean(axis=1)
+        I_multi_phonon_ref = eps_waves.diffraction_patterns(
+            max_angle="full"
+        ).array.mean(axis=1)
+
+        np.testing.assert_allclose(dp.array[1], I_one_phonon_ref, rtol=1e-4)
+        np.testing.assert_allclose(dp.array[2], I_multi_phonon_ref, rtol=1e-4)
+
+    def test_requires_fully_expanded_parity_axis(self):
+        e_values = [0.02, 0.05]
+        waves = _make_exit_waves(e_values, n_configs=4)
+        # manually attach a not-yet-expanded (length 2) PhononParityAxis
+        array = np.stack([waves.array, waves.array], axis=0)
+        bad_waves = Waves(
+            array, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[PhononParityAxis(values=("real", "twin"))]
+            + waves.ensemble_axes_metadata,
+        )
+        with pytest.raises(ValueError, match="fully expanded"):
+            phonon_loss_diffraction_patterns(bad_waves)
+
+    def test_temperature_unfolds_all_three_slots(self):
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+
+        dp = phonon_loss_diffraction_patterns(waves, temperature=300.0)
+
+        energy_axis = next(
+            ax for ax in dp.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        )
+        assert len(energy_axis.values) == 2 * len(e_values) - 1
+        assert dp.array.shape[0] == 3
+        assert dp.array.shape[1] == 2 * len(e_values) - 1
+
+    def test_lazy_matches_eager(self):
+        e_values = [0.02, 0.05, 0.10]
+        waves_eager = _make_parity_exit_waves(e_values, n_configs=6, lazy=False)
+        waves_lazy = _make_parity_exit_waves(e_values, n_configs=6, lazy=True)
+
+        dp_eager = phonon_loss_diffraction_patterns(waves_eager)
+        dp_lazy = phonon_loss_diffraction_patterns(waves_lazy)
 
         assert isinstance(dp_lazy.array, da.core.Array)
         np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)

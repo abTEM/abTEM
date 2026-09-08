@@ -389,6 +389,107 @@ def reduce_ensemble(
     return reduced_output
 
 
+def _add_parity_projection_static_branch(
+    result: Any,
+    potential: Any,
+    propagate_static: Callable[[], Waves],
+) -> Any:
+    """If ``potential`` wraps a ``parity_projection`` frozen-phonon ensemble
+    (see :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`) and
+    ``result`` is a complex exit-wave ``Waves`` ensemble, extend its
+    :class:`~abtem.core.axes.PhononParityAxis` from ``("real", "twin")`` to
+    ``("real", "twin", "static")`` with the shared static/equilibrium exit
+    wave -- computed once via ``propagate_static`` and broadcast across the
+    energy and frozen-phonon axes, not recomputed per configuration.
+
+    Returns ``result`` unchanged if ``potential`` is not a parity-projection
+    potential, or if ``result`` is not a complex ``Waves`` (e.g. a detector
+    other than ``WavesDetector`` was used -- unsupported here, left to
+    ``phonon_loss_diffraction_patterns`` to reject downstream).
+    """
+    if not getattr(potential, "parity_projection", False):
+        return result
+
+    if not isinstance(result, Waves) or not np.iscomplexobj(result.array):
+        return result
+
+    from abtem.core.axes import PhononParityAxis
+
+    parity_axis_idx = None
+    for i, axis_metadata in enumerate(result.ensemble_axes_metadata):
+        if isinstance(axis_metadata, PhononParityAxis):
+            parity_axis_idx = i
+            break
+
+    if parity_axis_idx is None:
+        return result
+
+    parity_axis = result.ensemble_axes_metadata[parity_axis_idx]
+    if len(parity_axis) != 2:
+        # Already expanded (or something unexpected) -- leave untouched.
+        return result
+
+    if len(result.ensemble_shape) != 3:
+        raise NotImplementedError(
+            "parity_projection currently only supports incident waves with "
+            "no ensemble axes of their own (e.g. a single-energy PlaneWave "
+            "or Probe with no scan/tilt/energy ensemble) -- got "
+            f"{len(result.ensemble_shape)} ensemble axes "
+            f"{result.ensemble_axes_metadata}, expected exactly 3 "
+            "(PhononParityAxis, EnergyLossAxis, FrozenPhononsAxis)."
+        )
+
+    static_waves = propagate_static()
+
+    if static_waves.ensemble_shape != ():
+        raise NotImplementedError(
+            "the static/equilibrium exit wave used for parity_projection "
+            "must have no ensemble axes of its own, got "
+            f"{static_waves.ensemble_axes_metadata}."
+        )
+
+    array = result.array
+    static_array = static_waves.array
+    is_lazy = isinstance(array, da.core.Array)
+    concatenate = da.concatenate if is_lazy else np.concatenate
+    broadcast_to = da.broadcast_to if is_lazy else np.broadcast_to
+
+    if is_lazy and not isinstance(static_array, da.core.Array):
+        static_array = da.from_array(static_array)
+    elif not is_lazy and isinstance(static_array, da.core.Array):
+        static_array = static_array.compute()
+
+    base_shape = result.base_shape
+    n_ensemble_axes = len(result.ensemble_shape)
+    static_reshaped = static_array.reshape((1,) * n_ensemble_axes + base_shape)
+    broadcast_shape = tuple(
+        1 if i == parity_axis_idx else s for i, s in enumerate(result.ensemble_shape)
+    ) + base_shape
+    static_broadcast = broadcast_to(static_reshaped, broadcast_shape)
+
+    new_array = concatenate([array, static_broadcast], axis=parity_axis_idx)
+
+    new_ensemble_axes_metadata = list(result.ensemble_axes_metadata)
+    new_ensemble_axes_metadata[parity_axis_idx] = PhononParityAxis(
+        values=parity_axis.values + ("static",)
+    )
+
+    kwargs = result._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
+    kwargs["ensemble_axes_metadata"] = new_ensemble_axes_metadata
+
+    return result.__class__(new_array, **kwargs)
+
+
+def _build_equilibrium_potential(potential: Any) -> Any:
+    """Build a plain (non-ensemble) copy of ``potential``, wrapping its
+    ``equilibrium_atoms`` instead of its frozen-phonon ensemble, with the
+    same resolved grid/slicing/integrator -- used to compute the shared
+    static exit wave for ``parity_projection``."""
+    kwargs = potential._copy_kwargs(exclude=("atoms", "sampling", "integrator"))
+    kwargs["integrator"] = potential.integrator
+    return potential.__class__(potential.equilibrium_atoms, **kwargs)
+
+
 class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
@@ -1680,7 +1781,21 @@ class Waves(BaseWaves, ArrayObject):
 
         waves = multislice_transform.apply(self)
 
-        return reduce_ensemble(waves)
+        result = reduce_ensemble(waves)
+
+        if getattr(potential, "parity_projection", False):
+            from abtem.detectors import WavesDetector
+
+            result = _add_parity_projection_static_branch(
+                result,
+                potential,
+                lambda: self.multislice(
+                    _build_equilibrium_potential(potential),
+                    detectors=WavesDetector(),
+                ),
+            )
+
+        return result
 
     def scan(
         self,
@@ -2309,7 +2424,21 @@ class PlaneWave(WavesBuilder):
 
         measurements = multislice.apply(waves)
 
-        return reduce_ensemble(measurements)
+        result = reduce_ensemble(measurements)
+
+        if getattr(potential, "parity_projection", False):
+            from abtem.detectors import WavesDetector
+
+            result = _add_parity_projection_static_branch(
+                result,
+                potential,
+                lambda: waves.multislice(
+                    _build_equilibrium_potential(potential),
+                    detectors=WavesDetector(),
+                ),
+            )
+
+        return result
 
 
 class Probe(WavesBuilder):
@@ -2679,7 +2808,21 @@ class Probe(WavesBuilder):
 
         measurements = multislice.apply(waves)
 
-        return reduce_ensemble(measurements)
+        result = reduce_ensemble(measurements)
+
+        if getattr(potential, "parity_projection", False):
+            from abtem.detectors import WavesDetector
+
+            result = _add_parity_projection_static_branch(
+                result,
+                potential,
+                lambda: waves.multislice(
+                    _build_equilibrium_potential(potential),
+                    detectors=WavesDetector(),
+                ),
+            )
+
+        return result
 
     def transition_potential_scan(
         self,
