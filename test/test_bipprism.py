@@ -501,3 +501,34 @@ def test_bipprism_focal_backprop_public_api():
         ).array
     )
     np.testing.assert_allclose(pub, direct, rtol=1e-5, atol=1e-8)
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("partitions_s1", [None, 2])
+def test_prism_eels_s1_preserves_configured_precision(monkeypatch, precision, partitions_s1):
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+    import abtem.multislice
+    import abtem.prism.utils
+
+    step = abtem.multislice.conventional_multislice_step
+    plane_waves = abtem.prism.utils.plane_waves
+    incoming_dtypes = []
+    carrier_dtypes = []
+
+    def record_step(waves, *args, **kwargs):
+        incoming_dtypes.append(waves.array.dtype)
+        return step(waves, *args, **kwargs)
+
+    def record_carriers(wave_vectors, *args, **kwargs):
+        carrier_dtypes.append(wave_vectors.dtype)
+        return plane_waves(wave_vectors, *args, **kwargs)
+
+    monkeypatch.setattr(abtem.multislice, "conventional_multislice_step", record_step)
+    monkeypatch.setattr(abtem.prism.utils, "plane_waves", record_carriers)
+    with abtem.config.set({"precision": precision}):
+        sm, tp, scan, det, atoms = _prism_eels_setup(gpts=(16, 16), reps=(1, 1, 1))
+        _run(prism_transition_potential_scan_beam_basis, sm, tp, scan, det, atoms,
+             double_channel=False, partitions_s1=partitions_s1)
+    expected = np.dtype("complex64" if precision == "float32" else "complex128")
+    assert incoming_dtypes and all(dtype == expected for dtype in incoming_dtypes)
+    assert carrier_dtypes and all(dtype == np.dtype(precision) for dtype in carrier_dtypes)

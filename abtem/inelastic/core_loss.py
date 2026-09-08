@@ -1146,10 +1146,10 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     n_k = len(wave_vectors_np)
 
     s_array = plane_waves(
-        xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts
+        xp.asarray(wave_vectors_np, dtype=get_dtype()), extent, gpts
     )
     s_array = s_array * (
-        np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:])
+        float(np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:]))
     )
 
     s_waves = Waves(
@@ -1829,7 +1829,7 @@ def prism_transition_potential_scan_beam_basis(
     """
     import warnings
 
-    from abtem.core.utils import safe_ceiling_int
+    from abtem.core.utils import get_dtype, safe_ceiling_int
     from abtem.multislice import (
         allocate_multislice_measurements,
         conventional_multislice_step,
@@ -1950,8 +1950,8 @@ def prism_transition_potential_scan_beam_basis(
         k_par1 = wave_vectors_np[p1_idx]
         w1 = natural_neighbor_weights(k_par1, wave_vectors_np)  # (n_k, Bp1)
         s1_par_array = plane_waves(
-            xp.asarray(k_par1, dtype=np.float32), extent, gpts
-        ) * (np.prod(interpolation) / np.prod(gpts))
+            xp.asarray(k_par1, dtype=get_dtype()), extent, gpts
+        ) * float(np.prod(interpolation) / np.prod(gpts))
         s_waves = Waves(
             s1_par_array,
             energy=energy,
