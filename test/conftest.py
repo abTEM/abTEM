@@ -45,3 +45,19 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+
+@pytest.fixture(autouse=True)
+def _close_matplotlib_figures_after_test():
+    """Figures created via matplotlib.pyplot (e.g. any test calling
+    .show()) are retained by pyplot's global state until explicitly closed.
+    Across a whole test session that accumulates past matplotlib's default
+    figure.max_open_warning (20), which pytest can promote into a failure
+    for whichever test happens to open the 21st one -- an innocent
+    bystander unrelated to whatever actually leaked the open figures.
+    Close everything after every test, regardless of outcome, so no test's
+    figures can accumulate into another's failure."""
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
