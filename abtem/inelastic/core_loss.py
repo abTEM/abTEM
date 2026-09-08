@@ -1815,8 +1815,9 @@ def prism_transition_potential_scan_beam_basis(
         S1-only accuracy lever (paper Sec. 3.3.6, "Fix 2"). When set, the S1 parent
         columns are Fresnel back-propagated to the scattering-centroid plane before
         the windowed NNW interpolation and forward-propagated back afterwards — the
-        de-tilted parents recohere best there, so the convex average decoheres least
-        and the on-atom probe reconstruction error drops (2-3x for thick specimens).
+        resulting interpolation may improve accuracy for some specimens. A cropped
+        Fresnel round trip is approximate and is bypassed when all parents are
+        retained, preserving the exact full-parent limit.
         ``"centroid"`` back-propagates half the traversed depth; a float ``f`` uses
         ``f * depth``. Applies only to ``partitions_s1`` (the detector-side ``S2``
         parents have no crossover plane, so it is a no-op for them). ``None``
@@ -1962,7 +1963,11 @@ def prism_transition_potential_scan_beam_basis(
     # Focal back-propagation (S1 only, paper Sec. 3.3.6): static prep. The per-slice
     # back-propagation distance (centroid = half the traversed depth) is computed in
     # the loop from the cumulative slice thickness.
-    do_focal_s1 = partitions_s1 is not None and bool(focal_backprop)
+    do_focal_s1 = (
+        partitions_s1 is not None
+        and len(p1_idx) < n_k
+        and bool(focal_backprop)
+    )
     if do_focal_s1:
         from abtem.core.energy import energy2wavelength
 

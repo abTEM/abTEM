@@ -2198,9 +2198,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         focal_backprop : {"centroid"}, float or None, optional
             S1-only accuracy lever (paper Sec. 3.3.6): back-propagate the ``S1``
             parent columns to the scattering-centroid plane before windowed NNW
-            interpolation and forward-propagate afterwards, reducing the on-atom
-            probe reconstruction error for thick specimens. Requires ``partitions_s1``
-            and the beam-basis backend.
+            interpolation and forward-propagate afterwards. This optional
+            approximation may improve accuracy for some specimens; it is bypassed
+            when all S1 parents are retained. ``None`` (default) disables it.
+            Requires ``partitions_s1`` and the beam-basis backend.
 
         Returns
         -------

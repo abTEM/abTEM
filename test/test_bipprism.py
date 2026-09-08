@@ -614,3 +614,22 @@ def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses):
             np.testing.assert_allclose(actual[unsupported], 0, atol=1e-15)
         else:
             np.testing.assert_allclose(np.abs(actual[unsupported]), 1 / 256, atol=1e-15)
+
+
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_bipprism_focal_backprop_full_parents_are_exact(double_channel):
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis as driver
+    from abtem.prism._bipartite import select_parent_beams
+
+    with abtem.config.set({"precision": "float64"}):
+        original, tp, _, _, atoms = _prism_eels_setup(gpts=(32, 32), reps=(1, 1, 3))
+        sm = abtem.SMatrix(potential=original.potential, energy=100e3,
+                          semiangle_cutoff=20, interpolation=2, downsample=False)
+        assert len(select_parent_beams(sm.wave_vectors, 20)) == len(sm.wave_vectors)
+        scan = abtem.CustomScan(np.unique(atoms.positions[:, :2], axis=0))
+        detector = abtem.AnnularDetector(inner=0, outer=25)
+        options = dict(double_channel=double_channel, collection_angle=30)
+        exact = _run(driver, sm, tp, scan, detector, atoms, **options)
+        focal = _run(driver, sm, tp, scan, detector, atoms,
+                     partitions_s1=20, focal_backprop="centroid", **options)
+        np.testing.assert_allclose(focal, exact, rtol=1e-10, atol=1e-18)
