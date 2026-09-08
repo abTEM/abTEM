@@ -563,12 +563,23 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             self.sampling = other.sampling
 
-        # Propagate a non-orthogonal cell between matched grids in both directions:
-        # the potential carries the cell and the wave starts without one, so whichever
-        # side has it shares it with the other during multislice setup.
+        # Propagate a non-orthogonal cell between matched grids. `lock_extent=True`
+        # is set only on a built Potential's grid (see _FieldBuilder.__init__), so
+        # it reliably marks the authoritative side: a locked grid's cell always
+        # wins and is never overwritten, while the other (unlocked) side always
+        # adopts it exactly -- including adopting None if the potential is
+        # orthogonal. Without the exact-adoption half, a wave/probe re-matched to
+        # a second, differently-shaped potential after a first multislice() call
+        # would keep the first potential's stale cell (or, worse, silently
+        # overwrite the second potential's own grid with it, corrupting an
+        # unrelated, independently built Potential object as a side effect).
         other_grid = other if isinstance(other, Grid) else getattr(other, "grid", other)
         other_cell = getattr(other_grid, "_cell", None)
-        if other_cell is not None and self._cell is None:
+        if self._lock_extent and not other_grid._lock_extent:
+            other_grid._cell = self._cell
+        elif other_grid._lock_extent and not self._lock_extent:
+            self._cell = other_cell
+        elif other_cell is not None and self._cell is None:
             self._cell = other_cell
         elif other_cell is None and self._cell is not None:
             other_grid._cell = self._cell

@@ -226,6 +226,61 @@ def test_skew_grid_copy_and_equality():
     assert not (grid == ortho)
 
 
+def test_match_does_not_leak_stale_cell_into_a_locked_grid():
+    # lock_extent=True marks a built Potential's grid as authoritative (see
+    # _FieldBuilder.__init__ and validate_potential, which calls
+    # potential.grid.match(waves) -- self=potential/locked, other=waves). A
+    # wave grid re-matched against a second, differently-shaped-cell potential
+    # must not carry over the first potential's cell into the second (locked)
+    # potential's own grid, which would silently corrupt an independent
+    # object. Same extent on both potentials isolates the cell behaviour from
+    # the (separate, correct) extent-lock protection tested elsewhere.
+    extent = (20.0, 20.0)
+    cell = _hex_cell(20.0)
+    skew_potential_grid = Grid(extent=extent, gpts=(64, 64), lock_extent=True, cell=cell)
+    ortho_potential_grid = Grid(extent=extent, gpts=(64, 64), lock_extent=True)
+
+    wave_grid = Grid()
+    skew_potential_grid.match(wave_grid)
+    assert wave_grid.cell is not None
+
+    ortho_potential_grid.match(wave_grid)
+    assert wave_grid.cell is None
+    assert ortho_potential_grid.cell is None  # not corrupted
+
+    skew_potential_grid.match(wave_grid)
+    assert wave_grid.cell is not None
+    assert skew_potential_grid.cell is not None  # unaffected throughout
+
+
+def test_match_reverse_direction_also_resets_stale_cell():
+    # The actual PlaneWave/Probe multislice() flow calls grid.match the other
+    # way around (self=wave, other=potential, via waves.grid.match(potential));
+    # the locked side must win regardless of which grid is `self` in the call.
+    # Here the potentials genuinely differ in extent too (as they would for a
+    # skew-native grid vs. an orthogonalised supercell of the same structure),
+    # since only the wave side is unlocked and free to adopt either.
+    cell = _hex_cell(20.0)
+    skew_extent = tuple(np.linalg.norm(cell, axis=1))
+    skew_potential_grid = Grid(
+        extent=skew_extent, gpts=(64, 64), lock_extent=True, cell=cell
+    )
+    ortho_potential_grid = Grid(extent=(30.0, 40.0), gpts=(64, 64), lock_extent=True)
+
+    wave_grid = Grid()
+    wave_grid.match(skew_potential_grid)
+    assert wave_grid.cell is not None
+
+    wave_grid.match(ortho_potential_grid)
+    assert wave_grid.cell is None
+    assert ortho_potential_grid.cell is None
+    assert wave_grid.extent == ortho_potential_grid.extent
+
+    wave_grid.match(skew_potential_grid)
+    assert wave_grid.cell is not None
+    assert skew_potential_grid.cell is not None  # unaffected throughout
+
+
 def test_fast_fft_rounding_off_by_default():
     # Pin the option: these assert the behaviour of the default mode,
     # which a user-level override of the config would otherwise change.

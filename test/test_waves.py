@@ -450,6 +450,57 @@ def test_skew_stem_scan_runs():
     assert images.array.shape == (5, 5)
     assert np.all(np.isfinite(images.array))
 
+
+def test_reused_wave_does_not_leak_cell_across_potentials():
+    """Reusing one PlaneWave/Probe across multislice() calls against a skew-cell
+    potential and then a differently-shaped orthogonal potential of the same
+    structure must not carry over the first potential's cell -- and must not
+    corrupt the second potential's own grid as a side effect (regression test:
+    this previously either raised a spurious ValueError from the grid-extent
+    consistency check, or silently injected the stale skew cell into the
+    unrelated orthogonal Potential object)."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, cz = 2.46, 6.7
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms(
+        "C2", cell=cell, pbc=True, scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)]
+    ) * (4, 4, 1)
+
+    pot_skew = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=cz)
+    pot_ortho = abtem.Potential(
+        atoms, gpts=(64, 64), slice_thickness=cz, non_orthogonal=False
+    )
+    assert pot_skew.cell is not None
+    assert pot_ortho.cell is None
+
+    for wave in (abtem.PlaneWave(energy=100e3), abtem.Probe(energy=100e3, semiangle_cutoff=20)):
+        w1 = wave.multislice(pot_skew).compute()
+        wave.multislice(pot_ortho).compute()
+        # the potentials themselves must never be mutated by being reused
+        assert pot_skew.cell is not None
+        assert pot_ortho.cell is None
+        # switching back must give the identical result, not one contaminated
+        # by having been matched to the orthogonal potential in between
+        w3 = wave.multislice(pot_skew).compute()
+        assert np.allclose(np.asarray(w1.array), np.asarray(w3.array))
+
+    # PlaneWave persists its grid across calls (unlike Probe, whose grid is
+    # rebuilt internally each time), so its cell state is directly checkable.
+    plane_wave = abtem.PlaneWave(energy=100e3)
+    plane_wave.multislice(pot_skew).compute()
+    assert plane_wave.grid.cell is not None
+    plane_wave.multislice(pot_ortho).compute()
+    assert plane_wave.grid.cell is None
+    plane_wave.multislice(pot_skew).compute()
+    assert plane_wave.grid.cell is not None
+
+
 @pytest.fixture
 def exit_plane_waves():
     """Create Waves with a ThicknessAxis for depth_profile tests."""
