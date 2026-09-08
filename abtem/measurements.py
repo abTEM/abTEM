@@ -405,23 +405,37 @@ def _sum_run_length_encoded(array, result, separators):
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
+    """Spline-interpolate a stack of arrays at given fractional-pixel positions.
+
+    `array`'s trailing `ndim` axes (`ndim = positions.shape[-1]`, e.g. 2 for
+    images/diffraction patterns, 3 for a potential volume) are the spatial axes
+    interpolated over; any leading axes are treated as an ensemble/batch dimension.
+    `positions` holds one `ndim`-tuple of pixel coordinates per output point, with
+    arbitrary leading shape (e.g. `(N,)` for a plain line, or `(N, n_perp)` when
+    averaging across a perpendicular width).
+    """
     map_coordinates = get_ndimage_module(array).map_coordinates
     xp = get_array_module(array)
+    ndim = positions.shape[-1]
 
     positions_shape = positions.shape
-    positions = positions.reshape((-1, 2))
+    positions = positions.reshape((-1, ndim)) + 2 * order
 
     old_shape = array.shape
-    array = array.reshape((-1,) + array.shape[-2:])
-    array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
+    array = array.reshape((-1,) + array.shape[-ndim:])
 
-    positions = positions + 2 * order
+    pad_width = ((2 * order,) * 2,) * ndim
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
+    # Pad one ensemble member at a time rather than the whole stack at once: for a
+    # large ensemble (e.g. frozen phonons), padding the full stack in one call would
+    # multiply the padded array's memory by the ensemble size; padding per member
+    # keeps peak memory to a single padded array.
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        padded = xp.pad(array[i], pad_width, mode=mode)
+        map_coordinates(padded, positions.T, output=output[i], order=order, **kwargs)
 
-    output = output.reshape(old_shape[:-2] + positions_shape[:-1])
+    output = output.reshape(old_shape[:-ndim] + positions_shape[:-1])
     return output
 
 
@@ -1088,10 +1102,49 @@ class _BaseMeasurement2D(BaseMeasurements):
         elif end is None:
             end = (0.0, self.extent[0])
 
-        if fractional:
-            extent = self.extent
+        cell = self.metadata.get("cell", None)
+        skewed = cell is not None and not is_cell_orthogonal(
+            np.asarray(cell, dtype=float)
+        )
+
+        # `conversion_cell`'s rows are the lattice vectors to convert between
+        # Cartesian and fractional coordinates with (Cartesian = frac @ cell, i.e.
+        # frac = Cartesian @ inv(cell) -- no transpose; that would instead apply the
+        # *reciprocal*-lattice basis change, landing on the wrong fraction for any
+        # non-symmetric cell). `metadata["cell"]` always holds the real-space
+        # lattice; a reciprocal-space measurement (e.g. DiffractionPatterns) instead
+        # needs the reciprocal lattice vectors (rows b1, b2) -- reciprocal_cell()
+        # is the same shared helper Grid.k_components / artists._build_skew_mesh use
+        # for this real-vs-reciprocal distinction, so using the real-space cell
+        # directly here would silently apply an Å-scale transform to 1/Å-scale
+        # positions.
+        conversion_cell = None
+        if skewed:
+            cell_arr = np.asarray(cell, dtype=float)
+            if isinstance(self.base_axes_metadata[0], ReciprocalSpaceAxis):
+                conversion_cell = reciprocal_cell(cell_arr)
+            else:
+                conversion_cell = cell_arr
+
+        if (
+            fractional
+            and conversion_cell is not None
+            and not isinstance(start, Atom)
+            and not isinstance(end, Atom)
+        ):
+            # LineScan's own fractional handling assumes an orthogonal grid
+            # (Cartesian = fractional * extent per axis), which is wrong for a
+            # non-orthogonal cell: it would scale along Cartesian x/y instead of
+            # along the (possibly skewed) lattice directions. Convert fractional
+            # (u, v) -> Cartesian (x, y) ourselves via the true cell, then hand
+            # LineScan already-Cartesian coordinates.
+            start = tuple(np.asarray(start, dtype=float) @ conversion_cell)
+            end = tuple(np.asarray(end, dtype=float) @ conversion_cell)
+            scan_fractional = False
+            scan_extent = None
         else:
-            extent = None
+            scan_fractional = fractional
+            scan_extent = self.extent if fractional else None
 
         scan = LineScan(
             start=start,
@@ -1099,27 +1152,20 @@ class _BaseMeasurement2D(BaseMeasurements):
             gpts=gpts,
             sampling=sampling,
             endpoint=endpoint,
-            potential=extent,
-            fractional=fractional,
+            potential=scan_extent,
+            fractional=scan_fractional,
         )
 
         if margin != 0.0:
             scan.add_margin(margin)
 
-        cell = self.metadata.get("cell", None)
         cart_positions = scan.get_positions(lazy=False) - self.offset
-        if cell is not None:
-            cell_arr = np.asarray(cell, dtype=float)
-            if not is_cell_orthogonal(cell_arr):
-                # Map Cartesian positions to fractional pixel indices via inverse cell
-                inv_cell = np.linalg.inv(cell_arr)  # maps Cartesian -> fractional
-                frac = cart_positions @ inv_cell.T  # fractional coordinates
-                # Scale fractional [0,1) -> pixel indices [0, N)
-                positions = xp.asarray(
-                    frac * np.array(self.base_shape, dtype=float)
-                )
-            else:
-                positions = xp.asarray(cart_positions / self.sampling)
+        if conversion_cell is not None:
+            # Map Cartesian positions to fractional pixel indices via inverse cell.
+            inv_cell = np.linalg.inv(conversion_cell)
+            frac = cart_positions @ inv_cell  # fractional coordinates
+            # Scale fractional [0,1) -> pixel indices [0, N)
+            positions = xp.asarray(frac * np.array(self.base_shape, dtype=float))
         else:
             positions = xp.asarray(cart_positions / self.sampling)
 
@@ -1135,10 +1181,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
-            # raise NotImplementedError("Lazy interpolation not implemented.")
-            # TDOO: Implement lazy interpolation
-
-            base_axes = tuple(range(len(self.base_shape)))
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
             chunks = self.array.chunks[:-2] + (positions.shape[0],)
             new_axis = (base_axes[0],)
 
@@ -2216,18 +2260,46 @@ class _BaseMeasurement1D(BaseMeasurements):
         start, end = self.metadata["start"], self.metadata["end"]
         from abtem.scan import LineScan
 
-        return LineScan(start=start, end=end, sampling=sampling)
+        # start/end may carry a depth (z) coordinate (e.g. a non-projected 3D line
+        # profile); add_to_plot draws the lateral projection of the line, so only the
+        # (x, y) part is relevant here.
+        return LineScan(start=start[:2], end=end[:2], sampling=sampling)
 
-    def _add_to_plot(self, *args, **kwargs):
+    def add_to_plot(self, ax, **kwargs):
+        """
+        Add a visualization of the location of the line profile(s) to a matplotlib
+        plot, e.g. an image of the potential or measurement the line profile(s) were
+        interpolated from.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes or Visualization
+            The axes of the matplotlib plot the visualization should be added to.
+        kwargs :
+            Additional options for matplotlib.pyplot.plot (or
+            matplotlib.patches.Rectangle if the line profile(s) were created with a
+            nonzero `width`) as keyword arguments.
+
+        Returns
+        -------
+        artist : matplotlib.lines.Line2D or matplotlib.patches.Rectangle
+            The plotted line, or, if `width` is nonzero, the rectangle indicating the
+            averaging width.
+        """
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
-                "The metadata does not contain the keys 'start' and 'end'"
+                "The metadata does not contain the keys 'start' and 'end'; "
+                "add_to_plot requires line profiles produced by interpolate_line "
+                "or interpolate_line_at_position"
             )
 
         if "width" in self.metadata:
+            # Always draw the width the profile was actually averaged over -- a
+            # caller-supplied `width` here would misrepresent the real averaging
+            # region the plotted data came from.
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_plot(*args, **kwargs)
+        return self._line_scan().add_to_plot(ax, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
