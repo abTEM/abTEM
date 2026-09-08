@@ -1714,7 +1714,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         outer: float,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
-        to_cpu: bool = False,
+        to_cpu: bool = True,
         url: Optional[str] = None,
     ):
         self._nbins_radial = nbins_radial
@@ -2007,7 +2007,10 @@ class WavesDetector(BaseDetector):
     to_cpu : bool, optional
        If True, copy the measurement data from the calculation device to CPU memory
        after applying the detector, otherwise the data stays on the respective devices.
-       Default is True.
+       Default is False: unlike the other detectors, this one returns the (large)
+       wave functions themselves, and it is the implicit detector used when no
+       detectors are given, so the data is left on the calculation device rather
+       than forcing a device-to-host copy of every exit wave.
     url : str, optional
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier

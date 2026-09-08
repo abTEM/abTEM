@@ -6053,6 +6053,24 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]"
         )
 
+        if logscale:
+            # LogNorm masks values <= 0 (log is undefined there) rather than
+            # raising -- phonon-loss TDS intensity (incoherent - coherent) is
+            # routinely exactly zero, or, from floating-point noise, a tiny
+            # negative value. Masked entries render with the colormap's "bad"
+            # colour, which defaults to fully transparent -- i.e. the figure's
+            # white background shows through, easy to mistake for missing
+            # data. These pixels are real, valid, just-below-the-log-floor
+            # intensity, not missing data, so colour them as the darkest end
+            # of the scale instead of leaving a blank gap. with_extremes()
+            # returns a new Colormap rather than mutating in place (set_bad()
+            # does the latter and is being deprecated), so this can never
+            # affect the shared, globally registered colormap. Resolved here
+            # rather than in pcolormesh itself so it applies uniformly to
+            # every panel below.
+            resolved_cmap = plt.get_cmap(cmap)
+            cmap = resolved_cmap.with_extremes(bad=resolved_cmap(0.0))
+
         def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
             # Exploded axes take their grid value; other ensemble axes collapse
             # to their first element. grid_index is positional in explode_axes

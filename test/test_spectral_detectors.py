@@ -522,6 +522,30 @@ def test_show_logscale_masks_nonpositive_values_without_error():
     assert ax.collections[0].norm.vmin is None or ax.collections[0].norm.vmin > 0
 
 
+def test_show_logscale_colors_nonpositive_values_instead_of_leaving_them_blank():
+    """LogNorm masks values <= 0 rather than raising, and a masked pixel is
+    drawn with the colormap's "bad" colour -- which defaults to fully
+    transparent, showing the figure's white background through it and
+    looking exactly like missing data. These pixels are real, valid,
+    just-below-the-log-floor intensity (routine for TDS: incoherent -
+    coherent is often exactly zero), so they must be coloured as the bottom
+    of the colour scale instead of left blank."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")
+    spec, array = _make_simple_spectrum()
+    array[0, 0] = 0.0
+
+    fig, ax = spec.show(logscale=True)
+    cmap = ax.collections[0].cmap
+    assert tuple(cmap.get_bad()) == tuple(cmap(0.0))
+    assert cmap.get_bad()[-1] == 1.0  # fully opaque, not the default transparent
+
+    # Must not have mutated the globally registered colormap.
+    assert tuple(plt.get_cmap("viridis").get_bad()) == (0.0, 0.0, 0.0, 0.0)
+
+
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------
 
 
