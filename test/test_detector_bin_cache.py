@@ -53,17 +53,48 @@ def test_differing_geometry_is_not_confused():
     assert not np.array_equal(a, b)
 
 
+_GEOMETRY_KWARGS = dict(
+    {k: v for k, v in BINS_KWARGS.items() if k != "gpts"},
+    rotation=0.0,
+    offset=(0.0, 0.0),
+    fftshift=False,
+)
+
+
 def test_device_index_arrays_are_cached_per_device():
-    indices = M._polar_detector_bins(**{**BINS_KWARGS, "return_indices": True})
-    key = ((128, 128), (0.05, 0.05), 0.0, 50.0, 10, 1, 0.0, (0.0, 0.0), False)
+    array = np.zeros((2, *BINS_KWARGS["gpts"]))
 
     M._RADIAL_BINNING_DEVICE_CACHE.clear()
-    flat_a, sep_a = M._radial_binning_device_arrays(np, key, indices)
-    flat_b, sep_b = M._radial_binning_device_arrays(np, key, indices)
+    flat_a, sep_a = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
+    flat_b, sep_b = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
 
     assert flat_a is flat_b and sep_a is sep_b
+    indices = M._polar_detector_bins(**{**BINS_KWARGS, "return_indices": True})
     assert np.array_equal(flat_a, np.concatenate(indices))
     assert int(sep_a[-1]) == sum(len(i) for i in indices)
+    # Shared between callers, so they must not be mutable (cpu arrays only;
+    # cupy arrays cannot be flagged).
+    assert not flat_a.flags.writeable and not sep_a.flags.writeable
+
+
+def test_device_cache_evicts_least_recently_used():
+    """A hot entry survives inserts beyond the bound; the stalest is evicted."""
+    array = np.zeros((1, *BINS_KWARGS["gpts"]))
+
+    M._RADIAL_BINNING_DEVICE_CACHE.clear()
+    hot, _ = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
+
+    for i in range(M._RADIAL_BINNING_DEVICE_CACHE_MAX + 3):
+        M._radial_binning_device_arrays(
+            array, **{**_GEOMETRY_KWARGS, "outer": 30.0 + i}
+        )
+        M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
+
+    again, _ = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
+    assert again is hot
+    assert (
+        len(M._RADIAL_BINNING_DEVICE_CACHE) <= M._RADIAL_BINNING_DEVICE_CACHE_MAX
+    )
 
 
 def test_radial_detectors_give_unchanged_results():
@@ -87,4 +118,7 @@ def test_radial_detectors_give_unchanged_results():
             first = np.asarray(detector.detect(waves).array)
             second = np.asarray(detector.detect(waves).array)  # served from cache
             assert np.allclose(first, second, rtol=0, atol=0)
-            assert M._polar_detector_bins_cached.cache_info().hits >= 1
+            # The repeat call is served from the device cache without even
+            # touching the host-side geometry cache again.
+            info = M._polar_detector_bins_cached.cache_info()
+            assert info.misses == 1 and len(M._RADIAL_BINNING_DEVICE_CACHE) == 1

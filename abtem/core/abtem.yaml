@@ -42,9 +42,12 @@ cupy:
   #          which on Bluestein-fallback grid sizes can reach tens of GB).
   # null  — same as -1 (no bound).
   fft-cache-size: auto
-  # Number of cuFFT plans kept. CuPy's own default is 16, which thrashes for
-  # workloads with many distinct transform shapes (e.g. core-loss scattering,
-  # whose batch dimension follows the number of contributing sites).
+  # Minimum number of cuFFT plans kept. CuPy's own default is 16, which
+  # thrashes for workloads with many distinct transform shapes (e.g. core-loss
+  # scattering, whose batch dimension follows the number of contributing
+  # sites). The count is raised to this value, never lowered — a cache tuned
+  # larger through CuPy's own API is left alone. null or a non-positive value
+  # leaves the entry count untouched entirely.
   fft-cache-entries: 64
 mkl:
   # The number of threads to use for mkl

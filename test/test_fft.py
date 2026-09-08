@@ -205,18 +205,18 @@ def test_cufft_cache_auto_resolves_device_relative():
 
     expected = cp.cuda.Device().mem_info[1] // 4
 
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": "auto"}):
         abtem_fft._configure_cufft_cache()
-        assert abtem_fft._CUFFT_CACHE_STATE is not None
-        assert abtem_fft._CUFFT_CACHE_STATE[1] == expected
+        assert getattr(abtem_fft._CUFFT_CACHE_STATE, "token", None) is not None
+        assert abtem_fft._CUFFT_CACHE_STATE.limit == expected
         assert cp.fft.config.get_plan_cache().get_memsize() == expected
 
     # -1 must still mean unlimited (no memsize bound applied).
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": -1}):
         abtem_fft._configure_cufft_cache()
-        assert abtem_fft._CUFFT_CACHE_STATE[1] == -1
+        assert abtem_fft._CUFFT_CACHE_STATE.limit == -1
 
 
 def test_oversized_plan_bypasses_cache():
@@ -269,38 +269,38 @@ def test_cufft_cache_config_edge_values():
     cache = cp.fft.config.get_plan_cache()
 
     # -1 must undo an earlier bound (the oversized-plan warning recommends it).
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": "auto"}):
         abtem_fft._configure_cufft_cache()
         assert cache.get_memsize() > 0
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": -1}):
         abtem_fft._configure_cufft_cache()
         assert cache.get_memsize() == -1
 
     # null means "no bound" rather than crashing.
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": None}):
         abtem_fft._configure_cufft_cache()
         assert cache.get_memsize() == -1
 
     # A positive bound re-enables a previously disabled cache.
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": "0 MB"}):
         abtem_fft._configure_cufft_cache()
         assert cache.get_size() == 0
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     with config.set({"cupy.fft-cache-size": "1 GB"}):
         abtem_fft._configure_cufft_cache()
         assert cache.get_size() > 0
         assert cache.get_memsize() == 10**9
 
     # Restore the shipped default for subsequent tests.
-    abtem_fft._CUFFT_CACHE_STATE = None
+    abtem_fft._reset_cufft_cache_state()
     abtem_fft._configure_cufft_cache()
 
 
-def test_plan_cache_entry_limit_is_raised():
+def test_plan_cache_entry_limit():
     cp = pytest.importorskip("cupy")
     try:
         if cp.cuda.runtime.getDeviceCount() < 1:
@@ -313,21 +313,38 @@ def test_plan_cache_entry_limit_is_raised():
 
     cache = cp.fft.config.get_plan_cache()
 
-    # CuPy's own default of 16 thrashes for varying batch shapes.
-    abtem_fft._CUFFT_CACHE_STATE = None
-    abtem_fft._configure_cufft_cache()
-    assert cache.get_size() == 64
+    try:
+        # CuPy's own default of 16 thrashes for varying batch shapes.
+        cache.set_size(16)
+        abtem_fft._reset_cufft_cache_state()
+        with config.set({"cupy.fft-cache-entries": 64}):
+            abtem_fft._configure_cufft_cache()
+            assert cache.get_size() == 64
 
-    abtem_fft._CUFFT_CACHE_STATE = None
-    with config.set({"cupy.fft-cache-entries": 128}):
+        # Raised, never lowered: an externally tuned larger cache is kept.
+        cache.set_size(256)
+        abtem_fft._reset_cufft_cache_state()
+        with config.set({"cupy.fft-cache-entries": 64}):
+            abtem_fft._configure_cufft_cache()
+            assert cache.get_size() == 256
+
+        # Invalid or opt-out values leave the entry count alone; they must
+        # never raise, as this runs ahead of every GPU FFT dispatch.
+        for bad in (None, -1, "not-a-number"):
+            cache.set_size(32)
+            abtem_fft._reset_cufft_cache_state()
+            with config.set({"cupy.fft-cache-entries": bad}):
+                abtem_fft._configure_cufft_cache()
+                assert cache.get_size() == 32, f"entries={bad!r}"
+
+        # Disabling the cache still wins over the entry count.
+        abtem_fft._reset_cufft_cache_state()
+        with config.set(
+            {"cupy.fft-cache-size": "0 MB", "cupy.fft-cache-entries": 64}
+        ):
+            abtem_fft._configure_cufft_cache()
+            assert cache.get_size() == 0
+    finally:
+        # Reapply the process configuration whatever happened above.
+        abtem_fft._reset_cufft_cache_state()
         abtem_fft._configure_cufft_cache()
-        assert cache.get_size() == 128
-
-    # Disabling the cache still wins over the entry count.
-    abtem_fft._CUFFT_CACHE_STATE = None
-    with config.set({"cupy.fft-cache-size": "0 MB"}):
-        abtem_fft._configure_cufft_cache()
-        assert cache.get_size() == 0
-
-    abtem_fft._CUFFT_CACHE_STATE = None
-    abtem_fft._configure_cufft_cache()

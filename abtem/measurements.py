@@ -7,7 +7,7 @@ import functools
 import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from numbers import Number
 from types import ModuleType
 from typing import (
@@ -23,8 +23,6 @@ from typing import (
 )
 
 import dask.array as da
-from functools import lru_cache
-
 import numpy as np
 from ase import Atom
 from ase.cell import Cell
@@ -295,43 +293,117 @@ def _annular_detector_mask(
     return bins
 
 
-_RADIAL_BINNING_DEVICE_CACHE: dict = {}
+def _polar_bins_key(
+    gpts,
+    sampling,
+    inner,
+    outer,
+    nbins_radial,
+    nbins_azimuthal,
+    rotation,
+    offset,
+    fftshift,
+    return_indices,
+) -> tuple:
+    """The canonical, hashable geometry key.
+
+    The single definition used by every cache in this module, so a parameter
+    added to the geometry cannot silently be left out of one cache's key.
+    """
+    return (
+        tuple(int(n) for n in gpts),
+        tuple(float(d) for d in sampling),
+        float(inner),
+        float(outer),
+        int(nbins_radial),
+        int(nbins_azimuthal),
+        float(rotation),
+        tuple(float(o) for o in offset),
+        bool(fftshift),
+        bool(return_indices),
+    )
+
+
+# Real LRU: a hit refreshes the entry, an insert beyond the bound evicts only
+# the least recently used one. The bound caps device-memory retention at a few
+# full-grid int64 arrays per device.
+_RADIAL_BINNING_DEVICE_CACHE: OrderedDict = OrderedDict()
 _RADIAL_BINNING_DEVICE_CACHE_MAX = 8
 
 
-def _radial_binning_device_arrays(xp, key, indices):
-    """Flat bin indices and separators, resident on the array's device.
+def _radial_binning_device_arrays(
+    array,
+    sampling,
+    inner,
+    outer,
+    nbins_radial,
+    nbins_azimuthal,
+    rotation,
+    offset,
+    fftshift,
+):
+    """Flat bin indices and separators, resident on ``array``'s device.
 
     Indexing a device array with a host index array transfers that array every
     call; for a detector applied once per wave-function chunk this dominated a
     core-loss scan's runtime. Both arrays depend only on the detector geometry
-    and the grid, so they are cached per device.
+    and the grid, so they are cached per (geometry, device).
+
+    The host-side indices are derived internally from the canonical geometry
+    key (a free lookup when the lru-cached geometry is warm), so there is no
+    key/data consistency contract for callers to uphold.
     """
+    xp = get_array_module(array)
+    key = _polar_bins_key(
+        array.shape[-2:],
+        sampling,
+        inner,
+        outer,
+        nbins_radial,
+        nbins_azimuthal,
+        rotation,
+        offset,
+        fftshift,
+        True,
+    )
+
     if xp is np:
         device_key = "cpu"
     else:
-        try:
-            device_key = ("gpu", int(xp.cuda.Device().id))
-        except Exception:  # noqa: BLE001 -- fall back to a single gpu bucket
-            device_key = "gpu"
+        # Key on the device the array actually lives on -- read off the array
+        # itself, not the current-device context, which can differ from it
+        # under multi-GPU use.
+        device_key = ("gpu", int(array.device.id))
 
     cache_key = key + (device_key,)
     cached = _RADIAL_BINNING_DEVICE_CACHE.get(cache_key)
     if cached is not None:
+        _RADIAL_BINNING_DEVICE_CACHE.move_to_end(cache_key)
         return cached
 
-    flat_indices = xp.asarray(np.concatenate(indices))
-    separators = xp.concatenate(
-        (xp.array([0]), xp.cumsum(xp.array([len(i) for i in indices])))
-    )
+    indices = _polar_detector_bins_cached(*key)
+    flat_host = np.concatenate(indices)
+    separators_host = np.concatenate(([0], np.cumsum([len(i) for i in indices])))
 
-    if len(_RADIAL_BINNING_DEVICE_CACHE) >= _RADIAL_BINNING_DEVICE_CACHE_MAX:
-        _RADIAL_BINNING_DEVICE_CACHE.clear()
+    if xp is np:
+        flat_indices, separators = flat_host, separators_host
+        # Shared between callers, like the lru-cached geometry.
+        flat_indices.flags.writeable = False
+        separators.flags.writeable = False
+    else:
+        # Allocate on the array's device, whatever device is current.
+        # (CuPy arrays cannot be flagged read-only; shared by convention.)
+        with array.device:
+            flat_indices = xp.asarray(flat_host)
+            separators = xp.asarray(separators_host)
+
+    while len(_RADIAL_BINNING_DEVICE_CACHE) >= _RADIAL_BINNING_DEVICE_CACHE_MAX:
+        _RADIAL_BINNING_DEVICE_CACHE.popitem(last=False)
     _RADIAL_BINNING_DEVICE_CACHE[cache_key] = (flat_indices, separators)
     return flat_indices, separators
 
 
-@lru_cache(maxsize=32)
+@functools.lru_cache(maxsize=8)
 def _polar_detector_bins_cached(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -352,7 +424,12 @@ def _polar_detector_bins_cached(
     coordinates on the host and shipping the indices to the device. Profiling
     such a scan put ~48 % of the runtime here.
 
-    Returned arrays are shared between callers and marked read-only.
+    Entries are full-grid arrays, so the bound is deliberately small: typical
+    workflows touch a handful of geometries, and 8 entries already cap the
+    retention at a few hundred MB for large grids.
+
+    Returned containers are immutable and their arrays read-only: they are
+    shared between all callers.
     """
     result = _polar_detector_bins_uncached(
         gpts=gpts,
@@ -366,11 +443,11 @@ def _polar_detector_bins_cached(
         fftshift=fftshift,
         return_indices=return_indices,
     )
-    if isinstance(result, list):
+    if return_indices:
         for array in result:
             array.flags.writeable = False
-    else:
-        result.flags.writeable = False
+        return tuple(result)
+    result.flags.writeable = False
     return result
 
 
@@ -385,20 +462,21 @@ def _polar_detector_bins(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
-) -> np.ndarray | list[np.ndarray]:
+) -> np.ndarray | tuple[np.ndarray, ...]:
     """Bin geometry for a polar detector, cached on its arguments."""
-    return _polar_detector_bins_cached(
-        gpts=tuple(int(n) for n in gpts),
-        sampling=tuple(float(d) for d in sampling),
-        inner=float(inner),
-        outer=float(outer),
-        nbins_radial=int(nbins_radial),
-        nbins_azimuthal=int(nbins_azimuthal),
-        rotation=float(rotation),
-        offset=tuple(float(o) for o in offset),
-        fftshift=bool(fftshift),
-        return_indices=bool(return_indices),
+    key = _polar_bins_key(
+        gpts,
+        sampling,
+        inner,
+        outer,
+        nbins_radial,
+        nbins_azimuthal,
+        rotation,
+        offset,
+        fftshift,
+        return_indices,
     )
+    return _polar_detector_bins_cached(*key)
 
 
 def _polar_detector_bins_uncached(
@@ -3821,37 +3899,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
     ):
         xp = get_array_module(array)
 
-        indices = _polar_detector_bins(
-            gpts=array.shape[-2:],
+        # The flat index array and the separators are functions of the
+        # detector geometry alone, but indexing a device array with a host
+        # index array copies it every call -- up to one int64 per grid point.
+        flat_indices, separators = _radial_binning_device_arrays(
+            array,
             sampling=sampling,
             inner=inner,
             outer=outer,
             nbins_radial=nbins_radial,
             nbins_azimuthal=nbins_azimuthal,
-            fftshift=fftshift,
             rotation=rotation,
             offset=offset,
-            return_indices=True,
+            fftshift=fftshift,
         )
-
-        # The flat index array and the separators are functions of the
-        # detector geometry alone, but indexing a device array with a host
-        # index array copies it every call -- up to one int64 per grid point.
-        flat_indices, separators = _radial_binning_device_arrays(
-            xp,
-            (
-                tuple(int(n) for n in array.shape[-2:]),
-                tuple(float(d) for d in sampling),
-                float(inner),
-                float(outer),
-                int(nbins_radial),
-                int(nbins_azimuthal),
-                float(rotation),
-                tuple(float(o) for o in offset),
-                bool(fftshift),
-            ),
-            indices,
-        )
+        n_bins = int(len(separators)) - 1
 
         new_shape = array.shape[:-2] + (nbins_radial, nbins_azimuthal)
 
@@ -3869,7 +3931,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         result = xp.zeros(
             (
                 array.shape[0],
-                len(indices),
+                n_bins,
             ),
             dtype=fp_dtype,
         )
