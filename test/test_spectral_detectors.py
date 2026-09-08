@@ -570,6 +570,30 @@ def test_show_suptitle_sets_whole_figure_title_exploded():
     assert fig._suptitle.get_text() == "Whole-figure title"
 
 
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_rasterizes_pcolormesh_by_default():
+    """pcolormesh draws each cell as its own vector polygon; in vector
+    output (PDF/SVG/EPS) anti-aliasing at adjacent cell edges shows up as a
+    fine grid of seams over the data. rasterized=True (the default) embeds
+    the mesh as a bitmap instead, avoiding it -- explicit rasterized=False
+    must still give true vector output for anyone who wants it."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()
+
+    fig, ax = spec.show()
+    assert ax.collections[0].get_rasterized() is True
+
+    fig, ax = spec.show(rasterized=False)
+    assert ax.collections[0].get_rasterized() is False
+
+    multi_spec, _ = _make_multiaxis_spectrum()
+    fig, axes = multi_spec.show(explode=[1])
+    for a in axes.flatten()[:3]:
+        assert a.collections[0].get_rasterized() is True
+
+
 def test_show_logscale_colors_nonpositive_values_instead_of_leaving_them_blank():
     """LogNorm masks values <= 0 rather than raising, and a masked pixel is
     drawn with the colormap's "bad" colour -- which defaults to fully

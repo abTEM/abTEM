@@ -5976,6 +5976,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         title: bool | str = True,
         suptitle: Optional[str] = None,
         e_units: str = "meV",
+        rasterized: bool = True,
         **kwargs,
     ) -> tuple:
         """
@@ -6023,6 +6024,15 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             ``AttributeError`` from matplotlib rather than doing what you want.
         e_units : str
             Units for the energy axis ('meV' or 'eV'). Default 'meV'.
+        rasterized : bool, optional
+            Rasterize the mesh (default True). ``pcolormesh`` draws each cell as
+            a separate vector polygon, which in vector output formats (PDF, SVG,
+            EPS -- not PNG, already raster) can show up as a fine grid of seams
+            between cells from anti-aliasing at their edges. Rasterizing embeds
+            the mesh as a bitmap instead, avoiding this; there is no benefit to
+            keeping a heatmap of this kind as scalable vector graphics. Passing
+            ``rasterized=False`` restores true vector output for every cell if
+            you specifically need it.
         kwargs
             Forwarded to :meth:`matplotlib.axes.Axes.pcolormesh`.
 
@@ -6144,7 +6154,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             for k, (idx, data_t) in enumerate(zip(indices, panels)):
                 a = axes_flat[k]
                 im = a.pcolormesh(
-                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm, **kwargs
+                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm,
+                    rasterized=rasterized, **kwargs
                 )
                 a.set_xlabel("q [mrad]")
                 a.set_ylabel(e_label)
@@ -6209,7 +6220,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
         norm = _get_norm(vmin=vmin, vmax=vmax, power=power, logscale=logscale)
         im = ax.pcolormesh(
-            q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
+            q, e, data.T, shading="nearest", cmap=cmap, norm=norm,
+            rasterized=rasterized, **kwargs
         )
         ax.set_xlabel("q [mrad]")
         ax.set_ylabel(e_label)
