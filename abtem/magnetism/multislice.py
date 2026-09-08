@@ -679,6 +679,13 @@ def pauli_multislice_and_detect(
     if magnetic_field is not None:
         magnetic_field_arrays = _materialize(magnetic_field)
 
+    probe_gauge = isinstance(gauge_origin, str) and gauge_origin == "probe"
+    if isinstance(gauge_origin, str) and not probe_gauge:
+        raise ValueError(
+            f"gauge_origin must be 'probe', a length-3 sequence, or None, "
+            f"got {gauge_origin!r}"
+        )
+
     if average_field is not None:
         average_field = np.asarray(average_field, dtype=float)
         if average_field.shape != (3,):
@@ -688,13 +695,48 @@ def pauli_multislice_and_detect(
             )
         if not np.any(average_field):
             average_field = None
+        elif np.any(average_field[:2]) and not probe_gauge:
+            # average_field has two separate roles, and only one of them has
+            # a transverse-growth problem. Its Zeeman contribution (added
+            # directly to magnetic_field_slice below, unconditionally, full
+            # vector) is a plain local B value -- bounded and well-defined
+            # for any direction, no gauge subtlety, and this is exactly what
+            # a genuinely transverse macroscopic field should do to the spin
+            # (Larmor precession). Its ORBITAL contribution instead exists
+            # to let a uniform *lateral* (xy) field be represented without
+            # an enormous supercell, via the non-periodic
+            # A_np = 1/2 B_avg x (r - r0); depth has no analogous supercell
+            # cost (the ordinary periodic `magnetic_field`, tiled through
+            # the true thickness, already represents z-dependence exactly),
+            # so a transverse component would need A_np to also grow with
+            # propagation depth -- unbounded, since there is no periodic
+            # wrapping along z (the sample has a genuine entrance and exit)
+            # and no gauge choice that fixes it the way
+            # gauge_origin="probe" fixes the lateral case. Physically, that
+            # growth is correctly representing a beam that should be
+            # curving away from the multislice axis, which paraxial
+            # propagation cannot do -- so below, only the AXIAL component
+            # of average_field is used to build A_np; a transverse
+            # component's orbital contribution is silently absent rather
+            # than left to possibly diverge. For a genuinely transverse
+            # macroscopic magnetization's orbital coupling, rotate the
+            # atomic structure and fields so that direction becomes the new
+            # beam axis instead, matching the source paper's own treatment
+            # of in-plane-magnetized FePt.
+            #
+            # gauge_origin="probe" has its own, stricter restriction on this
+            # (see _uniform_vector_potential_ramps below, which raises
+            # NotImplementedError instead of warning for that case).
+            warnings.warn(
+                "average_field has a nonzero transverse (x or y) component: "
+                "only its Zeeman (spin) contribution is applied. Its "
+                "orbital (A.grad) contribution has no bounded "
+                "representation with propagation depth in this paraxial "
+                "formalism and is not included -- rotate the atomic "
+                "structure so the magnetization direction is the beam "
+                f"axis if you need that. Got average_field={tuple(average_field)}."
+            )
 
-    probe_gauge = isinstance(gauge_origin, str) and gauge_origin == "probe"
-    if isinstance(gauge_origin, str) and not probe_gauge:
-        raise ValueError(
-            f"gauge_origin must be 'probe', a length-3 sequence, or None, "
-            f"got {gauge_origin!r}"
-        )
     probe_origins = None
 
     if average_field is not None:
@@ -718,6 +760,14 @@ def pauli_multislice_and_detect(
                     f"{origin.shape}"
                 )
         average_field_device = xp.asarray(average_field, dtype=real_dtype)
+        # A_np's orbital contribution is restricted to the axial component
+        # only (see the warning above): a transverse component would grow
+        # unboundedly with depth. The Zeeman contribution below still uses
+        # the full `average_field_device`, since it has no such problem.
+        average_field_orbital = np.array([0.0, 0.0, average_field[2]])
+        average_field_orbital_device = xp.asarray(
+            average_field_orbital, dtype=real_dtype
+        )
 
         if probe_gauge:
             probe_origins = _probe_gauge_origins(waves)
@@ -862,7 +912,7 @@ def pauli_multislice_and_detect(
                 if not probe_gauge:
                     z = depth + thickness / 2
                     A_np = _non_periodic_vector_potential_slice(
-                        average_field_device, x, y, z, origin
+                        average_field_orbital_device, x, y, z, origin
                     )
                     vector_potential_slice = xp.stack(
                         [
@@ -1039,27 +1089,35 @@ def pauli_multislice(
         `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
         for the quantitative details and for mitigations.
 
-        A SEPARATE growth direction, along z, applies whenever
-        `average_field` has a nonzero component transverse to the beam
-        (x or y): the same A_np = 1/2 B_avg x (r - r0) then also grows
-        linearly with propagation depth (r0's z-component sits at the
-        sample mid-thickness, so |A_np| there scales with roughly half the
-        total sample thickness). Unlike the x/y case, there is no periodic
-        wrapping available along z to bound this -- the multislice sample
-        has a genuine entrance and exit, not a repeating unit -- so this is
-        not just an accuracy caveat but a real numerical failure mode for
-        thick samples: the per-slice A.grad Taylor series this evolution
-        uses can leave its radius of convergence, raising `DivergedError`
-        for both `RealSpaceMultislice` and `FourierMultislice` (the latter
-        only since abTEM commit a631400c or later -- earlier commits could
-        let this pass silently as a finite but unphysical result, not even
-        reliably a NaN). A purely axial `average_field` (only the z
-        component nonzero) never
-        triggers this, and is also the only direction `gauge_origin="probe"`
-        supports -- there is currently no equivalent depth mitigation for a
-        transverse `average_field` beyond keeping the sample thin enough
-        for the resulting A_np to stay small compared to the natural scale
-        set by the wavelength and slice thickness.
+        `average_field`'s ORBITAL contribution (the A_np added to the
+        vector potential, driving the A.grad orbital coupling) is always
+        restricted to the axial (z, beam-parallel) component, even if
+        `average_field` itself has a nonzero transverse (x or y)
+        component -- a `UserWarning` is raised in that case, not an error,
+        because the ZEEMAN contribution (added directly to the local B,
+        no vector potential involved) is unaffected and still uses the
+        full vector: a transverse `average_field` still correctly drives
+        spin (Larmor) precession, it just does not drive orbital coupling.
+
+        The reason for the restriction: `average_field`'s orbital role
+        exists to represent a uniform *lateral* field without needing an
+        enormous supercell; depth has no analogous cost, since the
+        ordinary periodic `magnetic_field`, tiled slice by slice through
+        the true thickness, already represents z-dependence exactly. A
+        transverse orbital component would instead need
+        A_np = 1/2 B_avg x (r - r0) to also grow with propagation depth
+        (r0's z sits at the sample mid-thickness), and unlike the lateral
+        case there is no periodic wrapping along z to bound that (the
+        sample has a genuine entrance and exit, not a repeating unit) --
+        nor any gauge choice that fixes it the way `gauge_origin="probe"`
+        fixes the lateral case. Physically, a growing A_np there would be
+        correctly representing a beam that should be curving away from the
+        multislice axis under a transverse field, which paraxial
+        propagation cannot do; dropping it is not merely a numerical
+        convenience. For a genuinely transverse macroscopic magnetization's
+        orbital coupling, rotate the atomic structure and fields so that
+        direction becomes the new beam axis instead, matching the source
+        paper's own treatment of in-plane-magnetized FePt.
 
         For a beam significantly wider than the unit cell (e.g. a
         large-OAM vortex probe), the interaction with this uniform field

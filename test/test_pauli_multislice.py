@@ -7,6 +7,8 @@ vector potential A = B x r / 2 acquires phase at half that rate per quantum
 of l — the g = 2 ratio of spin and orbital moments [Eq. (19)].
 """
 
+import warnings
+
 import numpy as np
 import pytest
 from ase.build import bulk
@@ -240,8 +242,15 @@ def test_constant_field_spin_precession(device, method):
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_average_field_precession(device):
-    """The uniform-field path (average_field -> A_np + constant Zeeman)
-    reproduces the analytic precession for a realistic field strength."""
+    """The uniform-field path's Zeeman contribution (average_field ->
+    constant Zeeman, added to the local B regardless of direction)
+    reproduces the analytic precession for a realistic field strength.
+
+    This field is transverse (x), so it exercises the Zeeman path only --
+    average_field's orbital (A_np) contribution is restricted to the axial
+    component (see the `average_field` docstring), and a UserWarning is
+    raised noting that a transverse component's orbital contribution is
+    not applied."""
     gpts, extent = 32, 20.0
     n_slices, dz = 50, 10.0
     B0 = 2.0  # T, like the saturation field of Fe
@@ -255,13 +264,14 @@ def test_average_field_precession(device):
         .to_spinor((1, 0))
     )
 
-    out = pauli_multislice(
-        spinor,
-        potential,
-        vector_potential=A,
-        magnetic_field=B,
-        average_field=(B0, 0, 0),
-    )
+    with pytest.warns(UserWarning, match="transverse"):
+        out = pauli_multislice(
+            spinor,
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=(B0, 0, 0),
+        )
 
     wavelength = energy2wavelength(ENERGY)
     theta = e_over_hbar * B0 * wavelength / (2 * np.pi) * (n_slices * dz)
@@ -270,8 +280,10 @@ def test_average_field_precession(device):
     assert abs(s[1] + theta) < 1e-7
     assert abs(s[2] - 1) < 1e-6
 
-    # norm conservation (small loss from bandlimiting the non-periodic A_np
-    # phase at the supercell boundary is expected)
+    # norm conservation (average_field's orbital contribution is dropped
+    # for this transverse field, so there is no non-periodic A_np at all
+    # here and no bandlimiting loss to accommodate; the loose tolerance is
+    # kept only for consistency with the other precession tests)
     norm = (np.abs(to_numpy(out.array)) ** 2).sum() / (
         np.abs(to_numpy(spinor.array)) ** 2
     ).sum()
@@ -426,26 +438,114 @@ def test_average_field_vortex_orbital_phase(device, method):
     assert abs(avg - explicit) < 0.05 * abs(2 * expected)
 
 
-@pytest.mark.parametrize("method", ["series", "split"])
-def test_average_field_transverse_diverges_loudly(method):
-    """A transverse (non-axial) `average_field` makes the non-periodic
-    A_np = 1/2 B_avg x (r - r0) grow with propagation depth (r0's z sits
-    at the sample mid-thickness, so |A_np| there scales with roughly half
-    the total sample thickness) -- unlike the x/y case, there is no
-    periodic wrapping along z to bound it. Deep/strong enough, the
-    per-slice A.grad Taylor series leaves its radius of convergence.
+def test_average_field_transverse_warns_axial_is_silent():
+    """A nonzero transverse (x or y) average_field component warns (see
+    test_average_field_precession for why); a purely axial one does not
+    warn at all -- checked here by relying on this project's
+    filterwarnings=["error"], so an unexpected warning would itself raise
+    and fail the test."""
+    gpts, extent = 32, 20.0
+    n_slices, dz = 5, 1.0
+    potential = vacuum_potential(n_slices, gpts, extent, dz)
+    A, B = zero_fields(n_slices, gpts, extent, dz)
+    spinor = (
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device="cpu")
+        .build(lazy=False)
+        .to_spinor((1, 0))
+    )
 
-    Both algorithms must raise `DivergedError` rather than return a
-    silently wrong result. `RealSpaceMultislice` already did, via
-    `_multislice_exponential_series`'s existing growing-term/non-finite
-    guard; `FourierMultislice`'s own split-step A.grad series lacked the
-    equivalent check and would instead return a finite-but-unphysical
-    result for this exact configuration (verified directly: amplitude
-    ~1e65, not even a NaN, so a naive `isfinite()` check downstream would
-    not have caught it either)."""
+    for average_field in [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 1.0, 2.0)]:
+        with pytest.warns(UserWarning, match="transverse"):
+            pauli_multislice(
+                spinor.copy(),
+                potential,
+                vector_potential=A,
+                magnetic_field=B,
+                average_field=average_field,
+            )
+
+    # purely axial: no warning at all (would raise under this project's
+    # filterwarnings=["error"] if one fired)
+    pauli_multislice(
+        spinor.copy(),
+        potential,
+        vector_potential=A,
+        magnetic_field=B,
+        average_field=(0.0, 0.0, 2.0),
+    )
+
+
+def test_average_field_transverse_orbital_contribution_dropped():
+    """average_field's ORBITAL contribution (A_np, driving A.grad orbital
+    coupling) uses only the axial (z) component; a transverse (x, y)
+    component must not alter it at all -- only its separate Zeeman
+    (spin) effect applies (test_average_field_precession).
+
+    Verified with the same construction as test_average_field_vortex_
+    orbital_phase: the phase difference between l=+L and l=-L cancels the
+    l-independent Zeeman contribution, isolating the orbital one. That
+    difference must be identical whether or not a transverse component is
+    present."""
+    gpts, extent = 128, 40.0
+    n_slices, dz = 10, 1.0
+    Bz, Bx, L = 5e4, 3e4, 2
+
+    x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    potential = vacuum_potential(n_slices, gpts, extent, dz)
+    A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
+
+    def phase_for(l, average_field):
+        vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
+            -(X**2 + Y**2) / (2 * 6.0**2)
+        )
+        vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
+        waves = abtem.PlaneWave(
+            energy=ENERGY, gpts=gpts, extent=extent, device="cpu"
+        ).build(lazy=False)
+        waves._array = vortex.astype(to_numpy(waves.array).dtype)
+        spinor = waves.to_spinor((1, 0))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = pauli_multislice(
+                spinor,
+                potential,
+                vector_potential=A_zero,
+                magnetic_field=B_zero,
+                average_field=average_field,
+            )
+        ref = pauli_multislice(
+            spinor.copy(), potential, vector_potential=A_zero, magnetic_field=B_zero
+        )
+        overlap = np.vdot(to_numpy(ref.array[0]), to_numpy(out.array[0]))
+        return np.angle(overlap)
+
+    axial_only = phase_for(+L, (0.0, 0.0, Bz)) - phase_for(-L, (0.0, 0.0, Bz))
+    with_transverse = phase_for(+L, (Bx, 0.0, Bz)) - phase_for(-L, (Bx, 0.0, Bz))
+
+    assert abs(with_transverse - axial_only) < 1e-9
+
+
+@pytest.mark.parametrize("method", ["series", "split"])
+def test_large_vector_potential_diverges_loudly(method):
+    """An explicit `vector_potential` large enough to push the per-slice
+    A.grad Taylor series out of its radius of convergence must raise
+    DivergedError rather than return a silently wrong result.
+
+    Supplies the z-growing field explicitly (the shape a transverse
+    average_field used to build internally, before
+    test_average_field_transverse_rejected's restriction made that path
+    unreachable), so this test exercises the divergence guard itself,
+    independent of that restriction. `RealSpaceMultislice` already had
+    this guard via `_multislice_exponential_series`'s shared growing-term/
+    non-finite check; `FourierMultislice`'s own split-step A.grad series
+    lacked the equivalent check and would instead return a
+    finite-but-unphysical result for this exact configuration (verified
+    directly: amplitude ~1e65, not even a NaN, so a naive `isfinite()`
+    check downstream would not have caught it either)."""
     gpts, extent = 128, 40.0
     n_slices, dz = 100, 10.0
-    B0 = 5e4  # T, transverse (x) -- deliberately unphysical, to converge fast
+    B0 = 5e4  # T-equivalent scale, deliberately unphysical to converge fast
     l = 2
 
     x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
@@ -456,7 +556,11 @@ def test_average_field_transverse_diverges_loudly(method):
     vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
 
     potential = vacuum_potential(n_slices, gpts, extent, dz)
-    A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
+    A_array = np.zeros((n_slices, 3, gpts, gpts))
+    z = (np.arange(n_slices) + 0.5) * dz
+    A_array[:, 1] = -0.5 * B0 * z[:, None, None]
+    A = VectorPotentialArray(A_array, slice_thickness=dz, extent=(extent, extent))
+    _, B_zero = zero_fields(n_slices, gpts, extent, dz)
 
     waves = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device="cpu").build(
         lazy=False
@@ -468,9 +572,8 @@ def test_average_field_transverse_diverges_loudly(method):
         pauli_multislice(
             spinor,
             potential,
-            vector_potential=A_zero,
+            vector_potential=A,
             magnetic_field=B_zero,
-            average_field=(B0, 0, 0),
             algorithm=ALGORITHMS[method],
         )
 
@@ -663,7 +766,11 @@ def test_vortex_probe_spinor():
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_average_field_zeeman_without_periodic_field(device):
     """average_field applies its constant Zeeman term also when no periodic
-    magnetic_field is given (only the periodic Zeeman part is omitted)."""
+    magnetic_field is given (only the periodic Zeeman part is omitted).
+
+    This field is also transverse, so it additionally raises the
+    "orbital contribution not applied" warning from
+    test_average_field_precession; both are expected here."""
     gpts, extent = 32, 20.0
     n_slices, dz = 50, 10.0
     B0 = 2.0  # T
@@ -677,10 +784,17 @@ def test_average_field_zeeman_without_periodic_field(device):
         .to_spinor((1, 0))
     )
 
-    with pytest.warns(UserWarning, match="magnetic_field"):
+    # Not pytest.warns(match=...): this call raises two different warnings
+    # (missing magnetic_field, and average_field's transverse component --
+    # see test_average_field_precession), and pytest.warns' matching did
+    # not reliably coexist with the second, unrelated one here. Verified
+    # directly instead, the same way: record everything, then check.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         out = pauli_multislice(
             spinor, potential, vector_potential=A, average_field=(B0, 0, 0)
         )
+    assert any("magnetic_field" in str(w.message) for w in caught)
 
     wavelength = energy2wavelength(ENERGY)
     theta = e_over_hbar * B0 * wavelength / (2 * np.pi) * (n_slices * dz)
@@ -692,7 +806,11 @@ def test_average_field_zeeman_without_periodic_field(device):
 def test_fields_bundle_defaults():
     """pauli_multislice(fields=...) picks up the potential, both field
     arrays and average_field from the bundle, matching the explicit call;
-    an explicit zero average_field suppresses the bundle's uniform field."""
+    an explicit zero average_field suppresses the bundle's uniform field.
+
+    average_field here is transverse, so both calls also raise the
+    "orbital contribution not applied" warning from
+    test_average_field_precession."""
     from abtem.magnetism.gpaw import GPAWMagneticFields
 
     gpts, extent, n, dz = 32, 20.0, 10, 2.0
@@ -726,14 +844,15 @@ def test_fields_bundle_defaults():
         .to_spinor((1, 0))
     )
 
-    out_bundle = pauli_multislice(spinor.copy(), fields=fields)
-    out_explicit = pauli_multislice(
-        spinor.copy(),
-        potential,
-        vector_potential=A,
-        magnetic_field=B,
-        average_field=average_field,
-    )
+    with pytest.warns(UserWarning, match="transverse"):
+        out_bundle = pauli_multislice(spinor.copy(), fields=fields)
+        out_explicit = pauli_multislice(
+            spinor.copy(),
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=average_field,
+        )
     assert np.array_equal(to_numpy(out_bundle.array), to_numpy(out_explicit.array))
 
     out_zero = pauli_multislice(spinor.copy(), fields=fields, average_field=(0, 0, 0))
