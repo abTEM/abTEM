@@ -532,3 +532,85 @@ def test_prism_eels_s1_preserves_configured_precision(monkeypatch, precision, pa
     expected = np.dtype("complex64" if precision == "float32" else "complex128")
     assert incoming_dtypes and all(dtype == expected for dtype in incoming_dtypes)
     assert carrier_dtypes and all(dtype == np.dtype(precision) for dtype in carrier_dtypes)
+
+
+def _vacuum_eels_setup(thicknesses=(1.0,), gpts=(16, 16), interpolation=1):
+    extent = (16.0, 16.0)
+    energy = 100e3
+    pot = abtem.PotentialArray(np.zeros((len(thicknesses), *gpts)),
+                              slice_thickness=thicknesses, extent=extent)
+    atoms = ase.Atoms("Si", positions=[(8, 8, thicknesses[0] / 2)],
+                      cell=(16, 16, sum(thicknesses)), pbc=True)
+    fy, fx = (np.fft.fftfreq(n, e / n) for n, e in zip(gpts, extent))
+    transition = np.exp(-2 * (fy[:, None]**2 + fx[None, :]**2))
+    tp = TransitionPotentialArray(
+        Z=14, array=transition[None].astype(np.complex128), energy=energy,
+        extent=extent, ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+    )
+    sm = abtem.SMatrix(potential=pot, energy=energy, semiangle_cutoff=20,
+                      interpolation=interpolation, downsample=False, device="cpu")
+    return sm, tp, abtem.CustomScan([(8, 8)]), abtem.PixelatedDetector(max_angle="full"), atoms
+
+
+@pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 100.0), (17.0, 3.0, 27.0, 70.0)])
+@pytest.mark.parametrize("mag_preserve", [False, True])
+@pytest.mark.parametrize("partitions_s2", [1, 100])
+def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, mag_preserve, partitions_s2):
+    import abtem.prism._bipartite as bipartite
+    from abtem.multislice import _fresnel_propagator_array
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+
+    reconstruct = bipartite.windowed_reconstruct
+    reconstructed = []
+
+    def record_reconstruction(parent_cols, weights, parents, targets, iy, ix, extent, gpts, **kwargs):
+        result = reconstruct(parent_cols, weights, parents, targets, iy, ix, extent, gpts, **kwargs)
+        rows = np.rint(targets[:, 0] * extent[0]).astype(int) % gpts[0]
+        cols = np.rint(targets[:, 1] * extent[1]).astype(int) % gpts[1]
+        phase = np.ones(len(targets), dtype=complex)
+        for dz in thicknesses[1:]:
+            phase *= _fresnel_propagator_array(-dz, gpts, (1., 1.), 100e3, "cpu")[rows, cols]
+        carrier = np.exp(2j * np.pi * (
+            targets[:, 0, None, None] * iy[None, :, None]
+            + targets[:, 1, None, None] * ix[None, None, :])) / np.prod(gpts)
+        reconstructed.append((result, carrier * phase[:, None, None]))
+        return result
+
+    monkeypatch.setattr(bipartite, "windowed_reconstruct", record_reconstruction)
+    with abtem.config.set({"precision": "float64"}):
+        setup = _vacuum_eels_setup(thicknesses=thicknesses)
+        _run(prism_transition_potential_scan_beam_basis, *setup,
+             double_channel=True, collection_angle=6, partitions_s2=partitions_s2,
+             mag_preserve=mag_preserve)
+    assert reconstructed
+    for actual, expected in reconstructed:
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 10.0)])
+def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses):
+    import abtem.prism._bipartite as bipartite
+    from abtem.antialias import antialias_aperture
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+
+    reconstruct = bipartite.windowed_reconstruct
+    outputs = []
+
+    def record(*args, **kwargs):
+        result = reconstruct(*args, **kwargs)
+        targets = args[3]
+        rows, cols = (np.rint(targets[:, axis] * 16).astype(int) % 16 for axis in (0, 1))
+        unsupported = antialias_aperture((16, 16), (1., 1.), np)[rows, cols] == 0
+        outputs.append((result, unsupported))
+        return result
+
+    monkeypatch.setattr(bipartite, "windowed_reconstruct", record)
+    with abtem.config.set({"precision": "float64"}):
+        _run(prism_transition_potential_scan_beam_basis, *_vacuum_eels_setup(thicknesses),
+             double_channel=True, partitions_s2=4)
+    for actual, unsupported in outputs:
+        assert unsupported.any()
+        if len(thicknesses) > 1:
+            np.testing.assert_allclose(actual[unsupported], 0, atol=1e-15)
+        else:
+            np.testing.assert_allclose(np.abs(actual[unsupported]), 1 / 256, atol=1e-15)

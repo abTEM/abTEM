@@ -2112,6 +2112,21 @@ def prism_transition_potential_scan_beam_basis(
             for t in reversed(transmissions[slice_index + 1 :]):
                 s2_waves = _step(s2_waves, t, conjugate=True, transpose=True)
             s2_full = s2_waves.array  # (n_build, *gpts): n_pix exact OR Bp2 parents
+            s2_phase = s2_support = None
+            if partitions_s2 is not None and slice_index + 1 < len(transmissions):
+                # Adjoint columns have positive spatial carriers and accumulate
+                # the negative-distance vacuum phase after the ionization slice.
+                # Remove only its unit phase before interpolation: the antialias
+                # amplitudes belong to the multislice operator and must survive.
+                remaining_depth = float(np.sum(potential.slice_thickness[slice_index + 1:]))
+                kernel = _fresnel_propagator_array(
+                    -remaining_depth, tuple(gpts), full_sampling, energy,
+                    s_matrix.device,
+                )
+                s2_phase = xp.exp(1j * xp.angle(kernel[xp.asarray(s2_rows), xp.asarray(s2_cols)]))
+                aperture = ctx.antialias_aperture.get_array(s2_waves)
+                s2_support = aperture[xp.asarray(s2_rows), xp.asarray(s2_cols)] > 0
+
 
         for atom in sites_this_slice:
             site_xy = np.array(
@@ -2207,10 +2222,17 @@ def prism_transition_potential_scan_beam_basis(
             if double_channel:
                 if partitions_s2 is not None:
                     s2_par_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
+                    if s2_phase is not None:
+                        s2_par_crop = s2_par_crop * s2_phase[xp.asarray(p2_idx), None, None].conj()
                     S2_crop = windowed_reconstruct(
                         s2_par_crop, w2, k_par2, k_s2, iy, ix,
                         extent, gpts, mag_preserve=mag_preserve,
                     )  # (n_s2, wh, ww)
+                    if s2_phase is not None:
+                        S2_crop *= s2_phase[:, None, None]
+                        # The first adjoint propagation annihilates these output
+                        # columns, even when its slice has zero thickness.
+                        S2_crop *= s2_support[:, None, None]
                 else:
                     S2_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
                 S2_flat = S2_crop.conj().reshape(n_s2, -1)  # (n_s2, W)
