@@ -636,7 +636,7 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel):
 
 
 @pytest.mark.parametrize("interpolation", [1, 2, 4, (2, 4)])
-@pytest.mark.parametrize("inelastic_crop", [None, (2., 4.)])
+@pytest.mark.parametrize("inelastic_crop", [None, (2., 4.), (2., 3.), (3., 3.)])
 def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop):
     with abtem.config.set({"precision": "float64"}):
         sm, tp, scan, detector, atoms = _vacuum_eels_setup(interpolation=interpolation)

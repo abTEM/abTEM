@@ -1434,8 +1434,8 @@ def prism_transition_potential_scan(
         transition_potential.array * energy2sigma(energy)
     )
     _tp_crop_corner = (
-        -inelastic_window_gpts[0] // 2,
-        -inelastic_window_gpts[1] // 2,
+        -(inelastic_window_gpts[0] // 2),
+        -(inelastic_window_gpts[1] // 2),
     )
     _tp_window_real = wrapped_crop_2d(
         _tp_real_origin, _tp_crop_corner, inelastic_window_gpts
