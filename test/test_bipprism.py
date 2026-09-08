@@ -633,3 +633,27 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel):
         focal = _run(driver, sm, tp, scan, detector, atoms,
                      partitions_s1=20, focal_backprop="centroid", **options)
         np.testing.assert_allclose(focal, exact, rtol=1e-10, atol=1e-18)
+
+
+@pytest.mark.parametrize("interpolation", [1, 2, 4, (2, 4)])
+@pytest.mark.parametrize("inelastic_crop", [None, (2., 4.)])
+def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop):
+    with abtem.config.set({"precision": "float64"}):
+        sm, tp, scan, detector, atoms = _vacuum_eels_setup(interpolation=interpolation)
+        results = {}
+        for reduction in ("real_space", "beam_basis"):
+            for double_channel in (False, True):
+                result = sm.transition_potential_scan(
+                    tp, scan=scan, detectors=detector, sites=atoms,
+                    reduction=reduction, double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
+                )
+                results[reduction, double_channel] = np.asarray(result.array)
+        expected = results["real_space", False]
+        assert expected.sum() > 0
+        for key, actual in results.items():
+            np.testing.assert_allclose(actual.sum(), expected.sum(), rtol=1e-6,
+                                       err_msg=str(key))
+        # Single channel shares the real-space driver's cell detection grid,
+        # including when the transition-potential crop is smaller than the cell.
+        np.testing.assert_allclose(results["beam_basis", False], expected, rtol=1e-5, atol=1e-16)

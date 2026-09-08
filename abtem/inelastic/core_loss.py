@@ -2014,20 +2014,13 @@ def prism_transition_potential_scan_beam_basis(
 
     # --- Allocate measurements (full scan shape; identical pattern to the
     # real-space driver, single exit plane). ---
-    # Detection resolution: double-channel's q-basis is intrinsically the
-    # full native reciprocal grid (S2 is built over all ``gpts`` pixels), so
-    # detect at ``gpts``/``extent``. Single-channel's q is whatever size we
-    # FFT (no reverse multislice) — detecting on a *zero-padded* gpts-sized
-    # array would inflate the Parseval-summed intensity by
-    # ``prod(gpts) / prod(window_gpts)`` relative to the real-space driver's
-    # convention (detector.detect() does its own internal FFT at whatever
-    # array size it is given, and the unnormalised-forward/``1/N``-inverse
-    # FFT pair used throughout abtem is not size-invariant for the *total*
-    # intensity). So single-channel must FFT and detect directly at
-    # ``window_gpts``/``window_extent``, matching the real-space driver's
-    # ``output_window_gpts``-sized detection grid when ``window_gpts``
-    # equals the cell.
-    detect_gpts = gpts if double_channel else window_gpts
+    # The real-space driver detects on the PRISM cell, even when the
+    # transition-potential crop is smaller. Double-channel uses the native
+    # output-beam grid instead. With abTEM's unnormalized forward FFT, Parseval
+    # sums scale with the detection pixel count, so compensate amplitudes by
+    # sqrt(N_cell / N_native), independent of the transition-potential crop.
+    detect_gpts = gpts if double_channel else cell_gpts
+    s2_detector_scale = float(np.sqrt(np.prod(cell_gpts) / np.prod(gpts)))
     detect_extent = (
         detect_gpts[0] * full_sampling[0],
         detect_gpts[1] * full_sampling[1],
@@ -2246,7 +2239,7 @@ def prism_transition_potential_scan_beam_basis(
                 a = xp.stack(
                     [
                         (
-                            n_pix  # N = prod(gpts), the FFT-pair normalisation
+                            (n_pix * s2_detector_scale)
                             * (S2_flat @ HS1[t].reshape(n_k, -1).T)  # (n_s2, n_k)
                         )
                         @ coeff_masked.T  # (n_s2, n_masked)
@@ -2262,12 +2255,18 @@ def prism_transition_potential_scan_beam_basis(
                     xp.moveaxis(a, -1, 1)  # (n_T, n_masked, n_s2)
                 )
             else:
-                # Single channel: S2 is trivial -- FFT the windowed
-                # scattered field directly (no reverse multislice, and no
-                # zero-padding to the full grid: detect at window_gpts
-                # resolution to match the real-space driver's convention,
-                # see the ``detect_gpts`` note above).
-                SHn0 = fft2(HS1)  # (n_T, n_k, *window_gpts)
+                # Match the real-space driver's cell-sized scattered field,
+                # embedding a smaller transition-potential crop before its FFT.
+                if tuple(window_gpts) != tuple(cell_gpts):
+                    field = xp.zeros(
+                        HS1.shape[:-2] + tuple(cell_gpts), dtype=HS1.dtype
+                    )
+                    oy = (cell_gpts[0] - window_gpts[0]) // 2
+                    ox = (cell_gpts[1] - window_gpts[1]) // 2
+                    field[..., oy:oy + window_gpts[0], ox:ox + window_gpts[1]] = HS1
+                else:
+                    field = HS1
+                SHn0 = fft2(field)  # (n_T, n_k, *cell_gpts)
                 recip_full = xp.tensordot(
                     coeff_masked, SHn0, axes=[1, 1]
                 )  # (n_masked, n_T, *window_gpts)
