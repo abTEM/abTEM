@@ -11,7 +11,9 @@ beam-basis driver (M1+).
 import numpy as np
 import pytest
 
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.prism.utils import plane_waves
+from utils import gpu
 
 
 def _hex_beam_grid(radius=3, scale=0.1):
@@ -151,11 +153,11 @@ def _synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=1, seed=0):
     )
 
 
-def _prism_eels_setup(gpts=(24, 24), reps=(1, 1, 2)):
+def _prism_eels_setup(gpts=(24, 24), reps=(1, 1, 2), device="cpu"):
     unit = ase.build.bulk("Si", cubic=True)
     atoms = unit * reps
     st = float(unit.cell[2, 2])
-    pot = abtem.Potential(atoms, gpts=gpts, slice_thickness=st, device="cpu")
+    pot = abtem.Potential(atoms, gpts=gpts, slice_thickness=st, device=device)
     tp = _synthetic_tp(14, gpts, pot.extent, energy=100e3)
     scan = abtem.GridScan(
         start=(0, 0), end=(unit.cell[0, 0], unit.cell[1, 1]),
@@ -163,7 +165,7 @@ def _prism_eels_setup(gpts=(24, 24), reps=(1, 1, 2)):
     )
     sm = abtem.SMatrix(
         potential=pot, energy=100e3, semiangle_cutoff=20.0,
-        interpolation=1, downsample=False, device="cpu",
+        interpolation=1, downsample=False, device=device,
     )
     det = abtem.FlexibleAnnularDetector(to_cpu=True)
     return sm, tp, scan, det, atoms
@@ -176,7 +178,7 @@ def _pearson(a, b):
 
 
 def _run(driver, sm, tp, scan, det, atoms, **kw):
-    return np.asarray(driver(sm, tp, scan, det, sites=atoms, **kw).array)
+    return asnumpy(driver(sm, tp, scan, det, sites=atoms, **kw).array)
 
 
 @pytest.mark.parametrize("double_channel", [False, True])
@@ -505,7 +507,10 @@ def test_bipprism_focal_backprop_public_api():
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("partitions_s1", [None, 2])
-def test_prism_eels_s1_preserves_configured_precision(monkeypatch, precision, partitions_s1):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_s1_preserves_configured_precision(
+    monkeypatch, precision, partitions_s1, device
+):
     from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
     import abtem.multislice
     import abtem.prism.utils
@@ -516,17 +521,19 @@ def test_prism_eels_s1_preserves_configured_precision(monkeypatch, precision, pa
     carrier_dtypes = []
 
     def record_step(waves, *args, **kwargs):
+        assert waves.device == device
         incoming_dtypes.append(waves.array.dtype)
         return step(waves, *args, **kwargs)
 
     def record_carriers(wave_vectors, *args, **kwargs):
+        assert get_array_module(wave_vectors) is get_array_module(device)
         carrier_dtypes.append(wave_vectors.dtype)
         return plane_waves(wave_vectors, *args, **kwargs)
 
     monkeypatch.setattr(abtem.multislice, "conventional_multislice_step", record_step)
     monkeypatch.setattr(abtem.prism.utils, "plane_waves", record_carriers)
     with abtem.config.set({"precision": precision}):
-        sm, tp, scan, det, atoms = _prism_eels_setup(gpts=(16, 16), reps=(1, 1, 1))
+        sm, tp, scan, det, atoms = _prism_eels_setup(gpts=(16, 16), reps=(1, 1, 1), device=device)
         _run(prism_transition_potential_scan_beam_basis, sm, tp, scan, det, atoms,
              double_channel=False, partitions_s1=partitions_s1)
     expected = np.dtype("complex64" if precision == "float32" else "complex128")
@@ -534,10 +541,13 @@ def test_prism_eels_s1_preserves_configured_precision(monkeypatch, precision, pa
     assert carrier_dtypes and all(dtype == np.dtype(precision) for dtype in carrier_dtypes)
 
 
-def _vacuum_eels_setup(thicknesses=(1.0,), gpts=(16, 16), interpolation=1):
+def _vacuum_eels_setup(
+    thicknesses=(1.0,), gpts=(16, 16), interpolation=1, device="cpu"
+):
     extent = (16.0, 16.0)
     energy = 100e3
-    pot = abtem.PotentialArray(np.zeros((len(thicknesses), *gpts)),
+    xp = get_array_module(device)
+    pot = abtem.PotentialArray(xp.zeros((len(thicknesses), *gpts)),
                               slice_thickness=thicknesses, extent=extent)
     atoms = ase.Atoms("Si", positions=[(8, 8, thicknesses[0] / 2)],
                       cell=(16, 16, sum(thicknesses)), pbc=True)
@@ -548,14 +558,17 @@ def _vacuum_eels_setup(thicknesses=(1.0,), gpts=(16, 16), interpolation=1):
         extent=extent, ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
     )
     sm = abtem.SMatrix(potential=pot, energy=energy, semiangle_cutoff=20,
-                      interpolation=interpolation, downsample=False, device="cpu")
+                      interpolation=interpolation, downsample=False, device=device)
     return sm, tp, abtem.CustomScan([(8, 8)]), abtem.PixelatedDetector(max_angle="full"), atoms
 
 
 @pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 100.0), (17.0, 3.0, 27.0, 70.0)])
 @pytest.mark.parametrize("mag_preserve", [False, True])
 @pytest.mark.parametrize("partitions_s2", [1, 100])
-def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, mag_preserve, partitions_s2):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bipprism_s2_vacuum_columns(
+    monkeypatch, thicknesses, mag_preserve, partitions_s2, device
+):
     import abtem.prism._bipartite as bipartite
     from abtem.multislice import _fresnel_propagator_array
     from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
@@ -578,17 +591,19 @@ def test_bipprism_s2_vacuum_columns(monkeypatch, thicknesses, mag_preserve, part
 
     monkeypatch.setattr(bipartite, "windowed_reconstruct", record_reconstruction)
     with abtem.config.set({"precision": "float64"}):
-        setup = _vacuum_eels_setup(thicknesses=thicknesses)
+        setup = _vacuum_eels_setup(thicknesses=thicknesses, device=device)
         _run(prism_transition_potential_scan_beam_basis, *setup,
              double_channel=True, collection_angle=6, partitions_s2=partitions_s2,
              mag_preserve=mag_preserve)
     assert reconstructed
     for actual, expected in reconstructed:
-        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
+        # Keep the backend array alive until the driver's in-place rechirp finishes.
+        np.testing.assert_allclose(asnumpy(actual), expected, rtol=1e-10, atol=1e-12)
 
 
-@pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 10.0)])
-def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses):
+@pytest.mark.parametrize("thicknesses", [(1.0,), (1.0, 10.0), (1.0, 0.0)])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses, device):
     import abtem.prism._bipartite as bipartite
     from abtem.antialias import antialias_aperture
     from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
@@ -606,9 +621,11 @@ def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses):
 
     monkeypatch.setattr(bipartite, "windowed_reconstruct", record)
     with abtem.config.set({"precision": "float64"}):
-        _run(prism_transition_potential_scan_beam_basis, *_vacuum_eels_setup(thicknesses),
+        _run(prism_transition_potential_scan_beam_basis, *_vacuum_eels_setup(thicknesses, device=device),
              double_channel=True, partitions_s2=4)
     for actual, unsupported in outputs:
+        # Convert after the driver has restored phase and applied support in place.
+        actual = asnumpy(actual)
         assert unsupported.any()
         if len(thicknesses) > 1:
             np.testing.assert_allclose(actual[unsupported], 0, atol=1e-15)
@@ -617,14 +634,15 @@ def test_bipprism_s2_preserves_antialias_zero_support(monkeypatch, thicknesses):
 
 
 @pytest.mark.parametrize("double_channel", [False, True])
-def test_bipprism_focal_backprop_full_parents_are_exact(double_channel):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bipprism_focal_backprop_full_parents_are_exact(double_channel, device):
     from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis as driver
     from abtem.prism._bipartite import select_parent_beams
 
     with abtem.config.set({"precision": "float64"}):
-        original, tp, _, _, atoms = _prism_eels_setup(gpts=(32, 32), reps=(1, 1, 3))
+        original, tp, _, _, atoms = _prism_eels_setup(gpts=(32, 32), reps=(1, 1, 3), device=device)
         sm = abtem.SMatrix(potential=original.potential, energy=100e3,
-                          semiangle_cutoff=20, interpolation=2, downsample=False)
+                          semiangle_cutoff=20, interpolation=2, downsample=False, device=device)
         assert len(select_parent_beams(sm.wave_vectors, 20)) == len(sm.wave_vectors)
         scan = abtem.CustomScan(np.unique(atoms.positions[:, :2], axis=0))
         detector = abtem.AnnularDetector(inner=0, outer=25)
@@ -637,9 +655,10 @@ def test_bipprism_focal_backprop_full_parents_are_exact(double_channel):
 
 @pytest.mark.parametrize("interpolation", [1, 2, 4, (2, 4)])
 @pytest.mark.parametrize("inelastic_crop", [None, (2., 4.), (2., 3.), (3., 3.)])
-def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop, device):
     with abtem.config.set({"precision": "float64"}):
-        sm, tp, scan, detector, atoms = _vacuum_eels_setup(interpolation=interpolation)
+        sm, tp, scan, detector, atoms = _vacuum_eels_setup(interpolation=interpolation, device=device)
         results = {}
         for reduction in ("real_space", "beam_basis"):
             for double_channel in (False, True):
@@ -648,7 +667,7 @@ def test_prism_eels_vacuum_detector_normalization(interpolation, inelastic_crop)
                     reduction=reduction, double_channel=double_channel,
                     inelastic_crop=inelastic_crop,
                 )
-                results[reduction, double_channel] = np.asarray(result.array)
+                results[reduction, double_channel] = asnumpy(result.array)
         expected = results["real_space", False]
         assert expected.sum() > 0
         for key, actual in results.items():
