@@ -1520,6 +1520,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         overlay: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
+        suptitle: Optional[str] = None,
         units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
@@ -1571,6 +1572,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             title will be given by the
             value corresponding to the "name" key of the axes metadata dictionary, if
             this item exists.
+        suptitle : str, optional
+            An overall title for the whole figure (``Figure.suptitle``), distinct from
+            the per-panel/column titles set by ``title``. Not set by default.
         units : str
             The units used for the x and y axes. The given units must be compatible with
             the axes of the images.
@@ -1591,6 +1595,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             common_scale=common_color_scale,
             figsize=figsize,
             title=title,
+            suptitle=suptitle,
             aspect=True,
             share_x=True,
             share_y=True,
@@ -5969,6 +5974,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         explode: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
+        suptitle: Optional[str] = None,
         e_units: str = "meV",
         **kwargs,
     ) -> tuple:
@@ -6008,6 +6014,13 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         title : bool or str
             If a string, used as the (base) title. If True, a default title is
             generated. If False, no title is set.
+        suptitle : str, optional
+            An overall title for the whole figure (``Figure.suptitle``), distinct
+            from the per-panel ``title``. Not set by default. Note this is a named
+            parameter, not part of ``**kwargs`` -- ``kwargs`` here goes straight to
+            ``pcolormesh`` (an Axes/Artist-level call), which has no notion of a
+            whole-figure title, so passing ``suptitle`` that way raises an
+            ``AttributeError`` from matplotlib rather than doing what you want.
         e_units : str
             Units for the energy axis ('meV' or 'eV'). Default 'meV'.
         kwargs
@@ -6023,7 +6036,9 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
         import matplotlib.pyplot as plt
 
-        from abtem.visualize.artists import _get_norm
+        from abtem.visualize.artists import _get_norm, validate_cmap
+
+        cmap = validate_cmap(cmap, self, logscale=logscale)
 
         array = self.array
         if hasattr(array, "compute"):
@@ -6118,7 +6133,9 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                 a.set_xlabel("q [mrad]")
                 a.set_ylabel(e_label)
                 parts = [
-                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title()
+                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title(
+                        include_label=(idx[j] == 0)
+                    )
                     for j, a_idx in enumerate(explode_axes)
                 ]
                 panel_title = ", ".join(parts)
@@ -6134,6 +6151,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             # above already makes them redundant on every other panel.
             for a in axes_flat[: len(indices)]:
                 a.label_outer()
+
+            if suptitle:
+                # Set before tight_layout() so it reserves room for it,
+                # rather than the title overlapping the top row of panels.
+                fig.suptitle(suptitle)
 
             # tight_layout() must run before fig.colorbar(): colorbar()
             # shrinks the given panel axes via their gridspec to make room for
@@ -6181,6 +6203,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             ax.set_title("S(q, E)")
         if cbar:
             fig.colorbar(im, ax=ax, label=cbar_label)
+        if suptitle:
+            fig.suptitle(suptitle)
         fig.tight_layout()
         return fig, ax
 
@@ -6271,39 +6295,53 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     temperature: Optional[float],
 ) -> "DiffractionPatterns":
     """Separate one-phonon from multi-phonon scattering (issue #373) from
-    ``exit_waves`` carrying a fully-expanded (``"real", "twin", "static"``)
-    :class:`~abtem.core.axes.PhononParityAxis` -- see
+    ``exit_waves`` carrying a ``("real", "twin")``
+    :class:`~abtem.core.axes.PhononParityAxis` plus a
+    ``static_exit_wave`` attribute -- see
     :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
     ``parity_projection``.
 
     Returns an ensemble of diffraction patterns stacked along a new
-    ``phonon_order`` axis with values ``("all", "one_phonon",
-    "multi_phonon")``:
+    ``"Phonon order"`` axis with values ``("all", "one", "multi")``:
 
     - ``"all"``: identical to the ordinary (non-parity) path with
       ``component="tds"`` -- ``component`` is not otherwise exposed here,
       since once the parity axis has forced ``ensemble_mean=False`` the
       coherent/incoherent split is no longer the interesting choice.
-    - ``"one_phonon"``: ``mean_j |psi_odd_j|²`` where
+    - ``"one"`` (one-phonon): ``mean_j |psi_odd_j|²`` where
       ``psi_odd = (psi_real - psi_twin) / 2`` -- no coherent subtraction
       (the elastic/Bragg term is even in displacement, so it cancels
       exactly, sidestepping the catastrophic-cancellation floor of
       ``I_incoherent - I_coherent``).
-    - ``"multi_phonon"``: ``mean_j |psi_diff_j|²`` where
+    - ``"multi"`` (multi-phonon): ``mean_j |psi_diff_j|²`` where
       ``psi_diff = (psi_real + psi_twin) / 2 - psi_static`` isolates the
-      even-but-non-static (``u²`` and higher) content.
+      even-but-non-static (``u²`` and higher) content. ``psi_static`` (a
+      single ``(nx, ny)`` array, shared and not per-configuration) is
+      subtracted via ordinary broadcasting -- deliberately never replicated
+      to the full per-configuration shape, see
+      ``_add_parity_projection_static_branch`` in ``waves.py``.
     """
     from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
 
     parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
-    if tuple(parity_axis.values) != ("real", "twin", "static"):
+    if tuple(parity_axis.values) != ("real", "twin"):
         raise ValueError(
-            "phonon_loss_diffraction_patterns requires a fully expanded "
-            "PhononParityAxis with values ('real', 'twin', 'static'), got "
+            "phonon_loss_diffraction_patterns requires a PhononParityAxis "
+            "with values ('real', 'twin'), got "
             f"{tuple(parity_axis.values)}. Build the Potential from a "
             "parity_projection=True EnergyResolvedAtomsEnsemble and run "
             "multislice (with a WavesDetector, so the exit waves stay "
             "complex) before calling this function."
+        )
+
+    static_array = getattr(exit_waves, "static_exit_wave", None)
+    if static_array is None:
+        raise ValueError(
+            "exit_waves has a PhononParityAxis but no static_exit_wave "
+            "attribute. This is set by multislice() itself and does not "
+            "survive reconstruction (slicing, to_zarr round-trips, "
+            "rechunking, ...) -- pass the object multislice() returned "
+            "directly, before any such operation."
         )
 
     n_axes = len(exit_waves.ensemble_axes_metadata)
@@ -6316,7 +6354,6 @@ def _phonon_loss_diffraction_patterns_parity_projection(
 
     waves_real = _select(0)
     waves_twin = _select(1)
-    waves_static = _select(2)
 
     fp_axis_idx = None
     energy_axis_idx = None
@@ -6354,7 +6391,9 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     )
 
     # --- "multi_phonon": (real + twin)/2 - static, isolates u^2 and higher ---
-    psi_diff = (waves_real.array + waves_twin.array) / 2 - waves_static.array
+    # static_array is (nx, ny) -- broadcasts against (..., nx, ny) for free,
+    # never physically replicated across the energy/config axes.
+    psi_diff = (waves_real.array + waves_twin.array) / 2 - static_array
     waves_diff = waves_real.__class__(
         psi_diff, **waves_real._copy_kwargs(exclude=("array",))
     )
@@ -6391,7 +6430,7 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     result_array = stack_fn([I_all, I_one_phonon, I_multi_phonon], axis=0)
 
     phonon_order_axis = OrdinalAxis(
-        label="phonon_order", values=("all", "one_phonon", "multi_phonon")
+        label="Phonon order", values=("all", "one", "multi")
     )
     remaining_axes = [phonon_order_axis] + remaining_axes
 
@@ -6485,10 +6524,10 @@ def phonon_loss_diffraction_patterns(
         ``parity_projection=True``
         :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` and
         run through multislice), this instead returns an ensemble stacked
-        along a new ``phonon_order`` axis with values ``("all",
-        "one_phonon", "multi_phonon")`` -- separating one-phonon from
-        multi-phonon scattering (issue #373). In that case ``component`` is
-        ignored: the ``"all"`` slot always uses ``component="tds"``.
+        along a new ``"Phonon order"`` axis with values ``("all", "one",
+        "multi")`` -- separating one-phonon from multi-phonon scattering
+        (issue #373). In that case ``component`` is ignored: the ``"all"``
+        slot always uses ``component="tds"``.
     """
     from abtem.core.axes import (
         EnergyLossAxis,

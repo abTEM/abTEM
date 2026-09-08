@@ -7,6 +7,7 @@ plumbing end-to-end, not statistics; see the issue for the full physics
 validation on a realistic graphene cell.
 """
 
+import dask.array as da
 import numpy as np
 import pytest
 from ase.build import graphene
@@ -35,7 +36,11 @@ def _make_snapshots(equilibrium, n_energies, n_configs, seed=0, scale=0.05):
     return snapshots
 
 
-def test_multislice_produces_expanded_parity_axis(equilibrium):
+def test_multislice_attaches_static_exit_wave_without_expanding_axis(equilibrium):
+    """The PhononParityAxis stays length 2 -- the static wave is attached
+    separately (Waves.static_exit_wave) rather than broadcast and
+    concatenated onto the axis, so it is never replicated across the
+    energy/configuration ensemble."""
     snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
     ensemble = EnergyResolvedAtomsEnsemble(
         snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
@@ -50,8 +55,14 @@ def test_multislice_produces_expanded_parity_axis(equilibrium):
         ax for ax in exit_waves.ensemble_axes_metadata
         if isinstance(ax, PhononParityAxis)
     )
-    assert parity_axis.values == ("real", "twin", "static")
-    assert exit_waves.array.shape[0] == 3
+    assert parity_axis.values == ("real", "twin")
+    assert exit_waves.array.shape[0] == 2
+
+    static = exit_waves.static_exit_wave
+    assert static is not None
+    assert np.iscomplexobj(static)
+    # (nx, ny) only -- no energy/config axes baked in
+    assert static.shape == exit_waves.array.shape[-2:]
 
 
 def test_branches_match_independent_direct_multislice(equilibrium):
@@ -63,13 +74,13 @@ def test_branches_match_independent_direct_multislice(equilibrium):
     potential = abtem.Potential(ensemble, **potential_kwargs)
     exit_waves = abtem.PlaneWave(energy=100e3).multislice(potential, lazy=False)
 
-    # static branch must equal an independent multislice run on the bare
+    # static_exit_wave must equal an independent multislice run on the bare
     # equilibrium atoms
     static_ref = abtem.PlaneWave(energy=100e3).multislice(
         abtem.Potential(equilibrium, **potential_kwargs), lazy=False
     )
     np.testing.assert_allclose(
-        exit_waves.array[(2, 0, 0)], static_ref.array, atol=1e-10
+        exit_waves.static_exit_wave, static_ref.array, atol=1e-10
     )
 
     # real branch must equal an independent multislice run on the same
@@ -132,3 +143,25 @@ def test_full_pipeline_end_to_end(equilibrium):
     )
     dp_plain = phonon_loss_diffraction_patterns(exit_waves_plain, component="tds")
     np.testing.assert_allclose(dp.array[0], dp_plain.array, atol=1e-6)
+
+
+def test_static_exit_wave_stays_lazy(equilibrium):
+    """static_exit_wave must remain a dask array (not eagerly computed)
+    when multislice() itself is run lazily, so it never forces early
+    materialization of the (single, small) static branch."""
+    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+        parity_projection=True,
+    )
+    potential = abtem.Potential(
+        ensemble, sampling=0.1, slice_thickness=equilibrium.cell[2, 2]
+    )
+    exit_waves = abtem.PlaneWave(energy=100e3).multislice(potential, lazy=True)
+
+    assert isinstance(exit_waves.array, da.core.Array)
+    assert isinstance(exit_waves.static_exit_wave, da.core.Array)
+
+    dp = phonon_loss_diffraction_patterns(exit_waves)
+    assert isinstance(dp.array, da.core.Array)
+    assert np.all(np.isfinite(dp.array.compute()))

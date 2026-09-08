@@ -396,11 +396,27 @@ def _add_parity_projection_static_branch(
 ) -> Any:
     """If ``potential`` wraps a ``parity_projection`` frozen-phonon ensemble
     (see :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`) and
-    ``result`` is a complex exit-wave ``Waves`` ensemble, extend its
-    :class:`~abtem.core.axes.PhononParityAxis` from ``("real", "twin")`` to
-    ``("real", "twin", "static")`` with the shared static/equilibrium exit
-    wave -- computed once via ``propagate_static`` and broadcast across the
-    energy and frozen-phonon axes, not recomputed per configuration.
+    ``result`` is a complex exit-wave ``Waves`` ensemble, attach the shared
+    static/equilibrium exit wave -- computed once via ``propagate_static``,
+    not recomputed per configuration -- as ``result.static_exit_wave``.
+
+    The static wave is deliberately *not* broadcast and concatenated onto
+    the :class:`~abtem.core.axes.PhononParityAxis` (which stays
+    ``("real", "twin")``): a dense array has one uniform stride pattern per
+    axis, so joining a broadcast (zero-stride, memory-free) view of a single
+    small wave with the real per-configuration data would force a real copy
+    on materialization -- silently multiplying memory by roughly 1/3 for the
+    exit-wave ensemble, in exchange for no actual gain, since a
+    ``(nx, ny)``-shaped array broadcasts against the per-configuration
+    ensemble for free at the point of use (see
+    ``phonon_loss_diffraction_patterns``) without ever needing to be
+    physically replicated.
+
+    ``result.static_exit_wave`` is a plain object attribute, not part of the
+    constructor/metadata contract (metadata must be JSON-serializable for
+    ``to_zarr``, which a complex array is not) -- it does not survive
+    reconstruction (slicing, zarr round-trips, rechunking, ...). Read it
+    directly from what ``multislice()`` returns, before any such operation.
 
     Returns ``result`` unchanged if ``potential`` is not a parity-projection
     potential, or if ``result`` is not a complex ``Waves`` (e.g. a detector
@@ -425,8 +441,9 @@ def _add_parity_projection_static_branch(
         return result
 
     parity_axis = result.ensemble_axes_metadata[parity_axis_idx]
-    if len(parity_axis) != 2:
-        # Already expanded (or something unexpected) -- leave untouched.
+    if tuple(parity_axis.values) != ("real", "twin"):
+        # Already has a static branch attached (or something unexpected) --
+        # leave untouched.
         return result
 
     if len(result.ensemble_shape) != 3:
@@ -448,36 +465,16 @@ def _add_parity_projection_static_branch(
             f"{static_waves.ensemble_axes_metadata}."
         )
 
-    array = result.array
+    is_lazy = isinstance(result.array, da.core.Array)
     static_array = static_waves.array
-    is_lazy = isinstance(array, da.core.Array)
-    concatenate = da.concatenate if is_lazy else np.concatenate
-    broadcast_to = da.broadcast_to if is_lazy else np.broadcast_to
-
     if is_lazy and not isinstance(static_array, da.core.Array):
         static_array = da.from_array(static_array)
     elif not is_lazy and isinstance(static_array, da.core.Array):
         static_array = static_array.compute()
 
-    base_shape = result.base_shape
-    n_ensemble_axes = len(result.ensemble_shape)
-    static_reshaped = static_array.reshape((1,) * n_ensemble_axes + base_shape)
-    broadcast_shape = tuple(
-        1 if i == parity_axis_idx else s for i, s in enumerate(result.ensemble_shape)
-    ) + base_shape
-    static_broadcast = broadcast_to(static_reshaped, broadcast_shape)
+    result._static_exit_wave = static_array
 
-    new_array = concatenate([array, static_broadcast], axis=parity_axis_idx)
-
-    new_ensemble_axes_metadata = list(result.ensemble_axes_metadata)
-    new_ensemble_axes_metadata[parity_axis_idx] = PhononParityAxis(
-        values=parity_axis.values + ("static",)
-    )
-
-    kwargs = result._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
-    kwargs["ensemble_axes_metadata"] = new_ensemble_axes_metadata
-
-    return result.__class__(new_array, **kwargs)
+    return result
 
 
 def _build_equilibrium_potential(potential: Any) -> Any:
@@ -589,6 +586,21 @@ class Waves(BaseWaves, ArrayObject):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    @property
+    def static_exit_wave(self) -> Optional[np.ndarray | da.core.Array]:
+        """The shared static/equilibrium exit wave for a ``parity_projection``
+        multislice result (see
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`), if
+        any; ``None`` otherwise.
+
+        Set once by ``multislice()`` itself -- not part of the constructor
+        or metadata contract, and does **not** survive reconstruction
+        (slicing, ``to_zarr`` round-trips, rechunking, ...). Read it
+        directly from the object ``multislice()`` returns, before any such
+        operation.
+        """
+        return getattr(self, "_static_exit_wave", None)
 
     @property
     def device(self) -> str:

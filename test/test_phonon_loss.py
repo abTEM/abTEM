@@ -34,6 +34,11 @@ def _make_parity_exit_waves(
     e_values, n_configs=6, gpts=24, seed=0, lazy=False, real=None, twin=None,
     static=None,
 ):
+    """Build exit_waves carrying a ("real", "twin") PhononParityAxis plus a
+    separately-attached `static_exit_wave` -- the shared static wave is
+    genuinely (nx, ny)-shaped here, exactly as `multislice()` attaches it,
+    not pre-broadcast to the full per-configuration shape.
+    """
     rng = np.random.default_rng(seed)
     n_energies = len(e_values)
     shape = (n_energies, n_configs, gpts, gpts)
@@ -51,21 +56,23 @@ def _make_parity_exit_waves(
         static = (
             rng.normal(size=(gpts, gpts)) + 1j * rng.normal(size=(gpts, gpts))
         ).astype(np.complex64)
-        static = np.broadcast_to(static, shape)
 
-    array = np.stack([real, twin, static], axis=0)
+    array = np.stack([real, twin], axis=0)
     if lazy:
         array = da.from_array(array, chunks=(1, 1, 1, gpts, gpts))
-    return Waves(
+        static = da.from_array(static, chunks=(gpts, gpts))
+    waves = Waves(
         array,
         energy=100e3,
         sampling=0.1,
         ensemble_axes_metadata=[
-            PhononParityAxis(values=("real", "twin", "static")),
+            PhononParityAxis(values=("real", "twin")),
             EnergyLossAxis(values=tuple(float(e) for e in e_values)),
             FrozenPhononsAxis(_ensemble_mean=False),
         ],
     )
+    waves._static_exit_wave = static
+    return waves
 
 
 def test_components_are_consistent():
@@ -243,8 +250,8 @@ class TestLazyExitWaves:
 
 
 class TestParityProjection:
-    """Tests for the phonon_order=("all", "one_phonon", "multi_phonon")
-    ensemble output when exit_waves carries a PhononParityAxis (issue #373).
+    """Tests for the "Phonon order"=("all", "one", "multi") ensemble output
+    when exit_waves carries a PhononParityAxis (issue #373).
     """
 
     def test_shape_and_axes(self):
@@ -257,9 +264,9 @@ class TestParityProjection:
 
         phonon_order_axis = next(
             ax for ax in dp.ensemble_axes_metadata
-            if isinstance(ax, OrdinalAxis) and ax.label == "phonon_order"
+            if isinstance(ax, OrdinalAxis) and ax.label == "Phonon order"
         )
-        assert phonon_order_axis.values == ("all", "one_phonon", "multi_phonon")
+        assert phonon_order_axis.values == ("all", "one", "multi")
         assert dp.array.shape[0] == 3
 
         energy_axis = next(
@@ -302,17 +309,18 @@ class TestParityProjection:
         eps = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
             np.complex64
         )
-        static_b = np.broadcast_to(static, shape)
 
         # real = static + delta + eps, twin = static - delta + eps
         #   => psi_odd  = (real - twin) / 2 = delta          (one-phonon)
         #   => psi_diff = (real + twin) / 2 - static = eps   (multi-phonon)
-        real = static_b + delta + eps
-        twin = static_b - delta + eps
+        # (static broadcasts against the (n_e, n_c, gpts, gpts) shape here,
+        # same as it does inside phonon_loss_diffraction_patterns itself.)
+        real = static + delta + eps
+        twin = static - delta + eps
 
         waves = _make_parity_exit_waves(
             e_values, n_configs=n_configs, gpts=gpts,
-            real=real, twin=twin, static=static_b,
+            real=real, twin=twin, static=static,
         )
         dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
 
@@ -336,17 +344,36 @@ class TestParityProjection:
         np.testing.assert_allclose(dp.array[1], I_one_phonon_ref, rtol=1e-4)
         np.testing.assert_allclose(dp.array[2], I_multi_phonon_ref, rtol=1e-4)
 
-    def test_requires_fully_expanded_parity_axis(self):
+    def test_requires_static_exit_wave_attribute(self):
+        """A PhononParityAxis without the separately-attached
+        static_exit_wave (e.g. because exit_waves was reconstructed --
+        sliced, round-tripped through zarr, rechunked -- after multislice()
+        set it) must raise a clear, actionable error rather than a bare
+        AttributeError deep in the multi_phonon computation."""
         e_values = [0.02, 0.05]
         waves = _make_exit_waves(e_values, n_configs=4)
-        # manually attach a not-yet-expanded (length 2) PhononParityAxis
         array = np.stack([waves.array, waves.array], axis=0)
         bad_waves = Waves(
             array, energy=100e3, sampling=0.1,
             ensemble_axes_metadata=[PhononParityAxis(values=("real", "twin"))]
             + waves.ensemble_axes_metadata,
         )
-        with pytest.raises(ValueError, match="fully expanded"):
+        # deliberately do NOT set bad_waves._static_exit_wave
+        with pytest.raises(ValueError, match="static_exit_wave"):
+            phonon_loss_diffraction_patterns(bad_waves)
+
+    def test_requires_real_twin_parity_axis_values(self):
+        e_values = [0.02, 0.05]
+        waves = _make_exit_waves(e_values, n_configs=4)
+        array = np.stack([waves.array, waves.array, waves.array], axis=0)
+        bad_waves = Waves(
+            array, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin", "static"))
+            ]
+            + waves.ensemble_axes_metadata,
+        )
+        with pytest.raises(ValueError, match="'real', 'twin'"):
             phonon_loss_diffraction_patterns(bad_waves)
 
     def test_temperature_unfolds_all_three_slots(self):
