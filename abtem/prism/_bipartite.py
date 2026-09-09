@@ -239,6 +239,60 @@ def _window_tilt(k, iy, ix, extent, gpts, sign, xp, cdtype):
     return complex_exponential(phase).astype(cdtype)
 
 
+# Additional reconstruction workspace, not a bound on total scan memory.
+_EELS_RECONSTRUCTION_BYTES = 1 << 31
+
+
+def _prepare_reconstruction_geometry(weights, parents, targets, xp, cdtype):
+    """Keep invariant interpolation data on the array backend for one scan."""
+    real_dtype = get_dtype(complex=False)
+    if xp is np and hasattr(weights, "get"):
+        weights = _to_numpy(weights)
+    return (xp.asarray(weights, dtype=cdtype),
+            xp.asarray(parents, dtype=real_dtype),
+            xp.asarray(targets, dtype=real_dtype))
+
+
+def _reconstruct_slice(
+    parent_cols, weights, parents, targets, extent, gpts, *,
+    n_active, window_gpts, budget, focal=False, mag_preserve=True,
+    geometry=None, parent_phase=None, target_phase=None, support=None,
+):
+    """Reconstruct once when enough atom windows share a slice and storage fits.
+
+    Cropped focal propagation is not pointwise and must use its existing path.
+    Eight complex128-sized fields per parent/target conservatively cover phase,
+    dechirp/detilt, interpolation, magnitude replacement and output temporaries.
+    The caller subtracts the other leg's retained output from the joint budget.
+    """
+    n_pixels = int(np.prod(gpts))
+    covered_pixels = n_active * int(np.prod(window_gpts))
+    if focal or n_active < 2 or covered_pixels < n_pixels:
+        return None
+    workspace = 8 * max(parent_cols.dtype.itemsize, 16) * (
+        len(targets) + len(parents)
+    ) * n_pixels
+    if workspace > budget:
+        return None
+    xp = get_array_module(parent_cols)
+    # On CPU, equal coverage saves no interpolation arithmetic and the larger
+    # working arrays can cost more. GPU batching still benefits in this case.
+    if xp is np and covered_pixels == n_pixels:
+        return None
+    if parent_phase is not None:
+        parent_cols = parent_cols * parent_phase
+    result = windowed_reconstruct(
+        parent_cols, weights, parents, targets,
+        xp.arange(gpts[0]), xp.arange(gpts[1]), extent, gpts,
+        mag_preserve=mag_preserve, geometry=geometry,
+    )
+    if target_phase is not None:
+        result *= target_phase[:, None, None]
+    if support is not None:
+        result *= support[:, None, None]
+    return result
+
+
 def windowed_reconstruct(
     parent_cols,
     weights,
@@ -249,6 +303,8 @@ def windowed_reconstruct(
     extent,
     gpts,
     mag_preserve: bool = True,
+    *,
+    geometry=None,
 ):
     """Reconstruct the target beam columns on a crop window from the parent columns.
 
@@ -274,6 +330,9 @@ def windowed_reconstruct(
     mag_preserve : bool, optional
         Apply the magnitude-preserving correction (default ``True``).
 
+    geometry : tuple or None, optional
+        Backend-native weights and parent/target coordinates prepared for this scan.
+
     Returns
     -------
     (B, wy, wx) array
@@ -282,7 +341,11 @@ def windowed_reconstruct(
     """
     xp = get_array_module(parent_cols)
     cdtype = parent_cols.dtype
-    w = xp.asarray(_to_numpy(weights), dtype=cdtype)  # (B, Bp)
+    if geometry is None:
+        geometry = _prepare_reconstruction_geometry(
+            weights, k_parents, k_targets, xp, cdtype
+        )
+    w, k_parents, k_targets = geometry
 
     detilt = _window_tilt(k_parents, iy, ix, extent, gpts, -1.0, xp, cdtype)
     Sd = parent_cols * detilt  # (Bp, wy, wx)

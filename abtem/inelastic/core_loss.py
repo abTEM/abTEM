@@ -1976,6 +1976,8 @@ def prism_transition_potential_scan_beam_basis(
         conventional_multislice_step,
     )
     from abtem.multislice import _fresnel_propagator_array
+    from abtem.prism import _bipartite as bipartite
+    from abtem.prism import _eels_contract as eels_contract
     from abtem.prism._bipartite import (
         focal_backprop_distance,
         fresnel_margin,
@@ -2152,6 +2154,16 @@ def prism_transition_potential_scan_beam_basis(
             s2_build_cols = s2_cols
     n_s2 = 0 if s2_rows is None else len(s2_rows)
 
+    geometry1 = geometry2 = None
+    if partitions_s1 is not None:
+        geometry1 = bipartite._prepare_reconstruction_geometry(
+            w1, k_par1, wave_vectors_np, xp, s_waves.array.dtype
+        )
+    if double_channel and partitions_s2 is not None:
+        geometry2 = bipartite._prepare_reconstruction_geometry(
+            w2, k_par2, k_s2, xp, complex_dtype
+        )
+
     # --- Allocate measurements (full scan shape; identical pattern to the
     # real-space driver, single exit plane). ---
     # The real-space driver detects on the PRISM cell, even when the
@@ -2207,13 +2219,58 @@ def prism_transition_potential_scan_beam_basis(
                     scan_shape + m.array.shape[1:]
                 )
 
+    def _site_mask(site_xy):
+        mask = xp.ones(n_positions, dtype=bool)
+        if interpolation[0] > 1:
+            mask &= (
+                xp.abs(positions[:, 0] - site_xy[0])
+                % (extent[0] - prism_region[0])
+            ) <= prism_region[0]
+        if interpolation[1] > 1:
+            mask &= (
+                xp.abs(positions[:, 1] - site_xy[1])
+                % (extent[1] - prism_region[1])
+            ) <= prism_region[1]
+        return mask
+
     # --- Main loop ---
     warned_empty_mask = False
     for slice_index, transmission in enumerate(transmissions):
+        # Atom crops below are gathered copies, so no previous slice cache is
+        # kept alive through a view while the next slice is propagated.
+        s1_reconstructed = s2_reconstructed = None
         s_waves = _step(s_waves, transmission)
 
         sites_this_slice = sites.get_atoms_in_slices(slice_index, atomic_number=Z)
         if len(sites_this_slice) == 0:
+            continue
+
+        # Determine contributing sites before spending reconstruction work.
+        # Retain masks only within a bounded cache; for large
+        # scans regenerate each active site's mask when processing that atom.
+        keep_masks = len(sites_this_slice) * n_positions <= (1 << 25)
+        active_sites = []
+        for atom in sites_this_slice:
+            site_xy = np.asarray(atom.position[:2], dtype=get_dtype())
+            mask = _site_mask(site_xy)
+            if not bool(mask.any()):
+                if not warned_empty_mask:
+                    warnings.warn(
+                        "PRISM-EELS beam-basis: at least one ionization site "
+                        "has no scan position within its PRISM window "
+                        "(extent / interpolation, cropped to half that per "
+                        "axis) -- the scan is too coarse relative to "
+                        "`interpolation` for that site to contribute "
+                        "anything. Such sites are skipped (equivalent to a "
+                        "zero contribution); use a denser scan or lower "
+                        "`interpolation` if this is unintended.",
+                        stacklevel=2,
+                    )
+                    warned_empty_mask = True
+                continue
+
+            active_sites.append((site_xy, mask if keep_masks else None))
+        if not active_sites:
             continue
 
         # S1 focal back-propagation: bring the parent columns to the scattering
@@ -2276,46 +2333,28 @@ def prism_transition_potential_scan_beam_basis(
                 s2_support = aperture[xp.asarray(s2_rows), xp.asarray(s2_cols)] > 0
 
 
-        for atom in sites_this_slice:
-            site_xy = np.array(
-                [atom.position[0], atom.position[1]], dtype=get_dtype()
+        reconstruction_budget = bipartite._EELS_RECONSTRUCTION_BYTES
+        if partitions_s1 is not None:
+            s1_reconstructed = bipartite._reconstruct_slice(
+                s_waves.array, w1, k_par1, wave_vectors_np, extent, gpts,
+                n_active=len(active_sites), window_gpts=window_gpts,
+                budget=reconstruction_budget, focal=s1_bp is not None,
+                mag_preserve=mag_preserve, geometry=geometry1,
+            )
+            if s1_reconstructed is not None:
+                reconstruction_budget -= s1_reconstructed.nbytes
+        if double_channel and partitions_s2 is not None:
+            s2_reconstructed = bipartite._reconstruct_slice(
+                s2_full, w2, k_par2, k_s2, extent, gpts,
+                n_active=len(active_sites), window_gpts=window_gpts,
+                budget=reconstruction_budget, mag_preserve=mag_preserve,
+                geometry=geometry2, parent_phase=s2_parent_phase,
+                target_phase=s2_phase, support=s2_support,
             )
 
-
-            # Which scan positions fall inside this atom's PRISM window
-            # (only depends on site_xy, not on any of the S1/S2 reconstruction
-            # below) -- compute and check it FIRST so a scan too coarse for
-            # this atom (no position lands inside its window, so it would
-            # contribute exactly zero) skips the reconstruction work entirely
-            # instead of building empty-batch arrays that some backends (e.g.
-            # CuPy's FFT) reject.
-            mask = xp.ones(n_positions, dtype=bool)
-            if interpolation[0] > 1:
-                mask &= (
-                    xp.abs(positions[:, 0] - site_xy[0])
-                    % (extent[0] - prism_region[0])
-                ) <= prism_region[0]
-            if interpolation[1] > 1:
-                mask &= (
-                    xp.abs(positions[:, 1] - site_xy[1])
-                    % (extent[1] - prism_region[1])
-                ) <= prism_region[1]
-
-            if not bool(mask.any()):
-                if not warned_empty_mask:
-                    warnings.warn(
-                        "PRISM-EELS beam-basis: at least one ionization site "
-                        "has no scan position within its PRISM window "
-                        "(extent / interpolation, cropped to half that per "
-                        "axis) -- the scan is too coarse relative to "
-                        "`interpolation` for that site to contribute "
-                        "anything. Such sites are skipped (equivalent to a "
-                        "zero contribution); use a denser scan or lower "
-                        "`interpolation` if this is unintended.",
-                        stacklevel=2,
-                    )
-                    warned_empty_mask = True
-                continue
+        for site_xy, mask in active_sites:
+            if mask is None:
+                mask = _site_mask(site_xy)
 
             coeff_masked = coefficients[mask]  # (n_masked, n_k)
 
@@ -2336,7 +2375,11 @@ def prism_transition_potential_scan_beam_basis(
             )[0]
             H_full = ifft2(tp_k * shift_k)  # (n_T, *gpts), shifted to true site position
             H_crop = wrapped_crop_2d(H_full, crop_corner, window_gpts)
-            if partitions_s1 is not None and s1_bp is not None:
+            if s1_reconstructed is not None:
+                rows = xp.asarray(iy % gpts[0])
+                cols = xp.asarray(ix % gpts[1])
+                s1_crop = s1_reconstructed[:, rows[:, None], cols[None, :]]
+            elif partitions_s1 is not None and s1_bp is not None:
                 # Focal back-prop path: reconstruct at the centroid plane on a
                 # window padded by the Fresnel reach, then forward-propagate the
                 # reconstruction to the ionization plane and crop to the window.
@@ -2350,7 +2393,7 @@ def prism_transition_potential_scan_beam_basis(
                 )
                 recon_pad = windowed_reconstruct(
                     s1_par_pad, w1, k_par1, wave_vectors_np, py, px,
-                    extent, gpts, mag_preserve=mag_preserve,
+                    extent, gpts, mag_preserve=mag_preserve, geometry=geometry1,
                 )  # (n_k, Py, Px) at the centroid plane
                 fwd_kernel = _fresnel_propagator_array(
                     back_distance, (len(py), len(px)), full_sampling, energy,
@@ -2362,20 +2405,23 @@ def prism_transition_potential_scan_beam_basis(
                 s1_par_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
                 s1_crop = windowed_reconstruct(
                     s1_par_crop, w1, k_par1, wave_vectors_np, iy, ix,
-                    extent, gpts, mag_preserve=mag_preserve,
+                    extent, gpts, mag_preserve=mag_preserve, geometry=geometry1,
                 )  # (n_k, wh, ww)
             else:
                 s1_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
-            HS1 = H_crop[:, None] * s1_crop[None, :]  # (n_T, n_k, wh, ww)
 
             if double_channel:
-                if partitions_s2 is not None:
+                if s2_reconstructed is not None:
+                    rows = xp.asarray(iy % gpts[0])
+                    cols = xp.asarray(ix % gpts[1])
+                    S2_crop = s2_reconstructed[:, rows[:, None], cols[None, :]]
+                elif partitions_s2 is not None:
                     s2_par_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
                     if s2_phase is not None:
                         s2_par_crop = s2_par_crop * s2_parent_phase
                     S2_crop = windowed_reconstruct(
                         s2_par_crop, w2, k_par2, k_s2, iy, ix,
-                        extent, gpts, mag_preserve=mag_preserve,
+                        extent, gpts, mag_preserve=mag_preserve, geometry=geometry2,
                     )  # (n_s2, wh, ww)
                     if s2_phase is not None:
                         S2_crop *= s2_phase[:, None, None]
@@ -2384,19 +2430,11 @@ def prism_transition_potential_scan_beam_basis(
                         S2_crop *= s2_support[:, None, None]
                 else:
                     S2_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
-                S2_flat = S2_crop.conj().reshape(n_s2, -1)  # (n_s2, W)
-                # a_q(rho) for the S2 output beams q: N * conj(S2) . H . S1, then
-                # combine over aperture beams k with the per-position coefficients.
-                a = xp.stack(
-                    [
-                        (
-                            (n_pix * s2_detector_scale)
-                            * (S2_flat @ HS1[t].reshape(n_k, -1).T)  # (n_s2, n_k)
-                        )
-                        @ coeff_masked.T  # (n_s2, n_masked)
-                        for t in range(n_T)
-                    ]
-                )  # (n_T, n_s2, n_masked)
+                a = eels_contract.contract_eels(
+                    S2_crop, H_crop, s1_crop, coeff_masked,
+                    n_pix * s2_detector_scale,
+                    order=eels_contract._EELS_CONTRACT_ORDER,
+                )
                 # Scatter a_q onto the full reciprocal grid (zeros outside the S2
                 # set); the detector then integrates |a_q|^2 over its aperture.
                 recip_full = xp.zeros(
@@ -2406,6 +2444,7 @@ def prism_transition_potential_scan_beam_basis(
                     xp.moveaxis(a, -1, 1)  # (n_T, n_masked, n_s2)
                 )
             else:
+                HS1 = H_crop[:, None] * s1_crop[None, :]
                 # Match the real-space driver's cell-sized scattered field,
                 # embedding a smaller transition-potential crop before its FFT.
                 if tuple(window_gpts) != tuple(cell_gpts):
