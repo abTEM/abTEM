@@ -483,6 +483,27 @@ class WaveVectorAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class PlasmonOrderAxis(OrdinalAxis):
+    """Ensemble axis over the number of plasmon excitations (energy-loss order).
+
+    The axis carries the constructor arguments of the
+    :class:`abtem.inelastic.plasmons.QuadraturePlasmons` model describing how the loss
+    channels are computed by the multislice algorithm.
+    """
+
+    units: str = ""
+    label: str = "Plasmon excitations"
+    _ensemble_mean: bool = False
+    parameters: dict = None
+
+    @property
+    def plasmons(self):
+        """The plasmon model reconstructed from the stored parameters."""
+        from abtem.inelastic.plasmons import QuadraturePlasmons
+
+        return QuadraturePlasmons(**self.parameters)
+
+
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
 

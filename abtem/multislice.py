@@ -659,6 +659,25 @@ def multislice_and_detect(
         be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
+    from abtem.inelastic.plasmons import (
+        _find_plasmon_order_axis,
+        quadrature_plasmon_multislice_and_detect,
+    )
+
+    if _find_plasmon_order_axis(waves) is not None:
+        if return_backscattered:
+            raise NotImplementedError(
+                "backscattering is not implemented with plasmon scattering"
+            )
+        return quadrature_plasmon_multislice_and_detect(
+            waves,
+            potential,
+            detectors=detectors,
+            algorithm=algorithm,
+            pbar=pbar,
+            potential_chunk_size=potential_chunk_size,
+        )
+
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
     waves = waves.copy()
