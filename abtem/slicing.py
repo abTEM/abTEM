@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import is_cell_ab_in_plane, is_cell_orthogonal
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -54,10 +54,13 @@ def commensurate_slice_thickness(
     slice thickness is as close as possible to `target_thickness` while keeping
     boundaries aligned with atomic planes.
 
+    Only the `z`-height of the cell (``atoms.cell[2, 2]``) is used, so this is
+    unaffected by whether the in-plane (`a`, `b`) cell is skewed.
+
     Parameters
     ----------
     atoms : Atoms
-        The atoms to be sliced. Must have an orthogonal cell.
+        The atoms to be sliced.
     target_thickness : float
         Target slice thickness [Å].
     tolerance : float
@@ -195,17 +198,18 @@ def commensurate_gpts(
     target_sampling: float = 0.05,
     tolerance: float = 1e-3,
     round_to_fast_fft: bool = True,
+    cell: Optional[np.ndarray] = None,
 ) -> tuple[int, int]:
     """
     Find grid points such that the sampling grid is commensurate with the atom
     positions in x and y, closest to a target sampling.
 
-    For each axis the function identifies the unique atom planes and computes the
-    GCD of the spacings between them.  This gives the primitive lattice spacing
-    and therefore the required grid period p (= number of grid points per unit
-    cell of the primitive lattice).  The result is invariant under rigid
-    translations of the structure: a crystal that has been centered or otherwise
-    shifted within the cell always yields the same p as the unshifted version.
+    For each lattice direction the function identifies the unique atom planes and
+    computes the GCD of the spacings between them.  This gives the primitive lattice
+    spacing and therefore the required grid period p (= number of grid points per unit
+    cell of the primitive lattice).  The result is invariant under rigid translations of
+    the structure: a crystal that has been centered or otherwise shifted within the cell
+    always yields the same p as the unshifted version.
 
     When `round_to_fast_fft` is enabled the number of grid points additionally
     factorizes completely into the primes 2, 3, 5 and 7 whenever that is
@@ -228,8 +232,9 @@ def commensurate_gpts(
     Parameters
     ----------
     extent : tuple of float
-        Grid extent in x and y [Å].
-    positions : numpy.ndarray
+        Lattice-vector lengths (|a1|, |a2|) [Å]. For an orthogonal cell this is
+        the same as the Cartesian extent.
+    positions : np.ndarray
         Atom positions with shape (N, 3) or (N, 2).
     target_sampling : float
         Target grid sampling [Å].
@@ -243,6 +248,15 @@ def commensurate_gpts(
         this to False reproduces the plain commensurate grid exactly, including
         for the incommensurate structures above, which then simply take the
         target size.
+    cell : np.ndarray, optional
+        Optional 2x2 real-space cell (rows are the in-plane lattice vectors a1,
+        a2). When given, atom planes are identified along each *lattice*
+        direction using fractional coordinates (``positions @ inv(cell)``)
+        rather than raw Cartesian ``x``/``y`` -- the correct generalization for
+        a non-orthogonal (skewed) cell, where atoms are periodic under
+        translation by a1/a2 but not independently along Cartesian x or y.
+        ``None`` (default) reproduces the original Cartesian-only algorithm
+        exactly; for a diagonal (orthogonal) cell the two are identical.
 
     Returns
     -------
@@ -320,12 +334,23 @@ def commensurate_gpts(
             return max(round(n_target / m), 1) * m
         return best[1]
 
+    if cell is not None:
+        cell_2d = np.asarray(cell, dtype=float)[:2, :2]
+        inv_cell = np.linalg.inv(cell_2d)
+        # fractional coordinates along each lattice vector, wrapped to [0, 1)
+        frac = (positions[:, :2] @ inv_cell) % 1.0
+
     gpts = []
     for i in range(2):
         L = extent[i]
         n_target = int(np.ceil(L / target_sampling))
 
-        x = positions[:, i] % L
+        if cell is not None:
+            # along-axis Angstrom coordinate for lattice direction i, exactly
+            # analogous to positions[:, i] % extent[i] for an orthogonal cell
+            x = frac[:, i] * L
+        else:
+            x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
         # from cell-transform at L−ε rather than 0, creating a spurious near-zero
         # spacing that breaks the GCD calculation.
@@ -516,8 +541,11 @@ class BaseSlicedAtoms(EqualityMixin):
     """
 
     def __init__(self, atoms: Atoms, slice_thickness: float | Sequence[float] | str):
-        if not is_cell_orthogonal(atoms):
-            raise RuntimeError("atoms must have an orthogonal cell")
+        if not is_cell_ab_in_plane(atoms):
+            raise RuntimeError(
+                "atoms must have the a- and b-axes in the xy-plane (the in-plane cell "
+                "may be non-orthogonal and the c-axis may be tilted out of z)"
+            )
 
         self._atoms = atoms
 
@@ -538,9 +566,11 @@ class BaseSlicedAtoms(EqualityMixin):
 
     @property
     def box(self) -> tuple[float, float, float]:
-        """The simulation box [Å]."""
-        diag = np.diag(self._atoms.cell)
-        return float(diag[0]), float(diag[1]), float(diag[2])
+        """The simulation box [Å]: the lengths of the three lattice vectors. For an
+        orthogonal cell this is the same as the diagonal; for a skewed in-plane cell
+        (a, b) the lattice-vector length differs from the diagonal entry."""
+        lengths = np.linalg.norm(np.asarray(self._atoms.cell, dtype=float), axis=1)
+        return float(lengths[0]), float(lengths[1]), float(lengths[2])
 
     @property
     def num_slices(self) -> int:
@@ -755,5 +785,12 @@ class SlicedAtoms(BaseSlicedAtoms):
             in_slice = (self.atoms.numbers == atomic_number) * in_slice
 
         atoms = self.atoms[in_slice]
-        atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
+        # Preserve the true in-plane (a, b) cell -- which may be skewed -- instead of
+        # collapsing it to its diagonal; only the z-extent changes, to this slice's
+        # thickness.
+        cell = np.array(atoms.cell, dtype=float)
+        new_cell = np.zeros((3, 3))
+        new_cell[:2, :2] = cell[:2, :2]
+        new_cell[2, 2] = b - a
+        atoms.cell = new_cell
         return atoms

@@ -39,7 +39,20 @@ def _find_projected_pixel_index(
     g: np.ndarray,
     shape: tuple[int, int],
     sampling: tuple[float, float],
+    grid_cell: Optional[np.ndarray] = None,
 ) -> np.ndarray:
+    if grid_cell is not None:
+        # Non-orthogonal (skewed) diffraction grid: pixel (h1, h2) sits at
+        # g = h1 b1 + h2 b2, so the covariant indices are h_i = g . A_i = g @ cell.T.
+        # (This reduces to g / sampling for a diagonal cell.)
+        cell2 = np.asarray(grid_cell, dtype=float)[:2, :2]
+        hk = g[..., :2] @ cell2.T
+        n = np.rint(hk[..., 0]).astype(int) + shape[0] // 2
+        m = np.rint(hk[..., 1]).astype(int) + shape[1] // 2
+        n = np.clip(n, 0, shape[0] - 1)
+        m = np.clip(m, 0, shape[1] - 1)
+        return np.concatenate((n[..., None], m[..., None]), axis=-1)
+
     x, y = _pixel_edges(shape, sampling)
 
     n = np.digitize(g[..., 0], x) - 1
@@ -231,6 +244,7 @@ def index_diffraction_spots(
     energy: float,
     orientation_matrices: Optional[np.ndarray] = None,
     radius: Optional[float] = None,
+    grid_cell: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Indexes diffraction spots in an array.
@@ -279,7 +293,7 @@ def index_diffraction_spots(
 
     shape = (array.shape[-2], array.shape[-1])
 
-    nm = _find_projected_pixel_index(g_vec, shape, sampling)
+    nm = _find_projected_pixel_index(g_vec, shape, sampling, grid_cell=grid_cell)
 
     sg = np.abs(excitation_errors(g_vec, energy))
 

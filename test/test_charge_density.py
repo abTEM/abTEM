@@ -103,3 +103,78 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
         carbon_atoms, charge_density_3d, sampling=0.1, repetitions=reps
     )
     assert pot.repetitions == reps
+
+
+def test_charge_density_potential_on_skew_cell_preserves_cell():
+    """ChargeDensityPotential.build on a non-orthogonal in-plane cell must produce a
+    PotentialArray on the same skew grid (not silently rectified onto a Cartesian
+    rectangle). Before the slicer was generalised, _interpolate_slice built the
+    target slice on a diagonal slice_box, so the resulting PotentialArray came back
+    with ``grid.is_orthogonal == True`` even on a skew input."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 2.46, 3.35
+    atoms = Atoms(
+        "C2",
+        cell=[
+            [a, 0, 0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+            [0, 0, c],
+        ],
+        pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+    density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+
+    pot = ChargeDensityPotential(atoms, density, sampling=0.1)
+    assert not pot.grid.is_orthogonal
+    assert pot.cell is not None
+
+    built = pot.build(lazy=False)
+    arr = np.asarray(built.array)
+    assert np.all(np.isfinite(arr))
+    # the cell metadata must propagate through the slicer to the built array
+    assert built.cell is not None, (
+        "ChargeDensityPotential.build silently lost the non-orthogonal cell metadata"
+    )
+    assert not built.grid.is_orthogonal
+
+
+def test_point_charges_general_cell_conserves_nuclear_charge():
+    """The pixel-volume normalisation in _add_point_charges_real_space /
+    _add_point_charges_fourier must be the true parallelepiped volume |det(cell)|,
+    not the product of diagonal entries. For an ASE-standard cell (a along x, b in
+    the xy-plane) the cell matrix is upper-triangular and the two formulas happen
+    to coincide. They diverge when the cell is rotated -- e.g. a not along x --
+    which abTEM accepts through ChargeDensityPotential. Test with such a cell that
+    the total integrated nuclear charge equals sum(atomic_numbers) (a
+    method-independent sanity check)."""
+    import numpy as np
+    from ase import Atoms
+
+    from abtem.potentials.charge_density import _add_point_charges_real_space
+
+    # rotated cell where prod(diag) = 60 but |det| = 55 (a NOT along x)
+    cell = [[3.0, 1.0, 0.0], [1.0, 4.0, 0.0], [0.0, 0.0, 5.0]]
+    parallelepiped = abs(np.linalg.det(np.array(cell)))
+    prod_diag = float(np.prod(np.diag(np.array(cell))))
+    # sanity: the two normalisations differ here (so we're testing the real fix)
+    assert abs(prod_diag - parallelepiped) / parallelepiped > 0.05
+
+    atoms = Atoms(
+        "C2", cell=cell, pbc=True,
+        scaled_positions=[(0.1, 0.2, 0.3), (0.6, 0.7, 0.7)],
+    )
+    expected_total_charge = float(np.sum(atoms.numbers))
+
+    shape = (32, 32, 32)
+    array = np.zeros(shape, dtype=np.float32)
+    array = _add_point_charges_real_space(array, atoms)
+    pixel_volume = parallelepiped / np.prod(shape)
+    total_real = float(array.sum()) * pixel_volume
+    assert abs(total_real - expected_total_charge) / expected_total_charge < 1e-5, (
+        f"nuclear-charge normalisation broken on rotated cell: got {total_real:.4f} "
+        f"expected {expected_total_charge:.4f} -- pixel_volume should be |det(cell)|/N, "
+        f"not prod(diag(cell))/N"
+    )
