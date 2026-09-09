@@ -1145,3 +1145,22 @@ def test_local_potential_device_cache_survives_use_but_not_pickle():
     # And the clone repopulates its own cache transparently.
     clone.filter_sites(waves, np.array([[4.0, 4.0]]), threshold=1e-12)
     assert clone._local_potential_device_cache is not None
+
+
+@pytest.mark.skipif(cp is None, reason="no gpu")
+def test_local_potential_device_cache_keys_on_the_arrays_device():
+    """The cache key must carry the concrete GPU id, read off the array
+    itself -- never a bare 'gpu' bucket that could alias devices."""
+    tp = _make_synthetic_tp(5, (32, 32), (8.0, 8.0))
+    like = cp.zeros((32, 32), dtype=cp.complex64)
+
+    on_device = tp._local_potential_on_device(like)
+    key, cached = tp._local_potential_device_cache
+
+    assert key == ("gpu", int(like.device.id))
+    assert cached is on_device
+    assert tp._local_potential_on_device(like) is on_device  # served from cache
+
+    # A cpu request replaces the slot with a cpu-keyed entry.
+    tp._local_potential_on_device(np.zeros((32, 32), dtype=np.complex64))
+    assert tp._local_potential_device_cache[0] == "cpu"

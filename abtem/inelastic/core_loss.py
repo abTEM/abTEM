@@ -30,7 +30,6 @@ from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
-    device_name_from_array_module,
     get_array_module,
 )
 from abtem.core.chunks import validate_chunks
@@ -1040,20 +1039,26 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         dropped when the local potential itself is recomputed.
         """
         xp = get_array_module(like)
-        device = device_name_from_array_module(xp)
-        if device == "gpu":
-            try:
-                # One process can drive several GPUs (outside the dask-cuda
-                # process-per-GPU layout); an array cached for one device
-                # must not be handed to a kernel running on another.
-                device = ("gpu", int(xp.cuda.Device().id))
-            except Exception:  # noqa: BLE001 -- single gpu bucket fallback
-                pass
+        if xp is np:
+            device = "cpu"
+        else:
+            # One process can drive several GPUs (outside the dask-cuda
+            # process-per-GPU layout); an array cached for one device must
+            # not be handed to a kernel running on another. Key on the device
+            # ``like`` actually lives on -- a plain attribute read, so there
+            # is no failure mode to fall back from -- rather than the
+            # current-device context, which can differ from it.
+            device = ("gpu", int(like.device.id))
         cache = getattr(self, "_local_potential_device_cache", None)
         if cache is not None and cache[0] == device:
             return cache[1]
 
-        on_device = copy_to_device(self._local_potential, like)
+        if xp is np:
+            on_device = copy_to_device(self._local_potential, like)
+        else:
+            # Allocate on like's device, whatever device is current.
+            with like.device:
+                on_device = copy_to_device(self._local_potential, like)
         self._local_potential_device_cache = (device, on_device)
         return on_device
 
