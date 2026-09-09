@@ -249,8 +249,12 @@ def _init_laplace_stencil_kernels():
     global _laplace_stencil_c64, _laplace_stencil_c128
     if _laplace_stencil_c64 is None:
         mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL, options=("--std=c++14",))
-        _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
+        # _laplace_stencil_c64 doubles as the initialized-guard, so it is
+        # assigned last: a concurrent thread that observes it non-None is then
+        # guaranteed to also observe _laplace_stencil_c128 (redundant module
+        # compilation from two racing threads is harmless — CuPy caches it)
         _laplace_stencil_c128 = mod.get_function("laplace_stencil_c128")
+        _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
 
 
 def _laplace_operator_stencil(
@@ -297,8 +301,13 @@ def _laplace_operator_stencil(
         _init_laplace_stencil_kernels()
         if a.dtype == xp.complex128:
             kernel = _laplace_stencil_c128
-        else:
+        elif a.dtype == xp.complex64:
             kernel = _laplace_stencil_c64
+        else:
+            raise TypeError(
+                "the GPU Laplacian stencil requires a complex64 or complex128 "
+                f"array, got {a.dtype}"
+            )
 
         threads_x = 16
         threads_y = 16
