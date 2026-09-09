@@ -7,7 +7,7 @@ import functools
 import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from numbers import Number
 from types import ModuleType
 from typing import (
@@ -324,13 +324,6 @@ def _polar_bins_key(
     )
 
 
-# Real LRU: a hit refreshes the entry, an insert beyond the bound evicts only
-# the least recently used one. The bound caps device-memory retention at a few
-# full-grid int64 arrays per device.
-_RADIAL_BINNING_DEVICE_CACHE: OrderedDict = OrderedDict()
-_RADIAL_BINNING_DEVICE_CACHE_MAX = 8
-
-
 def _radial_binning_device_arrays(
     array,
     sampling,
@@ -353,7 +346,6 @@ def _radial_binning_device_arrays(
     key (a free lookup when the lru-cached geometry is warm), so there is no
     key/data consistency contract for callers to uphold.
     """
-    xp = get_array_module(array)
     key = _polar_bins_key(
         array.shape[-2:],
         sampling,
@@ -367,7 +359,7 @@ def _radial_binning_device_arrays(
         True,
     )
 
-    if xp is np:
+    if get_array_module(array) is np:
         device_key = "cpu"
     else:
         # Key on the device the array actually lives on -- read off the array
@@ -375,32 +367,32 @@ def _radial_binning_device_arrays(
         # under multi-GPU use.
         device_key = ("gpu", int(array.device.id))
 
-    cache_key = key + (device_key,)
-    cached = _RADIAL_BINNING_DEVICE_CACHE.get(cache_key)
-    if cached is not None:
-        _RADIAL_BINNING_DEVICE_CACHE.move_to_end(cache_key)
-        return cached
+    return _radial_binning_device_arrays_cached(key, device_key)
 
+
+@functools.lru_cache(maxsize=8)
+def _radial_binning_device_arrays_cached(key, device_key):
+    """The device-resident arrays behind ``_radial_binning_device_arrays``.
+
+    ``lru_cache`` supplies the locking and least-recently-used eviction (a
+    hand-rolled dict here raced under the threaded scheduler). The bound is a
+    single cap shared across all devices -- in the supported multi-GPU layout
+    (one process per GPU) each process only ever sees one device anyway.
+    """
     indices = _polar_detector_bins_cached(*key)
-    flat_host = np.concatenate(indices)
-    separators_host = np.concatenate(([0], np.cumsum([len(i) for i in indices])))
+    flat_indices = np.concatenate(indices)
+    separators = np.concatenate(([0], np.cumsum([len(i) for i in indices])))
 
-    if xp is np:
-        flat_indices, separators = flat_host, separators_host
+    if device_key == "cpu":
         # Shared between callers, like the lru-cached geometry.
         flat_indices.flags.writeable = False
         separators.flags.writeable = False
-    else:
-        # Allocate on the array's device, whatever device is current.
-        # (CuPy arrays cannot be flagged read-only; shared by convention.)
-        with array.device:
-            flat_indices = xp.asarray(flat_host)
-            separators = xp.asarray(separators_host)
+        return flat_indices, separators
 
-    while len(_RADIAL_BINNING_DEVICE_CACHE) >= _RADIAL_BINNING_DEVICE_CACHE_MAX:
-        _RADIAL_BINNING_DEVICE_CACHE.popitem(last=False)
-    _RADIAL_BINNING_DEVICE_CACHE[cache_key] = (flat_indices, separators)
-    return flat_indices, separators
+    # Allocate on the keyed device, whatever device is current.
+    # (CuPy arrays cannot be flagged read-only; shared by convention.)
+    with cp.cuda.Device(device_key[1]):
+        return cp.asarray(flat_indices), cp.asarray(separators)
 
 
 @functools.lru_cache(maxsize=8)

@@ -64,7 +64,7 @@ _GEOMETRY_KWARGS = dict(
 def test_device_index_arrays_are_cached_per_device():
     array = np.zeros((2, *BINS_KWARGS["gpts"]))
 
-    M._RADIAL_BINNING_DEVICE_CACHE.clear()
+    M._radial_binning_device_arrays_cached.cache_clear()
     flat_a, sep_a = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
     flat_b, sep_b = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
 
@@ -81,10 +81,11 @@ def test_device_cache_evicts_least_recently_used():
     """A hot entry survives inserts beyond the bound; the stalest is evicted."""
     array = np.zeros((1, *BINS_KWARGS["gpts"]))
 
-    M._RADIAL_BINNING_DEVICE_CACHE.clear()
+    M._radial_binning_device_arrays_cached.cache_clear()
     hot, _ = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
 
-    for i in range(M._RADIAL_BINNING_DEVICE_CACHE_MAX + 3):
+    maxsize = M._radial_binning_device_arrays_cached.cache_info().maxsize
+    for i in range(maxsize + 3):
         M._radial_binning_device_arrays(
             array, **{**_GEOMETRY_KWARGS, "outer": 30.0 + i}
         )
@@ -92,9 +93,8 @@ def test_device_cache_evicts_least_recently_used():
 
     again, _ = M._radial_binning_device_arrays(array, **_GEOMETRY_KWARGS)
     assert again is hot
-    assert (
-        len(M._RADIAL_BINNING_DEVICE_CACHE) <= M._RADIAL_BINNING_DEVICE_CACHE_MAX
-    )
+    info = M._radial_binning_device_arrays_cached.cache_info()
+    assert info.currsize <= info.maxsize
 
 
 def test_radial_detectors_give_unchanged_results():
@@ -114,11 +114,34 @@ def test_radial_detectors_give_unchanged_results():
             ),
         ):
             M._polar_detector_bins_cached.cache_clear()
-            M._RADIAL_BINNING_DEVICE_CACHE.clear()
+            M._radial_binning_device_arrays_cached.cache_clear()
             first = np.asarray(detector.detect(waves).array)
             second = np.asarray(detector.detect(waves).array)  # served from cache
             assert np.allclose(first, second, rtol=0, atol=0)
             # The repeat call is served from the device cache without even
             # touching the host-side geometry cache again.
             info = M._polar_detector_bins_cached.cache_info()
-            assert info.misses == 1 and len(M._RADIAL_BINNING_DEVICE_CACHE) == 1
+            device_info = M._radial_binning_device_arrays_cached.cache_info()
+            assert info.misses == 1 and device_info.currsize == 1
+
+
+def test_device_cache_is_thread_safe_under_churn():
+    """Concurrent misses beyond the bound must not race the eviction (the
+    hand-rolled predecessor could KeyError under the threaded scheduler)."""
+    import concurrent.futures
+
+    array = np.zeros((1, *BINS_KWARGS["gpts"]))
+    M._radial_binning_device_arrays_cached.cache_clear()
+
+    def hammer(worker):
+        for j in range(30):
+            outer = 20.0 + (worker * 30 + j) % 12  # > maxsize distinct keys
+            M._radial_binning_device_arrays(
+                array, **{**_GEOMETRY_KWARGS, "outer": outer}
+            )
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        list(pool.map(hammer, range(8)))
+
+    info = M._radial_binning_device_arrays_cached.cache_info()
+    assert info.currsize <= info.maxsize
