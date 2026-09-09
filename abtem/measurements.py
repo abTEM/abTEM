@@ -2695,7 +2695,6 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     # filter stops matching and the GPU tests catch the change.
     result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
     return result.astype(array.dtype, copy=False)
-    return array
 
 
 def _lorentzian_source_size(
