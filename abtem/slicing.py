@@ -229,7 +229,7 @@ def commensurate_gpts(
     ----------
     extent : tuple of float
         Grid extent in x and y [Å].
-    positions : np.ndarray
+    positions : numpy.ndarray
         Atom positions with shape (N, 3) or (N, 2).
     target_sampling : float
         Target grid sampling [Å].

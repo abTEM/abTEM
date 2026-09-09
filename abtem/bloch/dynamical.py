@@ -82,7 +82,7 @@ def calculate_scattering_factors(
 
     Parameters
     ----------
-    g_vec : np.ndarray
+    g_vec : numpy.ndarray
         Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
         plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
         shape (N_g, 3); passing magnitudes with anisotropic sigmas raises an error.
@@ -181,7 +181,7 @@ def calculate_structure_factors(
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     atoms : Atoms
         The Atoms object.
@@ -200,7 +200,7 @@ def calculate_structure_factors(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The structure factors.
     """
 
@@ -241,9 +241,9 @@ def structure_factor_1d_to_3d(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     gpts : tuple of ints
@@ -251,7 +251,7 @@ def structure_factor_1d_to_3d(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The 3D structure factors.
     """
     xp = get_array_module(structure_factor)
@@ -267,9 +267,9 @@ def structure_factor_to_potential(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     gpts : tuple of ints
@@ -277,7 +277,7 @@ def structure_factor_to_potential(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The potential.
     """
     xp = get_array_module(structure_factor)
@@ -562,7 +562,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D potential.
         """
         return self.build(lazy=lazy).get_potential_3d()
@@ -603,9 +603,9 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the
         same as the length of the structure factor.
     cell : Cell
@@ -680,7 +680,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D structure factors.
         """
         if self.is_lazy:
@@ -702,7 +702,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The 3D potential.
         """
         if self.is_lazy:
@@ -833,7 +833,7 @@ def calculate_M_matrix(
 
     Parameters
     ----------
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -842,7 +842,7 @@ def calculate_M_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The M matrix.
     """
     g = hkl @ reciprocal_cell(cell)
@@ -864,12 +864,12 @@ def calculate_structure_matrix(
 
     Parameters
     ----------
-    structure_factor : np.ndarray
+    structure_factor : numpy.ndarray
         The structure factors as a 1D array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices corresponding to the structure
         factors. Given as a (N, 3) array.
-    hkl_selected : np.ndarray
+    hkl_selected : numpy.ndarray
         The reciprocal space vectors as Miller indices for which the structure matrix is
         calculated. Given as a (N, 3) array.
     cell : Cell
@@ -884,7 +884,7 @@ def calculate_structure_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The structure matrix.
     """
     xp = get_array_module(structure_factor)
@@ -937,9 +937,9 @@ def calculate_dynamical_scattering(
 
     Parameters
     ----------
-    structure_matrix : np.ndarray
+    structure_matrix : numpy.ndarray
         The structure matrix as a (N, N) array.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -950,7 +950,7 @@ def calculate_dynamical_scattering(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The dynamical scattering as a complex array with shape
         (len(thicknesses), len(hkl)).
     """
@@ -990,12 +990,12 @@ def expm(A: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    A : np.ndarray
+    A : numpy.ndarray
         Input with last two dimensions are square.
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The resulting matrix exponential with the same shape of A.
     """
     xp = get_array_module(A)
@@ -1018,9 +1018,9 @@ def calculate_scattering_matrix(
 
     Parameters
     ----------
-    A : np.ndarray
+    A : numpy.ndarray
         The structure matrix. The last two dimensions must be square.
-    hkl : np.ndarray
+    hkl : numpy.ndarray
         The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
@@ -1037,7 +1037,7 @@ def calculate_scattering_matrix(
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The scattering matrix.
     """
     xp = get_array_module(A)
@@ -1108,18 +1108,18 @@ def plane_wave_basis(
 
     Parameters
     ----------
-    g : np.ndarray
+    g : numpy.ndarray
         The reciprocal space vectors as an Nx3 array [1 / Å].
-    x : np.ndarray
+    x : numpy.ndarray
         The x positions as a 1D array [Å].
-    y : np.ndarray
+    y : numpy.ndarray
         The y positions as a 1D array [Å].
-    z : np.ndarray
+    z : numpy.ndarray
         The z positions as a 1D array [Å].
 
     Returns
     -------
-    np.ndarray
+    numpy.ndarray
         The plane wave basis at the given positions.
     """
     plane_waves_x = complex_exponential(
@@ -1159,14 +1159,14 @@ def allowed_chars(s: str, allowed_chars: str) -> bool:
     """
     Check if the string `s` only contains characters from `allowed_chars`.
 
-    Parameters:
+    Parameters
     ----------
     s : str
         The string to check.
     allowed_chars : str
         A string containing all allowed characters.
 
-    Returns:
+    Returns
     --------
     bool
         True if `s` only contains characters from `allowed_chars`, False otherwise.
@@ -1237,7 +1237,7 @@ class BlochWaves:
         The maximum excitation error [1/Å].
     g_max : float
         The maximum scattering vector length [1/Å].
-    orientation_matrix : np.ndarray
+    orientation_matrix : numpy.ndarray
         An optional orientation matrix given as a (3, 3) array. If provided, the unit
         cell is rotated.
         Instead of providing an orientation matrix, the `.rotate` method can be used.
@@ -1515,7 +1515,7 @@ class BlochWaves:
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The scattering matrix.
         """
         A = self.calculate_structure_matrix()
@@ -1867,38 +1867,10 @@ class BlochWaves:
         Parameters
         ----------
         args : sequence of (str, float)
-            The rotation axes and angles. The axes must be given as a string of 'x', 'y'
-             or 'z',
-            representing a sequence of rotation axes.
+            The rotation axes and angles. The axes must be given as a string of 'x',
+            'y' or 'z', representing a sequence of rotation axes.
         degrees : bool
             If True, the angles are given in degrees. Default is False.
-
-        Examples
-        --------
-        Rotate the unit cell by 45 degrees around the x-axis:
-
-        >>> rotated = bloch.rotate('x', 45)
-        >>> rotated
-        BlochWaves
-        >>> rotated.ensemble_shape
-        ()
-
-        Rotate the unit cell by 0 and 45 degrees around the x-axis. For each x-rotation,
-         do the same around the y-axis:
-
-        >>> rotated = bloch.rotate('x', [0, 45], 'y', [0, 45], units="deg")
-        >>> rotated
-        BlochWavesEnsemble
-        >>> print(rotated.ensemble_shape)
-        (2, 2)
-
-        Rotate the unit cell by (0, 0) and (45, 45) degress in (x, y).
-
-        >>> bloch.rotate('xy', [[0, 0], [45, 45]], units="deg")
-        >>> rotated
-        BlochWavesEnsemble
-        >>> rotated.ensemble_shape
-        (2,)
 
         Returns
         -------
@@ -2004,7 +1976,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The mask selecting the reciprocal space vectors.
         """
         hkl = self._structure_factor.hkl
@@ -2024,7 +1996,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         Returns
         -------
-        np.ndarray
+        numpy.ndarray
             The orientation matrices. The shape is the ensemble shape + (3, 3).
         """
         orientation_matrices = np.eye(3)

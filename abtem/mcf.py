@@ -169,7 +169,7 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         Returns
         -------
-        mcf : np.ndarray
+        mcf : numpy.ndarray
             Array representing the diagonal mixed coherence function.
         """
         semiangle_cutoff = self._safe_semiangle_cutoff(waves)

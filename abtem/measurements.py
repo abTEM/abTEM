@@ -59,6 +59,7 @@ from abtem.core.units import get_conversion_factor
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    cos_sin_deg,
     get_dtype,
     is_broadcastable,
     label_to_index,
@@ -231,7 +232,7 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     routed through dask's own implementation whenever ``array`` is still a
     lazy dask array, regardless of device.
 
-    NumPy dispatches a top-level call like ``np.concatenate([dask_array])``
+    NumPy dispatches a top-level call like ``numpy.concatenate([dask_array])``
     to dask automatically via ``__array_function__``, but CuPy does not: its
     functions raise ``TypeError`` when given a ``dask.array.core.Array``
     rather than a genuine ``cupy.ndarray``. Any code that resolves ``xp`` via
@@ -413,14 +414,15 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def _get_energy(self) -> float:
         """Return the electron energy [eV].
 
-        Resolution order:
-        1. ``metadata["energy"]`` — always present for single-energy
-           measurements and for indexed members of an energy ensemble
-           (populated by :meth:`EnergyAxis.item_metadata` during indexing).
-        2. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` —
-           reached only for a full (un-indexed) energy-ensemble measurement.
-           This is an imprecise convenience fallback; callers that need the
-           exact per-member energy should index the ensemble first.
+        Shares its first two resolution steps with
+        :func:`abtem.core.energy.resolve_energy` (``metadata["energy"]``,
+        then a single-element ``EnergyAxis``). For a full, un-indexed
+        energy-ensemble measurement that resolver returns ``None``, so this
+        falls back further to the maximum value of an ``EnergyAxis`` in
+        ``ensemble_axes_metadata`` — the highest energy (shortest
+        wavelength), mirroring :attr:`Waves.angular_sampling`'s conservative
+        convention. This fallback is an imprecise convenience; callers that
+        need the exact per-member energy should index the ensemble first.
 
         Raises
         ------
@@ -428,13 +430,14 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             If no energy can be found in metadata or ensemble axes metadata.
         """
         from abtem.core.axes import EnergyAxis
+        from abtem.core.energy import resolve_energy
 
-        energy = self.metadata.get("energy")
+        energy = resolve_energy(None, self.metadata, self.ensemble_axes_metadata)
         if energy is not None:
             return energy
         for axis in self.ensemble_axes_metadata:
             if isinstance(axis, EnergyAxis):
-                return float(axis.values[0])
+                return float(max(axis.values))
         raise RuntimeError("energy not in measurement metadata.")
 
     def _check_is_complex(self):
@@ -1072,8 +1075,21 @@ class _BaseMeasurement2D(BaseMeasurements):
             # raise NotImplementedError("Lazy interpolation not implemented.")
             # TDOO: Implement lazy interpolation
 
-            base_axes = tuple(range(len(self.base_shape)))
-            chunks = self.array.chunks[:-2] + (positions.shape[0],)
+            # The base (spatial) axes are the *last* len(self.base_shape) axes
+            # of self.array -- any ensemble axes come first. da.map_blocks's
+            # drop_axis must name their actual positions; previously this used
+            # range(len(self.base_shape)) == (0, 1), i.e. the *first* two axes,
+            # which is only correct for a bare 2D array with no ensemble axes.
+            # With any ensemble axis present this silently mismatches dask's
+            # block bookkeeping: it doesn't raise, but produces wrong output
+            # (extra, duplicated blocks) the moment an ensemble axis has more
+            # than one chunk, or wrong values once BOTH base axes have more
+            # than one chunk each (confirmed by direct reproduction -- e.g. a
+            # DiffractionPatterns array whose spatial axes were chunked by a
+            # sufficiently large zarr save/reload).
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
+            chunks = self.array.chunks[:-n_base] + (positions.shape[0],)
             new_axis = (base_axes[0],)
 
             if width:
@@ -1603,7 +1619,7 @@ class Images(_BaseMeasurement2D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         2D or greater array containing data of type `float` or `complex`. The
         second-to-last and last
         dimensions are the image `y`- and `x`-axis, respectively.
@@ -2373,7 +2389,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array containing data of type `float` or `complex`.
     sampling : float
         Sampling of line profiles [Å].
@@ -2451,7 +2467,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array containing data of type `float` or `complex`.
     sampling : float
         Sampling of line profiles [1 / Å].
@@ -2947,7 +2963,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         2D or greater array containing data with `float` type. The second-to-last and
         last dimensions are the reciprocal space `y`- and `x`-axis of the diffraction
         pattern.
@@ -3162,7 +3178,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The assumed unit cell with respect to the diffraction pattern should be
             indexed. Must be one of ASE `Cell` object, float (for a cubic unit cell) or
             three floats (for orthorhombic unit cells).
-        orientation_matrices : np.ndarray, optional
+        orientation_matrices : numpy.ndarray, optional
             Orientation matrices used for indexing the diffraction spots. The shape of
             the orientation matrices must be broadcastable with the ensemble shape of
             the diffraction patterns.
@@ -4350,7 +4366,7 @@ class PolarMeasurements(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         Array containing the measurement.
     radial_sampling : float
         Sampling of the radial bins [mrad].
@@ -5111,15 +5127,15 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray
+    array : numpy.ndarray
         1D or greater array of type `float` or `complex`. The last axis represents the
         diffraction spots and should have the same length as the number of miller
         indices, any preceding axis represents an ensemble axis.
-    miller_indices : np.ndarray
+    miller_indices : numpy.ndarray
         The miller indices of the diffraction spots as an N x 3 array where N is the
         number of miller indices. The order of the miller indices must correspond to the
         array of intensities. The second axis represents each hkl miller index.
-    reciprocal_lattice_vectors : np.ndarray
+    reciprocal_lattice_vectors : numpy.ndarray
         The reciprocal lattice vectors of the crystal as a 3 x 3 array. The first axis
         represents miller indices and the order of the items must correspond to the
         array of intensities. The second axis represents the reciprocal space positions
@@ -5823,7 +5839,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
     Parameters
     ----------
-    array : np.ndarray or dask array
+    array : numpy.ndarray or dask array
         Array of shape ``(..., n_q, n_E)``.
     q_values : sequence of float
         Scattering-vector values [mrad] for each q bin.
@@ -5949,6 +5965,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         explode: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
@@ -5977,7 +5994,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             from the global min/max across all panels so the shared colorbar is
             meaningful.
         power : float
-            Display on a power scale.
+            Display on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show the spectrum on a logarithmic intensity scale. Cannot
+            be used together with ``power != 1.0``. Non-positive values are
+            masked (log scale is undefined there).
         explode : bool or sequence of int
             If True, explode all ensemble axes into a panel grid. If a sequence
             of ints, explode only those ensemble-axis indices (the remaining
@@ -6001,7 +6022,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         import warnings
 
         import matplotlib.pyplot as plt
-        from matplotlib.colors import PowerNorm
+
+        from abtem.visualize.artists import _get_norm
 
         array = self.array
         if hasattr(array, "compute"):
@@ -6031,6 +6053,24 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]"
         )
 
+        if logscale:
+            # LogNorm masks values <= 0 (log is undefined there) rather than
+            # raising -- phonon-loss TDS intensity (incoherent - coherent) is
+            # routinely exactly zero, or, from floating-point noise, a tiny
+            # negative value. Masked entries render with the colormap's "bad"
+            # colour, which defaults to fully transparent -- i.e. the figure's
+            # white background shows through, easy to mistake for missing
+            # data. These pixels are real, valid, just-below-the-log-floor
+            # intensity, not missing data, so colour them as the darkest end
+            # of the scale instead of leaving a blank gap. with_extremes()
+            # returns a new Colormap rather than mutating in place (set_bad()
+            # does the latter and is being deprecated), so this can never
+            # affect the shared, globally registered colormap. Resolved here
+            # rather than in pcolormesh itself so it applies uniformly to
+            # every panel below.
+            resolved_cmap = plt.get_cmap(cmap)
+            cmap = resolved_cmap.with_extremes(bad=resolved_cmap(0.0))
+
         def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
             # Exploded axes take their grid value; other ensemble axes collapse
             # to their first element. grid_index is positional in explode_axes
@@ -6042,9 +6082,10 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             )
             data = array[full] if full else array
             # array may be GPU-resident (cupy); np.asarray() cannot convert a
-            # cupy array implicitly (cupy deliberately blocks it), so prefer
-            # .get() when available, matching the convention used elsewhere
-            # (e.g. noise.py) for a possibly-cupy, possibly-numpy array.
+            # cupy array implicitly (cupy deliberately blocks it). Duck-type
+            # on .get() rather than using asnumpy(), which is a no-op when
+            # the cupy package itself isn't installed and so would not
+            # convert a genuinely GPU-resident array in that environment.
             data = data.get() if hasattr(data, "get") else np.asarray(data)
             if data.shape != (n_q, n_e):
                 raise ValueError(
@@ -6063,22 +6104,28 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             nrows = (n + ncols - 1) // ncols
             if figsize is None:
                 figsize = (4 * ncols, 3.5 * nrows)
+            # Axes are linked explicitly below rather than via plt.subplots'
+            # own sharex=True/sharey=True: that path reads back the object
+            # array slot it just allocated (matplotlib/gridspec.py's
+            # `axarr[0, 0]`) before every axes is created, and on some numpy
+            # builds that slot is not reliably None on first read.
             fig, axes_arr = plt.subplots(
                 nrows,
                 ncols,
                 figsize=figsize,
                 squeeze=False,
-                sharex=True,
-                sharey=True,
             )
             axes_flat = axes_arr.flatten()
+            for ax in axes_flat[1:]:
+                ax.sharex(axes_flat[0])
+                ax.sharey(axes_flat[0])
 
             # Shared colour scale across panels so the single colorbar applies to
             # every panel (otherwise the norm autoscales to the first panel only).
             panels = [panel_data(idx).T for idx in indices]
             _vmin = min(float(p.min()) for p in panels) if vmin is None else vmin
             _vmax = max(float(p.max()) for p in panels) if vmax is None else vmax
-            norm = PowerNorm(gamma=power, vmin=_vmin, vmax=_vmax)
+            norm = _get_norm(vmin=_vmin, vmax=_vmax, power=power, logscale=logscale)
 
             im = None
             for k, (idx, data_t) in enumerate(zip(indices, panels)):
@@ -6140,7 +6187,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         else:
             fig = ax.get_figure()
 
-        norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        norm = _get_norm(vmin=vmin, vmax=vmax, power=power, logscale=logscale)
         im = ax.pcolormesh(
             q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
         )
@@ -6533,8 +6580,7 @@ def momentum_resolved_spectrum(
         width_inv = detector.width * mrad_to_inv_ang
         sampling_inv = min(dp.sampling)
 
-        angle_rad = np.deg2rad(detector.angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(detector.angle)
 
         # Sample directly from q_min to q_max along the slit direction.
         # For q_min=0 this naturally includes q=0 as the first point.
@@ -6598,8 +6644,7 @@ def momentum_resolved_spectrum(
         n_steps = max(2, round((q_max - detector.q_min) / q_step) + 1)
         q_values = np.linspace(detector.q_min, q_max, n_steps)
 
-        angle_rad = np.deg2rad(detector.sweep_angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = cos_sin_deg(detector.sweep_angle)
 
         xp = get_array_module(dp.array)
         gpts = dp.shape[-2:]

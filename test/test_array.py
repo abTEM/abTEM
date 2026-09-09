@@ -1,3 +1,4 @@
+import os
 from numbers import Number
 
 import hypothesis.extra.numpy as numpy_st
@@ -270,6 +271,195 @@ def test_from_zarr_legacy_format(data, has_array, url):
 
     has_array_from_zarr = from_zarr(url).compute()
     assert has_array_from_zarr == has_array
+
+
+# ---- large-array zarr chunking (regression: whole-array single chunk hit a
+# codec's 2**31-1 byte buffer limit, and a write that failed partway left a
+# store with valid-looking metadata but silently-all-zero data) -------------
+
+
+def test_safe_zarr_chunks_stays_under_budget():
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1025, 512, 512)
+    chunks = _safe_zarr_chunks(shape, itemsize=8, max_bytes=10_000_000)
+
+    nbytes = 8
+    for c in chunks:
+        nbytes *= c
+    assert nbytes <= 10_000_000
+    assert all(0 < c <= s for c, s in zip(chunks, shape))
+
+
+def test_safe_zarr_chunks_no_op_when_already_small():
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (4, 8, 8)
+    assert _safe_zarr_chunks(shape, itemsize=8) == shape
+
+
+def test_safe_zarr_chunks_never_splits_trailing_axes_when_avoidable():
+    """Splitting an ArrayObject's base (measurement) axes -- e.g. a
+    DiffractionPatterns' 2D image plane -- doesn't just change chunk
+    granularity: several of abTEM's own lazy dask operations assume those
+    axes are never chunked and silently compute wrong results if they are
+    (see test_measure.py's interpolate_line regression). n_fixed_trailing_axes
+    must be respected whenever shrinking the leading (ensemble) axis alone is
+    enough to fit the budget."""
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1024, 256, 256)
+    chunks = _safe_zarr_chunks(
+        shape, itemsize=8, max_bytes=1_000_000, n_fixed_trailing_axes=2
+    )
+    assert chunks[-2:] == shape[-2:]
+    assert chunks[0] < shape[0]
+
+
+def test_safe_zarr_chunks_falls_back_to_trailing_axes_if_unavoidable():
+    """If even a single element along every leading axis still exceeds the
+    budget, there is no choice but to also split the trailing axes -- this
+    must not raise or loop forever."""
+    from abtem.array import _safe_zarr_chunks
+
+    shape = (1, 2048, 2048)
+    chunks = _safe_zarr_chunks(
+        shape, itemsize=8, max_bytes=1_000_000, n_fixed_trailing_axes=2
+    )
+    nbytes = 8
+    for c in chunks:
+        nbytes *= c
+    assert nbytes <= 1_000_000
+    assert chunks[-2:] != shape[-2:]
+
+
+def _make_dp(n_energy, gpts, seed=0):
+    import dask.array as da
+    import numpy as np
+
+    import abtem
+    from abtem.measurements import DiffractionPatterns
+
+    rng = np.random.default_rng(seed)
+    array = rng.random((n_energy, gpts, gpts))
+    lazy_array = da.from_array(array, chunks=(1, gpts, gpts))
+    dp = DiffractionPatterns.from_array_and_metadata(
+        lazy_array,
+        axes_metadata=[
+            OrdinalAxis(label="energy", values=tuple(range(n_energy))),
+            abtem.core.axes.ReciprocalSpaceAxis(sampling=0.1, label="x", units="1/A"),
+            abtem.core.axes.ReciprocalSpaceAxis(sampling=0.1, label="y", units="1/A"),
+        ],
+    )
+    return dp, array
+
+
+def test_from_zarr_auto_chunks_never_splits_base_axes(tmp_path):
+    """from_zarr(url, chunks="auto") must not let dask's own auto-chunking
+    heuristic split an ArrayObject's base (measurement) axes -- several of
+    abTEM's own lazy operations (e.g. interpolate_line) assume those are
+    never chunked. chunks=None (the default) already avoids this by
+    mirroring whatever to_zarr actually wrote (which itself never splits
+    base axes); explicitly requesting "auto" used to bypass that protection
+    since dask's own heuristic doesn't know which axes are which."""
+    import dask
+
+    import abtem.array as abtem_array_module
+
+    dp, _ = _make_dp(n_energy=2, gpts=64)
+    url = str(tmp_path / "dp_auto.zarr")
+    dp.to_zarr(url)
+
+    with dask.config.set({"array.chunk-size": "1KiB"}):
+        loaded = abtem_array_module.from_zarr(url, chunks="auto")
+
+    assert loaded.array.chunks[-2:] == ((64,), (64,))
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
+    """Regression: the spatial (base) axes of a DiffractionPatterns are much
+    larger than its ensemble (energy) axis here, so a naive "always shrink
+    the largest axis" policy would chunk the spatial plane first -- which
+    several lazy dask operations (e.g. interpolate_line) silently compute
+    wrong results against. to_zarr must chunk only the ensemble axis."""
+    import zarr
+
+    import abtem.array as abtem_array_module
+
+    monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 1_000_000)
+
+    dp, _ = _make_dp(n_energy=8, gpts=256)
+    url = str(tmp_path / f"dp_base{suffix}")
+    dp.to_zarr(url)
+
+    if suffix == ".zip":
+        store = zarr.storage.ZipStore(url, mode="r")
+        root = zarr.open(store=store, mode="r")
+    else:
+        root = zarr.open(url, mode="r")
+
+    zarr_array = root["array0"]
+    assert zarr_array.chunks[-2:] == zarr_array.shape[-2:]
+    assert zarr_array.chunks[0] < zarr_array.shape[0]
+
+    if suffix == ".zip":
+        store.close()
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_writes_multiple_chunks_not_one_giant_chunk(tmp_path, monkeypatch, suffix):
+    """A single whole-array zarr chunk hits a codec's 2**31-1 byte buffer
+    limit for any reasonably large array (regression: this used to always
+    happen via chunks=computed_array.shape). Force a tiny budget so a small
+    test array reproduces the same "must be split" condition, and check the
+    written array is actually split -- and still round-trips correctly."""
+    import numpy as np
+    import zarr
+
+    import abtem.array as abtem_array_module
+
+    monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 10_000)
+
+    dp, array = _make_dp(n_energy=8, gpts=16)
+    url = str(tmp_path / f"dp{suffix}")
+    dp.to_zarr(url)
+
+    if suffix == ".zip":
+        store = zarr.storage.ZipStore(url, mode="r")
+        root = zarr.open(store=store, mode="r")
+    else:
+        root = zarr.open(url, mode="r")
+
+    zarr_array = root["array0"]
+    assert zarr_array.chunks != zarr_array.shape
+
+    if suffix == ".zip":
+        store.close()
+
+    loaded = abtem_array_module.from_zarr(url).compute()
+    np.testing.assert_allclose(loaded.array, array)
+
+
+@pytest.mark.parametrize("suffix", ["", ".zip"])
+def test_to_zarr_cleans_up_on_failed_write(tmp_path, monkeypatch, suffix):
+    """A write that fails partway (e.g. a chunk still over a codec's buffer
+    limit) must not leave behind a store with valid-looking metadata but
+    missing chunk data -- previously silently readable back as all zeros
+    (zarr's fill_value for a declared-but-never-written chunk)."""
+    import zarr
+
+    def _raising_create_array(self, *args, **kwargs):
+        raise ValueError("Codec does not support buffers of > 2147483647 bytes")
+
+    monkeypatch.setattr(zarr.Group, "create_array", _raising_create_array)
+
+    dp, _ = _make_dp(n_energy=4, gpts=8)
+    url = str(tmp_path / f"dp{suffix}")
+    with pytest.raises(ValueError, match="Codec does not support buffers"):
+        dp.to_zarr(url)
+
+    assert not os.path.exists(url)
 
 
 @given(data=st.data())

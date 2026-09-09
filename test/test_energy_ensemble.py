@@ -51,64 +51,32 @@ class TestPlaneWaveEnergyEnsemble:
         waves = pw.build(lazy=False)
         assert waves.shape == (3, 32, 32)
 
-    def test_to_zarr_from_zarr(self):
+    @pytest.mark.parametrize("filename", ["waves.zarr", "waves.zarr.zip"])
+    def test_to_zarr_from_zarr(self, filename):
         pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
         waves = pw.build(lazy=False)
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "waves.zarr")
+            path = os.path.join(tmp, filename)
             waves.to_zarr(path)
             loaded = Waves.from_zarr(path)
         assert loaded.shape == (3, 32, 32)
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
 
-    def test_to_zarr_zip_from_zarr(self):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        waves = pw.build(lazy=False)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "waves.zarr.zip")
-            waves.to_zarr(path)
-            loaded = Waves.from_zarr(path)
-        assert loaded.shape == (3, 32, 32)
-        assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
-        assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
-
-    def test_multislice_eager(self):
-        """PlaneWave with list energy completes multislice without EnergyUndefinedError."""
-        unit_cell = ase.Atoms(
-            symbols="SrTiO3",
-            scaled_positions=[
-                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
-                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
-            ],
-            cell=[3.9127, 3.9127, 3.9127],
-            pbc=True,
+    @pytest.mark.parametrize(
+        "algorithm", [None, RealSpaceMultislice(order=1)], ids=["default", "realspace"]
+    )
+    def test_multislice_eager(self, algorithm):
+        """PlaneWave with list energy completes multislice without EnergyUndefinedError,
+        for both the default and RealSpaceMultislice algorithms."""
+        potential_unit = abtem.Potential(
+            _srtio3_atoms(), sampling=0.1, projection="finite"
         )
-        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
         potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
         pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
         pw.grid.match(potential)
-        result = pw.multislice(potential).compute()
-        assert result.array.shape[0] == 3
-
-    def test_realspace_multislice_eager(self):
-        """PlaneWave with list energy completes RealSpaceMultislice without EnergyUndefinedError."""
-        unit_cell = ase.Atoms(
-            symbols="SrTiO3",
-            scaled_positions=[
-                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
-                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
-            ],
-            cell=[3.9127, 3.9127, 3.9127],
-            pbc=True,
-        )
-        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
-        potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
-        pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
-        pw.grid.match(potential)
-        result = pw.multislice(
-            potential, algorithm=RealSpaceMultislice(order=1)
-        ).compute()
+        kwargs = {} if algorithm is None else {"algorithm": algorithm}
+        result = pw.multislice(potential, **kwargs).compute()
         assert result.array.shape[0] == 3
 
 
@@ -156,6 +124,56 @@ class TestProbeEnergyEnsemble:
         ]
         assert len(energy_axes) == 1
         assert tuple(energy_axes[0].values) == (40e3, 60e3, 80e3)
+
+
+class TestWavesBuilderEnergyProperty:
+    """Regression tests: PlaneWave.energy / Probe.energy must return the
+    unwrapped value (float or BaseDistribution), not the internal
+    EnergyEnsemble wrapper -- and detector.show() must accept a WavesBuilder
+    directly (not just a built Waves object)."""
+
+    def test_probe_energy_is_plain_float(self):
+        probe = Probe(energy=100e3, gpts=32, sampling=0.1, semiangle_cutoff=30)
+        assert probe.energy == 100e3
+        assert isinstance(probe.energy, float)
+
+    def test_plane_wave_energy_is_plain_float(self):
+        pw = PlaneWave(energy=100e3, gpts=32, sampling=0.1)
+        assert pw.energy == 100e3
+        assert isinstance(pw.energy, float)
+
+    def test_probe_energy_ensemble_is_distribution(self):
+        from abtem.distributions import BaseDistribution
+
+        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
+        assert isinstance(probe.energy, BaseDistribution)
+
+    def test_annular_detector_show_unbuilt_probe(self):
+        """AnnularDetector.show() must accept a Probe directly, without build()."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        probe = Probe(
+            energy=80e3, semiangle_cutoff=20, sampling=0.1, extent=10
+        )
+        abtem.AnnularDetector(inner=40, outer=80).show(probe)
+        plt.close("all")
+
+    def test_segmented_detector_show_unbuilt_plane_wave(self):
+        """SegmentedDetector.show() must accept a PlaneWave directly, without build()."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from abtem.detectors import SegmentedDetector
+
+        pw = PlaneWave(energy=80e3, sampling=0.1, extent=10)
+        SegmentedDetector(
+            nbins_radial=2, nbins_azimuthal=4, inner=10, outer=80
+        ).show(pw)
+        plt.close("all")
 
 
 class TestWavesEnergyEnsemble:
@@ -264,10 +282,12 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert all(a > 0 for a in dp.angular_sampling)
 
     def test_dp_get_energy_fallback(self):
-        """Full ensemble: _get_energy() falls back to the first EnergyAxis value."""
+        """Full ensemble: _get_energy() falls back to the max EnergyAxis value,
+        mirroring Waves.angular_sampling's conservative (shortest-wavelength)
+        convention for un-indexed multi-energy ensembles."""
         dp = self._exit_waves().diffraction_patterns()
         assert dp.metadata.get("energy") is None   # no scalar energy on full ensemble
-        assert dp._get_energy() == 80e3            # resolved from EnergyAxis
+        assert dp._get_energy() == 120e3           # max of EnergyAxis values
 
     def test_indexed_member_has_correct_energy(self):
         """Indexing a member propagates the per-member energy into metadata."""
@@ -387,7 +407,8 @@ class TestBlochWavesEnergyEnsemble:
     shaped, stacked results without requiring manual loops."""
 
     @pytest.fixture(scope="class")
-    def bw_multi(self):
+    @classmethod
+    def bw_multi(cls):
         """Shared BlochWaves object with multiple energies (expensive to create)."""
         atoms = _srtio3_atoms()
         return BlochWaves(
@@ -395,22 +416,26 @@ class TestBlochWavesEnergyEnsemble:
         )
 
     @pytest.fixture(scope="class")
-    def dp_single(self, bw_multi):
+    @classmethod
+    def dp_single(cls, bw_multi):
         """Cached single-thickness diffraction patterns (used by multiple tests)."""
         return bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
 
     @pytest.fixture(scope="class")
-    def dp_multi(self, bw_multi):
+    @classmethod
+    def dp_multi(cls, bw_multi):
         """Cached multi-thickness diffraction patterns."""
         return bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS).compute()
 
     @pytest.fixture(scope="class")
-    def ew_single(self, bw_multi):
+    @classmethod
+    def ew_single(cls, bw_multi):
         """Cached single-thickness exit waves."""
         return bw_multi.calculate_exit_waves(BLOCH_THICKNESS[0]).compute()
 
     @pytest.fixture(scope="class")
-    def ew_multi(self, bw_multi):
+    @classmethod
+    def ew_multi(cls, bw_multi):
         """Cached multi-thickness exit waves."""
         return bw_multi.calculate_exit_waves(BLOCH_THICKNESS).compute()
 

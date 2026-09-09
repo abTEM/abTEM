@@ -162,7 +162,7 @@ def validate_chunks(
         The maximum number of elements in a chunk. If "auto", the maximum number of
         elements will be determined based on the maximum number of bytes per chunk and
         the dtype.
-    dtype : np.dtype
+    dtype : numpy.dtype
         The dtype of the array.
     device : str
         The device the array will be stored on.
@@ -233,7 +233,7 @@ def _auto_chunks(
         The maximum number of elements in a chunk. If "auto", the maximum number of
         elements will be determined based on the maximum number of bytes per chunk and
         the dtype.
-    dtype : np.dtype
+    dtype : numpy.dtype
         The dtype of the array.
     device : str
         The device the array will be stored on.
@@ -449,7 +449,7 @@ def estimate_potential_chunk_size(
         The number of grid points (y, x).
     device : str
         The device ('cpu' or 'gpu').
-    dtype : np.dtype, optional
+    dtype : numpy.dtype, optional
         The dtype of the potential array. If None, uses float32.
 
     Returns
@@ -471,6 +471,21 @@ def estimate_potential_chunk_size(
     slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
 
     if device == "gpu":
+        # Deliberately no Bluestein-overhead factor here, unlike the sibling
+        # estimate_scan_batch_size.  Every FFT that touches a potential slice
+        # is a single, unbatched 2D transform: build() and generate_slices()
+        # emit one slice at a time (see _FieldBuilder.build), the projection
+        # integrals in integrals.py transform a bare (ny, nx) array, and
+        # multislice_step bandlimits one transmission function per step.  The
+        # cuFFT workspace for those transforms is therefore constant in
+        # chunk_size, while effective_per_slice below is multiplied by it --
+        # folding an FFT-unfriendliness factor in would halve the chunk on a
+        # Bluestein grid to pay for a cost that does not grow with it.  The
+        # probe batch is the only quantity whose FFT is batched over the
+        # dimension being sized, which is why the factor belongs to
+        # estimate_scan_batch_size alone.  What residual Bluestein cost there
+        # is (one cached plan) this function already sees: it runs at
+        # computation time and reads the live free-VRAM figure below.
         try:
             import cupy as cp
 
@@ -532,8 +547,8 @@ def _nearest_power_of_two(n: int) -> int:
     exceeding the VRAM budget, since the raw estimate already uses only
     50 % of free VRAM as headroom.
 
-    Examples
-    --------
+    Notes
+    -----
     59 → 64  (int(59 * 1.25) = 73;  64 ≤ 73,  use upper)
     14 → 16  (int(14 * 1.25) = 17;  16 ≤ 17,  use upper)
     20 → 16  (int(20 * 1.25) = 25;  32 > 25,  use lower)
@@ -589,6 +604,18 @@ def estimate_scan_batch_size(
     per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
 
     if device == "gpu":
+        # ``gpts`` is the wavefunction grid every probe lives on, not the scan
+        # grid: the scan positions form the FFT *batch* dimension, so only the
+        # transform lengths (ny, nx) decide whether cuFFT falls back to
+        # Bluestein.  The radix check cannot fail and needs no GPU -- keep it
+        # outside the try below, whose silent fallback is only for a
+        # missing/failing CUDA memory probe.
+        from abtem.core.fft import is_fast_fft_size
+
+        overhead = 6
+        if not all(is_fast_fft_size(n) for n in gpts):
+            overhead = 12
+
         try:
             import cupy as cp
 
@@ -605,7 +632,12 @@ def estimate_scan_batch_size(
             # A 6× overhead factor accounts for transient copies during
             # transmission-function multiply, FFT workspaces, and cuFFT plan
             # buffers.  Empirically: 4096² uses ~756 MB/probe (5.6× raw
-            # wavefunction), 2048² uses ~147 MB/probe (4.4×).
+            # wavefunction), 2048² uses ~147 MB/probe (4.4×).  Those numbers
+            # hold for fast-radix grids; a grid length with a prime factor
+            # larger than 7 pushes cuFFT onto the Bluestein algorithm, whose
+            # power-of-two-padded internal buffers roughly double the
+            # transient footprint (observed >13× raw per probe on a
+            # 2623×2271 complex128 grid), so the factor is doubled there.
             #
             # estimate_potential_chunk_size runs at *computation* time, when
             # the probe batch is already resident; it sees the reduced free
@@ -613,10 +645,10 @@ def estimate_scan_batch_size(
             # Both functions now use the same pool-aware effective_free so
             # the two estimates operate on a consistent VRAM picture.
             probe_budget = int(effective_free * 0.50)
-            per_probe_effective = max(1, int(per_probe_bytes * 6))
+            per_probe_effective = max(1, int(per_probe_bytes * overhead))
             n_probes = max(1, probe_budget // per_probe_effective)
             return _nearest_power_of_two(n_probes)
-        except (ImportError, Exception):
+        except Exception:  # noqa: BLE001 -- no CUDA memory probe available
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
         chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
