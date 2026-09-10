@@ -404,6 +404,115 @@ def test_tile(data, repetitions, renormalize, lazy, device):
         assert np.allclose(old_sum, new_sum)
 
 
+@given(data=st.data())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_crop(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    old_extent = waves.extent
+    old_energy = waves.energy
+    old_dtype = waves.array.dtype
+
+    half_extent = (old_extent[0] / 2, old_extent[1] / 2)
+    cropped = waves.crop(half_extent, centered=True)
+
+    assert np.allclose(cropped.extent, half_extent, atol=max(waves.sampling))
+    assert cropped.energy == old_energy
+    assert cropped.array.dtype == old_dtype
+    assert cropped.sampling == waves.sampling
+    assert_array_matches_laziness(cropped.array, lazy=lazy)
+    assert_array_matches_device(cropped.array, device=device)
+
+    # cropping to the full extent is a no-op on the array contents
+    full = waves.crop(old_extent, centered=True)
+    np.testing.assert_array_equal(
+        np.asarray(full.compute().array), np.asarray(waves.compute().array)
+    )
+
+
+def test_crop_raises_for_larger_extent():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((100.0, 100.0))
+
+
+def test_crop_raises_in_reciprocal_space():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.crop((1.0, 1.0))
+
+
+def test_crop_centered_rejects_explicit_offset():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError):
+        waves.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
+
+
+@given(data=st.data())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_window_boxcar_is_a_no_op(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    windowed = waves.window("boxcar")
+    np.testing.assert_array_equal(
+        np.asarray(windowed.compute().array), np.asarray(waves.compute().array)
+    )
+
+
+@given(data=st.data())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_window_hann_tapers_to_the_edges(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
+    windowed = waves.compute().window("hann")
+    array = np.asarray(windowed.array)
+    assert windowed.array.dtype == waves.array.dtype
+    assert windowed.energy == waves.energy
+    # a Hann window is exactly zero at its first and last sample
+    np.testing.assert_allclose(array[..., 0, :], 0.0, atol=1e-6)
+    np.testing.assert_allclose(array[..., :, 0], 0.0, atol=1e-6)
+
+
+@given(data=st.data())
+@pytest.mark.parametrize("lazy", [True, False])
+def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
+    margin = (waves.extent[0] / 4, waves.extent[1] / 4)
+
+    combined = waves.window("hann", margin=margin)
+    separate = waves.crop(
+        (waves.extent[0] - 2 * margin[0], waves.extent[1] - 2 * margin[1]),
+        centered=True,
+    ).window("hann")
+
+    np.testing.assert_allclose(
+        np.asarray(combined.compute().array), np.asarray(separate.compute().array)
+    )
+
+
+def test_window_none_only_crops():
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    windowed = waves.window(None, margin=0.4)
+    np.testing.assert_array_equal(np.asarray(windowed.array), 1.0)
+    assert windowed.array.shape == (8, 8)
+
+
 @pytest.fixture
 def exit_plane_waves():
     """Create Waves with a ThicknessAxis for depth_profile tests."""
