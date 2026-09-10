@@ -401,6 +401,11 @@ class LaplaceOperator:
         """
         Centered finite-difference laplacian operator.
 
+        Operates on complex wave arrays: the stencil coefficients are cast to
+        the configured complex dtype, so the stencils are specialized for
+        complex64/complex128 input even though the Laplacian itself is a real
+        operator.
+
         Parameters
         ----------
         accuracy: int
