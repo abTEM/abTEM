@@ -933,6 +933,52 @@ def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
     return array
 
 
+def check_eigh_memory(structure_matrix: np.ndarray, safety_factor: float = 2.5) -> None:
+    """Raise a clear error if the Hermitian eigendecomposition of
+    `structure_matrix` is unlikely to fit in the memory currently available,
+    instead of letting a raw CUDA/numpy allocation failure propagate.
+
+    A dense `eigh` needs the input matrix, the output eigenvector matrix, and
+    solver workspace live at once, roughly 2-2.5x the size of the matrix
+    itself; `safety_factor` bundles all three into one multiple.
+
+    Parameters
+    ----------
+    structure_matrix : numpy.ndarray
+        The (N, N) structure matrix about to be passed to `eigh`.
+    safety_factor : float
+        Multiple of the structure matrix's own byte size budgeted for the
+        eigenvector output and solver workspace held simultaneously.
+    """
+    n = structure_matrix.shape[-1]
+    itemsize = structure_matrix.dtype.itemsize
+    required_bytes = int(n**2 * itemsize * safety_factor)
+
+    xp = get_array_module(structure_matrix)
+
+    if xp is cp:
+        free_bytes, _ = cp.cuda.Device().mem_info
+        available_bytes = free_bytes + cp.get_default_memory_pool().free_bytes()
+        device_str = "GPU"
+    else:
+        try:
+            import psutil
+
+            available_bytes = psutil.virtual_memory().available
+        except ImportError:
+            return
+        device_str = "CPU"
+
+    if required_bytes > available_bytes:
+        raise MemoryError(
+            f"eigendecomposition of the {n}x{n} structure matrix ({n} Bloch "
+            f"beams) needs an estimated {required_bytes / 1e9:.1f} GB, but only "
+            f"{available_bytes / 1e9:.1f} GB is available on the {device_str}. "
+            "Reduce `g_max` and/or `sg_max` to select fewer beams, or run on a "
+            "device with more memory."
+        )
+
+
 def calculate_dynamical_scattering(
     structure_matrix: np.ndarray,
     hkl: np.ndarray,
@@ -967,6 +1013,8 @@ def calculate_dynamical_scattering(
     thicknesses = np.asarray(thicknesses)
 
     Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+
+    check_eigh_memory(structure_matrix)
 
     v, C = xp.linalg.eigh(structure_matrix)
     # v, C = scipy.linalg.eigh(structure_matrix)
