@@ -53,6 +53,9 @@ extra = [
 gpaw = [
     "hankel",
     "sympy",
+    # X-ray emission data for EDX. Core-loss already requires GPAW for the
+    # atomic wave functions, so EDX users always have this extra anyway.
+    "xraydb",
 ]
 # Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
 # are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
@@ -87,6 +90,9 @@ test = [
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.8.0",
     "sympy",
+    # Also in the `gpaw` extra. Listed here, like sympy, so CI exercises the
+    # core-loss and EDX tests rather than skipping them.
+    "xraydb",
     "tox>=4.34.1",
 ]
 
