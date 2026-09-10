@@ -54,6 +54,8 @@ Example: weekly on NERSC Perlmutter via `scrontab -e` (times are local; `-q shar
 
 **Reusing an existing venv** (e.g. a dev machine where cupy is a custom ROCm build): `ABTEM_CI_VENV=<venv>` activates it and installs nothing; the checkout under test is put on `PYTHONPATH`, so an editable abtem install in that venv is never re-pointed.
 
+**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. They require ≥ 2 visible GPUs plus `dask-cuda` (and skip themselves otherwise), so on a cluster this means requesting at least a 2-GPU allocation (e.g. `--gpus 2` instead of `--gpus 1` in the scrontab resources).
+
 All knobs are documented in the header of `run_gpu_tests.sh`.
 
 ## Toward CI integration

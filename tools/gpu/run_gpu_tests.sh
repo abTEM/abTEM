@@ -37,6 +37,9 @@
 #                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none)
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
+#   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests;
+#                      they need >= 2 visible GPUs and dask-cuda and skip
+#                      themselves otherwise (default: off)
 #
 # Exit status is non-zero when either test invocation fails. Each run appends
 # one line to status.tsv in the log directory:
@@ -155,13 +158,25 @@ echo "== full GPU sweep =="
 python -m pytest test/ -q -p no:cacheprovider -k gpu -m "not multigpu"
 SWEEP_RC=$?
 
+MULTI_RC=0
+if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
+    # the multigpu-marked tests skip themselves unless >= 2 GPUs and dask-cuda
+    # are present, so this invocation is safe on any machine; exit code 5
+    # (nothing collected) is treated as success
+    echo "== multi-GPU tests =="
+    python -m pytest test/ -q -p no:cacheprovider -m multigpu
+    MULTI_RC=$?
+    [ "${MULTI_RC}" -eq 5 ] && MULTI_RC=0
+fi
+
 SUMMARY="$(grep -E '[0-9]+ (passed|failed)' "${LOG}" | tail -1)"
-if [ "${STENCIL_RC}" -eq 0 ] && [ "${SWEEP_RC}" -eq 0 ]; then
+RCS="stencil_rc=${STENCIL_RC} sweep_rc=${SWEEP_RC} multigpu_rc=${MULTI_RC}"
+if [ "${STENCIL_RC}" -eq 0 ] && [ "${SWEEP_RC}" -eq 0 ] && [ "${MULTI_RC}" -eq 0 ]; then
     record PASS "${SUMMARY}"
     echo "== all green =="
 else
-    record FAIL "stencil_rc=${STENCIL_RC} sweep_rc=${SWEEP_RC}; ${SUMMARY}"
-    send_failure_mail "stencil_rc=${STENCIL_RC} sweep_rc=${SWEEP_RC}; ${SUMMARY}"
+    record FAIL "${RCS}; ${SUMMARY}"
+    send_failure_mail "${RCS}; ${SUMMARY}"
     echo "== FAILURES — see ${LOG} =="
     exit 1
 fi
