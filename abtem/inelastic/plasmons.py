@@ -565,8 +565,32 @@ class MonteCarloPlasmons:
     def draw_events(
         self, waves: "Waves", potential: "BasePotential"
     ) -> PlasmonScatteringEvents:
-        depth = potential.thickness
-        energy = waves._valid_energy
+        return self._draw_events(
+            thickness=potential.thickness, energy=waves._valid_energy
+        )
+
+    def _draw_events(
+        self, thickness: float, energy: float
+    ) -> PlasmonScatteringEvents:
+        """Draw Monte Carlo plasmon scattering events for a specimen thickness and
+        electron energy.
+
+        The object-agnostic core of :meth:`draw_events`: it needs neither a ``Waves``
+        nor a ``BasePotential`` object and is used by the Bloch-wave driver.
+
+        Parameters
+        ----------
+        thickness : float
+            The specimen thickness [Å].
+        energy : float
+            The electron energy [eV].
+
+        Returns
+        -------
+        events : PlasmonScatteringEvents
+            The sampled scattering events.
+        """
+        depth = thickness
 
         rng = np.random.default_rng(self.seed)
 
@@ -712,6 +736,15 @@ class QuadraturePlasmons:
     event_num_azimuthal : int, optional
         Number of azimuthal tilt nodes for the second and later events of a path
         (default is 4).
+    max_angular_step : float, optional
+        Largest angular width of a quadrature cell [mrad], radially and along the arc.
+        Rings that a uniform-probability spacing would leave coarser than this are
+        subdivided, which matters when the scattered intensity varies on an angular
+        scale rather than a probability scale. If not given, the rings are spaced by
+        probability alone.
+    event_max_angular_step : float, optional
+        As ``max_angular_step``, for the second and later events of a path. Defaults to
+        ``max_angular_step``.
     max_copies : int, optional
         Maximum number of tilted copies of the wave function held in memory at once.
         If exceeded, the first-event nodes are split into subsets that are propagated
@@ -737,6 +770,8 @@ class QuadraturePlasmons:
         max_tilt_events: int = 1,
         event_num_angles: int = 2,
         event_num_azimuthal: int = 4,
+        max_angular_step: float = None,
+        event_max_angular_step: float = None,
         max_copies: int = None,
         lab_frame: bool = True,
     ):
@@ -756,6 +791,12 @@ class QuadraturePlasmons:
         self._max_tilt_events = int(max_tilt_events)
         self._event_num_angles = int(event_num_angles)
         self._event_num_azimuthal = int(event_num_azimuthal)
+        self._max_angular_step = (
+            None if max_angular_step is None else float(max_angular_step)
+        )
+        self._event_max_angular_step = (
+            None if event_max_angular_step is None else float(event_max_angular_step)
+        )
         self._max_copies = None if max_copies is None else int(max_copies)
         self._lab_frame = bool(lab_frame)
 
@@ -808,6 +849,14 @@ class QuadraturePlasmons:
         return self._event_num_azimuthal
 
     @property
+    def max_angular_step(self) -> Union[float, None]:
+        return self._max_angular_step
+
+    @property
+    def event_max_angular_step(self) -> Union[float, None]:
+        return self._event_max_angular_step
+
+    @property
     def max_copies(self) -> Union[int, None]:
         return self._max_copies
 
@@ -835,6 +884,8 @@ class QuadraturePlasmons:
             "max_tilt_events": self._max_tilt_events,
             "event_num_angles": self._event_num_angles,
             "event_num_azimuthal": self._event_num_azimuthal,
+            "max_angular_step": self._max_angular_step,
+            "event_max_angular_step": self._event_max_angular_step,
             "max_copies": self._max_copies,
             "lab_frame": self._lab_frame,
         }
@@ -878,11 +929,22 @@ class QuadraturePlasmons:
 
     # -- angular quadrature --------------------------------------------------
 
-    def _angular_nodes(self, energy: float, min_angle: float):
+    def _angular_nodes(
+        self,
+        energy: float,
+        min_angle: float,
+        max_angular_step: float = None,
+        event_max_angular_step: float = None,
+    ):
         """Tilt nodes [mrad] and the quadrature of the Lorentzian.
 
         Returns a dict with the class probabilities and the ring/sector partitions
         used for the first event (``single``) and for later events (``extra``).
+
+        ``max_angular_step`` [mrad], if given, caps the angular width of a cell, both
+        radially and along the arc, refining the rings that a uniform-probability
+        spacing would leave too coarse; ``event_max_angular_step`` overrides it for the
+        later events.
         """
         theta_e = self.characteristic_angle(energy)
         theta_c = self._critical_angle
@@ -899,21 +961,48 @@ class QuadraturePlasmons:
         p_small = u_min / u_max
         p_large = 1 - p_small
 
-        def partition(num_angles, num_azimuthal):
+        def partition(num_angles, num_azimuthal, max_step):
+            """Cells of the angular quadrature and their probabilities.
+
+            The rings are spaced uniformly in the cumulative probability ``u``. A ring
+            wider than ``max_step`` in angle is subdivided until every cell is at most
+            that wide, and the azimuthal sampling of a ring is refined so that its cells
+            are at most ``max_step`` wide along the arc as well. This resolves integrands
+            that vary on an angular scale rather than a probability scale, such as the
+            rocking curves of Bloch waves.
+            """
             edges = np.linspace(u_min, u_max, num_angles + 1)
-            centers = 0.5 * (edges[1:] + edges[:-1])
-            tilts = []
-            for a, uc in enumerate(centers):
-                theta = theta_of_u(uc)
+            if max_step is not None:
+                refined = [edges[0]]
+                for a in range(num_angles):
+                    theta_lo, theta_hi = theta_of_u(edges[a]), theta_of_u(edges[a + 1])
+                    parts = int(np.ceil((theta_hi - theta_lo) / max_step))
+                    for i in range(1, parts + 1):
+                        theta_edge = theta_lo + (theta_hi - theta_lo) * i / parts
+                        refined.append(u(theta_edge))
+                edges = np.array(refined)
+            tilts, weights = [], []
+            for a in range(len(edges) - 1):
+                u_lo, u_hi = edges[a], edges[a + 1]
+                theta = theta_of_u(0.5 * (u_lo + u_hi))
+                num_sectors = num_azimuthal
+                if max_step is not None:
+                    num_sectors = max(
+                        num_azimuthal, int(np.ceil(2 * np.pi * theta / max_step))
+                    )
                 offset = 0.5 * (a % 2)
-                for b in range(num_azimuthal):
-                    phi = 2 * np.pi * (b + offset) / num_azimuthal
+                weight = (u_hi - u_lo) / (u_max - u_min) / num_sectors
+                for b in range(num_sectors):
+                    phi = 2 * np.pi * (b + offset) / num_sectors
                     tilts.append((theta * np.cos(phi), theta * np.sin(phi)))
+                    weights.append(weight)
             return {
                 "u_edges": edges,
-                "num_angles": num_angles,
+                "num_angles": len(edges) - 1,
                 "num_azimuthal": num_azimuthal,
+                "max_step": max_step,
                 "tilts": np.array(tilts, dtype=float).reshape(-1, 2),
+                "weights": np.array(weights, dtype=float),
             }
 
         return {
@@ -924,8 +1013,15 @@ class QuadraturePlasmons:
             "u_max": u_max,
             "p_small": p_small,
             "p_large": p_large,
-            "single": partition(self._num_angles, self._num_azimuthal),
-            "extra": partition(self._event_num_angles, self._event_num_azimuthal),
+            "single": partition(
+                self._num_angles, self._num_azimuthal, max_angular_step
+            ),
+            "extra": partition(
+                self._event_num_angles,
+                self._event_num_azimuthal,
+                max_angular_step if event_max_angular_step is None
+                else event_max_angular_step,
+            ),
         }
 
     @property
@@ -989,12 +1085,17 @@ def _lorentzian_kernels(
 
     def partition_kernels(part):
         edges = part["u_edges"]
-        n_az = part["num_azimuthal"]
+        max_step = part["max_step"]
+        theta_of_u = lambda value: theta_e * np.sqrt(np.expm1(value))  # noqa: E731
         kernels = []
         for a in range(part["num_angles"]):
             in_ring = (u >= edges[a]) & (u < edges[a + 1])
             if a == part["num_angles"] - 1:
                 in_ring = (u >= edges[a]) & (theta < theta_c)
+            n_az = part["num_azimuthal"]
+            if max_step is not None:
+                theta_ring = theta_of_u(0.5 * (edges[a] + edges[a + 1]))
+                n_az = max(n_az, int(np.ceil(2 * np.pi * theta_ring / max_step)))
             offset = 0.5 * (a % 2)
             for b in range(n_az):
                 phi_b = 2 * np.pi * (b + offset) / n_az
@@ -1084,12 +1185,19 @@ def quadrature_plasmon_multislice_and_detect(
     min_angle = plasmons.min_angle
     if min_angle is None:
         min_angle = max(angular_sampling)
-    nodes = plasmons._angular_nodes(energy, min_angle)
+    nodes = plasmons._angular_nodes(
+        energy,
+        min_angle,
+        max_angular_step=plasmons.max_angular_step,
+        event_max_angular_step=plasmons.event_max_angular_step,
+    )
     p_small, p_large = nodes["p_small"], nodes["p_large"]
     max_tilt_events = plasmons.max_tilt_events
     num_depths = plasmons.num_depths
     single_tilts = nodes["single"]["tilts"]
     extra_tilts = nodes["extra"]["tilts"]
+    single_weights = nodes["single"]["weights"]
+    extra_weights = nodes["extra"]["weights"]
     n_single = len(single_tilts)
     n_extra = len(extra_tilts)
 
@@ -1266,7 +1374,15 @@ def quadrature_plasmon_multislice_and_detect(
             if kernels is not None:
                 f = f * member_kernels(group["index"])[member_slice]
             m = group["m"]
-            f = f.sum(0) / (n_single * n_extra ** (m - 1))
+            index = group["index"]
+            member_weights = single_weights[index[:, 0]]
+            for level in range(1, index.shape[1]):
+                member_weights = member_weights * extra_weights[index[:, level]]
+            member_weights = xp.asarray(
+                member_weights.astype(get_dtype(complex=False))
+            )
+            weight_slice = (slice(None),) + (None,) * (n_base + 2)
+            f = (f * member_weights[weight_slice]).sum(0)
             contribute(exit_index, f, m, group["weight"])
 
     def finalize(exit_index, measurement_index, ens):
@@ -2024,4 +2140,272 @@ class PhaseScramblePlasmons:
             mean_free_path=self._mean_free_path,
             rng=rng,
             xp=xp,
+        )
+
+
+def _tds_differential_cross_section(
+    theta: np.ndarray,
+    scattering_factor_func,
+    debye_waller_factor: float,
+    energy: float,
+) -> np.ndarray:
+    """Evaluate the uncorrelated phonon (TDS) differential scattering cross section
+    ``dσ/dΩ = f(q)² [1 − exp(−2Bq²)]`` [Mendis Eq. 8, Pennycook & Jesson 1991].
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        Polar scattering angles [rad].
+    scattering_factor_func : callable
+        Electron scattering factor ``f(g²)`` as a function of the squared scattering
+        vector magnitude ``g² = q²`` [1/Å²].
+    debye_waller_factor : float
+        The isotropic Debye-Waller factor ``B = 8π²⟨u²⟩`` [Å²].
+    energy : float
+        The electron energy [eV].
+
+    Returns
+    -------
+    np.ndarray
+        The differential cross section (unnormalised), same shape as ``theta``.
+    """
+    from abtem.core.energy import energy2wavelength
+
+    wavelength = energy2wavelength(energy)
+    K = 1.0 / wavelength
+    q = 2 * K * np.sin(theta / 2.0)
+    q2 = q**2
+    f = scattering_factor_func(q2)
+    return f**2 * (1.0 - np.exp(-2.0 * debye_waller_factor * q2))
+
+
+def _compute_tds_cdf(
+    scattering_factor_func,
+    debye_waller_factor: float,
+    energy: float,
+    theta_max: float,
+    num_points: int = 2000,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Numerically compute the CDF of the phonon polar scattering angle distribution
+    [Mendis Eq. 11].
+
+    Returns ``(theta_grid, cdf_values, sigma_total)`` where ``cdf_values`` goes from
+    0 to 1 and ``sigma_total`` is the total TDS cross section.
+    """
+    theta = np.linspace(0, theta_max, num_points)
+    dsigma = _tds_differential_cross_section(
+        theta, scattering_factor_func, debye_waller_factor, energy,
+    )
+    integrand = dsigma * np.sin(theta) * 2 * np.pi
+    dtheta = theta[1] - theta[0]
+    sigma_total = float(np.trapezoid(integrand, dx=dtheta))
+    cdf = np.cumsum(integrand)
+    cdf[0] = 0.0
+    if cdf[-1] > 0:
+        cdf /= cdf[-1]
+    return theta, cdf, sigma_total
+
+
+def _draw_phonon_radial_angle(
+    theta_grid: np.ndarray,
+    cdf: np.ndarray,
+    num_samples: int,
+    num_depths: int,
+    rng,
+) -> Tuple[Tuple[float]]:
+    """Draw phonon polar scattering angles by inverse-CDF sampling [Mendis Eq. 11]."""
+    if num_depths == 0:
+        return tuple(() for _ in range(num_samples))
+    rands = rng.random((num_samples, num_depths))
+    thetas_flat = np.interp(rands.ravel(), cdf, theta_grid)
+    # ``theta_grid`` is in radians; the scattering events carry milliradians, as the
+    # plasmon events do.
+    thetas_2d = thetas_flat.reshape(num_samples, num_depths) * 1e3
+    return tuple(tuple(row) for row in thetas_2d)
+
+
+class MonteCarloPhonons:
+    """Monte-Carlo phonon (thermal diffuse) scattering for Bloch waves.
+
+    Uses the uncorrelated phonon model of Mendis (Acta Cryst. A80, 2024), Eq. 8–11 and
+    16a–16c. The TDS differential cross section is ``dσ/dΩ = f(q)²[1 − exp(−2Bq²)]``
+    (Pennycook & Jesson, 1991). The mean free path is ``λ_ph = 1/(Nᵥ σ_TDS^T)``
+    [Eq. 9]. The polar angle is drawn by numerical inversion of the CDF [Eq. 11].
+
+    The returned :class:`PlasmonScatteringEvents` object has the same format as
+    plasmon events and can be consumed by the Bloch-wave inelastic driver directly.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atoms object describing the structure (used for scattering factors and
+        number density).
+    thermal_sigma : float
+        The isotropic r.m.s. thermal vibration amplitude ``σ = √⟨u²⟩`` [Å].
+    parametrization : str
+        The scattering-factor parametrization (``'lobato'``, ``'kirkland'``, etc.).
+    theta_max : float
+        The maximum polar scattering angle [rad] for the cross-section integration.
+        Should cover the range where ``dσ/dΩ`` is significant.
+    num_excitations : int or tuple of int
+        The excitation orders to sample.
+    num_samples : int
+        The number of Monte-Carlo configurations per order.
+    ensemble_mean : bool
+        Whether to average over configurations when reducing.
+    seed : int, optional
+        Random seed for reproducibility.
+    """
+
+    def __init__(
+        self,
+        atoms,
+        thermal_sigma: float,
+        parametrization: str = "kirkland",
+        theta_max: float = 0.1,
+        num_excitations: Union[int, Tuple[int, ...]] = None,
+        num_samples: int = None,
+        ensemble_mean: bool = False,
+        seed: Union[int, Tuple[int, ...]] = None,
+    ):
+        from ase import Atoms as AseAtoms
+
+        if not isinstance(atoms, AseAtoms):
+            raise TypeError("atoms must be an ASE Atoms object")
+
+        self._atoms = atoms
+        self._thermal_sigma = thermal_sigma
+        self._parametrization_name = parametrization
+        self._theta_max = theta_max
+        self._ensemble_mean = ensemble_mean
+        self._num_samples = num_samples
+        self._seed = seed
+
+        if isinstance(num_excitations, int):
+            num_excitations = tuple(range(num_excitations + 1))
+        self._num_excitations = num_excitations
+
+        self._debye_waller_factor = 8.0 * np.pi**2 * thermal_sigma**2
+
+    @property
+    def debye_waller_factor(self) -> float:
+        return self._debye_waller_factor
+
+    @property
+    def ensemble_mean(self) -> bool:
+        return self._ensemble_mean
+
+    @property
+    def num_samples(self) -> int:
+        return self._num_samples
+
+    @property
+    def seed(self):
+        return self._seed
+
+    def _get_scattering_factor_func(self):
+        """Return a callable ``f(g²)`` that sums the scattering factors of all atom
+        species weighted by their fractional composition."""
+        from abtem.parametrizations import validate_parametrization
+
+        param = validate_parametrization(self._parametrization_name)
+
+        symbols = self._atoms.get_chemical_symbols()
+        unique_symbols = list(dict.fromkeys(symbols))
+        counts = {s: symbols.count(s) for s in unique_symbols}
+        total = len(symbols)
+
+        funcs = {s: param.scattering_factor(s) for s in unique_symbols}
+
+        def weighted_f(g2):
+            result = np.zeros_like(g2, dtype=float)
+            for s in unique_symbols:
+                result += (counts[s] / total) * funcs[s](g2)
+            return result
+
+        return weighted_f
+
+    def mean_free_path(self, energy: float) -> float:
+        """Compute the phonon mean free path ``λ_ph = 1/(Nᵥ σ_TDS^T)`` [Eq. 9]."""
+        from abtem.core.energy import energy2wavelength
+
+        f_func = self._get_scattering_factor_func()
+        theta_grid = np.linspace(0, self._theta_max, 2000)
+
+        dsigma = _tds_differential_cross_section(
+            theta_grid, f_func, self._debye_waller_factor, energy,
+        )
+        integrand = dsigma * np.sin(theta_grid) * 2 * np.pi
+        dtheta = theta_grid[1] - theta_grid[0]
+        sigma_total = np.trapezoid(integrand, dx=dtheta)
+
+        cell_volume = self._atoms.get_volume()
+        num_atoms = len(self._atoms)
+        number_density = num_atoms / cell_volume
+
+        if sigma_total <= 0:
+            return np.inf
+
+        return 1.0 / (number_density * sigma_total)
+
+    def _draw_events(
+        self, thickness: float, energy: float
+    ) -> PlasmonScatteringEvents:
+        """Draw Monte-Carlo phonon scattering events."""
+        f_func = self._get_scattering_factor_func()
+        theta_grid, cdf, sigma_total = _compute_tds_cdf(
+            f_func, self._debye_waller_factor, energy, self._theta_max,
+        )
+
+        number_density = len(self._atoms) / self._atoms.get_volume()
+        mfp = 1.0 / (number_density * sigma_total) if sigma_total > 0 else np.inf
+
+        rng = np.random.default_rng(self.seed)
+
+        depths = []
+        radial_angles = []
+        azimuthal_angles = []
+        weights = []
+
+        for n in self._num_excitations:
+            if n == 0:
+                ns = 1
+            else:
+                ns = self.num_samples
+
+            depths.append(
+                draw_scattering_depths(
+                    mean_free_path=mfp,
+                    num_depths=n,
+                    max_depth=thickness,
+                    num_samples=ns,
+                    rng=rng,
+                )
+            )
+
+            radial_angles.append(
+                _draw_phonon_radial_angle(
+                    theta_grid, cdf, num_samples=ns, num_depths=n, rng=rng,
+                )
+            )
+
+            azimuthal_angles.append(
+                draw_azimuthal_angle(num_samples=ns, num_depths=n, rng=rng)
+            )
+
+            weights.append(
+                (excitations_weights(n, thickness, mfp),) * ns
+            )
+
+        depths = list(itertools.chain(*depths))
+        radial_angles = list(itertools.chain(*radial_angles))
+        azimuthal_angles = list(itertools.chain(*azimuthal_angles))
+        weights = list(itertools.chain(*weights))
+
+        return PlasmonScatteringEvents(
+            depths,
+            radial_angles,
+            azimuthal_angles,
+            weights,
+            ensemble_mean=self._ensemble_mean,
         )
