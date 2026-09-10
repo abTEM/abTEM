@@ -60,7 +60,9 @@ _sum_rle_f64 = None
 def _init_sum_rle_kernels():
     global _sum_rle_f32, _sum_rle_f64
     if _sum_rle_f32 is None:
-        mod = cp.RawModule(code=_SUM_RLE_KERNEL, options=("--std=c++17",))
+        # no --std option: rely on each backend's default dialect, which tracks
+        # CuPy's bundled headers (see finite_difference._init_laplace_stencil_kernels)
+        mod = cp.RawModule(code=_SUM_RLE_KERNEL)
         _sum_rle_f32 = mod.get_function("sum_rle_f32")
         _sum_rle_f64 = mod.get_function("sum_rle_f64")
 
@@ -227,7 +229,7 @@ _interpolate_radial_f64 = None
 def _init_interpolate_radial_kernels():
     global _interpolate_radial_f32, _interpolate_radial_f64
     if _interpolate_radial_f32 is None:
-        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL, options=("--std=c++17",))
+        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL)
         _interpolate_radial_f32 = mod.get_function("interpolate_radial_f32")
         _interpolate_radial_f64 = mod.get_function("interpolate_radial_f64")
 

@@ -248,7 +248,11 @@ _laplace_stencil_c128 = None
 def _init_laplace_stencil_kernels():
     global _laplace_stencil_c64, _laplace_stencil_c128
     if _laplace_stencil_c64 is None:
-        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL, options=("--std=c++17",))
+        # no --std option: the dialect requirement comes from CuPy's bundled
+        # headers, and each backend's default tracks them (CuPy itself pins no
+        # dialect); pinning one broke NVRTC when CuPy 14's complex.cuh started
+        # requiring C++17 via CCCL
+        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL)
         # _laplace_stencil_c64 doubles as the initialized-guard, so it is
         # assigned last: a concurrent thread that observes it non-None is then
         # guaranteed to also observe _laplace_stencil_c128 (redundant module
