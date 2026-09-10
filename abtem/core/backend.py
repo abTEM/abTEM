@@ -39,7 +39,10 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    assert cupyx is None
+    # same reasoning as the cupyx.scipy.signal guard below: this can fail even
+    # though cupyx itself imported, if the CUDA/ROCm libraries it eagerly
+    # pulls in aren't on the loader path. GPU code that needs cupyx_ndimage
+    # then fails at use time instead of blocking the abtem import.
     cupyx_ndimage = None
 
 
