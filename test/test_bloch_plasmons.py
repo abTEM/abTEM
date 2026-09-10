@@ -11,13 +11,13 @@ from ase.build import bulk
 from utils import gpu
 
 import abtem
-from abtem.bloch.dynamical import BlochWaves, BlochwaveEnsemble
+from abtem.bloch.dynamical import BlochwaveEnsemble, BlochWaves
 from abtem.bloch.inelastic import (
-    _chain_one_configuration,
     _deflect,
     calculate_bloch_plasmon_intensities,
+    calculate_quadrature_plasmon_intensities,
 )
-from abtem.bloch.utils import calculate_g_vec, excitation_errors
+from abtem.bloch.utils import excitation_errors
 from abtem.core.energy import energy2wavelength
 from abtem.inelastic.plasmons import MonteCarloPhonons, MonteCarloPlasmons
 
@@ -244,9 +244,10 @@ def test_multi_thickness_shape(request, device):
     )
     dp = bw.calculate_diffraction_patterns([200.0, 400.0], plasmons=mc)
     assert dp.array.shape == (2, 2, len(bw))
-    axes_labels = [a.label for a in dp.ensemble_axes_metadata]
-    assert "energy loss" in axes_labels
-    assert "z" in axes_labels
+    from abtem.core.axes import PlasmonOrderAxis
+
+    assert isinstance(dp.ensemble_axes_metadata[0], PlasmonOrderAxis)
+    assert dp.ensemble_axes_metadata[1].label == "z"
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -631,3 +632,111 @@ def test_quadrature_angular_step_refines_the_outer_rings():
     assert np.isclose(fine["weights"].sum(), 1.0)
     radii = np.linalg.norm(fine["tilts"], axis=1)
     assert radii.max() > np.linalg.norm(coarse["tilts"], axis=1).max()
+
+
+# ---------------------------------------------------------------------------
+# Quadrature: dispatch, convergent-beam patterns in the laboratory frame
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_quadrature_dispatch_from_calculate_diffraction_patterns(lazy):
+    from abtem.core.axes import PlasmonOrderAxis
+
+    bw = _quadrature_bloch()
+    model = _quadrature_model()
+    direct = calculate_quadrature_plasmon_intensities(bw, 300.0, model)
+    dp = bw.calculate_diffraction_patterns(300.0, plasmons=model, lazy=lazy)
+    array = np.asarray(dp.compute().array if lazy else dp.array)
+    assert array.shape == direct.shape
+    assert np.allclose(array, direct, atol=1e-6)
+    assert isinstance(dp.ensemble_axes_metadata[0], PlasmonOrderAxis)
+    assert dp.ensemble_axes_metadata[0].model == "quadrature"
+    assert np.allclose(dp.metadata["plasmon_weights"], model.excitation_weights(300.0))
+
+    dp = bw.calculate_diffraction_patterns([200.0, 300.0], plasmons=model, lazy=lazy)
+    array = np.asarray(dp.compute().array if lazy else dp.array)
+    assert array.shape == (model.num_orders, 2, len(bw))
+    assert np.allclose(array[:, 1], direct, atol=1e-6)
+
+
+def test_quadrature_warns_when_tilts_exceed_the_beam_set():
+    si = bulk("Si", "diamond", a=5.43, cubic=True)
+    sf = abtem.StructureFactor(si, g_max=8, device="cpu")
+    bw = BlochWaves(sf, energy=200e3, sg_max=0.01, g_max=2.0, device="cpu")
+    with pytest.warns(UserWarning, match="sg_max"):
+        calculate_quadrature_plasmon_intensities(bw, 100.0, _quadrature_model())
+
+
+@pytest.fixture(scope="module")
+def cbed_case():
+    """Static-lattice Si [001]: a probe on the multislice grid and matching Bloch
+    waves; the reciprocal lattice falls exactly on the reciprocal grid of the probe."""
+    si = bulk("Si", "diamond", a=5.43, cubic=True)
+    atoms = si * (2, 2, 10)
+    potential = abtem.Potential(atoms, gpts=64, slice_thickness=si.cell[2, 2] / 4)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=6.0)
+    probe.grid.match(potential)
+    sf = abtem.StructureFactor(si, g_max=6.0, device="cpu")
+    bw = BlochWaves(sf, energy=200e3, sg_max=0.15, g_max=2.0, device="cpu")
+    return potential, probe, bw
+
+
+def _rel_rms(a, b):
+    return float(np.sqrt(np.mean((a - b) ** 2)) / np.sqrt(np.mean(b**2)))
+
+
+def test_convergent_beam_patterns_match_multislice(cbed_case):
+    potential, probe, bw = cbed_case
+    detector = abtem.PixelatedDetector(max_angle="valid")
+    multislice = np.asarray(probe.multislice(potential, detectors=detector).array)
+    bloch = bw.calculate_convergent_beam_patterns(potential.thickness, probe)
+    assert bloch.shape == multislice.shape
+    assert bloch.ensemble_axes_metadata == []
+    assert np.isclose(bloch.array.sum(), 1.0, atol=0.02)
+    assert _rel_rms(np.asarray(bloch.array), multislice) < 0.05
+    assert np.allclose(bloch.sampling, multislice.shape and probe.build().reciprocal_space_sampling)
+
+
+@pytest.mark.parametrize("lab_frame", [True, False])
+def test_convergent_beam_quadrature_matches_multislice_quadrature(cbed_case, lab_frame):
+    from abtem.core.axes import PlasmonOrderAxis
+    from abtem.inelastic.plasmons import QuadraturePlasmons
+
+    potential, probe, bw = cbed_case
+    model = QuadraturePlasmons(
+        mean_free_path=1050.0,
+        excitation_energy=17.0,
+        critical_angle=27.6,
+        max_loss_order=2,
+        num_angles=3,
+        num_azimuthal=6,
+        num_depths=2,
+        max_tilt_events=1,
+        lab_frame=lab_frame,
+    )
+    detector = abtem.PixelatedDetector(max_angle="valid")
+    multislice = np.asarray(
+        probe.multislice(potential, detectors=detector, plasmons=model).array
+    )
+    bloch = bw.calculate_convergent_beam_patterns(
+        potential.thickness, probe, plasmons=model
+    )
+    assert bloch.shape == multislice.shape
+    assert isinstance(bloch.ensemble_axes_metadata[0], PlasmonOrderAxis)
+    array = np.asarray(bloch.array)
+    for n in range(model.num_orders):
+        # every order is normalized to the incident electron and agrees with the
+        # multislice quadrature at the level of the elastic engine difference
+        assert np.isclose(array[n].sum(), 1.0, atol=0.02)
+        assert _rel_rms(array[n], multislice[n]) < 0.05
+    if lab_frame:
+        # momentum transfer blurs the discs: the loss channels differ from the elastic
+        assert _rel_rms(array[1], array[0]) > 0.1
+
+
+def test_convergent_beam_patterns_warn_off_grid(cbed_case):
+    potential, probe, bw = cbed_case
+    off = abtem.Probe(energy=200e3, semiangle_cutoff=6.0, extent=13.0, gpts=64)
+    with pytest.warns(UserWarning, match="reciprocal grid"):
+        bw.calculate_convergent_beam_patterns(50.0, off)

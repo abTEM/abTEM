@@ -830,6 +830,11 @@ def multislice_and_detect(
     )
 
     if isinstance(plasmons, QuadraturePlasmons):
+        if return_backscattered or renormalize_plasmons:
+            raise NotImplementedError(
+                "'return_backscattered' and 'renormalize_plasmons' are not supported "
+                "with quadrature plasmon scattering"
+            )
         return quadrature_plasmon_multislice_and_detect(
             waves,
             potential,

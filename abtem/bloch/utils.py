@@ -240,11 +240,11 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     elif centering.lower() == "i":
         return hkl.sum(axis=1) % 2 == 0
     elif centering.lower() == "a":
-        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0)
     elif centering.lower() == "b":
-        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0)
     elif centering.lower() == "c":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0)
     elif centering.lower() == "p":
         return np.ones(len(hkl), dtype=bool)
     else:

@@ -213,8 +213,10 @@ def test_monte_carlo_plasmons_keyword_and_lab_frame(si_potential, probe, lazy):
     assert tilted.shape == (2,) + elastic.shape
     assert np.allclose(tilted.array[0], elastic.array)
     assert np.allclose(lab.array[0], elastic.array)
-    # the laboratory frame shifts the single-plasmon channel, the tilted frame not
-    assert np.isclose(lab.array[1].sum(), tilted.array[1].sum(), rtol=1e-5)
+    # the laboratory frame shifts the single-plasmon channel, the tilted frame not;
+    # intensity shifted out of the cropped pattern is lost, not wrapped around
+    assert lab.array[1].sum() < tilted.array[1].sum()
+    assert lab.array[1].sum() > 0.9 * tilted.array[1].sum()
     assert not np.allclose(lab.array[1], tilted.array[1])
     assert lab.axes_metadata[0].model == "monte_carlo"
 
@@ -228,3 +230,67 @@ def test_monte_carlo_axis_round_trips_through_zarr(si_potential, probe, tmp_path
     loaded = abtem.from_zarr(str(tmp_path / "events.zarr")).compute()
     assert isinstance(loaded.axes_metadata[0], PlasmonAxis)
     assert np.allclose(loaded.array, result.array)
+
+
+def test_quadrature_rejects_wave_detectors_and_exit_planes(si_potential, probe):
+    with pytest.raises(NotImplementedError, match="wave functions"):
+        probe.multislice(si_potential, plasmons=plasmons()).compute()
+    with pytest.raises(NotImplementedError, match="wave functions"):
+        probe.multislice(
+            si_potential, detectors=abtem.WavesDetector(), plasmons=plasmons()
+        ).compute()
+    sliced = abtem.Potential(si_potential.frozen_phonons, gpts=64, exit_planes=2)
+    with pytest.raises(NotImplementedError, match="exit"):
+        probe.multislice(
+            sliced, detectors=abtem.PixelatedDetector(), plasmons=plasmons()
+        ).compute()
+    with pytest.raises(NotImplementedError, match="renormalize"):
+        probe.multislice(
+            si_potential,
+            detectors=abtem.PixelatedDetector(),
+            plasmons=plasmons(),
+            renormalize_plasmons=True,
+        ).compute()
+
+
+def test_s_matrix_accepts_phase_scrambling_only(si_potential):
+    from abtem.inelastic.plasmons import PhaseScramblePlasmons
+
+    abtem.SMatrix(
+        potential=si_potential,
+        energy=200e3,
+        semiangle_cutoff=20,
+        plasmons=PhaseScramblePlasmons(1050.0, 17.0, 27.6),
+    )
+    for model in (plasmons(), monte_carlo()):
+        with pytest.raises(NotImplementedError, match="PhaseScramblePlasmons"):
+            abtem.SMatrix(
+                potential=si_potential, energy=200e3, semiangle_cutoff=20, plasmons=model
+            )
+
+
+def test_characteristic_angle_is_relativistic():
+    from abtem.core.energy import relativistic_mass_correction
+    from abtem.inelastic.plasmons import characteristic_angle
+
+    gamma = relativistic_mass_correction(200e3)
+    expected = 17.0 / (2 * 200e3) * 2 * gamma / (gamma + 1) * 1e3
+    assert np.isclose(characteristic_angle(17.0, 200e3), expected)
+    assert np.isclose(expected / (17.0 / (2 * 200e3) * 1e3), 1.164, atol=0.002)
+    for model in (plasmons(), monte_carlo()):
+        assert np.isclose(model.characteristic_angle(200e3), expected)
+
+
+def test_loss_order_factors_sum_to_one_per_order():
+    from abtem.inelastic.plasmons import _loss_order_factors
+
+    p_small, p_large, num_orders = 0.3, 0.7, 4
+    for max_tilt_events in (1, 2, 3):
+        totals = np.zeros(num_orders)
+        # every chain length that occurs, each with unit angular and depth weight
+        for num_events in range(max_tilt_events + 1):
+            for n, m, factor in _loss_order_factors(
+                num_orders, num_events, max_tilt_events, p_small, p_large
+            ):
+                totals[n] += factor
+        assert np.allclose(totals, 1.0)

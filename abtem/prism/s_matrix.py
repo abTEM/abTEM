@@ -3782,6 +3782,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             downsample = "cutoff"
 
         self._device = validate_device(device)
+        if plasmons is not None:
+            from abtem.inelastic.plasmons import PhaseScramblePlasmons
+
+            if not isinstance(plasmons, PhaseScramblePlasmons):
+                raise NotImplementedError(
+                    "the scattering matrix supports 'PhaseScramblePlasmons' only; use "
+                    "'Probe.multislice' or 'Probe.scan' for the other plasmon models"
+                )
         self._plasmons = plasmons
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 

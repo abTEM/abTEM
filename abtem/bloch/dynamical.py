@@ -25,7 +25,12 @@ from scipy.linalg import expm as expm_scipy  # type: ignore
 from scipy.spatial.transform import Rotation  # type: ignore
 
 from abtem.array import ArrayObject
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import (
+    AtomProperties,
+    is_cell_orthogonal,
+    validate_per_atom_property,
+    validate_sigmas,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
     calculate_g_vec,
@@ -44,6 +49,7 @@ from abtem.core.axes import (
     EnergyAxis,
     NonLinearAxis,
     OrdinalAxis,
+    PlasmonOrderAxis,
     ThicknessAxis,
 )
 from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
@@ -57,11 +63,6 @@ from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
-from abtem.atoms import (
-    AtomProperties,
-    validate_per_atom_property,
-    validate_sigmas,
-)
 from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
@@ -72,7 +73,8 @@ if cp is not None:
 from abtem.waves import Waves
 
 if TYPE_CHECKING:
-    from abtem.inelastic.plasmons import MonteCarloPlasmons
+    from abtem.inelastic.plasmons import MonteCarloPlasmons, QuadraturePlasmons
+    from abtem.waves import Probe
 
 
 def calculate_scattering_factors(
@@ -1284,6 +1286,19 @@ def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
     return ensemble
 
 
+def _plasmon_order_axis(plasmons, labels: tuple[str, ...]) -> PlasmonOrderAxis:
+    """Loss-order axis of a Bloch-wave Monte Carlo run (plasmons or phonons)."""
+    from abtem.inelastic.plasmons import MonteCarloPlasmons
+
+    if isinstance(plasmons, MonteCarloPlasmons):
+        model = "monte_carlo"
+    else:
+        model = "monte_carlo_phonons"
+    return PlasmonOrderAxis(
+        values=labels, model=model, parameters=getattr(plasmons, "parameters", None)
+    )
+
+
 class BlochWaves:
     """The BlochWaves class represents a set of Bloch waves. It may be used to calculate
     the dynamical diffraction patterns.
@@ -1677,7 +1692,7 @@ class BlochWaves:
                 combined_weights[i, t_idx] = weights[j]
 
         labels = tuple(ntuples.get(n, f"{n}-plasmon") for n in all_orders)
-        plasmon_axis = OrdinalAxis(label="energy loss", values=labels)
+        plasmon_axis = _plasmon_order_axis(plasmons, labels)
 
         ensemble_axes_metadata: list[AxisMetadata] = [plasmon_axis]
         reciprocal_lattice_vectors = reciprocal_cell(self.cell)[None, None]
@@ -1751,7 +1766,7 @@ class BlochWaves:
         )
 
         labels = tuple(ntuples.get(n, f"{n}-plasmon") for n in all_orders)
-        plasmon_axis = OrdinalAxis(label="energy loss", values=labels)
+        plasmon_axis = _plasmon_order_axis(plasmons, labels)
         ensemble_axes_metadata: list[AxisMetadata] = [plasmon_axis]
         reciprocal_lattice_vectors = reciprocal_cell(self.cell)[None, None]
 
@@ -1780,6 +1795,125 @@ class BlochWaves:
             },
         )
 
+    def _calculate_quadrature_plasmon_diffraction_patterns(
+        self,
+        thicknesses: float | Sequence[float] | np.ndarray,
+        plasmons: "QuadraturePlasmons",
+        return_complex: bool = False,
+        lazy: bool = False,
+    ) -> IndexedDiffractionPatterns:
+        from abtem.bloch.inelastic import (
+            _prepare_bloch_matrices,
+            calculate_quadrature_plasmon_intensities,
+        )
+
+        if return_complex:
+            raise ValueError(
+                "return_complex is not supported with plasmons (the inelastic average "
+                "is incoherent)."
+            )
+
+        thickness_array = np.atleast_1d(np.array(thicknesses, dtype=get_dtype()))
+        scalar_thickness = np.array(thicknesses).ndim == 0
+        num_beams = len(self.hkl)
+        shape = (plasmons.num_orders, len(thickness_array), num_beams)
+
+        def compute():
+            precomputed = _prepare_bloch_matrices(self)
+            array = np.zeros(shape, dtype=get_dtype())
+            for i, t in enumerate(thickness_array):
+                array[:, i] = calculate_quadrature_plasmon_intensities(
+                    self, float(t), plasmons, _precomputed=precomputed
+                )
+            return array[:, 0] if scalar_thickness else array
+
+        out_shape = shape[:1] + shape[2:] if scalar_thickness else shape
+        if lazy:
+            import dask
+
+            array = da.from_delayed(
+                dask.delayed(compute)(), shape=out_shape, dtype=get_dtype()
+            )
+        else:
+            array = compute()
+
+        ensemble_axes_metadata: list[AxisMetadata] = [plasmons.order_axis]
+        reciprocal_lattice_vectors = reciprocal_cell(self.cell)[None, None]
+        weights = np.array(
+            [plasmons.excitation_weights(float(t)) for t in thickness_array]
+        ).T
+
+        if scalar_thickness:
+            reciprocal_lattice_vectors = reciprocal_lattice_vectors[:, 0]
+            weights = weights[:, 0]
+        else:
+            ensemble_axes_metadata.append(
+                ThicknessAxis(
+                    label="z",
+                    units="Å",
+                    values=tuple(float(t) for t in thickness_array),
+                )
+            )
+
+        return IndexedDiffractionPatterns(
+            miller_indices=self.hkl,
+            array=array,
+            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata={
+                "energy": self.energy,
+                "sg_max": self.sg_max,
+                "g_max": self.g_max,
+                "label": "Intensity",
+                "units": "arb. unit",
+                "plasmon_orders": tuple(range(plasmons.num_orders)),
+                "plasmon_weights": weights.tolist(),
+            },
+        )
+
+    def calculate_convergent_beam_patterns(
+        self,
+        thickness: float,
+        probe: "Probe",
+        plasmons: "QuadraturePlasmons | None" = None,
+        max_angle: str | float = "valid",
+    ) -> "DiffractionPatterns":
+        """Convergent-beam electron diffraction patterns of a probe from Bloch waves,
+        optionally with plasmon scattering by quadrature in the laboratory frame.
+
+        Every pixel of the probe aperture is an incident plane wave; its Bragg beams
+        are placed at the incident direction plus the reciprocal lattice vector, so the
+        result is the incoherent sum of the rocking curves over the aperture (exact for
+        non-overlapping discs). See
+        :func:`abtem.bloch.inelastic.calculate_quadrature_plasmon_diffraction_patterns`.
+
+        Parameters
+        ----------
+        thickness : float
+            Specimen thickness [Å].
+        probe : Probe
+            Defines the aperture, the energy and the grid (``extent``, ``gpts``); the
+            reciprocal lattice of the (oriented) Bloch waves must fall on the
+            reciprocal grid of the probe.
+        plasmons : QuadraturePlasmons, optional
+            Plasmon scattering model. The returned patterns gain a leading
+            :class:`~abtem.core.axes.PlasmonOrderAxis`.
+        max_angle : float or {'cutoff', 'valid', 'full'}
+            Cropping of the patterns, as for
+            :class:`~abtem.detectors.PixelatedDetector`.
+
+        Returns
+        -------
+        DiffractionPatterns
+        """
+        from abtem.bloch.inelastic import (
+            calculate_quadrature_plasmon_diffraction_patterns,
+        )
+
+        return calculate_quadrature_plasmon_diffraction_patterns(
+            self, float(thickness), probe, plasmons=plasmons, max_angle=max_angle
+        )
+
     def calculate_diffuse_diffraction_pattern(
         self,
         thickness: float,
@@ -1802,10 +1936,10 @@ class BlochWaves:
         plasmons : MonteCarloPlasmons
             The Monte-Carlo plasmon (or phonon) scattering parameters.
         gpts : tuple of int
-            Grid dimensions ``(ny, nx)`` for the output images.
+            Grid dimensions ``(nx, ny)`` for the output images.
         extent : tuple of float, optional
-            Reciprocal-space half-extent ``(ky_max, kx_max)`` [1/Å] so the images
-            span ``[-ky_max, ky_max] × [-kx_max, kx_max]``. Defaults to 1.2 ×
+            Reciprocal-space half-extent ``(kx_max, ky_max)`` [1/Å] so the images
+            span ``[-kx_max, kx_max] × [-ky_max, ky_max]``. Defaults to 1.2 ×
             the maximum g-vector length.
 
         Returns
@@ -1831,13 +1965,13 @@ class BlochWaves:
             _precomputed=precomputed,
         )
 
-        ny, nx = gpts
-        ky_max, kx_max = actual_extent
+        nx, ny = gpts
+        kx_max, ky_max = actual_extent
         sampling_x = 2 * kx_max / max(nx - 1, 1)
         sampling_y = 2 * ky_max / max(ny - 1, 1)
 
         labels = tuple(ntuples.get(n, f"{n}-plasmon") for n in orders)
-        plasmon_axis = OrdinalAxis(label="energy loss", values=labels)
+        plasmon_axis = _plasmon_order_axis(plasmons, labels)
 
         return DiffractionPatterns(
             array=images,
@@ -1897,13 +2031,11 @@ class BlochWaves:
             _prepare_bloch_matrices,
             calculate_deterministic_diffuse_dp,
         )
-        from abtem.inelastic.plasmons import MonteCarloPhonons, MonteCarloPlasmons
+        from abtem.inelastic.plasmons import MonteCarloPhonons
 
         dp_full_rad = dp_full / 1000
         dp_step_rad = dp_step / 1000
         dp_range = np.arange(-dp_full_rad, dp_full_rad + dp_step_rad * 0.5, dp_step_rad)
-        nDP = len(dp_range)
-
         precomputed = _prepare_bloch_matrices(self)
 
         if isinstance(plasmons, MonteCarloPhonons):
@@ -1973,14 +2105,18 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False,
             the calculation is done eagerly.
-        plasmons : MonteCarloPlasmons, optional
-            If provided, inelastic plasmon scattering is included using the combined
-            Bloch wave--Monte Carlo method of Mendis (Acta Cryst. A80, 2024). The
-            returned patterns gain a leading ordinal axis resolved by excitation order
+        plasmons : MonteCarloPlasmons or QuadraturePlasmons, optional
+            If provided, inelastic plasmon scattering is included, either by the
+            combined Bloch wave--Monte Carlo method of Mendis (Acta Cryst. A80, 2024)
+            or by the deterministic quadrature of
+            :func:`abtem.bloch.inelastic.calculate_quadrature_plasmon_intensities`.
+            The returned patterns gain a leading
+            :class:`~abtem.core.axes.PlasmonOrderAxis` resolved by excitation order
             (energy loss): ``"Zero loss"``, ``"Single plasmon"``, etc. Each pattern is
-            the incoherent average of ``|phi_g|^2`` over Monte-Carlo configurations of
-            that order; the Poisson weights ``P(n)`` are stored in the metadata.
-            Both ``lazy=True`` and ``lazy=False`` are supported with ``plasmons``.
+            the incoherent average of ``|phi_g|^2`` of that order, in the tilted frame
+            of the scattered electron and normalized to the incident electron count;
+            the Poisson weights ``P(n)`` are stored in the metadata under
+            ``"plasmon_weights"``. Both ``lazy=True`` and ``lazy=False`` are supported.
 
         Returns
         -------
@@ -1988,6 +2124,12 @@ class BlochWaves:
             The dynamical diffraction patterns.
         """
         if plasmons is not None:
+            from abtem.inelastic.plasmons import QuadraturePlasmons
+
+            if isinstance(plasmons, QuadraturePlasmons):
+                return self._calculate_quadrature_plasmon_diffraction_patterns(
+                    thicknesses, plasmons, return_complex=return_complex, lazy=lazy
+                )
             return self._calculate_plasmon_diffraction_patterns(
                 thicknesses, plasmons, return_complex=return_complex, lazy=lazy
             )
@@ -2762,7 +2904,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                     array[idx + (i,)][..., bw.hkl_mask[hkl_mask]] = dp_array[j]
 
         labels = tuple(ntuples.get(n, f"{n}-plasmon") for n in all_orders)
-        plasmon_axis = OrdinalAxis(label="energy loss", values=labels)
+        plasmon_axis = _plasmon_order_axis(plasmons, labels)
 
         ensemble_axes_metadata: list[AxisMetadata] = [
             *self.ensemble_axes_metadata,

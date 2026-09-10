@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numbers import Number
 from typing import Any, Optional
 
@@ -496,8 +496,8 @@ class PlasmonOrderAxis(OrdinalAxis):
     units: str = ""
     label: str = "Plasmon excitations"
     _ensemble_mean: bool = False
-    model: str = None
-    parameters: dict = None
+    model: Optional[str] = None
+    parameters: Optional[dict] = field(default=None, hash=False, compare=False)
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

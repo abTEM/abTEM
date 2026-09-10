@@ -1,3 +1,16 @@
+"""Plasmon (bulk valence) energy-loss scattering in the multislice algorithm.
+
+Three models share one convention: excitations form a Poisson process in depth with
+mean free path ``mean_free_path``; each excitation deflects the electron with the
+Lorentzian angular distribution ``P(theta) ~ theta / (theta^2 + theta_E^2)`` up to the
+critical angle. :class:`MonteCarloPlasmons` samples events (Mendis, Ultramicroscopy
+2019), :class:`PhaseScramblePlasmons` applies random kicks with random phases every
+slice (Mendis, Ultramicroscopy 2023) and :class:`QuadraturePlasmons` integrates the
+same distributions on deterministic nodes.
+"""
+
+from __future__ import annotations
+
 import itertools
 import math
 import warnings
@@ -7,25 +20,26 @@ from typing import TYPE_CHECKING, List, Tuple, Union
 
 import dask
 import dask.array as da
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.axes import Axes
 
 from abtem.core.axes import (
     AxisMetadata,
     PlasmonAxis,
     PlasmonOrderAxis,
+    ThicknessAxis,
     _iterate_axes_type,
 )
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.complex import abs2
-from abtem.core.energy import energy2wavelength
+from abtem.core.energy import energy2wavelength, relativistic_mass_correction
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.utils import get_dtype, itemset
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
     from abtem.potentials import BasePotential
     from abtem.waves import Waves
 
@@ -41,8 +55,57 @@ ntuples = {
     6: "Sextuple plasmon",
     7: "Septuple plasmon",
     8: "Octuple plasmon",
-    9: "Nonuble plasmon",
+    9: "Nonuple plasmon",
 }
+
+
+def characteristic_angle(excitation_energy: float, energy: float) -> float:
+    """Characteristic plasmon scattering angle [mrad].
+
+    ``theta_E = E_p / (gamma m v^2) = E_p / (2 E_0) * 2 gamma / (gamma + 1)``, the
+    relativistic form (Egerton, Electron Energy-Loss Spectroscopy in the Electron
+    Microscope, 3rd ed., Eq. 3.28); ``gamma`` is the relativistic mass correction. At
+    200 keV this is 16 percent wider than the non-relativistic ``E_p / (2 E_0)``.
+
+    Parameters
+    ----------
+    excitation_energy : float
+        Plasmon energy [eV].
+    energy : float
+        Electron energy [eV].
+    """
+    gamma = relativistic_mass_correction(energy)
+    return excitation_energy / (2 * energy) * (2 * gamma / (gamma + 1)) * 1e3
+
+
+def _loss_order_factors(
+    num_orders: int,
+    num_events: int,
+    max_tilt_events: int,
+    p_small: float,
+    p_large: float,
+):
+    """Weights of a chain of ``num_events`` direction-changing events in every loss
+    order.
+
+    Returns ``(n, m, factor)`` triples: the chain contributes ``factor`` times its
+    pattern to loss order ``n``, with ``m`` of the ``n`` excitations being large-angle
+    (``m - num_events`` of them beyond the chain, treated as momentum transfers
+    only) and ``n - m`` small-angle momentum transfers.
+    """
+    from math import comb
+
+    factors = []
+    for n in range(0 if num_events == 0 else 1, num_orders):
+        if num_events < max_tilt_events:
+            ms = [num_events] if num_events <= n else []
+        else:
+            ms = range(num_events, n + 1)
+        for m in ms:
+            factor = comb(n, m) * p_large**m * p_small ** (n - m)
+            if factor:
+                factors.append((n, m, factor))
+    return factors
 
 
 def draw_scattering_depths(
@@ -196,6 +259,14 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
         raise NotImplementedError(
             "the laboratory frame requires diffraction patterns (PixelatedDetector)"
         )
+    if lab_frame and any(
+        isinstance(axis, ThicknessAxis) for axis in measurement.axes_metadata
+    ):
+        raise NotImplementedError(
+            "the laboratory frame shifts every event by the momentum of all of its "
+            "excitations, which is only right at the final exit plane; use a single "
+            "exit plane or the tilted frame"
+        )
 
     num_excitations = [len(value[0]) for value in plasmon_axis.values]
     uniques, inverse = np.unique(num_excitations, return_inverse=True)
@@ -207,6 +278,20 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
         tilts = _event_tilts(plasmon_axis)
         sampling = measurement.angular_sampling
         shifts = np.round(tilts / np.array(sampling)).astype(int)
+        shape = measurement.shape[-2:]
+
+        def shifted(pattern, shift):
+            # intensity moved past the edge of the (cropped) pattern is lost, not
+            # wrapped to the other side
+            pattern = xp.roll(pattern, tuple(shift), axis=(-2, -1))
+            for axis, (n, s) in enumerate(zip(shape, shift)):
+                mask = np.ones(n, dtype=bool)
+                if s > 0:
+                    mask[:s] = False
+                elif s < 0:
+                    mask[n + s :] = False
+                pattern = pattern * mask.reshape((-1, 1) if axis == 0 else (1, -1))
+            return pattern
 
     axis_values = []
     new_array = []
@@ -218,9 +303,7 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
             members = []
             for j in indices:
                 index[plasmon_axis_index] = j
-                members.append(
-                    xp.roll(array[tuple(index)], tuple(shifts[j]), axis=(-2, -1))
-                )
+                members.append(shifted(array[tuple(index)], shifts[j]))
             channel = xp.stack(members, axis=plasmon_axis_index).mean(
                 plasmon_axis_index, keepdims=True
             )
@@ -307,6 +390,8 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         return max(self.num_excitations)
 
     def show_excitations_histogram(self, ax: Axes = None):
+        import matplotlib.pyplot as plt
+
         bins = range(0, self.max_excitations + 2)
         if ax is None:
             ax = plt.subplot()
@@ -330,6 +415,9 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
     ):
         if isinstance(num_excitations, int):
             num_excitations = [num_excitations]
+
+        import matplotlib.pyplot as plt
+        from matplotlib.axes import Axes
 
         if ax is None:
             fig, axes = plt.subplots(1, len(num_excitations), sharey=True)
@@ -362,6 +450,8 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
     def show_scattering_angle_distribution(self, ax=None, **kwargs):
         scattering_angles = list(itertools.chain(*self.radial_angles))
 
+        import matplotlib.pyplot as plt
+
         if ax is None:
             fig, ax = plt.subplots(1, 1)
 
@@ -377,6 +467,8 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         weights = [self.weights[index] for index in indices]
 
         x = [ntuples[unique] for unique in uniques]
+
+        import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.bar(x, weights)
@@ -483,9 +575,8 @@ class MonteCarloPlasmons:
         mean_free_path: float,
         excitation_energy: float,
         critical_angle: float,
-        num_excitations: Union[int, Tuple[int, ...]] = None,
+        num_excitations: Union[int, Tuple[int, ...]],
         num_samples: int = None,
-        weights: Union[bool] = True,
         ensemble_mean: bool = False,
         seed: Union[int, Tuple[int, ...]] = None,
         lab_frame: bool = True,
@@ -560,7 +651,8 @@ class MonteCarloPlasmons:
         return self.num_samples
 
     def characteristic_angle(self, energy: float) -> float:
-        return self._excitation_energy / (2 * energy) * 1e3
+        """Characteristic plasmon scattering angle [mrad] at the given energy [eV]."""
+        return characteristic_angle(self._excitation_energy, energy)
 
     def draw_events(
         self, waves: "Waves", potential: "BasePotential"
@@ -569,9 +661,7 @@ class MonteCarloPlasmons:
             thickness=potential.thickness, energy=waves._valid_energy
         )
 
-    def _draw_events(
-        self, thickness: float, energy: float
-    ) -> PlasmonScatteringEvents:
+    def _draw_events(self, thickness: float, energy: float) -> PlasmonScatteringEvents:
         """Draw Monte Carlo plasmon scattering events for a specimen thickness and
         electron energy.
 
@@ -892,7 +982,7 @@ class QuadraturePlasmons:
 
     def characteristic_angle(self, energy: float) -> float:
         """Characteristic plasmon scattering angle [mrad] at the given energy [eV]."""
-        return self._excitation_energy / (2 * energy) * 1e3
+        return characteristic_angle(self._excitation_energy, energy)
 
     def excitation_weights(self, thickness: float) -> Tuple[float, ...]:
         """Poisson probability of each loss order for the given thickness [Å]."""
@@ -903,6 +993,8 @@ class QuadraturePlasmons:
 
     def show_weights(self, thickness: float, ax: Axes = None):
         """Bar chart of the Poisson weights of the loss orders."""
+        import matplotlib.pyplot as plt
+
         if ax is None:
             _, ax = plt.subplots(figsize=(7, 5))
         ax.bar(self.order_labels, self.excitation_weights(thickness))
@@ -967,7 +1059,8 @@ class QuadraturePlasmons:
             The rings are spaced uniformly in the cumulative probability ``u``. A ring
             wider than ``max_step`` in angle is subdivided until every cell is at most
             that wide, and the azimuthal sampling of a ring is refined so that its cells
-            are at most ``max_step`` wide along the arc as well. This resolves integrands
+            are at most ``max_step`` wide along the arc as well. This resolves
+            integrands
             that vary on an angular scale rather than a probability scale, such as the
             rocking curves of Bloch waves.
             """
@@ -1019,7 +1112,8 @@ class QuadraturePlasmons:
             "extra": partition(
                 self._event_num_angles,
                 self._event_num_azimuthal,
-                max_angular_step if event_max_angular_step is None
+                max_angular_step
+                if event_max_angular_step is None
                 else event_max_angular_step,
             ),
         }
@@ -1053,6 +1147,12 @@ def _lorentzian_kernels(
     dx, dy = angular_sampling
     radius_x = int(np.ceil(theta_c / dx)) + 1
     radius_y = int(np.ceil(theta_c / dy)) + 1
+    if 2 * radius_x + 1 > gpts[0] or 2 * radius_y + 1 > gpts[1]:
+        warnings.warn(
+            f"the critical angle ({theta_c:.1f} mrad) exceeds half the extent of the "
+            "diffraction grid; the momentum-transfer kernels wrap around it",
+            stacklevel=3,
+        )
     ix = np.arange(-radius_x, radius_x + 1)
     iy = np.arange(-radius_y, radius_y + 1)
     sub = (np.arange(supersampling) + 0.5) / supersampling - 0.5
@@ -1073,11 +1173,11 @@ def _lorentzian_kernels(
         if total <= 0:
             raise RuntimeError("empty momentum-transfer kernel")
         kernel = kernel / total
-        full = np.zeros(gpts, dtype=np.float32)
+        full = np.zeros(gpts, dtype=get_dtype(complex=False))
         # wrap into the unshifted grid
         gx = np.mod(ix, gpts[0])
         gy = np.mod(iy, gpts[1])
-        np.add.at(full, (gx[:, None], gy[None, :]), kernel.astype(np.float32))
+        np.add.at(full, (gx[:, None], gy[None, :]), kernel.astype(full.dtype))
         return full
 
     small = to_kernel(np.where(u < u_min, weight, 0.0))
@@ -1128,13 +1228,15 @@ def quadrature_plasmon_multislice_and_detect(
     algorithm=None,
     pbar: bool = False,
     potential_chunk_size: int | str = "auto",
-    **kwargs,
 ):
     """
     Multislice algorithm with plasmon scattering evaluated by quadrature.
 
     One measurement per detector is returned with a leading
-    :class:`PlasmonOrderAxis` resolving the number of plasmon excitations.
+    :class:`PlasmonOrderAxis` resolving the number of plasmon excitations. The loss
+    channels are formed from the diffraction patterns at the exit plane, so only
+    detectors that reduce diffraction patterns are supported, and only the final
+    exit plane.
     """
     from itertools import product
     from math import comb
@@ -1145,7 +1247,7 @@ def quadrature_plasmon_multislice_and_detect(
     from abtem.core.energy import energy2wavelength
     from abtem.core.fft import fft2, ifft2
     from abtem.core.grid import spatial_frequencies
-    from abtem.detectors import validate_detectors
+    from abtem.detectors import WavesDetector, validate_detectors
     from abtem.multislice import (
         FourierMultislice,
         FresnelPropagator,
@@ -1173,6 +1275,16 @@ def quadrature_plasmon_multislice_and_detect(
 
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
+    if any(isinstance(detector, WavesDetector) for detector in detectors):
+        raise NotImplementedError(
+            "quadrature plasmon scattering returns loss-order diffraction patterns, "
+            "not wave functions; use a detector that reduces diffraction patterns"
+        )
+    if tuple(potential.exit_planes) != (potential.num_slices - 1,):
+        raise NotImplementedError(
+            "quadrature plasmon scattering resolves the loss orders at the final exit "
+            "plane only; 'exit_planes' must be the default"
+        )
     xp = get_array_module(waves.device)
     energy = waves._valid_energy
     wavelength = energy2wavelength(energy)
@@ -1337,30 +1449,25 @@ def quadrature_plasmon_multislice_and_detect(
         acc = accumulators.setdefault(exit_index, [None] * n_orders)
         acc[n] = value if acc[n] is None else acc[n] + value
 
-    def path_weight(n, m):
-        return comb(n, m) * p_large**m * p_small ** (n - m)
-
-    ks = xp.ones((), dtype=complex_dtype) if kernels is None else kernels["small"]
-    kl = xp.ones((), dtype=complex_dtype) if kernels is None else kernels["large"]
+    # powers of the momentum-transfer kernels for the excitations that are not
+    # direction-changing events of a chain, computed once
+    if kernels is None:
+        one = xp.ones((), dtype=complex_dtype)
+        ks_pow = kl_pow = [one] * n_orders
+    else:
+        ks_pow = [kernels["small"] ** j for j in range(n_orders)]
+        kl_pow = [kernels["large"] ** j for j in range(n_orders)]
 
     def contribute(exit_index, f_pattern, m_group, weight):
-        # contributes to m = m_group if m_group < max_tilt_events, otherwise to every
-        # m >= max_tilt_events (extra events as momentum transfer)
-        for n in range(0 if m_group == 0 else 1, n_orders):
-            if m_group < max_tilt_events:
-                ms = [m_group] if m_group <= n else []
-            else:
-                ms = range(m_group, n + 1)
-            for m in ms:
-                factor = path_weight(n, m) * weight
-                if factor == 0:
-                    continue
-                term = f_pattern * factor
-                if n - m > 0:
-                    term = term * ks ** (n - m)
-                if m - m_group > 0:
-                    term = term * kl ** (m - m_group)
-                add(exit_index, n, term)
+        for n, m, factor in _loss_order_factors(
+            n_orders, m_group, max_tilt_events, p_small, p_large
+        ):
+            term = f_pattern * (factor * weight)
+            if n - m > 0:
+                term = term * ks_pow[n - m]
+            if m - m_group > 0:
+                term = term * kl_pow[m - m_group]
+            add(exit_index, n, term)
 
     def accumulate_elastic(exit_index, elastic):
         i0 = abs2(fft2(elastic.array, overwrite_x=False))
@@ -1378,9 +1485,7 @@ def quadrature_plasmon_multislice_and_detect(
             member_weights = single_weights[index[:, 0]]
             for level in range(1, index.shape[1]):
                 member_weights = member_weights * extra_weights[index[:, level]]
-            member_weights = xp.asarray(
-                member_weights.astype(get_dtype(complex=False))
-            )
+            member_weights = xp.asarray(member_weights.astype(get_dtype(complex=False)))
             weight_slice = (slice(None),) + (None,) * (n_base + 2)
             f = (f * member_weights[weight_slice]).sum(0)
             contribute(exit_index, f, m, group["weight"])
@@ -1414,7 +1519,7 @@ def quadrature_plasmon_multislice_and_detect(
         enabled=pbar, total=n_slices, leave=False, desc="multislice"
     )
 
-    elastic_input = make_waves(waves.array.copy(), [])
+    elastic_input = make_waves(waves.array, [])
     ens = tuple(elastic_input.array.shape[:-2])
 
     for potential_index, potential_configuration in _generate_potential_configurations(
@@ -1648,9 +1753,10 @@ class _PlasmonSliceOperator:
             ψ_0' = √(1-P) ψ_0
             ψ_n' = √(1-P) ψ_n  +  √P e^{iφ} e^{2πi q·r} ψ_{n-1}   for n ≥ 1
 
-        with the same random kick ``q`` and phase ``φ`` for every order, so that the
-        sum over orders reproduces the single-wave result up to the truncation at the
-        highest order (which therefore collects that order and all higher ones).
+        with the same random kick ``q`` and phase ``φ`` for every order. Every channel
+        holds exactly its order: intensity scattered beyond ``max_order`` leaves the
+        set, so the sum over the channels reproduces the single-wave result minus the
+        weight of the higher orders.
         """
         xp = self._xp
         scatter_prob, kick, phase = self._scatter_params(slice_thickness)
@@ -1930,8 +2036,8 @@ class PhaseScramblePlasmons:
     max_loss_order : int, optional
         If set, the multislice loop maintains separate wave functions for each
         plasmon-loss order from 0 (zero loss) up to ``max_loss_order``, returning
-        order-resolved diffraction patterns; the highest order collects that order
-        and all higher ones. If ``None`` (default), a single wave function
+        order-resolved diffraction patterns (every channel holds exactly its order;
+        higher orders are dropped). If ``None`` (default), a single wave function
         accumulating all orders is propagated (faster, but only the total unfiltered
         signal is available).
     num_repetitions : int, optional
@@ -2118,7 +2224,8 @@ class PhaseScramblePlasmons:
         wavelength = energy2wavelength(waves._valid_energy)  # [Å]
         rng = _config_rng(self._seed, potential_index, config_seed)
 
-        theta_e = self._excitation_energy / (2.0 * waves._valid_energy)  # [rad]
+        theta_e = characteristic_angle(self._excitation_energy, waves._valid_energy)
+        theta_e = theta_e * 1e-3  # [rad]
         theta_c = self._critical_angle * 1e-3
         if self._min_angle is None:
             min_angle = wavelength * max(1.0 / extent[0], 1.0 / extent[1])
@@ -2194,7 +2301,10 @@ def _compute_tds_cdf(
     """
     theta = np.linspace(0, theta_max, num_points)
     dsigma = _tds_differential_cross_section(
-        theta, scattering_factor_func, debye_waller_factor, energy,
+        theta,
+        scattering_factor_func,
+        debye_waller_factor,
+        energy,
     )
     integrand = dsigma * np.sin(theta) * 2 * np.pi
     dtheta = theta[1] - theta[0]
@@ -2327,13 +2437,15 @@ class MonteCarloPhonons:
 
     def mean_free_path(self, energy: float) -> float:
         """Compute the phonon mean free path ``λ_ph = 1/(Nᵥ σ_TDS^T)`` [Eq. 9]."""
-        from abtem.core.energy import energy2wavelength
 
         f_func = self._get_scattering_factor_func()
         theta_grid = np.linspace(0, self._theta_max, 2000)
 
         dsigma = _tds_differential_cross_section(
-            theta_grid, f_func, self._debye_waller_factor, energy,
+            theta_grid,
+            f_func,
+            self._debye_waller_factor,
+            energy,
         )
         integrand = dsigma * np.sin(theta_grid) * 2 * np.pi
         dtheta = theta_grid[1] - theta_grid[0]
@@ -2348,13 +2460,14 @@ class MonteCarloPhonons:
 
         return 1.0 / (number_density * sigma_total)
 
-    def _draw_events(
-        self, thickness: float, energy: float
-    ) -> PlasmonScatteringEvents:
+    def _draw_events(self, thickness: float, energy: float) -> PlasmonScatteringEvents:
         """Draw Monte-Carlo phonon scattering events."""
         f_func = self._get_scattering_factor_func()
         theta_grid, cdf, sigma_total = _compute_tds_cdf(
-            f_func, self._debye_waller_factor, energy, self._theta_max,
+            f_func,
+            self._debye_waller_factor,
+            energy,
+            self._theta_max,
         )
 
         number_density = len(self._atoms) / self._atoms.get_volume()
@@ -2385,7 +2498,11 @@ class MonteCarloPhonons:
 
             radial_angles.append(
                 _draw_phonon_radial_angle(
-                    theta_grid, cdf, num_samples=ns, num_depths=n, rng=rng,
+                    theta_grid,
+                    cdf,
+                    num_samples=ns,
+                    num_depths=n,
+                    rng=rng,
                 )
             )
 
@@ -2393,9 +2510,7 @@ class MonteCarloPhonons:
                 draw_azimuthal_angle(num_samples=ns, num_depths=n, rng=rng)
             )
 
-            weights.append(
-                (excitations_weights(n, thickness, mfp),) * ns
-            )
+            weights.append((excitations_weights(n, thickness, mfp),) * ns)
 
         depths = list(itertools.chain(*depths))
         radial_angles = list(itertools.chain(*radial_angles))
