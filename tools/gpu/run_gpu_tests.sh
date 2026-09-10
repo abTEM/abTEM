@@ -40,6 +40,10 @@
 #   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests;
 #                      they need >= 2 visible GPUs and dask-cuda and skip
 #                      themselves otherwise (default: off)
+#   ABTEM_CI_REPO_URL  clone URL for managed mode (default: anonymous HTTPS —
+#                      the runner only reads, and cluster compute nodes often
+#                      cannot use the SSH key that works on login nodes; set a
+#                      git@ URL for a private fork)
 #
 # Exit status is non-zero when either test invocation fails. Each run appends
 # one line to status.tsv in the log directory:
@@ -110,7 +114,8 @@ done
 # --- repo --------------------------------------------------------------------
 if [ "${MODE}" != "in-place" ]; then
     if [ ! -d "${REPO}/.git" ]; then
-        git clone --branch "${BRANCH}" git@github.com:abTEM/abTEM.git "${REPO}" \
+        git clone --branch "${BRANCH}" \
+            "${ABTEM_CI_REPO_URL:-https://github.com/abTEM/abTEM.git}" "${REPO}" \
             || fail "git clone failed"
     fi
     cd "${REPO}"

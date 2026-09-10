@@ -50,7 +50,7 @@ Example: weekly on NERSC Perlmutter via `scrontab -e` (times are local; `-q shar
 0 6 * * 1 ABTEM_CI_ROOT=$SCRATCH/abtem-gpu-ci ABTEM_CI_MODULES=cudatoolkit/12.9 ABTEM_CI_MAILTO=<you@example.org> $SCRATCH/abtem-gpu-ci/run_gpu_tests.sh
 ```
 
-(Copy the script itself somewhere stable first — in managed mode it clones the repo, so it cannot run from inside the clone it manages. On Perlmutter, note that `/global/common` is read-only from compute nodes: keep `ABTEM_CI_ROOT` on `$SCRATCH`.)
+(Copy the script itself somewhere stable first — in managed mode it clones the repo, so it cannot run from inside the clone it manages. Managed mode clones anonymously over HTTPS by default, since compute nodes often cannot use the SSH key that works on login nodes; set `ABTEM_CI_REPO_URL` for a private fork. On Perlmutter, note that `/global/common` is read-only from compute nodes: keep `ABTEM_CI_ROOT` on `$SCRATCH`.)
 
 **Reusing an existing venv** (e.g. a dev machine where cupy is a custom ROCm build): `ABTEM_CI_VENV=<venv>` activates it and installs nothing; the checkout under test is put on `PYTHONPATH`, so an editable abtem install in that venv is never re-pointed.
 
