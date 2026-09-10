@@ -917,7 +917,18 @@ def calculate_structure_matrix(
 
     Mii = xp.asarray(Mii)
 
-    A = A * prefactor * Mii[None] * Mii[:, None]
+    # `A = A * prefactor * Mii[None] * Mii[:, None]` would keep the old A
+    # alive (still bound to the name) through all three multiplications,
+    # needing 2x A's footprint at once for the whole chain -- for a ~13GB
+    # structure matrix that is the difference between fitting on a 24GB GPU
+    # and not. The first multiplication can't be done in place (A may be
+    # read-only here, e.g. from the pandas round-trip in
+    # retrieve_structure_factor_values) but it produces a fresh, writable
+    # array as a side effect, so the old A is freed right after this line
+    # instead of being held through the rest of the chain.
+    A = A * prefactor
+    A *= Mii[None]
+    A *= Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
