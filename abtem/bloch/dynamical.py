@@ -231,7 +231,7 @@ def calculate_structure_factors(
 
     struct_factors = (
         xp.sum(
-            f_e * xp.exp(-2.0j * np.pi * positions @ hkl),
+            f_e * xp.exp(2.0j * np.pi * positions @ hkl),
             axis=0,
         )
         / atoms.cell.volume
@@ -288,14 +288,21 @@ def structure_factor_to_potential(
     """
     xp = get_array_module(structure_factor)
     structure_factor = structure_factor_1d_to_3d(structure_factor, hkl, gpts)
-    # Deliberately xp.fft rather than abtem.core.fft.ifftn: the FFTW backend
+    # Deliberately xp.fft rather than abtem.core.fft.fftn: the FFTW backend
     # behind that wrapper only ever transforms the trailing two axes, so it
     # would silently turn this 3D transform into a 2D one on CPU. The slow-FFT
     # diagnostic is requested explicitly instead -- this grid follows from
     # g_max and the cell, so it is essentially never a fast length.
-    warn_if_slow_gpu_fft(structure_factor, "ifftn")
-    potential = xp.fft.ifftn(structure_factor)
-    potential = potential * np.prod(potential.shape) / kappa
+    #
+    # calculate_structure_factors uses the standard crystallographic convention
+    # F(g) = sum_j f_j exp(+2pi i g.r_j), i.e. V(r) = sum_g F(g) exp(-2pi i g.r)
+    # is the correct Fourier synthesis -- exactly numpy's forward transform
+    # (fftn), not the inverse. Unlike ifftn, fftn carries no built-in 1/N
+    # normalization, so (unlike the previous ifftn-based version) the result
+    # must not be rescaled by the number of grid points.
+    warn_if_slow_gpu_fft(structure_factor, "fftn")
+    potential = xp.fft.fftn(structure_factor)
+    potential = potential / kappa
     potential -= potential.min()
     return potential.real
 
@@ -2206,6 +2213,12 @@ class BlochWaves:
             )
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
+
+            if thicknesses.ndim == 0:
+                # a scalar thickness has no ensemble (thickness) axis; drop the spurious
+                # leading size-1 axis so the array matches the empty axis metadata (the
+                # lazy path already returns a 2D array in this case).
+                array = array[0]
 
         ensemble_axes_metadata: list[AxisMetadata] = []
 

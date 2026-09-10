@@ -368,8 +368,36 @@ U = TypeVar("U", np.ndarray, da.core.Array)
 
 # Cache the parsed cuFFT cache limit + the config value it was derived from.
 # Revalidated on every GPU FFT dispatch without reparsing when the config is
-# unchanged (the common case in a hot loop).
-_CUFFT_CACHE_STATE: tuple[object, int] | None = None
+# unchanged (the common case in a hot loop). CuPy's plan cache is per thread
+# (and per device), so the applied state must be thread-local as well: a
+# process-global slot would configure only the first dispatching thread and
+# leave every other dask worker thread's cache at CuPy's defaults.
+_CUFFT_CACHE_STATE = threading.local()
+
+
+def _reset_cufft_cache_state():
+    """Forget the applied plan-cache state for the calling thread (tests)."""
+    for attr in ("token", "limit"):
+        try:
+            delattr(_CUFFT_CACHE_STATE, attr)
+        except AttributeError:
+            pass
+
+
+def _parse_cufft_cache_entries() -> int:
+    """The configured plan-cache entry count, or 0 to leave the count alone.
+
+    Invalid values must not raise: this runs ahead of every GPU FFT, and an
+    exception here (e.g. ``int(None)``) would fail every dispatch. null and
+    non-positive values mean "do not touch the entry count", mirroring how a
+    user opts out of the sibling ``fft-cache-size`` bound.
+    """
+    raw = config.get("cupy.fft-cache-entries", 64)
+    try:
+        entries = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return entries if entries > 0 else 0
 
 
 def _configure_cufft_cache():
@@ -399,13 +427,14 @@ def _configure_cufft_cache():
     of successive computations. The limit is a ceiling, not a reservation —
     unused headroom costs no memory.
     """
-    global _CUFFT_CACHE_STATE
     raw = config.get("cupy.fft-cache-size", "auto")
 
     # The plan cache and the resolved "auto" limit are per device, so the
     # applied state is keyed on the current device as well as the raw value.
     device = cp.cuda.Device()
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
+    entries = _parse_cufft_cache_entries()
+    applied = getattr(_CUFFT_CACHE_STATE, "token", None)
+    if applied is not None and applied == (raw, entries, device.id):
         return
 
     if raw is None:
@@ -421,19 +450,32 @@ def _configure_cufft_cache():
     cache = cp.fft.config.get_plan_cache()
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
-    elif limit > 0:
-        if cache.get_size() == 0:
-            cache.set_size(16)  # re-enable a previously disabled cache
-        cache.set_memsize(limit)
     else:
-        # Explicitly restore "unlimited": an earlier bound (e.g. from the
-        # "auto" default) must be undoable at runtime -- the oversized-plan
-        # warning recommends exactly this.
-        if cache.get_size() == 0:
-            cache.set_size(16)
-        cache.set_memsize(-1)
+        # CuPy keeps at most 16 plans by default. Workloads whose batch
+        # dimension varies pass that within a few chunks and then rebuild
+        # plans continuously: profiling a core-loss scan, whose scattering
+        # batches follow the number of sites passing the threshold, put 30 %
+        # of the runtime in _get_cufft_plan_nd, and raising the limit made
+        # the same scan 18 % faster with identical results.
+        #
+        # Raise, never lower: a cache someone tuned larger through CuPy's own
+        # API keeps its size (the old code likewise never overrode a live
+        # cache, only re-enabled a disabled one). This also re-enables a
+        # disabled cache, whose size is 0.
+        if entries and cache.get_size() < entries:
+            cache.set_size(entries)
+        elif not entries and cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
+        if limit > 0:
+            cache.set_memsize(limit)
+        else:
+            # Explicitly restore "unlimited": an earlier bound (e.g. from the
+            # "auto" default) must be undoable at runtime -- the
+            # oversized-plan warning recommends exactly this.
+            cache.set_memsize(-1)
 
-    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
+    _CUFFT_CACHE_STATE.token = (raw, entries, device.id)
+    _CUFFT_CACHE_STATE.limit = limit
 
 
 _warned_plan_cache_bypass = False

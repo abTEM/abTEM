@@ -595,11 +595,13 @@ class TestComplexWorkflows:
 
 
 class TestStencilNumericalAccuracy:
-    """Verify the numba stencil matches the scipy reference implementation."""
+    """Verify the fast stencils match the scipy reference implementation."""
 
+    @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("accuracy", [2, 4, 6, 8])
-    def test_laplace_stencil_matches_scipy_reference(self, accuracy):
-        """Compare the numba Laplacian stencil against scipy.ndimage.convolve."""
+    def test_laplace_stencil_matches_scipy_reference(self, accuracy, device):
+        """Compare the fast Laplacian stencils against scipy.ndimage.convolve."""
+        from abtem.core.backend import get_array_module
         from abtem.finite_difference import (
             _laplace_operator_func_slow,
             _laplace_operator_stencil,
@@ -618,14 +620,29 @@ class TestStencilNumericalAccuracy:
                 for m in range(a.shape[0])
             ]
         )
+        xp = get_array_module(device)
         result = _laplace_operator_stencil(
-            accuracy, prefactor, mode="wrap", dtype=np.complex64, device="cpu"
-        )(a)
+            accuracy, prefactor, mode="wrap", dtype=np.complex64, device=device
+        )(xp.asarray(a))
 
         np.testing.assert_allclose(
-            result,
+            to_numpy(result),
             ref,
             rtol=1e-5,
             atol=1e-5,
-            err_msg=f"Stencil mismatch at accuracy={accuracy}",
+            err_msg=f"Stencil mismatch at accuracy={accuracy} on {device}",
         )
+
+    @pytest.mark.parametrize("device", [gpu])
+    def test_gpu_stencil_rejects_non_complex_dtype(self, device):
+        """The raw GPU kernel only ships complex specializations; a real array
+        must raise instead of silently reinterpreting the buffer."""
+        import cupy as cp
+
+        from abtem.finite_difference import _laplace_operator_stencil
+
+        stencil = _laplace_operator_stencil(
+            4, 1.0, mode="wrap", dtype=np.complex64, device="gpu"
+        )
+        with pytest.raises(TypeError, match="complex64 or complex128"):
+            stencil(cp.ones((8, 8), dtype=cp.float32))
