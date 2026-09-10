@@ -52,7 +52,11 @@ try:
         warnings.simplefilter("ignore", FutureWarning)
         import cupyx.scipy.signal  # type: ignore  # noqa: F401
 except ImportError:
-    assert cupyx is None
+    # this can fail even though cupyx itself imported: cupyx.scipy.signal
+    # eagerly imports cuBLAS-backed submodules, so an environment without the
+    # CUDA/ROCm libraries on the loader path fails here. GPU filters that need
+    # scipy.signal then fail at use time instead of blocking the abtem import.
+    pass
 
 
 ArrayModule = Union[ModuleType, str]
