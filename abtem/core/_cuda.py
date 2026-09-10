@@ -60,7 +60,7 @@ _sum_rle_f64 = None
 def _init_sum_rle_kernels():
     global _sum_rle_f32, _sum_rle_f64
     if _sum_rle_f32 is None:
-        mod = cp.RawModule(code=_SUM_RLE_KERNEL, options=("--std=c++14",))
+        mod = cp.RawModule(code=_SUM_RLE_KERNEL, options=("--std=c++17",))
         _sum_rle_f32 = mod.get_function("sum_rle_f32")
         _sum_rle_f64 = mod.get_function("sum_rle_f64")
 
@@ -227,7 +227,7 @@ _interpolate_radial_f64 = None
 def _init_interpolate_radial_kernels():
     global _interpolate_radial_f32, _interpolate_radial_f64
     if _interpolate_radial_f32 is None:
-        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL, options=("--std=c++14",))
+        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_KERNEL, options=("--std=c++17",))
         _interpolate_radial_f32 = mod.get_function("interpolate_radial_f32")
         _interpolate_radial_f64 = mod.get_function("interpolate_radial_f64")
 

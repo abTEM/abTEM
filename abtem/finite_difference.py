@@ -248,7 +248,7 @@ _laplace_stencil_c128 = None
 def _init_laplace_stencil_kernels():
     global _laplace_stencil_c64, _laplace_stencil_c128
     if _laplace_stencil_c64 is None:
-        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL, options=("--std=c++14",))
+        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL, options=("--std=c++17",))
         # _laplace_stencil_c64 doubles as the initialized-guard, so it is
         # assigned last: a concurrent thread that observes it non-None is then
         # guaranteed to also observe _laplace_stencil_c128 (redundant module
