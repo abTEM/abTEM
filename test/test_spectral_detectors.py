@@ -522,6 +522,78 @@ def test_show_logscale_masks_nonpositive_values_without_error():
     assert ax.collections[0].norm.vmin is None or ax.collections[0].norm.vmin > 0
 
 
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_explode_title_shows_label_only_on_first_panel():
+    """Matches the convention used elsewhere (e.g. DiffractionPatterns'
+    exploded grids): only the first panel along each exploded axis carries
+    the "Label = value" form; the rest show just the bare value, since
+    repeating the label on every panel of a single row/column is
+    redundant."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_multiaxis_spectrum()
+
+    fig, axes = spec.show(explode=[1])  # axis1 has 3 values -> one row of 3
+    axes_flat = axes.flatten()
+    titles = [ax.get_title() for ax in axes_flat[:3]]
+
+    assert titles[0] == "axis1 = 0"
+    assert titles[1] == "1"
+    assert titles[2] == "2"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_suptitle_sets_whole_figure_title_single_panel():
+    """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
+    per-panel `title` -- and must be a dedicated parameter, not something
+    picked up from **kwargs: kwargs here goes straight to pcolormesh (an
+    Axes/Artist-level call), so a caller passing suptitle that way gets a
+    bare matplotlib AttributeError instead of what they wanted."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()  # no ensemble axes -- no collapse warning
+    fig, _ = spec.show(suptitle="Whole-figure title")
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole-figure title"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_suptitle_sets_whole_figure_title_exploded():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_multiaxis_spectrum()
+    fig, _ = spec.show(explode=[1], suptitle="Whole-figure title")
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole-figure title"
+
+
+@pytest.mark.filterwarnings("ignore:This figure includes Axes")
+def test_show_rasterizes_pcolormesh_by_default():
+    """pcolormesh draws each cell as its own vector polygon; in vector
+    output (PDF/SVG/EPS) anti-aliasing at adjacent cell edges shows up as a
+    fine grid of seams over the data. rasterized=True (the default) embeds
+    the mesh as a bitmap instead, avoiding it -- explicit rasterized=False
+    must still give true vector output for anyone who wants it."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    spec, _ = _make_simple_spectrum()
+
+    fig, ax = spec.show()
+    assert ax.collections[0].get_rasterized() is True
+
+    fig, ax = spec.show(rasterized=False)
+    assert ax.collections[0].get_rasterized() is False
+
+    multi_spec, _ = _make_multiaxis_spectrum()
+    fig, axes = multi_spec.show(explode=[1])
+    for a in axes.flatten()[:3]:
+        assert a.collections[0].get_rasterized() is True
+
+
 def test_show_logscale_colors_nonpositive_values_instead_of_leaving_them_blank():
     """LogNorm masks values <= 0 rather than raising, and a masked pixel is
     drawn with the colormap's "bad" colour -- which defaults to fully

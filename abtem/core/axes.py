@@ -599,6 +599,26 @@ class FrozenPhononsAxis(AxisMetadata):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class PhononParityAxis(OrdinalAxis):
+    """Ensemble axis distinguishing the real displaced configuration from its
+    displacement-reversed twin.
+
+    Used to separate one-phonon from multi-phonon scattering in energy-
+    resolved phonon-loss simulations (see issue #373 and
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``parity_projection``). Always exactly length 2 (``("real", "twin")``),
+    on both the atoms/potential ensemble and the resulting exit-wave
+    ensemble. The shared static/equilibrium exit wave needed alongside it is
+    *not* a third member of this axis -- deliberately, to avoid replicating
+    it across every energy/configuration on materialization -- but is
+    instead attached separately as ``Waves.static_exit_wave``.
+    """
+
+    label: str = "phonon parity"
+    values: tuple = ("real", "twin")
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PrismPlaneWavesAxis(AxisMetadata):
     pass
 

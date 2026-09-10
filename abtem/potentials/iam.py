@@ -790,6 +790,20 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return self._frozen_phonons
 
     @property
+    def parity_projection(self) -> bool:
+        """Whether the wrapped frozen-phonon ensemble carries a
+        displacement-reversed twin for separating one-phonon from
+        multi-phonon scattering (see
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`)."""
+        return getattr(self.frozen_phonons, "parity_projection", False)
+
+    @property
+    def equilibrium_atoms(self) -> Optional[Atoms]:
+        """The shared undisplaced/equilibrium structure of a
+        ``parity_projection`` frozen-phonon ensemble, if any."""
+        return getattr(self.frozen_phonons, "equilibrium_atoms", None)
+
+    @property
     def num_configurations(self) -> int:
         """Size of the ensemble of atomic configurations representing frozen phonons."""
         return len(self.frozen_phonons)

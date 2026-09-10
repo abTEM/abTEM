@@ -41,6 +41,7 @@ from abtem.core.axes import (
     axis_to_dict,
 )
 from abtem.core.backend import (
+    asnumpy,
     check_cupy_is_installed,
     copy_to_device,
     cp,
@@ -379,11 +380,24 @@ class ComputableList(list):
         is_zip = url.endswith(".zip")
 
         arrays_to_write = []
+        static_arrays_to_write = []
         metadata_list = []
         base_dims_by_index = {}
 
-        for i, has_array in enumerate(self):
-            has_array = has_array.ensure_lazy()
+        for i, obj in enumerate(self):
+            # Companion arrays (currently just Waves.static_exit_wave, see
+            # abtem/waves.py) are plain object attributes, not part of the
+            # constructor/metadata contract -- capture before ensure_lazy()/
+            # copy_to_device() below reconstruct a new instance via
+            # _copy_kwargs, which would silently drop them.
+            static_exit_wave = getattr(obj, "static_exit_wave", None)
+            if static_exit_wave is not None:
+                static_exit_wave = asnumpy(static_exit_wave)
+                if not isinstance(static_exit_wave, da.core.Array):
+                    static_exit_wave = da.from_array(static_exit_wave)
+                static_arrays_to_write.append((i, static_exit_wave))
+
+            has_array = obj.ensure_lazy()
             array = has_array.copy_to_device("cpu").array
 
             metadata_dict = has_array._metadata_to_dict()
@@ -407,6 +421,7 @@ class ComputableList(list):
                 url,
                 metadata_list,
                 overwrite,
+                computed_static_arrays=(),
                 compressors=compressors,
             ):
 
@@ -441,6 +456,15 @@ class ComputableList(list):
                                 overwrite=True,
                                 compressors=compressors,
                             )
+
+                        for i, computed_static_array in computed_static_arrays:
+                            root.create_array(
+                                name=f"static_exit_wave{i}",
+                                data=computed_static_array,
+                                chunks=computed_static_array.shape,
+                                overwrite=True,
+                                compressors=compressors,
+                            )
                     except BaseException:
                         # A failed write (e.g. a chunk still over a codec's
                         # buffer limit) can leave a .zip with valid-looking
@@ -462,7 +486,10 @@ class ComputableList(list):
 
         else:
             # Use directory store for non-.zip files
-            def write_to_directory(computed_arrays, url, metadata_list, overwrite):
+            def write_to_directory(
+                computed_arrays, url, metadata_list, overwrite,
+                computed_static_arrays=(),
+            ):
                 import shutil
 
                 if overwrite and os.path.exists(url):
@@ -493,6 +520,14 @@ class ComputableList(list):
                             ),
                             overwrite=True,
                         )
+
+                    for i, computed_static_array in computed_static_arrays:
+                        root.create_array(
+                            name=f"static_exit_wave{i}",
+                            data=computed_static_array,
+                            chunks=computed_static_array.shape,
+                            overwrite=True,
+                        )
                 except BaseException:
                     # See the matching comment in write_to_zipstore: don't
                     # leave a partially-written store with valid-looking
@@ -512,8 +547,13 @@ class ComputableList(list):
             delayed_arrays = [
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
+            delayed_static_arrays = [
+                (i, dask.delayed(array.compute)())
+                for i, array in static_arrays_to_write
+            ]
             return dask.delayed(write_func)(
-                delayed_arrays, url, metadata_list, overwrite
+                delayed_arrays, url, metadata_list, overwrite,
+                computed_static_arrays=delayed_static_arrays,
             )
 
         # Compute the arrays first -- resolving the GPU execution context the
@@ -536,13 +576,21 @@ class ComputableList(list):
         with _nested_compute_guard(kwargs), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+            arrays, static_arrays = dask.compute(
+                [array for _, array in arrays_to_write],
+                [array for _, array in static_arrays_to_write],
+                **kwargs,
+            )
 
         output = write_func(
             [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
             url,
             metadata_list,
             overwrite,
+            computed_static_arrays=[
+                (i, array)
+                for (i, _), array in zip(static_arrays_to_write, static_arrays)
+            ],
         )
 
         profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
@@ -2340,6 +2388,16 @@ def _from_zarr_canonical(root, chunks, decode_types):
             kwargs["metadata"] = metadata
 
             obj = cls(**kwargs)
+
+        static_key = f"static_exit_wave{i}"
+        if static_key in root:
+            static_zarr_array = root[static_key]
+            static_chunks = (
+                static_zarr_array.chunks if chunks in (None, "auto") else chunks
+            )
+            obj._static_exit_wave = da.from_array(
+                static_zarr_array, chunks=static_chunks
+            )
 
         imported.append(obj)
 
