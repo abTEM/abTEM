@@ -1655,6 +1655,41 @@ class SegmentedDetector(_AbstractRadialDetector):
         self._nbins_azimuthal = value
 
 
+def _crop_margin(waves: WavesType, margin: float | tuple[float, float]) -> WavesType:
+    """Crop `margin` [Å] off each side of `waves`, or return it unchanged if
+    `margin` is zero. Factored out of `Waves.window` so a detector can get the
+    post-margin shape (for `_out_base_shape` and friends) without also paying
+    for -- or needing -- the windowed array itself."""
+    if isinstance(margin, (int, float)):
+        margin = (float(margin), float(margin))
+
+    if margin[0] == 0.0 and margin[1] == 0.0:
+        return waves
+
+    return waves.crop(
+        extent=(waves.extent[0] - 2 * margin[0], waves.extent[1] - 2 * margin[1]),
+        centered=True,
+    )
+
+
+def _window_power_gain(window: str | tuple, shape: tuple[int, int]) -> float:
+    """`1 / mean(taper**2)` for the separable window `window` over `shape`.
+
+    A window function's mean squared value is below one almost everywhere, so
+    tapering a signal with one lowers its total power; multiplying detected
+    intensities by this factor undoes that loss, so windowed and unwindowed
+    detections stay on a comparable intensity scale. For a square Hann window
+    this reduces to the `(8/3)**2` constant the 3DED project's own analysis
+    tools apply by hand.
+    """
+    from scipy.signal import windows as scipy_windows
+
+    window_x = scipy_windows.get_window(window, shape[0])
+    window_y = scipy_windows.get_window(window, shape[1])
+    taper = window_x[:, None] * window_y[None, :]
+    return float(1.0 / np.mean(taper**2))
+
+
 class PixelatedDetector(BaseDetector):
     """
     The pixelated detector records the intensity of the Fourier-transformed exit wave
@@ -1692,6 +1727,22 @@ class PixelatedDetector(BaseDetector):
         location, typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    margin : float or tuple of float, optional
+        Margin cropped from each side of the exit wave [Å] before detecting, and
+        before applying `window_func` (default is 0.0, i.e. no cropping). Useful
+        for a finite, non-periodic structure (e.g. from :func:`abtem.atoms.cut_disk`
+        or :func:`abtem.atoms.cut_ball`), where the simulation cell is padded
+        beyond the structure itself. See :meth:`abtem.waves.Waves.crop`.
+    window_func : str, optional
+        Real-space window function applied before detecting, as accepted by
+        :func:`scipy.signal.windows.get_window` (default is `None`, i.e. no
+        windowing). Tapers the (optionally margin-cropped) exit wave to
+        (near-)zero at the edges, suppressing the truncation-rod streaks a
+        finite, non-periodic structure would otherwise produce in its
+        diffraction pattern. The detected intensity is automatically rescaled
+        by the window's power gain (`1 / mean(taper**2)`) so windowed and
+        unwindowed detections stay on a comparable scale. See
+        :meth:`abtem.waves.Waves.window`.
     """
 
     def __init__(
@@ -1701,10 +1752,14 @@ class PixelatedDetector(BaseDetector):
         reciprocal_space: bool = True,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        margin: float | tuple[float, float] = 0.0,
+        window_func: Optional[str] = None,
     ):
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
+        self._margin = margin
+        self._window_func = window_func
         super().__init__(to_cpu=to_cpu, url=url)
 
     @property
@@ -1722,7 +1777,18 @@ class PixelatedDetector(BaseDetector):
         """How to resample the detected diffraction patterns."""
         return self._resample
 
+    @property
+    def margin(self) -> float | tuple[float, float]:
+        """Margin cropped from each side of the exit wave [Å] before detecting."""
+        return self._margin
+
+    @property
+    def window_func(self) -> Optional[str]:
+        """Real-space window function applied before detecting."""
+        return self._window_func
+
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
+        waves = _crop_margin(waves, self.margin)
         if isinstance(self.max_angle, str):
             if self.max_angle == "valid":
                 cutoff = waves.rectangle_cutoff_angles
@@ -1758,6 +1824,8 @@ class PixelatedDetector(BaseDetector):
         gpts : tuple[int, int]
             Number of grid points in each dimension for the detector output.
         """
+        waves = _crop_margin(waves, self.margin)
+
         if self.resample:
             sampling = waves.reciprocal_space_sampling
             gpts = waves._gpts_within_angle(self.max_angle)
@@ -1855,6 +1923,8 @@ class PixelatedDetector(BaseDetector):
         """
         measurements: Images | DiffractionPatterns
 
+        waves = waves.window(window=self.window_func, margin=self.margin)
+
         if self.reciprocal_space:
             measurements = waves.diffraction_patterns(
                 max_angle=self.max_angle, parity="same"
@@ -1874,7 +1944,13 @@ class PixelatedDetector(BaseDetector):
         if self.to_cpu:
             measurements = measurements.to_cpu()
 
-        return measurements._eager_array
+        array = measurements._eager_array
+
+        if self.window_func is not None:
+            renorm = _window_power_gain(self.window_func, waves.base_shape)
+            array = array * array.dtype.type(renorm)
+
+        return array
 
     def detect(self, waves: WavesType) -> DiffractionPatterns | Images:
         """
@@ -1894,6 +1970,13 @@ class PixelatedDetector(BaseDetector):
         return measurements
 
 
+class WindowedPixelatedDetector(PixelatedDetector):
+    """Alias for :class:`PixelatedDetector` with `margin`/`window_func`, kept so
+    code written against the 3DED project's py3DED package
+    (github.com/3DED/py3DED, `py3DED.detector.WindowedPixelatedDetector`) runs
+    unmodified against abTEM directly. New code should use `PixelatedDetector`."""
+
+
 class WavesDetector(BaseDetector):
     """
     Detect the complex wave functions.
@@ -1911,6 +1994,18 @@ class WavesDetector(BaseDetector):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    margin : float or tuple of float, optional
+        Margin cropped from each side of the exit wave [Å] before detecting, and
+        before applying `window_func` (default is 0.0, i.e. no cropping). See
+        :meth:`abtem.waves.Waves.crop`.
+    window_func : str, optional
+        Real-space window function applied before detecting, as accepted by
+        :func:`scipy.signal.windows.get_window` (default is `None`, i.e. no
+        windowing). See :meth:`abtem.waves.Waves.window` and
+        :class:`PixelatedDetector`. The returned wave functions' amplitude is
+        automatically rescaled by the square root of the window's power gain
+        (`1 / mean(taper**2)`), so that their intensity (`abs(array)**2`)
+        stays on the same scale as an unwindowed detection would give.
     """
 
     def __init__(
@@ -1918,9 +2013,23 @@ class WavesDetector(BaseDetector):
         gpts: Optional[tuple[int, int]] = None,
         to_cpu: bool = False,
         url: Optional[str] = None,
+        margin: float | tuple[float, float] = 0.0,
+        window_func: Optional[str] = None,
     ):
         self._gpts = gpts
+        self._margin = margin
+        self._window_func = window_func
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def margin(self) -> float | tuple[float, float]:
+        """Margin cropped from each side of the exit wave [Å] before detecting."""
+        return self._margin
+
+    @property
+    def window_func(self) -> Optional[str]:
+        """Real-space window function applied before detecting."""
+        return self._window_func
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves
@@ -1932,8 +2041,14 @@ class WavesDetector(BaseDetector):
         metadata["reciprocal_space"] = False
         return (metadata,)
 
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
+        if self._gpts is not None:
+            return (self._gpts,)
+        return (_crop_margin(waves, self.margin).base_shape,)
+
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         waves = waves.ensure_real_space()
+        waves = waves.window(window=self.window_func, margin=self.margin)
 
         if self.to_cpu:
             waves = waves.to_cpu()
@@ -1944,6 +2059,10 @@ class WavesDetector(BaseDetector):
             )
         else:
             array = waves.array
+
+        if self.window_func is not None:
+            renorm = _window_power_gain(self.window_func, waves.base_shape) ** 0.5
+            array = array * array.dtype.type(renorm)
 
         return array
 
