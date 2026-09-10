@@ -41,7 +41,7 @@ from abtem.tilt import _get_tilt_axes
 from abtem.transform import WavesTransform
 
 if TYPE_CHECKING:
-    from abtem.inelastic.plasmons import PhaseScramblePlasmons
+    from abtem.inelastic.plasmons import PhaseScramblePlasmons, QuadraturePlasmons
     from abtem.waves import Waves
 
 
@@ -573,7 +573,9 @@ def _renormalize_order_waves_inplace(order_waves: list) -> None:
 def _renormalize_order_waves(order_waves: list, target_norm) -> None:
     """Renormalize order-resolved waves so their total intensity matches the
     incident beam.  The same scale factor is applied to every order so that
-    relative intensities are preserved."""
+    relative intensities are preserved. No-op when ``target_norm`` is None."""
+    if target_norm is None:
+        return
     xp = get_array_module(order_waves[0].device)
     total = sum(
         xp.sum(
@@ -755,8 +757,8 @@ def multislice_and_detect(
     detectors: Optional[list[BaseDetector]] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
-    plasmons: Optional["PhaseScramblePlasmons"] = None,
-    renormalize_plasmons: bool = True,
+    plasmons: Optional["PhaseScramblePlasmons | QuadraturePlasmons"] = None,
+    renormalize_plasmons: bool = False,
     pbar: bool = False,
     potential_chunk_size: int | str = "auto",
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -808,11 +810,11 @@ def multislice_and_detect(
         ``FourierMultislice`` and ``RealSpaceMultislice`` algorithms (including
         real-space ``expansion_scope='full'`` backscattering).
     renormalize_plasmons : bool, optional
-        Whether to renormalize the (non-unitary) plasmon exit wave to conserve the
-        incident electron count before detection (default True). Set to False to defer
-        the renormalization — used by the PRISM S-matrix build, where renormalizing the
-        individual plane-wave beams would distort their relative weights; the recombined
-        probe is renormalized after reduction instead.
+        Whether to rescale the plasmon exit wave of every configuration to the incident
+        electron count before detection (default False). The phase-scramble operator
+        conserves the electron count in expectation over configurations, and rescaling
+        each configuration separately biases the average; the option is kept for
+        comparison with the original phase-scrambling algorithm.
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -823,18 +825,15 @@ def multislice_and_detect(
 
     """
     from abtem.inelastic.plasmons import (
-        _find_plasmon_order_axis,
+        QuadraturePlasmons,
         quadrature_plasmon_multislice_and_detect,
     )
 
-    if _find_plasmon_order_axis(waves) is not None:
-        if return_backscattered:
-            raise NotImplementedError(
-                "backscattering is not implemented with plasmon scattering"
-            )
+    if isinstance(plasmons, QuadraturePlasmons):
         return quadrature_plasmon_multislice_and_detect(
             waves,
             potential,
+            plasmons,
             detectors=detectors,
             algorithm=algorithm,
             pbar=pbar,
@@ -908,12 +907,7 @@ def multislice_and_detect(
     )
     if order_resolved:
         n_orders = max_loss_order + 1
-        order_labels = ("Zero loss",) + tuple(
-            f"{n}-plasmon" for n in range(1, n_orders)
-        )
-        order_axis = OrdinalAxis(
-            label="Plasmon order", values=order_labels
-        )
+        order_axis = plasmons.order_axis
         extra_ensemble_axes_shape = (n_orders,) + extra_ensemble_axes_shape
         extra_ensemble_axes_metadata = [order_axis] + extra_ensemble_axes_metadata
 
@@ -955,7 +949,9 @@ def multislice_and_detect(
                 potential_index,
                 config_seed=_configuration_seed(potential_configuration),
             )
-            plasmon_target_norm = _plasmon_total_intensity(waves)
+            plasmon_target_norm = (
+                _plasmon_total_intensity(waves) if renormalize_plasmons else None
+            )
         else:
             plasmon_operator = None
             plasmon_target_norm = None
@@ -996,6 +992,16 @@ def multislice_and_detect(
             _psa_incident_norm = _plasmon_total_intensity(waves)
         else:
             _psa_incident_norm = None
+
+        # Order-resolved channels are rescaled at detection only when a target norm
+        # is requested: by ``renormalize_plasmons`` or, for the phase-scramble
+        # potential mixing, to undo its per-slice unit normalization.
+        order_target_norm = (
+            plasmon_target_norm
+            if plasmon_target_norm is not None
+            else (_psa_incident_norm if _phase_scramble else None)
+        )
+
 
         # The memory-bounded chunked-slice path below is elastic-only: it
         # doesn't know about phase-scramble mixing's coherent multi-config
@@ -1083,7 +1089,7 @@ def multislice_and_detect(
                             # detector, indexed by loss order and exit plane.
                             _detect_order_resolved(
                                 order_waves,
-                                plasmon_target_norm,
+                                order_target_norm,
                                 detectors[:-1],
                                 measurements[:-1],
                                 config_meas_index,
@@ -1098,7 +1104,7 @@ def multislice_and_detect(
                         elif order_resolved:
                             _detect_order_resolved(
                                 order_waves,
-                                plasmon_target_norm,
+                                order_target_norm,
                                 detectors,
                                 measurements,
                                 config_meas_index,
@@ -1174,7 +1180,7 @@ def multislice_and_detect(
     # Handle final output if not using intermediate measurements
     if measurements is None:
         if order_resolved:
-            _renormalize_order_waves(order_waves, plasmon_target_norm)
+            _renormalize_order_waves(order_waves, order_target_norm)
             measurements = [
                 _stack_order_detections(
                     order_waves, detector, potential.ensemble_shape, order_axis
@@ -1720,11 +1726,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     def _plasmon_order_axis(self):
         plasmons = self._multislice_func_kwargs.get("plasmons")
         if plasmons is not None and plasmons.max_loss_order is not None:
-            n = plasmons.max_loss_order + 1
-            labels = ("Zero loss",) + tuple(
-                f"{i}-plasmon" for i in range(1, n)
-            )
-            return OrdinalAxis(label="Plasmon order", values=labels)
+            return plasmons.order_axis
         return None
 
     @property

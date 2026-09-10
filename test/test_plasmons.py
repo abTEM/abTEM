@@ -64,22 +64,37 @@ def test_plasmons_none_is_noop(device, lazy):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_conserve_total_intensity(device):
-    """The non-unitary plasmon operator is renormalized to conserve the incident
-    electron count: the exit-wave total intensity must equal the entrance total (per
-    configuration) and stay close to the plasmon-free exit (which differs only by the
-    small anti-aliasing bandlimit loss)."""
-    wave, potential, _ = _setup(device)
+def test_plasmons_zero_loss_is_scaled_elastic(device):
+    """The zero-loss channel is the elastic wave scaled by the survival probability
+    of every slice, exactly; the electron count is conserved in expectation over the
+    repetitions (the scrambled wave of a single configuration is not normalized)."""
+    wave, potential, _ = _setup(device, num_configs=8, nz=10, ensemble_mean=False)
+    detector = abtem.PixelatedDetector(max_angle="valid")
 
-    exit_ref = wave.multislice(potential).compute()
-    exit_pl = wave.multislice(potential, plasmons=_plasmons()).compute()
+    d_elastic = _to_numpy(wave.multislice(potential, detector).compute().array)
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        seed=7,
+        max_loss_order=2,
+    )
+    result = _to_numpy(
+        wave.multislice(potential, detector, plasmons=plasmons).compute().array
+    )
 
-    i_ref = float((np.abs(_to_numpy(exit_ref.array)) ** 2).sum())
-    i_pl = float((np.abs(_to_numpy(exit_pl.array)) ** 2).sum())
+    thicknesses = np.array(potential.slice_thickness)
+    survival = np.prod(1.0 - thicknesses / 1050.0)
+    assert np.allclose(
+        result[0], survival * d_elastic, rtol=1e-4, atol=1e-8 * d_elastic.max()
+    )
 
-    # renormalization keeps the plasmon exit intensity within a couple percent of the
-    # (bandlimited) plasmon-free exit -- in particular it does not blow up.
-    assert i_pl == pytest.approx(i_ref, rel=2e-2)
+    totals = result.sum((-2, -1))  # (order, config)
+    assert np.all(totals > 0)
+    total_per_config = totals.sum(0)
+    elastic_per_config = d_elastic.sum((-2, -1))
+    # expectation value equals the elastic count; 8 repetitions give a loose check
+    assert total_per_config.mean() == pytest.approx(elastic_per_config.mean(), rel=0.25)
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -170,9 +185,7 @@ def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
     wave, potential, _ = _setup(device, num_configs=4, nz=10)
     detector = abtem.PixelatedDetector(max_angle=40)
 
-    d_elastic = _to_numpy(
-        wave.multislice(potential, detector).compute().array
-    )
+    d_elastic = _to_numpy(wave.multislice(potential, detector).compute().array)
 
     plasmons = PhaseScramblePlasmons(
         mean_free_path=1050.0,
@@ -195,7 +208,7 @@ def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
 def test_plasmons_realspace_conserve_total_intensity(device):
     """The plasmon operator is a real-space multiplication, so it composes with
     the real-space (finite-difference) multislice exactly as with the Fourier
-    algorithm: the renormalized exit intensity stays close to the plasmon-free
+    algorithm: the exit intensity stays of the order of the plasmon-free
     real-space exit."""
     wave, potential, _ = _setup(device, nz=10)
 
@@ -208,7 +221,7 @@ def test_plasmons_realspace_conserve_total_intensity(device):
     i_ref = float((np.abs(_to_numpy(exit_ref.array)) ** 2).sum())
     i_pl = float((np.abs(_to_numpy(exit_pl.array)) ** 2).sum())
 
-    assert i_pl == pytest.approx(i_ref, rel=2e-2)
+    assert 0.2 * i_ref < i_pl < 5.0 * i_ref
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -239,9 +252,7 @@ def test_plasmons_realspace_order_resolved_matches_fourier(device):
     assert arr_realspace.shape[0] == 3
     # Per-order total intensities agree (same scatter draw via shared seed).
     for n in range(3):
-        assert arr_realspace[n].sum() == pytest.approx(
-            arr_fourier[n].sum(), rel=1e-3
-        )
+        assert arr_realspace[n].sum() == pytest.approx(arr_fourier[n].sum(), rel=1e-3)
 
 
 @pytest.mark.filterwarnings("ignore:Grid size")  # small grid, GPU occupancy hint
@@ -323,24 +334,21 @@ def test_plasmons_order_resolved_with_phase_scramble_mixing(device):
     # Every order channel carries real weight -- none starved to zero.
     intensity_per_order = arr.reshape(arr.shape[0], -1).sum(axis=-1)
     assert np.all(intensity_per_order > 0)
-    # Total intensity across orders is conserved (renormalized to the
-    # incident beam); a looser tolerance than the non-mixed case accounts
-    # for the coarser grid's larger anti-aliasing bandlimit loss.
-    assert float(intensity_per_order.sum()) == pytest.approx(1.0, rel=5e-2)
+    # The scrambled wave of a single repetition is not normalized (the electron
+    # count is conserved only in expectation), but it must stay of order one.
+    assert 0.2 < float(intensity_per_order.sum()) < 5.0
 
 
 def test_estimate_plasmon_parameters_silicon():
     """The free-electron plasmon energy is accurate for Si (~16.7 eV); the
     critical angle and mean free path are positive, physically-sized estimates."""
     si = ase.build.bulk("Si", cubic=True)
-    E_p, theta_c, lambda_p = estimate_plasmon_parameters(
-        si, 200e3, valence_electrons=4
-    )
+    E_p, theta_c, lambda_p = estimate_plasmon_parameters(si, 200e3, valence_electrons=4)
     # Plasmon energy is the reliable estimate — within a few percent of 16.7 eV.
     assert E_p == pytest.approx(16.7, abs=0.5)
     # theta_c and lambda_p are order-of-magnitude free-electron estimates.
-    assert 1.0 < theta_c < 50.0          # mrad
-    assert 200.0 < lambda_p < 5000.0     # Å
+    assert 1.0 < theta_c < 50.0  # mrad
+    assert 200.0 < lambda_p < 5000.0  # Å
 
 
 def test_estimate_plasmon_parameters_density_intensive():
@@ -360,14 +368,14 @@ def test_from_atoms_overrides_and_kwargs():
         si,
         200e3,
         valence_electrons=4,
-        critical_angle=19.1,     # calibrated override
-        mean_free_path=1050.0,   # calibrated override
+        critical_angle=19.1,  # calibrated override
+        mean_free_path=1050.0,  # calibrated override
         max_loss_order=3,
     )
     assert plasmons.excitation_energy == pytest.approx(16.7, abs=0.5)  # estimated
-    assert plasmons.critical_angle == 19.1       # override respected
-    assert plasmons.mean_free_path == 1050.0     # override respected
-    assert plasmons.max_loss_order == 3          # kwarg forwarded
+    assert plasmons.critical_angle == 19.1  # override respected
+    assert plasmons.mean_free_path == 1050.0  # override respected
+    assert plasmons.max_loss_order == 3  # kwarg forwarded
 
 
 def test_estimate_plasmon_parameters_compound_valence():
@@ -410,8 +418,11 @@ def test_plasmons_static_num_repetitions(device):
     detector = abtem.PixelatedDetector(max_angle="valid")
 
     plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        num_repetitions=6, seed=7,
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        num_repetitions=6,
+        seed=7,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
     arr = _to_numpy(result.array)
@@ -429,10 +440,15 @@ def test_plasmons_static_num_repetitions_reproducible(device):
 
     def run(seed):
         pl = PhaseScramblePlasmons(
-            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            num_repetitions=5, seed=seed,
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
+            num_repetitions=5,
+            seed=seed,
         )
-        return _to_numpy(wave.multislice(potential, detector, plasmons=pl).compute().array)
+        return _to_numpy(
+            wave.multislice(potential, detector, plasmons=pl).compute().array
+        )
 
     assert np.allclose(run(7), run(7))
     assert not np.allclose(run(7), run(99))
@@ -445,8 +461,12 @@ def test_plasmons_static_num_repetitions_order_resolved(device):
     detector = abtem.PixelatedDetector(max_angle="valid")
 
     plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        num_repetitions=4, seed=7, max_loss_order=2,
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        num_repetitions=4,
+        seed=7,
+        max_loss_order=2,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
     arr = _to_numpy(result.array)
@@ -463,8 +483,11 @@ def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
     detector = abtem.PixelatedDetector(max_angle="valid")
 
     plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        num_repetitions=10, seed=7,
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        num_repetitions=10,
+        seed=7,
     )
     with pytest.warns(UserWarning, match="num_repetitions"):
         wave.multislice(potential, detector, plasmons=plasmons).compute()
@@ -487,13 +510,20 @@ def test_plasmons_prism_matches_single_probe(device):
 
     def plasmons():
         return PhaseScramblePlasmons(
-            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
             seed=42,
         )
 
     s_matrix = SMatrix(
-        potential=potential, energy=energy, semiangle_cutoff=semiangle,
-        interpolation=1, downsample=False, plasmons=plasmons(), device=device,
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle,
+        interpolation=1,
+        downsample=False,
+        plasmons=plasmons(),
+        device=device,
     ).build(lazy=False)
     prism = _to_numpy(
         s_matrix.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
@@ -504,7 +534,9 @@ def test_plasmons_prism_matches_single_probe(device):
     single = _to_numpy(
         probe.multislice(
             potential, scan=CustomScan([pos]), detectors=detector, plasmons=plasmons()
-        ).compute().array
+        )
+        .compute()
+        .array
     )[0]
 
     assert np.corrcoef(prism.ravel(), single.ravel())[0, 1] > 0.999
@@ -524,13 +556,21 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
 
     def plasmons():
         return PhaseScramblePlasmons(
-            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            seed=42, max_loss_order=2,
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
+            seed=42,
+            max_loss_order=2,
         )
 
     s_matrix = SMatrix(
-        potential=potential, energy=energy, semiangle_cutoff=semiangle,
-        interpolation=1, downsample=False, plasmons=plasmons(), device=device,
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle,
+        interpolation=1,
+        downsample=False,
+        plasmons=plasmons(),
+        device=device,
     ).build(lazy=False)
     prism = _to_numpy(
         s_matrix.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
@@ -541,15 +581,15 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
     single = _to_numpy(
         probe.multislice(
             potential, scan=CustomScan([pos]), detectors=detector, plasmons=plasmons()
-        ).compute().array
+        )
+        .compute()
+        .array
     )  # (n_orders, 1, ny, nx)
 
     assert prism.shape == single.shape
     assert prism.shape[0] == 3  # leading loss-order axis
     for n in range(3):
-        assert (
-            np.corrcoef(prism[n].ravel(), single[n].ravel())[0, 1] > 0.999
-        )
+        assert np.corrcoef(prism[n].ravel(), single[n].ravel())[0, 1] > 0.999
     # The orders share one renormalization scale, so the total matches too.
     assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
 
@@ -563,15 +603,24 @@ def test_plasmons_prism_order_resolved_lazy_matches_eager():
 
     def build(lazy):
         plasmons = PhaseScramblePlasmons(
-            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            seed=42, max_loss_order=2,
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
+            seed=42,
+            max_loss_order=2,
         )
         sma = SMatrix(
-            potential=potential, energy=200e3, semiangle_cutoff=20.0,
-            interpolation=1, downsample=False, plasmons=plasmons,
+            potential=potential,
+            energy=200e3,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+            plasmons=plasmons,
         ).build(lazy=lazy)
         return np.squeeze(
-            _to_numpy(sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array)
+            _to_numpy(
+                sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
+            )
         )
 
     eager, lazy = build(False), build(True)
@@ -587,22 +636,32 @@ def test_plasmons_prism_order_resolved_multiconfig_averages():
     atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
     fp = Potential(
         FrozenPhonons(atoms, num_configs=3, sigmas=0.0, seed=1),
-        gpts=96, slice_thickness=2.0,
+        gpts=96,
+        slice_thickness=2.0,
     )
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
 
     def build(lazy):
         plasmons = PhaseScramblePlasmons(
-            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            seed=42, max_loss_order=2,
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
+            seed=42,
+            max_loss_order=2,
         )
         sma = SMatrix(
-            potential=fp, energy=200e3, semiangle_cutoff=20.0,
-            interpolation=1, downsample=False, plasmons=plasmons,
+            potential=fp,
+            energy=200e3,
+            semiangle_cutoff=20.0,
+            interpolation=1,
+            downsample=False,
+            plasmons=plasmons,
         ).build(lazy=lazy)
         return np.squeeze(
-            _to_numpy(sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array)
+            _to_numpy(
+                sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
+            )
         )
 
     eager, lazy = build(False), build(True)

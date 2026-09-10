@@ -2,7 +2,6 @@ import itertools
 import math
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, List, Tuple, Union
 
@@ -14,7 +13,7 @@ from matplotlib.axes import Axes
 
 from abtem.core.axes import (
     AxisMetadata,
-    OrdinalAxis,
+    PlasmonAxis,
     PlasmonOrderAxis,
     _iterate_axes_type,
 )
@@ -23,7 +22,6 @@ from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
-from abtem.core.grid import coordinate_grid
 from abtem.core.utils import get_dtype, itemset
 from abtem.transform import ArrayObjectTransform
 
@@ -140,68 +138,50 @@ def excitations_weights(n: int, thickness: float, mean_free_path: float) -> floa
     )
 
 
-@dataclass(eq=False, repr=False, unsafe_hash=True)
-class PlasmonAxis(OrdinalAxis):
-    units: str = ""
-    label: str = "Plasmons excitations"
-    _ensemble_mean: bool = False
-
-    @property
-    def excitations(self):
-        return tuple(value[3] for value in self.values)
-
-    @property
-    def azimuthal_angles(self):
-        return tuple(value[2] for value in self.values)
-
-    @property
-    def radial_angles(self):
-        return tuple(value[1] for value in self.values)
-
-    @property
-    def depths(self):
-        return tuple(value[0] for value in self.values)
-
-    @property
-    def tilt(self):
-        tilt = ()
-        for radial_angles, azimuthal_angles, excitations in zip(
-            self.radial_angles, self.azimuthal_angles, self.excitations
-        ):
-            # Successive scattering events add as vectors in the small-angle
-            # limit; sum the x and y tilt components rather than the angles.
-            tilt_x = sum(
-                r * np.cos(a)
-                for r, a in zip(radial_angles[:excitations], azimuthal_angles)
-            )
-            tilt_y = sum(
-                r * np.sin(a)
-                for r, a in zip(radial_angles[:excitations], azimuthal_angles)
-            )
-            tilt += ((float(tilt_x), float(tilt_y)),)
-
-        return tilt
-
-    def update(self, depth):
-        values = ()
-        for excitation_depths, value in zip(self.depths, self.values):
-            for i, excitation_depth in enumerate(excitation_depths):
-                if excitation_depth > depth:
-                    break
-            else:
-                i = len(excitation_depths)
-
-            values += (value[:-1] + (i,),)
-
-        self.values = values
-
-
 def _update_plasmon_axes(waves, depth):
     for axis in _iterate_axes_type(waves, PlasmonAxis):
         axis.update(depth)
 
 
-def reduce_plasmon_axes(measurement):
+def _event_tilts(plasmon_axis: PlasmonAxis) -> np.ndarray:
+    """Total tilt [mrad] of every sampled event, summing all of its excitations."""
+    tilts = []
+    for value in plasmon_axis.values:
+        radial, azimuthal = value[1], value[2]
+        tilts.append(
+            (
+                sum(r * np.cos(a) for r, a in zip(radial, azimuthal)),
+                sum(r * np.sin(a) for r, a in zip(radial, azimuthal)),
+            )
+        )
+    return np.array(tilts, dtype=float).reshape(-1, 2)
+
+
+def reduce_plasmon_axes(measurement, lab_frame: bool = False):
+    """
+    Average sampled plasmon scattering events into loss-order channels.
+
+    Parameters
+    ----------
+    measurement : BaseMeasurements
+        Measurement with a :class:`PlasmonAxis` of sampled events.
+    lab_frame : bool, optional
+        If True, shift the diffraction pattern of every event by the momentum
+        transferred to the electron (the sum of its scattering angles) before
+        averaging, so the patterns are in the laboratory frame of reference. Only
+        possible for diffraction patterns. If False (default), every event is kept
+        in its own tilted frame of reference, the convention of the original
+        implementation.
+
+    Returns
+    -------
+    reduced : BaseMeasurements
+        Measurement with a :class:`PlasmonOrderAxis` in place of the event axis, one
+        channel per number of excitations present in the events, each normalized to
+        the intensity of the incident wave function.
+    """
+    from abtem.measurements import DiffractionPatterns
+
     plasmon_axes = [
         (i, axes_metadata)
         for i, axes_metadata in enumerate(measurement.axes_metadata)
@@ -212,23 +192,49 @@ def reduce_plasmon_axes(measurement):
         return measurement
 
     plasmon_axis_index, plasmon_axis = plasmon_axes[0]
+    if lab_frame and not isinstance(measurement, DiffractionPatterns):
+        raise NotImplementedError(
+            "the laboratory frame requires diffraction patterns (PixelatedDetector)"
+        )
 
     num_excitations = [len(value[0]) for value in plasmon_axis.values]
-
     uniques, inverse = np.unique(num_excitations, return_inverse=True)
+
+    array = measurement.array
+    lazy = isinstance(array, da.core.Array)
+    xp = da if lazy else get_array_module(array)
+    if lab_frame:
+        tilts = _event_tilts(plasmon_axis)
+        sampling = measurement.angular_sampling
+        shifts = np.round(tilts / np.array(sampling)).astype(int)
 
     axis_values = []
     new_array = []
     for i, unique in enumerate(uniques):
         axis_values.append(f"{ntuples[unique]}")
         indices = np.where(i == inverse)[0]
-        new_array.append(measurement.array[indices].mean(0, keepdims=True))
+        if lab_frame:
+            index = [slice(None)] * len(measurement.shape)
+            members = []
+            for j in indices:
+                index[plasmon_axis_index] = j
+                members.append(
+                    xp.roll(array[tuple(index)], tuple(shifts[j]), axis=(-2, -1))
+                )
+            channel = xp.stack(members, axis=plasmon_axis_index).mean(
+                plasmon_axis_index, keepdims=True
+            )
+        else:
+            index = [slice(None)] * len(measurement.shape)
+            index[plasmon_axis_index] = indices
+            channel = array[tuple(index)].mean(plasmon_axis_index, keepdims=True)
+        new_array.append(channel)
 
-    array = da.concatenate(new_array, axis=plasmon_axis_index)
+    array = xp.concatenate(new_array, axis=plasmon_axis_index)
 
     kwargs = measurement._copy_kwargs(exclude=("array",))
-    kwargs["ensemble_axes_metadata"][plasmon_axis_index] = OrdinalAxis(
-        label="", values=axis_values
+    kwargs["ensemble_axes_metadata"][plasmon_axis_index] = PlasmonOrderAxis(
+        values=tuple(axis_values), model="monte_carlo"
     )
 
     return measurement.__class__(array, **kwargs)
@@ -323,14 +329,12 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         self, ax=None, num_excitations: Union[int, List[int]] = 1, **kwargs
     ):
         if isinstance(num_excitations, int):
-            num_excitations = [1]
+            num_excitations = [num_excitations]
 
         if ax is None:
             fig, axes = plt.subplots(1, len(num_excitations), sharey=True)
         else:
             axes = [ax]
-
-        print(axes)
 
         if isinstance(axes, Axes):
             axes = [axes]
@@ -484,6 +488,7 @@ class MonteCarloPlasmons:
         weights: Union[bool] = True,
         ensemble_mean: bool = False,
         seed: Union[int, Tuple[int, ...]] = None,
+        lab_frame: bool = True,
     ):
         self._mean_free_path = mean_free_path
         self._excitation_energy = excitation_energy
@@ -491,11 +496,49 @@ class MonteCarloPlasmons:
         self._ensemble_mean = ensemble_mean
         self._num_samples = num_samples
         self._seed = seed
+        self._lab_frame = bool(lab_frame)
 
         if isinstance(num_excitations, int):
             num_excitations = tuple(range(num_excitations + 1))
 
-        self._num_excitations = num_excitations
+        self._num_excitations = tuple(num_excitations)
+
+    @property
+    def lab_frame(self) -> bool:
+        """Whether the loss channels are detected in the laboratory frame."""
+        return self._lab_frame
+
+    @property
+    def num_excitations(self) -> Tuple[int, ...]:
+        """The numbers of excitations that are sampled."""
+        return self._num_excitations
+
+    @property
+    def max_loss_order(self) -> int:
+        """Highest number of excitations sampled."""
+        return max(self._num_excitations)
+
+    @property
+    def parameters(self) -> dict:
+        """The constructor arguments of the model."""
+        return {
+            "mean_free_path": self._mean_free_path,
+            "excitation_energy": self._excitation_energy,
+            "critical_angle": self._critical_angle,
+            "num_excitations": self._num_excitations,
+            "num_samples": self._num_samples,
+            "seed": self._seed,
+            "lab_frame": self._lab_frame,
+        }
+
+    @property
+    def order_axis(self) -> PlasmonOrderAxis:
+        """The loss-order axis of the reduced measurements."""
+        return PlasmonOrderAxis(
+            values=tuple(ntuples[n] for n in sorted(set(self._num_excitations))),
+            model="monte_carlo",
+            parameters=self.parameters,
+        )
 
     @property
     def ensemble_mean(self) -> bool:
@@ -585,14 +628,7 @@ class MonteCarloPlasmons:
 # ---------------------------------------------------------------------------
 
 
-def _find_plasmon_order_axis(waves) -> Union[Tuple[int, PlasmonOrderAxis], None]:
-    for i, axis in enumerate(waves.ensemble_axes_metadata):
-        if isinstance(axis, PlasmonOrderAxis):
-            return i, axis
-    return None
-
-
-class QuadraturePlasmons(ArrayObjectTransform):
+class QuadraturePlasmons:
     """
     Plasmon energy-loss scattering integrated by deterministic quadrature.
 
@@ -628,7 +664,10 @@ class QuadraturePlasmons(ArrayObjectTransform):
     All loss orders up to ``max_loss_order`` are assembled from the same set of
     copies. The copies propagate alongside the elastic wave function in a single pass
     of the multislice algorithm, or in several passes over subsets of the first-event
-    nodes when ``max_copies`` bounds the number of copies held in memory.
+    nodes when ``max_copies`` bounds the number of copies held in memory. The model is
+    passed as ``plasmons=`` to the multislice methods, e.g.
+    ``probe.multislice(potential, detectors=detector, plasmons=model)``; the
+    measurements gain a leading :class:`PlasmonOrderAxis`.
 
     Parameters
     ----------
@@ -663,7 +702,8 @@ class QuadraturePlasmons(ArrayObjectTransform):
         transfer. With 0, plasmon scattering is treated as pure momentum transfer
         (a convolution of the elastic diffraction pattern) without any change to the
         propagation. The number of copies grows as
-        ``num_angles * num_azimuthal * (event_num_angles * event_num_azimuthal)**(m-1)``
+        ``num_angles * num_azimuthal`` times
+        ``(event_num_angles * event_num_azimuthal) ** (m - 1)``
         times the number of depth-node combinations for ``m`` events, so use
         ``max_copies`` for values above 1.
     event_num_angles : int, optional
@@ -888,56 +928,12 @@ class QuadraturePlasmons(ArrayObjectTransform):
             "extra": partition(self._event_num_angles, self._event_num_azimuthal),
         }
 
-    # -- ensemble/transform protocol -------------------------------------------
-
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
-        return (self.num_orders,)
-
-    @property
-    def _default_ensemble_chunks(self):
-        return (self.num_orders,)
-
-    @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return [PlasmonOrderAxis(values=self.order_labels, parameters=self.parameters)]
-
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-        if len(chunks[0]) != 1:
-            raise RuntimeError(
-                "the plasmon excitation axis must be kept in a single chunk"
-            )
-        array = np.zeros((1,), dtype=object)
-        itemset(array, 0, self)
-        if lazy:
-            array = da.from_array(array, chunks=1)
-        return (array,)
-
-    @staticmethod
-    def _from_partitioned_args_func(*args, **kwargs):
-        args = args[0]
-        if hasattr(args, "item"):
-            args = args.item()
-        return _wrap_with_array(args, 0)
-
-    def _from_partitioned_args(self):
-        return partial(self._from_partitioned_args_func)
-
-    def _calculate_new_array(self, waves: "Waves") -> np.ndarray:
-        xp = get_array_module(waves.device)
-        array = waves.array[(None,) * len(self.ensemble_shape)]
-        return xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-
-    def apply(self, waves: "Waves", max_batch: int | str = "auto") -> "Waves":
-        """
-        Attach the plasmon-loss channels to the wave functions.
-
-        The returned wave functions have a leading ensemble axis with one entry per
-        loss order. Running the multislice algorithm on them computes every loss
-        channel in a single pass.
-        """
-        return waves.apply_transform(self, max_batch=max_batch)
+    def order_axis(self) -> PlasmonOrderAxis:
+        """The loss-order axis of the measurements."""
+        return PlasmonOrderAxis(
+            values=self.order_labels, model="quadrature", parameters=self.parameters
+        )
 
 
 def _lorentzian_kernels(
@@ -1026,6 +1022,7 @@ def _lorentzian_kernels(
 def quadrature_plasmon_multislice_and_detect(
     waves: "Waves",
     potential: "BasePotential",
+    plasmons: QuadraturePlasmons,
     detectors: list = None,
     algorithm=None,
     pbar: bool = False,
@@ -1035,9 +1032,8 @@ def quadrature_plasmon_multislice_and_detect(
     """
     Multislice algorithm with plasmon scattering evaluated by quadrature.
 
-    The wave functions must carry a :class:`PlasmonOrderAxis` as their leading
-    ensemble axis, see :meth:`QuadraturePlasmons.apply`. One measurement per detector
-    is returned with that axis resolving the number of plasmon excitations.
+    One measurement per detector is returned with a leading
+    :class:`PlasmonOrderAxis` resolving the number of plasmon excitations.
     """
     from itertools import product
     from math import comb
@@ -1071,20 +1067,8 @@ def quadrature_plasmon_multislice_and_detect(
             "multislice"
         )
 
-    found = _find_plasmon_order_axis(waves)
-    if found is None:
-        raise RuntimeError("wave functions do not carry a plasmon excitation axis")
-    order_axis_index, order_axis = found
-    if order_axis_index != 0:
-        raise RuntimeError("the plasmon excitation axis must be the leading axis")
-
-    plasmons: QuadraturePlasmons = order_axis.plasmons
+    order_axis = plasmons.order_axis
     n_orders = plasmons.num_orders
-    if waves.shape[0] != n_orders:
-        raise RuntimeError(
-            "the plasmon excitation axis must be kept in a single chunk "
-            f"(got {waves.shape[0]} of {n_orders} channels)"
-        )
 
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
@@ -1134,12 +1118,14 @@ def quadrature_plasmon_multislice_and_detect(
     ) = _potential_ensemble_shape_and_metadata(potential)
 
     measurements = allocate_multislice_measurements(
-        waves, detectors, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+        waves,
+        detectors,
+        (n_orders,) + extra_ensemble_axes_shape,
+        [order_axis] + extra_ensemble_axes_metadata,
     )
 
-    # The elastic wave functions, without the excitation axis.
     base_kwargs = waves._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
-    base_axes = waves.ensemble_axes_metadata[1:]
+    base_axes = list(waves.ensemble_axes_metadata)
     n_base = len(base_axes)
     copy_axis = AxisMetadata(label="plasmon tilt copies")
 
@@ -1297,9 +1283,11 @@ def quadrature_plasmon_multislice_and_detect(
         carrier_waves = make_waves(carrier, [order_axis])
         for i, detector in enumerate(detectors):
             new_measurement = detector.detect(carrier_waves)
-            measurements[i].array[measurement_index] += new_measurement.array
+            measurements[i].array[(slice(None),) + tuple(measurement_index)] += (
+                new_measurement.array
+            )
 
-    n_waves = int(np.prod(waves.shape[1:-2])) if len(waves.shape) > 3 else 1
+    n_waves = int(np.prod(waves.shape[:-2])) if len(waves.shape) > 2 else 1
     n_slices = int(
         n_waves
         * potential.num_slices
@@ -1310,7 +1298,7 @@ def quadrature_plasmon_multislice_and_detect(
         enabled=pbar, total=n_slices, leave=False, desc="multislice"
     )
 
-    elastic_input = make_waves(waves.array[0].copy(), [])
+    elastic_input = make_waves(waves.array.copy(), [])
     ens = tuple(elastic_input.array.shape[:-2])
 
     for potential_index, potential_configuration in _generate_potential_configurations(
@@ -1447,56 +1435,87 @@ def _config_rng(seed, potential_index, config_seed=None) -> np.random.Generator:
 class _PlasmonSliceOperator:
     """Inline per-slice plasmon scattering operator (single configuration).
 
-    Holds the precomputed, phase-scrambled tilted-beam basis (random-order Bessel
-    functions ``J_n(2*pi*k_t*R)``) and the per-configuration random generator. The
-    operator is applied to the real-space wave function at the bottom of every slice
-    during the multislice loop; see :class:`PhaseScramblePlasmons`.
+    At the bottom of every slice one plasmon excitation is sampled: with probability
+    ``slice_thickness / mean_free_path`` the electron is kicked by a transverse
+    momentum drawn from the Lorentzian angular distribution, applied as a plane-wave
+    factor with a random phase. Averaged over configurations, the intensity of the
+    scrambled wave function has the same expectation value as the incoherent sum over
+    scattering events; see :class:`PhaseScramblePlasmons`.
     """
 
     def __init__(
         self,
-        bessel_stack: np.ndarray,
-        angle_weights: np.ndarray,
-        azimuthal_norm: float,
+        x: np.ndarray,
+        y: np.ndarray,
+        extent: Tuple[float, float],
+        wavelength: float,
+        theta_e: float,
+        theta_c: float,
+        min_angle: float,
         mean_free_path: float,
         rng: np.random.Generator,
+        xp,
     ):
-        # bessel_stack: (num_angles, num_copies, gpts_x, gpts_y), real valued
-        self._bessel_stack = bessel_stack
-        self._angle_weights = angle_weights  # P(theta) per angle bin
-        self._azimuthal_norm = azimuthal_norm  # sqrt(2*pi/phi_min)
+        # x, y: real-space coordinates of the grid [Å] (1D, on the wave backend)
+        self._x = x
+        self._y = y
+        self._extent = extent
+        self._wavelength = wavelength
+        self._u_max = np.log(1.0 + (theta_c / theta_e) ** 2)
+        self._u_min = np.log(1.0 + (min_angle / theta_e) ** 2)
+        self._theta_e = theta_e
         self._mean_free_path = mean_free_path
         self._rng = rng
+        self._xp = xp
 
-    def _scatter_params(self, depth: float, slice_thickness: float):
-        """Compute per-slice scatter probability and draw random Bessel copies."""
-        lp = self._mean_free_path
-        scatter_prob = float(np.exp(-depth / lp) * (slice_thickness / lp))
-        num_angles, num_copies = self._bessel_stack.shape[:2]
-        chosen = [int(self._rng.integers(num_copies)) for _ in range(num_angles)]
-        return scatter_prob, chosen
+    def _draw_kick(self):
+        """Draw one scattering angle from the Lorentzian and round it to the grid.
+
+        Returns the separable plane-wave factors (or None below one pixel) and the
+        random phase.
+        """
+        u = self._rng.random() * self._u_max
+        phase = np.exp(2j * np.pi * self._rng.random())
+        if u < self._u_min:
+            return None, phase
+        theta = self._theta_e * np.sqrt(np.expm1(u))
+        phi = 2.0 * np.pi * self._rng.random()
+        q = np.sin(theta) / self._wavelength  # [1/Å]
+        i = int(round(q * np.cos(phi) * self._extent[0]))
+        j = int(round(q * np.sin(phi) * self._extent[1]))
+        if i == 0 and j == 0:
+            return None, phase
+        xp = self._xp
+        complex_dtype = get_dtype(complex=True)
+        ramp_x = xp.exp(2j * np.pi * (i / self._extent[0]) * self._x).astype(
+            complex_dtype
+        )
+        ramp_y = xp.exp(2j * np.pi * (j / self._extent[1]) * self._y).astype(
+            complex_dtype
+        )
+        return (ramp_x, ramp_y), phase
+
+    def _kicked(self, psi, kick, phase):
+        out = psi * psi.dtype.type(phase)
+        if kick is not None:
+            ramp_x, ramp_y = kick
+            out = out * ramp_x[(None,) * (psi.ndim - 2) + (slice(None), None)]
+            out = out * ramp_y[(None,) * (psi.ndim - 2) + (None, slice(None))]
+        return out
+
+    def _scatter_params(self, slice_thickness: float):
+        scatter_prob = float(slice_thickness / self._mean_free_path)
+        kick, phase = self._draw_kick()
+        return scatter_prob, kick, phase
 
     def scatter(self, waves: "Waves", depth: float, slice_thickness: float) -> None:
-        """Apply one slice of plasmon scattering to ``waves`` in place (real space)."""
-        xp = get_array_module(waves.device)
-        scatter_prob, chosen = self._scatter_params(depth, slice_thickness)
-        num_angles = self._bessel_stack.shape[0]
-
+        """Apply one slice of plasmon scattering to ``waves`` in place."""
+        xp = self._xp
+        scatter_prob, kick, phase = self._scatter_params(slice_thickness)
         psi = waves._array
-        # Keep scalar coefficients at the wave's real precision; a Python/NumPy
-        # float64 scalar times a complex64 array would upcast the (large)
-        # intermediates to complex128, defeating ``config['precision']``.
         real_dtype = psi.real.dtype.type
-
-        # ``psi`` is only read below — the scattered wave is accumulated in a
-        # fresh array ``out`` — so no defensive copy of ``psi`` is needed.
         out = real_dtype(np.sqrt(1.0 - scatter_prob)) * psi
-        for a in range(num_angles):
-            bessel = self._bessel_stack[a, chosen[a]]
-            amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
-            coeff = real_dtype(amplitude * self._azimuthal_norm)
-            out += coeff * (bessel * psi)
-
+        out += real_dtype(np.sqrt(scatter_prob)) * self._kicked(psi, kick, phase)
         waves._array = xp.asarray(out, dtype=psi.dtype)
 
     def scatter_by_order(
@@ -1507,60 +1526,32 @@ class _PlasmonSliceOperator:
     ) -> None:
         """Apply order-resolved plasmon scattering in place.
 
-        Maintains separate wave functions for each plasmon-loss order.  At each
+        Maintains separate wave functions for each plasmon-loss order. At each
         slice the update rule is::
 
             ψ_0' = √(1-P) ψ_0
-            ψ_n' = √(1-P) ψ_n  +  S(ψ_{n-1})   for n ≥ 1
+            ψ_n' = √(1-P) ψ_n  +  √P e^{iφ} e^{2πi q·r} ψ_{n-1}   for n ≥ 1
 
-        where S is the phase-scramble scattering operator (sum over angle bins).
-        The same random Bessel copy draw is shared across all orders so that the
-        sum  Σ_n ψ_n  reproduces the single-pass result (up to truncation at
-        ``max_order``).
-
-        Parameters
-        ----------
-        order_waves : list of Waves
-            ``[ψ_0, ψ_1, …, ψ_N]`` — one Waves object per loss order.
-            Modified in place.
-        depth : float
-            Cumulative depth at the bottom of the current slice [Å].
-        slice_thickness : float
-            Thickness of the current slice [Å].
+        with the same random kick ``q`` and phase ``φ`` for every order, so that the
+        sum over orders reproduces the single-wave result up to the truncation at the
+        highest order (which therefore collects that order and all higher ones).
         """
-        xp = get_array_module(order_waves[0].device)
-        scatter_prob, chosen = self._scatter_params(depth, slice_thickness)
-        num_angles = self._bessel_stack.shape[0]
+        xp = self._xp
+        scatter_prob, kick, phase = self._scatter_params(slice_thickness)
         max_order = len(order_waves) - 1
-
-        # Cast scalars to the wave's real precision so a float64 scalar does not
-        # upcast the complex64 channels/kernel to complex128 (see ``scatter``).
         real_dtype = order_waves[0]._array.real.dtype.type
-
-        scatter_kernel = xp.zeros(
-            self._bessel_stack.shape[2:], dtype=self._bessel_stack.dtype
-        )
-        for a in range(num_angles):
-            amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
-            scatter_kernel += (
-                real_dtype(amplitude * self._azimuthal_norm)
-                * self._bessel_stack[a, chosen[a]]
-            )
-
         sqrt_one_minus_p = real_dtype(np.sqrt(1.0 - scatter_prob))
-
+        sqrt_p = real_dtype(np.sqrt(scatter_prob))
         for n in range(max_order, -1, -1):
             arr = order_waves[n]._array
             if n > 0:
                 prev_arr = order_waves[n - 1]._array
-                order_waves[n]._array = xp.asarray(
-                    sqrt_one_minus_p * arr + scatter_kernel * prev_arr,
-                    dtype=arr.dtype,
+                new = sqrt_one_minus_p * arr + sqrt_p * self._kicked(
+                    prev_arr, kick, phase
                 )
             else:
-                order_waves[n]._array = xp.asarray(
-                    sqrt_one_minus_p * arr, dtype=arr.dtype
-                )
+                new = sqrt_one_minus_p * arr
+            order_waves[n]._array = xp.asarray(new, dtype=arr.dtype)
 
 
 def _valence_electrons_from_atoms(atoms) -> int:
@@ -1665,9 +1656,7 @@ def estimate_plasmon_parameters(
         Plasmon mean free path :math:`\\lambda_p` [Å].
     """
     if method not in ("egerton", "malis"):
-        raise ValueError(
-            f"method must be 'egerton' or 'malis', got {method!r}"
-        )
+        raise ValueError(f"method must be 'egerton' or 'malis', got {method!r}")
 
     # Physical constants (SI).
     hbar = 1.054571817e-34
@@ -1702,8 +1691,8 @@ def estimate_plasmon_parameters(
     theta_E = excitation_energy * e / (gamma * m_e * v**2)  # rad
 
     if method == "egerton":
-        mean_free_path = 2.0 * a0 / (
-            gamma * theta_E * np.log(1.0 + (theta_c / theta_E) ** 2)
+        mean_free_path = (
+            2.0 * a0 / (gamma * theta_E * np.log(1.0 + (theta_c / theta_E) ** 2))
         )  # m
     else:
         # Malis et al. (1988) Eq. 7 — semi-empirical total inelastic MFP.
@@ -1771,37 +1760,38 @@ def scale_critical_angle(
 
 
 class PhaseScramblePlasmons:
-    """Fast single-pass plasmon energy-loss model (phase-scramble method).
+    """Stochastic single-pass plasmon energy-loss model (phase scrambling).
 
     Implements the plasmon-scattering model of B.G. Mendis, *Ultramicroscopy*
-    **206** (2019) 112816 (and its 2020 corrigendum), which B.G. Mendis,
-    *Microsc. Microanal.* **29** (2023) 1111 cites and reuses directly rather
-    than presenting an independent plasmon method. In contrast to
-    :class:`MonteCarloPlasmons` — the 2019 paper's own original implementation,
-    which runs a separate full multislice for every sampled scattering event —
-    this model applies the same plasmon-scattering physics *inline* at the
-    bottom of every slice within a single multislice pass, so all plasmon
-    orders accumulate simultaneously. Statistical convergence is obtained by
-    *incoherently* averaging over repetitions, realised by reusing the
-    frozen-phonon configuration ensemble of the potential (``num_configs`` plays
-    the role of the number of repetitions) — ordinary ensemble averaging, not
-    the coherent multi-configuration combination (eq. 7c) that the 2023 paper
-    introduces for phonon disorder; see :func:`abtem.CrystalPotential`'s
-    ``mixing="phase_scramble"``.
-
-    At the bottom of each slice the real-space wave function ``psi`` is updated as
+    **206** (2019) 112816 in the single-pass form of B.G. Mendis, *Microsc.
+    Microanal.* **29** (2023) 1111: instead of running a separate multislice for
+    every sampled scattering event (:class:`MonteCarloPlasmons`), one plasmon
+    excitation is sampled at the bottom of every slice and added to the wave
+    function with a random phase. At each slice the wave function is updated as
 
     .. math::
+        \\psi \\rightarrow \\sqrt{1 - P}\\,\\psi
+            + \\sqrt{P}\\, e^{i\\varphi}\\, e^{2\\pi i \\mathbf{q}\\cdot\\mathbf{r}}\\, \\psi,
 
-        \\psi \\rightarrow \\sqrt{1 - P_s}\\,\\psi
-            + \\sqrt{\\tfrac{2\\pi}{\\phi_{min}}}
-              \\sum_a \\sqrt{P_s\\,P(\\theta_a)}\\, J_{n}(2\\pi k_{t,a} R)\\, \\psi,
+    where :math:`P = \\Delta z / \\lambda_p` is the plasmon scattering probability of
+    the slice, :math:`\\mathbf{q}` is a transverse momentum transfer drawn from
+    the Lorentzian angular distribution :math:`P(\\theta) \\propto \\theta /
+    (\\theta^2 + \\theta_E^2)` up to the critical angle and rounded to the
+    reciprocal-space grid,
+    and :math:`\\varphi` is a random phase. Transfers below ``min_angle`` (by default
+    one reciprocal-space pixel) only carry the random phase. Averaged over
+    repetitions, the intensity of the scrambled wave function has the same
+    expectation value as the incoherent sum over scattering events, i.e. the Monte
+    Carlo result; the interference between scattering paths that survives in a single
+    repetition averages away as one over the square root of the number of
+    repetitions. The repetitions are realised by the frozen-phonon configurations of
+    the potential (``num_configs``), or by ``num_repetitions`` for a static structure.
 
-    where :math:`P_s = e^{-s/\\lambda_p}\\,\\Delta z/\\lambda_p` is the plasmon
-    scattering probability for the slice at depth :math:`s`, :math:`P(\\theta_a)` is the
-    (Lorentzian) angular scattering probability, and the random-order Bessel functions
-    represent azimuthally-scrambled tilted beams with transverse wavenumber
-    :math:`k_{t,a} = k\\sin\\theta_a`.
+    Compared with the original phase-scrambling algorithm, which superposes all
+    azimuths of each of a few scattering angles with a random-order Bessel function,
+    sampling one kick per slice keeps the full Lorentzian up to the critical angle,
+    conserves the electron count in expectation (no renormalization), and gives the
+    Poisson distribution of loss orders.
 
     Parameters
     ----------
@@ -1813,26 +1803,21 @@ class PhaseScramblePlasmons:
     critical_angle : float
         Critical (cut-off) scattering angle :math:`\\theta_c` [mrad], above which single
         electron excitations dominate.
-    num_angles : int, optional
-        Number of discrete scattering-angle bins (default 5).
-    num_copies : int, optional
-        Number of independent random-order Bessel realisations per angle bin to draw
-        from during phase scrambling (default 5).
-    max_bessel_order : float, optional
-        Maximum (non-integer) Bessel-function order used for phase scrambling
-        (default 30).
+    min_angle : float, optional
+        Scattering angle [mrad] below which the momentum transfer is neglected (the
+        excitation still counts as a loss event). If not given, one reciprocal-space
+        pixel of the wave function grid is used.
     seed : int, optional
-        Base random seed. Combined with the frozen-phonon configuration index to give a
-        reproducible, per-configuration scramble (eager execution). If ``None``
-        (default), each configuration draws fresh entropy, giving independent scramble
-        streams in both eager and lazy execution (matching the reference
-        implementation's per-repetition reshuffling).
+        Base random seed. Combined with the frozen-phonon configuration seed to give a
+        reproducible, independent stream per configuration. If ``None`` (default),
+        each configuration draws fresh entropy.
     max_loss_order : int, optional
         If set, the multislice loop maintains separate wave functions for each
         plasmon-loss order from 0 (zero loss) up to ``max_loss_order``, returning
-        order-resolved diffraction patterns.  If ``None`` (default), a single wave
-        function accumulating all orders is propagated (faster, but only the total
-        unfiltered signal is available).
+        order-resolved diffraction patterns; the highest order collects that order
+        and all higher ones. If ``None`` (default), a single wave function
+        accumulating all orders is propagated (faster, but only the total unfiltered
+        signal is available).
     num_repetitions : int, optional
         Number of phase-scramble repetitions to incoherently average when the
         potential has **no** frozen phonons (a static structure). Each repetition
@@ -1849,9 +1834,7 @@ class PhaseScramblePlasmons:
         mean_free_path: float,
         excitation_energy: float,
         critical_angle: float,
-        num_angles: int = 5,
-        num_copies: int = 5,
-        max_bessel_order: float = 30.0,
+        min_angle: float = None,
         seed: int = None,
         max_loss_order: int = None,
         num_repetitions: int = None,
@@ -1859,15 +1842,34 @@ class PhaseScramblePlasmons:
         self._mean_free_path = mean_free_path
         self._excitation_energy = excitation_energy
         self._critical_angle = critical_angle
-        self._num_angles = num_angles
-        self._num_copies = num_copies
-        self._max_bessel_order = max_bessel_order
+        self._min_angle = None if min_angle is None else float(min_angle)
         self._seed = seed
         self._max_loss_order = max_loss_order
         self._num_repetitions = num_repetitions
-        # Single-entry cache of the unique-radii decomposition, reused across
-        # configurations sharing the same grid (geometry is config-independent).
-        self._radial_cache = None
+
+    @property
+    def parameters(self) -> dict:
+        """The constructor arguments of the model."""
+        return {
+            "mean_free_path": self._mean_free_path,
+            "excitation_energy": self._excitation_energy,
+            "critical_angle": self._critical_angle,
+            "min_angle": self._min_angle,
+            "seed": self._seed,
+            "max_loss_order": self._max_loss_order,
+            "num_repetitions": self._num_repetitions,
+        }
+
+    @property
+    def order_axis(self) -> Union[PlasmonOrderAxis, None]:
+        """The loss-order axis of the measurements (None when unresolved)."""
+        if self._max_loss_order is None:
+            return None
+        return PlasmonOrderAxis(
+            values=tuple(ntuples[n] for n in range(self._max_loss_order + 1)),
+            model="phase_scramble",
+            parameters=self.parameters,
+        )
 
     @classmethod
     def from_atoms(
@@ -1908,8 +1910,8 @@ class PhaseScramblePlasmons:
             ``"egerton"`` (default) or ``"malis"`` — forwarded to
             :func:`estimate_plasmon_parameters` to select the MFP formula.
         kwargs
-            Forwarded to :class:`PhaseScramblePlasmons` (``num_angles``,
-            ``num_copies``, ``max_bessel_order``, ``seed``, ``max_loss_order``).
+            Forwarded to :class:`PhaseScramblePlasmons` (``min_angle``, ``seed``,
+            ``max_loss_order``, ``num_repetitions``).
         """
         est_energy, est_angle, est_mfp = estimate_plasmon_parameters(
             atoms, energy, valence_electrons, method=method
@@ -1994,76 +1996,32 @@ class PhaseScramblePlasmons:
     def _build_operator(
         self, waves: "Waves", potential_index=0, config_seed=None
     ) -> _PlasmonSliceOperator:
-        """Build the per-configuration slice operator for the given wave functions.
-
-        Precomputes the radial-distance image, the discrete scattering angles, the
-        Lorentzian angular weights and the random-order Bessel-function basis on the
-        host (SciPy provides non-integer-order Bessel functions), transferring the basis
-        to the wave backend once per configuration.
-        """
-        from scipy.special import jv
-
-        extent = waves.extent
-        gpts = waves.gpts
-        wavelength = energy2wavelength(waves.energy)  # [Å]
-        k = 1.0 / wavelength  # [1/Å]
-
+        """Build the per-configuration slice operator for the given wave functions."""
+        extent = tuple(waves.extent)
+        gpts = tuple(waves.gpts)
+        wavelength = energy2wavelength(waves._valid_energy)  # [Å]
         rng = _config_rng(self._seed, potential_index, config_seed)
 
-        # Characteristic and critical angles [rad].
-        theta_E = self._excitation_energy / (2.0 * waves.energy)
+        theta_e = self._excitation_energy / (2.0 * waves._valid_energy)  # [rad]
         theta_c = self._critical_angle * 1e-3
-
-        # Pixel-limited angular step and discrete scattering angles (Matlab reference).
-        reciprocal_step = wavelength * min(1.0 / extent[0], 1.0 / extent[1])
-        theta = (np.arange(self._num_angles) + 0.5) * reciprocal_step
-        phi_min = reciprocal_step / theta[-1]
-        azimuthal_norm = float(np.sqrt(2.0 * np.pi / phi_min))
-
-        # Normalised Lorentzian angular scattering probability P(theta_a) (Eq. 3).
-        lorentz_norm = np.log(1.0 + (theta_c / theta_E) ** 2)
-        angle_weights = (
-            2.0 * theta * reciprocal_step / (theta**2 + theta_E**2) / lorentz_norm
-        )
-
-        # ``J_n(2*pi*k_t*R)`` is radially symmetric, so it takes only as many
-        # distinct values as there are distinct radii — far fewer than the
-        # ``gpts**2`` pixels. Evaluate each (expensive, non-integer-order) Bessel
-        # function on the unique radii and scatter the result back to the grid;
-        # this is the dominant cost of building the operator. The decomposition
-        # depends only on the grid, so it is cached across configurations.
-        cache_key = (tuple(gpts), tuple(extent))
-        if self._radial_cache is not None and self._radial_cache[0] == cache_key:
-            unique_radial, inverse = self._radial_cache[1]
+        if self._min_angle is None:
+            min_angle = wavelength * max(1.0 / extent[0], 1.0 / extent[1])
         else:
-            origin = (extent[0] / 2.0, extent[1] / 2.0)
-            x, y = coordinate_grid(extent, gpts, origin=origin, endpoint=False)
-            radial = np.sqrt(x**2 + y**2)
-            unique_radial, inverse = np.unique(radial.ravel(), return_inverse=True)
-            # int32 indices halve the cached map and the per-beam gather traffic
-            # (grids never approach the 2**31-pixel limit).
-            inverse = inverse.reshape(-1).astype(np.int32)
-            self._radial_cache = (cache_key, (unique_radial, inverse))
-
-        real_dtype = get_dtype(complex=False)
-        bessel_stack = np.empty(
-            (self._num_angles, self._num_copies) + tuple(gpts), dtype=real_dtype
-        )
-        for a in range(self._num_angles):
-            kt = k * np.sin(theta[a])
-            argument = 2.0 * np.pi * kt * unique_radial
-            for c in range(self._num_copies):
-                order = self._max_bessel_order * rng.random()
-                values = jv(order, argument).astype(real_dtype)
-                bessel_stack[a, c] = values[inverse].reshape(tuple(gpts))
+            min_angle = self._min_angle * 1e-3
 
         xp = get_array_module(waves.device)
-        bessel_stack = xp.asarray(bessel_stack)
-
+        real_dtype = get_dtype(complex=False)
+        x = xp.asarray(np.arange(gpts[0]) * (extent[0] / gpts[0]), dtype=real_dtype)
+        y = xp.asarray(np.arange(gpts[1]) * (extent[1] / gpts[1]), dtype=real_dtype)
         return _PlasmonSliceOperator(
-            bessel_stack=bessel_stack,
-            angle_weights=angle_weights,
-            azimuthal_norm=azimuthal_norm,
+            x=x,
+            y=y,
+            extent=extent,
+            wavelength=wavelength,
+            theta_e=theta_e,
+            theta_c=theta_c,
+            min_angle=min_angle,
             mean_free_path=self._mean_free_path,
             rng=rng,
+            xp=xp,
         )

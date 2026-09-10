@@ -20,7 +20,11 @@ from abtem.inelastic.phonons import (
     EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
 )
-from abtem.inelastic.plasmons import PhaseScramblePlasmons
+from abtem.inelastic.plasmons import (
+    MonteCarloPlasmons,
+    PhaseScramblePlasmons,
+    QuadraturePlasmons,
+)
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -72,7 +76,9 @@ __all__ = [
     "CompressedSMatrixArray",
     "FrozenPhonons",
     "AtomsEnsemble",
+    "MonteCarloPlasmons",
     "PhaseScramblePlasmons",
+    "QuadraturePlasmons",
     "EnergyResolvedAtomsEnsemble",
     "Potential",
     "CrystalPotential",

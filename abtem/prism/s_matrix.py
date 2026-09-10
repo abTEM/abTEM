@@ -1239,7 +1239,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         pbar.close_if_exists()
 
-        if plasmon_renormalize:
+        if self.metadata.get("plasmon_scramble", False):
             # Average the frozen-phonon (phase-scramble repetition) ensemble,
             # which carries the plasmon statistical convergence. This eager path
             # does not otherwise reduce it; ``reduce_ensemble`` leaves the
@@ -4874,11 +4874,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         n_orders = 1
         if order_resolved:
             n_orders = self.plasmons.max_loss_order + 1
-            order_axis = OrdinalAxis(
-                label="Plasmon order",
-                values=("Zero loss",)
-                + tuple(f"{n}-plasmon" for n in range(1, n_orders)),
-            )
+            order_axis = self.plasmons.order_axis
 
         downsampled_gpts = self.downsampled_gpts
 
@@ -5000,12 +4996,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         if self.plasmons is not None:
-            # The S-matrix beams carry un-renormalized plasmon scattering; flag the
-            # reduction to renormalize each recombined probe (conserving the
-            # incident electron count) before detection.
-            waves.metadata["plasmon_renormalize"] = True
+            # The phase-scramble operator conserves the electron count in
+            # expectation, so the recombined probes are not renormalized (the
+            # reduction still honours the flag if a model sets it).
+            waves.metadata["plasmon_renormalize"] = False
+            waves.metadata["plasmon_scramble"] = True
             if order_resolved:
-                # The reduction must sum over loss orders when renormalizing.
                 waves.metadata["plasmon_order_resolved"] = True
 
         s_matrix_array = SMatrixArray._from_waves(
