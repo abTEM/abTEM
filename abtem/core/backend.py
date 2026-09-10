@@ -39,7 +39,10 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    assert cupyx is None
+    # same reasoning as the cupyx.scipy.signal guard below: this can fail even
+    # though cupyx itself imported, if the CUDA/ROCm libraries it eagerly
+    # pulls in aren't on the loader path. GPU code that needs cupyx_ndimage
+    # then fails at use time instead of blocking the abtem import.
     cupyx_ndimage = None
 
 
@@ -52,7 +55,11 @@ try:
         warnings.simplefilter("ignore", FutureWarning)
         import cupyx.scipy.signal  # type: ignore  # noqa: F401
 except ImportError:
-    assert cupyx is None
+    # this can fail even though cupyx itself imported: cupyx.scipy.signal
+    # eagerly imports cuBLAS-backed submodules, so an environment without the
+    # CUDA/ROCm libraries on the loader path fails here. GPU filters that need
+    # scipy.signal then fail at use time instead of blocking the abtem import.
+    pass
 
 
 ArrayModule = Union[ModuleType, str]
