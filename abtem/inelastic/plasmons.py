@@ -632,6 +632,27 @@ class MonteCarloPlasmons:
         )
 
     @property
+    def num_orders(self) -> int:
+        """Number of loss channels including the zero loss."""
+        return len(self.order_labels)
+
+    @property
+    def order_labels(self) -> Tuple[str, ...]:
+        """Label of every loss channel, in the order of the loss-order axis."""
+        return tuple(ntuples[n] for n in sorted(set(self._num_excitations)))
+
+    def excitation_weights(self, thickness: float) -> Tuple[float, ...]:
+        """Poisson probability of each sampled loss order at a thickness [Å].
+
+        The loss channels of this model are each normalized to the incident electron
+        count, so these are the weights with which they add to the unfiltered signal.
+        """
+        return tuple(
+            excitations_weights(n, thickness, self._mean_free_path)
+            for n in sorted(set(self._num_excitations))
+        )
+
+    @property
     def ensemble_mean(self) -> bool:
         return self._ensemble_mean
 
@@ -2170,6 +2191,34 @@ class PhaseScramblePlasmons:
     @property
     def num_repetitions(self):
         return self._num_repetitions
+
+    @property
+    def num_orders(self) -> int:
+        """Number of loss channels including the zero loss."""
+        if self._max_loss_order is None:
+            raise ValueError(
+                "the loss orders are not resolved by this model; set 'max_loss_order'"
+            )
+        return self._max_loss_order + 1
+
+    @property
+    def order_labels(self) -> Tuple[str, ...]:
+        """Label of every loss channel, in the order of the loss-order axis."""
+        return tuple(ntuples[n] for n in range(self.num_orders))
+
+    def excitation_weights(self, thickness: float) -> Tuple[float, ...]:
+        """Poisson probability of each loss order at a thickness [Å].
+
+        Unlike :class:`MonteCarloPlasmons` and :class:`QuadraturePlasmons`, whose
+        channels are each normalized to the incident electron count, the channels of
+        the phase-scramble model carry these weights already: the electron splits
+        between the orders as it propagates. Divide channel ``n`` by weight ``n`` to
+        put this model on the same footing as the other two.
+        """
+        return tuple(
+            excitations_weights(n, thickness, self._mean_free_path)
+            for n in range(self.num_orders)
+        )
 
     def expand_static_potential(self, potential):
         """Return a potential providing the phase-scramble repetitions.
