@@ -69,7 +69,7 @@ def test_kernels_are_normalized():
         assert np.isclose(kernels[key][0, 0].real, 1.0, atol=1e-5)
     assert kernels["single"].shape == (12, 64, 64)
     assert np.allclose(kernels["single"][:, 0, 0].real, 1.0, atol=1e-5)
-    assert np.allclose(kernels["pair"][:, 0, 0].real, 1.0, atol=1e-5)
+    assert np.allclose(kernels["extra"][:, 0, 0].real, 1.0, atol=1e-5)
 
 
 def test_apply_adds_order_axis(probe):
@@ -173,3 +173,27 @@ def test_order_axis_round_trips_through_zarr(si_potential, probe, tmp_path):
     loaded = abtem.from_zarr(str(tmp_path / "plasmons.zarr")).compute()
     assert np.allclose(loaded.array, result.array)
     assert loaded.axes_metadata[0].values == result.axes_metadata[0].values
+
+
+def test_three_events_conserve_intensity_and_multipass_equivalence(si_potential, probe):
+    detector = abtem.PixelatedDetector(max_angle="full")
+    waves = probe.build(lazy=False)
+    kwargs = dict(
+        max_loss_order=3,
+        num_angles=2,
+        num_azimuthal=3,
+        num_depths=3,
+        max_tilt_events=3,
+        event_num_angles=1,
+        event_num_azimuthal=2,
+        lab_frame=True,
+    )
+    single_pass = (
+        plasmons(**kwargs).apply(waves).multislice(si_potential, detectors=detector)
+    )
+    totals = single_pass.array.sum((-2, -1))
+    assert np.allclose(totals, totals[0], rtol=2e-3)
+    p = plasmons(**kwargs, max_copies=20)
+    assert p.num_copies() == 6 * (3 + 6 * 2 + 10 * 4)
+    multi_pass = p.apply(waves).multislice(si_potential, detectors=detector)
+    assert np.allclose(multi_pass.array, single_pass.array, rtol=1e-4, atol=1e-8)

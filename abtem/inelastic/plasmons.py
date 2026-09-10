@@ -616,15 +616,19 @@ class QuadraturePlasmons(ArrayObjectTransform):
       the exact momentum-transfer distribution of its cell of the Lorentzian, again
       applied as a convolution of its diffraction pattern.
     * The scattering depth of each channeling-changing event is represented by
-      ``num_depths`` uniformly spaced depth nodes. Every node spawns a copy of the
-      wave function that continues through the specimen as a tilted beam.
+      ``num_depths`` uniformly spaced depth nodes. Every node spawns copies of the
+      wave function that continue through the specimen as tilted beams.
+    * Paths with several channeling-changing events, up to ``max_tilt_events``, are
+      represented by chains of tilted copies: the first event uses the
+      ``num_angles`` x ``num_azimuthal`` nodes, every later event the coarser
+      ``event_num_angles`` x ``event_num_azimuthal`` nodes, with the cumulative tilt
+      applied from the depth node of each event onward. Paths with more events than
+      ``max_tilt_events`` treat the additional events as pure momentum transfers.
 
-    A single pass of the multislice algorithm therefore propagates the elastic wave
-    function together with ``num_depths * num_angles * num_azimuthal`` tilted copies,
-    and every plasmon-loss order up to ``max_loss_order`` is assembled from the same
-    set of copies. Paths with more than ``max_tilt_events`` channeling-changing
-    events are approximated by treating the additional events as pure momentum
-    transfers.
+    All loss orders up to ``max_loss_order`` are assembled from the same set of
+    copies. The copies propagate alongside the elastic wave function in a single pass
+    of the multislice algorithm, or in several passes over subsets of the first-event
+    nodes when ``max_copies`` bounds the number of copies held in memory.
 
     Parameters
     ----------
@@ -642,10 +646,10 @@ class QuadraturePlasmons(ArrayObjectTransform):
         has a leading axis with the zero-loss and every loss order up to this value,
         each normalized to the intensity of the incident wave function.
     num_angles : int, optional
-        Number of radial tilt nodes between ``min_angle`` and the critical angle
-        (default is 6).
+        Number of radial tilt nodes between ``min_angle`` and the critical angle for
+        the first channeling-changing event (default is 6).
     num_azimuthal : int, optional
-        Number of azimuthal tilt nodes per ring (default is 8).
+        Number of azimuthal tilt nodes per ring for the first event (default is 8).
     num_depths : int, optional
         Number of depth nodes for each channeling-changing scattering event
         (default is 4).
@@ -654,16 +658,25 @@ class QuadraturePlasmons(ArrayObjectTransform):
         of the electron. If not given, one reciprocal-space pixel of the wave function
         grid is used.
     max_tilt_events : int, optional
-        Maximum number of channeling-changing scattering events per path, 0, 1 or 2
-        (default is 1). With 2, pairs of events are represented by
-        ``pair_num_angles`` rings of ``pair_num_azimuthal`` nodes for the second event
-        of each pair. With 0, plasmon scattering is treated as pure momentum transfer
+        Maximum number of channeling-changing scattering events per path (default is
+        1). Paths with more events treat the additional events as pure momentum
+        transfer. With 0, plasmon scattering is treated as pure momentum transfer
         (a convolution of the elastic diffraction pattern) without any change to the
-        propagation, which is fast but neglects the change of channeling.
-    pair_num_angles : int, optional
-        Number of radial tilt nodes for the second event of a pair (default is 2).
-    pair_num_azimuthal : int, optional
-        Number of azimuthal tilt nodes for the second event of a pair (default is 4).
+        propagation. The number of copies grows as
+        ``num_angles * num_azimuthal * (event_num_angles * event_num_azimuthal)**(m-1)``
+        times the number of depth-node combinations for ``m`` events, so use
+        ``max_copies`` for values above 1.
+    event_num_angles : int, optional
+        Number of radial tilt nodes for the second and later events of a path
+        (default is 2).
+    event_num_azimuthal : int, optional
+        Number of azimuthal tilt nodes for the second and later events of a path
+        (default is 4).
+    max_copies : int, optional
+        Maximum number of tilted copies of the wave function held in memory at once.
+        If exceeded, the first-event nodes are split into subsets that are propagated
+        in separate passes of the multislice algorithm. If not given, a single pass is
+        used.
     lab_frame : bool, optional
         If True (default), the diffraction patterns include the momentum transferred
         to the electron, i.e. they are shifted by the plasmon scattering angle. If
@@ -682,12 +695,13 @@ class QuadraturePlasmons(ArrayObjectTransform):
         num_depths: int = 4,
         min_angle: float = None,
         max_tilt_events: int = 1,
-        pair_num_angles: int = 2,
-        pair_num_azimuthal: int = 4,
+        event_num_angles: int = 2,
+        event_num_azimuthal: int = 4,
+        max_copies: int = None,
         lab_frame: bool = True,
     ):
-        if max_tilt_events not in (0, 1, 2):
-            raise ValueError("`max_tilt_events` must be 0, 1 or 2")
+        if max_tilt_events < 0:
+            raise ValueError("`max_tilt_events` must be non-negative")
         if max_loss_order < 0:
             raise ValueError("`max_loss_order` must be non-negative")
 
@@ -700,8 +714,9 @@ class QuadraturePlasmons(ArrayObjectTransform):
         self._num_depths = int(num_depths)
         self._min_angle = None if min_angle is None else float(min_angle)
         self._max_tilt_events = int(max_tilt_events)
-        self._pair_num_angles = int(pair_num_angles)
-        self._pair_num_azimuthal = int(pair_num_azimuthal)
+        self._event_num_angles = int(event_num_angles)
+        self._event_num_azimuthal = int(event_num_azimuthal)
+        self._max_copies = None if max_copies is None else int(max_copies)
         self._lab_frame = bool(lab_frame)
 
     @property
@@ -745,12 +760,16 @@ class QuadraturePlasmons(ArrayObjectTransform):
         return self._max_tilt_events
 
     @property
-    def pair_num_angles(self) -> int:
-        return self._pair_num_angles
+    def event_num_angles(self) -> int:
+        return self._event_num_angles
 
     @property
-    def pair_num_azimuthal(self) -> int:
-        return self._pair_num_azimuthal
+    def event_num_azimuthal(self) -> int:
+        return self._event_num_azimuthal
+
+    @property
+    def max_copies(self) -> Union[int, None]:
+        return self._max_copies
 
     @property
     def lab_frame(self) -> bool:
@@ -760,6 +779,25 @@ class QuadraturePlasmons(ArrayObjectTransform):
     def num_orders(self) -> int:
         """Number of loss channels including the zero loss."""
         return self._max_loss_order + 1
+
+    @property
+    def parameters(self) -> dict:
+        """The constructor arguments of the model."""
+        return {
+            "mean_free_path": self._mean_free_path,
+            "excitation_energy": self._excitation_energy,
+            "critical_angle": self._critical_angle,
+            "max_loss_order": self._max_loss_order,
+            "num_angles": self._num_angles,
+            "num_azimuthal": self._num_azimuthal,
+            "num_depths": self._num_depths,
+            "min_angle": self._min_angle,
+            "max_tilt_events": self._max_tilt_events,
+            "event_num_angles": self._event_num_angles,
+            "event_num_azimuthal": self._event_num_azimuthal,
+            "max_copies": self._max_copies,
+            "lab_frame": self._lab_frame,
+        }
 
     def characteristic_angle(self, energy: float) -> float:
         """Characteristic plasmon scattering angle [mrad] at the given energy [eV]."""
@@ -784,13 +822,27 @@ class QuadraturePlasmons(ArrayObjectTransform):
     def order_labels(self) -> Tuple[str, ...]:
         return tuple(ntuples[n] for n in range(self.num_orders))
 
+    def num_copies(self) -> int:
+        """Number of tilted copies of the wave function for a single pass."""
+        n_single = self._num_angles * self._num_azimuthal
+        n_extra = self._event_num_angles * self._event_num_azimuthal
+        return n_single * self._copies_per_first_node(n_extra)
+
+    def _copies_per_first_node(self, n_extra: int) -> int:
+        from math import comb
+
+        return sum(
+            comb(self._num_depths + m - 1, m) * n_extra ** (m - 1)
+            for m in range(1, self._max_tilt_events + 1)
+        )
+
     # -- angular quadrature --------------------------------------------------
 
     def _angular_nodes(self, energy: float, min_angle: float):
         """Tilt nodes [mrad] and the quadrature of the Lorentzian.
 
-        Returns a dict with the class probabilities and the ring/sector partition
-        used for the nodes and for the second event of a pair.
+        Returns a dict with the class probabilities and the ring/sector partitions
+        used for the first event (``single``) and for later events (``extra``).
         """
         theta_e = self.characteristic_angle(energy)
         theta_c = self._critical_angle
@@ -833,7 +885,7 @@ class QuadraturePlasmons(ArrayObjectTransform):
             "p_small": p_small,
             "p_large": p_large,
             "single": partition(self._num_angles, self._num_azimuthal),
-            "pair": partition(self._pair_num_angles, self._pair_num_azimuthal),
+            "extra": partition(self._event_num_angles, self._event_num_azimuthal),
         }
 
     # -- ensemble/transform protocol -------------------------------------------
@@ -845,24 +897,6 @@ class QuadraturePlasmons(ArrayObjectTransform):
     @property
     def _default_ensemble_chunks(self):
         return (self.num_orders,)
-
-    @property
-    def parameters(self) -> dict:
-        """The constructor arguments of the model."""
-        return {
-            "mean_free_path": self._mean_free_path,
-            "excitation_energy": self._excitation_energy,
-            "critical_angle": self._critical_angle,
-            "max_loss_order": self._max_loss_order,
-            "num_angles": self._num_angles,
-            "num_azimuthal": self._num_azimuthal,
-            "num_depths": self._num_depths,
-            "min_angle": self._min_angle,
-            "max_tilt_events": self._max_tilt_events,
-            "pair_num_angles": self._pair_num_angles,
-            "pair_num_azimuthal": self._pair_num_azimuthal,
-            "lab_frame": self._lab_frame,
-        }
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
@@ -918,8 +952,8 @@ def _lorentzian_kernels(
     Every kernel is the (normalized) shape of the Lorentzian scattering distribution
     restricted to one cell of the angular quadrature, sampled on the unshifted
     reciprocal-space grid of the wave functions. Returns the Fourier transforms of the
-    small-angle kernel, the whole large-angle kernel, the kernels of the tilt nodes
-    and the kernels of the second-event nodes.
+    small-angle kernel, the whole large-angle kernel, the kernels of the first-event
+    tilt nodes and the kernels of the later-event nodes.
     """
     theta_e = nodes["theta_e"]
     theta_c = nodes["theta_c"]
@@ -974,7 +1008,7 @@ def _lorentzian_kernels(
         return np.stack(kernels)
 
     single = partition_kernels(nodes["single"])
-    pair = partition_kernels(nodes["pair"])
+    extra = partition_kernels(nodes["extra"])
 
     from abtem.core.fft import fft2
 
@@ -985,7 +1019,7 @@ def _lorentzian_kernels(
         "small": transform(small),
         "large": transform(large),
         "single": transform(single),
-        "pair": transform(pair),
+        "extra": transform(extra),
     }
 
 
@@ -1005,13 +1039,15 @@ def quadrature_plasmon_multislice_and_detect(
     ensemble axis, see :meth:`QuadraturePlasmons.apply`. One measurement per detector
     is returned with that axis resolving the number of plasmon excitations.
     """
+    from itertools import product
     from math import comb
 
     from abtem.antialias import AntialiasAperture
-    from abtem.core.axes import TiltAxis
+    from abtem.core.complex import complex_exponential
     from abtem.core.diagnostics import TqdmWrapper
     from abtem.core.energy import energy2wavelength
     from abtem.core.fft import fft2, ifft2
+    from abtem.core.grid import spatial_frequencies
     from abtem.detectors import validate_detectors
     from abtem.multislice import (
         FourierMultislice,
@@ -1028,6 +1064,11 @@ def quadrature_plasmon_multislice_and_detect(
     if not isinstance(algorithm, FourierMultislice):
         raise NotImplementedError(
             "quadrature plasmon scattering requires the Fourier multislice algorithm"
+        )
+    if algorithm.conjugate or algorithm.transpose:
+        raise NotImplementedError(
+            "quadrature plasmon scattering does not support conjugate or transposed "
+            "multislice"
         )
 
     found = _find_plasmon_order_axis(waves)
@@ -1050,9 +1091,11 @@ def quadrature_plasmon_multislice_and_detect(
     xp = get_array_module(waves.device)
     energy = waves._valid_energy
     wavelength = energy2wavelength(energy)
-    gpts = waves._valid_gpts
+    gpts = tuple(waves._valid_gpts)
+    sampling = tuple(waves._valid_sampling)
     extent = waves.extent
     angular_sampling = tuple(wavelength / e * 1e3 for e in extent)
+    complex_dtype = get_dtype(complex=True)
 
     min_angle = plasmons.min_angle
     if min_angle is None:
@@ -1061,11 +1104,29 @@ def quadrature_plasmon_multislice_and_detect(
     p_small, p_large = nodes["p_small"], nodes["p_large"]
     max_tilt_events = plasmons.max_tilt_events
     num_depths = plasmons.num_depths
+    single_tilts = nodes["single"]["tilts"]
+    extra_tilts = nodes["extra"]["tilts"]
+    n_single = len(single_tilts)
+    n_extra = len(extra_tilts)
 
     if plasmons.lab_frame:
         kernels = _lorentzian_kernels(gpts, angular_sampling, nodes, xp=xp)
     else:
         kernels = None
+
+    # first-event nodes per pass, from the memory budget
+    if max_tilt_events == 0:
+        first_node_chunks = [np.arange(0)]
+    else:
+        per_first = plasmons._copies_per_first_node(n_extra)
+        if plasmons.max_copies is None:
+            per_pass = n_single
+        else:
+            per_pass = max(1, plasmons.max_copies // per_first)
+        first_node_chunks = [
+            np.arange(start, min(start + per_pass, n_single))
+            for start in range(0, n_single, per_pass)
+        ]
 
     (
         extra_ensemble_axes_shape,
@@ -1080,6 +1141,7 @@ def quadrature_plasmon_multislice_and_detect(
     base_kwargs = waves._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
     base_axes = waves.ensemble_axes_metadata[1:]
     n_base = len(base_axes)
+    copy_axis = AxisMetadata(label="plasmon tilt copies")
 
     def make_waves(array, extra_axes):
         return waves.__class__(
@@ -1088,229 +1150,265 @@ def quadrature_plasmon_multislice_and_detect(
             **base_kwargs,
         )
 
-    def tilt_axis(tilts):
-        return TiltAxis(
-            label="tilt",
-            values=tuple(tuple(map(float, t)) for t in tilts),
-            units="mrad",
-        )
-
-    single_tilts = nodes["single"]["tilts"]
-    pair_tilts = nodes["pair"]["tilts"]
-    n_single = len(single_tilts)
-    n_pair = len(pair_tilts)
-    single_axis = tilt_axis(single_tilts)
-    combined = (single_tilts[:, None, :] + pair_tilts[None, :, :]).reshape(-1, 2)
-    combined_axis = tilt_axis(combined)
-
     thickness = potential.thickness
     depth_nodes = (np.arange(num_depths) + 0.5) * thickness / num_depths
 
     antialias_aperture = AntialiasAperture()
-    propagators = {
-        "elastic": FresnelPropagator(),
-        "single": FresnelPropagator(),
-        "pair": FresnelPropagator(),
-    }
+    propagator = FresnelPropagator()
+    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+    kx = kx.astype(get_dtype(complex=False))
+    ky = ky.astype(get_dtype(complex=False))
 
-    def step(w, transmission_function, key):
-        return conventional_multislice_step(
-            w,
-            potential_slice=transmission_function,
-            antialias_aperture=antialias_aperture,
-            propagator=propagators[key],
-            conjugate=algorithm.conjugate,
-            transpose=algorithm.transpose,
-            order=algorithm.order,
+    def tilt_phases(tilts, slice_thickness):
+        """Separable reciprocal-space phase factors of the tilted propagator."""
+        tilts = xp.asarray(tilts, dtype=get_dtype(complex=False))
+        tan_x = xp.tan(tilts[:, 0] / 1e3)[:, None]
+        tan_y = xp.tan(tilts[:, 1] / 1e3)[:, None]
+        ux = complex_exponential(-2 * np.pi * kx[None] * tan_x * slice_thickness)
+        uy = complex_exponential(-2 * np.pi * ky[None] * tan_y * slice_thickness)
+        return ux, uy
+
+    member_slice = (slice(None),) + (None,) * n_base
+
+    def step_group(group, transmission_function, slice_thickness):
+        group_waves = transmission_function.transmit(group["waves"])
+        kernel = propagator.get_array(
+            group_waves, slice_thickness, order=algorithm.order
         )
+        if group.get("phase_thickness") != slice_thickness:
+            group["phases"] = tilt_phases(group["tilts"], slice_thickness)
+            group["phase_thickness"] = slice_thickness
+        ux, uy = group["phases"]
+        array = fft2(group_waves.array, overwrite_x=True)
+        array *= kernel
+        array *= ux[member_slice + (slice(None), None)]
+        array *= uy[member_slice + (None, slice(None))]
+        group_waves._array = ifft2(array, overwrite_x=True)
+        group["waves"] = group_waves
 
-    def kernel_broadcast(k):
-        # (n, gx, gy) -> (n, 1..., gx, gy) for the base ensemble axes
-        return k[(slice(None),) + (None,) * n_base]
-
-    def detect(elastic, groups, measurement_index):
-        """Assemble the loss channels and accumulate the detector signals."""
-        ens = elastic.array.shape[:-2]
-        i0 = abs2(fft2(elastic.array, overwrite_x=False))
-        f0 = fft2(i0.astype(get_dtype(complex=True)))
-
-        if kernels is None:
-            ks = xp.ones((), dtype=get_dtype(complex=True))
-            kl = ks
+    def make_group(
+        source_array, source_tilts, source_index, k, first_nodes, m_parent, weight
+    ):
+        """Chain ``k`` new events onto a parent (the elastic wave if m_parent == 0)."""
+        if m_parent == 0:
+            new_index = np.array(
+                [
+                    (i,) + e
+                    for i in first_nodes
+                    for e in product(range(n_extra), repeat=k - 1)
+                ],
+                dtype=int,
+            ).reshape(-1, k)
+            n_new = len(new_index)
+            array = xp.tile(
+                source_array[None], (n_new,) + (1,) * len(source_array.shape)
+            )
+            tilts = single_tilts[new_index[:, 0]] + sum(
+                (extra_tilts[new_index[:, j]] for j in range(1, k)), np.zeros(2)
+            )
         else:
-            ks = kernels["small"]
-            kl = kernels["large"]
+            combos = np.array(
+                list(product(range(n_extra), repeat=k)), dtype=int
+            ).reshape(-1, k)
+            n_parent = len(source_index)
+            new_index = np.concatenate(
+                [
+                    np.repeat(source_index, len(combos), axis=0),
+                    np.tile(combos, (n_parent, 1)),
+                ],
+                axis=1,
+            )
+            array = xp.repeat(source_array, len(combos), axis=0)
+            tilts = np.repeat(source_tilts, len(combos), axis=0) + np.tile(
+                extra_tilts[combos].sum(1), (n_parent, 1)
+            )
+        return {
+            "waves": make_waves(array, [copy_axis]),
+            "tilts": np.asarray(tilts, dtype=float).reshape(-1, 2),
+            "index": new_index,
+            "m": m_parent + k,
+            "weight": weight,
+        }
 
-        accumulators = [None] * n_orders
-        accumulators[0] = f0
+    def member_kernels(index):
+        """Fourier kernels of the chain members (product of their node kernels)."""
+        k = kernels["single"][index[:, 0]]
+        for j in range(1, index.shape[1]):
+            k = k * kernels["extra"][index[:, j]]
+        return k
 
-        def add(n, value):
-            if accumulators[n] is None:
-                accumulators[n] = value
+    accumulators = {}
+
+    def add(exit_index, n, value):
+        acc = accumulators.setdefault(exit_index, [None] * n_orders)
+        acc[n] = value if acc[n] is None else acc[n] + value
+
+    def path_weight(n, m):
+        return comb(n, m) * p_large**m * p_small ** (n - m)
+
+    ks = xp.ones((), dtype=complex_dtype) if kernels is None else kernels["small"]
+    kl = xp.ones((), dtype=complex_dtype) if kernels is None else kernels["large"]
+
+    def contribute(exit_index, f_pattern, m_group, weight):
+        # contributes to m = m_group if m_group < max_tilt_events, otherwise to every
+        # m >= max_tilt_events (extra events as momentum transfer)
+        for n in range(0 if m_group == 0 else 1, n_orders):
+            if m_group < max_tilt_events:
+                ms = [m_group] if m_group <= n else []
             else:
-                accumulators[n] = accumulators[n] + value
+                ms = range(m_group, n + 1)
+            for m in ms:
+                factor = path_weight(n, m) * weight
+                if factor == 0:
+                    continue
+                term = f_pattern * factor
+                if n - m > 0:
+                    term = term * ks ** (n - m)
+                if m - m_group > 0:
+                    term = term * kl ** (m - m_group)
+                add(exit_index, n, term)
 
-        # m: number of channeling-changing events on the path
-        def path_weight(n, m):
-            return comb(n, m) * p_large**m * p_small ** (n - m)
+    def accumulate_elastic(exit_index, elastic):
+        i0 = abs2(fft2(elastic.array, overwrite_x=False))
+        contribute(exit_index, fft2(i0.astype(complex_dtype)), 0, 1.0)
 
-        def contribute(f_pattern, m_group, depth_weight):
-            # contributes to m = m_group if m_group < max_tilt_events,
-            # otherwise to every m >= max_tilt_events (extra events as momentum
-            # transfer)
-            for n in range(1, n_orders):
-                if m_group < max_tilt_events:
-                    ms = [m_group] if m_group <= n else []
-                else:
-                    ms = range(m_group, n + 1)
-                for m in ms:
-                    factor = path_weight(n, m) * depth_weight
-                    if factor == 0:
-                        continue
-                    term = f_pattern * factor
-                    if n - m > 0:
-                        term = term * ks ** (n - m)
-                    if m - m_group > 0:
-                        term = term * kl ** (m - m_group)
-                    add(n, term)
-
-        contribute(f0, 0, 1.0)
-
+    def accumulate_groups(exit_index, groups):
         for group in groups:
             arr = group["waves"].array
             intensity = abs2(fft2(arr, overwrite_x=False))
-            f = fft2(intensity.astype(get_dtype(complex=True)))
+            f = fft2(intensity.astype(complex_dtype))
             if kernels is not None:
-                f = f * kernel_broadcast(group["kernel"])
-            f = f.sum(0) / arr.shape[0]
-            contribute(f, group["m"], group["depth_weight"])
+                f = f * member_kernels(group["index"])[member_slice]
+            m = group["m"]
+            f = f.sum(0) / (n_single * n_extra ** (m - 1))
+            contribute(exit_index, f, m, group["weight"])
 
+    def finalize(exit_index, measurement_index, ens):
+        acc = accumulators.pop(exit_index)
         patterns = []
         for n in range(n_orders):
-            if accumulators[n] is None:
-                patterns.append(
-                    xp.zeros(ens + tuple(gpts), dtype=get_dtype(complex=False))
-                )
+            if acc[n] is None:
+                patterns.append(xp.zeros(ens + gpts, dtype=get_dtype(complex=False)))
             else:
-                patterns.append(xp.clip(ifft2(accumulators[n]).real, 0, None))
+                patterns.append(xp.clip(ifft2(acc[n]).real, 0, None))
         intensity = xp.stack(patterns)
         # A wave function whose diffraction pattern is the accumulated intensity.
-        carrier = ifft2(xp.sqrt(intensity).astype(get_dtype(complex=True)))
+        carrier = ifft2(xp.sqrt(intensity).astype(complex_dtype))
         carrier_waves = make_waves(carrier, [order_axis])
         for i, detector in enumerate(detectors):
             new_measurement = detector.detect(carrier_waves)
             measurements[i].array[measurement_index] += new_measurement.array
 
-    n_waves = np.prod(waves.shape[1:-2]) if len(waves.shape) > 3 else 1
-    n_slices = int(n_waves * potential.num_slices * potential.num_configurations)
+    n_waves = int(np.prod(waves.shape[1:-2])) if len(waves.shape) > 3 else 1
+    n_slices = int(
+        n_waves
+        * potential.num_slices
+        * potential.num_configurations
+        * max(1, len(first_node_chunks))
+    )
     tqdm_pbar = TqdmWrapper(
         enabled=pbar, total=n_slices, leave=False, desc="multislice"
     )
 
     elastic_input = make_waves(waves.array[0].copy(), [])
+    ens = tuple(elastic_input.array.shape[:-2])
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
-        elastic = elastic_input.copy()
-        groups = []
-        next_node = 0
-        depth = 0.0
-        exit_plane_index = 0
+        exit_indices = []
+        passes = first_node_chunks if first_node_chunks else [np.arange(0)]
+        for pass_index, first_nodes in enumerate(passes):
+            first_pass = pass_index == 0
+            elastic = elastic_input.copy()
+            groups = []
+            next_node = 0
+            depth = 0.0
+            exit_plane_index = 0
 
-        if potential.exit_planes[0] == -1:
+            if potential.exit_planes[0] == -1:
+                if first_pass:
+                    accumulate_elastic(exit_plane_index, elastic)
+                    exit_indices.append(exit_plane_index)
+                exit_plane_index += 1
+
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
+            ):
+                for potential_slice in potential_chunk.generate_slices():
+                    if potential_slice.device != elastic.device:
+                        potential_slice = potential_slice.copy_to_device(elastic.device)
+                    transmission_function = potential_slice.transmission_function(
+                        energy=energy
+                    )
+                    transmission_function = antialias_aperture.bandlimit(
+                        transmission_function, in_place=True
+                    )
+                    slice_thickness = transmission_function.slice_thickness[0]
+
+                    elastic = conventional_multislice_step(
+                        elastic,
+                        potential_slice=transmission_function,
+                        antialias_aperture=antialias_aperture,
+                        propagator=propagator,
+                        order=algorithm.order,
+                    )
+                    for group in groups:
+                        step_group(group, transmission_function, slice_thickness)
+
+                    depth += slice_thickness
+                    tqdm_pbar.update_if_exists(int(n_waves))
+
+                    # spawn chains of tilted copies at the depth nodes
+                    while next_node < num_depths and depth >= depth_nodes[next_node]:
+                        next_node += 1
+                        if max_tilt_events == 0 or len(first_nodes) == 0:
+                            continue
+                        new_groups = []
+                        for group in groups:
+                            for k in range(1, max_tilt_events - group["m"] + 1):
+                                weight = (
+                                    group["weight"]
+                                    * comb(group["m"] + k, k)
+                                    / num_depths**k
+                                )
+                                new_groups.append(
+                                    make_group(
+                                        group["waves"].array,
+                                        group["tilts"],
+                                        group["index"],
+                                        k,
+                                        first_nodes,
+                                        group["m"],
+                                        weight,
+                                    )
+                                )
+                        for k in range(1, max_tilt_events + 1):
+                            new_groups.append(
+                                make_group(
+                                    elastic.array,
+                                    None,
+                                    None,
+                                    k,
+                                    first_nodes,
+                                    0,
+                                    1.0 / num_depths**k,
+                                )
+                            )
+                        groups.extend(new_groups)
+
+                    if potential_slice.exit_planes:
+                        if first_pass:
+                            accumulate_elastic(exit_plane_index, elastic)
+                            exit_indices.append(exit_plane_index)
+                        accumulate_groups(exit_plane_index, groups)
+                        exit_plane_index += 1
+
+        for exit_plane_index in exit_indices:
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, exit_plane_index, potential
             )
-            detect(elastic, groups, measurement_index)
-            exit_plane_index += 1
-
-        for potential_chunk in potential_configuration.generate_chunked_slices(
-            chunk_size=potential_chunk_size
-        ):
-            for potential_slice in potential_chunk.generate_slices():
-                if potential_slice.device != elastic.device:
-                    potential_slice = potential_slice.copy_to_device(elastic.device)
-                transmission_function = potential_slice.transmission_function(
-                    energy=energy
-                )
-                transmission_function = antialias_aperture.bandlimit(
-                    transmission_function, in_place=True
-                )
-
-                elastic = step(elastic, transmission_function, "elastic")
-                for group in groups:
-                    group["waves"] = step(
-                        group["waves"], transmission_function, group["key"]
-                    )
-
-                depth += potential_slice.axes_metadata[0].values[0]
-                tqdm_pbar.update_if_exists(int(n_waves))
-
-                # spawn tilted copies at the depth nodes
-                while next_node < num_depths and depth >= depth_nodes[next_node]:
-                    next_node += 1
-                    if max_tilt_events == 0:
-                        continue
-                    if max_tilt_events == 2:
-                        # pairs: second event at node j, first at an earlier node
-                        for group in list(groups):
-                            if group["m"] != 1:
-                                continue
-                            arr = group["waves"].array
-                            tiled = xp.repeat(arr[:, None], n_pair, axis=1)
-                            tiled = tiled.reshape((n_single * n_pair,) + arr.shape[1:])
-                            groups.append(
-                                {
-                                    "waves": make_waves(tiled, [combined_axis]),
-                                    "key": "pair",
-                                    "m": 2,
-                                    "depth_weight": 2.0 / num_depths**2,
-                                    "kernel": None
-                                    if kernels is None
-                                    else (
-                                        kernels["single"][:, None]
-                                        * kernels["pair"][None]
-                                    ).reshape((n_single * n_pair,) + tuple(gpts)),
-                                }
-                            )
-                        # both events at node j
-                        tiled = xp.tile(
-                            elastic.array[None],
-                            (n_single * n_pair,) + (1,) * len(elastic.shape),
-                        )
-                        groups.append(
-                            {
-                                "waves": make_waves(tiled, [combined_axis]),
-                                "key": "pair",
-                                "m": 2,
-                                "depth_weight": 1.0 / num_depths**2,
-                                "kernel": None
-                                if kernels is None
-                                else (
-                                    kernels["single"][:, None] * kernels["pair"][None]
-                                ).reshape((n_single * n_pair,) + tuple(gpts)),
-                            }
-                        )
-                    tiled = xp.tile(
-                        elastic.array[None], (n_single,) + (1,) * len(elastic.shape)
-                    )
-                    groups.append(
-                        {
-                            "waves": make_waves(tiled, [single_axis]),
-                            "key": "single",
-                            "m": 1,
-                            "depth_weight": 1.0 / num_depths,
-                            "kernel": None if kernels is None else kernels["single"],
-                        }
-                    )
-
-                if potential_slice.exit_planes:
-                    measurement_index = _validate_potential_ensemble_indices(
-                        potential_index, exit_plane_index, potential
-                    )
-                    detect(elastic, groups, measurement_index)
-                    exit_plane_index += 1
+            finalize(exit_plane_index, measurement_index, ens)
 
     tqdm_pbar.close_if_exists()
     return measurements
