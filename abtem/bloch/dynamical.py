@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -958,14 +957,6 @@ def check_eigh_memory(structure_matrix: np.ndarray, safety_factor: float = 2.5) 
     xp = get_array_module(structure_matrix)
 
     if xp is cp:
-        # A structure matrix from a prior, crashed call to this same function
-        # can stay reachable through its own exception traceback (every frame
-        # between the `raise` and the caller's `except` keeps its locals
-        # alive) until the cycle collector runs, so cupy's pool never sees it
-        # freed and mem_info() undercounts what is genuinely available.
-        # Collecting first, before reading memory state, avoids repeatedly
-        # tripping this check on a retry loop.
-        gc.collect()
         free_bytes, _ = cp.cuda.Device().mem_info
         available_bytes = free_bytes + cp.get_default_memory_pool().free_bytes()
         device_str = "GPU"
@@ -1025,24 +1016,7 @@ def calculate_dynamical_scattering(
 
     check_eigh_memory(structure_matrix)
 
-    try:
-        v, C = xp.linalg.eigh(structure_matrix)
-    except Exception as exc:
-        # The pre-flight check above estimates from a fixed safety factor and
-        # a point-in-time memory reading; it can't account for allocator
-        # fragmentation (a same-total-bytes-but-no-single-large-enough-block
-        # situation) or memory another task grabs between the check and this
-        # call. Catch the actual failure too, so it still surfaces as the
-        # same actionable message rather than a raw CUDA/numpy error.
-        if xp is cp and isinstance(exc, cp.cuda.memory.OutOfMemoryError):
-            n = structure_matrix.shape[-1]
-            raise MemoryError(
-                f"eigendecomposition of the {n}x{n} structure matrix ({n} "
-                f"Bloch beams) ran out of GPU memory during allocation. "
-                "Reduce `g_max` and/or `sg_max` to select fewer beams, or "
-                "run on a device with more memory."
-            ) from exc
-        raise
+    v, C = xp.linalg.eigh(structure_matrix)
     # v, C = scipy.linalg.eigh(structure_matrix)
 
     gamma = v * energy2wavelength(energy) / 2.0
