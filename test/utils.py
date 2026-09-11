@@ -150,8 +150,8 @@ requires_multigpu = pytest.mark.skipif(
 def synthetic_transition_potential(
     Z: int = 14,
     gpts: tuple[int, int] = (64, 64),
-    extent: tuple[float, float] = (8.0, 8.0),
-    energy: float = 100e3,
+    extent: tuple[float, float] | None = (8.0, 8.0),
+    energy: float | None = 100e3,
     n_transitions: int = 2,
     seed: int = 0,
 ):

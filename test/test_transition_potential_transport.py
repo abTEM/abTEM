@@ -17,9 +17,10 @@ def on_cpu():
         yield
 
 
-def _synthetic_tp(gpts=(64, 64), extent=(8.0, 8.0), n_transitions=4, seed=0):
+def _synthetic_tp(gpts=(64, 64), extent=(8.0, 8.0), energy=60e3, n_transitions=4,
+                  seed=0):
     return synthetic_transition_potential(
-        Z=5, gpts=gpts, extent=extent, energy=60e3,
+        Z=5, gpts=gpts, extent=extent, energy=energy,
         n_transitions=n_transitions, seed=seed,
     )
 
@@ -31,7 +32,13 @@ def _setup(gpts=(64, 64)):
         "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
     )
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2.0)
-    tp = _synthetic_tp(gpts=gpts, extent=potential.extent)
+    # Deliberately NOT pre-matched to the probe: the energy differs, so the
+    # drivers' accelerator.match must write. A transition potential that
+    # already agrees with the waves makes that call a no-op, and then no test
+    # can tell a private view from a mutated shared one. (The extent must be
+    # defined -- TransitionPotentialArray builds its local potential in
+    # __init__, which needs the grid.)
+    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
     probe = abtem.Probe(semiangle_cutoff=32, energy=60e3)
     probe.grid.match(potential)
     scan = abtem.GridScan(
@@ -161,6 +168,20 @@ def test_task_local_view_shields_the_shared_object():
     assert tp.extent == (8.0, 8.0)
 
 
+def test_scan_does_not_rematch_the_callers_energy_in_place():
+    """The end-to-end guard that actually bites: the fixture's transition
+    potential carries a different energy from the probe, so the drivers must
+    re-match it -- on their own view, never on the caller's object."""
+    potential, tp, probe, scan, sites = _setup()
+    assert tp.energy == 80e3  # fixture precondition: matching must do work
+
+    _scan(probe, potential, tp, scan, sites).compute(
+        progress_bar=False, scheduler="threads", num_workers=8
+    )
+
+    assert tp.energy == 80e3, "the scan re-matched the caller's energy in place"
+
+
 def test_scan_leaves_the_users_object_unmutated():
     """End to end: after lazy compute, the user's transition potential still
     has exactly the state it was built with."""
@@ -168,6 +189,7 @@ def test_scan_leaves_the_users_object_unmutated():
     energy_before = tp.energy
     extent_before = tp.extent
     array_before = tp.array
+    assert energy_before == 80e3  # the match below has to actually do work
 
     _scan(probe, potential, tp, scan, sites).compute(progress_bar=False)
 
