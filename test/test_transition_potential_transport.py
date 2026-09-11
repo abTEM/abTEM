@@ -129,7 +129,11 @@ def test_graph_computes_on_a_distributed_cluster_and_survives_client_loss():
         lazy.compute(progress_bar=False, scheduler="threads").to_cpu().array
     )
 
-    assert np.array_equal(on_cluster, local)
+    # Not bit-for-bit: the default FFTW backend plans with FFTW_MEASURE, which
+    # picks different algorithms in differently loaded processes, so results
+    # that cross a process boundary agree only to float32 round-off. The
+    # same-process comparisons above do assert exact equality.
+    assert np.allclose(on_cluster, local, rtol=1e-5, atol=0)
 
 
 def test_prism_lazy_and_eager_agree():
