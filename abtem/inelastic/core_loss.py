@@ -617,7 +617,9 @@ class BaseTransitionPotential(
         drivers use: they follow this call with ``copy_to_device``, which
         rebuilds the object and so privatizes the derived state, and the
         payload array itself is only ever read (the transforms that use it
-        do not overwrite their input).
+        do not overwrite their input). Note that ``copy.copy`` honours
+        ``__getstate__``, so a subclass that blanks an attribute there gets
+        it blanked in this view as well.
 
         Parameters
         ----------
