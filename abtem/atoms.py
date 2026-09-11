@@ -1165,19 +1165,61 @@ def _rotate_positions(
     return (positions - center) @ R.T + center
 
 
+def _disk_range_mask(
+    yz: np.ndarray,
+    box_y: float,
+    box_z: float,
+    rotation_range: tuple[float, float],
+    margin: float,
+) -> np.ndarray:
+    """Boolean mask selecting which rows of `yz` (an (N, 2) array of (y, z)
+    positions relative to the disk's own center) land within a
+    (box_y, box_z)-sized rectangle (grown by `margin` on each side) centered
+    at the origin, for at least one rotation angle in `rotation_range` [deg]
+    about `x`. This is the exact condition for an atom to be able to appear
+    inside the box for some angle in the range -- not an approximation of
+    it -- so restricting to it never drops an atom that a simulated rotation
+    step could actually need."""
+    theta_min, theta_max = sorted(np.deg2rad(rotation_range))
+    span = theta_max - theta_min
+    # Fine enough that even a rotation series with hundreds of steps samples
+    # this range far more coarsely than this mask does, so no angle actually
+    # used in a real rotation series can fall in the gap between two of
+    # these samples and be missed.
+    n_samples = max(2, int(np.ceil(span / np.deg2rad(0.01))) + 1)
+    thetas = np.linspace(theta_min, theta_max, n_samples)
+
+    y, z = yz[:, 0], yz[:, 1]
+    half_y, half_z = box_y / 2 + margin, box_z / 2 + margin
+
+    survives = np.zeros(len(yz), dtype=bool)
+    for theta in thetas:
+        c, s = np.cos(theta), np.sin(theta)
+        yp = c * y - s * z
+        zp = s * y + c * z
+        survives |= (np.abs(yp) <= half_y) & (np.abs(zp) <= half_z)
+    return survives
+
+
 def _disk_lattice_points(
-    cell: np.ndarray, box: tuple[float, float, float], rotation_axis: float = 0.0
+    cell: np.ndarray,
+    box: tuple[float, float, float],
+    rotation_axis: float = 0.0,
+    rotation_range: tuple[float, float] | None = None,
 ) -> np.ndarray:
     """Lattice points (cell-origin repetitions) filling a cylinder along `x`
     inscribed in `box`, pre-rotated about `z` by `-rotation_axis` so that
     rotating the result *back* by `rotation_axis` about `z` leaves it inscribed
     in `box` again -- i.e. the points that survive rotating the crystal about the
-    axis at that azimuth and cropping back to `box`."""
+    axis at that azimuth and cropping back to `box`. If `rotation_range` is
+    given, restricts to points that survive only rotating by an angle within
+    that range about `x`, rather than by any angle -- see `cut_disk`."""
     rotation_axis = -np.deg2rad(rotation_axis)
     box = np.asarray(box, dtype=float)
+    margin = np.linalg.norm(cell)
 
-    width = np.linalg.norm(box[:2]) + 2 * np.linalg.norm(cell)
-    height = np.linalg.norm(box) + np.linalg.norm(cell)
+    width = np.linalg.norm(box[:2]) + 2 * margin
+    height = np.linalg.norm(box) + margin
     large_box = np.array((width, height, height))
 
     rotated_cell = _rotate_positions(cell, rotation_axis)
@@ -1191,9 +1233,19 @@ def _disk_lattice_points(
     lattice = lattice[_mask_box(lattice, large_box)]
 
     lattice = lattice - lattice.mean(0)
-    lattice = lattice[np.linalg.norm(lattice[:, 1:], axis=-1) < height / 2]
+    if rotation_range is None:
+        lattice = lattice[np.linalg.norm(lattice[:, 1:], axis=-1) < height / 2]
+        lattice = _center_positions_in_box(lattice, box)
+    else:
+        # Unlike the full-circle mask above (deliberately oversized, so it
+        # tolerates the candidates not being exactly box-centered yet), the
+        # range mask is a tight fit and needs (y, z) measured from the box's
+        # actual center -- box-center the candidates first.
+        centered = _center_positions_in_box(lattice, box)
+        rel_yz = centered[:, 1:] - box[1:] / 2
+        mask = _disk_range_mask(rel_yz, box[1], box[2], rotation_range, margin)
+        lattice = centered[mask]
 
-    lattice = _center_positions_in_box(lattice, box)
     lattice = _rotate_positions(lattice, rotation_axis, center=box / 2)
     lattice = lattice - cell.sum(0) / 2
     return lattice
@@ -1237,6 +1289,7 @@ def cut_disk(
     atoms: Atoms,
     box: tuple[float, float, float],
     rotation_axis: float = 0.0,
+    rotation_range: tuple[float, float] | None = None,
 ) -> Atoms:
     """
     Cut a disk-shaped finite crystallite out of a periodic structure, inscribed in
@@ -1260,13 +1313,27 @@ def cut_disk(
         the crystal is intended to later be rotated about (default is 0.0).
         Choose this to match that rotation so a large fraction of the disk
         survives being cropped back to `box` afterwards.
+    rotation_range : tuple of two floats, optional
+        If a rotation (tilt) series is only ever going to rotate the crystal
+        about `x` within this angular range [deg] (e.g. `(0, 45)`), restrict
+        the disk to just the atoms that can appear inside `box` for some
+        angle in that range, instead of sizing it to survive an arbitrary
+        angle. By default (`None`), the disk survives rotation to any angle,
+        which for a box whose `z` extent is much larger than its `y` extent
+        (a thick sample) requires a disk far larger than the box itself, most
+        of which is only ever needed for angles outside a limited tilt
+        series. This is an exact restriction, not an approximation: every
+        atom kept can still appear inside the box for some angle in the
+        range, and none that can are ever dropped.
 
     Returns
     -------
     disk : ase.Atoms
         The disk-shaped, non-periodic crystallite, centered on the origin.
     """
-    points = _disk_lattice_points(np.asarray(atoms.cell), box, rotation_axis)
+    points = _disk_lattice_points(
+        np.asarray(atoms.cell), box, rotation_axis, rotation_range
+    )
     return _finite_crystal_from_lattice_points(atoms, points, box)
 
 
