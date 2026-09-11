@@ -69,7 +69,11 @@ from abtem.multislice import (
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
-from abtem.distributions import BaseDistribution, EnsembleFromDistributions, validate_distribution
+from abtem.distributions import (
+    BaseDistribution,
+    EnsembleFromDistributions,
+    validate_distribution,
+)
 from abtem.tilt import TiltType2D, validate_tilt
 from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
 from abtem.transform import WavesToWavesTransform
@@ -135,11 +139,7 @@ def _prebuild_reused_potential(
     already uses, so this never risks exceeding memory for potentials too
     large to build in one piece.
     """
-    if (
-        potential is None
-        or isinstance(potential, PotentialArray)
-        or not waves.is_lazy
-    ):
+    if potential is None or isinstance(potential, PotentialArray) or not waves.is_lazy:
         return potential
 
     if int(np.prod(waves.array.numblocks)) <= 1:
@@ -966,7 +966,9 @@ class Waves(BaseWaves, ArrayObject):
             spatial_gpts = self.gpts[1]
 
         if depth is not None:
-            proj_sampling = self.sampling[1] if projection_axis == "y" else self.sampling[0]
+            proj_sampling = (
+                self.sampling[1] if projection_axis == "y" else self.sampling[0]
+            )
             proj_gpts = self.gpts[1] if projection_axis == "y" else self.gpts[0]
             n = max(1, min(proj_gpts, round(depth / proj_sampling)))
             start = (proj_gpts - n) // 2
@@ -988,9 +990,7 @@ class Waves(BaseWaves, ArrayObject):
         z_sampling = z_extent / n_z if n_z > 0 else 1.0
 
         remaining_metadata = [
-            ax
-            for i, ax in enumerate(self.ensemble_axes_metadata)
-            if i != thickness_idx
+            ax for i, ax in enumerate(self.ensemble_axes_metadata) if i != thickness_idx
         ]
 
         metadata = copy(self.metadata)
@@ -1086,9 +1086,7 @@ class Waves(BaseWaves, ArrayObject):
             z_extent = profile.extent[1]
 
             if explode is True or (isinstance(explode, Sequence) and explode):
-                n_panels = (
-                    profile.ensemble_shape[0] if profile.ensemble_shape else 1
-                )
+                n_panels = profile.ensemble_shape[0] if profile.ensemble_shape else 1
             else:
                 n_panels = 1
 
@@ -1109,9 +1107,11 @@ class Waves(BaseWaves, ArrayObject):
 
         from abtem.visualize import Visualization
 
-        viz_complex = convert_complex if convert_complex in (
-            "domain_coloring", "none", None
-        ) else "none"
+        viz_complex = (
+            convert_complex
+            if convert_complex in ("domain_coloring", "none", None)
+            else "none"
+        )
 
         visualization = Visualization(
             measurement=profile,
@@ -1280,7 +1280,10 @@ class Waves(BaseWaves, ArrayObject):
     def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
         fft_array = Waves._diffraction_pattern_fft(array, normalize)
         return Waves._diffraction_pattern_from_fft(
-            fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
+            fft_array,
+            new_gpts=new_gpts,
+            return_complex=return_complex,
+            fftshift=fftshift,
         )
 
     @staticmethod
@@ -1317,7 +1320,9 @@ class Waves(BaseWaves, ArrayObject):
             self.metadata, renormalize
         )
         with share_diffraction_pattern_fft(
-            self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+            self,
+            normalize,
+            lambda: self._diffraction_pattern_fft(self.array, normalize),
         ):
             yield
 
@@ -1411,7 +1416,9 @@ class Waves(BaseWaves, ArrayObject):
             # runs per call, so this is bit-for-bit identical to calling
             # ``_diffraction_pattern`` directly.
             fft_array = get_shared_diffraction_pattern_fft(
-                self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+                self,
+                normalize,
+                lambda: self._diffraction_pattern_fft(self.array, normalize),
             )
             pattern = self._diffraction_pattern_from_fft(
                 fft_array,
@@ -1502,9 +1509,7 @@ class Waves(BaseWaves, ArrayObject):
                 )
                 member_ctf = ctf.copy()
                 member_ctf.accelerator.energy = float(energy)
-                members.append(
-                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
-                )
+                members.append(self[index].apply_ctf(member_ctf, max_batch=max_batch))
             waves = stack(members, energy_axis, axis=axis_idx)
             # The stacked object must remain a genuine multi-energy ensemble:
             # its scalar accelerator/metadata energy come from member[0] and
@@ -1674,6 +1679,25 @@ class Waves(BaseWaves, ArrayObject):
         potential = validate_potential(potential, self)
         potential = _prebuild_reused_potential(potential, self)
 
+        from abtem.inelastic.plasmons import MonteCarloPlasmons, reduce_plasmon_axes
+
+        plasmons = multislice_func_kwargs.get("plasmons")
+        if isinstance(plasmons, MonteCarloPlasmons):
+            # Sampled events are an ensemble of independent multislice runs: tile
+            # the wave functions, run the standard algorithm and average the events
+            # into loss-order channels.
+            kwargs = {
+                k: val for k, val in multislice_func_kwargs.items() if k != "plasmons"
+            }
+            events = plasmons.draw_events(self, potential)
+            measurements = events.apply(self).multislice(potential, detectors, **kwargs)
+            if isinstance(measurements, list):
+                return [
+                    reduce_plasmon_axes(m, lab_frame=plasmons.lab_frame)
+                    for m in measurements
+                ]
+            return reduce_plasmon_axes(measurements, lab_frame=plasmons.lab_frame)
+
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors, **multislice_func_kwargs
         )
@@ -1792,12 +1816,15 @@ class EnergyEnsemble(EnsembleFromDistributions):
     @property
     def ensemble_axes_metadata(self) -> list:
         from abtem.core.axes import EnergyAxis
+
         e = self.energy
         if isinstance(e, BaseDistribution):
-            return [EnergyAxis(
-                values=tuple(float(v) for v in e.values),
-                _ensemble_mean=e.ensemble_mean,
-            )]
+            return [
+                EnergyAxis(
+                    values=tuple(float(v) for v in e.values),
+                    _ensemble_mean=e.ensemble_mean,
+                )
+            ]
         return []
 
 
@@ -2115,7 +2142,9 @@ class PlaneWave(WavesBuilder):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._energy = validate_energy(energy)
         _e = self._energy.energy
-        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
+        self._accelerator = Accelerator(
+            energy=_e if not isinstance(_e, BaseDistribution) else None
+        )
 
         self._normalize = normalize
         device = validate_device(device)
@@ -2294,10 +2323,16 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
+        from abtem.inelastic.plasmons import MonteCarloPlasmons
+
+        if isinstance(multislice_func_kwargs.get("plasmons"), MonteCarloPlasmons):
+            return waves.multislice(potential, detectors, **multislice_func_kwargs)
+
         # Ensure each energy value occupies its own dask chunk so that
         # conventional_multislice_step receives a scalar energy via _valid_energy.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
+
             for i, ax in enumerate(waves.ensemble_axes_metadata):
                 if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
                     chunks = list(waves._lazy_array.chunks)
@@ -2375,7 +2410,9 @@ class Probe(WavesBuilder):
     ):
         self._energy = validate_energy(energy)
         _e = self._energy.energy
-        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
+        self._accelerator = Accelerator(
+            energy=_e if not isinstance(_e, BaseDistribution) else None
+        )
 
         if (semiangle_cutoff is not None) and (aperture is not None):
             if not np.allclose(aperture.semiangle_cutoff, semiangle_cutoff):
@@ -2397,7 +2434,11 @@ class Probe(WavesBuilder):
             aberrations = {}
 
         if isinstance(aberrations, dict):
-            aberrations = Aberrations(energy=_e if not isinstance(_e, BaseDistribution) else None, **aberrations, **kwargs)
+            aberrations = Aberrations(
+                energy=_e if not isinstance(_e, BaseDistribution) else None,
+                **aberrations,
+                **kwargs,
+            )
 
         aberrations._accelerator = self._accelerator
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -2551,7 +2592,9 @@ class Probe(WavesBuilder):
             finally:
                 waves_builder._accelerator.energy = original_energy
             # Energy is the last ensemble axis; insert it after the non-energy ensemble dims
-            stack_axis = len(waves_builder.ensemble_shape) - len(waves_builder._energy.ensemble_shape)
+            stack_axis = len(waves_builder.ensemble_shape) - len(
+                waves_builder._energy.ensemble_shape
+            )
             return xp.stack(arrays, axis=stack_axis)
 
         array = waves_builder.scan_positions._evaluate_kernel(waves_builder)
@@ -2659,6 +2702,11 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
+        from abtem.inelastic.plasmons import MonteCarloPlasmons
+
+        if isinstance(multislice_func_kwargs.get("plasmons"), MonteCarloPlasmons):
+            return waves.multislice(potential, detectors, **multislice_func_kwargs)
+
         # Ensure each energy value occupies its own dask chunk so that
         # conventional_multislice_step receives a scalar energy via _valid_energy.
         # Do this before _prebuild_reused_potential below, so it sees the true
@@ -2666,6 +2714,7 @@ class Probe(WavesBuilder):
         # actually be reused) rather than the pre-rechunk chunking.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
+
             for i, ax in enumerate(waves.ensemble_axes_metadata):
                 if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
                     chunks = list(waves._lazy_array.chunks)
