@@ -220,6 +220,42 @@ def _event_tilts(plasmon_axis: PlasmonAxis) -> np.ndarray:
     return np.array(tilts, dtype=float).reshape(-1, 2)
 
 
+def _shift_events(array, shifts, axis: int, lazy: bool):
+    """Roll the diffraction pattern of every event by its own momentum transfer.
+
+    Intensity moved past the edge of the (cropped) pattern is lost, not wrapped to the
+    other side. The rolls are applied inside the chunks of ``array``, so a lazy
+    measurement keeps its chunking instead of being split into one chunk per event.
+    """
+
+    def shift_block(block, block_info=None):
+        xp = get_array_module(block)
+        start = 0 if block_info is None else block_info[0]["array-location"][axis][0]
+        shifted = xp.empty_like(block)
+        index: list = [slice(None)] * block.ndim
+        for k in range(block.shape[axis]):
+            index[axis] = k
+            pattern = xp.roll(
+                block[tuple(index)], tuple(shifts[start + k]), axis=(-2, -1)
+            )
+            for j, (n, s) in enumerate(zip(block.shape[-2:], shifts[start + k])):
+                s = int(np.clip(s, -n, n))
+                if s == 0:
+                    continue
+                edge: list = [slice(None)] * pattern.ndim
+                edge[j - 2] = slice(0, s) if s > 0 else slice(n + s, None)
+                pattern[tuple(edge)] = 0.0
+            shifted[tuple(index)] = pattern
+        return shifted
+
+    if not lazy:
+        return shift_block(array)
+
+    # the roll is along the pattern axes, so they must not be split across chunks
+    array = array.rechunk({array.ndim - 2: -1, array.ndim - 1: -1})
+    return array.map_blocks(shift_block, dtype=array.dtype)
+
+
 def reduce_plasmon_axes(measurement, lab_frame: bool = False):
     """
     Average sampled plasmon scattering events into loss-order channels.
@@ -276,44 +312,22 @@ def reduce_plasmon_axes(measurement, lab_frame: bool = False):
     xp = da if lazy else get_array_module(array)
     if lab_frame:
         tilts = _event_tilts(plasmon_axis)
-        sampling = measurement.angular_sampling
-        shifts = np.round(tilts / np.array(sampling)).astype(int)
-        shape = measurement.shape[-2:]
+        shifts = np.round(tilts / np.array(measurement.angular_sampling)).astype(int)
+        array = _shift_events(array, shifts, plasmon_axis_index, lazy)
 
-        def shifted(pattern, shift):
-            # intensity moved past the edge of the (cropped) pattern is lost, not
-            # wrapped to the other side
-            pattern = xp.roll(pattern, tuple(shift), axis=(-2, -1))
-            for axis, (n, s) in enumerate(zip(shape, shift)):
-                mask = np.ones(n, dtype=bool)
-                if s > 0:
-                    mask[:s] = False
-                elif s < 0:
-                    mask[n + s :] = False
-                pattern = pattern * mask.reshape((-1, 1) if axis == 0 else (1, -1))
-            return pattern
+    axis_values = [f"{ntuples[unique]}" for unique in uniques]
 
-    axis_values = []
-    new_array = []
-    for i, unique in enumerate(uniques):
-        axis_values.append(f"{ntuples[unique]}")
-        indices = np.where(i == inverse)[0]
-        if lab_frame:
-            index = [slice(None)] * len(measurement.shape)
-            members = []
-            for j in indices:
-                index[plasmon_axis_index] = j
-                members.append(shifted(array[tuple(index)], shifts[j]))
-            channel = xp.stack(members, axis=plasmon_axis_index).mean(
-                plasmon_axis_index, keepdims=True
-            )
-        else:
-            index = [slice(None)] * len(measurement.shape)
-            index[plasmon_axis_index] = indices
-            channel = array[tuple(index)].mean(plasmon_axis_index, keepdims=True)
-        new_array.append(channel)
+    # one weighted sum over the event axis instead of a slice per event: the graph of a
+    # lazy measurement then has a task per chunk rather than a task per event and chunk
+    weights = np.zeros((len(uniques), len(inverse)), dtype=np.float32)
+    for i in range(len(uniques)):
+        members = np.where(inverse == i)[0]
+        weights[i, members] = 1.0 / len(members)
 
-    array = xp.concatenate(new_array, axis=plasmon_axis_index)
+    array = xp.tensordot(
+        weights.astype(array.dtype), array, axes=([1], [plasmon_axis_index])
+    )
+    array = xp.moveaxis(array, 0, plasmon_axis_index)
 
     kwargs = measurement._copy_kwargs(exclude=("array",))
     kwargs["ensemble_axes_metadata"][plasmon_axis_index] = PlasmonOrderAxis(
