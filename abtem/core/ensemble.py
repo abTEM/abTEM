@@ -28,6 +28,31 @@ def unpack_blockwise_args(args) -> tuple:
     return unpacked
 
 
+def shared_constant_arg(x: Any, lazy: bool = True) -> Any:
+    """Package a large constant as a single node of the task graph.
+
+    An ensemble member's keyword arguments are baked into the function of
+    every task with ``functools.partial``, and dask cannot look inside a
+    partial: a multi-megabyte object baked there is copied into every task,
+    so the serialized graph, the scheduler traffic and the worker memory all
+    grow with the task count. Returned as a partitioned argument instead,
+    the object becomes one scheduler-managed graph node -- one copy in the
+    graph, one materialized copy per worker, released with the graph.
+
+    The materialized object is **shared** by every task on a worker, and by
+    every thread of the local scheduler, so task code must treat it as
+    read-only and privatize any state it intends to mutate.
+    """
+    if not lazy:
+        return _wrap_with_array(x, ndims=0)
+
+    import dask
+
+    return da.from_delayed(
+        dask.delayed(_wrap_with_array)(x, ndims=0), shape=(), dtype=object
+    )
+
+
 class Ensemble:
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
