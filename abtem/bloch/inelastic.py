@@ -1415,6 +1415,8 @@ def calculate_quadrature_plasmon_diffraction_patterns(
     array = xp.stack(patterns)
     array = fft_crop(array, new_shape=array.shape[:-2] + tuple(new_gpts))
     array = xp.fft.fftshift(array, axes=(-2, -1))
+    # the detectors of the multislice counterpart return host arrays (``to_cpu=True``)
+    array = asnumpy(array)
 
     metadata = {
         "energy": bloch_waves.energy,
