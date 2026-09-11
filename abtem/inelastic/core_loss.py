@@ -610,8 +610,14 @@ class BaseTransitionPotential(
         Matching its grid and accelerator to the wave functions mutates that
         shared state, which concurrent tasks would race on (an energy
         ensemble puts a different energy in each task). Work on a shallow
-        copy with a private grid and accelerator instead; the payload array
-        and everything derived from it stay shared, so nothing is copied.
+        copy with a private grid and accelerator instead, so nothing large
+        is copied.
+
+        Everything else stays shared, which is safe for the objects the
+        drivers use: they follow this call with ``copy_to_device``, which
+        rebuilds the object and so privatizes the derived state, and the
+        payload array itself is only ever read (the transforms that use it
+        do not overwrite their input).
 
         Parameters
         ----------

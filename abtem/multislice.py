@@ -1219,6 +1219,11 @@ def is_waves_base_measurements_or_list(
 # graph node rather than baked into every task's partial. Listing a name here
 # is the whole opt-in: _partition_args appends it, _from_partitioned_args
 # leaves it out of the partial, and the member function restores it.
+#
+# The value must be an ordinary object (abTEM's potentials, transition
+# potentials, Atoms). A bare numpy array or scalar is not suitable: the
+# blockwise machinery unwraps zero-dimensional object arrays by calling
+# .item(), which such a payload would answer itself.
 _GRAPH_NODE_KWARGS = ("transition_potential",)
 
 
@@ -1433,6 +1438,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             # The trailing args are the values _partition_args shipped as
             # their own graph nodes; restore them as keyword arguments.
             split = len(args) - len(graph_node_keys)
+            if split < 1:
+                raise ValueError(
+                    f"expected at least {len(graph_node_keys) + 1} partitioned "
+                    f"arguments ({len(graph_node_keys)} shipped as graph nodes "
+                    f"plus the potential), got {len(args)}. The callable "
+                    "returned by _from_partitioned_args must be given the args "
+                    "from _partition_args of the same transform."
+                )
             kwargs.update(zip(graph_node_keys, args[split:]))
             args = args[:split]
 
