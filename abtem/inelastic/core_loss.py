@@ -1359,7 +1359,7 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         xp.asarray(wave_vectors_np, dtype=get_dtype()), extent, gpts
     )
     s_array = s_array * (
-        np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:])
+        float(np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:]))
     )
 
     s_waves = Waves(
@@ -1644,8 +1644,8 @@ def prism_transition_potential_scan(
         transition_potential.array * energy2sigma(energy)
     )
     _tp_crop_corner = (
-        -inelastic_window_gpts[0] // 2,
-        -inelastic_window_gpts[1] // 2,
+        -(inelastic_window_gpts[0] // 2),
+        -(inelastic_window_gpts[1] // 2),
     )
     _tp_window_real = wrapped_crop_2d(
         _tp_real_origin, _tp_crop_corner, inelastic_window_gpts
@@ -1911,6 +1911,12 @@ def prism_transition_potential_scan_beam_basis(
     sites=None,
     double_channel: bool = True,
     inelastic_crop: float | tuple[float, float] | None = None,
+    partitions_s1: int | None = None,
+    partitions_s2: int | None = None,
+    n_angular: int = 6,
+    mag_preserve: bool = True,
+    collection_angle: float | None = None,
+    focal_backprop: str | float | None = None,
 ):
     """PRISM-EELS beam-basis reduction (Brown et al. Sec. IV B / Eq. dropped
     in supplementary; ``PRISM_double_channeling_nanoparticle.m``) — the
@@ -1993,6 +1999,42 @@ def prism_transition_potential_scan_beam_basis(
         (``extent / interpolation``) with a warning if larger — see
         Limitations above. If ``None`` (default), the PRISM cell is used,
         matching the real-space driver's default window.
+    partitions_s1, partitions_s2 : int or None, optional
+        Enable **BiP-PRISM** beam partitioning (paper Alg. 5). When set, ``S1``
+        (aperture beams) and/or ``S2`` (detector/reciprocal-grid beams) are built
+        on a sparse hex-ring **parent** set with ``partitions_*`` radial rings
+        (``n_radial`` in the paper) and reconstructed locally at each ionized atom
+        by windowed natural-neighbor interpolation. ``None`` (default) builds the
+        full (unpartitioned) matrices — the exact beam-basis path. The
+        full-parent limit is exact (paper eq-part-exact); at finite parent counts
+        the on-atom reconstruction error governs the total error (locality result).
+    n_angular : int, optional
+        Base azimuthal parent sampling; hex ring ``i`` carries ``n_angular*(1+i)``
+        samples (default 6). Shared by the ``S1`` and ``S2`` partitions.
+    mag_preserve : bool, optional
+        Apply the magnitude-preserving reconstruction (paper eq-magpreserve,
+        default ``True``) that counters the amplitude loss of the convex complex
+        average — required for quantitatively correct absolute map intensity.
+    collection_angle : float or None, optional
+        S2 detector-collection semiangle [mrad]. When set, ``S2`` is built only on
+        the reciprocal-grid beams inside ``|k| <= collection_angle/1e3/lambda`` (the
+        detector disk) instead of the full native grid — the BiP-PRISM map regime
+        (paper Alg. 5). This leaves the detector-integrated map unchanged as long as
+        the disk covers the detector's outer angle (the beam-basis reduction already
+        computes ``I = sum_q |a_q|^2``), while making ``partitions_s2`` far more
+        accurate at low parent counts (the S2 columns are smooth over the small
+        disk) and cheaper to build. ``None`` (default) uses the full grid.
+    focal_backprop : {"centroid"}, float or None, optional
+        S1-only accuracy lever (paper Sec. 3.3.6, "Fix 2"). When set, the S1 parent
+        columns are Fresnel back-propagated to the scattering-centroid plane before
+        the windowed NNW interpolation and forward-propagated back afterwards — the
+        resulting interpolation may improve accuracy for some specimens. A cropped
+        Fresnel round trip is approximate and is bypassed when all parents are
+        retained, preserving the exact full-parent limit.
+        ``"centroid"`` back-propagates half the traversed depth; a float ``f`` uses
+        ``f * depth``. Applies only to ``partitions_s1`` (the detector-side ``S2``
+        parents have no crossover plane, so it is a no-op for them). ``None``
+        (default) disables it.
 
     Returns
     -------
@@ -2001,12 +2043,23 @@ def prism_transition_potential_scan_beam_basis(
     """
     import warnings
 
-    from abtem.core.utils import safe_ceiling_int
+    from abtem.core.utils import get_dtype, safe_ceiling_int
     from abtem.multislice import (
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
-    from abtem.prism.utils import wrapped_crop_2d
+    from abtem.multislice import _fresnel_propagator_array
+    from abtem.prism import _bipartite as bipartite
+    from abtem.prism import _eels_contract as eels_contract
+    from abtem.prism._bipartite import (
+        focal_backprop_distance,
+        fresnel_margin,
+        natural_neighbor_weights,
+        pad_window,
+        select_parent_beams,
+        windowed_reconstruct,
+    )
+    from abtem.prism.utils import plane_waves, wrapped_crop_2d
     from abtem.waves import Waves
 
     ctx = _prism_eels_common_setup(
@@ -2103,22 +2156,96 @@ def prism_transition_potential_scan_beam_basis(
             min(window_gpts[1], cell_gpts[1]),
         )
 
+    # --- Beam partitioning setup (BiP-PRISM, paper Alg. 5) ---------------------
+    # Build S1 / S2 on sparse hex-ring parent beams and reconstruct the full beam
+    # set locally at each atom (windowed NNW). ``None`` = exact unpartitioned path.
+    wave_vectors_np = ctx.wave_vectors_np  # (n_k, 2) aperture beams [1/Å]
+    w1 = k_par1 = None
+    if partitions_s1 is not None:
+        p1_idx = select_parent_beams(wave_vectors_np, partitions_s1, n_angular)
+        k_par1 = wave_vectors_np[p1_idx]
+        w1 = natural_neighbor_weights(k_par1, wave_vectors_np)  # (n_k, Bp1)
+        s1_par_array = plane_waves(
+            xp.asarray(k_par1, dtype=get_dtype()), extent, gpts
+        ) * float(np.prod(interpolation) / np.prod(gpts))
+        s_waves = Waves(
+            s1_par_array,
+            energy=energy,
+            extent=extent,
+            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(len(p1_idx))))],
+        )
+
+    # Focal back-propagation (S1 only, paper Sec. 3.3.6): static prep. The per-slice
+    # back-propagation distance (centroid = half the traversed depth) is computed in
+    # the loop from the cumulative slice thickness.
+    do_focal_s1 = (
+        partitions_s1 is not None
+        and len(p1_idx) < n_k
+        and bool(focal_backprop)
+    )
+    if do_focal_s1:
+        from abtem.core.energy import energy2wavelength
+
+        fb_wavelength = energy2wavelength(energy)
+        fb_cumthick = np.cumsum(np.asarray(potential.slice_thickness, dtype=float))
+        # Max transverse carrier frequency of the re-tilted S1 columns = the
+        # aperture-disk radius (a conservative upper bound on the discrete beam
+        # frequencies), which sets the Fresnel lateral spread for the window margin.
+        fb_kmax = s_matrix.semiangle_cutoff / 1e3 / fb_wavelength
+
+    # S2 output-beam set: the detector-collection disk (BiP-PRISM map regime) when
+    # ``collection_angle`` is given, else the full native reciprocal grid (PR #289
+    # behaviour). Columns ``a_q`` are scattered back onto the grid before the
+    # detector integrates ``|a_q|^2``, so the map is unchanged when the disk covers
+    # the detector's outer angle. When ``partitions_s2`` is set, only the Bp2
+    # hex-ring parent beams of this set are built and the rest are reconstructed.
+    s2_rows = s2_cols = k_s2 = w2 = k_par2 = None
+    s2_build_rows = s2_build_cols = None
+    if double_channel:
+        from abtem.core.energy import energy2wavelength
+
+        fy = np.fft.fftfreq(gpts[0], d=full_sampling[0])
+        fx = np.fft.fftfreq(gpts[1], d=full_sampling[1])
+        KY, KX = np.meshgrid(fy, fx, indexing="ij")
+        if collection_angle is not None:
+            k_max = collection_angle / 1e3 / energy2wavelength(energy)
+            s2_mask = (KY**2 + KX**2) <= k_max**2
+        else:
+            s2_mask = np.ones(tuple(gpts), dtype=bool)
+        rows_nz, cols_nz = np.nonzero(s2_mask)  # row-major (C) order
+        s2_rows = rows_nz.astype(int)
+        s2_cols = cols_nz.astype(int)
+        k_s2 = np.stack([KY[s2_mask], KX[s2_mask]], axis=1)  # (n_s2, 2)
+        if partitions_s2 is not None:
+            p2_idx = select_parent_beams(k_s2, partitions_s2, n_angular)
+            k_par2 = k_s2[p2_idx]
+            w2 = natural_neighbor_weights(k_par2, k_s2)  # (n_s2, Bp2)
+            s2_build_rows = s2_rows[p2_idx]
+            s2_build_cols = s2_cols[p2_idx]
+        else:
+            s2_build_rows = s2_rows
+            s2_build_cols = s2_cols
+    n_s2 = 0 if s2_rows is None else len(s2_rows)
+
+    geometry1 = geometry2 = None
+    if partitions_s1 is not None:
+        geometry1 = bipartite._prepare_reconstruction_geometry(
+            w1, k_par1, wave_vectors_np, xp, s_waves.array.dtype
+        )
+    if double_channel and partitions_s2 is not None:
+        geometry2 = bipartite._prepare_reconstruction_geometry(
+            w2, k_par2, k_s2, xp, complex_dtype
+        )
+
     # --- Allocate measurements (full scan shape; identical pattern to the
     # real-space driver, single exit plane). ---
-    # Detection resolution: double-channel's q-basis is intrinsically the
-    # full native reciprocal grid (S2 is built over all ``gpts`` pixels), so
-    # detect at ``gpts``/``extent``. Single-channel's q is whatever size we
-    # FFT (no reverse multislice) — detecting on a *zero-padded* gpts-sized
-    # array would inflate the Parseval-summed intensity by
-    # ``prod(gpts) / prod(window_gpts)`` relative to the real-space driver's
-    # convention (detector.detect() does its own internal FFT at whatever
-    # array size it is given, and the unnormalised-forward/``1/N``-inverse
-    # FFT pair used throughout abtem is not size-invariant for the *total*
-    # intensity). So single-channel must FFT and detect directly at
-    # ``window_gpts``/``window_extent``, matching the real-space driver's
-    # ``output_window_gpts``-sized detection grid when ``window_gpts``
-    # equals the cell.
-    detect_gpts = gpts if double_channel else window_gpts
+    # The real-space driver detects on the PRISM cell, even when the
+    # transition-potential crop is smaller. Double-channel uses the native
+    # output-beam grid instead. With abTEM's unnormalized forward FFT, Parseval
+    # sums scale with the detection pixel count, so compensate amplitudes by
+    # sqrt(N_cell / N_native), independent of the transition-potential crop.
+    detect_gpts = gpts if double_channel else cell_gpts
+    s2_detector_scale = float(np.sqrt(np.prod(cell_gpts) / np.prod(gpts)))
     detect_extent = (
         detect_gpts[0] * full_sampling[0],
         detect_gpts[1] * full_sampling[1],
@@ -2165,35 +2292,145 @@ def prism_transition_potential_scan_beam_basis(
                     scan_shape + m.array.shape[1:]
                 )
 
+    def _site_mask(site_xy):
+        mask = xp.ones(n_positions, dtype=bool)
+        if interpolation[0] > 1:
+            mask &= (
+                xp.abs(positions[:, 0] - site_xy[0])
+                % (extent[0] - prism_region[0])
+            ) <= prism_region[0]
+        if interpolation[1] > 1:
+            mask &= (
+                xp.abs(positions[:, 1] - site_xy[1])
+                % (extent[1] - prism_region[1])
+            ) <= prism_region[1]
+        return mask
+
     # --- Main loop ---
+    warned_empty_mask = False
     for slice_index, transmission in enumerate(transmissions):
+        # Atom crops below are gathered copies, so no previous slice cache is
+        # kept alive through a view while the next slice is propagated.
+        s1_reconstructed = s2_reconstructed = None
         s_waves = _step(s_waves, transmission)
 
         sites_this_slice = sites.get_atoms_in_slices(slice_index, atomic_number=Z)
         if len(sites_this_slice) == 0:
             continue
 
+        # Determine contributing sites before spending reconstruction work.
+        # Retain masks only within a bounded cache; for large
+        # scans regenerate each active site's mask when processing that atom.
+        keep_masks = len(sites_this_slice) * n_positions <= (1 << 25)
+        active_sites = []
+        for atom in sites_this_slice:
+            site_xy = np.asarray(atom.position[:2], dtype=get_dtype())
+            mask = _site_mask(site_xy)
+            if not bool(mask.any()):
+                if not warned_empty_mask:
+                    warnings.warn(
+                        "PRISM-EELS beam-basis: at least one ionization site "
+                        "has no scan position within its PRISM window "
+                        "(extent / interpolation, cropped to half that per "
+                        "axis) -- the scan is too coarse relative to "
+                        "`interpolation` for that site to contribute "
+                        "anything. Such sites are skipped (equivalent to a "
+                        "zero contribution); use a denser scan or lower "
+                        "`interpolation` if this is unintended.",
+                        stacklevel=2,
+                    )
+                    warned_empty_mask = True
+                continue
+
+            active_sites.append((site_xy, mask if keep_masks else None))
+        if not active_sites:
+            continue
+
+        # S1 focal back-propagation: bring the parent columns to the scattering
+        # centroid plane once per slice (full grid, shared across atoms).
+        s1_bp = None
+        back_distance = 0.0
+        if do_focal_s1:
+            back_distance = focal_backprop_distance(
+                float(fb_cumthick[slice_index]), focal_backprop
+            )
+            if back_distance:
+                back_kernel = _fresnel_propagator_array(
+                    -back_distance, tuple(gpts), full_sampling, energy,
+                    s_matrix.device,
+                )
+                s1_bp = ifft2(fft2(s_waves.array) * back_kernel)  # (Bp1, *gpts)
+
         s2_full = None
         if double_channel:
-            # Build S2 over the FULL native reciprocal grid: reverse
-            # multislice (conjugate transmission, transposed propagate
-            # order) of every reciprocal-pixel delta function, batched.
-            delta_k = xp.eye(n_pix, dtype=complex_dtype).reshape((n_pix,) + tuple(gpts))
+            # Build S2 by reverse multislice (conjugate transmission, transposed
+            # propagate order) of reciprocal-pixel delta functions, over the S2
+            # build set: every beam of the S2 output set (full grid or detector
+            # disk) when unpartitioned, or only its Bp2 hex-ring parent beams when
+            # ``partitions_s2`` is set (the S2 build-cost / memory win).
+            n_build = len(s2_build_rows)
+            delta_k = xp.zeros((n_build,) + tuple(gpts), dtype=complex_dtype)
+            delta_k[
+                xp.arange(n_build),
+                xp.asarray(s2_build_rows),
+                xp.asarray(s2_build_cols),
+            ] = 1.0
             s2_array = ifft2(delta_k)
             s2_waves = Waves(
                 s2_array,
                 energy=energy,
                 extent=extent,
-                ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_pix)))],
+                ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_build)))],
             )
             for t in reversed(transmissions[slice_index + 1 :]):
                 s2_waves = _step(s2_waves, t, conjugate=True, transpose=True)
-            s2_full = s2_waves.array  # (n_pix, *gpts)
+            s2_full = s2_waves.array  # (n_build, *gpts): n_pix exact OR Bp2 parents
+            s2_phase = s2_parent_phase = s2_support = None
+            if partitions_s2 is not None and slice_index + 1 < len(transmissions):
+                # Adjoint columns have positive spatial carriers and accumulate
+                # the negative-distance vacuum phase after the ionization slice.
+                # Remove only its unit phase before interpolation: the antialias
+                # amplitudes belong to the multislice operator and must survive.
+                remaining_depth = float(
+                    np.sum(potential.slice_thickness[slice_index + 1:])
+                )
+                kernel = _fresnel_propagator_array(
+                    -remaining_depth, tuple(gpts), full_sampling, energy,
+                    s_matrix.device,
+                )
+                s2_phase = xp.exp(
+                    1j * xp.angle(kernel[xp.asarray(s2_rows), xp.asarray(s2_cols)])
+                )
+                s2_parent_phase = s2_phase[xp.asarray(p2_idx), None, None].conj()
+                aperture = ctx.antialias_aperture.get_array(s2_waves)
+                s2_support = aperture[xp.asarray(s2_rows), xp.asarray(s2_cols)] > 0
 
-        for atom in sites_this_slice:
-            site_xy = np.array(
-                [atom.position[0], atom.position[1]], dtype=get_dtype()
+
+        reconstruction_budget = bipartite._EELS_RECONSTRUCTION_BYTES
+        if partitions_s1 is not None:
+            s1_reconstructed = bipartite._reconstruct_slice(
+                s_waves.array, w1, k_par1, wave_vectors_np, extent, gpts,
+                n_active=len(active_sites), window_gpts=window_gpts,
+                budget=reconstruction_budget, focal=s1_bp is not None,
+                mag_preserve=mag_preserve, geometry=geometry1,
             )
+            if s1_reconstructed is not None:
+                reconstruction_budget -= s1_reconstructed.nbytes
+        if double_channel and partitions_s2 is not None:
+            s2_reconstructed = bipartite._reconstruct_slice(
+                s2_full, w2, k_par2, k_s2, extent, gpts,
+                n_active=len(active_sites), window_gpts=window_gpts,
+                budget=reconstruction_budget, mag_preserve=mag_preserve,
+                geometry=geometry2, parent_phase=s2_parent_phase,
+                target_phase=s2_phase, support=s2_support,
+            )
+
+        for site_xy, mask in active_sites:
+            if mask is None:
+                mask = _site_mask(site_xy)
+
+            coeff_masked = coefficients[mask]  # (n_masked, n_k)
+
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
             crop_corner = (
@@ -2201,51 +2438,98 @@ def prism_transition_potential_scan_beam_basis(
                 int(site_pixel_int[1]) - window_gpts[1] // 2,
             )
 
+            # Un-wrapped window pixel indices (match wrapped_crop_2d ordering);
+            # phases are exactly gpts-periodic so the un-wrapped indices are valid.
+            iy = np.arange(crop_corner[0], crop_corner[0] + window_gpts[0])
+            ix = np.arange(crop_corner[1], crop_corner[1] + window_gpts[1])
+
             shift_k = fft_shift_kernel(
                 xp.asarray(site_pixel.reshape(1, 2), dtype=get_dtype()), gpts
             )[0]
             H_full = ifft2(tp_k * shift_k)  # (n_T, *gpts), shifted to true site position
             H_crop = wrapped_crop_2d(H_full, crop_corner, window_gpts)
-            s1_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
-            HS1 = H_crop[:, None] * s1_crop[None, :]  # (n_T, n_k, wh, ww)
-
-            mask = xp.ones(n_positions, dtype=bool)
-            if interpolation[0] > 1:
-                mask &= (
-                    xp.abs(positions[:, 0] - site_xy[0])
-                    % (extent[0] - prism_region[0])
-                ) <= prism_region[0]
-            if interpolation[1] > 1:
-                mask &= (
-                    xp.abs(positions[:, 1] - site_xy[1])
-                    % (extent[1] - prism_region[1])
-                ) <= prism_region[1]
-
-            coeff_masked = coefficients[mask]  # (n_masked, n_k)
+            if s1_reconstructed is not None:
+                rows = xp.asarray(iy % gpts[0])
+                cols = xp.asarray(ix % gpts[1])
+                s1_crop = s1_reconstructed[:, rows[:, None], cols[None, :]]
+            elif partitions_s1 is not None and s1_bp is not None:
+                # Focal back-prop path: reconstruct at the centroid plane on a
+                # window padded by the Fresnel reach, then forward-propagate the
+                # reconstruction to the ionization plane and crop to the window.
+                m = fresnel_margin(
+                    back_distance, fb_wavelength, fb_kmax, full_sampling, gpts
+                )
+                py, iny = pad_window(crop_corner[0], window_gpts[0], m, gpts[0])
+                px, inx = pad_window(crop_corner[1], window_gpts[1], m, gpts[1])
+                s1_par_pad = wrapped_crop_2d(
+                    s1_bp, (int(py[0]), int(px[0])), (len(py), len(px))
+                )
+                recon_pad = windowed_reconstruct(
+                    s1_par_pad, w1, k_par1, wave_vectors_np, py, px,
+                    extent, gpts, mag_preserve=mag_preserve, geometry=geometry1,
+                )  # (n_k, Py, Px) at the centroid plane
+                fwd_kernel = _fresnel_propagator_array(
+                    back_distance, (len(py), len(px)), full_sampling, energy,
+                    s_matrix.device,
+                )
+                recon_pad = ifft2(fft2(recon_pad) * fwd_kernel)
+                s1_crop = recon_pad[:, iny][:, :, inx]  # (n_k, wh, ww)
+            elif partitions_s1 is not None:
+                s1_par_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
+                s1_crop = windowed_reconstruct(
+                    s1_par_crop, w1, k_par1, wave_vectors_np, iy, ix,
+                    extent, gpts, mag_preserve=mag_preserve, geometry=geometry1,
+                )  # (n_k, wh, ww)
+            else:
+                s1_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
 
             if double_channel:
-                S2_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
-                S2_flat = S2_crop.conj().reshape(n_pix, -1)
-                recip_full = xp.stack(
-                    [
-                        (
-                            n_pix
-                            * (S2_flat @ HS1[t].reshape(n_k, -1).T)  # (n_pix, n_k)
-                        )
-                        @ coeff_masked.T  # (n_pix, n_masked)
-                        for t in range(n_T)
-                    ]
-                )  # (n_T, n_pix, n_masked)
-                recip_full = xp.moveaxis(recip_full, -1, 1).reshape(
-                    (n_T, -1) + tuple(gpts)
-                )  # (n_T, n_masked, *gpts)
+                if s2_reconstructed is not None:
+                    rows = xp.asarray(iy % gpts[0])
+                    cols = xp.asarray(ix % gpts[1])
+                    S2_crop = s2_reconstructed[:, rows[:, None], cols[None, :]]
+                elif partitions_s2 is not None:
+                    s2_par_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
+                    if s2_phase is not None:
+                        s2_par_crop = s2_par_crop * s2_parent_phase
+                    S2_crop = windowed_reconstruct(
+                        s2_par_crop, w2, k_par2, k_s2, iy, ix,
+                        extent, gpts, mag_preserve=mag_preserve, geometry=geometry2,
+                    )  # (n_s2, wh, ww)
+                    if s2_phase is not None:
+                        S2_crop *= s2_phase[:, None, None]
+                        # The first adjoint propagation annihilates these output
+                        # columns, even when its slice has zero thickness.
+                        S2_crop *= s2_support[:, None, None]
+                else:
+                    S2_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
+                a = eels_contract.contract_eels(
+                    S2_crop, H_crop, s1_crop, coeff_masked,
+                    n_pix * s2_detector_scale,
+                    order=eels_contract._EELS_CONTRACT_ORDER,
+                )
+                # Scatter a_q onto the full reciprocal grid (zeros outside the S2
+                # set); the detector then integrates |a_q|^2 over its aperture.
+                recip_full = xp.zeros(
+                    (n_T, a.shape[-1]) + tuple(gpts), dtype=complex_dtype
+                )
+                recip_full[:, :, xp.asarray(s2_rows), xp.asarray(s2_cols)] = (
+                    xp.moveaxis(a, -1, 1)  # (n_T, n_masked, n_s2)
+                )
             else:
-                # Single channel: S2 is trivial -- FFT the windowed
-                # scattered field directly (no reverse multislice, and no
-                # zero-padding to the full grid: detect at window_gpts
-                # resolution to match the real-space driver's convention,
-                # see the ``detect_gpts`` note above).
-                SHn0 = fft2(HS1)  # (n_T, n_k, *window_gpts)
+                HS1 = H_crop[:, None] * s1_crop[None, :]
+                # Match the real-space driver's cell-sized scattered field,
+                # embedding a smaller transition-potential crop before its FFT.
+                if tuple(window_gpts) != tuple(cell_gpts):
+                    field = xp.zeros(
+                        HS1.shape[:-2] + tuple(cell_gpts), dtype=HS1.dtype
+                    )
+                    oy = (cell_gpts[0] - window_gpts[0]) // 2
+                    ox = (cell_gpts[1] - window_gpts[1]) // 2
+                    field[..., oy:oy + window_gpts[0], ox:ox + window_gpts[1]] = HS1
+                else:
+                    field = HS1
+                SHn0 = fft2(field)  # (n_T, n_k, *cell_gpts)
                 recip_full = xp.tensordot(
                     coeff_masked, SHn0, axes=[1, 1]
                 )  # (n_masked, n_T, *window_gpts)
