@@ -5,7 +5,9 @@ from ase.build import bulk
 
 from abtem.atoms import (
     best_orthogonal_cell,
+    cut_ball,
     cut_cell,
+    cut_disk,
     decompose_affine_transform,
     euler_sequence,
     euler_to_rotation,
@@ -357,3 +359,87 @@ def test_best_orthogonal_cell():
     with pytest.raises(RuntimeError):
         # Two zero-norm columns trigger the RuntimeError
         best_orthogonal_cell(np.array([[0., 0., 3.], [0., 0., 4.], [0., 0., 5.]]))
+
+
+# ---------------------------------------------------------------------------
+# cut_disk / cut_ball
+# ---------------------------------------------------------------------------
+
+
+def test_cut_disk_sets_cell_and_pbc():
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (25.0, 25.0, 50.0)
+    disk = cut_disk(atoms, box, rotation_axis=25.0)
+    assert np.allclose(np.diag(np.array(disk.cell)), box)
+    assert np.all(disk.pbc)
+
+
+def test_cut_disk_atoms_wrap_into_box():
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (25.0, 25.0, 50.0)
+    disk = cut_disk(atoms, box, rotation_axis=25.0)
+    wrapped = disk.get_positions(wrap=True)
+    assert np.all(wrapped >= -1e-9) and np.all(wrapped <= np.array(box) + 1e-9)
+
+
+@pytest.mark.parametrize("rotation_axis", [0.0, 25.0, 60.0, -37.5, 90.0])
+def test_cut_disk_atom_count_roughly_conserved_across_rotation_axis(rotation_axis):
+    # The point of the disk shape (a cylinder along x) is that -- unlike a plain
+    # box -- a similar amount of material survives cropping back to the box
+    # regardless of which azimuth the crystal is later rotated about.
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (25.0, 25.0, 50.0)
+    reference = len(cut_disk(atoms, box, rotation_axis=0.0))
+    n = len(cut_disk(atoms, box, rotation_axis=rotation_axis))
+    assert abs(n - reference) / reference < 0.1
+
+
+def test_cut_ball_sets_cell_and_pbc():
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (30.0, 30.0, 30.0)
+    ball = cut_ball(atoms, box)
+    assert np.allclose(np.diag(np.array(ball.cell)), box)
+    assert np.all(ball.pbc)
+
+
+def test_cut_ball_atoms_wrap_into_box():
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (20.0, 40.0, 25.0)
+    ball = cut_ball(atoms, box)
+    wrapped = ball.get_positions(wrap=True)
+    assert np.all(wrapped >= -1e-9) and np.all(wrapped <= np.array(box) + 1e-9)
+
+
+def test_cut_ball_invariant_under_input_cell_rotation():
+    # Unlike cut_disk, the ball has no preferred axis: rotating the crystal
+    # before cutting should not change how much of it survives.
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    box = (30.0, 30.0, 30.0)
+    reference = len(cut_ball(atoms, box))
+
+    rotated = rotate_atoms(
+        atoms, axes="zxz", angles=tuple(np.deg2rad((20.0, 35.0, -10.0)))
+    )
+    n = len(cut_ball(rotated, box))
+    assert abs(n - reference) / reference < 0.1
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+def test_cut_ball_atom_count_scales_with_volume(scale):
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    base_box = np.array((20.0, 20.0, 20.0))
+    n_base = len(cut_ball(atoms, tuple(base_box)))
+    n_scaled = len(cut_ball(atoms, tuple(base_box * scale)))
+    assert n_scaled == pytest.approx(n_base * scale**3, rel=0.15)
+
+
+def test_cut_disk_and_cut_ball_on_non_orthogonal_cell():
+    # cut_cell / crop_atoms_to_cell in the 3DED project this was ported from
+    # require an orthogonal cell; cut_disk/cut_ball operate on the cell matrix
+    # directly and support any (e.g. hexagonal) input cell.
+    atoms = bulk("Mg", "hcp", a=3.21, c=5.21)
+    assert not is_cell_orthogonal(atoms)
+
+    disk = cut_disk(atoms, (20.0, 20.0, 40.0), rotation_axis=33.0)
+    ball = cut_ball(atoms, (25.0, 25.0, 25.0))
+    assert len(disk) > 0 and len(ball) > 0

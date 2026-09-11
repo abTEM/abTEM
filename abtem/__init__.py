@@ -14,6 +14,7 @@ from abtem.detectors import (
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
+    WindowedPixelatedDetector,
 )
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -55,6 +56,7 @@ __all__ = [
     "SegmentedDetector",
     "FlexibleAnnularDetector",
     "PixelatedDetector",
+    "WindowedPixelatedDetector",
     "WavesDetector",
     "Images",
     "DiffractionPatterns",
