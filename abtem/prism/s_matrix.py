@@ -9,6 +9,7 @@ import warnings
 from abc import abstractmethod
 from functools import partial, reduce
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -5244,7 +5245,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             chunks=chunks,
             scan=scan,
             detectors=detectors,
-            transition_potentials=transition_potentials,
+            # One graph node shared by every ensemble block's task instead
+            # of a copy embedded per task; map_blocks traverses kwargs for
+            # dask collections and materializes it before the call. Same
+            # rationale as shared_constant_arg, which the multislice driver
+            # uses through the transform's partitioned args.
+            transition_potentials=dask.delayed(transition_potentials, pure=True),
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,

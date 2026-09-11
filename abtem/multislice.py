@@ -20,7 +20,11 @@ from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
-from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    _wrap_with_array,
+    shared_constant_arg,
+    unpack_blockwise_args,
+)
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
@@ -1002,8 +1006,9 @@ def transition_potential_multislice_and_detect(
         extra_ensemble_axes_metadata,
     )
 
-    transition_potential.grid.match(waves)
-    transition_potential.accelerator.match(waves)
+    # Arrives as one graph node shared by every task on this worker, so
+    # match on a private view rather than mutating it. See _task_local.
+    transition_potential = transition_potential._task_local(match_to=waves)
 
     if isinstance(transition_potential, TransitionPotential):
         transition_potential = transition_potential.build()
@@ -1210,6 +1215,13 @@ def is_waves_base_measurements_or_list(
     return False
 
 
+# Keyword arguments of a multislice function that are shipped as their own
+# graph node rather than baked into every task's partial. Listing a name here
+# is the whole opt-in: _partition_args appends it, _from_partitioned_args
+# leaves it out of the partial, and the member function restores it.
+_GRAPH_NODE_KWARGS = ("transition_potential",)
+
+
 class MultisliceTransform(WavesTransform[BaseMeasurements]):
     """
     Transformation applying the multislice algorithm to wave functions, producing new
@@ -1379,6 +1391,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         return chunks
 
+    def _graph_node_keys(self) -> tuple[str, ...]:
+        """Names of multislice_func kwargs shipped as their own graph node."""
+        return tuple(
+            key
+            for key in _GRAPH_NODE_KWARGS
+            if self._multislice_func_kwargs.get(key) is not None
+        )
+
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
@@ -1390,11 +1410,31 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         if len(self._potential.exit_planes) > 1:
             args = (args[0][..., None],)
 
+        # Trailing zero-dimensional args, one per large kwarg: dask sees
+        # these (unlike anything baked into the partial below) and keeps a
+        # single copy in the graph. See shared_constant_arg.
+        for key in self._graph_node_keys():
+            args += (
+                shared_constant_arg(self._multislice_func_kwargs[key], lazy=lazy),
+            )
+
         return args
 
     @staticmethod
-    def _multislice_transform_member(*args, potential_partial: Callable, **kwargs):
+    def _multislice_transform_member(
+        *args,
+        potential_partial: Callable,
+        graph_node_keys: tuple[str, ...] = (),
+        **kwargs,
+    ):
         args = unpack_blockwise_args(args)
+
+        if graph_node_keys:
+            # The trailing args are the values _partition_args shipped as
+            # their own graph nodes; restore them as keyword arguments.
+            split = len(args) - len(graph_node_keys)
+            kwargs.update(zip(graph_node_keys, args[split:]))
+            args = args[:split]
 
         potential = potential_partial(*args)
         potential = potential.item()
@@ -1406,12 +1446,21 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
     def _from_partitioned_args(self) -> Callable:
         potential_partial = self._potential._from_partitioned_args()
+        graph_node_keys = self._graph_node_keys()
+        # Whatever _partition_args ships as its own graph node must not also
+        # be baked in here, or dask re-embeds a copy of it in every task.
+        func_kwargs = {
+            key: value
+            for key, value in self._multislice_func_kwargs.items()
+            if key not in graph_node_keys
+        }
         return partial(
             self._multislice_transform_member,
             potential_partial=potential_partial,
+            graph_node_keys=graph_node_keys,
             detectors=self._user_detectors,
             multislice_func=self.multislice_func,
-            **self._multislice_func_kwargs,
+            **func_kwargs,
         )
 
     def _calculate_new_array(self, waves: Waves):
