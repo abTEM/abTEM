@@ -408,6 +408,24 @@ def superpose_deltas(
     return array
 
 
+_MAX_SCATTERING_FACTOR_ENTRIES = 32
+
+
+def _device_cache_key(device) -> str | tuple[str, int]:
+    """Name the concrete device an array will be allocated on.
+
+    The ``device`` threaded through the integrators is the plain "cpu"/"gpu"
+    string, which does not distinguish one GPU from another. Arrays here are
+    allocated on the *current* device, so read that rather than trusting the
+    string. Mirrors the keys used by ``_local_potential_on_device`` and
+    ``_radial_binning_device_arrays``.
+    """
+    xp = get_array_module(device)
+    if xp is np:
+        return "cpu"
+    return ("gpu", int(xp.cuda.Device().id))
+
+
 class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     """
     A FieldIntegrator calculating infinite projections of radial potential
@@ -462,18 +480,36 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         return f
 
     def get_scattering_factor(self, symbol, gpts, sampling, device):
+        # The cached array depends on the grid and on the device it was
+        # allocated on, not on the element alone: keying on ``symbol`` served
+        # the first grid's array to every later grid (a broadcast error one
+        # frame away, in integrate_on_grid) and the first device's array to
+        # every later device (a numpy array handed to a cupy kernel).
+        key = (
+            symbol,
+            tuple(gpts),
+            tuple(sampling),
+            _device_cache_key(device),
+        )
         try:
-            scattering_factor = self.scattering_factors[symbol]
+            scattering_factor = self._scattering_factors[key]
         except KeyError:
             scattering_factor = self._calculate_scattering_factor(
                 symbol, gpts, sampling, device
             )
-            self._scattering_factors[symbol] = scattering_factor
+            # A full key admits one entry per (element, grid, device) rather
+            # than per element, so a parameter sweep over grids would grow the
+            # cache without bound. Evict oldest-first; dicts preserve insertion
+            # order. (PR: to be replaced by the shared bounded device-array
+            # helper that unifies the four caches of this kind in the tree.)
+            while len(self._scattering_factors) >= _MAX_SCATTERING_FACTOR_ENTRIES:
+                self._scattering_factors.pop(next(iter(self._scattering_factors)))
+            self._scattering_factors[key] = scattering_factor
 
         return scattering_factor
 
     @property
-    def scattering_factors(self) -> dict[str, np.ndarray]:
+    def scattering_factors(self) -> dict[tuple, np.ndarray]:
         """Projected scattering factor array on a 2D grid."""
         return self._scattering_factors
 
