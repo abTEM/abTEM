@@ -32,13 +32,9 @@ def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
 
 def _make_parity_exit_waves(
     e_values, n_configs=6, gpts=24, seed=0, lazy=False, real=None, twin=None,
-    static=None,
 ):
-    """Build exit_waves carrying a ("real", "twin") PhononParityAxis plus a
-    separately-attached `static_exit_wave` -- the shared static wave is
-    genuinely (nx, ny)-shaped here, exactly as `multislice()` attaches it,
-    not pre-broadcast to the full per-configuration shape.
-    """
+    """Build exit_waves carrying a ("real", "twin") PhononParityAxis, as
+    `multislice()` on a parity_projection=True ensemble returns them."""
     rng = np.random.default_rng(seed)
     n_energies = len(e_values)
     shape = (n_energies, n_configs, gpts, gpts)
@@ -52,16 +48,11 @@ def _make_parity_exit_waves(
         real = _random_complex()
     if twin is None:
         twin = _random_complex()
-    if static is None:
-        static = (
-            rng.normal(size=(gpts, gpts)) + 1j * rng.normal(size=(gpts, gpts))
-        ).astype(np.complex64)
 
     array = np.stack([real, twin], axis=0)
     if lazy:
         array = da.from_array(array, chunks=(1, 1, 1, gpts, gpts))
-        static = da.from_array(static, chunks=(gpts, gpts))
-    waves = Waves(
+    return Waves(
         array,
         energy=100e3,
         sampling=0.1,
@@ -71,8 +62,6 @@ def _make_parity_exit_waves(
             FrozenPhononsAxis(_ensemble_mean=False),
         ],
     )
-    waves._static_exit_wave = static
-    return waves
 
 
 def test_components_are_consistent():
@@ -281,20 +270,33 @@ class TestParityProjection:
             isinstance(ax, PhononParityAxis) for ax in dp.ensemble_axes_metadata
         )
 
-    def test_all_slot_matches_direct_tds_call(self):
+    def test_all_equals_ordinary_tds_over_full_parity_set(self):
+        """"all" is one + multi, and for the symmetric (real, twin) set that
+        is exactly the ordinary I_incoherent - I_coherent estimator over all
+        2N members -- not a statistical agreement, an identity."""
         e_values = [0.02, 0.05, 0.10]
         waves = _make_parity_exit_waves(e_values, n_configs=6)
 
-        dp = phonon_loss_diffraction_patterns(waves)
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
 
-        waves_real = waves[(0, slice(None), slice(None))]
-        dp_direct = phonon_loss_diffraction_patterns(waves_real, component="tds")
+        full_set = Waves(
+            np.concatenate([waves.array[0], waves.array[1]], axis=1),
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        dp_full = phonon_loss_diffraction_patterns(
+            full_set, component="tds", max_angle="full"
+        )
 
-        np.testing.assert_allclose(dp.array[0], dp_direct.array)
+        scale = np.abs(dp.array[1]).max()
+        np.testing.assert_allclose(dp.array[0], dp_full.array, atol=1e-5 * scale, rtol=0)
+        np.testing.assert_allclose(
+            dp.array[0], dp.array[1] + dp.array[2], atol=1e-6 * scale, rtol=0
+        )
 
     def test_one_phonon_and_multi_phonon_isolate_known_signals(self):
-        """Construct real/twin/static so that psi_odd and psi_diff are
-        exactly known, independently-verifiable signals."""
+        """Construct real/twin so that psi_odd and psi_even are exactly
+        known, independently-verifiable signals."""
         e_values = [0.02, 0.05]
         n_configs, gpts = 4, 16
         shape = (len(e_values), n_configs, gpts, gpts)
@@ -312,20 +314,18 @@ class TestParityProjection:
 
         # real = static + delta + eps, twin = static - delta + eps
         #   => psi_odd  = (real - twin) / 2 = delta          (one-phonon)
-        #   => psi_diff = (real + twin) / 2 - static = eps   (multi-phonon)
-        # (static broadcasts against the (n_e, n_c, gpts, gpts) shape here,
-        # same as it does inside phonon_loss_diffraction_patterns itself.)
+        #   => psi_even = (real + twin) / 2 = static + eps   (multi-phonon =
+        #      its variance over configs; the constant static drops out)
         real = static + delta + eps
         twin = static - delta + eps
 
         waves = _make_parity_exit_waves(
-            e_values, n_configs=n_configs, gpts=gpts,
-            real=real, twin=twin, static=static,
+            e_values, n_configs=n_configs, gpts=gpts, real=real, twin=twin,
         )
         dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
 
-        # independent reference: FFT delta/eps directly and average |.|^2
-        # over the frozen-phonon axis (axis=1 of shape (n_e, n_c, gpts, gpts))
+        # independent reference: FFT delta/eps directly; axis=1 of shape
+        # (n_e, n_c, gpts, gpts) is the frozen-phonon axis
         delta_waves = Waves(
             delta, energy=100e3, sampling=0.1,
             ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
@@ -334,33 +334,15 @@ class TestParityProjection:
             eps, energy=100e3, sampling=0.1,
             ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
         )
-        I_one_phonon_ref = delta_waves.diffraction_patterns(
-            max_angle="full"
-        ).array.mean(axis=1)
-        I_multi_phonon_ref = eps_waves.diffraction_patterns(
-            max_angle="full"
-        ).array.mean(axis=1)
-
-        np.testing.assert_allclose(dp.array[1], I_one_phonon_ref, rtol=1e-4)
-        np.testing.assert_allclose(dp.array[2], I_multi_phonon_ref, rtol=1e-4)
-
-    def test_requires_static_exit_wave_attribute(self):
-        """A PhononParityAxis without the separately-attached
-        static_exit_wave (e.g. because exit_waves was reconstructed --
-        sliced, round-tripped through zarr, rechunked -- after multislice()
-        set it) must raise a clear, actionable error rather than a bare
-        AttributeError deep in the multi_phonon computation."""
-        e_values = [0.02, 0.05]
-        waves = _make_exit_waves(e_values, n_configs=4)
-        array = np.stack([waves.array, waves.array], axis=0)
-        bad_waves = Waves(
-            array, energy=100e3, sampling=0.1,
-            ensemble_axes_metadata=[PhononParityAxis(values=("real", "twin"))]
-            + waves.ensemble_axes_metadata,
+        I_one_ref = delta_waves.diffraction_patterns(max_angle="full").array.mean(axis=1)
+        I_multi_ref = (
+            eps_waves.diffraction_patterns(max_angle="full").array.mean(axis=1)
+            - eps_waves.sum(axis=1).diffraction_patterns(max_angle="full").array
+            / n_configs**2
         )
-        # deliberately do NOT set bad_waves._static_exit_wave
-        with pytest.raises(ValueError, match="static_exit_wave"):
-            phonon_loss_diffraction_patterns(bad_waves)
+
+        np.testing.assert_allclose(dp.array[1], I_one_ref, rtol=1e-4)
+        np.testing.assert_allclose(dp.array[2], I_multi_ref, rtol=1e-4, atol=1e-4 * I_multi_ref.max())
 
     def test_requires_real_twin_parity_axis_values(self):
         e_values = [0.02, 0.05]

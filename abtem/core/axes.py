@@ -608,10 +608,10 @@ class PhononParityAxis(OrdinalAxis):
     :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
     ``parity_projection``). Always exactly length 2 (``("real", "twin")``),
     on both the atoms/potential ensemble and the resulting exit-wave
-    ensemble. The shared static/equilibrium exit wave needed alongside it is
-    *not* a third member of this axis -- deliberately, to avoid replicating
-    it across every energy/configuration on materialization -- but is
-    instead attached separately as ``Waves.static_exit_wave``.
+    ensemble. No static/equilibrium wave is needed alongside it: the
+    one-phonon channel is the odd part of the exit wave and the multi-phonon
+    channel is the variance of its even part over configurations (see
+    ``phonon_loss_diffraction_patterns``).
     """
 
     label: str = "phonon parity"
