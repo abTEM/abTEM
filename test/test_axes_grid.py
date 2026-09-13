@@ -171,3 +171,30 @@ def test_suptitle_sets_whole_figure_title(two_by_two_diffraction_patterns):
     fig = visualization.get_figure()
     assert fig._suptitle is not None
     assert fig._suptitle.get_text() == "Whole-figure title"
+
+
+def test_suptitle_does_not_replace_column_titles(two_by_two_diffraction_patterns):
+    """Regression: `suptitle` was once inserted into the title `if/elif`
+    chain, so (a) a string `title` on an exploded plot was overwritten by the
+    auto-generated axis titles and (b) passing a suptitle dropped the
+    auto-generated column titles entirely. Column titles must be independent
+    of whether a suptitle is given."""
+    dp = two_by_two_diffraction_patterns
+    plt.close("all")
+
+    auto = [t.get_text() for t in dp.show(explode=True)._column_titles]
+    assert auto and all(auto)
+
+    with_sup = [
+        t.get_text() for t in dp.show(explode=True, suptitle="Whole")._column_titles
+    ]
+    assert with_sup == auto
+
+    custom = [t.get_text() for t in dp.show(explode=True, title="foo")._column_titles]
+    assert custom == ["foo"] * len(auto)
+
+    custom_sup = [
+        t.get_text()
+        for t in dp.show(explode=True, title="foo", suptitle="Whole")._column_titles
+    ]
+    assert custom_sup == ["foo"] * len(auto)

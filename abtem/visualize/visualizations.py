@@ -243,9 +243,6 @@ class Visualization:
         if isinstance(title, str):
             self.set_column_titles(title)
 
-        if suptitle:
-            self.get_figure().suptitle(suptitle)
-
         elif title and len(explode) > 0:
             axes_metadata = measurement.axes_metadata[explode[0]].to_ordinal_axis(
                 measurement.shape[explode[0]]
@@ -269,6 +266,13 @@ class Visualization:
             ]
 
             self.set_row_titles(row_titles)
+
+        # Independent of the per-column/row titles above: a whole-figure
+        # title must not short-circuit the title chain (it once did, as an
+        # ``elif`` partner of ``if suptitle``, which silently replaced a
+        # string ``title`` on exploded plots with the auto-generated ones).
+        if suptitle:
+            self.get_figure().suptitle(suptitle)
 
         self._make_new_artists(artist_type=self._artist_type, **kwargs)
 
