@@ -3,6 +3,13 @@ import numpy as np
 import pytest
 from hypothesis import given
 
+import abtem
+from abtem.integrals import (
+    _MAX_SCATTERING_FACTOR_ENTRIES,
+    ScatteringFactorProjectionIntegrals,
+)
+from utils import assert_array_matches_device, gpu
+
 # from abtem.integrals import GaussianProjectionIntegrals
 from abtem.parametrizations import (
     KirklandParametrization,
@@ -158,3 +165,78 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 #     gaussian_potential = gaussian_scattering_factors.integrate_on_grid(positions, a, b, gpts, sampling)
 #
 #     assert np.allclose(quadrature_potential[0, :gpts[1] // 2], gaussian_potential[0, :gpts[1] // 2], atol=2)
+
+
+class TestScatteringFactorCacheKey:
+    """``get_scattering_factor`` cached on the chemical symbol alone.
+
+    The cached array depends on the grid and on the device it was allocated
+    on as well, so reusing one integrator across two potentials served the
+    first potential's array to the second: a broadcast error for a new grid,
+    and a numpy array handed to a cupy kernel for a new device. ``integrator``
+    is a documented ``Potential`` parameter, so sharing one is ordinary use.
+    """
+
+    @staticmethod
+    def _atoms():
+        import ase.build
+
+        return ase.build.bulk("Si", cubic=True)
+
+    def test_second_grid_is_not_served_the_first_grids_array(self):
+        integrator = ScatteringFactorProjectionIntegrals()
+        for gpts, sampling in (((64, 64), (0.125, 0.125)), ((128, 128), (0.0625,) * 2)):
+            array = integrator.get_scattering_factor("Si", gpts, sampling, "cpu")
+            assert array.shape == gpts
+
+    def test_potentials_on_two_grids_may_share_an_integrator(self):
+        atoms = self._atoms()
+        shared = ScatteringFactorProjectionIntegrals()
+        for gpts in ((64, 64), (128, 128)):
+            got = abtem.Potential(
+                atoms, gpts=gpts, slice_thickness=1.0, integrator=shared
+            ).build(lazy=False)
+            reference = abtem.Potential(
+                atoms,
+                gpts=gpts,
+                slice_thickness=1.0,
+                integrator=ScatteringFactorProjectionIntegrals(),
+            ).build(lazy=False)
+            assert np.allclose(got.array, reference.array)
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_array_lands_on_the_requested_device(self, device):
+        integrator = ScatteringFactorProjectionIntegrals()
+        # Warm the cache on the cpu first: the array served for ``device``
+        # must still be the one belonging to ``device``.
+        integrator.get_scattering_factor("Si", (64, 64), (0.125, 0.125), "cpu")
+        array = integrator.get_scattering_factor("Si", (64, 64), (0.125, 0.125), device)
+        assert_array_matches_device(array, device)
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_potential_may_share_an_integrator_across_devices(self, device):
+        atoms = self._atoms()
+        shared = ScatteringFactorProjectionIntegrals()
+        abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=1.0, integrator=shared, device="cpu"
+        ).build(lazy=False)
+        got = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=1.0, integrator=shared, device=device
+        ).build(lazy=False)
+        reference = abtem.Potential(
+            atoms,
+            gpts=(64, 64),
+            slice_thickness=1.0,
+            integrator=ScatteringFactorProjectionIntegrals(),
+            device=device,
+        ).build(lazy=False)
+        assert np.allclose(
+            np.asarray(got.to_cpu().array), np.asarray(reference.to_cpu().array)
+        )
+
+    def test_cache_is_bounded(self):
+        """A full key admits an entry per grid, so it needs a bound."""
+        integrator = ScatteringFactorProjectionIntegrals()
+        for n in range(_MAX_SCATTERING_FACTOR_ENTRIES + 8):
+            integrator.get_scattering_factor("Si", (8 + n,) * 2, (0.1, 0.1), "cpu")
+        assert len(integrator.scattering_factors) <= _MAX_SCATTERING_FACTOR_ENTRIES
