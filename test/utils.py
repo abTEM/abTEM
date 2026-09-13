@@ -145,3 +145,36 @@ requires_multigpu = pytest.mark.skipif(
     _gpu_count() < 2 or not _HAS_DASK_CUDA,
     reason="requires >=2 GPUs and dask-cuda",
 )
+
+
+def synthetic_transition_potential(
+    Z: int = 14,
+    gpts: tuple[int, int] = (64, 64),
+    extent: tuple[float, float] | None = (8.0, 8.0),
+    energy: float | None = 100e3,
+    n_transitions: int = 2,
+    seed: int = 0,
+):
+    """A seeded ``TransitionPotentialArray`` with a synthetic payload.
+
+    Tests that exercise machinery *around* the transition potentials --
+    graph transport, caching, detector wiring -- need an object of the right
+    shape, not real physics. Building one directly skips the GPAW atomic
+    solvers, so these tests also run where GPAW is not installed (CI).
+    """
+    from abtem.core.axes import OrdinalAxis
+    from abtem.inelastic.core_loss import TransitionPotentialArray
+
+    rng = np.random.default_rng(seed)
+    array = (
+        rng.standard_normal((n_transitions, *gpts))
+        + 1j * rng.standard_normal((n_transitions, *gpts))
+    ).astype(np.complex64)
+    return TransitionPotentialArray(
+        Z=Z,
+        array=array,
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
+        metadata={"Z": Z, "n": 1, "l": 0},
+    )
