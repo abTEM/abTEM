@@ -652,6 +652,52 @@ class AtomsEnsemble(BaseFrozenPhonons):
         return (positions - positions.mean(0)).std()
 
 
+def _validate_parity_snapshot(
+    atoms: Atoms,
+    equilibrium_atoms: Atoms,
+    max_displacement: Optional[float],
+    index: tuple,
+) -> None:
+    """Check that ``atoms`` is a displacement of ``equilibrium_atoms`` with
+    the same atoms in the same order, so that ``2 * R_eq - R`` is a
+    meaningful twin. ``index`` is the (energy, config) position, for the
+    error message only."""
+    if len(atoms) != len(equilibrium_atoms):
+        raise ValueError(
+            f"snapshot {index} has {len(atoms)} atoms but equilibrium_atoms "
+            f"has {len(equilibrium_atoms)}; every snapshot must be a "
+            "displacement of the same structure."
+        )
+    if not np.array_equal(atoms.numbers, equilibrium_atoms.numbers):
+        raise ValueError(
+            f"snapshot {index} has a different species sequence than "
+            "equilibrium_atoms; atoms must be in the same order in every "
+            "snapshot and in equilibrium_atoms."
+        )
+    if max_displacement is None:
+        return
+
+    displacement = atoms.positions - equilibrium_atoms.positions
+    cell = np.asarray(atoms.cell)
+    if atoms.cell.rank == 3:
+        # minimum image, so snapshots wrapped back into the cell (an atom
+        # near a boundary displaced across it) are not flagged
+        fractional = displacement @ np.linalg.inv(cell)
+        displacement = displacement - np.round(fractional) @ cell
+    largest = np.linalg.norm(displacement, axis=1)
+    worst = int(np.argmax(largest))
+    if largest[worst] > max_displacement:
+        raise ValueError(
+            f"atom {worst} of snapshot {index} is displaced by "
+            f"{largest[worst]:.3f} Å from equilibrium_atoms, more than "
+            f"max_displacement={max_displacement} Å. This usually means the "
+            "snapshot and equilibrium_atoms are ordered differently (or "
+            "equilibrium_atoms is not the structure the snapshots were "
+            "displaced from). Pass max_displacement=None to disable the "
+            "check if the displacement is genuine."
+        )
+
+
 class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     """
     Energy-resolved ensemble of frozen-phonon configurations.
@@ -693,7 +739,17 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         ``energy_resolved_snapshots`` is a displacement of. Required if
         ``parity_projection`` is True (used to build each snapshot's
         displacement-reversed twin, ``2 * equilibrium_atoms.positions -
-        snapshot.positions``); unused otherwise.
+        snapshot.positions``); unused otherwise. Must have the same number
+        of atoms, in the same order and of the same species, as every
+        snapshot -- a reordered or otherwise mismatched structure would
+        silently produce meaningless twins, so this is checked.
+    max_displacement : float, optional
+        Sanity bound [Å] on the (minimum-image) displacement of every atom
+        in every snapshot from ``equilibrium_atoms``, checked when
+        ``parity_projection`` is True. Thermal and zero-point displacements
+        are a few hundredths to a few tenths of an Å; a larger value almost
+        always means the snapshot and equilibrium atoms are ordered
+        differently. Default 1.0 Å; ``None`` disables the check.
     parity_projection : bool, optional
         If True (default False), separate one-phonon from multi-phonon
         scattering by also propagating, for every snapshot, its
@@ -716,6 +772,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         energies: np.ndarray | Sequence[float],
         equilibrium_atoms: Optional[Atoms] = None,
         parity_projection: bool = False,
+        max_displacement: Optional[float] = 1.0,
         ensemble_mean: bool = True,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         cell: Optional[Cell] = None,
@@ -765,6 +822,9 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             twin = np.empty_like(snapshots)
             for index in np.ndindex(snapshots.shape):
                 atoms = snapshots[index]
+                _validate_parity_snapshot(
+                    atoms, equilibrium_atoms, max_displacement, index
+                )
                 twin_atoms = atoms.copy()
                 twin_atoms.positions = 2 * eq_positions - atoms.positions
                 itemset(twin, index, twin_atoms)
@@ -779,6 +839,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         self._energies = energies
         self._equilibrium_atoms = equilibrium_atoms
         self._parity_projection = parity_projection
+        self._max_displacement = max_displacement
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -822,6 +883,12 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         """Whether this ensemble carries the displacement-reversed twin
         needed to separate one-phonon from multi-phonon scattering."""
         return self._parity_projection
+
+    @property
+    def max_displacement(self) -> Optional[float]:
+        """Sanity bound [Å] on snapshot displacements from
+        ``equilibrium_atoms`` (``None`` if disabled)."""
+        return self._max_displacement
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:

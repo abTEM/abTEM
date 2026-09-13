@@ -147,3 +147,70 @@ class TestEnsembleMachinery:
         )
         blocks = ensemble.ensemble_blocks(chunks=1)
         assert blocks.shape == (2, 2, 3)
+
+
+def test_rejects_equilibrium_with_wrong_atom_count(equilibrium):
+    snapshots = _make_snapshots(equilibrium)
+    wrong = Atoms("H", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=True)
+    with pytest.raises(ValueError, match="atoms but equilibrium_atoms"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=wrong,
+            parity_projection=True,
+        )
+
+
+def test_rejects_equilibrium_with_different_species_order(equilibrium):
+    snapshots = _make_snapshots(equilibrium)
+    wrong = equilibrium.copy()
+    wrong.numbers = [1, 2]
+    with pytest.raises(ValueError, match="species sequence"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=wrong,
+            parity_projection=True,
+        )
+
+
+def test_rejects_large_displacement_as_probable_misordering(equilibrium):
+    """A snapshot whose atoms are permuted relative to equilibrium_atoms
+    looks like a huge displacement; that must be caught rather than
+    producing meaningless twins."""
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=2)
+    permuted = snapshots[0][1].copy()
+    permuted.positions = permuted.positions[::-1] + [[0, 0, 0], [3.0, 0, 0]]
+    snapshots[0][1] = permuted
+    with pytest.raises(ValueError, match="max_displacement"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02], equilibrium_atoms=equilibrium, parity_projection=True,
+        )
+    # explicit opt-outs
+    EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02], equilibrium_atoms=equilibrium, parity_projection=True,
+        max_displacement=None,
+    )
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02], equilibrium_atoms=equilibrium, parity_projection=True,
+        max_displacement=5.0,
+    )
+    assert ensemble.max_displacement == 5.0
+
+
+def test_wrapped_snapshot_passes_minimum_image_check(equilibrium):
+    """An atom at the cell origin displaced across the boundary and wrapped
+    back into the cell has a raw displacement of ~L; the check must use the
+    minimum image and accept it, and the twin must still be R_eq - u modulo
+    the cell."""
+    u = np.array([-0.05, 0.02, 0.0])
+    atoms = equilibrium.copy()
+    atoms.positions[0] += u
+    atoms.wrap()
+    assert atoms.positions[0, 0] > 9.0  # really wrapped
+
+    ensemble = EnergyResolvedAtomsEnsemble(
+        [[atoms, atoms]], [0.02], equilibrium_atoms=equilibrium,
+        parity_projection=True,
+    )
+    twin = ensemble.snapshots[1, 0, 0]
+    expected = equilibrium.positions[0] - u
+    diff = twin.positions[0] - expected
+    diff -= np.round(diff / 10.0) * 10.0
+    np.testing.assert_allclose(diff, 0.0, atol=1e-12)
