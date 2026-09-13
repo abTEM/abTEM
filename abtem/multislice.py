@@ -507,9 +507,20 @@ def _update_measurements(
 
 def _validate_potential_ensemble_indices(
     potential_index: int | tuple[int, ...],
-    exit_plane_index: int | tuple[int, ...],
+    exit_plane_index: int | slice | tuple[int | slice, ...],
     potential: BasePotential,
-) -> tuple[int, ...]:
+) -> tuple[int | slice, ...]:
+    """Index into a measurement's leading potential-ensemble and exit-plane axes.
+
+    The measurement is allocated with the potential's ensemble axes *before*
+    the exit-plane axis (see ``_potential_ensemble_shape_and_metadata``), so
+    both have to be indexed together; indexing the plane axis alone silently
+    addresses the ensemble axis instead whenever the potential has one.
+
+    ``exit_plane_index`` may be a ``slice`` for accumulations that contribute
+    to every plane at or beyond a depth, as the single-channel core-loss
+    driver does.
+    """
     if not potential.ensemble_shape:
         potential_index = ()
     elif not isinstance(potential_index, tuple):
@@ -1158,12 +1169,25 @@ def transition_potential_multislice_and_detect(
                 else:
                     exit_plane_index = bisect_left(potential.exit_planes, scatter_index)
 
-                    measurement_plane_indices: tuple[slice] | tuple = ()
-                    if len(potential.exit_planes) > 1:
-                        exit_planes = slice(
-                            exit_plane_index, len(potential.exit_planes)
-                        )
-                        measurement_plane_indices = (exit_planes,)
+                    # Single-channel ionisation at this depth contributes to
+                    # every exit plane at or beyond it, hence a slice over the
+                    # plane axis. The potential's ensemble axes come first in
+                    # the measurement, so they must be indexed as well -- the
+                    # double-channel branch above gets this right by going
+                    # through _update_loss_measurements. Indexing the plane
+                    # axis alone meant that with a single exit plane the index
+                    # was empty and every configuration's contribution was
+                    # broadcast across all configurations (giving num_configs
+                    # times the correct result), while with several exit planes
+                    # the plane slice landed on the configuration axis and
+                    # dropped the contribution entirely (giving zeros).
+                    n_plane_axes = 1 if len(potential.exit_planes) > 1 else 0
+
+                    measurement_indices = _validate_potential_ensemble_indices(
+                        potential_index,
+                        slice(exit_plane_index, len(potential.exit_planes)),
+                        potential,
+                    )
 
                     # All detectors here see the same, not-yet-mutated
                     # ``scattered_waves`` -- share one diffraction-pattern
@@ -1173,10 +1197,12 @@ def transition_potential_multislice_and_detect(
                             new_measurement = detector.detect(scattered_waves).sum(
                                 (0,)
                             )
-                            measurements[i].array[measurement_plane_indices] += (
-                                new_measurement.array[
-                                    (None,) * len(measurement_plane_indices)
-                                ]
+                            # Only the plane axis is a slice and so survives
+                            # the indexing; the ensemble axes are integers and
+                            # are dropped, so broadcast over the plane axis
+                            # alone.
+                            measurements[i].array[measurement_indices] += (
+                                new_measurement.array[(None,) * n_plane_axes]
                             )
 
     tqdm_pbar.close_if_exists()
