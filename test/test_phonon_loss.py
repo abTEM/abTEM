@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from ase import units
 
-from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
+from abtem.core.axes import OrdinalAxis, EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
 from abtem.measurements import phonon_loss_diffraction_patterns
 from abtem.waves import Waves
 
@@ -358,18 +358,68 @@ class TestParityProjection:
         with pytest.raises(ValueError, match="'real', 'twin'"):
             phonon_loss_diffraction_patterns(bad_waves)
 
-    def test_temperature_unfolds_all_three_slots(self):
+    def test_temperature_is_rejected(self):
+        """One-phonon Bose weights at +/-E are wrong for the multi channel
+        (its two-phonon processes sit at +2E, 0, -2E), so the combined call
+        must refuse rather than mislabel."""
         e_values = [0.0, 0.02, 0.05]
         waves = _make_parity_exit_waves(e_values, n_configs=6)
+        with pytest.raises(ValueError, match="unfold_loss_gain"):
+            phonon_loss_diffraction_patterns(waves, temperature=300.0)
 
-        dp = phonon_loss_diffraction_patterns(waves, temperature=300.0)
+    def test_unfold_loss_gain_on_one_slot_matches_internal_unfolding(self):
+        from abtem.measurements import unfold_loss_gain
 
-        energy_axis = next(
-            ax for ax in dp.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+        one = dp[1]
+        assert not any(
+            isinstance(ax, OrdinalAxis) and ax.label == "Phonon order"
+            for ax in one.ensemble_axes_metadata
         )
-        assert len(energy_axis.values) == 2 * len(e_values) - 1
-        assert dp.array.shape[0] == 3
-        assert dp.array.shape[1] == 2 * len(e_values) - 1
+
+        unfolded = unfold_loss_gain(one, 300.0)
+        assert isinstance(unfolded, type(one))
+        energy_axis = next(
+            ax for ax in unfolded.ensemble_axes_metadata
+            if isinstance(ax, EnergyLossAxis)
+        )
+        assert energy_axis.values == (-0.05, -0.02, 0.0, 0.02, 0.05)
+        assert unfolded.array.shape[0] == 5
+
+        # identical to what the non-parity path does with temperature=,
+        # applied to the same (unweighted) input
+        waves_odd = Waves(
+            (waves.array[0] - waves.array[1]) / 2,
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        ref = phonon_loss_diffraction_patterns(
+            waves_odd, component="incoherent", max_angle="full"
+        )
+        from abtem.measurements import _thermal_weight_tds
+        ref_array, _ = _thermal_weight_tds(
+            ref.array, np.asarray(e_values), 0, 300.0
+        )
+        np.testing.assert_allclose(unfolded.array, ref_array, rtol=1e-5)
+
+        # detailed balance: loss/gain = exp(E / kT) at every nonzero energy
+        from ase import units
+        loss, gain = unfolded.array[3:], unfolded.array[:2][::-1]
+        ratio = loss.sum(axis=(-2, -1)) / gain.sum(axis=(-2, -1))
+        np.testing.assert_allclose(
+            ratio, np.exp(np.array([0.02, 0.05]) / (units.kB * 300.0)), rtol=1e-5
+        )
+
+    def test_unfold_loss_gain_requires_energy_axis(self):
+        from abtem.measurements import unfold_loss_gain
+
+        waves = _make_exit_waves([0.02, 0.05], n_configs=4)
+        dp = waves.diffraction_patterns(max_angle="full")
+        no_energy = dp.sum(axis=0)  # drops the EnergyLossAxis
+        with pytest.raises(ValueError, match="EnergyLossAxis"):
+            unfold_loss_gain(no_energy, 300.0)
 
     def test_lazy_matches_eager(self):
         e_values = [0.02, 0.05, 0.10]

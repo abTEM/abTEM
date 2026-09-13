@@ -6314,6 +6314,71 @@ def _thermal_weight_tds(
     return result_array, e_values_signed
 
 
+def unfold_loss_gain(measurement, temperature: float):
+    """Unfold an energy-resolved TDS measurement, computed at energy
+    magnitudes ``|E|`` only, into signed loss (``+E``) and gain (``-E``)
+    sides using Bose-Einstein detailed balance.
+
+    A frozen-phonon run per energy bin gives the *combined* loss + gain
+    intensity of that bin; the split between the two sides is a quantum
+    statistical effect governed by the phonon occupation ``n(E)`` at
+    ``temperature``, with weights ``(n+1)/(2n+1)`` for loss and
+    ``n/(2n+1)`` for gain, which sum to 1 so the total spectral weight per
+    energy magnitude is preserved. The zero-energy bin is passed through
+    unweighted. This is what ``phonon_loss_diffraction_patterns(...,
+    temperature=...)`` does internally for ``component="tds"``; it is
+    exposed here so that a single channel of a parity-projected result --
+    the ``"one"`` slot, for which one-phonon weights are the right ones --
+    can be unfolded deliberately.
+
+    Parameters
+    ----------
+    measurement : ArrayObject
+        Any array object (typically :class:`DiffractionPatterns` or
+        :class:`MomentumResolvedSpectrum`) with an
+        :class:`~abtem.core.axes.EnergyLossAxis` among its ensemble axes,
+        whose values start at 0 and strictly increase.
+    temperature : float
+        Sample temperature [K].
+
+    Returns
+    -------
+    unfolded : same type as ``measurement``
+        With the ``EnergyLossAxis`` replaced by its signed unfolding
+        (``-E_max, ..., 0, ..., +E_max``).
+    """
+    from abtem.core.axes import EnergyLossAxis
+
+    energy_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(measurement.ensemble_axes_metadata)
+            if isinstance(ax, EnergyLossAxis)
+        ),
+        None,
+    )
+    if energy_axis_idx is None:
+        raise ValueError(
+            "unfold_loss_gain requires an EnergyLossAxis among the ensemble "
+            f"axes, got {measurement.ensemble_axes_metadata}."
+        )
+
+    energy_axis = measurement.ensemble_axes_metadata[energy_axis_idx]
+    e_values = np.asarray(energy_axis.values, dtype=float)
+    array, e_values_signed = _thermal_weight_tds(
+        measurement.array, e_values, energy_axis_idx, temperature
+    )
+
+    ensemble_axes_metadata = list(measurement.ensemble_axes_metadata)
+    ensemble_axes_metadata[energy_axis_idx] = EnergyLossAxis(
+        values=tuple(e_values_signed), units=energy_axis.units
+    )
+    kwargs = measurement._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
+    return measurement.__class__(
+        array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs
+    )
+
+
 def _phonon_loss_diffraction_patterns_parity_projection(
     exit_waves,
     parity_axis_idx: int,
@@ -6366,6 +6431,21 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     """
     from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
     from abtem.core.utils import get_dtype
+
+    if temperature is not None:
+        raise ValueError(
+            "temperature-based loss/gain unfolding is not available for a "
+            "parity-projected ensemble. The unfolding splits the intensity "
+            "of energy bin E into +E and -E with one-phonon Bose weights; "
+            "that is meaningful for the 'one' channel only. The 'multi' "
+            "channel's energy axis is the mode energy of the bin, not the "
+            "energy transfer -- its same-mode two-phonon processes sit at "
+            "+2E, 0 and -2E with weights (n+1)^2, 2n(n+1) and n^2 over "
+            "(2n+1)^2, none at +/-E -- so unfolding it with one-phonon "
+            "weights mislabels it. Call this function without temperature, "
+            "select the 'one' slot of the 'Phonon order' axis, and apply "
+            "abtem.measurements.unfold_loss_gain(one, temperature) to it."
+        )
 
     parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
     if tuple(parity_axis.values) != ("real", "twin"):
@@ -6455,22 +6535,6 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     remaining_axes = [
         ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
     ]
-
-    if temperature is not None:
-        remaining_energy_axis_idx = next(
-            i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
-        )
-        energy_axis = remaining_axes[remaining_energy_axis_idx]
-        e_values = np.asarray(energy_axis.values, dtype=float)
-        I_one, e_values_signed = _thermal_weight_tds(
-            I_one, e_values, remaining_energy_axis_idx, temperature
-        )
-        I_multi, _ = _thermal_weight_tds(
-            I_multi, e_values, remaining_energy_axis_idx, temperature
-        )
-        remaining_axes[remaining_energy_axis_idx] = EnergyLossAxis(
-            values=tuple(e_values_signed), units=energy_axis.units
-        )
 
     # --- "all" = one + multi, exact for the symmetric (+u, -u) set ---
     I_all = I_one + I_multi
@@ -6563,6 +6627,11 @@ def phonon_loss_diffraction_patterns(
         signal is symmetric in loss/gain; only their *split* is a quantum
         effect). The zero-energy bin is unweighted. Default is None (no
         unfolding — the returned energies are the ones in ``exit_waves``).
+        Not accepted for a parity-projected ensemble (raises): the
+        one-phonon weights are wrong for the ``"multi"`` channel, whose
+        energy axis is the bin's mode energy rather than the energy
+        transfer. Select the ``"one"`` slot and apply
+        :func:`unfold_loss_gain` to it instead.
 
     Returns
     -------
