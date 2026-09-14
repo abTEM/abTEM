@@ -39,7 +39,9 @@
 #                      mail/mailx/sendmail on the node (default: no mail)
 #   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests;
 #                      they need >= 2 visible GPUs and dask-cuda and skip
-#                      themselves otherwise (default: off)
+#                      themselves otherwise (default: off). Managed mode then
+#                      installs dask-cuda into its venv; with ABTEM_CI_VENV or
+#                      in-place mode the environment must already provide it
 #   ABTEM_CI_REPO_URL  clone URL for managed mode (default: anonymous HTTPS —
 #                      the runner only reads, and cluster compute nodes often
 #                      cannot use the SSH key that works on login nodes; set a
@@ -140,6 +142,7 @@ elif [ "${MODE}" != "in-place" ]; then
     fi
     source "${VENV}/bin/activate"
     uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
+        ${ABTEM_CI_MULTIGPU:+dask-cuda} \
         || fail "dependency install failed"
 fi
 # in-place without ABTEM_CI_VENV: use whatever python is active, but make sure
