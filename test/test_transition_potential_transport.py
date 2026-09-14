@@ -321,3 +321,57 @@ def test_reconstructor_without_its_graph_node_args_fails_clearly():
         *transform._partition_args(lazy=False)
     ).item()
     assert rebuilt._multislice_func_kwargs["transition_potential"] is tp
+
+
+def test_prism_matches_the_grid_before_building():
+    """`build()` evaluates form factors on `self.gpts`, so an unbuilt
+    transition potential must be matched to the waves first.
+
+    The multislice driver and `TransitionPotential.scatter` both do that;
+    `_prism_eels_common_setup` used to build first, so PRISM rejected an
+    unbuilt transition potential that multislice accepts. Uses a stub rather
+    than real `SubshellTransitions` so it runs without GPAW.
+    """
+    import ase
+
+    from abtem.inelastic.core_loss import TransitionPotential
+
+    class _RecordingTransitionPotential(TransitionPotential):
+        """Records the grid it saw when build() was called."""
+
+        def __init__(self, **kwargs):
+            # A list, not a scalar: the driver calls build() on the private
+            # view from _task_local (a shallow copy), which shares this
+            # object by reference, so the original still sees the record.
+            self.builds = []
+            super().__init__(Z=5, transitions=(), **kwargs)
+
+        def __len__(self):
+            return 4
+
+        def build(self):
+            self.builds.append(self.gpts)
+            assert self.gpts is not None, "build() called before the grid was matched"
+            return _synthetic_tp(gpts=self.gpts, extent=self.extent, energy=self.energy)
+
+    atoms = ase.Atoms(
+        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
+    )
+    potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+    )
+
+    unbuilt = _RecordingTransitionPotential()  # no extent, no gpts, no energy
+    assert unbuilt.gpts is None
+
+    s_matrix.transition_potential_scan(
+        transition_potentials=unbuilt, scan=scan,
+        detectors=abtem.FlexibleAnnularDetector(), sites=None,
+        double_channel=False, lazy=False,
+    )
+
+    assert unbuilt.builds == [potential.gpts]

@@ -1364,9 +1364,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     else:
         transition_potential = transition_potentials
 
-    if isinstance(transition_potential, TransitionPotential):
-        transition_potential = transition_potential.build()
-
     potential = s_matrix.potential
     energy = s_matrix.energy
     extent = s_matrix.extent
@@ -1412,7 +1409,15 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
 
     # Arrives as one graph node shared by every task on this worker, so
     # match on a private view rather than mutating it. See _task_local.
+    # Match BEFORE building: build() evaluates the form factors on self.gpts,
+    # so an unbuilt TransitionPotential needs the grid first. This is the
+    # order transition_potential_multislice_and_detect and
+    # TransitionPotential.scatter already use.
     transition_potential = transition_potential._task_local(match_to=s_waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
     transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
