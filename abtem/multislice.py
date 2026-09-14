@@ -1181,12 +1181,15 @@ def transition_potential_multislice_and_detect(
                     # times the correct result), while with several exit planes
                     # the plane slice landed on the configuration axis and
                     # dropped the contribution entirely (giving zeros).
-                    n_plane_axes = 1 if len(potential.exit_planes) > 1 else 0
-
                     measurement_indices = _validate_potential_ensemble_indices(
                         potential_index,
                         slice(exit_plane_index, len(potential.exit_planes)),
                         potential,
+                    )
+                    # Only the slice entries survive the indexing and need
+                    # broadcasting; integer ensemble indices drop their axis.
+                    n_slice_axes = sum(
+                        isinstance(i, slice) for i in measurement_indices
                     )
 
                     # All detectors here see the same, not-yet-mutated
@@ -1202,7 +1205,7 @@ def transition_potential_multislice_and_detect(
                             # are dropped, so broadcast over the plane axis
                             # alone.
                             measurements[i].array[measurement_indices] += (
-                                new_measurement.array[(None,) * n_plane_axes]
+                                new_measurement.array[(None,) * n_slice_axes]
                             )
 
     tqdm_pbar.close_if_exists()

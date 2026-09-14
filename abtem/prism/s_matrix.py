@@ -5052,8 +5052,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
                 len(self.potential.exit_planes),
             )
+            # base_axes_metadata[0] is the per-*slice* ThicknessAxis, whose
+            # values have length num_slices, while the axis being described
+            # here has length len(exit_planes). Those differ whenever exit
+            # planes are not every slice, and the mismatch raises from the
+            # measurement constructor. Use the per-exit-plane axis, as
+            # multislice.py's _potential_ensemble_shape_and_metadata does.
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                self.potential.base_axes_metadata[0]
+                self.potential._get_exit_planes_axes_metadata()
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
