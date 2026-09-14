@@ -377,7 +377,8 @@ class TestFilterByIntensity:
         assert kept_ranks == list(range(len(kept_ranks)))
 
 
-def test_detectors_elastic_is_refused_rather_than_ignored():
+@pytest.mark.parametrize("lazy", [False, True])
+def test_detectors_elastic_is_refused_rather_than_ignored(lazy):
     """It was declared in the signature and never read.
 
     Elastic detectors passed through Probe.transition_potential_scan were
@@ -385,11 +386,12 @@ def test_detectors_elastic_is_refused_rather_than_ignored():
     other unsupported keyword reaching the driver through
     **multislice_func_kwargs raises TypeError; this one spelling quietly
     absorbed the caller's intent.
+
+    Parametrised over ``lazy`` because abTEM is lazy by default: a check
+    inside the per-chunk worker would let the caller build a whole measurement
+    object without complaint and only fail later, inside a dask traceback.
     """
-    atoms = ase.build.bulk("Si", cubic=True)
-    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=1.4)
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
-    probe.grid.match(potential)
+    atoms, potential, probe = _detectors_elastic_setup()
 
     with pytest.raises(NotImplementedError, match="detectors_elastic"):
         probe.transition_potential_scan(
@@ -401,17 +403,75 @@ def test_detectors_elastic_is_refused_rather_than_ignored():
             detectors=abtem.FlexibleAnnularDetector(),
             detectors_elastic=[abtem.AnnularDetector(inner=50, outer=150)],
             double_channel=False,
-            lazy=False,
+            lazy=lazy,
             sites=atoms,
         )
 
 
-def test_dead_transition_potential_validator_is_gone():
-    """Duck-typed list wrapper with no callers anywhere in the package.
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "kwargs", [{}, {"detectors_elastic": None}, {"detectors_elastic": []}],
+    ids=["omitted", "none", "empty"],
+)
+def test_detectors_elastic_guard_has_no_false_positives(lazy, kwargs):
+    """An empty list asks for no elastic detectors, so nothing is dropped.
 
-    The live check in Waves.transition_potential_multislice is isinstance-based
-    and they diverge on generators, so this was not an equivalent spelling.
+    Raising on it would turn a working call into a crash for no benefit, and
+    callers that forward an explicit ``None`` must keep working.
+    """
+    atoms, potential, probe = _detectors_elastic_setup()
+
+    measurement = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=_synthetic_transition_potential(
+            potential.extent, potential.gpts
+        ),
+        scan=np.array([[0.0, 0.0]]),
+        detectors=abtem.FlexibleAnnularDetector(),
+        double_channel=False,
+        lazy=lazy,
+        sites=atoms,
+        **kwargs,
+    )
+    if lazy:
+        measurement = measurement.compute(progress_bar=False)
+    assert np.asarray(abtem.core.backend.asnumpy(measurement.array)).size
+
+
+def _detectors_elastic_setup():
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=1.4)
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    return atoms, potential, probe
+
+
+def test_transition_potentials_are_wrapped_by_the_live_isinstance_check():
+    """The deleted duck-typed validator was not an equivalent spelling.
+
+    It wrapped on ``hasattr(x, "scatter")``; the live check in
+    Waves.transition_potential_multislice is ``isinstance(x, (list, tuple))``.
+    They diverge on a generator, so asserting only that the dead one is gone
+    would not stop it being "restored" later as a synonym.
     """
     import abtem.inelastic.core_loss as core_loss
 
     assert not hasattr(core_loss, "_validate_transition_potentials")
+
+    atoms, potential, probe = _detectors_elastic_setup()
+    single = _synthetic_transition_potential(potential.extent, potential.gpts)
+
+    from_single = probe.transition_potential_scan(
+        potential=potential, transition_potentials=single,
+        scan=np.array([[0.0, 0.0]]), detectors=abtem.FlexibleAnnularDetector(),
+        double_channel=False, lazy=False, sites=atoms,
+    )
+    from_list = probe.transition_potential_scan(
+        potential=potential, transition_potentials=[single],
+        scan=np.array([[0.0, 0.0]]), detectors=abtem.FlexibleAnnularDetector(),
+        double_channel=False, lazy=False, sites=atoms,
+    )
+    assert np.array_equal(
+        np.asarray(abtem.core.backend.asnumpy(from_single.array)),
+        np.asarray(abtem.core.backend.asnumpy(from_list.array)),
+    )
