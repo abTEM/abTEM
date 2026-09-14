@@ -54,7 +54,7 @@ Example: weekly on NERSC Perlmutter via `scrontab -e` (times are local; `-q shar
 
 **Reusing an existing venv** (e.g. a dev machine where cupy is a custom ROCm build): `ABTEM_CI_VENV=<venv>` activates it and installs nothing; the checkout under test is put on `PYTHONPATH`, so an editable abtem install in that venv is never re-pointed.
 
-**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. They require ≥ 2 visible GPUs plus `dask-cuda` (and skip themselves otherwise), so on a cluster this means requesting at least a 2-GPU allocation (e.g. `--gpus 2` instead of `--gpus 1` in the scrontab resources). Managed mode installs `dask-cuda` into its venv when the flag is set; with `ABTEM_CI_VENV` or in-place mode, the environment must already provide it. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT` so two concurrent runs never share a clone or venv.
+**Multi-GPU:** `ABTEM_CI_MULTIGPU=1` adds a third invocation running the `multigpu`-marked tests. Setting it is a contract: the run **fails unless at least one multigpu test passes**, so an environment that cannot actually test multi-GPU (fewer than 2 visible GPUs, or `import dask_cuda` failing even though the package is installed) produces a red run rather than a silent all-skip. It requires a ≥ 2-GPU allocation (e.g. `--gpus 2` in the scrontab resources); managed mode installs `dask-cuda` into its venv when the flag is set, while `ABTEM_CI_VENV` / in-place mode must already provide it. When scheduling a multi-GPU job alongside a single-GPU one, give it its own `ABTEM_CI_ROOT` so two concurrent runs never share a clone or venv.
 
 All knobs are documented in the header of `run_gpu_tests.sh`.
 

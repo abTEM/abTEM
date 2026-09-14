@@ -37,11 +37,13 @@
 #                      "cudatoolkit/12.9" on NERSC Perlmutter (default: none)
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
-#   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests;
-#                      they need >= 2 visible GPUs and dask-cuda and skip
-#                      themselves otherwise (default: off). Managed mode then
-#                      installs dask-cuda into its venv; with ABTEM_CI_VENV or
-#                      in-place mode the environment must already provide it
+#   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests
+#                      (default: off). This is a contract: the run FAILS unless
+#                      at least one multigpu test passes, so an environment
+#                      that cannot provide >= 2 GPUs plus a working dask-cuda
+#                      import gets a red run, not a silent all-skip. Managed
+#                      mode installs dask-cuda into its venv; with ABTEM_CI_VENV
+#                      or in-place mode the environment must already provide it
 #   ABTEM_CI_REPO_URL  clone URL for managed mode (default: anonymous HTTPS —
 #                      the runner only reads, and cluster compute nodes often
 #                      cannot use the SSH key that works on login nodes; set a
@@ -142,8 +144,16 @@ elif [ "${MODE}" != "in-place" ]; then
     fi
     source "${VENV}/bin/activate"
     uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
-        ${ABTEM_CI_MULTIGPU:+dask-cuda} \
         || fail "dependency install failed"
+    if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
+        # dask-cuda pulls RAPIDS CUDA packages (cuda-core -> cuda-bindings)
+        # that resolve only from NVIDIA's index on plain PyPI; without it the
+        # install "succeeds" but `import dask_cuda` fails at cuda.bindings and
+        # the multigpu tests skip. The contract check below turns that into a
+        # red run, but installing from the right index is the actual fix.
+        uv pip install --extra-index-url https://pypi.nvidia.com dask-cuda \
+            || fail "dask-cuda install failed"
+    fi
 fi
 # in-place without ABTEM_CI_VENV: use whatever python is active, but make sure
 # this checkout wins over any installed abtem
@@ -168,13 +178,26 @@ SWEEP_RC=$?
 
 MULTI_RC=0
 if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
-    # the multigpu-marked tests skip themselves unless >= 2 GPUs and dask-cuda
-    # are present, so this invocation is safe on any machine; exit code 5
-    # (nothing collected) is treated as success
+    # requesting multi-GPU testing is a contract: at least one multigpu-marked
+    # test must PASS. The tests skip themselves without >= 2 GPUs and a working
+    # dask-cuda import, so an all-skipped (or empty) run means the environment
+    # cannot actually test multi-GPU — report that as a failure instead of
+    # letting the run masquerade as green (observed: dask-cuda installed but
+    # not importable -> 6 skipped -> "all green")
     echo "== multi-GPU tests =="
-    python -m pytest test/ -q -p no:cacheprovider -m multigpu
-    MULTI_RC=$?
-    [ "${MULTI_RC}" -eq 5 ] && MULTI_RC=0
+    MULTI_TALLY="${LOGS}/${STAMP}.multigpu-tally"
+    python -m pytest test/ -q -p no:cacheprovider -m multigpu -rs \
+        | tee "${MULTI_TALLY}"
+    MULTI_RC=${PIPESTATUS[0]}
+    if [ "${MULTI_RC}" -eq 0 ] || [ "${MULTI_RC}" -eq 5 ]; then
+        if ! grep -qE '[0-9]+ passed' "${MULTI_TALLY}"; then
+            echo "ERROR: ABTEM_CI_MULTIGPU is set but no multigpu test passed" \
+                 "(all skipped or none collected — check GPU count and that" \
+                 "'import dask_cuda' works in this environment)"
+            MULTI_RC=1
+        fi
+    fi
+    rm -f "${MULTI_TALLY}"
 fi
 
 SUMMARY="$(grep -E '[0-9]+ (passed|failed)' "${LOG}" | tail -1)"
