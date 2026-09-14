@@ -63,6 +63,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
 )
 from abtem.multislice import (
+    _DETECTORS_ELASTIC_MESSAGE,
     MultisliceTransform,
     transition_potential_multislice_and_detect,
 )
@@ -1568,8 +1569,6 @@ class Waves(BaseWaves, ArrayObject):
         # measurement object without complaint and only fail later, from inside
         # a dask traceback.
         if multislice_func_kwargs.get("detectors_elastic"):
-            from abtem.multislice import _DETECTORS_ELASTIC_MESSAGE
-
             raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
         potential = validate_potential(potential, self)
