@@ -239,4 +239,56 @@ class TestScatteringFactorCacheKey:
         integrator = ScatteringFactorProjectionIntegrals()
         for n in range(_MAX_SCATTERING_FACTOR_ENTRIES + 8):
             integrator.get_scattering_factor("Si", (8 + n,) * 2, (0.1, 0.1), "cpu")
-        assert len(integrator.scattering_factors) <= _MAX_SCATTERING_FACTOR_ENTRIES
+        info = integrator.scattering_factor_cache_info
+        assert info.currsize <= _MAX_SCATTERING_FACTOR_ENTRIES
+        assert info.maxsize == _MAX_SCATTERING_FACTOR_ENTRIES
+
+    def test_cache_is_least_recently_used_not_first_in_first_out(self):
+        """A hit must refresh recency, or a sweep gets no benefit from it."""
+        integrator = ScatteringFactorProjectionIntegrals()
+        first = (8, 8)
+        integrator.get_scattering_factor("Si", first, (0.1, 0.1), "cpu")
+        for n in range(_MAX_SCATTERING_FACTOR_ENTRIES - 1):
+            integrator.get_scattering_factor("Si", (16 + n,) * 2, (0.1, 0.1), "cpu")
+            # Keep the first entry the most recently used one.
+            integrator.get_scattering_factor("Si", first, (0.1, 0.1), "cpu")
+        before = integrator.scattering_factor_cache_info.hits
+        integrator.get_scattering_factor("Si", first, (0.1, 0.1), "cpu")
+        assert integrator.scattering_factor_cache_info.hits == before + 1
+
+    def test_concurrent_access_does_not_race(self):
+        """Hand-rolled dict eviction raced: two threads evicting the same key
+        gave KeyError, and iteration could see the dict resized underneath."""
+        import sys
+        import threading
+
+        errors = []
+
+        def hammer(integrator, seed):
+            try:
+                for n in range(4000):
+                    g = 8 + ((seed * 7919 + n * 13) % 200)
+                    integrator.get_scattering_factor(
+                        "Si", (g, g), (0.1, 0.1), "cpu"
+                    )
+            except Exception as exc:  # noqa: BLE001 -- report, don't mask
+                errors.append(exc)
+
+        integrator = ScatteringFactorProjectionIntegrals()
+        # A short switch interval makes the window reachable in seconds
+        # instead of relying on luck.
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            threads = [
+                threading.Thread(target=hammer, args=(integrator, i))
+                for i in range(8)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+
+        assert not errors, f"{len(errors)} failures, first: {errors[0]!r}"
