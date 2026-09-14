@@ -685,3 +685,102 @@ def test_prism_driver_refuses_a_multi_configuration_potential():
             detectors=[abtem.FlexibleAnnularDetector()],
             sites=atoms,
         )
+
+
+class TestPrismLazyExitPlanes:
+    """The lazy PRISM path omitted the exit-plane axis from its block shape.
+
+    ``SMatrix.transition_potential_scan(lazy=True)`` declared ``chunks`` and
+    ``new_axis`` from the S-matrix ensemble and the scan only, while each block
+    carries a measurement that also has an exit-plane axis whenever the
+    potential has more than one. The declared block shape therefore disagreed
+    with the computed one: the result came back with one more array dimension
+    than axes metadata, so every method pairing the two raised, and with
+    ``ensemble_mean=False`` it failed outright during compute.
+
+    The eager branch got this right through ``_build_ensemble_shape_metadata``;
+    the two computed their bookkeeping separately, which is how they diverged.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+
+    def _run(self, potential, lazy, double_channel=False):
+        atoms = self._atoms()
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+        )
+        measurement = s_matrix.transition_potential_scan(
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=lazy,
+        )
+        if lazy:
+            measurement = measurement.compute(progress_bar=False)
+        return measurement
+
+    def _potential(self, num_configs=None, exit_planes=None, ensemble_mean=True):
+        atoms = self._atoms()
+        ensemble = (
+            atoms
+            if num_configs is None
+            else abtem.FrozenPhonons(
+                atoms,
+                num_configs=num_configs,
+                sigmas=0.05,
+                seed=7,
+                ensemble_mean=ensemble_mean,
+            )
+        )
+        return abtem.Potential(
+            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
+        )
+
+    @pytest.mark.parametrize(
+        "num_configs, exit_planes, ensemble_mean",
+        [
+            (None, None, True),
+            (None, 1, True),
+            (1, 1, True),
+            (3, 1, True),
+            (3, 1, False),
+            (None, [1, 3], True),
+        ],
+        ids=["plain-1", "plain-5", "phonons1-5", "phonons3-5", "no-mean", "explicit"],
+    )
+    @pytest.mark.parametrize("double_channel", [False, True])
+    def test_lazy_matches_eager(self, num_configs, exit_planes, ensemble_mean,
+                                double_channel):
+        potential = self._potential(num_configs, exit_planes, ensemble_mean)
+        eager = self._run(potential, lazy=False, double_channel=double_channel)
+        lazy = self._run(potential, lazy=True, double_channel=double_channel)
+
+        assert [type(a).__name__ for a in eager.axes_metadata] == [
+            type(a).__name__ for a in lazy.axes_metadata
+        ]
+        eager_array = np.asarray(abtem.core.backend.asnumpy(eager.array))
+        lazy_array = np.asarray(abtem.core.backend.asnumpy(lazy.array))
+        assert eager_array.shape == lazy_array.shape
+        assert np.array_equal(eager_array, lazy_array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_array_dimensions_match_the_axes_metadata(self, lazy):
+        """The failure users hit: every method pairing the two raised."""
+        measurement = self._run(self._potential(exit_planes=1), lazy=lazy)
+        array = np.asarray(abtem.core.backend.asnumpy(measurement.array))
+        assert array.ndim == len(measurement.axes_metadata)
+        measurement.to_cpu()  # raised before the fix
