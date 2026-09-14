@@ -743,10 +743,18 @@ class TestIntegratorCaches:
         # The miss path is the one that used to raise AttributeError.
         self._build(restored)
 
-    def test_the_dead_gaussian_caches_are_gone(self):
+    def test_the_gaussian_caches_are_keyed_and_transient(self):
+        """The parent commit deleted these as unusable -- never storing, no
+        precision in the key, and shipped into every task graph. They are back
+        with the key they needed, and excluded from pickling."""
+        import pickle
+
         integrator = GaussianProjectionIntegrals()
-        assert not hasattr(integrator, "_gaussians")
-        assert not hasattr(integrator, "_corrections")
+        integrator.get_gaussians("Si", (64, 64), (0.1, 0.1))
+        assert len(integrator._gaussians) == 1
+        assert len(pickle.dumps(integrator)) == len(
+            pickle.dumps(GaussianProjectionIntegrals())
+        )
 
     def test_the_integrator_stays_picklable_comparable_and_copyable(self):
         """The three things a per-instance lru_cache broke in #388."""
@@ -759,7 +767,11 @@ class TestIntegratorCaches:
             pickle.loads(pickle.dumps(used)), QuadratureProjectionIntegrals
         )
         assert used == fresh
-        assert copy.deepcopy(used)._tables is not used._tables
+        # deepcopy goes through __getstate__, which drops the caches, so the
+        # copy starts empty -- and must be its own object, not a shared one.
+        clone = copy.deepcopy(used)
+        assert clone._tables is not used._tables
+        assert len(clone._tables) == 0
 
     def test_concurrent_access_serves_correct_values(self):
         """Not just "nothing raised": check what the cache hands back."""
@@ -797,3 +809,538 @@ class TestIntegratorCaches:
             sys.setswitchinterval(previous)
         assert not errors, f"{len(errors)} failures, first: {errors[0]!r}"
         assert len(integrator._scattering_factors) <= _MAX_CACHE_ENTRIES
+
+
+class TestGaussianProjectionIntegralsUsable:
+    """The class was reachable but unfinished.
+
+    It is the only integrator that is both finite (z-resolved within a slice)
+    and periodic -- ``ScatteringFactorProjectionIntegrals`` is periodic but
+    z-unresolved, ``QuadratureProjectionIntegrals`` is z-resolved but needs
+    padding. Two of its constructor parameters -- `parametrization` and
+    `gaussian_parametrization` -- were validated, stored and never used
+    (`cutoff_tolerance` was live), `integrate_on_grid` accepted a
+    `fourier_space` flag it never read, and it could not run on GPU at all.
+    """
+
+    @staticmethod
+    def _atoms():
+        import ase.build
+
+        return ase.build.bulk("Si", cubic=True)
+
+    def _build(self, integrator, device="cpu", gpts=(128, 128)):
+        return np.asarray(
+            abtem.core.backend.asnumpy(
+                abtem.Potential(
+                    self._atoms(), gpts=gpts, slice_thickness=1.0,
+                    integrator=integrator, device=device,
+                ).build(lazy=False).array
+            )
+        )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_builds_on_both_devices_and_they_agree(self, device):
+        """It failed on GPU with TypeError: Unsupported type numpy.ndarray."""
+        if device == "cpu":
+            pytest.skip("the cpu case would compare a build with itself")
+        got = self._build(GaussianProjectionIntegrals(), device=device)
+        reference = self._build(GaussianProjectionIntegrals(), device="cpu")
+        assert got.shape == reference.shape
+        assert got.dtype == reference.dtype
+        # 1.1e-07 on this cell and grid. The bound is 2e-6 rather than
+        # something tighter because the deviation is a property of the cell,
+        # not of the code: across 100 combinations of element, grid and slice
+        # thickness the worst float32 case reached 5.7e-07, every one of them
+        # on a non-power-of-two grid, so 5e-7 sat 14 % from failing.
+        #
+        # No tolerance here can guard the device transfer cast, contrary to
+        # what an earlier version of this comment claimed: dropping the cast
+        # changes GPU bytes but leaves this difference identical to seven
+        # significant figures, because it moves CPU and GPU apart in the same
+        # direction. The cast's effect is bytes moved -- see the commit message.
+        scale = np.abs(reference).max()
+        assert np.abs(got - reference).max() < 2e-6 * scale
+
+    def test_the_correction_parametrization_is_used(self):
+        """It was stored and ignored; the module default was used instead."""
+        lobato = self._build(GaussianProjectionIntegrals(parametrization="lobato"))
+        kirkland = self._build(GaussianProjectionIntegrals(parametrization="kirkland"))
+        assert not np.array_equal(lobato, kirkland)
+
+    def test_the_gaussian_parametrization_is_used(self):
+        """Two Gaussian-form parametrizations must give different potentials.
+
+        The first version of this test fell back to varying the *correction*
+        parametrization, making it a duplicate of the test above and leaving
+        half the wiring untested. peng_low/peng_high are real alternatives,
+        13.8 % apart.
+        """
+        low = self._build(
+            GaussianProjectionIntegrals(gaussian_parametrization=self._peng("low"))
+        )
+        high = self._build(
+            GaussianProjectionIntegrals(gaussian_parametrization=self._peng("high"))
+        )
+        assert not np.array_equal(low, high)
+
+    @staticmethod
+    def _peng(variant):
+        from abtem.parametrizations import PengParametrization
+
+        return PengParametrization(parameters=f"peng_{variant}.json")
+
+    def test_get_gaussians_uses_the_configured_parametrization(self):
+        """Isolates one of the two wirings.
+
+        The end-to-end test above cannot: gaussian_projection_weights is also
+        wired, so its difference alone makes the potentials differ even when
+        get_gaussians still ignores self's parametrization.
+        """
+        low = GaussianProjectionIntegrals(gaussian_parametrization=self._peng("low"))
+        high = GaussianProjectionIntegrals(gaussian_parametrization=self._peng("high"))
+        assert not np.array_equal(
+            low.get_gaussians("Si", (64, 64), (0.1, 0.1)),
+            high.get_gaussians("Si", (64, 64), (0.1, 0.1)),
+        )
+
+    def test_projection_weights_use_the_configured_parametrization(self):
+        """Isolates the _integrate_gaussians wiring.
+
+        Calling the module-level gaussian_projection_weights with an explicit
+        parametrization tests nothing -- that keyword already existed. Drive it
+        through the integrator with get_gaussians pinned, so only the weights
+        wiring can produce a difference.
+        """
+        from unittest.mock import patch
+
+        low = GaussianProjectionIntegrals(gaussian_parametrization=self._peng("low"))
+        high = GaussianProjectionIntegrals(gaussian_parametrization=self._peng("high"))
+        # Three things vary with gaussian_parametrization: the gaussians, the
+        # weights, and get_corrections' long_range. Pin the other two, or this
+        # passes for the wrong reason.
+        pinned_g = low.get_gaussians("Si", (64, 64), (0.1, 0.1))
+        pinned_c = low.get_corrections("Si", (64, 64), (0.1, 0.1))
+
+        def build(integrator):
+            with patch.object(
+                type(integrator), "get_gaussians", lambda *a, **k: pinned_g
+            ), patch.object(
+                type(integrator), "get_corrections", lambda *a, **k: pinned_c
+            ):
+                return self._build(integrator, gpts=(64, 64))
+
+        assert not np.array_equal(build(low), build(high))
+
+    def test_the_correction_long_range_follows_the_gaussian_parametrization(self):
+        """The correction must subtract exactly the Gaussian field that was
+        added, so get_corrections' long_range has to be the *gaussian*
+        parametrization. Reverting that alone changes the potential by 27.6 %
+        and nothing else in this class detects it."""
+        from abtem.integrals import correction_projected_scattering_factors
+
+        integrator = GaussianProjectionIntegrals(
+            gaussian_parametrization=self._peng("low")
+        )
+        got = integrator.get_corrections("Si", (64, 64), (0.1, 0.1))
+        wired = correction_projected_scattering_factors(
+            "Si", (64, 64), (0.1, 0.1),
+            short_range=integrator.correction_parametrization,
+            long_range=integrator.gaussian_parametrization,
+        )
+        default_long_range = correction_projected_scattering_factors(
+            "Si", (64, 64), (0.1, 0.1),
+            short_range=integrator.correction_parametrization,
+        )
+        assert np.array_equal(got, wired)
+        assert not np.array_equal(got, default_long_range)
+
+    def test_an_element_the_parametrization_lacks_does_not_reject_it(self):
+        """The first form check validated the fixed element "C", so any
+        parametrization without carbon was rejected outright -- the shipped
+        peng_ionic.json among them.
+
+        This guards the *validator*, not a production path: no build reaches an
+        ionic symbol, because integrate_on_grid derives symbols from
+        chemical_symbols[number], and peng_ionic in a real build dies earlier
+        in cutoff(). The per-element rework is justified by
+        test_a_bad_entry_is_caught_at_the_element_that_uses_it, which is a live
+        path; this one pins that validation follows the element asked for.
+        """
+        from abtem.parametrizations import PengParametrization
+
+        integrator = GaussianProjectionIntegrals(
+            gaussian_parametrization=PengParametrization(
+                parameters="peng_ionic.json"
+            )
+        )
+        assert integrator.get_gaussians("O--", (32, 32), (0.1, 0.1)).shape[0] == 5
+
+    @pytest.mark.parametrize(
+        "centre, width, label",
+        [
+            (20.0, 0.5, "outside the old [0.01, 4.0] window"),
+            (0.0744, 1e-4, "between two of the old 32 sample points"),
+        ],
+    )
+    def test_a_non_gaussian_feature_is_caught_wherever_it_sits(
+        self, centre, width, label
+    ):
+        """The form check has to look at the grid the build uses.
+
+        Sampling a fixed linspace(0.01, 4.0, 32) covered 2.3 % of the k^2 a
+        128^2 build evaluates and 0.1 % of a 512^2 one, with the 32 points
+        0.13 apart. Both gaps were reachable, and a parametrization that
+        cleared the check through either built a potential several per cent to
+        tens of per cent wrong -- from the very check meant to prevent exactly
+        that.
+        """
+        import ase.build
+
+        from abtem.parametrizations import PengParametrization
+
+        class Bumped(PengParametrization):
+            """Peng's Gaussian sum times a narrow bump: not a Gaussian sum."""
+
+            def projected_scattering_factor(self, symbol, *args, **kwargs):
+                base = super().projected_scattering_factor(symbol, *args, **kwargs)
+
+                def factor(k2):
+                    k2 = np.asarray(k2)
+                    return base(k2) * (
+                        1.0 + 3.0 * np.exp(-((k2 - centre) ** 2) / width)
+                    )
+
+                return factor
+
+        integrator = GaussianProjectionIntegrals(gaussian_parametrization=Bumped())
+        with pytest.raises(ValueError, match="not a superposition of Gaussians"):
+            abtem.Potential(
+                ase.build.bulk("Si", cubic=True), gpts=(128, 128),
+                slice_thickness=1.0, integrator=integrator,
+            ).build(lazy=False)
+
+    def test_get_corrections_validates_the_parametrization_too(self):
+        """get_corrections uses gaussian_parametrization as its long_range
+        term, so a non-Gaussian one gives a plausible array rather than an
+        error. It is only safe by call order today -- integrate_on_grid happens
+        to call get_gaussians first -- and get_corrections is public."""
+        integrator = GaussianProjectionIntegrals(gaussian_parametrization="lobato")
+        with pytest.raises(ValueError, match="not a superposition of Gaussians"):
+            integrator.get_corrections("Si", (64, 64), (0.1, 0.1))
+
+    def test_the_form_check_verdict_does_not_depend_on_precision(self):
+        """Accept or reject must not be a function of abtem.config.
+
+        scaled_parameters is float64 while Parametrization._get_function casts
+        to get_dtype, so comparing one against the other made the verdict
+        precision-dependent: a user script that worked at float64 raised at
+        float32. The fixture is a pair of near-cancelling terms, which is where
+        the two dtypes disagree most.
+        """
+        import copy
+
+        from abtem.parametrizations import PengParametrization
+        from abtem.integrals import _validate_gaussian_form
+
+        # Five terms, so the table and Peng's own five-term function agree, and
+        # the last two cancel almost exactly: a genuine Gaussian superposition
+        # that float32 cannot sum accurately. The amplitude is chosen so the
+        # float32 evaluation error lands above the tolerance while the exact
+        # deviation is zero -- 1e4 is already enough, 1e5 leaves margin.
+        parameters = copy.deepcopy(PengParametrization().parameters)
+        a, b = list(parameters["Si"][0]), list(parameters["Si"][1])
+        parameters["Si"] = [a[:3] + [1e5, -1e5], b[:3] + [0.30, 0.30000001]]
+        cancelling = PengParametrization(parameters=parameters)
+
+        verdicts = {}
+        for precision in ("float32", "float64"):
+            with abtem.config.set({"precision": precision}):
+                try:
+                    _validate_gaussian_form(cancelling, "Si", (64, 64), (0.1, 0.1))
+                    verdicts[precision] = "accepted"
+                except ValueError:
+                    verdicts[precision] = "rejected"
+        # Same verdict at both, and the right one: it *is* a Gaussian sum.
+        # Comparing float64 parameters against a float32 own-function rejected
+        # it at float32 and accepted it at float64.
+        assert verdicts == {"float32": "accepted", "float64": "accepted"}, verdicts
+
+    def test_a_bad_entry_is_caught_at_the_element_that_uses_it(self):
+        """Validating one fixed element let a parametrization whose carbon
+        entry is sound and whose silicon entry is not through silently -- the
+        extra terms were added to the field while get_corrections and cutoff
+        still saw five, a ~10 % error, finite everywhere."""
+        import copy
+
+        from abtem.parametrizations import PengParametrization
+
+        parameters = copy.deepcopy(PengParametrization().parameters)
+        parameters["Si"] = [list(row) + [1.0] for row in parameters["Si"]]
+        integrator = GaussianProjectionIntegrals(
+            gaussian_parametrization=PengParametrization(parameters=parameters)
+        )
+        # The untouched element is unaffected...
+        assert integrator.get_gaussians("Ga", (32, 32), (0.1, 0.1)).shape[0] == 5
+        # ...and the tampered one is refused where it is used.
+        with pytest.raises(ValueError, match="superposition of Gaussians for 'Si'"):
+            integrator.get_gaussians("Si", (32, 32), (0.1, 0.1))
+
+    @pytest.mark.parametrize("name", ["lobato", "kirkland"])
+    def test_a_non_gaussian_parametrization_is_refused(self, name):
+        """It was accepted and gave a potential 4.8x too large, finite
+        everywhere -- a dead parameter turned into a silent physics error."""
+        integrator = GaussianProjectionIntegrals(gaussian_parametrization=name)
+        with pytest.raises(ValueError, match="superposition of Gaussians"):
+            integrator.get_gaussians("Si", (64, 64), (0.1, 0.1))
+
+    def test_the_gaussian_count_follows_the_parametrization(self):
+        """The loop bound was hardcoded to 5 while the source became
+        configurable, so a sixth Gaussian was silently dropped.
+
+        Behavioural rather than an `inspect.getsource` check, which would fail
+        a correct `zip(gaussians, weights)` refactor and pass a broken loop
+        body. The fixture is Peng's silicon entry with its last Gaussian split
+        into three identical thirds: the same function, seven terms. With the
+        bound following the parametrization the split is invisible; hardcoded
+        to five it drops two thirds of the last Gaussian.
+        """
+        import copy
+
+        from abtem.parametrizations import PengParametrization
+
+        class NTermPeng(PengParametrization):
+            """Peng, but its own scattering factor honours every term.
+
+            Needed because the shipped PengParametrization hardcodes five in
+            `scattering_factor_k2`, so a seven-term table is -- correctly --
+            rejected by the form check as self-inconsistent. That is exactly
+            why the loop bound cannot be reached with any shipped
+            parametrization: real n-term support has to fix Peng first.
+            """
+
+            def projected_scattering_factor(self, symbol, *args, **kwargs):
+                parameters = np.asarray(
+                    self.scaled_parameters(symbol, "projected_scattering_factor")
+                )
+
+                def factor(k2):
+                    k2 = np.asarray(k2)
+                    return (
+                        parameters[0][:, None]
+                        * np.exp(-parameters[1][:, None] * k2.ravel()[None])
+                    ).sum(0).reshape(k2.shape)
+
+                return factor
+
+        parameters = copy.deepcopy(PengParametrization().parameters)
+        a, b = parameters["Si"][0], parameters["Si"][1]
+        parameters["Si"] = [
+            list(a[:-1]) + [a[-1] / 3.0] * 3,
+            list(b[:-1]) + [b[-1]] * 3,
+        ]
+        split = GaussianProjectionIntegrals(
+            gaussian_parametrization=NTermPeng(parameters=parameters)
+        )
+        assert split.get_gaussians("Si", (64, 64), (0.1, 0.1)).shape[0] == 7
+
+        # The five-term reference goes through the same class, so the only
+        # difference between the two builds is the term count.
+        reference_integrator = GaussianProjectionIntegrals(
+            gaussian_parametrization=NTermPeng()
+        )
+        with abtem.config.set({"fft": "numpy"}):
+            got = self._build(split)
+            reference = self._build(reference_integrator)
+        assert np.abs(got - reference).max() < 1e-5 * np.abs(reference).max()
+
+    def test_the_defaults_are_unchanged_by_the_wiring(self):
+        """The defaults equal the module defaults the code used before.
+
+        Pinned to the numpy FFT: fftw's FFTW_MEASURE picks plans by wall-clock
+        benchmark, so abTEM is run-to-run nondeterministic on some grids and a
+        bit-identity assertion would flake.
+        """
+        with abtem.config.set({"fft": "numpy"}):
+            default = self._build(GaussianProjectionIntegrals())
+            explicit = self._build(
+                GaussianProjectionIntegrals(
+                    parametrization="lobato", gaussian_parametrization="peng"
+                )
+            )
+        assert np.array_equal(default, explicit)
+
+    def test_integrate_on_grid_accepts_no_parameter_it_ignores(self):
+        """`fourier_space` was accepted and never read.
+
+        It is a leftover of the commented-out test_finite_gaussian_projection_
+        integrals in this file. No caller passes it -- iam.py:968 is the only
+        one, and the abstract FieldIntegrator.integrate_on_grid does not
+        declare it -- so asking for a reciprocal-space result silently returned
+        a real-space one. Removed; the request is now a loud TypeError.
+
+        The oracle is the two sibling integrators, not the abstract base: all
+        three concrete ones renamed the first argument to `atoms` and the base
+        still calls it `positions`.
+        """
+        import inspect
+
+        def params(cls):
+            return list(inspect.signature(cls.integrate_on_grid).parameters)
+
+        assert params(GaussianProjectionIntegrals) == params(
+            ScatteringFactorProjectionIntegrals
+        ) == params(QuadratureProjectionIntegrals)
+
+        integrator = GaussianProjectionIntegrals()
+
+        with pytest.raises(TypeError):
+            integrator.integrate_on_grid(
+                self._atoms(),
+                a=0.0,
+                b=1.0,
+                gpts=(32, 32),
+                sampling=(0.1, 0.1),
+                fourier_space=True,
+            )
+
+    def test_the_host_path_does_not_cast_the_parametrization_arrays(
+        self, monkeypatch
+    ):
+        """`if xp is not np` around the device cast is load-bearing.
+
+        The parametrization arrays are float64 whatever the run's precision.
+        Casting them to float32 is right on the way to a device -- it halves
+        the transfer -- and wrong on the host, where it changes the CPU result
+        and so breaks the bit-identity with dev that this commit rests on.
+
+        Both arrays have to be cast to see it, and the cell matters: casting
+        the gaussians alone is invisible on every cell tried, and casting both
+        is invisible on GaAs at any grid and on Si and Au except at 97x131.
+        Diamond shows it at every grid tried, which is why it is the fixture --
+        picked by searching for a cell that discriminates rather than by
+        assuming one does.
+        """
+        import ase.build
+
+        import abtem.integrals
+
+        atoms = ase.build.bulk("C", cubic=True)
+
+        def build(cast):
+            integrator = GaussianProjectionIntegrals()
+            if cast:
+                original_gaussians = integrator.get_gaussians
+                original_weights = abtem.integrals.gaussian_projection_weights
+                integrator.get_gaussians = lambda *a, **k: np.asarray(
+                    original_gaussians(*a, **k), dtype=np.float32
+                )
+                monkeypatch.setattr(
+                    abtem.integrals,
+                    "gaussian_projection_weights",
+                    lambda *a, **k: np.asarray(
+                        original_weights(*a, **k), dtype=np.float32
+                    ),
+                )
+            with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+                return np.asarray(
+                    abtem.Potential(
+                        atoms, gpts=(64, 64), slice_thickness=1.0,
+                        integrator=integrator,
+                    ).build(lazy=False).array
+                )
+
+        plain = build(cast=False)
+        cast = build(cast=True)
+        assert not np.array_equal(plain, cast), (
+            "casting the parametrization arrays to float32 changed nothing on "
+            "this cell, so this test cannot tell whether the host path casts"
+        )
+
+    @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
+    @pytest.mark.parametrize(
+        "component, other",
+        [("symbol", "As"), ("gpts", (96, 96)), ("sampling", (0.13, 0.13))],
+    )
+    def test_no_parametrization_cache_key_component_may_be_dropped(
+        self, method, component, other
+    ):
+        """Both caches, every component -- not just the gaussians' precision.
+
+        The corrections cache had no key coverage at all, and neither cache's
+        sampling component was exercised by any test.
+        """
+        base = dict(symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10))
+        probe = {**base, component: other}
+
+        shared = GaussianProjectionIntegrals()
+        getattr(shared, method)(**base)
+        got = np.asarray(getattr(shared, method)(**probe))
+        reference = np.asarray(
+            getattr(GaussianProjectionIntegrals(), method)(**probe)
+        )
+        assert got.shape == reference.shape
+        assert np.array_equal(got, reference)
+
+    @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
+    def test_neither_parametrization_cache_is_served_across_precisions(self, method):
+        args = dict(symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10))
+        shared = GaussianProjectionIntegrals()
+        with abtem.config.set({"precision": "float32"}):
+            getattr(shared, method)(**args)
+        with abtem.config.set({"precision": "float64"}):
+            served = np.asarray(getattr(shared, method)(**args))
+            correct = np.asarray(
+                getattr(GaussianProjectionIntegrals(), method)(**args)
+            )
+        assert np.array_equal(served, correct)
+
+    def test_the_parametrization_arrays_are_cached(self):
+        """integrate_on_grid runs once per slice per species and recomputed
+        both arrays each time -- 46x redundant on a 46-slice cell, and most of
+        the build time."""
+        import ase.build
+
+        atoms = ase.build.bulk(
+            "GaAs", crystalstructure="zincblende", a=5.65, cubic=True
+        ) * (1, 1, 4)
+        integrator = GaussianProjectionIntegrals()
+        abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=1.0, integrator=integrator
+        ).build(lazy=False)
+        # One entry per (element, grid, sampling, precision) -- two elements.
+        assert len(integrator._gaussians) == 2
+        assert len(integrator._corrections) == 2
+
+    def test_caches_are_not_shipped_into_the_task_graph(self):
+        """abTEM pickles integrators into every task, so a populated cache
+        would ride along to every worker -- 12.6x graph inflation when these
+        caches were first made to store."""
+        import pickle
+
+        used = GaussianProjectionIntegrals()
+        self._build(used)
+        assert len(used._gaussians) > 0
+
+        payload = pickle.dumps(used)
+        assert len(payload) == len(pickle.dumps(GaussianProjectionIntegrals()))
+
+        restored = pickle.loads(payload)
+        assert len(restored._gaussians) == 0
+        # and it must still work after the round trip
+        self._build(restored)
+
+    def test_a_cache_is_not_served_across_precisions(self):
+        """Every cached value reaches get_dtype through spatial_frequencies."""
+        integrator = GaussianProjectionIntegrals()
+        with abtem.config.set({"precision": "float32"}):
+            integrator.get_gaussians("Ga", (64, 64), (0.1, 0.1))
+        with abtem.config.set({"precision": "float64"}):
+            served = integrator.get_gaussians("Ga", (64, 64), (0.1, 0.1))
+            correct = GaussianProjectionIntegrals().get_gaussians(
+                "Ga", (64, 64), (0.1, 0.1)
+            )
+        # Not a dtype assertion: both are float64 at either precision, so
+        # comparing dtypes passes whether or not the key carries precision.
+        # The values are what differ.
+        assert np.array_equal(served, correct)
