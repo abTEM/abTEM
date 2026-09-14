@@ -385,8 +385,12 @@ class TestPotentialEnsembleAccumulation:
     axis instead. With one exit plane the index was empty and every
     configuration's contribution was broadcast across all configurations, so
     the result came out ``num_configs`` times too large; with several exit
-    planes the plane slice landed on the configuration axis and selected
-    nothing, so the whole thickness series came out zero.
+    planes the plane slice landed on the configuration axis. On a length-1
+    configuration axis -- what the lazy path produces for every configuration
+    count, and what eager produces for num_configs == 1 -- it selected nothing
+    and the series came back zero; for eager with num_configs > 1 it selected
+    real configuration slots instead, giving a flat series carrying signal at
+    zero thickness. Wrong either way, zeros only in the first case.
 
     The double-channel branch goes through ``_update_loss_measurements`` and
     was always correct -- it is used here as a reference.
@@ -478,35 +482,38 @@ class TestPotentialEnsembleAccumulation:
         assert np.all([got[i].sum() > 0.0 for i in range(1, got.shape[0])])
         assert got.sum() == pytest.approx(reference.sum(), rel=1e-2)
 
-    def test_per_configuration_slots_are_distinct_before_reduction(self):
+    def test_each_configuration_slot_holds_its_own_configuration(self):
         """Every slot held the sum over all configurations, not its own.
 
-        Dividing the eager result by ``num_configs`` would have fixed the
-        total while leaving this broken, so assert the data itself.
+        Asserting only that the slots differ is too weak -- a permuted
+        configuration index passes that. With ``ensemble_mean=False`` the
+        per-configuration slots are public, so compare each against its own
+        independently built single-configuration run, which goes through the
+        plain-atoms path that was correct all along.
         """
-        from abtem.multislice import MultisliceTransform
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        phonons = abtem.FrozenPhonons(
+            atoms, num_configs=3, sigmas=0.05, seed=7, ensemble_mean=False
+        )
+        potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
+        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
+        probe.grid.match(potential)
+        got = self._run(potential, probe, atoms, lazy=False)
+        assert got.shape[0] == 3
 
-        atoms, potential, probe = self._setup(num_configs=3)
-        sites = atoms
-
-        captured = []
-        original = MultisliceTransform._calculate_new_array
-
-        def capture(self, waves):
-            array = original(self, waves)
-            captured.append(np.asarray(abtem.core.backend.asnumpy(array)))
-            return array
-
-        MultisliceTransform._calculate_new_array = capture
-        try:
-            self._run(potential, probe, sites, lazy=False)
-        finally:
-            MultisliceTransform._calculate_new_array = original
-
-        unreduced = captured[-1]
-        assert unreduced.shape[0] == 3
-        assert not np.array_equal(unreduced[0], unreduced[1])
-        assert not np.array_equal(unreduced[1], unreduced[2])
+        for index, configuration in enumerate(phonons):
+            single = abtem.Potential(
+                configuration, gpts=(64, 64), slice_thickness=2.0
+            )
+            reference = self._run(single, probe, atoms, lazy=False)
+            assert np.array_equal(got[index], reference), (
+                f"slot {index} does not hold configuration {index}"
+            )
 
 
 class TestPrismPotentialEnsembleAccumulation:
@@ -584,7 +591,7 @@ class TestPrismPotentialEnsembleAccumulation:
         # signal at all, and at the right magnitude, rather than being zeroed.
         for plane in range(1, got.shape[0]):
             assert got[plane].sum() == pytest.approx(
-                reference[plane].sum(), rel=5e-2
+                reference[plane].sum(), rel=1e-3
             )
 
     def test_exit_plane_axis_metadata_has_one_value_per_exit_plane(self):
@@ -619,3 +626,62 @@ def test_ensemble_indices_handle_a_multi_axis_potential_ensemble():
         1,
         2,
     )
+
+
+def test_ensemble_index_length_is_enforced():
+    """Every defect in this family was a caller passing too few indices.
+
+    The helper used to accept a short tuple silently, which let the exit-plane
+    part land on an ensemble axis.
+    """
+    from abtem.multislice import _validate_potential_ensemble_indices
+
+    class _Potential:
+        ensemble_shape = (2, 3)
+        exit_planes = (-1, 0, 1)
+
+    potential = _Potential()
+    assert _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential) == (
+        1,
+        2,
+        slice(1, 3),
+    )
+    for short in ((1,), ()):
+        with pytest.raises(ValueError, match="entries for an ensemble"):
+            _validate_potential_ensemble_indices(short, slice(1, 3), potential)
+
+
+def test_prism_driver_refuses_a_multi_configuration_potential():
+    """Called directly it would silently return 1/num_configurations.
+
+    The SMatrix entry points always hand it a single-configuration
+    sub-potential, but nothing enforced that, and after the indexing fix the
+    wrong answer looks like a plausible monotone thickness series rather than
+    obviously broken output.
+    """
+    from abtem.inelastic.core_loss import prism_transition_potential_scan
+
+    atoms = ase.Atoms(
+        "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8), pbc=True
+    )
+    potential = abtem.Potential(
+        abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.05, seed=7),
+        gpts=(64, 64),
+        slice_thickness=2.0,
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+    )
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+    )
+    with pytest.raises(NotImplementedError, match="one potential"):
+        prism_transition_potential_scan(
+            s_matrix,
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            scan=scan,
+            detectors=[abtem.FlexibleAnnularDetector()],
+            sites=atoms,
+        )
