@@ -164,6 +164,17 @@ def gaussian_projection_weights(symbol, a, b, parametrization="peng"):
     return weights
 
 
+def _sinc_on_device(gpts, sampling, device, device_key):
+    """``sinc`` built inside the context of the device its key names."""
+    if device_key == "cpu":
+        return sinc(gpts, sampling, "cpu")
+
+    import cupy as cp  # noqa: PLC0415 -- optional dependency
+
+    with cp.cuda.Device(device_key[1]):
+        return sinc(gpts, sampling, "gpu")
+
+
 class GaussianProjectionIntegrals(FieldIntegrator):
     """
     Parameters
@@ -197,8 +208,14 @@ class GaussianProjectionIntegrals(FieldIntegrator):
 
         super().__init__(periodic=True, finite=True)
 
-        self._gaussians = {}
-        self._corrections = {}
+        # These two computed a key, checked the dict, missed, recomputed and
+        # never wrote back, so both stayed empty for the life of the object and
+        # every call redid the full parametrization evaluation.
+        self._gaussians = _DeviceArrayCache()
+        self._corrections = _DeviceArrayCache()
+        # Was created lazily via hasattr on first use; an attribute that
+        # sometimes exists is worse than one that always does.
+        self._sinc_cache = _DeviceArrayCache()
 
     @property
     def cutoff_tolerance(self):
@@ -225,18 +242,26 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        key = (symbol, gpts, sampling)
-        if key in self._gaussians:
-            return self._gaussians[key]
+        # Host-side: gaussian_projected_scattering_factors takes no device, so
+        # the key needs no device component.
+        key = (symbol, tuple(gpts), tuple(sampling))
+        cached = self._gaussians.get(key)
+        if cached is not None:
+            return cached
 
-        return gaussian_projected_scattering_factors(symbol, gpts, sampling)
+        return self._gaussians.put(
+            key, gaussian_projected_scattering_factors(symbol, gpts, sampling)
+        )
 
     def get_corrections(self, symbol, gpts, sampling):
-        key = (symbol, gpts, sampling)
-        if key in self._corrections:
-            return self._corrections[key]
+        key = (symbol, tuple(gpts), tuple(sampling))
+        cached = self._corrections.get(key)
+        if cached is not None:
+            return cached
 
-        return correction_projected_scattering_factors(symbol, gpts, sampling)
+        return self._corrections.put(
+            key, correction_projected_scattering_factors(symbol, gpts, sampling)
+        )
 
     def _integrate_gaussians(self, positions, symbol, a, b, gpts, sampling, device):
         gaussians = self.get_gaussians(symbol, gpts, sampling)
@@ -301,14 +326,19 @@ class GaussianProjectionIntegrals(FieldIntegrator):
                 positions, symbol, a, b, gpts, sampling, device
             )
 
-        if not hasattr(self, "_sinc_cache"):
-            self._sinc_cache = {}
+        # `array` is already on the device this result must live on, so use it
+        # as the anchor rather than the ambient CUDA context, and build the
+        # sinc there too -- keying on one device while allocating on another is
+        # the half-fix PR #388 had to correct.
+        device_key = _device_cache_key(device, like=array)
+        sinc_key = (tuple(gpts), tuple(sampling), device_key)
+        sinc_array = self._sinc_cache.get(sinc_key)
+        if sinc_array is None:
+            sinc_array = self._sinc_cache.put(
+                sinc_key, _sinc_on_device(gpts, sampling, device, device_key)
+            )
 
-        sinc_key = (gpts, sampling, device)
-        if sinc_key not in self._sinc_cache:
-            self._sinc_cache[sinc_key] = sinc(gpts, sampling, device)
-
-        return ifft2(array / self._sinc_cache[sinc_key]).real
+        return ifft2(array / sinc_array).real
 
 
 def sinc(
@@ -409,7 +439,68 @@ def superpose_deltas(
     return array
 
 
-_MAX_SCATTERING_FACTOR_ENTRIES = 32
+_MAX_CACHE_ENTRIES = 32
+
+# Kept as the name the scattering-factor tests import.
+_MAX_SCATTERING_FACTOR_ENTRIES = _MAX_CACHE_ENTRIES
+
+
+class _DeviceArrayCache:
+    """A bounded, least-recently-used cache of computed arrays.
+
+    Deliberately a plain ``OrderedDict`` rather than ``functools.lru_cache``: a
+    per-instance ``lru_cache`` wrapping a bound method is not picklable -- it
+    resolves by ``__qualname__`` and no longer matches the class attribute of
+    that name -- which breaks dask's processes scheduler and ``distributed``,
+    i.e. the multi-GPU layout these device keys exist to serve. It also breaks
+    ``EqualityMixin`` comparison and ``deepcopy``. See PR #388.
+
+    Eviction cannot race: ``popitem`` and ``move_to_end`` are single C-level
+    dict operations, and the ``KeyError`` a losing thread sees is caught rather
+    than escaping to the caller.
+    """
+
+    def __init__(self, maxsize: int = _MAX_CACHE_ENTRIES):
+        self._maxsize = maxsize
+        self._entries: OrderedDict = OrderedDict()
+
+    def get(self, key):
+        """The cached value for ``key``, or None, refreshing its recency."""
+        try:
+            value = self._entries[key]
+        except KeyError:
+            return None
+        try:
+            self._entries.move_to_end(key)
+        except KeyError:  # evicted by another thread; the value is still ours
+            pass
+        return value
+
+    def put(self, key, value):
+        """Store ``value`` under ``key`` and return it."""
+        while len(self._entries) >= self._maxsize:
+            try:
+                self._entries.popitem(last=False)
+            except KeyError:  # another thread emptied it
+                break
+        self._entries[key] = value
+        return value
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def __eq__(self, other) -> bool:
+        # A cache is incidental state, never identity: two integrators with the
+        # same parametrization are the same integrator whether or not either
+        # has been used. Comparing contents would compare numpy arrays, which
+        # safe_equality turns into an unequal verdict via its ValueError guard,
+        # so two identical potentials would stop comparing equal once built.
+        return isinstance(other, _DeviceArrayCache)
+
+    __hash__ = None
 
 
 def _device_cache_key(device, like=None) -> str | tuple[str, int]:
@@ -889,7 +980,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         # changing between calls. Only disks small enough to fit within
         # the chunked-transfer bound are cached; larger disks are streamed
         # in memory-bounded chunks instead (see integrate_on_grid).
-        self._device_arrays: dict[tuple[str, tuple[float, float], str], object] = {}
+        self._device_arrays = _DeviceArrayCache()
 
         super().__init__(periodic=False, finite=True)
 
@@ -1117,11 +1208,20 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     # Common case: the disk fits comfortably on device, so keep
                     # a cached copy -- re-uploading it every slice measurably
                     # dominated GPU build time (see PR #309 discussion).
-                    device_key = disk_key + (device,)
-                    disk_device = self._device_arrays.get(device_key)
+                    # disk_counts_device was just allocated for this work, so
+                    # it names the device this copy has to live on. Keying on
+                    # the plain "gpu" string instead served an array cached for
+                    # one GPU to a kernel running on another, whenever a single
+                    # process drives several.
+                    cache_key = disk_key + (
+                        _device_cache_key(device, like=disk_counts_device),
+                    )
+                    disk_device = self._device_arrays.get(cache_key)
                     if disk_device is None:
-                        disk_device = cp.asarray(disk)
-                        self._device_arrays[device_key] = disk_device
+                        with disk_counts_device.device:
+                            disk_device = self._device_arrays.put(
+                                cache_key, cp.asarray(disk)
+                            )
                     interpolate_radial_functions_cuda(
                         array=temp,
                         positions=positions,

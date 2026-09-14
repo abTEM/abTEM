@@ -5,7 +5,9 @@ from hypothesis import given
 
 import abtem
 from abtem.integrals import (
+    _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
+    GaussianProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
 )
 from utils import assert_array_matches_device, gpu
@@ -393,3 +395,130 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         integrator.get_scattering_factor("Si", (64, 64), (0.1, 0.1), "cpu")
         # All spellings of the same physical device share one canonical entry.
         assert len(integrator.scattering_factors) == 1
+
+
+class TestIntegratorCaches:
+    """Four caches in integrals.py were broken in two different ways.
+
+    ``GaussianProjectionIntegrals.get_gaussians`` and ``get_corrections`` each
+    computed a key, checked the dict, missed, recomputed and never wrote back,
+    so both stayed empty for the life of the object. Its ``_sinc_cache`` and
+    ``QuadratureProjectionIntegrals._device_arrays`` keyed device-resident
+    arrays on the literal ``"cpu"``/``"gpu"`` string, which does not
+    distinguish one GPU from another.
+
+    All four now share one bounded, LRU, race-free container.
+    """
+
+    @staticmethod
+    def _atoms():
+        import ase.build
+
+        return ase.build.bulk("Si", cubic=True)
+
+    def _build(self, integrator, gpts=(64, 64)):
+        return abtem.Potential(
+            self._atoms(), gpts=gpts, slice_thickness=1.0, integrator=integrator
+        ).build(lazy=False)
+
+    def test_gaussian_caches_actually_store(self):
+        integrator = GaussianProjectionIntegrals()
+        self._build(integrator)
+        assert len(integrator._gaussians) > 0
+        assert len(integrator._corrections) > 0
+        assert len(integrator._sinc_cache) > 0
+
+    def test_a_cache_hit_returns_the_same_object(self):
+        integrator = GaussianProjectionIntegrals()
+        first = integrator.get_gaussians("Si", (64, 64), (0.1, 0.1))
+        assert integrator.get_gaussians("Si", (64, 64), (0.1, 0.1)) is first
+
+    def test_a_different_grid_is_not_served_the_first_grids_array(self):
+        integrator = GaussianProjectionIntegrals()
+        small = integrator.get_gaussians("Si", (64, 64), (0.1, 0.1))
+        large = integrator.get_gaussians("Si", (128, 128), (0.05, 0.05))
+        assert small.shape[-2:] == (64, 64)
+        assert large.shape[-2:] == (128, 128)
+
+    def test_results_do_not_depend_on_cache_state(self):
+        """A shared integrator must match a fresh one, on every grid."""
+        shared = GaussianProjectionIntegrals()
+        for gpts in ((64, 64), (96, 96), (64, 64)):
+            got = self._build(shared, gpts)
+            reference = self._build(GaussianProjectionIntegrals(), gpts)
+            assert np.array_equal(got.array, reference.array)
+
+    def test_sinc_is_cached_per_grid_and_device(self):
+        """The key must carry the grid, which the old one did too, and the
+        device, which it recorded only as the literal "cpu"/"gpu" string.
+
+        Note this class is host-only today -- it returns numpy arrays from
+        get_gaussians and fails on GPU with ``TypeError: Unsupported type
+        <class 'numpy.ndarray'>`` on this branch and on dev alike -- so the
+        device half of the key is defensive, not currently exercisable. It is
+        included because the cache is migrating to the shared container that
+        the GPU-capable integrator also uses.
+        """
+        integrator = GaussianProjectionIntegrals()
+        self._build(integrator, gpts=(64, 64))
+        self._build(integrator, gpts=(96, 96))
+        keys = list(integrator._sinc_cache)
+        assert len(keys) == 2, "the grid must be part of the key"
+        assert all(k[-1] == "cpu" for k in keys)
+
+    def test_caches_are_bounded(self):
+        integrator = GaussianProjectionIntegrals()
+        for n in range(_MAX_CACHE_ENTRIES + 8):
+            integrator.get_gaussians("Si", (8 + n,) * 2, (0.1, 0.1))
+        assert len(integrator._gaussians) <= _MAX_CACHE_ENTRIES
+
+    def test_cache_is_least_recently_used(self):
+        integrator = GaussianProjectionIntegrals()
+        kept = (8, 8)
+        integrator.get_gaussians("Si", kept, (0.1, 0.1))
+        for n in range(_MAX_CACHE_ENTRIES + 8):
+            integrator.get_gaussians("Si", (16 + n,) * 2, (0.1, 0.1))
+            integrator.get_gaussians("Si", kept, (0.1, 0.1))
+        assert any(k[1] == kept for k in integrator._gaussians)
+
+    def test_the_integrator_stays_picklable_comparable_and_copyable(self):
+        """The three things a per-instance lru_cache broke in #388."""
+        import copy
+        import pickle
+
+        used, fresh = GaussianProjectionIntegrals(), GaussianProjectionIntegrals()
+        self._build(used)
+        assert isinstance(pickle.loads(pickle.dumps(used)), GaussianProjectionIntegrals)
+        # A cache is incidental state, never identity.
+        assert used == fresh
+        clone = copy.deepcopy(used)
+        assert clone._gaussians is not used._gaussians
+
+    def test_concurrent_access_does_not_race(self):
+        import sys
+        import threading
+
+        errors = []
+
+        def hammer(integrator, seed):
+            try:
+                for n in range(4000):
+                    g = 8 + ((seed * 7919 + n * 13) % 200)
+                    integrator.get_gaussians("Si", (g, g), (0.1, 0.1))
+            except Exception as exc:  # noqa: BLE001 -- report, don't mask
+                errors.append(exc)
+
+        integrator = GaussianProjectionIntegrals()
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            threads = [
+                threading.Thread(target=hammer, args=(integrator, i)) for i in range(8)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+        assert not errors, f"{len(errors)} failures, first: {errors[0]!r}"
