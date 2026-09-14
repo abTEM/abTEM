@@ -421,6 +421,63 @@ class TestParityProjection:
         with pytest.raises(ValueError, match="EnergyLossAxis"):
             unfold_loss_gain(no_energy, 300.0)
 
+    def test_rest_parity_axis_is_averaged_out_before_projection(self):
+        """With a rest-parity axis the waves are first averaged over the two
+        rest signs. Build psi(s, t) = static + s*delta + t*rho + eps so that
+        the rest-odd part rho must drop out exactly, leaving one = mean|delta|^2
+        and multi = variance(eps), regardless of rho's size."""
+        from abtem.core.axes import PhononRestParityAxis
+
+        e_values = [0.02, 0.05]
+        n_configs, gpts = 4, 16
+        shape = (len(e_values), n_configs, gpts, gpts)
+        rng = np.random.default_rng(7)
+
+        def rc(size):
+            return (rng.normal(size=size) + 1j * rng.normal(size=size)).astype(
+                np.complex64
+            )
+
+        static, delta, eps = rc((gpts, gpts)), rc(shape), rc(shape)
+        rho = 5.0 * rc(shape)  # deliberately large rest-odd part
+
+        members = np.empty((2, 2) + shape, dtype=np.complex64)
+        for parity, s_sign in enumerate((1, -1)):
+            for rest, t_sign in enumerate((1, -1)):
+                members[parity, rest] = static + s_sign * delta + t_sign * rho + eps
+
+        waves = Waves(
+            members, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+        assert dp.array.shape[0] == 3
+
+        reference = _make_parity_exit_waves(
+            e_values, n_configs=n_configs, gpts=gpts,
+            real=static + delta + eps, twin=static - delta + eps,
+        )
+        dp_ref = phonon_loss_diffraction_patterns(reference, max_angle="full")
+        scale = np.abs(dp_ref.array[1]).max()
+        np.testing.assert_allclose(dp.array, dp_ref.array, atol=1e-5 * scale, rtol=0)
+
+        for lazy in (True,):
+            lazy_waves = Waves(
+                da.from_array(members, chunks=(1, 1, 1, 1, gpts, gpts)),
+                energy=100e3, sampling=0.1,
+                ensemble_axes_metadata=waves.ensemble_axes_metadata,
+            )
+            dp_lazy = phonon_loss_diffraction_patterns(lazy_waves, max_angle="full")
+            assert isinstance(dp_lazy.array, da.core.Array)
+            np.testing.assert_allclose(
+                dp_lazy.array.compute(), dp.array, atol=1e-5 * scale, rtol=0
+            )
+
     def test_lazy_matches_eager(self):
         e_values = [0.02, 0.05, 0.10]
         waves_eager = _make_parity_exit_waves(e_values, n_configs=6, lazy=False)

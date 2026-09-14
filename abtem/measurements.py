@@ -6429,7 +6429,13 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     ``ensemble_mean=False`` the coherent/incoherent split is no longer the
     interesting choice.
     """
-    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+    from abtem.core.axes import (
+        EnergyLossAxis,
+        FrozenPhononsAxis,
+        OrdinalAxis,
+        PhononParityAxis,
+        PhononRestParityAxis,
+    )
     from abtem.core.utils import get_dtype
 
     if temperature is not None:
@@ -6445,6 +6451,36 @@ def _phonon_loss_diffraction_patterns_parity_projection(
             "weights mislabels it. Call this function without temperature, "
             "select the 'one' slot of the 'Phonon order' axis, and apply "
             "abtem.measurements.unfold_loss_gain(one, temperature) to it."
+        )
+
+    # --- rest parity: keep only the part even in the rest displacement ---
+    # Averaging the complex waves over the ("plus", "minus") rest axis
+    # retains the Debye-Waller damping of the bin's one-phonon amplitude by
+    # all other modes (even orders in u_rest) and cancels the mis-binned
+    # one-bin-phonon-plus-one-rest-phonon term (odd in u_rest) exactly.
+    rest_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononRestParityAxis)
+        ),
+        None,
+    )
+    if rest_axis_idx is not None:
+        rest_axis = exit_waves.ensemble_axes_metadata[rest_axis_idx]
+        if tuple(rest_axis.values) != ("plus", "minus"):
+            raise ValueError(
+                "PhononRestParityAxis must have values ('plus', 'minus'), got "
+                f"{tuple(rest_axis.values)}."
+            )
+        summed = exit_waves.sum(axis=rest_axis_idx)
+        exit_waves = summed.__class__(
+            summed.array / 2, **summed._copy_kwargs(exclude=("array",))
+        )
+        parity_axis_idx = next(
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononParityAxis)
         )
 
     parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
@@ -6648,7 +6684,12 @@ def phonon_loss_diffraction_patterns(
         (issue #373). In that case ``component`` is ignored: ``"one"`` is
         the odd-in-displacement intensity, ``"multi"`` the variance of the
         even part, and ``"all"`` their sum, which equals the ordinary TDS
-        estimator over the full ``(+u, -u)`` set.
+        estimator over the full ``(+u, -u)`` set. If the ensemble also
+        carries a :class:`~abtem.core.axes.PhononRestParityAxis` (built with
+        ``rest_snapshots``), the exit waves are first averaged over it,
+        which keeps the Debye-Waller damping of the one-phonon channel by the
+        modes outside the bin and removes the mis-binned one-bin-phonon plus
+        one-rest-phonon term.
     """
     from abtem.core.axes import (
         EnergyLossAxis,

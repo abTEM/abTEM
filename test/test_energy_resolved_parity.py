@@ -5,7 +5,12 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
+from abtem.core.axes import (
+    EnergyLossAxis,
+    FrozenPhononsAxis,
+    PhononParityAxis,
+    PhononRestParityAxis,
+)
 from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
 
 
@@ -214,3 +219,105 @@ def test_wrapped_snapshot_passes_minimum_image_check(equilibrium):
     diff = twin.positions[0] - expected
     diff -= np.round(diff / 10.0) * 10.0
     np.testing.assert_allclose(diff, 0.0, atol=1e-12)
+
+
+def _rest_fields(equilibrium, n, seed=11, scale=0.03):
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        atoms = equilibrium.copy()
+        atoms.positions += rng.normal(scale=scale, size=atoms.positions.shape)
+        out.append(atoms)
+    return out
+
+
+def test_rest_snapshots_add_rest_parity_axis_and_members(equilibrium):
+    """R_eq + s u_bin + t u_rest for s, t in (+, -), laid out as
+    (parity, rest sign, energy, configuration)."""
+    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
+    rest = [_rest_fields(equilibrium, 3, seed=1), _rest_fields(equilibrium, 3, seed=2)]
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+        parity_projection=True, rest_snapshots=rest,
+    )
+    assert ensemble.ensemble_shape == (2, 2, 2, 3)
+    assert ensemble.rest_parity is True
+    assert ensemble.num_configs == 3
+    axes = ensemble.ensemble_axes_metadata
+    assert isinstance(axes[0], PhononParityAxis)
+    assert isinstance(axes[1], PhononRestParityAxis) and axes[1].values == ("plus", "minus")
+    assert isinstance(axes[2], EnergyLossAxis)
+    assert isinstance(axes[3], FrozenPhononsAxis)
+
+    eq = equilibrium.positions
+    for i in range(2):
+        for j in range(3):
+            u_bin = snapshots[i][j].positions - eq
+            u_rest = rest[i][j].positions - eq
+            for parity, s in enumerate((1, -1)):
+                for sign_index, t in enumerate((1, -1)):
+                    member = ensemble.snapshots[parity, sign_index, i, j]
+                    np.testing.assert_allclose(
+                        member.positions, eq + s * u_bin + t * u_rest, atol=1e-12
+                    )
+
+
+def test_flat_rest_snapshots_are_reused_for_every_energy(equilibrium):
+    snapshots = _make_snapshots(equilibrium, n_energies=3, n_configs=2)
+    rest = _rest_fields(equilibrium, 2)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=equilibrium,
+        parity_projection=True, rest_snapshots=rest,
+    )
+    assert ensemble.ensemble_shape == (2, 2, 3, 2)
+    eq = equilibrium.positions
+    for i in range(3):
+        for j in range(2):
+            u_bin = snapshots[i][j].positions - eq
+            u_rest = rest[j].positions - eq
+            np.testing.assert_allclose(
+                ensemble.snapshots[0, 1, i, j].positions, eq + u_bin - u_rest, atol=1e-12
+            )
+
+
+def test_rest_snapshots_validation(equilibrium):
+    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
+    rest = _rest_fields(equilibrium, 3)
+    with pytest.raises(ValueError, match="requires parity_projection"):
+        EnergyResolvedAtomsEnsemble(snapshots, [0.02, 0.05], rest_snapshots=rest)
+    with pytest.raises(ValueError, match="one entry per"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_snapshots=rest[:2],
+        )
+    with pytest.raises(ValueError, match="same \\(energy, configuration\\) layout"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_snapshots=[rest],
+        )
+    wrong = Atoms("H", positions=[[0, 0, 0]], cell=[10, 10, 10], pbc=True)
+    with pytest.raises(ValueError, match="atoms but equilibrium_atoms"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_snapshots=[wrong] * 3,
+        )
+
+
+def test_rest_parity_ensemble_blocks_reconstruct(equilibrium):
+    """The dask partition/reconstruction path must carry the 4D snapshot
+    array through without re-twinning or re-applying the rest fields."""
+    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=2)
+    rest = _rest_fields(equilibrium, 2)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+        parity_projection=True, rest_snapshots=rest,
+    )
+    blocks = ensemble.ensemble_blocks(chunks=1).compute()
+    assert blocks.shape == (2, 2, 2, 2)
+    member = blocks[0, 1, 1, 0]
+    assert member.ensemble_shape == (1, 1, 1, 1)
+    np.testing.assert_allclose(
+        member.snapshots[0, 0, 0, 0].positions,
+        ensemble.snapshots[0, 1, 1, 0].positions,
+        atol=1e-12,
+    )

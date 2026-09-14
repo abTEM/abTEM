@@ -27,6 +27,7 @@ from abtem.core.axes import (
     EnergyLossAxis,
     FrozenPhononsAxis,
     PhononParityAxis,
+    PhononRestParityAxis,
     UnknownAxis,
 )
 from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
@@ -698,6 +699,49 @@ def _validate_parity_snapshot(
         )
 
 
+def _validate_rest_snapshots(
+    rest_snapshots,
+    shape: tuple[int, int],
+    equilibrium_atoms: Atoms,
+    max_displacement: Optional[float],
+) -> Optional[np.ndarray]:
+    """Bring ``rest_snapshots`` into an ``(n_energies, n_configs)`` object
+    array matching the bin snapshots (a flat list of ``n_configs`` fields is
+    reused for every energy), and validate each against the equilibrium
+    structure. Returns None if no rest snapshots were given."""
+    if rest_snapshots is None:
+        return None
+
+    n_energies, n_configs = shape
+    rest = np.empty(shape, dtype=object)
+    if len(rest_snapshots) > 0 and isinstance(rest_snapshots[0], Atoms):
+        if len(rest_snapshots) != n_configs:
+            raise ValueError(
+                "a flat list of rest_snapshots must have one entry per "
+                f"configuration ({n_configs}), got {len(rest_snapshots)}."
+            )
+        for i in range(n_energies):
+            for j, atoms in enumerate(rest_snapshots):
+                itemset(rest, (i, j), atoms)
+    else:
+        if len(rest_snapshots) != n_energies or any(
+            len(group) != n_configs for group in rest_snapshots
+        ):
+            raise ValueError(
+                "rest_snapshots must have the same (energy, configuration) "
+                f"layout as energy_resolved_snapshots, {shape}."
+            )
+        for i, group in enumerate(rest_snapshots):
+            for j, atoms in enumerate(group):
+                itemset(rest, (i, j), atoms)
+
+    for index in np.ndindex(shape):
+        _validate_parity_snapshot(
+            rest[index], equilibrium_atoms, max_displacement, ("rest",) + index
+        )
+    return rest
+
+
 class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     """
     Energy-resolved ensemble of frozen-phonon configurations.
@@ -750,6 +794,23 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         are a few hundredths to a few tenths of an Å; a larger value almost
         always means the snapshot and equilibrium atoms are ordered
         differently. Default 1.0 Å; ``None`` disables the check.
+    rest_snapshots : list of lists of ASE Atoms, or list of ASE Atoms, optional
+        Displacement fields of the *rest* of the phonon spectrum, all modes
+        outside the energy bin (or, simpler and adequate for narrow bins,
+        drawn from the full thermal ensemble), each a displacement of
+        ``equilibrium_atoms``. Given per snapshot in the same
+        ``(energy, configuration)`` layout as ``energy_resolved_snapshots``,
+        or as one list of ``n_configs`` fields reused for every energy bin.
+        Requires ``parity_projection=True``. Every snapshot is then
+        propagated at the four sign combinations ``R_eq ± u_bin ± u_rest``,
+        adding a :class:`~abtem.core.axes.PhononRestParityAxis`
+        (``values=("plus", "minus")``) after the parity axis. Averaging the
+        exit waves over it keeps the part even in the rest displacement,
+        which carries the Debye-Waller damping of the bin's one-phonon
+        amplitude by all other modes -- the factor a bin-restricted
+        snapshot lacks -- while the part odd in the rest displacement (one
+        bin phonon plus one rest phonon, mis-binned at this energy) cancels
+        exactly. Costs four multislice runs per snapshot instead of two.
     parity_projection : bool, optional
         If True (default False), separate one-phonon from multi-phonon
         scattering by also propagating, for every snapshot, its
@@ -773,10 +834,14 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         equilibrium_atoms: Optional[Atoms] = None,
         parity_projection: bool = False,
         max_displacement: Optional[float] = 1.0,
+        rest_snapshots: Optional[list[Sequence[Atoms]] | Sequence[Atoms]] = None,
         ensemble_mean: bool = True,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         cell: Optional[Cell] = None,
     ):
+        if rest_snapshots is not None and not parity_projection:
+            raise ValueError("rest_snapshots requires parity_projection=True.")
+
         if parity_projection and equilibrium_atoms is None:
             raise ValueError(
                 "parity_projection=True requires equilibrium_atoms (the "
@@ -814,11 +879,15 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         if parity_projection and snapshots.ndim == 2:
             # Fresh, real-configuration-only input (the public contract of
             # this constructor): build the displacement-reversed twin and
-            # stack it as a new leading axis. A `snapshots.ndim == 3` input
+            # stack it as a new leading axis. A `snapshots.ndim >= 3` input
             # here means this is instead a dask/chunk reconstruction of an
-            # ensemble that already has the parity axis baked in (see
-            # `_from_partition_args_func` below) -- must not be re-twinned.
+            # ensemble that already has the parity axis (and, if used, the
+            # rest-parity axis) baked in (see `_from_partition_args_func`
+            # below) -- must not be re-twinned.
             eq_positions = equilibrium_atoms.positions
+            rest = _validate_rest_snapshots(
+                rest_snapshots, snapshots.shape, equilibrium_atoms, max_displacement
+            )
             twin = np.empty_like(snapshots)
             for index in np.ndindex(snapshots.shape):
                 atoms = snapshots[index]
@@ -830,6 +899,18 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 itemset(twin, index, twin_atoms)
             snapshots = np.stack([snapshots, twin], axis=0)
 
+            if rest is not None:
+                # (parity, rest sign, energy, config): R_eq + s u_bin + t u_rest
+                with_rest = np.empty((2, 2) + rest.shape, dtype=object)
+                for index in np.ndindex(rest.shape):
+                    u_rest = rest[index].positions - eq_positions
+                    for parity in range(2):
+                        for sign_index, sign in enumerate((1.0, -1.0)):
+                            atoms = snapshots[(parity,) + index].copy()
+                            atoms.positions = atoms.positions + sign * u_rest
+                            itemset(with_rest, (parity, sign_index) + index, atoms)
+                snapshots = with_rest
+
         atoms = snapshots.ravel()[0]
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
             atoms, None, cell
@@ -840,6 +921,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         self._equilibrium_atoms = equilibrium_atoms
         self._parity_projection = parity_projection
         self._max_displacement = max_displacement
+        self._rest_snapshots = rest_snapshots
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -856,16 +938,19 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 FrozenPhononsAxis(_ensemble_mean=ensemble_mean),
             ]
             if parity_projection:
-                self._ensemble_axes_metadata = [
-                    PhononParityAxis(values=("real", "twin"))
-                ] + energy_and_config_axes
+                leading = [PhononParityAxis(values=("real", "twin"))]
+                if snapshots.ndim == 4:
+                    leading.append(PhononRestParityAxis(values=("plus", "minus")))
+                self._ensemble_axes_metadata = leading + energy_and_config_axes
             else:
                 self._ensemble_axes_metadata = energy_and_config_axes
 
     @property
     def snapshots(self) -> np.ndarray:
-        """Object array of Atoms, ``(n_energies, n_configs)`` normally, or
-        ``(2, n_energies, n_configs)`` if ``parity_projection`` is True."""
+        """Object array of Atoms, ``(n_energies, n_configs)`` normally,
+        ``(2, n_energies, n_configs)`` if ``parity_projection`` is True, or
+        ``(2, 2, n_energies, n_configs)`` if ``rest_snapshots`` were given
+        as well (parity, rest sign, energy, configuration)."""
         return self._snapshots
 
     @property
@@ -889,6 +974,17 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         """Sanity bound [Å] on snapshot displacements from
         ``equilibrium_atoms`` (``None`` if disabled)."""
         return self._max_displacement
+
+    @property
+    def rest_snapshots(self):
+        """The rest-displacement fields, if given (see the constructor)."""
+        return self._rest_snapshots
+
+    @property
+    def rest_parity(self) -> bool:
+        """Whether the ensemble carries the rest-parity axis (both signs of a
+        rest displacement field on top of every bin snapshot)."""
+        return self._snapshots.ndim == 4
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -1007,8 +1103,11 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(
-            exclude=("energy_resolved_snapshots", "energies")
+            exclude=("energy_resolved_snapshots", "energies", "rest_snapshots")
         )
+        # the chunk snapshots already contain the rest-displaced members;
+        # only the fresh (2D) constructor path consumes rest_snapshots
+        kwargs["rest_snapshots"] = None
         kwargs["cell"] = self.cell.array
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(
             self.ensemble_shape

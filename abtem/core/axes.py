@@ -619,6 +619,24 @@ class PhononParityAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class PhononRestParityAxis(OrdinalAxis):
+    """Ensemble axis distinguishing the two signs of the *rest* displacement
+    field, i.e. of all phonon modes outside the energy bin, added on top of a
+    bin snapshot (see
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``rest_snapshots``). Always exactly length 2 (``("plus", "minus")``).
+    Averaging the complex exit waves over this axis keeps only the part even
+    in the rest displacement: the Debye-Waller damping of the bin's
+    one-phonon amplitude by all other modes is retained, while the
+    mis-binned one-bin-phonon-plus-one-rest-phonon term, odd in the rest
+    displacement, cancels exactly.
+    """
+
+    label: str = "rest parity"
+    values: tuple = ("plus", "minus")
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PrismPlaneWavesAxis(AxisMetadata):
     pass
 
