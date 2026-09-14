@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -659,6 +659,24 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # Wrapping here rather than in each caller because this is the single
+        # point they all pass through, and it is idempotent so the already-
+        # wrapped potential path is unaffected. Note SlicedAtoms -- the class
+        # used when the integrator is finite -- is deliberately left alone: it
+        # legitimately receives pad_atoms output from beyond the cell.
+        atoms = wrap_and_snap_atoms(atoms)
+
         super().__init__(atoms, slice_thickness)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
@@ -672,6 +690,15 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         bin_edges -= 1e-12
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
+
+        # label_to_index silently discards labels outside [0, num_slices - 1],
+        # which is how an out-of-cell atom used to disappear. After the wrap
+        # above there is no such atom, so say so rather than dropping one.
+        if len(labels) and (labels.min() < 0 or labels.max() > len(self) - 1):
+            raise RuntimeError(
+                "atoms fall outside every slice after wrapping: labels in "
+                f"[{labels.min()}, {labels.max()}] for {len(self)} slices"
+            )
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
