@@ -1108,18 +1108,28 @@ def cut_cell(
 
 
 def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
-    """Wrap atoms into their cell, snapping the boundary cases to zero.
+    """Wrap atoms into their cell by modulo, snapping the boundary cases to zero.
 
-    ``Atoms.wrap(eps=0.0)`` uses strict modulo, so a tiny-negative position --
-    a routine floating-point artefact of ASE surface builders, and of the
-    matrix multiplication in ``orthogonalize_cell`` -- maps to ``L - eps``
-    rather than to 0. Along ``z`` that lands the atom in
-    ``(cell_z - 1e-12, cell_z)``, outside every ``SliceIndexedAtoms`` bin edge,
-    and it is dropped in silence; along ``x`` and ``y`` it puts the atom's FFT
-    peak at the wrong position. Hence the snapping on top of the wrap.
+    Wrapping is by ``np.mod`` rather than ``Atoms.wrap``, because ``wrap`` is a
+    **no-op along any axis where ``pbc`` is False** -- which is ASE's default
+    for a hand-built ``Atoms`` and what every ``ase.build.*(vacuum=...)`` slab
+    carries. The slicing this feeds models an infinite-projection potential
+    that is periodic in all three directions whatever the ``Atoms`` object
+    declares, so the bin index must be taken modulo the cell regardless.
 
-    Idempotent: atoms already inside the cell are returned unchanged, so
-    callers that have wrapped already pay nothing.
+    Using ``wrap`` here was actively harmful for those inputs: it left
+    out-of-cell positions untouched, and the boundary snapping below then saw
+    arbitrarily large values rather than near-boundary ones and moved them to
+    zero -- teleporting an atom instead of wrapping it.
+
+    The snap itself is still needed: positions land in ``[0, L)``, and the
+    ``SliceIndexedAtoms`` bin edges are nudged down by 1e-12, so anything in
+    ``(L - 1e-12, L)`` would fall outside every bin and be dropped. The same
+    applies in x and y, where a value a hair below ``L`` puts the atom's FFT
+    peak at the wrong position.
+
+    Idempotent, and the caller's ``Atoms`` is not modified unless ``copy`` is
+    False.
 
     Parameters
     ----------
@@ -1131,21 +1141,21 @@ def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
     cell = np.diag(np.array(atoms.cell))
 
     positions = atoms.positions
-    if positions.size == 0 or np.all(
-        (positions >= 0.0) & (positions < cell - 1e-10)
-    ):
+    if positions.size == 0 or not np.all(cell > 0.0):
+        # A degenerate cell is reported better by the caller's own validation
+        # than by a modulo-by-zero here.
+        return atoms
+
+    if np.all((positions >= 0.0) & (positions < cell - 1e-10)):
         return atoms
 
     if copy:
         atoms = atoms.copy()
 
-    atoms.wrap(eps=0.0)
+    np.mod(atoms.positions, cell, out=atoms.positions)
 
-    cell_z = atoms.cell[2, 2]
-    atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
-
-    for ax in (0, 1):
-        length = atoms.cell[ax, ax]
+    for ax in range(3):
+        length = cell[ax]
         atoms.positions[atoms.positions[:, ax] > length - 1e-10, ax] = 0.0
         atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
 
