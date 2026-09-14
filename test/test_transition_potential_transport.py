@@ -200,3 +200,49 @@ def test_scan_leaves_the_users_object_unmutated():
     assert tp.energy == energy_before
     assert tp.extent == extent_before
     assert tp.array is array_before
+
+
+def test_prism_threaded_and_synchronous_schedulers_agree():
+    """The PRISM-EELS driver shares the materialized transition potential
+    through its own mechanism (a delayed ``map_blocks`` kwarg), so it needs
+    race coverage of its own.
+
+    Concurrency requires more than one task, and a plain potential gives
+    PRISM exactly one block -- hence the frozen-phonon ensemble, which puts
+    one block per configuration.
+    """
+    import ase
+
+    atoms = ase.Atoms(
+        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
+    )
+    phonons = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=11)
+    potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
+    # Energy differs from the S-matrix, so accelerator.match must write and a
+    # shared-object mutation would actually be observable.
+    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(4, 4), fractional=True, potential=potential
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+    )
+
+    lazy = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=scan,
+        detectors=abtem.FlexibleAnnularDetector(), sites=None,
+        double_channel=False, lazy=True,
+    )
+    assert len(lazy.array.__dask_graph__()) > 1  # the test must have concurrency
+
+    threaded = np.asarray(
+        lazy.copy().compute(
+            progress_bar=False, scheduler="threads", num_workers=8
+        ).to_cpu().array
+    )
+    synchronous = np.asarray(
+        lazy.compute(progress_bar=False, scheduler="synchronous").to_cpu().array
+    )
+
+    assert np.array_equal(threaded, synchronous)
+    assert tp.energy == 80e3, "the scan re-matched the caller's energy in place"
