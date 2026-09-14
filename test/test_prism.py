@@ -284,3 +284,86 @@ def test_prism_aberrated_ctf_matches_probe():
         np.squeeze(probe_intensity),
         atol=1e-5 * probe_intensity.max(),
     )
+
+
+class TestWrappedCrop2D:
+    """``wrapped_slices`` assumed ``-n <= start < n`` and ``0 < stop <= 2n``.
+
+    Outside that range it returned a wrongly shaped array instead of failing:
+    for a window entirely in negative indices, ``slice(0, stop)`` is Python's
+    negative indexing and selects ``n + stop`` rows rather than none. The crop
+    then reached the caller intact and surfaced as a broadcast error frames
+    away, in ``prism_transition_potential_scan``. Reachable from any model with
+    atoms far enough outside the cell.
+    """
+
+    @staticmethod
+    def _reference(array, corner, size):
+        """The crop by modulo index -- the definition of a periodic crop."""
+        i = (corner[0] + np.arange(size[0])) % array.shape[-2]
+        j = (corner[1] + np.arange(size[1])) % array.shape[-1]
+        return array[..., i[:, None], j[None, :]]
+
+    @pytest.mark.parametrize("n, size", [(192, 64), (17, 5), (8, 8)])
+    def test_every_corner_gives_the_right_shape_and_values(self, n, size):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(0)
+        array = rng.standard_normal((2, n, n))
+        # Several periods either side: the old code was correct only in a
+        # narrow band around zero, and wrong by n + size rows outside it.
+        for corner in range(-3 * n, 3 * n):
+            got = wrapped_crop_2d(array, (corner, 0), (size, size))
+            assert got.shape == (2, size, size)
+            assert np.array_equal(got, self._reference(array, (corner, 0), (size, size)))
+
+    def test_both_axes_wrap_independently(self):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(1)
+        array = rng.standard_normal((3, 24, 20))
+        for corner in [(-30, -25), (-5, 18), (23, -1), (47, 39), (-48, -40)]:
+            got = wrapped_crop_2d(array, corner, (7, 9))
+            assert got.shape == (3, 7, 9)
+            assert np.array_equal(got, self._reference(array, corner, (7, 9)))
+
+    @pytest.mark.parametrize("size", [16, 24, 32, 48])
+    def test_windows_wider_than_one_period(self, size):
+        """Two slices cannot express these; the general path must.
+
+        The old code was correct here only for corners in a narrow band around
+        zero -- e.g. n=16, corner=-23, size=24 came back as 8x8 -- so sweep the
+        corner rather than picking one.
+        """
+        from abtem.prism.utils import wrapped_crop_2d
+
+        n = 16
+        rng = np.random.default_rng(2)
+        array = rng.standard_normal((1, n, n))
+        for corner in range(-2 * n, 2 * n, 3):
+            got = wrapped_crop_2d(array, (corner, corner), (size, size))
+            assert got.shape == (1, size, size)
+            assert np.array_equal(
+                got, self._reference(array, (corner, corner), (size, size))
+            )
+
+    def test_wrapped_slices_refuses_more_than_one_period(self):
+        from abtem.prism.utils import wrapped_slices
+
+        with pytest.raises(RuntimeError, match="exceeds the period"):
+            wrapped_slices(0, 25, 24)
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_matches_on_device(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(3)
+        array = rng.standard_normal((2, 32, 32))
+        for corner in [(-40, 7), (-9, -9), (70, -70)]:
+            got = wrapped_crop_2d(copy_to_device(array, device), corner, (11, 11))
+            assert_array_matches_device(got, device)
+            assert np.allclose(
+                np.asarray(copy_to_device(got, "cpu")),
+                self._reference(array, corner, (11, 11)),
+            )
