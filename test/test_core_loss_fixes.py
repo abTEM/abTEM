@@ -375,3 +375,43 @@ class TestFilterByIntensity:
         strongest = [potential.transitions[i] for i in order]
         kept_ranks = [i for i, t in enumerate(strongest) if id(t) in kept]
         assert kept_ranks == list(range(len(kept_ranks)))
+
+
+def test_detectors_elastic_is_refused_rather_than_ignored():
+    """It was declared in the signature and never read.
+
+    Elastic detectors passed through Probe.transition_potential_scan were
+    accepted in silence and only the inelastic measurement came back. Every
+    other unsupported keyword reaching the driver through
+    **multislice_func_kwargs raises TypeError; this one spelling quietly
+    absorbed the caller's intent.
+    """
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=1.4)
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+    probe.grid.match(potential)
+
+    with pytest.raises(NotImplementedError, match="detectors_elastic"):
+        probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            detectors=abtem.FlexibleAnnularDetector(),
+            detectors_elastic=[abtem.AnnularDetector(inner=50, outer=150)],
+            double_channel=False,
+            lazy=False,
+            sites=atoms,
+        )
+
+
+def test_dead_transition_potential_validator_is_gone():
+    """Duck-typed list wrapper with no callers anywhere in the package.
+
+    The live check in Waves.transition_potential_multislice is isinstance-based
+    and they diverge on generators, so this was not an equivalent spelling.
+    """
+    import abtem.inelastic.core_loss as core_loss
+
+    assert not hasattr(core_loss, "_validate_transition_potentials")

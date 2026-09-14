@@ -3,7 +3,6 @@ import numpy as np
 import pytest
 from hypothesis import given
 
-# from abtem.integrals import GaussianProjectionIntegrals
 from abtem.parametrizations import (
     KirklandParametrization,
     LobatoParametrization,
@@ -45,12 +44,10 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 
 # @pytest.mark.parametrize('parameters',
 #                          [{'gaussian_projection_integrals':
-#                                GaussianProjectionIntegrals(correction_parametrization=None),
 #                            'parametrization':
 #                                PengParametrization()
 #                            },
 #                           {'gaussian_projection_integrals':
-#                                GaussianProjectionIntegrals(correction_parametrization='lobato'),
 #                            'parametrization': LobatoParametrization()
 #                            }
 #                           ], ids=['uncorrected', 'corrected'])
@@ -82,7 +79,6 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 #
 # @pytest.mark.parametrize('fourier_space', [True, False])
 # def test_finite_gaussian_projection_integrals(fourier_space):
-#     gaussian_projection_integrals = GaussianProjectionIntegrals(correction_parametrization=None)
 #
 #     symbol = 'C'
 #     gpts = (256, 256)
@@ -139,7 +135,6 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 
 # def test_finite_projections():
 #     quadrature = ProjectionQuadratureRule('lobato', quad_order=8, cutoff_tolerance=1e-4)
-#     gaussian_projection_integrals = GaussianProjectionIntegrals()
 #
 #     symbol = 'C'
 #     gpts = (256, 256)
