@@ -1107,6 +1107,51 @@ def cut_cell(
     return new_atoms
 
 
+def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
+    """Wrap atoms into their cell, snapping the boundary cases to zero.
+
+    ``Atoms.wrap(eps=0.0)`` uses strict modulo, so a tiny-negative position --
+    a routine floating-point artefact of ASE surface builders, and of the
+    matrix multiplication in ``orthogonalize_cell`` -- maps to ``L - eps``
+    rather than to 0. Along ``z`` that lands the atom in
+    ``(cell_z - 1e-12, cell_z)``, outside every ``SliceIndexedAtoms`` bin edge,
+    and it is dropped in silence; along ``x`` and ``y`` it puts the atom's FFT
+    peak at the wrong position. Hence the snapping on top of the wrap.
+
+    Idempotent: atoms already inside the cell are returned unchanged, so
+    callers that have wrapped already pay nothing.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        Atoms to wrap. Not modified unless ``copy`` is False.
+    copy : bool, optional
+        If False, wrap in place. Only for callers that own ``atoms``.
+    """
+    cell = np.diag(np.array(atoms.cell))
+
+    positions = atoms.positions
+    if positions.size == 0 or np.all(
+        (positions >= 0.0) & (positions < cell - 1e-10)
+    ):
+        return atoms
+
+    if copy:
+        atoms = atoms.copy()
+
+    atoms.wrap(eps=0.0)
+
+    cell_z = atoms.cell[2, 2]
+    atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+
+    for ax in (0, 1):
+        length = atoms.cell[ax, ax]
+        atoms.positions[atoms.positions[:, ax] > length - 1e-10, ax] = 0.0
+        atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+
+    return atoms
+
+
 def pad_atoms(
     atoms: Atoms,
     margins: SupportsFloat | tuple[float, float, float],
