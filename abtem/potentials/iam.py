@@ -869,7 +869,15 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # Shared with SliceIndexedAtoms, which applies the same wrap to the
             # atoms it is handed directly -- e.g. explicit core-loss ``sites``
             # and CrystalPotential's tiled atoms, which do not come through
-            # here. ``copy=False``: these atoms are already this method's own.
+            # here.
+            #
+            # ``copy=False`` preserves dev's behaviour exactly: atoms.wrap()
+            # mutated in place here too. Note these atoms are *not* this
+            # method's own -- for DummyFrozenPhonons, get_transformed_atoms()
+            # and randomize() are both identity, so this writes into the
+            # object the potential stores and ships as one graph node. That
+            # aliasing is a pre-existing defect tracked separately; do not read
+            # this copy=False as an assertion that the object is private.
             atoms = wrap_and_snap_atoms(atoms, copy=False)
 
         if not self.integrator.periodic and self.integrator.finite:
