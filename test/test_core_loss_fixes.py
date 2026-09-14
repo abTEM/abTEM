@@ -730,7 +730,15 @@ class TestPrismLazyExitPlanes:
             lazy=lazy,
         )
         if lazy:
+            # The shape dask was told to expect must equal what the blocks
+            # actually produce -- a chunks declaration that is never honoured
+            # (single block) would otherwise go unnoticed, and that mismatch is
+            # the whole defect.
+            declared = measurement.array.shape
             measurement = measurement.compute(progress_bar=False)
+            assert declared == np.asarray(
+                abtem.core.backend.asnumpy(measurement.array)
+            ).shape, f"dask declared {declared}, blocks produced a different shape"
         return measurement
 
     def _potential(self, num_configs=None, exit_planes=None, ensemble_mean=True):
@@ -769,9 +777,12 @@ class TestPrismLazyExitPlanes:
         eager = self._run(potential, lazy=False, double_channel=double_channel)
         lazy = self._run(potential, lazy=True, double_channel=double_channel)
 
-        assert [type(a).__name__ for a in eager.axes_metadata] == [
-            type(a).__name__ for a in lazy.axes_metadata
-        ]
+        # Compare the axes themselves, not their type names: the defect an
+        # earlier commit in this PR fixed was two *ThicknessAxis* objects with
+        # different values (per-slice vs per-exit-plane), which a type-name
+        # comparison cannot see.
+        assert eager.axes_metadata == lazy.axes_metadata
+
         eager_array = np.asarray(abtem.core.backend.asnumpy(eager.array))
         lazy_array = np.asarray(abtem.core.backend.asnumpy(lazy.array))
         assert eager_array.shape == lazy_array.shape

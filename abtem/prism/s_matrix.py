@@ -5139,14 +5139,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             squeeze=False,
         )
 
-        num_exit_planes = 0
-        potential = s_matrix.potential
-        if potential is not None and len(potential.exit_planes) > 1:
-            num_exit_planes = 1
-
-        array = np.zeros(
-            (1,) + (1,) * num_exit_planes + (1,) * len(scan.shape), dtype=object
-        )
+        # One object per block; _extract_measurement only calls .item(), so the
+        # shape of this wrapper carries no information beyond being non-empty.
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         itemset(array, 0, measurements)
         return array
 
