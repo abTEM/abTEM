@@ -1332,7 +1332,13 @@ def _extract_scattering_sites(potential, sites):
             sites = unit_atoms * potential.repetitions
 
     if isinstance(sites, Atoms):
-        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+        # Follow the potential's own convention, so explicitly passed sites
+        # are sliced exactly as sites=None would be.
+        sites = SliceIndexedAtoms(
+            sites,
+            slice_thickness=potential.slice_thickness,
+            wrap=getattr(potential, "periodic", True),
+        )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(
             "Could not derive scattering sites from the potential "

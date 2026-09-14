@@ -658,6 +658,7 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
         # Atoms outside the cell must be wrapped before they are binned, and
         # not every caller has done so: Potential._prepare_atoms wraps, but
@@ -670,14 +671,23 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         # depth, which is exactly what a depth-resolved measurement is trying
         # to resolve.
         #
-        # Wrapping here rather than in each caller because this is the single
-        # point they all pass through, and it is idempotent so the already-
-        # wrapped potential path is unaffected. Note SlicedAtoms -- the class
-        # used when the integrator is finite -- is deliberately left alone: it
-        # legitimately receives pad_atoms output from beyond the cell.
-        atoms = wrap_and_snap_atoms(atoms)
-
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Wrapping unconditionally moved such
+        # an atom the full height of the box, which is the same depth
+        # corruption this wrap exists to prevent, just for the other path.
+        # Callers that know the potential's convention pass it through; the
+        # default wraps, since that is right for everything else that reaches
+        # here.
+        # Validate first: wrapping reads np.diag(atoms.cell) and would
+        # silently ignore the shear terms of a non-orthogonal cell before
+        # BaseSlicedAtoms raises for it.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
@@ -694,9 +704,12 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         # label_to_index silently discards labels outside [0, num_slices - 1],
         # which is how an out-of-cell atom used to disappear. After the wrap
         # above there is no such atom, so say so rather than dropping one.
+        # Only meaningful after a wrap: with wrap=False (a non-periodic
+        # potential) an atom outside the cell is expected, and label_to_index
+        # dropping it is the pre-existing behaviour this must not change.
         # np.digitize against increasing bins returns [0, len(bins)], never
         # negative, so only the upper end can escape.
-        if len(labels) and labels.max() > len(self) - 1:
+        if wrap and len(labels) and labels.max() > len(self) - 1:
             raise RuntimeError(
                 f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
                 f"every one of the {len(self)} slices after wrapping; the "
