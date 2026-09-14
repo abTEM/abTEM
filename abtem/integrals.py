@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from abc import ABCMeta, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
@@ -411,18 +412,25 @@ def superpose_deltas(
 _MAX_SCATTERING_FACTOR_ENTRIES = 32
 
 
-def _device_cache_key(device) -> str | tuple[str, int]:
-    """Name the concrete device an array will be allocated on.
+def _device_cache_key(device, like=None) -> str | tuple[str, int]:
+    """Name the concrete device a cached array belongs to.
 
     The ``device`` threaded through the integrators is the plain "cpu"/"gpu"
-    string, which does not distinguish one GPU from another. Arrays here are
-    allocated on the *current* device, so read that rather than trusting the
-    string. Mirrors the keys used by ``_local_potential_on_device`` and
-    ``_radial_binning_device_arrays``.
+    string, which does not distinguish one GPU from another. Read the device
+    off ``like`` -- an array the cached value will be combined with -- the way
+    ``_local_potential_on_device`` (core_loss.py) and
+    ``_radial_binning_device_arrays`` (measurements.py) read it off theirs.
+    That is what makes the key right when one process drives several GPUs: the
+    ambient CUDA context can differ from the device an array actually lives on.
+
+    Without ``like`` there is nothing to anchor to and the current device is
+    the best available answer. Callers that have an array should pass it.
     """
     xp = get_array_module(device)
     if xp is np:
         return "cpu"
+    if like is not None and get_array_module(like) is not np:
+        return ("gpu", int(like.device.id))
     return ("gpu", int(xp.cuda.Device().id))
 
 
@@ -446,8 +454,26 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
-        self._scattering_factors = {}
+        # Bounded, thread-safe and least-recently-used. A hand-rolled dict with
+        # manual eviction races under dask's threaded scheduler -- two threads
+        # choose the same victim and the second .pop() raises KeyError, which
+        # reproduces here in a few thousand iterations with a short switch
+        # interval. measurements.py hit the same failure mode and fixed it the
+        # same way (see _radial_binning_device_arrays_cached).
+        #
+        # Built per instance rather than as a module-level lru_cache, unlike
+        # that precedent, so the cached device arrays are released with the
+        # integrator instead of being held for the life of the process: these
+        # are full-grid arrays and 32 of them at 1024^2 is not a rounding error.
+        self._scattering_factor_cache = functools.lru_cache(
+            maxsize=_MAX_SCATTERING_FACTOR_ENTRIES
+        )(self._cached_scattering_factor)
         super().__init__(periodic=True, finite=False)
+
+    def _cached_scattering_factor(self, symbol, gpts, sampling, device, device_key):
+        # ``device_key`` participates in the cache key only; the array is built
+        # from ``device``.
+        return self._calculate_scattering_factor(symbol, gpts, sampling, device)
 
     @property
     def parametrization(self) -> Parametrization:
@@ -479,39 +505,24 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device):
+    def get_scattering_factor(self, symbol, gpts, sampling, device, like=None):
         # The cached array depends on the grid and on the device it was
         # allocated on, not on the element alone: keying on ``symbol`` served
         # the first grid's array to every later grid (a broadcast error one
         # frame away, in integrate_on_grid) and the first device's array to
         # every later device (a numpy array handed to a cupy kernel).
-        key = (
+        return self._scattering_factor_cache(
             symbol,
             tuple(gpts),
             tuple(sampling),
-            _device_cache_key(device),
+            device,
+            _device_cache_key(device, like),
         )
-        try:
-            scattering_factor = self._scattering_factors[key]
-        except KeyError:
-            scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device
-            )
-            # A full key admits one entry per (element, grid, device) rather
-            # than per element, so a parameter sweep over grids would grow the
-            # cache without bound. Evict oldest-first; dicts preserve insertion
-            # order. (PR: to be replaced by the shared bounded device-array
-            # helper that unifies the four caches of this kind in the tree.)
-            while len(self._scattering_factors) >= _MAX_SCATTERING_FACTOR_ENTRIES:
-                self._scattering_factors.pop(next(iter(self._scattering_factors)))
-            self._scattering_factors[key] = scattering_factor
-
-        return scattering_factor
 
     @property
-    def scattering_factors(self) -> dict[tuple, np.ndarray]:
-        """Projected scattering factor array on a 2D grid."""
-        return self._scattering_factors
+    def scattering_factor_cache_info(self):
+        """Hits, misses and size of the scattering-factor cache."""
+        return self._scattering_factor_cache.cache_info()
 
     def integrate_on_grid(
         self,
@@ -528,8 +539,11 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
+            # Anchor the cache's device key on an array the scattering factor
+            # will actually be combined with, rather than on the ambient CUDA
+            # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device
+                chemical_symbols[number], gpts, sampling, device, like=array
             )
 
             positions = atoms.positions[atoms.numbers == number]
