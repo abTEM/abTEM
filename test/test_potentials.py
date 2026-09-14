@@ -924,24 +924,25 @@ class TestIntegratorSharedAcrossEnsemble:
 class TestSliceIndexedAtomsWrapping:
     """Atoms outside the cell were binned without being wrapped.
 
-    ``Potential._prepare_atoms`` wraps, but the other two construction sites --
-    explicit core-loss ``sites`` and ``CrystalPotential``'s tiled atoms -- hand
-    ``SliceIndexedAtoms`` raw atoms. ``np.digitize`` returns 0 for any z below
-    the first bin edge, including arbitrarily negative z, so such an atom was
-    assigned to slice 0 whatever its true wrapped depth; one above the last
+    ``Potential._prepare_atoms`` wrapped, but the other two construction sites
+    -- explicit core-loss ``sites`` and ``CrystalPotential``'s tiled atoms --
+    hand ``SliceIndexedAtoms`` raw atoms. ``np.digitize`` returns 0 for any z
+    below the first bin edge, including arbitrarily negative z, so such an atom
+    was assigned to slice 0 whatever its true wrapped depth; one above the last
     edge was discarded by ``label_to_index``. Both silent.
 
-    The mis-sliced case is the damaging one: it ionises at the wrong depth,
-    which is what a depth-resolved measurement is trying to resolve, while
-    leaving the total roughly intact.
+    Parametrised over ``pbc``: the first attempt at this fix used
+    ``Atoms.wrap``, which is a no-op along non-periodic axes, so it left the
+    bug in place for ASE's default ``pbc=False`` and for every
+    ``build.*(vacuum=...)`` slab -- and the boundary snap then moved those
+    atoms to zero instead of wrapping them.
     """
 
     DZ = 2.0
     N_SLICES = 4
 
-    def _atoms(self):
+    def _atoms(self, pbc=True):
         import ase
-
         import numpy as np
 
         z = [1.0, 3.0, 5.0, 7.0, -0.5, 8.5]  # last two outside the cell
@@ -949,7 +950,7 @@ class TestSliceIndexedAtomsWrapping:
             "B" * len(z),
             positions=[[1.0, 1.0, zz] for zz in z],
             cell=np.diag([4.0, 4.0, self.DZ * self.N_SLICES]),
-            pbc=True,
+            pbc=pbc,
         )
 
     def _expected(self, atoms):
@@ -966,21 +967,55 @@ class TestSliceIndexedAtomsWrapping:
             for i in range(sliced.num_slices)
         ]
 
-    def test_out_of_cell_atoms_land_in_their_wrapped_slice(self):
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_out_of_cell_atoms_land_in_their_wrapped_slice(self, pbc):
         from abtem.slicing import SliceIndexedAtoms
 
-        atoms = self._atoms()
+        atoms = self._atoms(pbc)
         sliced = SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
         assert self._per_slice(sliced) == self._expected(atoms)
 
-    def test_explicit_sites_agree_with_the_potentials_own_atoms(self):
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_explicit_sites_agree_with_the_potentials_own_atoms(self, pbc):
         from abtem.inelastic.core_loss import _extract_scattering_sites
 
-        atoms = self._atoms()
+        atoms = self._atoms(pbc)
         potential = Potential(atoms, gpts=(32, 32), slice_thickness=self.DZ)
         from_potential = self._per_slice(_extract_scattering_sites(potential, None))
         from_caller = self._per_slice(_extract_scattering_sites(potential, atoms))
         assert from_caller == from_potential == self._expected(atoms)
+
+    @pytest.mark.parametrize("pbc", [True, False], ids=["pbc", "nopbc"])
+    def test_in_plane_site_positions_are_wrapped_not_zeroed(self, pbc):
+        """The snap must only catch values a hair below the boundary.
+
+        Applied to an un-wrapped position it teleports the site to the cell
+        origin -- a real change of ionisation site, which ``dev`` did not make.
+        """
+        import ase
+        import numpy as np
+
+        from abtem.inelastic.core_loss import _extract_scattering_sites
+
+        atoms = ase.Atoms(
+            "B4",
+            positions=[
+                [1.0, 1.0, 1.0],
+                [4.3, 1.0, 1.0],
+                [2.0, 1.0, 3.0],
+                [2.0, 1.0, 5.0],
+            ],
+            cell=np.diag([4.0, 4.0, 8.0]),
+            pbc=pbc,
+        )
+        potential = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+        sites = _extract_scattering_sites(potential, atoms)
+        # 4.3 in a 4 A cell is 0.3, not 0.0.
+        assert np.allclose(sites.atoms.positions[:, 0], [1.0, 0.3, 2.0, 2.0])
 
     def test_the_callers_atoms_are_not_modified(self):
         import numpy as np
@@ -992,21 +1027,24 @@ class TestSliceIndexedAtomsWrapping:
         SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
         assert np.array_equal(atoms.positions, before)
 
-    def test_wrapping_is_idempotent(self):
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_wrapping_is_idempotent(self, pbc):
         import numpy as np
 
         from abtem.slicing import SliceIndexedAtoms
 
-        atoms = self._atoms()
+        atoms = self._atoms(pbc)
         once = SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
         twice = SliceIndexedAtoms(once.atoms, slice_thickness=self.DZ)
-        assert np.allclose(once.atoms.positions, twice.atoms.positions)
+        # Bitwise, not approximately: a second pass must be a no-op.
+        assert np.array_equal(once.atoms.positions, twice.atoms.positions)
         assert self._per_slice(once) == self._per_slice(twice)
 
-    def test_crystal_potential_keeps_every_site(self):
-        """CrystalPotential tiles the unit's atoms without wrapping them."""
+    def test_crystal_potential_slices_match_the_tiled_unit(self):
+        """A head count passes even when the atoms are in the wrong slices."""
         import ase
-
         import numpy as np
 
         z = [1.0, 3.0, -0.5, 4.5]
@@ -1017,8 +1055,10 @@ class TestSliceIndexedAtomsWrapping:
             pbc=True,
         )
         reps = (1, 1, 2)
-        crystal = CrystalPotential(
-            Potential(unit, gpts=(32, 32), slice_thickness=2.0), repetitions=reps
-        )
-        sliced = crystal.get_sliced_atoms()
-        assert sum(self._per_slice(sliced)) == len(z) * reps[2]
+        unit_potential = Potential(unit, gpts=(32, 32), slice_thickness=2.0)
+        crystal = CrystalPotential(unit_potential, repetitions=reps)
+
+        got = self._per_slice(crystal.get_sliced_atoms())
+        per_unit = self._per_slice(unit_potential.get_sliced_atoms())
+        assert got == per_unit * reps[2]
+        assert sum(got) == len(z) * reps[2]

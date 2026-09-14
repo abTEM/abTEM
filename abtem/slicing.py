@@ -694,10 +694,14 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         # label_to_index silently discards labels outside [0, num_slices - 1],
         # which is how an out-of-cell atom used to disappear. After the wrap
         # above there is no such atom, so say so rather than dropping one.
-        if len(labels) and (labels.min() < 0 or labels.max() > len(self) - 1):
+        # np.digitize against increasing bins returns [0, len(bins)], never
+        # negative, so only the upper end can escape.
+        if len(labels) and labels.max() > len(self) - 1:
             raise RuntimeError(
-                "atoms fall outside every slice after wrapping: labels in "
-                f"[{labels.min()}, {labels.max()}] for {len(self)} slices"
+                f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
+                f"every one of the {len(self)} slices after wrapping; the "
+                "first is at z = "
+                f"{self.atoms.positions[labels > len(self) - 1][0, 2]!r}"
             )
 
         self._slice_index = [
