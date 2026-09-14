@@ -146,12 +146,14 @@ elif [ "${MODE}" != "in-place" ]; then
     uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
         || fail "dependency install failed"
     if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
-        # dask-cuda pulls RAPIDS CUDA packages (cuda-core -> cuda-bindings)
-        # that resolve only from NVIDIA's index on plain PyPI; without it the
-        # install "succeeds" but `import dask_cuda` fails at cuda.bindings and
-        # the multigpu tests skip. The contract check below turns that into a
-        # red run, but installing from the right index is the actual fix.
-        uv pip install --extra-index-url https://pypi.nvidia.com dask-cuda \
+        # dask-cuda's import chain (cuda-core -> `from cuda import bindings`)
+        # needs cuda-bindings, which dask-cuda does not pull in and which
+        # resolves only from NVIDIA's index; without it the install "succeeds"
+        # but `import dask_cuda` fails and the multigpu tests skip. Install
+        # both from that index explicitly. The contract check below still
+        # turns any remaining import failure into a red run.
+        uv pip install --extra-index-url https://pypi.nvidia.com \
+            dask-cuda cuda-bindings \
             || fail "dask-cuda install failed"
     fi
 fi
