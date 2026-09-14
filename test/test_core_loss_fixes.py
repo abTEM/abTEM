@@ -507,3 +507,115 @@ class TestPotentialEnsembleAccumulation:
         assert unreduced.shape[0] == 3
         assert not np.array_equal(unreduced[0], unreduced[1])
         assert not np.array_equal(unreduced[1], unreduced[2])
+
+
+class TestPrismPotentialEnsembleAccumulation:
+    """The PRISM core-loss driver had the same axis-ordering defect.
+
+    ``prism_transition_potential_scan`` shares
+    ``_potential_ensemble_shape_and_metadata`` with the regular multislice
+    driver, so its measurement also carries the potential's ensemble axes
+    before the exit-plane axis -- but it indexed the plane part alone. It runs
+    once per configuration with a length-1 ensemble axis, so an exit-plane
+    slice starting at 1 or beyond selected nothing and a whole thickness
+    series came back zero.
+
+    Separately, ``SMatrix._build_ensemble_shape_metadata`` described that
+    exit-plane axis with the per-*slice* ``ThicknessAxis`` (length
+    ``num_slices``) instead of the per-exit-plane one, which raised from the
+    measurement constructor and masked the zeros above.
+    """
+
+    @staticmethod
+    def _setup(num_configs=None, exit_planes=None):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        ensemble = (
+            atoms
+            if num_configs is None
+            else abtem.FrozenPhonons(
+                atoms, num_configs=num_configs, sigmas=0.05, seed=7
+            )
+        )
+        potential = abtem.Potential(
+            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
+        )
+        return atoms, potential
+
+    def _run(self, atoms, potential, double_channel=False):
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+        )
+        measurement = s_matrix.transition_potential_scan(
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=False,
+        )
+        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
+
+    @pytest.mark.parametrize("num_configs", [1, 3])
+    @pytest.mark.parametrize("double_channel", [False, True])
+    def test_thickness_series_survives_a_potential_ensemble(
+        self, num_configs, double_channel
+    ):
+        atoms, plain = self._setup(exit_planes=1)
+        reference = self._run(atoms, plain, double_channel)
+
+        _, potential = self._setup(num_configs=num_configs, exit_planes=1)
+        got = self._run(atoms, potential, double_channel)
+
+        assert got.shape == reference.shape
+        assert got[0].sum() == 0.0  # entrance plane, nothing traversed yet
+        assert all(got[i].sum() > 0.0 for i in range(1, got.shape[0]))
+        # Frozen phonons displace the atoms, so this matches the un-displaced
+        # reference only in aggregate -- the point is that the series carries
+        # signal at all, and at the right magnitude, rather than being zeroed.
+        for plane in range(1, got.shape[0]):
+            assert got[plane].sum() == pytest.approx(
+                reference[plane].sum(), rel=5e-2
+            )
+
+    def test_exit_plane_axis_metadata_has_one_value_per_exit_plane(self):
+        """It was built from the per-slice ThicknessAxis instead."""
+        _, potential = self._setup(num_configs=2, exit_planes=1)
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        shape, metadata = s_matrix._build_ensemble_shape_metadata()
+        assert shape[-1] == len(potential.exit_planes)
+        assert len(metadata[-1].values) == len(potential.exit_planes)
+
+
+def test_ensemble_indices_handle_a_multi_axis_potential_ensemble():
+    """A potential with two ensemble axes is not constructible through the
+    public API today, so exercise the index builder directly."""
+    from abtem.multislice import _validate_potential_ensemble_indices
+
+    class _FakePotential:
+        ensemble_shape = (2, 3)
+        exit_planes = (-1, 0, 1)
+
+    potential = _FakePotential()
+    indices = _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential)
+    assert indices == (1, 2, slice(1, 3))
+    assert sum(isinstance(i, slice) for i in indices) == 1
+
+    class _SinglePlane(_FakePotential):
+        exit_planes = (-1,)
+
+    assert _validate_potential_ensemble_indices((1, 2), slice(0, 1), _SinglePlane()) == (
+        1,
+        2,
+    )
