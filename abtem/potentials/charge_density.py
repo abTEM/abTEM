@@ -3,6 +3,7 @@ electrostatic potential in multislice simulations."""
 
 from __future__ import annotations
 
+import warnings
 from functools import partial
 from typing import Tuple, Union
 
@@ -210,6 +211,11 @@ def add_point_charges_fourier(
     """
     Add the nuclear point charges in Reciprocal space.
 
+    Each atom's full atomic number is added as a Gaussian-broadened point charge.
+    This assumes `array` represents a valence-only electron density (the charge
+    "missing" for neutrality is exactly the atomic number); if `array` already
+    represents an all-electron density, this double-counts the core electrons.
+
     The per-atom phase factor ``exp(-2pi i k.r)`` is evaluated exactly (as an
     analytic delta function in Fourier space, not a real-space interpolation of a
     singularity), but reorganised for speed: for a plane-wave FFT grid, k is always
@@ -393,11 +399,83 @@ def _generate_slices(
         yield slic
 
 
+def _warn_if_not_valence_only(
+    charge_density: np.ndarray, atoms: Atoms, cls_name: str = "ChargeDensityPotential"
+) -> None:
+    """
+    Warn if `charge_density` looks like an all-electron density (e.g. from summing
+    VASP AECCAR0 and AECCAR2, as in ``chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum``) rather
+    than the valence-only density :class:`.ChargeDensityPotential` expects.
+
+    :class:`.ChargeDensityPotential` adds its own approximate nuclear/core correction
+    (a Gaussian-broadened point charge equal to each atom's full atomic number, see
+    :func:`add_point_charges_fourier`) on top of the given density -- analogous to,
+    but much cruder than, the per-species radial PAW core correction
+    :class:`.GPAWPotential` reconstructs from a GPAW calculation. If the given
+    density already includes an all-electron core contribution, this correction
+    double-counts it, and the genuinely sharp near-nuclear feature of an
+    all-electron density is far too fine to resolve on a typical multislice grid --
+    both effects show up as large, spurious swings right at atomic positions, worst
+    for heavy elements (whose core electron count, and hence the double-counted
+    charge, is largest).
+    """
+    voxel_volume = atoms.cell.volume / np.prod(charge_density.shape[-3:])
+    total_electrons = float(np.sum(charge_density)) * voxel_volume
+    total_atomic_number = float(np.sum(atoms.numbers))
+    max_density = float(np.max(charge_density))
+
+    reasons = []
+    if total_electrons > 1.5 * total_atomic_number:
+        reasons.append(
+            f"it integrates to ~{total_electrons:.1f} electrons, well above the "
+            f"atoms' total atomic number ({total_atomic_number:.0f}) -- implausible "
+            "unless the density already includes the core electrons"
+        )
+    if max_density > 1000.0:
+        reasons.append(
+            f"its peak value ({max_density:.3g} e/Å³) is implausibly large for a "
+            "smooth valence-only density"
+        )
+
+    if reasons:
+        warnings.warn(
+            "charge_density looks like it may be an all-electron density (e.g. "
+            "from summing VASP AECCAR0 and AECCAR2, or a 'CHGCAR_sum' file) rather "
+            f"than the valence-only density {cls_name} expects: "
+            + "; and ".join(reasons)
+            + f". {cls_name} adds its own approximate nuclear/core "
+            "correction on top of the given density equal to each atom's full "
+            "atomic number; if the density already includes the core electrons, "
+            "this double-counts them and can severely distort the potential near "
+            "atoms. Pass a valence-only density instead -- a plain VASP CHGCAR, a "
+            "GPAW pseudo-density, or AECCAR2 alone (not the AECCAR0+AECCAR2 sum).",
+            stacklevel=3,
+        )
+
+
 class ChargeDensityPotential(_PotentialBuilder):
     """
     The charge density potential is used to calculate the electrostatic potential from a
     set of core charges defined by an ASE `Atoms` object and corresponding electron
     charge density defined by a NumPy array.
+
+    `charge_density` must be a smooth, **valence-only** electron density -- e.g. a
+    plain VASP `CHGCAR`, a GPAW pseudo-density, or VASP's `AECCAR2` alone -- not an
+    all-electron density such as the `AECCAR0+AECCAR2` sum some VASP workflows
+    produce for Bader charge analysis (`chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum`).
+    This class adds its own approximate nuclear/core correction on top of the given
+    density -- a Gaussian-broadened point charge equal to each atom's full atomic
+    number, see :func:`add_point_charges_fourier` -- which plays the same role as
+    the per-species radial PAW core correction :class:`.GPAWPotential` reconstructs
+    from a converged GPAW calculation, just with a single, cruder isotropic
+    Gaussian instead of an accurate per-species radial reconstruction. If the given
+    density already includes the (all-electron) core contribution, this correction
+    double-counts it; and the genuinely sharp near-nuclear feature of an
+    all-electron density is far too fine to resolve on a typical multislice grid.
+    Both effects show up as large, spurious swings in the potential right at atomic
+    positions, worst for heavy elements. A warning is raised if `charge_density`
+    looks implausible for a valence-only density (see
+    :func:`_warn_if_not_valence_only`).
 
     Parameters
     ----------
@@ -405,7 +483,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
     charge_density : numpy.ndarray
-        Charge density as a 3D NumPy array [electrons / Å^3].
+        Valence-only electron density as a 3D NumPy array [electrons / Å^3]. See
+        above -- this must not be an all-electron density.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
         calculated by specifying either `sampling` or `gpts`.
@@ -481,6 +560,15 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
+
+        if isinstance(self._charge_density, np.ndarray):
+            # Skipped for a lazy (dask) charge_density to avoid forcing an eager
+            # computation of a potentially large array just for this check.
+            _warn_if_not_valence_only(
+                self._charge_density,
+                self._frozen_phonons.atoms,
+                cls_name=type(self).__name__,
+            )
 
         # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
         # vectors correctly for an orthogonal cell. For a skewed cell with

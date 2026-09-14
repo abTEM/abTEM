@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -178,3 +180,47 @@ def test_point_charges_general_cell_conserves_nuclear_charge():
         f"expected {expected_total_charge:.4f} -- pixel_volume should be |det(cell)|/N, "
         f"not prod(diag(cell))/N"
     )
+
+
+def test_no_warning_for_valence_like_density(carbon_atoms, charge_density_3d):
+    """A smooth, low-amplitude density (as any real valence-only density is) must
+    not trigger the all-electron-density warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+
+
+def test_warns_for_implausibly_peaked_density(carbon_atoms):
+    """A density with an implausibly large peak value (as a genuinely all-electron
+    density, e.g. from summing VASP AECCAR0+AECCAR2, would have near each nucleus)
+    must raise the all-electron-density warning."""
+    charge_density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+    charge_density[16, 16, 16] = 1e5
+
+    with pytest.warns(UserWarning, match="all-electron density"):
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_warns_for_implausible_total_charge(carbon_atoms):
+    """A smooth density whose integrated electron count greatly exceeds the atoms'
+    total atomic number (as a genuinely all-electron density would, once summed)
+    must raise the all-electron-density warning, even without an extreme peak."""
+    # carbon_atoms is a single C atom (Z=6) in a 5x5x5 cell; a uniform density of
+    # 1.0 e/A^3 integrates to 125 electrons, far more than the atomic number.
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+
+    with pytest.warns(UserWarning, match="all-electron density"):
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_no_warning_for_lazy_charge_density(carbon_atoms):
+    """The all-electron-density check is skipped for a lazy (dask) charge_density,
+    even if its content would otherwise trigger the warning, to avoid forcing an
+    eager computation of a potentially large array just for this check."""
+    da = pytest.importorskip("dask.array")
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+    lazy_charge_density = da.from_array(charge_density, chunks=-1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, lazy_charge_density, sampling=0.1)
