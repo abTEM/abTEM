@@ -886,7 +886,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                # Non-periodic potentials are randomised after padding and are
+                # deliberately never wrapped; see the note in
+                # SliceIndexedAtoms.__init__.
+                wrap=self.periodic,
             )
 
         return sliced_atoms
