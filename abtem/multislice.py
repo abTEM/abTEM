@@ -526,6 +526,16 @@ def _validate_potential_ensemble_indices(
     elif not isinstance(potential_index, tuple):
         potential_index = (potential_index,)
 
+    # This whole family of defects was one caller passing too few leading
+    # indices, so refuse that rather than silently letting the exit-plane part
+    # land on an ensemble axis.
+    if len(potential_index) != len(potential.ensemble_shape):
+        raise ValueError(
+            f"potential_index {potential_index!r} has "
+            f"{len(potential_index)} entries for an ensemble of "
+            f"{len(potential.ensemble_shape)} axes {potential.ensemble_shape!r}"
+        )
+
     if len(potential.exit_planes) == 1:
         exit_plane_index = ()
     elif not isinstance(exit_plane_index, tuple):
