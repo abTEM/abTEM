@@ -6,6 +6,7 @@ from abc import abstractmethod
 from itertools import accumulate
 from typing import Any, Callable, Generator, Optional, Union
 
+import dask
 import dask.array as da
 import numpy as np
 
@@ -28,7 +29,7 @@ def unpack_blockwise_args(args) -> tuple:
     return unpacked
 
 
-def shared_constant_arg(x: Any, lazy: bool = True) -> Any:
+def shared_constant_arg(x: Any, lazy: bool = True) -> np.ndarray | da.core.Array:
     """Package a large constant as a single node of the task graph.
 
     An ensemble member's keyword arguments are baked into the function of
@@ -45,8 +46,6 @@ def shared_constant_arg(x: Any, lazy: bool = True) -> Any:
     """
     if not lazy:
         return _wrap_with_array(x, ndims=0)
-
-    import dask
 
     return da.from_delayed(
         dask.delayed(_wrap_with_array)(x, ndims=0), shape=(), dtype=object

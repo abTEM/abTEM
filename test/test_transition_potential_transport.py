@@ -38,7 +38,7 @@ def _setup(gpts=(64, 64)):
     # can tell a private view from a mutated shared one. (The extent must be
     # defined -- TransitionPotentialArray builds its local potential in
     # __init__, which needs the grid.)
-    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
+    tp = _synthetic_tp(gpts=gpts, extent=potential.extent, energy=80e3)
     probe = abtem.Probe(semiangle_cutoff=32, energy=60e3)
     probe.grid.match(potential)
     scan = abtem.GridScan(
@@ -89,9 +89,16 @@ def test_lazy_threads_and_eager_agree():
 
 
 def test_threaded_and_synchronous_schedulers_agree():
-    """The same graph under concurrent threads must match the synchronous
-    run bit for bit -- the regression this guards is concurrent tasks racing
-    on a shared transition potential's grid/accelerator state."""
+    """The same graph under concurrent threads must match the synchronous run
+    bit for bit.
+
+    Note what this does and does not catch: the grid/accelerator matching is
+    idempotent, so concurrent tasks racing on a shared transition potential
+    converge to the same values and the numbers alone cannot see it. The
+    assertions that the caller's object is left unmatched are what actually
+    guard that race (see the two tests below); this one guards the broader
+    invariant that concurrency does not perturb the result.
+    """
     potential, tp, probe, scan, sites = _setup()
     lazy = _scan(probe, potential, tp, scan, sites, threshold=0.5)
 
@@ -209,7 +216,9 @@ def test_prism_threaded_and_synchronous_schedulers_agree():
 
     Concurrency requires more than one task, and a plain potential gives
     PRISM exactly one block -- hence the frozen-phonon ensemble, which puts
-    one block per configuration.
+    one block per configuration. As above, the scheduler comparison alone
+    cannot see the idempotent grid/accelerator race; the closing assertion
+    on the caller's energy is what bites.
     """
     import ase
 
@@ -220,7 +229,7 @@ def test_prism_threaded_and_synchronous_schedulers_agree():
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
     # Energy differs from the S-matrix, so accelerator.match must write and a
     # shared-object mutation would actually be observable.
-    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
+    tp = _synthetic_tp(gpts=(64, 64), extent=potential.extent, energy=80e3)
     scan = abtem.GridScan(
         start=(0, 0), end=(1, 1), gpts=(4, 4), fractional=True, potential=potential
     )
@@ -246,3 +255,69 @@ def test_prism_threaded_and_synchronous_schedulers_agree():
 
     assert np.array_equal(threaded, synchronous)
     assert tp.energy == 80e3, "the scan re-matched the caller's energy in place"
+
+
+def test_prism_graph_carries_the_transition_potential_once():
+    """The PRISM path's transport needs its own assertion: without the
+    delayed wrapper dask would embed one copy per ensemble block, and the
+    result-only tests above would not notice."""
+    import ase
+
+    atoms = ase.Atoms(
+        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
+    )
+    phonons = abtem.FrozenPhonons(atoms, num_configs=6, sigmas=0.05, seed=3)
+    potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
+    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(4, 4), fractional=True, potential=potential
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+    )
+
+    lazy = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=scan,
+        detectors=abtem.FlexibleAnnularDetector(), sites=None,
+        double_channel=False, lazy=True,
+    )
+    graph = dict(lazy.array.__dask_graph__())
+    payload = tp.array.nbytes
+    sizes = [len(cloudpickle.dumps(value)) for value in graph.values()]
+
+    assert len(graph) > 6  # one block per configuration, plus structure
+    big = [size for size in sizes if size > payload / 2]
+    assert len(big) == 1, f"expected one payload-sized key, got {len(big)}"
+
+
+def test_reconstructor_without_its_graph_node_args_fails_clearly():
+    """Calling the partial from _from_partitioned_args with only the
+    potential's args used to die inside the potential's own reconstructor,
+    naming a function the caller never invoked."""
+    import ase
+
+    from abtem.multislice import (
+        MultisliceTransform,
+        transition_potential_multislice_and_detect,
+    )
+
+    atoms = ase.Atoms("BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
+                      cell=(8, 8, 4), pbc=True)
+    potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+    tp = _synthetic_tp(extent=potential.extent, energy=80e3)
+    transform = MultisliceTransform(
+        potential=potential, detectors=abtem.FlexibleAnnularDetector(),
+        multislice_func=transition_potential_multislice_and_detect,
+        transition_potential=tp, threshold=1.0,
+    )
+
+    assert transform._graph_node_keys() == ("transition_potential",)
+    potential_args = potential._partition_args(lazy=False)
+    with pytest.raises(ValueError, match="partitioned arguments"):
+        transform._from_partitioned_args()(*potential_args)
+
+    # With the full set from _partition_args it round-trips.
+    rebuilt = transform._from_partitioned_args()(
+        *transform._partition_args(lazy=False)
+    ).item()
+    assert rebuilt._multislice_func_kwargs["transition_potential"] is tp

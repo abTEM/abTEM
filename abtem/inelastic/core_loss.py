@@ -613,13 +613,16 @@ class BaseTransitionPotential(
         copy with a private grid and accelerator instead, so nothing large
         is copied.
 
-        Everything else stays shared, which is safe for the objects the
-        drivers use: they follow this call with ``copy_to_device``, which
-        rebuilds the object and so privatizes the derived state, and the
-        payload array itself is only ever read (the transforms that use it
-        do not overwrite their input). Note that ``copy.copy`` honours
-        ``__getstate__``, so a subclass that blanks an attribute there gets
-        it blanked in this view as well.
+        Everything else stays shared, so this view alone is **not** enough
+        to call the mutating methods on: ``scatter`` and
+        ``generate_scattered_waves`` rebind ``_array`` and re-match the grid
+        on ``self``. Both drivers rely on following this call with
+        ``copy_to_device``, which rebuilds the object and privatizes that
+        derived state; a caller that skips it must not mutate the result.
+        The payload buffer itself is only ever read (the transforms
+        allocate rather than overwrite their input). Note that
+        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
+        attribute there gets it blanked in this view as well.
 
         Parameters
         ----------
