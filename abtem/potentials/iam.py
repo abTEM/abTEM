@@ -1957,6 +1957,44 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         return waves
 
 
+def _iter_balanced_config_tiles(
+    n_configs: int, n_tiles: int, n_z: int, rng: np.random.Generator
+):
+    """Yield ``n_z`` length-``n_tiles`` arrays of pool-configuration indices.
+
+    Shared by ``CrystalPotential.generate_slices`` (to assemble the mosaic
+    potential) and ``CrystalPotential.get_realised_atoms`` (to place atoms
+    consistently with that same mosaic) -- both must consume an identically
+    seeded ``rng`` in the same order to agree on which configuration landed
+    at which lateral tile of which z-repetition.
+
+    Every configuration receives a total usage budget of
+    floor/ceil(``n_tiles * n_z / n_configs``) over the whole sequence, and
+    each draw picks the ``n_tiles`` configurations with the most budget
+    remaining (random tie-breaking keeps assignments uniform), so reuse is
+    the minimum the pool size allows and is spread evenly across z rather
+    than let the same configuration recur in many layers. See
+    ``CrystalPotential.generate_slices`` for the full rationale.
+    """
+    total_slots = n_tiles * n_z
+    base, extra = divmod(total_slots, n_configs)
+    budgets = np.full(n_configs, base, dtype=np.int64)
+    if extra:
+        budgets[rng.permutation(n_configs)[:extra]] += 1
+
+    for _ in range(n_z):
+        if n_configs >= n_tiles:
+            order = rng.permutation(n_configs)
+            chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
+        else:
+            n_perms = -(-n_tiles // n_configs)  # ceil
+            chosen = np.concatenate(
+                [rng.permutation(n_configs) for _ in range(n_perms)]
+            )[:n_tiles]
+        np.subtract.at(budgets, chosen, 1)
+        yield chosen
+
+
 class CrystalPotential(_PotentialBuilder):
     """
     The crystal potential may be used to represent a potential consisting of a repeating
@@ -2183,6 +2221,129 @@ class CrystalPotential(_PotentialBuilder):
         )
 
         return self._sliced_atoms
+
+    def get_realised_atoms(self, seed: Optional[int] = None) -> Atoms:
+        """
+        Reconstruct one explicit, self-consistent thermal realisation of the
+        full crystal: the actual displaced atomic positions the mosaic
+        assembly in :meth:`generate_slices` used for the given seed -- which
+        pool configuration it drew for every lateral tile of every
+        z-repetition, and what that configuration's own displacement was.
+
+        This is the displaced counterpart to :meth:`get_sliced_atoms`, which
+        deliberately returns the equilibrium (undisplaced) lattice because a
+        mosaic pool draws independently on every call and there is normally
+        no single "the" displaced realisation to hand back. Fixing ``seed``
+        (and passing the same ``seed`` to the ``CrystalPotential`` actually
+        used for the multislice run, via its ``seeds`` argument) makes that
+        draw reproducible, so the two agree. This lets, for example, an
+        ionisation/EDX scan place its transition potentials at the same
+        thermally displaced positions the elastic potential actually used
+        for that run, instead of the ideal lattice sites
+        ``get_sliced_atoms`` returns -- pass the result as ``sites=`` to
+        :meth:`abtem.Probe.ionization_scan`.
+
+        Parameters
+        ----------
+        seed : int, optional
+            The member seed to replay -- pass ``int(self.seeds[0])`` (or
+            omit ``seed`` to default to that) for a ``CrystalPotential``
+            built with a fixed ``seeds``, so the pool reseeding and mosaic
+            draw this method replays are the same ones :meth:`generate_slices`
+            actually consumed. If ``self.seeds`` is ``None`` (the default),
+            the mosaic draw is not reproducible after the fact, so ``seed``
+            must be supplied explicitly here *and* passed as ``seeds=seed``
+            to the ``CrystalPotential`` used for the actual run, before that
+            run consumes it.
+
+        Returns
+        -------
+        atoms : ase.Atoms
+            The full crystal (all repetitions), with atoms placed at the
+            thermally displaced positions the mosaic assigned to each
+            lateral tile and z-repetition for this seed.
+        """
+        if seed is None:
+            if self.seeds is None:
+                raise ValueError(
+                    "This CrystalPotential has no fixed 'seeds', so its "
+                    "mosaic draw is not reproducible after the fact -- pass "
+                    "'seed' explicitly, and pass the same value as 'seeds' "
+                    "to the CrystalPotential actually used for the "
+                    "multislice run (before it consumes it), so the two "
+                    "agree on which configuration landed where."
+                )
+            seed = int(self.seeds[0])
+
+        if not hasattr(self._potential_unit, "get_transformed_atoms"):
+            raise RuntimeError(
+                "Cannot derive atoms from a CrystalPotential whose "
+                f"potential_unit ({type(self._potential_unit).__name__}) does "
+                "not expose 'get_transformed_atoms' (e.g. a precomputed "
+                "PotentialArray)."
+            )
+
+        pool_unit = self._pool_unit_for_member(seed)
+        unit_atoms = pool_unit.get_transformed_atoms()
+
+        fp = getattr(pool_unit, "frozen_phonons", None)
+        tile_xy = self._repetitions[:2]
+        n_tiles = tile_xy[0] * tile_xy[1]
+        n_z = self._repetitions[2]
+        unit_thickness = pool_unit.thickness
+
+        if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
+            realised = unit_atoms.copy()
+            if isinstance(fp, FrozenPhonons):
+                realised = fp.randomize(realised)
+            tiled = realised * (tile_xy[0], tile_xy[1], n_z)
+        else:
+            n_configs = fp.num_configs
+            # Config c's displaced unit-cell atoms: a length-1 FrozenPhonons
+            # seeded with that config's own seed reproduces exactly the
+            # displacement the pool built at index c (Potential.get_sliced_atoms
+            # -> FrozenPhonons.randomize both key off seed[0] alone). The seed
+            # must be passed as a 1-tuple, not a bare int: validate_seeds
+            # treats a bare int as a *master* seed to derive new seeds from
+            # (matching how a top-level FrozenPhonons(..., seed=<int>) call
+            # expands one seed into num_configs), whereas a tuple is reused
+            # literally -- which is what the internal per-block
+            # reconstruction (FrozenPhonons's own ensemble machinery, slicing
+            # self.seed[c:c+1]) actually does.
+            config_atoms = [
+                FrozenPhonons(
+                    unit_atoms,
+                    num_configs=1,
+                    sigmas=fp.sigmas,
+                    directions=fp.directions,
+                    seed=(int(fp.seed[c]),),
+                ).randomize(unit_atoms)
+                for c in range(n_configs)
+            ]
+
+            rng = np.random.default_rng(seed)
+            tiles = []
+            for tile_flat in _iter_balanced_config_tiles(n_configs, n_tiles, n_z, rng):
+                tiles.append(tile_flat.reshape(tile_xy))
+
+            pieces = []
+            for i, config_tiles in enumerate(tiles):
+                for tx in range(tile_xy[0]):
+                    for ty in range(tile_xy[1]):
+                        piece = config_atoms[int(config_tiles[tx, ty])].copy()
+                        piece.positions[:, 0] += tx * unit_atoms.cell[0, 0]
+                        piece.positions[:, 1] += ty * unit_atoms.cell[1, 1]
+                        piece.positions[:, 2] += i * unit_thickness
+                        pieces.append(piece)
+
+            tiled = pieces[0]
+            for piece in pieces[1:]:
+                tiled += piece
+
+        tiled.set_cell(np.diag(self.box))
+        tiled.pbc = True
+
+        return tiled
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -2452,31 +2613,14 @@ class CrystalPotential(_PotentialBuilder):
         # every unit cell in the crystal receives a distinct configuration --
         # statistically identical to tiling the displaced atoms directly.
         # Within a layer draws remain distinct whenever the pool allows (no
-        # in-plane duplication), as before.
+        # in-plane duplication), as before. The draw sequence itself lives in
+        # ``_iter_balanced_config_tiles`` (module level), shared with
+        # ``get_realised_atoms`` so the two agree on which configuration
+        # landed at which tile of which z-repetition for the same seed.
         if n_configs > 1:
-            total_slots = n_tiles * self.repetitions[2]
-            base, extra = divmod(total_slots, n_configs)
-            budgets = np.full(n_configs, base, dtype=np.int64)
-            if extra:
-                budgets[rng.permutation(n_configs)[:extra]] += 1
-
-        def _draw_config_tiles() -> np.ndarray:
-            if n_configs >= n_tiles:
-                # The ``n_tiles`` most-underused configurations, in random
-                # order (permute first; the stable sort then orders by budget
-                # only, keeping ties shuffled).
-                order = rng.permutation(n_configs)
-                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
-            else:
-                # Pool smaller than a single layer: in-plane repeats are
-                # unavoidable; cycle freshly shuffled permutations to spread
-                # them as evenly as possible.
-                n_perms = -(-n_tiles // n_configs)  # ceil
-                chosen = np.concatenate(
-                    [rng.permutation(n_configs) for _ in range(n_perms)]
-                )[:n_tiles]
-            np.subtract.at(budgets, chosen, 1)
-            return chosen.reshape(tile_xy)
+            config_tiles_iter = _iter_balanced_config_tiles(
+                n_configs, n_tiles, self.repetitions[2], rng
+            )
 
         for i in range(self.repetitions[2]):
             # Draw an independent displaced realisation per unit cell in the x,
@@ -2487,7 +2631,7 @@ class CrystalPotential(_PotentialBuilder):
             # consistent regardless of first_slice -- different chunks of the
             # same crystal must see the same per-layer configuration draws.
             if n_configs > 1:
-                config_tiles = _draw_config_tiles()
+                config_tiles = next(config_tiles_iter).reshape(tile_xy)
             else:
                 config_tiles = None
 

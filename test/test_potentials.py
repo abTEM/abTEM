@@ -212,6 +212,119 @@ def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
     )
 
 
+def test_crystal_potential_get_realised_atoms_requires_seed():
+    """Unlike get_sliced_atoms, get_realised_atoms replays one specific
+    mosaic draw -- which is only reproducible if a seed pins it down. With no
+    fixed 'seeds' on the CrystalPotential and no explicit 'seed' argument,
+    there is nothing to replay, so it must raise rather than silently return
+    an arbitrary (and irreproducible) realisation."""
+    import ase
+
+    import abtem
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    fp = abtem.FrozenPhonons(unit_atoms, num_configs=4, sigmas=0.1, seed=7)
+    unit_pot = Potential(fp, gpts=(16, 16), slice_thickness=5.43)
+    cryst = CrystalPotential(unit_pot, repetitions=(2, 2, 1))
+
+    with pytest.raises(ValueError, match="seed"):
+        cryst.get_realised_atoms()
+
+    # An explicit seed sidesteps the need for fixed 'seeds' on the instance.
+    cryst.get_realised_atoms(seed=3)
+
+
+def test_crystal_potential_get_realised_atoms_reproducible():
+    """The same seed must replay the same mosaic draw and per-config
+    displacement; a different seed must (almost certainly) give a different
+    one. Both the pool config assignment and the atomic displacements it
+    draws depend on the seed, so this exercises the full reconstruction."""
+    import ase
+    import numpy as np
+
+    import abtem
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    fp = abtem.FrozenPhonons(unit_atoms, num_configs=4, sigmas=0.1, seed=7)
+    unit_pot = Potential(fp, gpts=(16, 16), slice_thickness=5.43)
+    cryst = CrystalPotential(unit_pot, repetitions=(2, 2, 1), seeds=(11,))
+
+    a = cryst.get_realised_atoms()
+    b = cryst.get_realised_atoms()
+    c = cryst.get_realised_atoms(seed=11)
+    d = cryst.get_realised_atoms(seed=99)
+
+    assert np.allclose(a.positions, b.positions)
+    assert np.allclose(a.positions, c.positions)
+    assert not np.allclose(
+        np.sort(a.positions, axis=0), np.sort(d.positions, axis=0)
+    )
+    assert len(a) == len(unit_atoms) * 2 * 2 * 1
+    assert np.allclose(np.diag(a.cell), cryst.box)
+
+
+def test_crystal_potential_get_realised_atoms_matches_mosaic_per_tile():
+    """get_realised_atoms must place, at every lateral tile, exactly the pool
+    configuration (and its exact displacement) that generate_slices' mosaic
+    assembly drew for that tile -- not just a plausibly-displaced crystal.
+
+    Verified the strict way: with a pool exactly matching the tile count (no
+    reuse, so the mapping is unambiguous), reconstruct each tile's atoms from
+    get_realised_atoms' output, rebuild that single unit cell's potential in
+    isolation, and check it is bit-identical to the corresponding block of
+    the mosaic-built array -- which is exactly how generate_slices constructs
+    that block in the first place (each block is one isolated unit build; see
+    test_crystal_potential_balanced_pool_drawing for the reshape convention
+    this relies on).
+    """
+    import ase
+    import numpy as np
+
+    import abtem
+    from abtem.core.backend import asnumpy
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    ug = 16
+    tile_reps = (2, 2)
+    n_tiles = tile_reps[0] * tile_reps[1]
+    n_unit = len(unit_atoms)
+    seed = 5
+
+    fp = abtem.FrozenPhonons(unit_atoms, num_configs=n_tiles, sigmas=0.1, seed=7)
+    unit_pot = Potential(fp, gpts=(ug, ug), slice_thickness=5.43)
+    cryst = CrystalPotential(unit_pot, repetitions=tile_reps + (1,), seeds=(seed,))
+
+    mosaic_slice = asnumpy(next(cryst.generate_slices()).array)[0]
+    mosaic_tiles = mosaic_slice.reshape(
+        tile_reps[0], ug, tile_reps[1], ug
+    ).transpose(0, 2, 1, 3)
+
+    realised = cryst.get_realised_atoms(seed=seed)
+    assert len(realised) == n_unit * n_tiles
+
+    unit_extent = (unit_atoms.cell[0, 0], unit_atoms.cell[1, 1])
+    piece_index = 0
+    for tx in range(tile_reps[0]):
+        for ty in range(tile_reps[1]):
+            piece = realised[piece_index * n_unit : (piece_index + 1) * n_unit].copy()
+            piece.positions[:, 0] -= tx * unit_extent[0]
+            piece.positions[:, 1] -= ty * unit_extent[1]
+            # Slicing an Atoms object keeps the *original* (full-crystal)
+            # cell attached -- reset it to the small unit cell before
+            # rebuilding, or the isolated Potential samples the wrong extent.
+            piece.set_cell(unit_atoms.cell)
+
+            isolated = Potential(
+                piece, gpts=(ug, ug), slice_thickness=unit_pot.slice_thickness
+            )
+            isolated_array = asnumpy(isolated.build(lazy=False).array)[0]
+
+            assert np.allclose(
+                isolated_array, mosaic_tiles[tx, ty], atol=1e-6
+            ), f"tile ({tx}, {ty}) does not match the mosaic's own block"
+            piece_index += 1
+
+
 @pytest.mark.parametrize("device", [gpu, "cpu"])
 def test_eager_build_populates_all_frozen_phonon_configs(device):
     """Eager ``build(lazy=False)`` of a multi-config frozen-phonon potential must

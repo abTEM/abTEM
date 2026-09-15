@@ -15,7 +15,14 @@ try:
 except ImportError:
     pass
 
-pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+pytestmark = [
+    pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw"),
+    # These tests use a small, fast cell that is well below the inelastic
+    # delocalisation margin for this edge -- deliberate, since they check
+    # dtype/precision handling, not cross-section convergence. Same
+    # convention as test/test_ionization.py.
+    pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning"),
+]
 
 
 @pytest.fixture(scope="module")
