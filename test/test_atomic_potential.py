@@ -5,8 +5,12 @@ from hypothesis import given
 
 import abtem
 from abtem.integrals import (
+    _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
+    GaussianProjectionIntegrals,
+    QuadratureProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
+    _DeviceArrayCache,
 )
 from utils import assert_array_matches_device, gpu
 
@@ -247,7 +251,18 @@ class TestScatteringFactorCacheKey:
         This needs *more* distinct keys than the bound: with exactly maxsize
         keys nothing is ever evicted and FIFO and LRU are indistinguishable.
         """
+        import collections
+
         integrator = ScatteringFactorProjectionIntegrals()
+        recomputations: dict = collections.Counter()
+        original = integrator._calculate_scattering_factor_on_device
+
+        def counting(symbol, gpts, sampling, device_key):
+            recomputations[tuple(gpts)] += 1
+            return original(symbol, gpts, sampling, device_key)
+
+        integrator._calculate_scattering_factor_on_device = counting
+
         kept = (8, 8)
         integrator.get_scattering_factor("Si", kept, (0.1, 0.1), "cpu")
         # Insert well past the bound, touching `kept` between each insertion so
@@ -257,8 +272,14 @@ class TestScatteringFactorCacheKey:
             integrator.get_scattering_factor("Si", (16 + n,) * 2, (0.1, 0.1), "cpu")
             integrator.get_scattering_factor("Si", kept, (0.1, 0.1), "cpu")
         assert len(integrator.scattering_factors) <= _MAX_SCATTERING_FACTOR_ENTRIES
-        keys = list(integrator.scattering_factors)
-        assert any(k[1] == kept for k in keys), "most recently used entry was evicted"
+        # Presence at the end proves nothing: under FIFO `kept` is evicted
+        # repeatedly, but the very next lookup misses and re-inserts it at the
+        # tail, so it is present either way. What separates LRU from FIFO is
+        # how often it had to be *recomputed*.
+        assert recomputations[kept] == 1, (
+            f"`kept` was recomputed {recomputations[kept]} times; under LRU a "
+            "touched entry is never evicted, so once is the only right answer"
+        )
 
     def test_concurrent_access_does_not_race(self):
         """Hand-rolled dict eviction raced: two threads evicting the same key
@@ -361,13 +382,27 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         assert self._potential() == self._potential()
 
     def test_deepcopy_is_independent(self):
+        """A copy starts cold and cannot disturb the original.
+
+        The clone's cache is empty rather than a copy of the original's:
+        __getstate__ drops caches, and deepcopy goes through it. That is the
+        point -- a cache is per-worker state, not part of the object's value --
+        so what this test pins is independence in both directions, not that the
+        contents were carried over.
+        """
         import copy
 
         original = self._warmed()
+        before = len(original.scattering_factors)
+        assert before > 0
+
         clone = copy.deepcopy(original)
         assert clone.scattering_factors is not original.scattering_factors
+        assert len(clone.scattering_factors) == 0
+
         clone.get_scattering_factor("Si", (32, 32), (0.1, 0.1), "cpu")
-        assert len(clone.scattering_factors) == len(original.scattering_factors) + 1
+        assert len(clone.scattering_factors) == 1
+        assert len(original.scattering_factors) == before
 
     def test_cached_arrays_are_freed_without_a_cyclic_collection(self):
         """The wrapper made instance -> cache -> bound method -> instance."""
@@ -393,3 +428,372 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         integrator.get_scattering_factor("Si", (64, 64), (0.1, 0.1), "cpu")
         # All spellings of the same physical device share one canonical entry.
         assert len(integrator.scattering_factors) == 1
+
+
+class TestIntegratorCaches:
+    """Caches in integrals.py, keyed on less than their value depends on.
+
+    ``QuadratureProjectionIntegrals._tables`` was keyed on the element alone
+    while the table is built from ``sampling``; every key omitted the precision
+    config, through which every cached value is built. Two further caches in
+    ``GaussianProjectionIntegrals`` computed a key, missed, recomputed and never
+    stored, and are removed rather than repaired.
+    """
+
+    @staticmethod
+    def _atoms(a=5.65):
+        import ase.build
+
+        # Two elements on purpose. Note this is necessary but not sufficient:
+        # a potential-level shared-vs-fresh comparison cannot detect a
+        # symbol-blind key either way, because both sides serve the first
+        # element's array to the second and therefore agree. Only the
+        # method-level probes below catch that one.
+        return ase.build.bulk("GaAs", crystalstructure="zincblende", a=a, cubic=True)
+
+    def _build(self, integrator, gpts=None, sampling=None, a=5.65, **kwargs):
+        """Build a potential.
+
+        `sampling` is honoured. An earlier version of this helper accepted it
+        and dropped it on the floor, so every case that meant to vary sampling
+        independently of the grid silently varied neither -- and the lattice
+        constant knob is what makes "independently" possible at all, since with
+        a fixed cell sampling is just extent/gpts.
+        """
+        grid = {}
+        if gpts is not None:
+            grid["gpts"] = gpts
+        if sampling is not None:
+            grid["sampling"] = sampling
+        if not grid:
+            grid["gpts"] = (64, 64)
+        return abtem.Potential(
+            self._atoms(a=a), slice_thickness=1.0,
+            integrator=integrator, **grid, **kwargs,
+        ).build(lazy=False)
+
+    def test_integral_tables_are_keyed_on_sampling(self):
+        """Keyed on the element alone, a sampling sweep was ~54 % wrong."""
+        shared = QuadratureProjectionIntegrals()
+        self._build(shared, gpts=(32, 32))
+        got = self._build(shared, gpts=(128, 128))
+        reference = self._build(QuadratureProjectionIntegrals(), gpts=(128, 128))
+        assert np.array_equal(got.array, reference.array)
+        assert len(shared._tables) == 4  # two elements x two samplings
+
+    # ------------------------------------------------------------------
+    # Key-completeness, probed one component at a time at the *method* level.
+    #
+    # The potential-level tests above cannot do this job. A shared-vs-fresh
+    # comparison of two full builds is blind to a key that drops the chemical
+    # symbol, because both sides serve the first element's array to the second
+    # and therefore agree with each other. Calling the cached method directly,
+    # with exactly one component changed from the warmed call, is what makes
+    # each component observable.
+
+    @staticmethod
+    def _scattering_factor(
+        integrator, symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10),
+        precision="float32",
+    ):
+        with abtem.config.set({"precision": precision}):
+            return np.asarray(
+                integrator.get_scattering_factor(symbol, gpts, sampling, "cpu")
+            )
+
+    @pytest.mark.parametrize(
+        "component, other",
+        [
+            ("symbol", "As"),
+            ("gpts", (96, 96)),
+            ("sampling", (0.13, 0.13)),
+            ("precision", "float64"),
+        ],
+    )
+    def test_no_scattering_factor_key_component_may_be_dropped(
+        self, component, other
+    ):
+        shared = ScatteringFactorProjectionIntegrals()
+        self._scattering_factor(shared)
+        got = self._scattering_factor(shared, **{component: other})
+        reference = self._scattering_factor(
+            ScatteringFactorProjectionIntegrals(), **{component: other}
+        )
+        assert got.shape == reference.shape
+        assert got.dtype == reference.dtype
+        assert np.array_equal(got, reference)
+
+    @staticmethod
+    def _table(integrator, symbol="Ga", sampling=(0.10, 0.10), precision="float32"):
+        with abtem.config.set({"precision": precision}):
+            table = integrator.get_integral_table(symbol, sampling)
+        return np.asarray(table.values), np.asarray(table.radial_gpts)
+
+    @pytest.mark.parametrize(
+        "component, other",
+        [("symbol", "As"), ("sampling", (0.13, 0.13)), ("precision", "float64")],
+    )
+    def test_no_integral_table_key_component_may_be_dropped(self, component, other):
+        shared = QuadratureProjectionIntegrals()
+        self._table(shared)
+        got = self._table(shared, **{component: other})
+        reference = self._table(
+            QuadratureProjectionIntegrals(), **{component: other}
+        )
+        assert all(np.array_equal(a, b) for a, b in zip(got, reference))
+
+    @staticmethod
+    def _gaussian_on_grid(
+        integrator, gpts=(64, 64), sampling=(0.10, 0.10), precision="float32"
+    ):
+        import ase.build
+
+        atoms = ase.build.bulk("Si", cubic=True)
+        with abtem.config.set({"precision": precision, "fft": "numpy"}):
+            return np.asarray(
+                integrator.integrate_on_grid(
+                    atoms, a=0.0, b=1.0, gpts=gpts, sampling=sampling, device="cpu"
+                )
+            )
+
+    @pytest.mark.parametrize(
+        "component, other",
+        [
+            ("gpts", (96, 96)),
+            ("sampling", (0.13, 0.13)),
+            ("precision", "float64"),
+        ],
+    )
+    def test_no_sinc_key_component_may_be_dropped(self, component, other):
+        """The sinc is the only cached value on this path.
+
+        GaussianProjectionIntegrals' other two caches are deleted in this
+        commit, so its gaussians and corrections are recomputed on every call;
+        anything a shared integrator gets wrong here is the sinc.
+        """
+        shared = GaussianProjectionIntegrals()
+        self._gaussian_on_grid(shared)
+        got = self._gaussian_on_grid(shared, **{component: other})
+        reference = self._gaussian_on_grid(
+            GaussianProjectionIntegrals(), **{component: other}
+        )
+        assert got.shape == reference.shape
+        assert np.array_equal(got, reference)
+
+    def test_the_sorted_disk_is_not_served_across_precisions(self):
+        """The disk is sized int(ceil(cutoff / min(sampling))), and `cutoff` is
+        precision-dependent, so the key needs precision even though the disk
+        itself is integer offsets.
+
+        The sampling below is not arbitrary: cases where the two precisions
+        want different radii have to be solved for (cutoff32/m <= s <
+        cutoff64/m), not scanned for. Si wants radius 18 at float32 and 19 at
+        float64 here, and serving the float32 disk to the float64 build is
+        wrong by 4.6e-05 on a peak of 312.
+        """
+        import ase
+
+        sampling = 0.281458955844481
+        atoms = ase.Atoms(
+            "Si", positions=[(2.0, 2.0, 0.5)], cell=(sampling * 80, sampling * 80, 1.0)
+        )
+
+        def build(integrator, precision):
+            with abtem.config.set({"precision": precision, "fft": "numpy"}):
+                return np.asarray(
+                    abtem.Potential(
+                        atoms, sampling=(sampling, sampling), slice_thickness=1.0,
+                        integrator=integrator,
+                    ).build(lazy=False).array
+                )
+
+        shared = QuadratureProjectionIntegrals()
+        build(shared, "float32")
+        got = build(shared, "float64")
+        reference = build(QuadratureProjectionIntegrals(), "float64")
+        assert np.array_equal(got, reference)
+
+    def test_the_public_caches_still_behave_like_the_dicts_they_replaced(self):
+        """`tables` and `scattering_factors` are public and were plain dicts.
+
+        Keeping them dict-like is the entire reason the container is a Mapping,
+        so the two-argument `get(key, default)` has to work: a one-argument
+        override shadows Mapping.get and turns ordinary dict usage into a
+        TypeError.
+        """
+        integrator = ScatteringFactorProjectionIntegrals()
+        self._build(integrator)
+        cache = integrator.scattering_factors
+        key = next(iter(cache))
+
+        assert cache.get(key) is not None
+        assert cache.get(("absent",)) is None
+        assert cache.get(("absent",), "fallback") == "fallback"
+        assert key in cache
+        assert len(list(cache.keys())) == len(cache)
+        assert len(dict(cache.items())) == len(cache)
+        assert cache[key] is cache.get(key)
+
+    def test_the_sorted_disk_is_not_served_across_elements(self):
+        """The disk is sized from the element's own cutoff.
+
+        A potential-level shared-vs-fresh comparison cannot see this: both
+        sides would serve the first element's disk to the second and agree.
+        What makes it observable is a cell whose *lower* atomic number has the
+        *smaller* cutoff -- H (3.3499 A, radius 34 at this sampling) is
+        processed before Au (5.0342 A, radius 51), so a symbol-blind key hands
+        Au a disk too small by 17 pixels and truncates it.
+        """
+        import ase
+
+        atoms = ase.Atoms(
+            "HAu", positions=[(3.0, 3.0, 0.5), (9.0, 9.0, 0.5)], cell=(12.8, 12.8, 1.0)
+        )
+        with abtem.config.set({"fft": "numpy"}):
+            got = np.asarray(
+                abtem.Potential(
+                    atoms, sampling=(0.1, 0.1), slice_thickness=1.0,
+                    integrator=QuadratureProjectionIntegrals(),
+                ).build(lazy=False).array
+            )
+            # The oracle is the same cell built one element at a time, where
+            # no sharing can occur: their sum is what the mixed build must be.
+            separate = sum(
+                np.asarray(
+                    abtem.Potential(
+                        ase.Atoms(
+                            symbol, positions=[position], cell=(12.8, 12.8, 1.0)
+                        ),
+                        sampling=(0.1, 0.1), slice_thickness=1.0,
+                        integrator=QuadratureProjectionIntegrals(),
+                    ).build(lazy=False).array
+                )
+                for symbol, position in (("H", (3.0, 3.0, 0.5)), ("Au", (9.0, 9.0, 0.5)))
+            )
+        assert np.abs(got - separate).max() < 1e-6 * np.abs(separate).max()
+
+    def test_sorted_disks_are_bounded(self):
+        integrator = QuadratureProjectionIntegrals()
+        for n in range(_MAX_CACHE_ENTRIES + 8):
+            self._build(integrator, gpts=(32 + 2 * n,) * 2)
+        assert len(integrator._sorted_disks) <= _MAX_CACHE_ENTRIES
+        assert len(integrator._tables) <= _MAX_CACHE_ENTRIES
+
+    @pytest.mark.parametrize(
+        "integrator_class",
+        [ScatteringFactorProjectionIntegrals, QuadratureProjectionIntegrals],
+    )
+    def test_a_cache_is_not_served_across_precisions(self, integrator_class):
+        """Every cached value is built through get_dtype.
+
+        The difference is ~1e-6 relative, which np.allclose with default
+        tolerances reports as equal -- so this must compare exactly.
+        """
+        shared = integrator_class()
+        with abtem.config.set({"precision": "float32"}):
+            self._build(shared)
+        with abtem.config.set({"precision": "float64"}):
+            got = self._build(shared)
+            reference = self._build(integrator_class())
+        assert got.array.dtype == reference.array.dtype
+        assert np.array_equal(got.array, reference.array)
+
+    def test_results_do_not_depend_on_cache_state(self):
+        """Vary the grid and the sampling independently, not together."""
+        shared = ScatteringFactorProjectionIntegrals()
+        cases = [
+            dict(gpts=(64, 64)),
+            dict(gpts=(96, 96)),
+            dict(gpts=(64, 64)),
+            # Same gpts as case 1, different sampling (via the lattice
+            # constant); then same sampling as case 1, different gpts.
+            dict(gpts=(64, 64), a=7.20),
+            dict(sampling=(5.65 / 64, 5.65 / 64), a=8.475),
+        ]
+        for case in cases:
+            got = self._build(shared, **case)
+            reference = self._build(
+                ScatteringFactorProjectionIntegrals(), **case
+            )
+            assert np.array_equal(got.array, reference.array)
+
+    def test_caches_restored_from_an_older_pickle_still_work(self):
+        """_sinc_cache post-dates PR #269, and a restored plain dict has no put."""
+        import pickle
+
+        missing = GaussianProjectionIntegrals()
+        missing.__dict__.pop("_sinc_cache", None)
+        restored = pickle.loads(pickle.dumps(missing))
+        assert isinstance(restored._sinc_cache, _DeviceArrayCache)
+
+        # A state dict as an *older* abTEM would have written it: the cache is
+        # a plain dict, with .get but no .put, so the miss path -- not the hit
+        # path -- raised AttributeError. It has to be built by hand rather than
+        # round-tripped, because __getstate__ now drops caches, so no pickle
+        # this version writes carries one.
+        legacy_state = QuadratureProjectionIntegrals().__dict__.copy()
+        legacy_state["_tables"] = {("Ga", (0.1, 0.1), "float32"): "entry"}
+        restored = QuadratureProjectionIntegrals.__new__(QuadratureProjectionIntegrals)
+        restored.__setstate__(legacy_state)
+        assert isinstance(restored._tables, _DeviceArrayCache)
+        # Empty, not carried over: those entries are keyed in the old shape,
+        # and serving a value found under an incomplete key is the defect this
+        # commit fixes. Recomputing them costs a miss.
+        assert len(restored._tables) == 0
+        # The miss path is the one that used to raise AttributeError.
+        self._build(restored)
+
+    def test_the_dead_gaussian_caches_are_gone(self):
+        integrator = GaussianProjectionIntegrals()
+        assert not hasattr(integrator, "_gaussians")
+        assert not hasattr(integrator, "_corrections")
+
+    def test_the_integrator_stays_picklable_comparable_and_copyable(self):
+        """The three things a per-instance lru_cache broke in #388."""
+        import copy
+        import pickle
+
+        used, fresh = QuadratureProjectionIntegrals(), QuadratureProjectionIntegrals()
+        self._build(used)
+        assert isinstance(
+            pickle.loads(pickle.dumps(used)), QuadratureProjectionIntegrals
+        )
+        assert used == fresh
+        assert copy.deepcopy(used)._tables is not used._tables
+
+    def test_concurrent_access_serves_correct_values(self):
+        """Not just "nothing raised": check what the cache hands back."""
+        import sys
+        import threading
+
+        integrator = ScatteringFactorProjectionIntegrals()
+        combinations = [("Ga", (16 + n,) * 2, (0.1, 0.1)) for n in range(150)]
+        truth = {
+            c: ScatteringFactorProjectionIntegrals().get_scattering_factor(*c, "cpu")
+            for c in combinations[:8]
+        }
+        errors = []
+
+        def hammer(seed):
+            try:
+                for n in range(1500):
+                    combination = combinations[(seed * 7919 + n * 13) % len(combinations)]
+                    got = integrator.get_scattering_factor(*combination, "cpu")
+                    expected = truth.get(combination)
+                    if expected is not None and not np.array_equal(got, expected):
+                        errors.append(f"wrong value for {combination}")
+            except Exception as exc:  # noqa: BLE001 -- report, don't mask
+                errors.append(exc)
+
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-9)
+        try:
+            threads = [threading.Thread(target=hammer, args=(i,)) for i in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+        assert not errors, f"{len(errors)} failures, first: {errors[0]!r}"
+        assert len(integrator._scattering_factors) <= _MAX_CACHE_ENTRIES
