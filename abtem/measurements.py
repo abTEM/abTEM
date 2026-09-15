@@ -2730,6 +2730,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         title: str | bool = True,
         units: Optional[str] = None,
         legend: bool = False,
+        logscale: bool = False,
         interact: bool = False,
         display: bool = True,
         **kwargs,
@@ -2765,6 +2766,8 @@ class _BaseMeasurement1D(BaseMeasurements):
             Add a legend to the plot. The labels will be derived from
         units : str, optional
             The units used for the x-axis. The given units must be compatible.
+        logscale : bool
+            If True, the y-axis is shown on a logarithmic scale. Default is False.
         interact : bool
             If True, create an interactive visualization. This requires enabling the
             `ipympl` Matplotlib backend.
@@ -2794,6 +2797,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             interactive=not interact and display,
             legend=legend,
             common_scale=common_scale,
+            logscale=logscale,
             **kwargs,
         )
 
