@@ -127,12 +127,20 @@ class _DeviceArrayCache(Mapping):
         self._maxsize = maxsize
         self._entries: OrderedDict = OrderedDict()
 
-    def get(self, key):
-        """The cached value for ``key``, or None, refreshing its recency."""
+    def get(self, key, default=None):
+        """The cached value for ``key``, or ``default``, refreshing its recency.
+
+        The two-argument form matters: ``tables`` and ``scattering_factors``
+        are public properties that returned a plain dict before this container
+        existed, and keeping them dict-like is the whole reason this is a
+        Mapping. A one-argument override shadows ``Mapping.get`` and makes
+        ``scattering_factors.get(key, "not cached")`` -- ordinary dict usage --
+        raise TypeError instead of returning the default.
+        """
         try:
             value = self._entries[key]
         except KeyError:
-            return None
+            return default
         try:
             self._entries.move_to_end(key)
         except KeyError:  # evicted by another thread; the value is still ours
@@ -1191,8 +1199,9 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             fp_dtype = get_dtype(complex=False)
 
             cutoff = table.radial_gpts[-1]
-            # Precision belongs here for the same reason as everywhere else in
-            # this file, though it takes two steps to get there: the disk is
+            # Precision is the one key component this needed; the symbol was
+            # already here. It belongs for the same reason as everywhere else
+            # in this file, though it takes two steps to get there: the disk is
             # sized int(ceil(cutoff / min(sampling))), and `cutoff` is
             # precision-dependent (optimize_cutoff evaluates the parametrization
             # at the configured dtype) -- 5.066261105906332 against
@@ -1211,6 +1220,10 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             # that a 400-sampling scan found no case where the integer moves.
             # It found none because a linear scan cannot: the cases have to be
             # solved for, not stumbled on.
+            #
+            # The symbol component is older than this commit and was never
+            # missing -- see test_the_sorted_disk_is_not_served_across_elements,
+            # which covers it for the first time rather than fixing it.
             disk_key = (
                 chemical_symbols[number],
                 tuple(sampling),

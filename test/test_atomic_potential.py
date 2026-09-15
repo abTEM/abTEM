@@ -613,6 +613,27 @@ class TestIntegratorCaches:
         reference = build(QuadratureProjectionIntegrals(), "float64")
         assert np.array_equal(got, reference)
 
+    def test_the_public_caches_still_behave_like_the_dicts_they_replaced(self):
+        """`tables` and `scattering_factors` are public and were plain dicts.
+
+        Keeping them dict-like is the entire reason the container is a Mapping,
+        so the two-argument `get(key, default)` has to work: a one-argument
+        override shadows Mapping.get and turns ordinary dict usage into a
+        TypeError.
+        """
+        integrator = ScatteringFactorProjectionIntegrals()
+        self._build(integrator)
+        cache = integrator.scattering_factors
+        key = next(iter(cache))
+
+        assert cache.get(key) is not None
+        assert cache.get(("absent",)) is None
+        assert cache.get(("absent",), "fallback") == "fallback"
+        assert key in cache
+        assert len(list(cache.keys())) == len(cache)
+        assert len(dict(cache.items())) == len(cache)
+        assert cache[key] is cache.get(key)
+
     def test_the_sorted_disk_is_not_served_across_elements(self):
         """The disk is sized from the element's own cutoff.
 
