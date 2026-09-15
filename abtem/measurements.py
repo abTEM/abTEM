@@ -6560,7 +6560,10 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     )
 
     if block_direct:
-        radius = block_direct if isinstance(block_direct, (int, float)) else None
+        # bool is a subclass of int, so isinstance(True, (int, float)) is True --
+        # block_direct=True (the documented "auto-infer the radius" usage) must be
+        # checked for explicitly, or it is taken as a literal radius of 1.
+        radius = None if isinstance(block_direct, bool) else block_direct
         result = result.block_direct(radius=radius)
 
     return result
@@ -6781,7 +6784,10 @@ def phonon_loss_diffraction_patterns(
     )
 
     if block_direct:
-        radius = block_direct if isinstance(block_direct, (int, float)) else None
+        # bool is a subclass of int, so isinstance(True, (int, float)) is True --
+        # block_direct=True (the documented "auto-infer the radius" usage) must be
+        # checked for explicitly, or it is taken as a literal radius of 1.
+        radius = None if isinstance(block_direct, bool) else block_direct
         result = result.block_direct(radius=radius)
 
     return result
