@@ -761,6 +761,123 @@ class Waves(BaseWaves, ArrayObject):
 
         return self.__class__(**kwargs)
 
+    def crop(
+        self,
+        extent: tuple[float, float],
+        offset: tuple[float, float] = (0.0, 0.0),
+        centered: bool = False,
+    ) -> Waves:
+        """Crop the wave functions to a smaller extent in real space.
+
+        Parameters
+        ----------
+        extent : tuple of float
+            Extent of the rectangular cropping region in `x` and `y` [Å].
+        offset : tuple of float, optional
+            Lower corner of the cropping region in `x` and `y` [Å] (default is
+            (0, 0)). Ignored if `centered` is True.
+        centered : bool, optional
+            If True, the cropping region is centered on the wave functions instead
+            of using `offset` (default is False).
+
+        Returns
+        -------
+        cropped_waves : Waves
+            The cropped wave functions.
+        """
+        if self.reciprocal_space:
+            raise NotImplementedError("crop can only be applied in real space")
+
+        if centered and offset != (0.0, 0.0):
+            raise ValueError("offset is not used when centered is True")
+        elif centered:
+            offset = (
+                self.extent[0] / 2 - extent[0] / 2,
+                self.extent[1] / 2 - extent[1] / 2,
+            )
+
+        if extent[0] > self.extent[0] or extent[1] > self.extent[1]:
+            raise ValueError("extent must not be larger than the current extent")
+
+        offset_gpts = (
+            int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * offset[1] / self.extent[1])),
+        )
+        new_shape = (
+            int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * extent[1] / self.extent[1])),
+        )
+
+        array = self.array[
+            ...,
+            offset_gpts[0] : offset_gpts[0] + new_shape[0],
+            offset_gpts[1] : offset_gpts[1] + new_shape[1],
+        ]
+
+        kwargs = self._copy_kwargs(exclude=("array", "extent"))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
+
+    def window(
+        self,
+        window: str | tuple = "hann",
+        margin: float | tuple[float, float] = 0.0,
+    ) -> Waves:
+        """Apply a separable real-space window function to the wave functions,
+        optionally after first cropping a margin from each side.
+
+        Windowing tapers the wave functions to (near-)zero at the edges before a
+        Fourier transform, suppressing the truncation-rod streaks a hard-edged,
+        finite (non-periodic) structure would otherwise produce in its diffraction
+        pattern. See :func:`scipy.signal.windows.get_window` for the available
+        window functions.
+
+        Parameters
+        ----------
+        window : str or tuple, optional
+            The window function to apply, as accepted by
+            :func:`scipy.signal.windows.get_window` (default is `'hann'`). Use
+            `None` to disable windowing (only the `margin` crop is applied, if
+            given).
+        margin : float or tuple of float, optional
+            Margin cropped from each side in `x` and `y` [Å] before windowing
+            (default is 0.0, i.e. no cropping). A single float applies the same
+            margin to both axes.
+
+        Returns
+        -------
+        windowed_waves : Waves
+            The windowed (and optionally cropped) wave functions.
+        """
+        from scipy.signal import windows as scipy_windows
+
+        if isinstance(margin, (int, float)):
+            margin = (float(margin), float(margin))
+
+        waves = self
+        if margin[0] != 0.0 or margin[1] != 0.0:
+            waves = waves.crop(
+                extent=(
+                    waves.extent[0] - 2 * margin[0],
+                    waves.extent[1] - 2 * margin[1],
+                ),
+                centered=True,
+            )
+
+        if window is None:
+            return waves
+
+        window_x = scipy_windows.get_window(window, waves.base_shape[0])
+        window_y = scipy_windows.get_window(window, waves.base_shape[1])
+        taper = window_x[:, None] * window_y[None, :]
+
+        xp = get_array_module(waves.array)
+        taper = xp.asarray(taper, dtype=waves.array.real.dtype)
+
+        kwargs = waves._copy_kwargs(exclude=("array",))
+        kwargs["array"] = waves.array * taper
+        return waves.__class__(**kwargs)
+
     def ensure_reciprocal_space(self, overwrite_x: bool = False) -> Waves:
         """Transform to reciprocal space if the wave functions are represented in real
         space.

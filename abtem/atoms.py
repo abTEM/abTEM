@@ -1107,6 +1107,259 @@ def cut_cell(
     return new_atoms
 
 
+def _min_circumscribed_radius(box: np.ndarray) -> float:
+    return np.linalg.norm(box) / 2
+
+
+def _transform_positions(basis: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Fractional coordinates of `positions` in the given (not necessarily
+    orthogonal) `basis`."""
+    return np.linalg.solve(basis.T, positions.T).T
+
+
+def _box_corners(size: tuple[float, float, float]) -> np.ndarray:
+    """The eight corners of an axis-aligned box of the given size, one corner at
+    the origin."""
+    size = np.asarray(size, dtype=float)
+    return np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [size[0], 0.0, 0.0],
+            [0.0, size[1], 0.0],
+            [0.0, 0.0, size[2]],
+            [size[0], size[1], 0.0],
+            [size[0], 0.0, size[2]],
+            [0.0, size[1], size[2]],
+            [size[0], size[1], size[2]],
+        ]
+    )
+
+
+def _repeated_lattice(
+    cell: np.ndarray, repetitions: tuple[int, int, int]
+) -> np.ndarray:
+    """Lattice points (i.e. cell-origin repetitions) at every integer index from 0
+    up to `repetitions` (inclusive) along each of the three cell vectors."""
+    xyz = tuple(np.linspace(0, n, n + 1) for n in repetitions)
+    x, y, z = np.meshgrid(*xyz, indexing="ij")
+    indices = np.column_stack((x.ravel(), y.ravel(), z.ravel()))
+    return _transform_positions(np.linalg.inv(cell), indices)
+
+
+def _mask_box(positions: np.ndarray, box: np.ndarray) -> np.ndarray:
+    return np.all((positions >= 0) & (positions < box), axis=1)
+
+
+def _center_positions_in_box(positions: np.ndarray, box: np.ndarray) -> np.ndarray:
+    return positions - positions.mean(0) + np.asarray(box) / 2
+
+
+def _rotate_positions(
+    positions: np.ndarray, angle: float, center: np.ndarray | None = None
+) -> np.ndarray:
+    """Rotate `positions` by `angle` [rad] about the z-axis, about `center`
+    (default the origin)."""
+    if center is None:
+        center = np.zeros(3)
+    R = euler_to_rotation(angle, 0.0, 0.0, axes="zxz")
+    return (positions - center) @ R.T + center
+
+
+def _disk_range_mask(
+    yz: np.ndarray,
+    box_y: float,
+    box_z: float,
+    rotation_range: tuple[float, float],
+    margin: float,
+) -> np.ndarray:
+    """Boolean mask selecting which rows of `yz` (an (N, 2) array of (y, z)
+    positions relative to the disk's own center) land within a
+    (box_y, box_z)-sized rectangle (grown by `margin` on each side) centered
+    at the origin, for at least one rotation angle in `rotation_range` [deg]
+    about `x`. This is the exact condition for an atom to be able to appear
+    inside the box for some angle in the range -- not an approximation of
+    it -- so restricting to it never drops an atom that a simulated rotation
+    step could actually need."""
+    theta_min, theta_max = sorted(np.deg2rad(rotation_range))
+    span = theta_max - theta_min
+    # Fine enough that even a rotation series with hundreds of steps samples
+    # this range far more coarsely than this mask does, so no angle actually
+    # used in a real rotation series can fall in the gap between two of
+    # these samples and be missed.
+    n_samples = max(2, int(np.ceil(span / np.deg2rad(0.01))) + 1)
+    thetas = np.linspace(theta_min, theta_max, n_samples)
+
+    y, z = yz[:, 0], yz[:, 1]
+    half_y, half_z = box_y / 2 + margin, box_z / 2 + margin
+
+    survives = np.zeros(len(yz), dtype=bool)
+    for theta in thetas:
+        c, s = np.cos(theta), np.sin(theta)
+        yp = c * y - s * z
+        zp = s * y + c * z
+        survives |= (np.abs(yp) <= half_y) & (np.abs(zp) <= half_z)
+    return survives
+
+
+def _disk_lattice_points(
+    cell: np.ndarray,
+    box: tuple[float, float, float],
+    rotation_axis: float = 0.0,
+    rotation_range: tuple[float, float] | None = None,
+) -> np.ndarray:
+    """Lattice points (cell-origin repetitions) filling a cylinder along `x`
+    inscribed in `box`, pre-rotated about `z` by `-rotation_axis` so that
+    rotating the result *back* by `rotation_axis` about `z` leaves it inscribed
+    in `box` again -- i.e. the points that survive rotating the crystal about the
+    axis at that azimuth and cropping back to `box`. If `rotation_range` is
+    given, restricts to points that survive only rotating by an angle within
+    that range about `x`, rather than by any angle -- see `cut_disk`."""
+    rotation_axis = -np.deg2rad(rotation_axis)
+    box = np.asarray(box, dtype=float)
+    margin = np.linalg.norm(cell)
+
+    width = np.linalg.norm(box[:2]) + 2 * margin
+    height = np.linalg.norm(box) + margin
+    large_box = np.array((width, height, height))
+
+    rotated_cell = _rotate_positions(cell, rotation_axis)
+    transformed_corners = _transform_positions(rotated_cell, _box_corners(large_box))
+    repetitions = np.ceil(np.ptp(transformed_corners, axis=0)).astype(int)
+
+    lattice = _repeated_lattice(cell, tuple(repetitions))
+    lattice = _rotate_positions(lattice, -rotation_axis)
+
+    lattice = _center_positions_in_box(lattice, large_box)
+    lattice = lattice[_mask_box(lattice, large_box)]
+
+    lattice = lattice - lattice.mean(0)
+    if rotation_range is None:
+        lattice = lattice[np.linalg.norm(lattice[:, 1:], axis=-1) < height / 2]
+        lattice = _center_positions_in_box(lattice, box)
+    else:
+        # Unlike the full-circle mask above (deliberately oversized, so it
+        # tolerates the candidates not being exactly box-centered yet), the
+        # range mask is a tight fit and needs (y, z) measured from the box's
+        # actual center -- box-center the candidates first.
+        centered = _center_positions_in_box(lattice, box)
+        rel_yz = centered[:, 1:] - box[1:] / 2
+        mask = _disk_range_mask(rel_yz, box[1], box[2], rotation_range, margin)
+        lattice = centered[mask]
+
+    lattice = _rotate_positions(lattice, rotation_axis, center=box / 2)
+    lattice = lattice - cell.sum(0) / 2
+    return lattice
+
+
+def _ball_lattice_points(
+    cell: np.ndarray, box: tuple[float, float, float]
+) -> np.ndarray:
+    """Lattice points (cell-origin repetitions) filling a ball inscribed in
+    `box`."""
+    box = np.asarray(box, dtype=float)
+    radius = _min_circumscribed_radius(box)
+
+    margin = np.linalg.norm(cell.sum(0)) / 2
+    size = 2 * (radius + margin)
+
+    transformed_corners = _transform_positions(cell, _box_corners((size, size, size)))
+    repetitions = np.ceil(np.ptp(transformed_corners, axis=0)).astype(int)
+
+    lattice = _repeated_lattice(cell, tuple(repetitions))
+    lattice = lattice - lattice.mean(0)
+    lattice = lattice[np.linalg.norm(lattice, axis=-1) < radius]
+
+    lattice = _center_positions_in_box(lattice, box) - cell.sum(0) / 2
+    return lattice
+
+
+def _finite_crystal_from_lattice_points(
+    atoms: Atoms, points: np.ndarray, box: tuple[float, float, float]
+) -> Atoms:
+    """Broadcast the atomic basis of `atoms` onto each of `points`. `box` is set
+    as the returned structure's cell -- not because the crystallite is actually
+    periodic, but because downstream potential-building (e.g. `Potential`) uses
+    the cell to size the simulation domain around the finite structure."""
+    positions = (points[:, None] + atoms.positions[None]).reshape(-1, 3)
+    numbers = np.tile(atoms.numbers, len(points))
+    return Atoms(numbers, positions=positions, cell=box, pbc=True)
+
+
+def cut_disk(
+    atoms: Atoms,
+    box: tuple[float, float, float],
+    rotation_axis: float = 0.0,
+    rotation_range: tuple[float, float] | None = None,
+) -> Atoms:
+    """
+    Cut a disk-shaped finite crystallite out of a periodic structure, inscribed in
+    a box. Unlike :func:`cut_cell`, the result is *not* periodic: it is meant as a
+    finite, non-periodic nanocrystal or particle, e.g. for a tilt/rotation series
+    simulation, where the disk shape (a cylinder along `x`) makes a similar amount
+    of material survive cropping back to `box` after rotating the crystal about
+    an axis at the given azimuth, compared to a plain box that would leave gaps
+    at the corners once rotated.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The periodic unit cell to cut the disk from.
+    box : tuple of three floats
+        Size of the box the disk is inscribed in, in `x`, `y` and `z` [Å]. `x` is
+        the disk's axis (the intended rotation axis); the disk fills the `y`-`z`
+        cross-section.
+    rotation_axis : float, optional
+        Azimuthal angle about `z` (i.e. in the `x`-`y` plane), in degrees, that
+        the crystal is intended to later be rotated about (default is 0.0).
+        Choose this to match that rotation so a large fraction of the disk
+        survives being cropped back to `box` afterwards.
+    rotation_range : tuple of two floats, optional
+        If a rotation (tilt) series is only ever going to rotate the crystal
+        about `x` within this angular range [deg] (e.g. `(0, 45)`), restrict
+        the disk to just the atoms that can appear inside `box` for some
+        angle in that range, instead of sizing it to survive an arbitrary
+        angle. By default (`None`), the disk survives rotation to any angle,
+        which for a box whose `z` extent is much larger than its `y` extent
+        (a thick sample) requires a disk far larger than the box itself, most
+        of which is only ever needed for angles outside a limited tilt
+        series. This is an exact restriction, not an approximation: every
+        atom kept can still appear inside the box for some angle in the
+        range, and none that can are ever dropped.
+
+    Returns
+    -------
+    disk : ase.Atoms
+        The disk-shaped, non-periodic crystallite, centered on the origin.
+    """
+    points = _disk_lattice_points(
+        np.asarray(atoms.cell), box, rotation_axis, rotation_range
+    )
+    return _finite_crystal_from_lattice_points(atoms, points, box)
+
+
+def cut_ball(atoms: Atoms, box: tuple[float, float, float]) -> Atoms:
+    """
+    Cut a ball-shaped finite crystallite out of a periodic structure, inscribed in
+    a box. Unlike :func:`cut_disk`, the ball shape is invariant under rotation
+    about any axis, at the cost of discarding more atoms for the same box (a ball
+    inscribed in a box has a smaller volume than the box itself).
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The periodic unit cell to cut the ball from.
+    box : tuple of three floats
+        Size of the box the ball is inscribed in, in `x`, `y` and `z` [Å].
+
+    Returns
+    -------
+    ball : ase.Atoms
+        The ball-shaped, non-periodic crystallite, centered on the origin.
+    """
+    points = _ball_lattice_points(np.asarray(atoms.cell), box)
+    return _finite_crystal_from_lattice_points(atoms, points, box)
+
+
 def pad_atoms(
     atoms: Atoms,
     margins: SupportsFloat | tuple[float, float, float],
