@@ -8,7 +8,7 @@ import scipy.ndimage  # type: ignore
 from numba import cuda, njit  # type: ignore
 
 from abtem.antialias import AntialiasAperture
-from abtem.core.backend import get_array_module
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.utils import get_dtype
 
@@ -312,6 +312,94 @@ def _laplace_operator_stencil(
         return _laplace_stencil
 
 
+_METRIC_LAPLACE_STENCIL_KERNEL = r"""
+#include <cupy/complex.cuh>
+
+// Batched 2-D anisotropic (skewed-grid) Laplacian finite-difference stencil:
+// out[m, i, j] = sum_k c2_row[k + n2] * a[m, i + k, j]
+//              + sum_k c2_col[k + n2] * a[m, i, j + k]
+//              + sum_{k, l} d1_scaled[k + n1] * d1[l + n1] * a[m, i + k, j + l]
+// over the interior i, j in [npad, H - npad) x [npad, W - npad), npad = max(n1, n2).
+// The boundary is left zero; the caller handles it via wrap padding.
+//
+// c2_row / c2_col are the second-derivative coefficients pre-scaled by the metric
+// components g11 / g22, and d1_scaled is the first-derivative coefficients
+// pre-scaled by 2 * g12 -- pushing the (otherwise scalar) metric components into
+// the coefficient arrays avoids needing a separate complex-scalar kernel
+// argument type per precision.
+//
+// Grid: x covers W (fastest axis, coalesced), y covers H, z strides over the
+// batch so any batch size is supported. Mirrors the layout of the orthogonal
+// Laplacian kernel below.
+//
+// Template parameter T is the complex floating-point type.
+template<typename T>
+__device__ __forceinline__ void metric_laplace_stencil_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c2_row,
+    const T* __restrict__ c2_col,
+    const T* __restrict__ d1,
+    const T* __restrict__ d1_scaled,
+    const int n1, const int n2, const int npad,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < npad || i >= H - npad || j < npad || j >= W - npad) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n2; k <= n2; k++) {
+            cumul += c2_row[k + n2] * am[(long long)(i + k) * W + j];
+            cumul += c2_col[k + n2] * am[(long long)i * W + (j + k)];
+        }
+        T cross = T(0);
+        for (int k = -n1; k <= n1; k++) {
+            for (int l = -n1; l <= n1; l++) {
+                cross += d1_scaled[k + n1] * d1[l + n1] * am[(long long)(i + k) * W + (j + l)];
+            }
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul + cross;
+    }
+}
+
+extern "C" __global__ void metric_laplace_stencil_c64(
+    complex<float>* out, const complex<float>* a,
+    const complex<float>* c2_row, const complex<float>* c2_col,
+    const complex<float>* d1, const complex<float>* d1_scaled,
+    int n1, int n2, int npad, int M, int H, int W
+) {
+    metric_laplace_stencil_impl<complex<float> >(
+        out, a, c2_row, c2_col, d1, d1_scaled, n1, n2, npad, M, H, W
+    );
+}
+
+extern "C" __global__ void metric_laplace_stencil_c128(
+    complex<double>* out, const complex<double>* a,
+    const complex<double>* c2_row, const complex<double>* c2_col,
+    const complex<double>* d1, const complex<double>* d1_scaled,
+    int n1, int n2, int npad, int M, int H, int W
+) {
+    metric_laplace_stencil_impl<complex<double> >(
+        out, a, c2_row, c2_col, d1, d1_scaled, n1, n2, npad, M, H, W
+    );
+}
+"""
+
+_metric_laplace_stencil_c64 = None
+_metric_laplace_stencil_c128 = None
+
+
+def _init_metric_laplace_stencil_kernels():
+    global _metric_laplace_stencil_c64, _metric_laplace_stencil_c128
+    if _metric_laplace_stencil_c64 is None:
+        mod = cp.RawModule(code=_METRIC_LAPLACE_STENCIL_KERNEL, options=("--std=c++14",))
+        _metric_laplace_stencil_c64 = mod.get_function("metric_laplace_stencil_c64")
+        _metric_laplace_stencil_c128 = mod.get_function("metric_laplace_stencil_c128")
+
+
 def _metric_laplace_operator_stencil(
     accuracy,
     metric,
@@ -368,29 +456,57 @@ def _metric_laplace_operator_stencil(
                     out[m, i, j] = cumul
         return out
 
-    @cuda.jit
-    def _metric_stencil_gpu_batch(a, out):
-        m, i, j = cuda.grid(3)
-        M, H, W = a.shape
-        if m < M and npad <= i < H - npad and npad <= j < W - npad:
-            cumul = dtype(0.0)
-            for k in range(-n2, n2 + 1):
-                cumul += g11d * c2[k] * a[m, i + k, j]
-                cumul += g22d * c2[k] * a[m, i, j + k]
-            cross = dtype(0.0)
-            for k in range(-n1, n1 + 1):
-                for l in range(-n1, n1 + 1):
-                    cross += d1[k] * d1[l] * a[m, i + k, j + l]
-            out[m, i, j] = cumul + g12d * cross
+    if device == "gpu":
+        check_cupy_is_installed()
+        # the kernel indexes the coefficients in natural order (index k + n for
+        # offset k), so undo the rolls applied for the CPU stencil above
+        c2_natural = np.roll(c2, n2)
+        d1_natural = np.roll(d1, n1)
+        c2_row_gpu = cp.asarray(g11d * c2_natural)
+        c2_col_gpu = cp.asarray(g22d * c2_natural)
+        d1_gpu = cp.asarray(d1_natural)
+        d1_scaled_gpu = cp.asarray(g12d * d1_natural)
 
     def _metric_stencil_gpu(a):
         xp = get_array_module(a)
+        a = xp.ascontiguousarray(a)
         out = xp.zeros_like(a)
-        threadsperblock = (4, 8, 8)
-        bpg = tuple(
-            math.ceil(s / t) for s, t in zip(a.shape, threadsperblock)
+
+        M, H, W = a.shape
+
+        _init_metric_laplace_stencil_kernels()
+        if a.dtype == xp.complex128:
+            kernel = _metric_laplace_stencil_c128
+        else:
+            kernel = _metric_laplace_stencil_c64
+
+        threads_x = 16
+        threads_y = 16
+        block = (threads_x, threads_y, 1)
+        grid = (
+            math.ceil(W / threads_x),
+            math.ceil(H / threads_y),
+            min(M, 65535),
         )
-        _metric_stencil_gpu_batch[bpg, threadsperblock](a, out)
+        kernel(
+            grid,
+            block,
+            (
+                out,
+                a,
+                c2_row_gpu.astype(a.dtype, copy=False),
+                c2_col_gpu.astype(a.dtype, copy=False),
+                d1_gpu.astype(a.dtype, copy=False),
+                d1_scaled_gpu.astype(a.dtype, copy=False),
+                np.int32(n1),
+                np.int32(n2),
+                np.int32(npad),
+                np.int32(M),
+                np.int32(H),
+                np.int32(W),
+            ),
+        )
+
         return out
 
     def _metric_stencil(a):
