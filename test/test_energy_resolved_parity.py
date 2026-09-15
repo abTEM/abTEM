@@ -4,6 +4,7 @@
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.geometry import find_mic
 
 from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
 from abtem.inelastic.phonons import EnergyResolvedAtomsEnsemble
@@ -214,3 +215,38 @@ def test_wrapped_snapshot_passes_minimum_image_check(equilibrium):
     diff = twin.positions[0] - expected
     diff -= np.round(diff / 10.0) * 10.0
     np.testing.assert_allclose(diff, 0.0, atol=1e-12)
+
+
+def test_wrapped_snapshot_passes_minimum_image_check_2d_material():
+    """A 2D-material cell built the standard ASE way (e.g. ase.build.
+    graphene()'s defaults) has a degenerate/zero out-of-plane cell vector,
+    so atoms.cell.rank < 3 even though the in-plane directions are fully
+    periodic. The minimum-image check must still wrap those in-plane
+    directions instead of silently skipping the correction (which would
+    make an ordinary in-plane PBC wrap look like a multi-angstrom
+    displacement and spuriously fail max_displacement)."""
+    equilibrium_2d = Atoms(
+        "C2",
+        positions=[[0, 0, 0], [1.42, 0, 0]],
+        cell=[[2.84, 0, 0], [-1.42, 2.46, 0], [0, 0, 0]],
+        pbc=(True, True, False),
+    )
+    assert equilibrium_2d.cell.rank < 3
+
+    u = np.array([0.03, -0.02, 0.0])
+    atoms = equilibrium_2d.copy()
+    atoms.positions[0] += u
+    atoms.positions[0] += atoms.cell[0]  # push across the periodic x boundary
+    atoms.wrap()
+    assert np.linalg.norm(atoms.positions[0] - equilibrium_2d.positions[0]) > 1.0
+
+    # must not raise despite the >1 A raw (unwrapped) displacement
+    ensemble = EnergyResolvedAtomsEnsemble(
+        [[atoms, atoms]], [0.02], equilibrium_atoms=equilibrium_2d,
+        parity_projection=True,
+    )
+    twin = ensemble.snapshots[1, 0, 0]
+    expected = equilibrium_2d.positions[0] - u
+    diff = twin.positions[0] - expected
+    vmin, _ = find_mic(diff[None, :], equilibrium_2d.cell, pbc=equilibrium_2d.pbc)
+    np.testing.assert_allclose(vmin[0], 0.0, atol=1e-10)

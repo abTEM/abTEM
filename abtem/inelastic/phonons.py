@@ -18,6 +18,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, data
 from ase.cell import Cell
+from ase.geometry import find_mic
 from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
@@ -678,12 +679,15 @@ def _validate_parity_snapshot(
         return
 
     displacement = atoms.positions - equilibrium_atoms.positions
-    cell = np.asarray(atoms.cell)
-    if atoms.cell.rank == 3:
-        # minimum image, so snapshots wrapped back into the cell (an atom
-        # near a boundary displaced across it) are not flagged
-        fractional = displacement @ np.linalg.inv(cell)
-        displacement = displacement - np.round(fractional) @ cell
+    # minimum image, so snapshots wrapped back into the cell (an atom near a
+    # boundary displaced across it) are not flagged. find_mic (rather than a
+    # hand-rolled fractional-coordinate wrap requiring an invertible 3x3
+    # cell) also handles the common case of a 2D material with a degenerate
+    # or undefined out-of-plane cell vector (e.g. ase.build.graphene()'s
+    # default cell has rank 2, pbc=(True, True, False)): it wraps only the
+    # periodic directions and leaves the rest untouched.
+    if atoms.cell.rank > 0 and np.any(atoms.pbc):
+        displacement, _ = find_mic(displacement, atoms.cell, pbc=atoms.pbc)
     largest = np.linalg.norm(displacement, axis=1)
     worst = int(np.argmax(largest))
     if largest[worst] > max_displacement:
