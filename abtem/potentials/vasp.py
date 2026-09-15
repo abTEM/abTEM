@@ -272,6 +272,14 @@ class VASPPotential(ChargeDensityPotential):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
+    subtract_min : bool, optional
+        If True, each slice's own minimum value is subtracted from it. This constant,
+        spatially uniform shift doesn't change multislice-simulated intensities (a
+        per-slice constant only contributes an overall, unobservable phase), but it
+        does mean the potential's absolute value -- e.g. in vacuum -- is not the
+        physical electrostatic reference and differs slice-to-slice, and from other
+        potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
+        is False.
     """
 
     def __init__(
@@ -289,6 +297,7 @@ class VASPPotential(ChargeDensityPotential):
         exit_planes: int = None,
         repetitions=(1, 1, 1),
         device: str = None,
+        subtract_min: bool = False,
     ):
         super().__init__(
             atoms=atoms,
@@ -303,6 +312,7 @@ class VASPPotential(ChargeDensityPotential):
             exit_planes=exit_planes,
             repetitions=repetitions,
             device=device,
+            subtract_min=subtract_min,
         )
 
         if isinstance(potcar, (str, Path)):
@@ -393,5 +403,6 @@ class VASPPotential(ChargeDensityPotential):
             first_slice=first_slice,
             last_slice=last_slice,
             core_density_correction=self._core_density_correction,
+            subtract_min=self.subtract_min,
         ):
             yield slic

@@ -396,6 +396,7 @@ def _generate_slices(
     first_slice: int = 0,
     last_slice: int = None,
     core_density_correction: dict = None,
+    subtract_min: bool = False,
 ):
     if last_slice is None:
         last_slice = len(ewald_potential)
@@ -443,7 +444,16 @@ def _generate_slices(
 
         slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
 
-        slic._array -= slic._array.min()
+        if subtract_min:
+            # A per-slice constant shift doesn't change multislice-simulated
+            # intensities (it's spatially uniform, so it only contributes an
+            # overall, unobservable phase) -- but it does mean the potential's
+            # own absolute value, e.g. in vacuum, is not physically meaningful
+            # and differs slice-to-slice from the true electrostatic reference
+            # (and from other potential builders, e.g. GPAWPotential, which
+            # don't do this). Off by default; kept only for comparison with
+            # older results that relied on this normalization.
+            slic._array -= slic._array.min()
         yield slic
 
 
@@ -582,6 +592,14 @@ class ChargeDensityPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
+    subtract_min : bool, optional
+        If True, each slice's own minimum value is subtracted from it. This constant,
+        spatially uniform shift doesn't change multislice-simulated intensities (a
+        per-slice constant only contributes an overall, unobservable phase), but it
+        does mean the potential's absolute value -- e.g. in vacuum -- is not the
+        physical electrostatic reference and differs slice-to-slice, and from other
+        potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
+        is False.
     """
 
     def __init__(
@@ -598,6 +616,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
+        subtract_min: bool = False,
     ):
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
@@ -608,6 +627,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
+        self._subtract_min = subtract_min
 
         if isinstance(self._charge_density, np.ndarray):
             # Skipped for a lazy (dask) charge_density to avoid forcing an eager
@@ -658,6 +678,10 @@ class ChargeDensityPotential(_PotentialBuilder):
     @property
     def repetitions(self):
         return self._repetitions
+
+    @property
+    def subtract_min(self):
+        return self._subtract_min
 
     @property
     def num_frozen_phonons(self):
@@ -864,6 +888,10 @@ class ChargeDensityPotential(_PotentialBuilder):
         array, ewald_potential = self._prepare_array_and_ewald_potential()
 
         for slic in _generate_slices(
-            array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+            array,
+            ewald_potential,
+            first_slice=first_slice,
+            last_slice=last_slice,
+            subtract_min=self._subtract_min,
         ):
             yield slic
