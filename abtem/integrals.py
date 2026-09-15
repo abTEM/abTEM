@@ -309,7 +309,12 @@ def correction_projected_scattering_factors(
     long_range = long_range.projected_scattering_factor(symbol)
 
     correction = short_range(k**2) - long_range(k**2)
-    # correction /= sinc()
+    # A commented-out `correction /= sinc()` sat here and read like an
+    # unfinished step. It is not: integrate_on_grid divides the *summed*
+    # gaussian-plus-correction array by sinc once, so dividing here as well
+    # double-divides. Restoring it makes the result diverge rather than
+    # converge as the sampling is refined -- total ratio against the quadrature
+    # integrator goes 2.70 / 7.78 / 28.12 at gpts 128 / 256 / 512.
     return correction
 
 
@@ -355,6 +360,102 @@ def _sinc_on_device(gpts, sampling, device, device_key):
         return sinc(gpts, sampling, "gpu")
 
 
+# The largest scale-relative deviation a Gaussian-form parametrization may show
+# when rebuilt from its own parameters. Peng, the only one abTEM ships, reaches
+# 1.8e-07 at float32 and 1.8e-16 at float64 over all 98 elements it covers on a
+# 128^2 grid; the nearest rejection, Kirkland, is 0.275, and Lobato is 2.3-3.8.
+# Three decades of headroom above the former and three below the latter.
+_GAUSSIAN_FORM_TOLERANCE = 1e-4
+
+
+def _validate_gaussian_form(parametrization, symbol: str, gpts, sampling):
+    """Reject a parametrization that is not a superposition of Gaussians.
+
+    ``gaussian_parametrization`` is documented as requiring that form and
+    nothing checked it: ``gaussian_projected_scattering_factors`` evaluates
+    ``a exp(-b k^2)`` on whatever ``(2, n)`` array it is handed, so Lobato --
+    same shape, different functional form -- produced a potential whose plane
+    integral is 3.3x too large for carbon and 4.8x for silicon, finite
+    everywhere.
+
+    The test is functional rather than a name check: rebuild the scattering
+    factor from the parameters as a Gaussian sum and compare with the
+    parametrization's own.
+
+    **On the grid the call is about to use**, not on a fixed window. An earlier
+    version sampled ``linspace(0.01, 4.0, 32)``, which covers 2.3 % of the k^2
+    a 128^2 build evaluates and 0.1 % of a 512^2 one -- and 32 points across
+    that window sit 0.13 apart, so a feature narrower than that fell between
+    them as well. Both holes were reachable: a Peng subclass carrying a bump at
+    k^2 = 20, or one between two sample points, passed the check and built a
+    potential several per cent to tens of per cent wrong. Using the real grid
+    costs nothing, since ``gaussian_projected_scattering_factors`` computes it
+    one call later.
+
+    Both sides are evaluated at the configured precision. Mixing them made the
+    verdict depend on ``abtem.config``: ``scaled_parameters`` is float64 while
+    ``Parametrization._get_function`` casts to ``get_dtype``, so the same
+    parametrization could be accepted at float64 and rejected at float32.
+
+    Checked **per element, for the element actually being used**, not once at
+    construction for a fixed one. A first version validated only carbon, which
+    rejected the shipped ``peng_ionic.json`` (all ions, no carbon) and let a
+    parametrization whose carbon entry is sound but whose silicon entry is not
+    through silently.
+
+    This also rejects a parametrization whose ``scaled_parameters`` and whose
+    own scattering-factor function disagree about the number of terms -- which
+    is what Peng does if its parameter table is extended past five, because
+    ``scattering_factor_k2`` is hardcoded to five. That rejection is wanted:
+    the extra Gaussians would be added to the field while ``get_corrections``
+    and ``cutoff`` still saw five.
+    """
+    fp_dtype = get_dtype(complex=False)
+    try:
+        parameters = parametrization.scaled_parameters(
+            symbol, "projected_scattering_factor"
+        )
+        own_function = parametrization.projected_scattering_factor(symbol)
+    except Exception as exc:  # noqa: BLE001 -- re-raised with context
+        raise ValueError(
+            f"{type(parametrization).__name__} cannot provide a projected "
+            f"scattering factor for {symbol!r}, so it cannot be used as "
+            "gaussian_parametrization"
+        ) from exc
+
+    parameters = np.asarray(parameters, dtype=fp_dtype)
+    if parameters.ndim != 2 or parameters.shape[0] != 2:
+        raise ValueError(
+            f"{type(parametrization).__name__} is not a superposition of "
+            f"Gaussians for {symbol!r}: expected (2, n) amplitude/width "
+            f"parameters, got {parameters.shape}"
+        )
+
+    k, _ = polar_spatial_frequencies(gpts, sampling)
+    k2 = np.asarray(k, dtype=fp_dtype) ** 2.0
+    own = np.asarray(own_function(k2), dtype=fp_dtype)
+    reconstructed = (
+        parameters[0][:, None, None] * np.exp(-parameters[1][:, None, None] * k2[None])
+    ).sum(0)
+
+    # Scale-relative, not np.allclose: these span many orders of magnitude
+    # across the grid, and at large k^2 both sides are ~0, where a per-element
+    # relative tolerance compares noise with noise.
+    deviation = float(np.abs(reconstructed - own).max() / np.abs(own).max())
+    if not deviation <= _GAUSSIAN_FORM_TOLERANCE:
+        raise ValueError(
+            f"{type(parametrization).__name__} is not a superposition of "
+            f"Gaussians for {symbol!r}: rebuilding its projected scattering "
+            "factor from its own parameters as a sum of Gaussians does not "
+            f"reproduce it on a {tuple(gpts)} grid (max deviation "
+            f"{deviation:.3g} of peak, tolerance "
+            f"{_GAUSSIAN_FORM_TOLERANCE:g}). gaussian_parametrization requires "
+            "a Gaussian-form parametrization such as Peng, and its parameter "
+            "table must have the same number of terms its own "
+            "scattering-factor function uses."
+        )
+
+
 class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     """
     Parameters
@@ -370,9 +471,55 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the
         potential [eV / e]. Default is 1e-3.
+
+    Notes
+    -----
+    The short-range correction is **not** resolved along z. The Gaussian term is:
+    each atom contributes to every slice, weighted by the analytic z-integral of
+    each Gaussian between that slice's limits. The correction term is not: the
+    whole infinitely-projected difference between the two parametrizations is
+    added to the one slice the atom's centre falls in.
+
+    Summed over slices the two terms recover the full projection of
+    ``parametrization`` -- exact up to ``_GAUSSIAN_FORM_TOLERANCE``, not
+    unconditionally. The identity holds only where the Gaussian sum built from
+    ``scaled_parameters`` equals the parametrization's own
+    ``projected_scattering_factor``, and the form check bounds their
+    disagreement globally, as ``max|difference| / max|own|``. A discrepancy
+    parked where ``own`` is small relative to the grid's peak therefore costs
+    almost nothing globally while being large locally: a Peng subclass with a
+    bump at k^2 = 150 on a 128^2 grid is accepted at a global deviation of
+    5.5e-05 while differing by 4.8 % locally, leaving the total off by 3.2e-04.
+    For the shipped Peng/Lobato default the disagreement is ~1.8e-07 and the
+    total is exact to that, but a custom ``gaussian_parametrization`` should not
+    read this as an unconditional guarantee.
+
+    Distribution between slices is a separate matter, and a worse one: it is a
+    good approximation only if the difference between the two parametrizations
+    is confined to a region thinner than a slice. It is not. Measured for silicon, the fraction
+    of the correction that actually belongs in the atom's own slice is 11 % at
+    dz = 0.5 A, 20 % at 1 A and 31 % at 2 A, against 44 / 67 / 90 % for the
+    atom's own potential: the correction is *less* localised in z than the atom
+    it corrects, because a five-Gaussian fit crosses a different functional form
+    repeatedly rather than agreeing with it outside the core.
+
+    The cost is a redistribution of potential between neighbouring slices, not a
+    change in the total. Building a single silicon atom against
+    ``QuadratureProjectionIntegrals`` at matched cutoff, the largest per-slice
+    deviation grows as 1/dz -- 0.16 % for one slice holding the whole atom,
+    0.62 % at dz = 1 A, 3.5 % at dz = 0.125 A -- while the total stays within
+    1563-1643 ppm throughout. **Refining the slicing makes it worse**, which is
+    the signature of a model choice rather than a discretisation error.
+
+    Whether that is acceptable, and whether the correction should carry a real
+    z-profile, is an open question: giving it one means a numerical z-quadrature
+    for that term, since the difference of the two parametrizations has no
+    closed-form z-integral. Until it is settled, prefer
+    ``QuadratureProjectionIntegrals`` where the distribution of potential within
+    a slice matters, and this class where periodicity does.
     """
 
-    _cache_attributes = ("_sinc_cache",)
+    _cache_attributes = ("_gaussians", "_corrections", "_sinc_cache")
 
     def __init__(
         self,
@@ -390,14 +537,15 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
         super().__init__(periodic=True, finite=True)
 
-        # There were two further caches here, for the projected gaussians and
-        # the corrections. Both computed a key, checked the dict, missed,
-        # recomputed and never wrote back, so neither ever stored anything and
-        # nobody noticed. They are removed rather than repaired: the values are
-        # (5, *gpts) float64 arrays that abTEM pickles into every task graph,
-        # so enabling them cost ~300 MB retained and inflated a warm
-        # frozen-phonon graph 12.6x, to buy a speed-up nothing has ever had.
-        # A correctly keyed cache can be added by whoever needs one.
+        # integrate_on_grid runs once per slice per species and recomputes
+        # both parametrization arrays each time -- 46x redundant for a 46-slice
+        # cell, and 65-70 % of CPU build time (89 % on GPU at 1024^2, which is
+        # why the device could not help). The previous commit deleted these two
+        # caches because as written they were unusable: they never stored, their
+        # key omitted precision, and they rode into every task graph. Restored
+        # here with the key they always needed and excluded from __getstate__.
+        self._gaussians = _DeviceArrayCache()
+        self._corrections = _DeviceArrayCache()
         self._sinc_cache = _DeviceArrayCache()
 
     @property
@@ -408,12 +556,16 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
     @property
     def gaussian_parametrization(self):
-        """The error tolerance used for deciding the radial cutoff distance of the
-        potential [eV / e]."""
+        """The Gaussian radial potential parametrization that is superposed to build
+        the projected field. Must be a superposition of Gaussians."""
         return self._gaussian_parametrization
 
     @property
     def correction_parametrization(self):
+        """The radial potential parametrization the short-range correction is taken
+        from. Set by the `parametrization` argument, which is named for consistency
+        with the other integrators; the correction is the difference between this
+        parametrization and `gaussian_parametrization`."""
         return self._correction_parametrization
 
     def cutoff(self, symbol: str) -> float:
@@ -425,10 +577,48 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        return gaussian_projected_scattering_factors(symbol, gpts, sampling)
+        # Host-side: the helper takes no device, so the key needs none -- but
+        # it does need the precision, which reaches the value through
+        # spatial_frequencies.
+        key = (symbol, tuple(gpts), tuple(sampling), _precision_key())
+        cached = self._gaussians.get(key)
+        if cached is not None:
+            return cached
+
+        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+
+        return self._gaussians.put(
+            key,
+            gaussian_projected_scattering_factors(
+                symbol, gpts, sampling, parametrization=self._gaussian_parametrization
+            ),
+        )
 
     def get_corrections(self, symbol, gpts, sampling):
-        return correction_projected_scattering_factors(symbol, gpts, sampling)
+        key = (symbol, tuple(gpts), tuple(sampling), _precision_key())
+        cached = self._corrections.get(key)
+        if cached is not None:
+            return cached
+
+        # Validated here too, not only in get_gaussians. The correction is
+        # short_range - long_range with long_range = gaussian_parametrization,
+        # so a non-Gaussian one yields a plausible-looking array rather than an
+        # error. integrate_on_grid happens to call get_gaussians first, which
+        # would raise before this is reached -- but that is an ordering
+        # accident, and get_corrections is public. Validating both makes the
+        # guarantee a property of the methods rather than of their call order.
+        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+
+        return self._corrections.put(
+            key,
+            correction_projected_scattering_factors(
+                symbol,
+                gpts,
+                sampling,
+                short_range=self._correction_parametrization,
+                long_range=self._gaussian_parametrization,
+            ),
+        )
 
     def _integrate_gaussians(self, positions, symbol, a, b, gpts, sampling, device):
         gaussians = self.get_gaussians(symbol, gpts, sampling)
@@ -436,18 +626,38 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         shifted_a = a - positions[:, 2]
         shifted_b = b - positions[:, 2]
 
-        weights = gaussian_projection_weights(symbol, shifted_a, shifted_b)
+        weights = gaussian_projection_weights(
+            symbol,
+            shifted_a,
+            shifted_b,
+            parametrization=self._gaussian_parametrization,
+        )
 
         xp = get_array_module(device)
         fp_dtype = get_dtype(complex=False)
         cx_dtype = get_dtype(complex=True)
         positions = (positions[:, :2] / sampling).astype(fp_dtype)
+        # The parametrization helpers are host-only, so move their results
+        # across before they meet a device array. Cast on the way: the
+        # parameters are float64 regardless of the configured precision, so
+        # transferring them raw moves twice the bytes a float32 run needs.
+        # Only on device -- casting on the host path would change CPU results.
+        if xp is not np:
+            gaussians = xp.asarray(gaussians, dtype=fp_dtype)
+            weights = xp.asarray(weights, dtype=fp_dtype)
 
         array = xp.zeros(gpts, dtype=cx_dtype)
-        for i in range(5):
-            temp = xp.zeros_like(array, dtype=cx_dtype)
+        # Was hardcoded to 5 while the parametrization became configurable, so
+        # a six-term parametrization silently dropped its last Gaussian and a
+        # three-term one raised IndexError.
+        for i in range(len(gaussians)):
+            # Superpose into a real array and cast afterwards, as the infinite
+            # projection does: cupy's scatter-add has no complex overload.
+            temp = xp.zeros(gpts, dtype=fp_dtype)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(cx_dtype)
+            array += fft2(temp.astype(cx_dtype), overwrite_x=True) * gaussians[
+                i
+            ].astype(cx_dtype)
 
         return array
 
@@ -457,15 +667,20 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
         fp_dtype = get_dtype(complex=False)
         cx_dtype = get_dtype(complex=True)
+        if xp is not np:
+            # Real, not complex: the imaginary part is identically zero, so a
+            # complex cast saved nothing at float32 and doubled the transfer at
+            # float64 -- and left cpu and gpu disagreeing on dtype.
+            corrections = xp.asarray(corrections, dtype=fp_dtype)
 
         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
         positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=cx_dtype)
+        array = xp.zeros(gpts, dtype=fp_dtype)
 
         superpose_deltas(positions, array)
 
-        corrections = fft2(array, overwrite_x=False) * corrections
+        corrections = fft2(array.astype(cx_dtype), overwrite_x=False) * corrections
 
         return corrections
 
@@ -477,7 +692,6 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-        fourier_space: bool = False,
     ) -> np.ndarray:
         xp = get_array_module(device)
 
