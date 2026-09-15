@@ -88,6 +88,16 @@ def test_invalid_component_raises():
         phonon_loss_diffraction_patterns(waves, component="bogus")
 
 
+def test_invalid_component_raises_for_parity_projected_input():
+    """component is ignored (not applicable) once exit_waves carries a
+    PhononParityAxis, but an invalid value must still be rejected rather
+    than silently dropped -- the parity path must not bypass this check
+    just because it doesn't use the value."""
+    waves = _make_parity_exit_waves([0.02, 0.05])
+    with pytest.raises(ValueError, match="component must be one of"):
+        phonon_loss_diffraction_patterns(waves, component="bogus")
+
+
 def test_block_direct_true_infers_radius_from_metadata():
     """block_direct=True must resolve to radius=None (auto-infer from
     metadata), not a literal radius of 1 -- bool is a subclass of int, so

@@ -6314,6 +6314,28 @@ def _thermal_weight_tds(
     return result_array, e_values_signed
 
 
+def _unfold_loss_gain_array(array, axes_metadata, energy_axis_idx, temperature):
+    """Core of the loss/gain unfolding: reweight ``array`` along
+    ``energy_axis_idx`` via :func:`_thermal_weight_tds` and replace that
+    axis's :class:`~abtem.core.axes.EnergyLossAxis` with its signed
+    unfolding. Shared by the public :func:`unfold_loss_gain` (operates on a
+    finished measurement object) and ``phonon_loss_diffraction_patterns``'s
+    inline ``temperature`` handling (operates mid-construction, before a
+    measurement object exists yet) so the two can't independently drift."""
+    from abtem.core.axes import EnergyLossAxis
+
+    energy_axis = axes_metadata[energy_axis_idx]
+    e_values = np.asarray(energy_axis.values, dtype=float)
+    array, e_values_signed = _thermal_weight_tds(
+        array, e_values, energy_axis_idx, temperature
+    )
+    axes_metadata = list(axes_metadata)
+    axes_metadata[energy_axis_idx] = EnergyLossAxis(
+        values=tuple(e_values_signed), units=energy_axis.units
+    )
+    return array, axes_metadata
+
+
 def unfold_loss_gain(measurement, temperature: float):
     """Unfold an energy-resolved TDS measurement, computed at energy
     magnitudes ``|E|`` only, into signed loss (``+E``) and gain (``-E``)
@@ -6363,20 +6385,51 @@ def unfold_loss_gain(measurement, temperature: float):
             f"axes, got {measurement.ensemble_axes_metadata}."
         )
 
-    energy_axis = measurement.ensemble_axes_metadata[energy_axis_idx]
-    e_values = np.asarray(energy_axis.values, dtype=float)
-    array, e_values_signed = _thermal_weight_tds(
-        measurement.array, e_values, energy_axis_idx, temperature
-    )
-
-    ensemble_axes_metadata = list(measurement.ensemble_axes_metadata)
-    ensemble_axes_metadata[energy_axis_idx] = EnergyLossAxis(
-        values=tuple(e_values_signed), units=energy_axis.units
+    array, ensemble_axes_metadata = _unfold_loss_gain_array(
+        measurement.array,
+        measurement.ensemble_axes_metadata,
+        energy_axis_idx,
+        temperature,
     )
     kwargs = measurement._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
     return measurement.__class__(
         array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs
     )
+
+
+def _finalize_phonon_loss_result(
+    result_array,
+    reference_dp: "DiffractionPatterns",
+    remaining_axes: list,
+    phonon_loss_component: str,
+    block_direct: bool | float,
+) -> "DiffractionPatterns":
+    """Shared tail of ``phonon_loss_diffraction_patterns`` and its parity-
+    projection helper: stamp metadata, build the ``DiffractionPatterns``
+    result (reusing ``reference_dp``'s sampling/fftshift/metadata, since
+    both call sites derive ``result_array`` from a diffraction pattern
+    computed with the same ``max_angle``/``parity``), and apply
+    ``block_direct``. Factored out so the two call sites can't silently
+    diverge on this bookkeeping the way they once did."""
+    metadata = dict(reference_dp.metadata)
+    metadata["phonon_loss_component"] = phonon_loss_component
+
+    result = DiffractionPatterns(
+        result_array,
+        sampling=reference_dp.sampling,
+        fftshift=reference_dp.fftshift,
+        ensemble_axes_metadata=remaining_axes or None,
+        metadata=metadata,
+    )
+
+    if block_direct:
+        # bool is a subclass of int, so isinstance(True, (int, float)) is True --
+        # block_direct=True (the documented "auto-infer the radius" usage) must be
+        # checked for explicitly, or it is taken as a literal radius of 1.
+        radius = None if isinstance(block_direct, bool) else block_direct
+        result = result.block_direct(radius=radius)
+
+    return result
 
 
 def _phonon_loss_diffraction_patterns_parity_projection(
@@ -6508,6 +6561,11 @@ def _phonon_loss_diffraction_patterns_parity_projection(
         **dp_kwargs
     )
     I_one = dp_one.array.mean(axis=fp_axis_idx)
+    # Full real-space (uncropped) grid, no longer needed once dp_one (the
+    # much smaller, already max_angle-cropped result) exists -- freed here
+    # rather than left alive for the rest of the function, which would
+    # otherwise coexist in memory with psi_even below.
+    del psi_odd
 
     # --- "multi": variance of psi_even = (real + twin) / 2, in complex128 ---
     psi_even = ((waves_real.array + waves_twin.array) / 2).astype(np.complex128)
@@ -6531,6 +6589,9 @@ def _phonon_loss_diffraction_patterns_parity_projection(
         / N**2
     )
     I_multi = (I_even_incoherent - I_even_coherent).astype(real_dtype)
+    # Full real-space (uncropped), complex128-upcast grid -- twice the
+    # working precision's byte size -- no longer needed once I_multi exists.
+    del psi_even, waves_even
 
     remaining_axes = [
         ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
@@ -6548,25 +6609,9 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     )
     remaining_axes = [phonon_order_axis] + remaining_axes
 
-    metadata = dict(dp_one.metadata)
-    metadata["phonon_loss_component"] = "parity_projection"
-
-    result = DiffractionPatterns(
-        result_array,
-        sampling=dp_one.sampling,
-        fftshift=dp_one.fftshift,
-        ensemble_axes_metadata=remaining_axes,
-        metadata=metadata,
+    return _finalize_phonon_loss_result(
+        result_array, dp_one, remaining_axes, "parity_projection", block_direct
     )
-
-    if block_direct:
-        # bool is a subclass of int, so isinstance(True, (int, float)) is True --
-        # block_direct=True (the documented "auto-infer the radius" usage) must be
-        # checked for explicitly, or it is taken as a literal radius of 1.
-        radius = None if isinstance(block_direct, bool) else block_direct
-        result = result.block_direct(radius=radius)
-
-    return result
 
 
 def phonon_loss_diffraction_patterns(
@@ -6660,6 +6705,14 @@ def phonon_loss_diffraction_patterns(
         PhononParityAxis,
     )
 
+    # Validated unconditionally, before the parity-axis dispatch below: a
+    # PhononParityAxis makes the parity-projection path ignore `component`
+    # entirely (see the Returns section above), but an invalid value (e.g. a
+    # typo) must still be caught rather than silently accepted and dropped.
+    valid_components = ("tds", "coherent", "incoherent", "all")
+    if component not in valid_components:
+        raise ValueError(f"component must be one of {valid_components}")
+
     for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
         if isinstance(ax, PhononParityAxis):
             return _phonon_loss_diffraction_patterns_parity_projection(
@@ -6727,11 +6780,7 @@ def phonon_loss_diffraction_patterns(
     # TDS = incoherent - coherent
     I_tds = I_incoherent - I_coherent
 
-    # --- select component ---
-    valid_components = ("tds", "coherent", "incoherent", "all")
-    if component not in valid_components:
-        raise ValueError(f"component must be one of {valid_components}")
-
+    # --- select component --- (validity of `component` already checked above)
     if temperature is not None and component != "tds":
         raise ValueError(
             "temperature-based loss/gain unfolding requires component='tds'."
@@ -6747,13 +6796,8 @@ def phonon_loss_diffraction_patterns(
         remaining_energy_axis_idx = next(
             i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
         )
-        energy_axis = remaining_axes[remaining_energy_axis_idx]
-        e_values = np.asarray(energy_axis.values, dtype=float)
-        I_tds, e_values_signed = _thermal_weight_tds(
-            I_tds, e_values, remaining_energy_axis_idx, temperature
-        )
-        remaining_axes[remaining_energy_axis_idx] = EnergyLossAxis(
-            values=tuple(e_values_signed), units=energy_axis.units
+        I_tds, remaining_axes = _unfold_loss_gain_array(
+            I_tds, remaining_axes, remaining_energy_axis_idx, temperature
         )
 
     if component == "all":
@@ -6772,25 +6816,9 @@ def phonon_loss_diffraction_patterns(
     else:
         result_array = I_incoherent
 
-    metadata = dict(dp_coherent.metadata)
-    metadata["phonon_loss_component"] = component
-
-    result = DiffractionPatterns(
-        result_array,
-        sampling=dp_coherent.sampling,
-        fftshift=dp_coherent.fftshift,
-        ensemble_axes_metadata=remaining_axes or None,
-        metadata=metadata,
+    return _finalize_phonon_loss_result(
+        result_array, dp_coherent, remaining_axes, component, block_direct
     )
-
-    if block_direct:
-        # bool is a subclass of int, so isinstance(True, (int, float)) is True --
-        # block_direct=True (the documented "auto-infer the radius" usage) must be
-        # checked for explicitly, or it is taken as a literal radius of 1.
-        radius = None if isinstance(block_direct, bool) else block_direct
-        result = result.block_direct(radius=radius)
-
-    return result
 
 
 def momentum_resolved_spectrum(
