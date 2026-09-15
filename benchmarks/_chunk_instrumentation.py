@@ -68,24 +68,20 @@ def _log_potential_chunk_call(gpts, device, dtype, chunk_size):
         pool_used = pool.used_bytes()
         pool_free = pool.free_bytes()
         pool_total = pool.total_bytes()
-        effective_free = min(free_mem, total_mem - pool_used)
+        # Mirrors the real formula in abtem.core.chunks.estimate_potential_chunk_size
+        # (as of commits c24b92fb / affdc1bc): counts the pool's own idle cache
+        # (pool_free -- already reserved from CUDA but not currently live) as
+        # available, and uses a 2x per-slice factor calibrated from real peak
+        # pool.used_bytes() measurements rather than the original 5x.
+        effective_free = min(free_mem + pool_free, total_mem - pool_used)
 
         if dtype is None:
             itemsize = 4
         else:
             itemsize = np.dtype(dtype).itemsize
         slice_bytes = gpts[0] * gpts[1] * itemsize
-        effective_per_slice = slice_bytes * 5
+        effective_per_slice = slice_bytes * 2
         budget_bytes = int(effective_free * 0.35)
-
-        # PREVIEW ONLY -- not used for the real return value. Counts the
-        # pool's own idle cache (pool_free, already reserved from CUDA but
-        # not live) as available, instead of only raw CUDA-level free
-        # memory. See _log_scan_batch_call for the same change applied to
-        # estimate_scan_batch_size.
-        proposed_effective_free = min(free_mem + pool_free, total_mem - pool_used)
-        proposed_budget_bytes = int(proposed_effective_free * 0.35)
-        proposed_chunk_size = max(1, min(4096, int(proposed_budget_bytes / effective_per_slice)))
 
         print(
             f"[t={_elapsed():7.2f}s] potential_chunk_size call #{n}: "
@@ -93,14 +89,10 @@ def _log_potential_chunk_call(gpts, device, dtype, chunk_size):
             f"    cuda_free={_fmt_gb(free_mem)} cuda_total={_fmt_gb(total_mem)} "
             f"pool_used={_fmt_gb(pool_used)} pool_free_cached={_fmt_gb(pool_free)} "
             f"pool_total_reserved={_fmt_gb(pool_total)}\n"
-            f"    effective_free=min(cuda_free, cuda_total-pool_used)={_fmt_gb(effective_free)}\n"
-            f"    slice_bytes={_fmt_gb(slice_bytes)} effective_per_slice(x5)={_fmt_gb(effective_per_slice)} "
+            f"    effective_free=min(cuda_free+pool_free_cached, cuda_total-pool_used)={_fmt_gb(effective_free)}\n"
+            f"    slice_bytes={_fmt_gb(slice_bytes)} effective_per_slice(x2)={_fmt_gb(effective_per_slice)} "
             f"budget_bytes(35%% of effective_free)={_fmt_gb(budget_bytes)}\n"
-            f"    -> resolved chunk_size = {chunk_size}\n"
-            f"    [PREVIEW, not applied] proposed_effective_free=min(cuda_free+pool_free_cached, "
-            f"cuda_total-pool_used)={_fmt_gb(proposed_effective_free)}  "
-            f"proposed_budget_bytes={_fmt_gb(proposed_budget_bytes)}  "
-            f"-> proposed chunk_size = {proposed_chunk_size}"
+            f"    -> resolved chunk_size = {chunk_size}"
         )
     except Exception as e:  # pragma: no cover - diagnostic path only
         print(f"[t={_elapsed():7.2f}s] potential_chunk_size call #{n}: "
@@ -128,17 +120,16 @@ def _log_scan_batch_call(gpts, dtype, device, n_probes):
         pool_used = pool.used_bytes()
         pool_free = pool.free_bytes()
         pool_total = pool.total_bytes()
-        effective_free = min(free_mem, total_mem - pool_used)
+        # Mirrors the real formula in abtem.core.chunks.estimate_scan_batch_size
+        # (as of commit c24b92fb): counts the pool's own idle cache as available.
+        # The per-probe overhead factor (6x / 12x for Bluestein) is unchanged --
+        # only estimate_potential_chunk_size's per-slice factor was recalibrated.
+        effective_free = min(free_mem + pool_free, total_mem - pool_used)
 
         overhead = 6 if all(is_fast_fft_size(g) for g in gpts) else 12
         per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
         per_probe_effective = max(1, int(per_probe_bytes * overhead))
         probe_budget = int(effective_free * 0.50)
-
-        # PREVIEW ONLY -- see the matching comment in _log_potential_chunk_call.
-        proposed_effective_free = min(free_mem + pool_free, total_mem - pool_used)
-        proposed_probe_budget = int(proposed_effective_free * 0.50)
-        proposed_n_probes = max(1, proposed_probe_budget // per_probe_effective)
 
         print(
             f"[t={_elapsed():7.2f}s] scan_batch_size call #{n}: "
@@ -146,15 +137,11 @@ def _log_scan_batch_call(gpts, dtype, device, n_probes):
             f"    cuda_free={_fmt_gb(free_mem)} cuda_total={_fmt_gb(total_mem)} "
             f"pool_used={_fmt_gb(pool_used)} pool_free_cached={_fmt_gb(pool_free)} "
             f"pool_total_reserved={_fmt_gb(pool_total)}\n"
-            f"    effective_free=min(cuda_free, cuda_total-pool_used)={_fmt_gb(effective_free)}\n"
+            f"    effective_free=min(cuda_free+pool_free_cached, cuda_total-pool_used)={_fmt_gb(effective_free)}\n"
             f"    per_probe_bytes={_fmt_gb(per_probe_bytes)} overhead={overhead}x "
             f"per_probe_effective={_fmt_gb(per_probe_effective)} "
             f"probe_budget(50%% of effective_free)={_fmt_gb(probe_budget)}\n"
-            f"    -> resolved n_probes (pre power-of-two rounding target) = {n_probes}\n"
-            f"    [PREVIEW, not applied] proposed_effective_free=min(cuda_free+pool_free_cached, "
-            f"cuda_total-pool_used)={_fmt_gb(proposed_effective_free)}  "
-            f"proposed_probe_budget={_fmt_gb(proposed_probe_budget)}  "
-            f"-> proposed n_probes (pre rounding) = {proposed_n_probes}"
+            f"    -> resolved n_probes (pre power-of-two rounding target) = {n_probes}"
         )
     except Exception as e:  # pragma: no cover - diagnostic path only
         print(f"[t={_elapsed():7.2f}s] scan_batch_size call #{n}: "
