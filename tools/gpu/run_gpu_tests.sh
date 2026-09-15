@@ -163,18 +163,21 @@ elif [ "${MODE}" != "in-place" ]; then
         uv venv "${VENV}" || fail "uv venv failed"
     fi
     source "${VENV}/bin/activate"
-    uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
-        || fail "dependency install failed"
+    # One resolve pass over the union of all constraints, so a conflict fails
+    # loudly here instead of being silently decided by whichever of two
+    # installs ran last. Multi-GPU adds dask-cuda and its cuda-bindings
+    # dependency (cuda-core does `from cuda import bindings`); dask-cuda does
+    # not pull cuda-bindings in, and both resolve only from NVIDIA's index, so
+    # that index is added for the whole resolve. The contract check below still
+    # turns any remaining dask_cuda import failure into a red run.
     if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
-        # dask-cuda's import chain (cuda-core -> `from cuda import bindings`)
-        # needs cuda-bindings, which dask-cuda does not pull in and which
-        # resolves only from NVIDIA's index; without it the install "succeeds"
-        # but `import dask_cuda` fails and the multigpu tests skip. Install
-        # both from that index explicitly. The contract check below still
-        # turns any remaining import failure into a red run.
         uv pip install --extra-index-url https://pypi.nvidia.com \
+            -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
             dask-cuda cuda-bindings \
-            || fail "dask-cuda install failed"
+            || fail "dependency install failed"
+    else
+        uv pip install -e . --group test "${ABTEM_CI_CUPY_PKG:-cupy-cuda12x}" \
+            || fail "dependency install failed"
     fi
 fi
 # in-place without ABTEM_CI_VENV: use whatever python is active, but make sure
