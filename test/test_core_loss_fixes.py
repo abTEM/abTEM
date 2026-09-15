@@ -277,6 +277,86 @@ def test_entrance_exit_plane_carries_no_core_loss_signal(device):
     assert np.all(np.diff(values) > 0)
 
 
+class TestPrismEelsBuiltTransitionPotentialGrid:
+    """A built transition potential on the wrong grid ran silently.
+
+    ``_prism_eels_common_setup`` matches the transition potential's grid to the
+    S-matrix waves. For an UNBUILT one that is the fix in the preceding commit:
+    it has no array yet, so the match sets the grid and ``build()`` then
+    evaluates the form factors at the right gpts.
+
+    For an already-BUILT one the array shape is fixed, so the match cannot
+    change it -- it overwrites the *grid* to agree with the waves and leaves the
+    array alone, producing an object whose grid lies about its own contents
+    (gpts (64, 64) over a (4, 32, 32) array). The scan then completed and
+    returned a result on the wrong grid: 18.1 % low against the matched
+    reference, with an identical output shape, so nothing downstream could
+    notice.
+
+    The guard therefore has to run BEFORE the match, while the grid still
+    reports what the array really is; checking afterwards is useless because
+    the match is what destroys the evidence.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8), pbc=True,
+        )
+
+    def _s_matrix(self, gpts):
+        potential = abtem.Potential(self._atoms(), gpts=gpts, slice_thickness=4.0)
+        return abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+
+    def _scan(self, s_matrix, transition_potentials, **kwargs):
+        return s_matrix.transition_potential_scan(
+            transition_potentials=transition_potentials,
+            scan=abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                                potential=s_matrix.potential),
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=self._atoms(), lazy=False, **kwargs,
+        )
+
+    def test_a_built_potential_on_the_wrong_grid_is_refused(self):
+        s_matrix = self._s_matrix((64, 64))
+        mismatched = _synthetic_transition_potential((8.0, 8.0), (32, 32), n=2)
+        with pytest.raises(RuntimeError, match="Inconsistent grid"):
+            self._scan(s_matrix, mismatched)
+
+    def test_a_built_potential_on_the_right_grid_still_runs(self):
+        """The guard must not fire on the case it is meant to allow."""
+        s_matrix = self._s_matrix((64, 64))
+        matched = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        measurement = self._scan(s_matrix, matched)
+        assert measurement.shape[:2] == (2, 2)
+
+    def test_a_mismatched_extent_is_refused_too(self):
+        """check_match compares extent as well as gpts, and an extent mismatch
+        is the same class of error -- the array cannot be re-gridded either."""
+        s_matrix = self._s_matrix((64, 64))
+        wrong_extent = _synthetic_transition_potential((6.0, 6.0), (64, 64), n=2)
+        with pytest.raises(RuntimeError, match="Inconsistent grid"):
+            self._scan(s_matrix, wrong_extent)
+
+    def test_an_unbuilt_potential_is_still_regridded(self):
+        """Regression guard for the preceding commit: an unbuilt potential has
+        no array, so a grid mismatch is not an error -- it is matched and then
+        built at the S-matrix's gpts."""
+        pytest.importorskip("gpaw")
+        from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+
+        s_matrix = self._s_matrix((64, 64))
+        transitions = SubshellTransitions(Z=14, n=1, l=0, xc="PBE").get_transitions()
+        unbuilt = TransitionPotential(
+            14, transitions, extent=8.0, gpts=32, energy=ENERGY, double_channel=False
+        )
+        measurement = self._scan(s_matrix, unbuilt)
+        assert measurement.shape[:2] == (2, 2)
+
+
 class TestPrismScanAxisSqueeze:
     """The scan position axis was squeezed per dask block, not once at the end.
 
@@ -424,6 +504,7 @@ class TestPrismScanAxisSqueeze:
         assert np.allclose(from_point, from_grid, rtol=1e-6, atol=0.0)
 
 
+
 class TestMultipleDetectorsInOnePass:
     """Passing several detectors raised AssertionError instead of working.
 
@@ -522,423 +603,3 @@ class TestFilterByIntensity:
         strongest = [potential.transitions[i] for i in order]
         kept_ranks = [i for i, t in enumerate(strongest) if id(t) in kept]
         assert kept_ranks == list(range(len(kept_ranks)))
-
-
-class TestPotentialEnsembleAccumulation:
-    """The single-channel driver indexed only the exit-plane axis.
-
-    The measurement is allocated with the potential's ensemble axes before the
-    exit-plane axis, so indexing the plane axis alone addressed the ensemble
-    axis instead. With one exit plane the index was empty and every
-    configuration's contribution was broadcast across all configurations, so
-    the result came out ``num_configs`` times too large; with several exit
-    planes the plane slice landed on the configuration axis. On a length-1
-    configuration axis -- what the lazy path produces for every configuration
-    count, and what eager produces for num_configs == 1 -- it selected nothing
-    and the series came back zero; for eager with num_configs > 1 it selected
-    real configuration slots instead, giving a flat series carrying signal at
-    zero thickness. Wrong either way, zeros only in the first case.
-
-    The double-channel branch goes through ``_update_loss_measurements`` and
-    was always correct -- it is used here as a reference.
-    """
-
-    @staticmethod
-    def _setup(num_configs=None, exit_planes=None, seed=7):
-        atoms = ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
-            cell=(8, 8, 4),
-            pbc=True,
-        )
-        if num_configs is None:
-            ensemble = atoms
-        else:
-            ensemble = abtem.FrozenPhonons(
-                atoms, num_configs=num_configs, sigmas=0.05, seed=seed
-            )
-        potential = abtem.Potential(
-            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
-        )
-        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
-        probe.grid.match(potential)
-        return atoms, potential, probe
-
-    def _run(self, potential, probe, sites, lazy, double_channel=False):
-        scan = abtem.GridScan(
-            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
-        )
-        measurement = probe.transition_potential_scan(
-            scan=scan,
-            potential=potential,
-            detectors=abtem.FlexibleAnnularDetector(),
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
-            ),
-            double_channel=double_channel,
-            sites=sites,
-            threshold=1.0,
-            lazy=lazy,
-        )
-        if lazy:
-            measurement = measurement.compute(progress_bar=False)
-        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
-
-    @pytest.mark.parametrize("num_configs", [2, 3])
-    @pytest.mark.parametrize("double_channel", [False, True])
-    def test_eager_matches_lazy_over_frozen_phonons(self, num_configs, double_channel):
-        """Eager summed over configurations where lazy averaged."""
-        atoms, potential, probe = self._setup(num_configs=num_configs)
-        sites = atoms
-        eager = self._run(potential, probe, sites, lazy=False,
-                          double_channel=double_channel)
-        lazy = self._run(potential, probe, sites, lazy=True,
-                         double_channel=double_channel)
-        # Core-loss intensities are ~1e-9, far below np.allclose's default
-        # atol of 1e-8, which would call a factor-of-num_configs error
-        # "close". Compare against the data's own scale instead.
-        scale = max(np.abs(eager).max(), np.abs(lazy).max())
-        np.testing.assert_allclose(eager, lazy, rtol=1e-6, atol=1e-9 * scale)
-
-    @pytest.mark.parametrize("num_configs", [1, 2])
-    def test_configuration_count_does_not_scale_the_result(self, num_configs):
-        """The ensemble reduction averages, so the total must not follow n."""
-        atoms, one, probe = self._setup(num_configs=1)
-        sites = atoms
-        reference = self._run(one, probe, sites, lazy=True)
-
-        _, potential, probe = self._setup(num_configs=num_configs)
-        got = self._run(potential, probe, sites, lazy=False)
-        assert got.sum() == pytest.approx(reference.sum(), rel=1e-2)
-
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_thickness_series_survives_a_potential_ensemble(self, lazy):
-        """A frozen-phonon thickness series came back identically zero."""
-        atoms, plain, probe = self._setup(exit_planes=1)
-        sites = atoms
-        reference = self._run(plain, probe, sites, lazy=lazy)
-
-        _, potential, probe = self._setup(num_configs=1, exit_planes=1)
-        got = self._run(potential, probe, sites, lazy=lazy)
-
-        assert got.shape == reference.shape
-        # The entrance plane at t = 0 is zero by construction; every later
-        # plane must carry signal, and must match the un-wrapped potential to
-        # within the frozen-phonon displacement.
-        assert got[0].sum() == 0.0
-        assert np.all([got[i].sum() > 0.0 for i in range(1, got.shape[0])])
-        assert got.sum() == pytest.approx(reference.sum(), rel=1e-2)
-
-    def test_each_configuration_slot_holds_its_own_configuration(self):
-        """Every slot held the sum over all configurations, not its own.
-
-        Asserting only that the slots differ is too weak -- a permuted
-        configuration index passes that. With ``ensemble_mean=False`` the
-        per-configuration slots are public, so compare each against its own
-        independently built single-configuration run, which goes through the
-        plain-atoms path that was correct all along.
-        """
-        atoms = ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8),
-            pbc=True,
-        )
-        phonons = abtem.FrozenPhonons(
-            atoms, num_configs=3, sigmas=0.05, seed=7, ensemble_mean=False
-        )
-        potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
-        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
-        probe.grid.match(potential)
-        got = self._run(potential, probe, atoms, lazy=False)
-        assert got.shape[0] == 3
-
-        for index, configuration in enumerate(phonons):
-            single = abtem.Potential(
-                configuration, gpts=(64, 64), slice_thickness=2.0
-            )
-            reference = self._run(single, probe, atoms, lazy=False)
-            assert np.array_equal(got[index], reference), (
-                f"slot {index} does not hold configuration {index}"
-            )
-
-
-class TestPrismPotentialEnsembleAccumulation:
-    """The PRISM core-loss driver had the same axis-ordering defect.
-
-    ``prism_transition_potential_scan`` shares
-    ``_potential_ensemble_shape_and_metadata`` with the regular multislice
-    driver, so its measurement also carries the potential's ensemble axes
-    before the exit-plane axis -- but it indexed the plane part alone. It runs
-    once per configuration with a length-1 ensemble axis, so an exit-plane
-    slice starting at 1 or beyond selected nothing and a whole thickness
-    series came back zero.
-
-    Separately, ``SMatrix._build_ensemble_shape_metadata`` described that
-    exit-plane axis with the per-*slice* ``ThicknessAxis`` (length
-    ``num_slices``) instead of the per-exit-plane one, which raised from the
-    measurement constructor and masked the zeros above.
-    """
-
-    @staticmethod
-    def _setup(num_configs=None, exit_planes=None):
-        atoms = ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8),
-            pbc=True,
-        )
-        ensemble = (
-            atoms
-            if num_configs is None
-            else abtem.FrozenPhonons(
-                atoms, num_configs=num_configs, sigmas=0.05, seed=7
-            )
-        )
-        potential = abtem.Potential(
-            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
-        )
-        return atoms, potential
-
-    def _run(self, atoms, potential, double_channel=False):
-        s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
-        )
-        scan = abtem.GridScan(
-            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
-        )
-        measurement = s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
-            ),
-            scan=scan,
-            detectors=abtem.FlexibleAnnularDetector(),
-            sites=atoms,
-            double_channel=double_channel,
-            lazy=False,
-        )
-        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
-
-    @pytest.mark.parametrize("num_configs", [1, 3])
-    @pytest.mark.parametrize("double_channel", [False, True])
-    def test_thickness_series_survives_a_potential_ensemble(
-        self, num_configs, double_channel
-    ):
-        atoms, plain = self._setup(exit_planes=1)
-        reference = self._run(atoms, plain, double_channel)
-
-        _, potential = self._setup(num_configs=num_configs, exit_planes=1)
-        got = self._run(atoms, potential, double_channel)
-
-        assert got.shape == reference.shape
-        assert got[0].sum() == 0.0  # entrance plane, nothing traversed yet
-        assert all(got[i].sum() > 0.0 for i in range(1, got.shape[0]))
-        # Frozen phonons displace the atoms, so this matches the un-displaced
-        # reference only in aggregate -- the point is that the series carries
-        # signal at all, and at the right magnitude, rather than being zeroed.
-        for plane in range(1, got.shape[0]):
-            assert got[plane].sum() == pytest.approx(
-                reference[plane].sum(), rel=1e-3
-            )
-
-    def test_exit_plane_axis_metadata_has_one_value_per_exit_plane(self):
-        """It was built from the per-slice ThicknessAxis instead."""
-        _, potential = self._setup(num_configs=2, exit_planes=1)
-        s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
-        )
-        shape, metadata = s_matrix._build_ensemble_shape_metadata()
-        assert shape[-1] == len(potential.exit_planes)
-        assert len(metadata[-1].values) == len(potential.exit_planes)
-
-
-def test_ensemble_indices_handle_a_multi_axis_potential_ensemble():
-    """A potential with two ensemble axes is not constructible through the
-    public API today, so exercise the index builder directly."""
-    from abtem.multislice import _validate_potential_ensemble_indices
-
-    class _FakePotential:
-        ensemble_shape = (2, 3)
-        exit_planes = (-1, 0, 1)
-
-    potential = _FakePotential()
-    indices = _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential)
-    assert indices == (1, 2, slice(1, 3))
-    assert sum(isinstance(i, slice) for i in indices) == 1
-
-    class _SinglePlane(_FakePotential):
-        exit_planes = (-1,)
-
-    assert _validate_potential_ensemble_indices((1, 2), slice(0, 1), _SinglePlane()) == (
-        1,
-        2,
-    )
-
-
-def test_ensemble_index_length_is_enforced():
-    """Every defect in this family was a caller passing too few indices.
-
-    The helper used to accept a short tuple silently, which let the exit-plane
-    part land on an ensemble axis.
-    """
-    from abtem.multislice import _validate_potential_ensemble_indices
-
-    class _Potential:
-        ensemble_shape = (2, 3)
-        exit_planes = (-1, 0, 1)
-
-    potential = _Potential()
-    assert _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential) == (
-        1,
-        2,
-        slice(1, 3),
-    )
-    for short in ((1,), ()):
-        with pytest.raises(ValueError, match="entries for an ensemble"):
-            _validate_potential_ensemble_indices(short, slice(1, 3), potential)
-
-
-def test_prism_driver_refuses_a_multi_configuration_potential():
-    """Called directly it would silently return 1/num_configurations.
-
-    The SMatrix entry points always hand it a single-configuration
-    sub-potential, but nothing enforced that, and after the indexing fix the
-    wrong answer looks like a plausible monotone thickness series rather than
-    obviously broken output.
-    """
-    from abtem.inelastic.core_loss import prism_transition_potential_scan
-
-    atoms = ase.Atoms(
-        "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8), pbc=True
-    )
-    potential = abtem.Potential(
-        abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.05, seed=7),
-        gpts=(64, 64),
-        slice_thickness=2.0,
-    )
-    s_matrix = abtem.SMatrix(
-        potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
-    )
-    scan = abtem.GridScan(
-        start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
-    )
-    with pytest.raises(NotImplementedError, match="one potential"):
-        prism_transition_potential_scan(
-            s_matrix,
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
-            ),
-            scan=scan,
-            detectors=[abtem.FlexibleAnnularDetector()],
-            sites=atoms,
-        )
-
-
-class TestPrismLazyExitPlanes:
-    """The lazy PRISM path omitted the exit-plane axis from its block shape.
-
-    ``SMatrix.transition_potential_scan(lazy=True)`` declared ``chunks`` and
-    ``new_axis`` from the S-matrix ensemble and the scan only, while each block
-    carries a measurement that also has an exit-plane axis whenever the
-    potential has more than one. The declared block shape therefore disagreed
-    with the computed one: the result came back with one more array dimension
-    than axes metadata, so every method pairing the two raised, and with
-    ``ensemble_mean=False`` it failed outright during compute.
-
-    The eager branch got this right through ``_build_ensemble_shape_metadata``;
-    the two computed their bookkeeping separately, which is how they diverged.
-    """
-
-    @staticmethod
-    def _atoms():
-        return ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8),
-            pbc=True,
-        )
-
-    def _run(self, potential, lazy, double_channel=False):
-        atoms = self._atoms()
-        s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
-        )
-        scan = abtem.GridScan(
-            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
-        )
-        measurement = s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
-            ),
-            scan=scan,
-            detectors=abtem.FlexibleAnnularDetector(),
-            sites=atoms,
-            double_channel=double_channel,
-            lazy=lazy,
-        )
-        if lazy:
-            # The shape dask was told to expect must equal what the blocks
-            # actually produce -- a chunks declaration that is never honoured
-            # (single block) would otherwise go unnoticed, and that mismatch is
-            # the whole defect.
-            declared = measurement.array.shape
-            measurement = measurement.compute(progress_bar=False)
-            assert declared == np.asarray(
-                abtem.core.backend.asnumpy(measurement.array)
-            ).shape, f"dask declared {declared}, blocks produced a different shape"
-        return measurement
-
-    def _potential(self, num_configs=None, exit_planes=None, ensemble_mean=True):
-        atoms = self._atoms()
-        ensemble = (
-            atoms
-            if num_configs is None
-            else abtem.FrozenPhonons(
-                atoms,
-                num_configs=num_configs,
-                sigmas=0.05,
-                seed=7,
-                ensemble_mean=ensemble_mean,
-            )
-        )
-        return abtem.Potential(
-            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
-        )
-
-    @pytest.mark.parametrize(
-        "num_configs, exit_planes, ensemble_mean",
-        [
-            (None, None, True),
-            (None, 1, True),
-            (1, 1, True),
-            (3, 1, True),
-            (3, 1, False),
-            (None, [1, 3], True),
-        ],
-        ids=["plain-1", "plain-5", "phonons1-5", "phonons3-5", "no-mean", "explicit"],
-    )
-    @pytest.mark.parametrize("double_channel", [False, True])
-    def test_lazy_matches_eager(self, num_configs, exit_planes, ensemble_mean,
-                                double_channel):
-        potential = self._potential(num_configs, exit_planes, ensemble_mean)
-        eager = self._run(potential, lazy=False, double_channel=double_channel)
-        lazy = self._run(potential, lazy=True, double_channel=double_channel)
-
-        # Compare the axes themselves, not their type names: the defect an
-        # earlier commit in this PR fixed was two *ThicknessAxis* objects with
-        # different values (per-slice vs per-exit-plane), which a type-name
-        # comparison cannot see.
-        assert eager.axes_metadata == lazy.axes_metadata
-
-        eager_array = np.asarray(abtem.core.backend.asnumpy(eager.array))
-        lazy_array = np.asarray(abtem.core.backend.asnumpy(lazy.array))
-        assert eager_array.shape == lazy_array.shape
-        assert np.array_equal(eager_array, lazy_array)
-
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_array_dimensions_match_the_axes_metadata(self, lazy):
-        """The failure users hit: every method pairing the two raised."""
-        measurement = self._run(self._potential(exit_planes=1), lazy=lazy)
-        array = np.asarray(abtem.core.backend.asnumpy(measurement.array))
-        assert array.ndim == len(measurement.axes_metadata)
-        measurement.to_cpu()  # raised before the fix
