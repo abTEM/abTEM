@@ -5052,8 +5052,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
                 len(self.potential.exit_planes),
             )
+            # base_axes_metadata[0] is the per-*slice* ThicknessAxis, whose
+            # values have length num_slices, while the axis being described
+            # here has length len(exit_planes). Those differ whenever exit
+            # planes are not every slice, and the mismatch raises from the
+            # measurement constructor. Use the per-exit-plane axis, as
+            # multislice.py's _potential_ensemble_shape_and_metadata does.
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                self.potential.base_axes_metadata[0]
+                self.potential._get_exit_planes_axes_metadata()
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
@@ -5133,6 +5139,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             squeeze=False,
         )
 
+        # One object per block; _extract_measurement only calls .item(), so the
+        # shape of this wrapper carries no information beyond being non-empty.
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         itemset(array, 0, measurements)
         return array
@@ -5223,17 +5231,34 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         blocks = self.ensemble_blocks(1)
 
+        # Each block carries a measurement with an exit-plane axis whenever the
+        # potential has more than one, sitting between the ensemble axes and
+        # the scan axes. Declaring chunks without it made the declared block
+        # shape disagree with the computed one: the result came back with one
+        # more array dimension than axes metadata (so every method pairing the
+        # two raised), and with ensemble_mean=False it failed outright during
+        # compute with a broadcast error.
+        num_exit_planes = 0
+        if self.potential is not None and len(self.potential.exit_planes) > 1:
+            num_exit_planes = len(self.potential.exit_planes)
+
         chunks = ()
         drop_axis = ()
         if not self.ensemble_shape:
             blocks = blocks[None]
             drop_axis = (0,)
-            new_axis = tuple_range(offset=0, length=len(scan.shape))
+            offset = 0
         else:
             chunks += blocks.chunks
-            new_axis = tuple_range(
-                offset=len(blocks.shape), length=len(scan.shape)
-            )
+            offset = len(blocks.shape)
+
+        new_axis = tuple_range(
+            offset=offset,
+            length=bool(num_exit_planes) + len(scan.shape),
+        )
+
+        if num_exit_planes:
+            chunks += (num_exit_planes,)
 
         chunks += scan.shape
 
@@ -5255,7 +5280,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         extra_axes_metadata = []
         if self.potential is not None:
-            extra_axes_metadata = self.potential.ensemble_axes_metadata
+            extra_axes_metadata = list(self.potential.ensemble_axes_metadata)
+            if num_exit_planes:
+                extra_axes_metadata = extra_axes_metadata + [
+                    self.potential._get_exit_planes_axes_metadata()
+                ]
 
         measurements = _finalize_lazy_measurements(
             arrays, waves, detectors, extra_axes_metadata
