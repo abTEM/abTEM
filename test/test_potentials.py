@@ -845,7 +845,7 @@ def test_potential_array_slicing_maps_exit_planes():
     from ase.build import bulk
 
     atoms = bulk("Si", cubic=True) * (2, 2, 8)
-    potential = abtem.Potential(atoms, gpts=128, slice_thickness=2.0).build(lazy=False)
+    potential = Potential(atoms, gpts=128, slice_thickness=2.0).build(lazy=False)
 
     assert potential.exit_planes == (potential.num_slices - 1,)
 
@@ -919,6 +919,129 @@ class TestIntegratorSharedAcrossEnsemble:
             np.testing.assert_allclose(
                 exit_waves.array[index], direct.array[0], atol=1e-10
             )
+
+
+class TestPotentialDoesNotMutateItsAtoms:
+    """Building a potential rewrote the ``Atoms`` it was given.
+
+    ``Potential._prepare_atoms`` wrapped in place. For ``DummyFrozenPhonons``
+    -- the wrapper every plain ``Potential(atoms)`` gets --
+    ``get_transformed_atoms()`` and ``randomize()`` are both the identity, so
+    the write landed on the object the potential stores and ships into the task
+    graph as a single shared node. Every task on a worker then wrapped the same
+    ``Atoms``.
+
+    Two of the three entry points alias the **caller's** object, not merely
+    abTEM's internal copy: ``_validate_frozen_phonons`` copies a plain
+    ``Atoms``, but passes a list (which becomes an ``AtomsEnsemble`` holding
+    references) and a pre-built frozen-phonons object straight through.
+
+    ``FrozenPhonons`` is unaffected -- its ``randomize`` already copies -- which
+    is the oracle this fix follows.
+    """
+
+    @staticmethod
+    def _atoms():
+        # x = 4.2 in a 4 A cell: outside the cell, so wrapping has work to do
+        # and an in-place write is visible.
+        return Atoms(
+            "Si2", positions=[(0.2, 0.2, 0.5), (4.2, 2.0, 1.5)], cell=(4.0, 4.0, 4.0)
+        )
+
+    @staticmethod
+    def _build(potential):
+        from abtem.core import config
+
+        with config.set({"fft": "numpy"}):
+            return potential.build(lazy=False)
+
+    def test_a_plain_atoms_potential_does_not_rewrite_its_own_atoms(self):
+        atoms = self._atoms()
+        potential = Potential(atoms, gpts=(32, 32), slice_thickness=1.0)
+        stored = potential.frozen_phonons.atoms
+        before = stored.positions.copy()
+        self._build(potential)
+        assert np.array_equal(stored.positions, before)
+
+    def test_a_list_of_atoms_does_not_rewrite_the_callers_objects(self):
+        """`Potential([a])` keeps a reference, so the write reached the caller."""
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+        self._build(Potential([atoms], gpts=(32, 32), slice_thickness=1.0))
+        assert np.array_equal(atoms.positions, before)
+
+    def test_a_prebuilt_dummy_frozen_phonons_does_not_rewrite_the_callers_atoms(self):
+        from abtem.inelastic.phonons import DummyFrozenPhonons
+
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+        self._build(
+            Potential(
+                DummyFrozenPhonons(atoms), gpts=(32, 32), slice_thickness=1.0
+            )
+        )
+        assert np.array_equal(atoms.positions, before)
+
+    def test_frozen_phonons_was_already_safe(self):
+        """The oracle: FrozenPhonons.randomize copies, so this path never had
+        the defect. Pinned so the fix cannot be 'simplified' by removing the
+        copy there instead."""
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        # sigmas must be NON-ZERO. With sigmas=0.0 randomize's displacement is
+        # `positions += 0 * r`, so an in-place randomize leaves the positions
+        # numerically identical and this test passes even with
+        # FrozenPhonons.randomize's own copy deleted -- it would be pinning a
+        # no-op. Verified: removing that copy is caught at 0.1 and missed at 0.0.
+        phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
+        self._build(Potential(phonons, gpts=(32, 32), slice_thickness=1.0))
+        assert np.array_equal(atoms.positions, before)
+
+    def test_an_earlier_build_does_not_change_a_later_potentials_result(self):
+        """The sharpest consequence: the write crosses *objects*.
+
+        Not repeated builds of one potential -- `get_sliced_atoms` memoises
+        `_sliced_atoms`, so a second build never re-enters `_prepare_atoms`,
+        and `wrap_and_snap_atoms` is idempotent anyway. An earlier version of
+        this test asserted that and therefore could not fail.
+
+        What does fail is a second potential built from the SAME Atoms object:
+        the first build wrapped it in place, so the second sees pre-wrapped
+        atoms and slices them differently.
+        """
+        atoms = Atoms(
+            "Si2", positions=[(0.2, 0.2, -0.5), (2.0, 2.0, 1.5)],
+            cell=(4.0, 4.0, 4.0),
+        )
+        reference = Potential(
+            [atoms.copy()], gpts=(32, 32), slice_thickness=1.0, periodic=False,
+            projection="infinite",
+        ).get_sliced_atoms()
+
+        shared = Potential([atoms], gpts=(32, 32), slice_thickness=1.0)
+        self._build(shared)  # wraps `atoms` in place on the unfixed code
+        after = Potential(
+            [atoms], gpts=(32, 32), slice_thickness=1.0, periodic=False,
+            projection="infinite",
+        ).get_sliced_atoms()
+
+        counts_ref = [len(reference.get_atoms_in_slices(i)) for i in range(4)]
+        counts_after = [len(after.get_atoms_in_slices(i)) for i in range(4)]
+        assert counts_after == counts_ref, (
+            f"an earlier build changed a later potential's slicing: "
+            f"{counts_after} != {counts_ref}"
+        )
+
+    def test_the_wrapped_positions_still_reach_the_slicing(self):
+        """Copying must not lose the wrap -- the potential still has to be
+        built from wrapped atoms, only not by rewriting the caller's."""
+        atoms = self._atoms()
+        potential = Potential(atoms, gpts=(32, 32), slice_thickness=1.0)
+        sliced = potential.get_sliced_atoms()
+        xs = np.asarray(sliced.atoms.positions)[:, 0]
+        assert np.all(xs < 4.0), f"an unwrapped x survived into the slicing: {xs}"
 
 
 class TestSliceIndexedAtomsWrapping:
