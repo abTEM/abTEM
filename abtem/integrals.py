@@ -480,10 +480,23 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     whole infinitely-projected difference between the two parametrizations is
     added to the one slice the atom's centre falls in.
 
-    That is exact for the total -- summed over slices the two terms recover the
-    full projection of ``parametrization`` -- and it is a good approximation
-    only if the difference between the two parametrizations is confined to a
-    region thinner than a slice. It is not. Measured for silicon, the fraction
+    Summed over slices the two terms recover the full projection of
+    ``parametrization`` -- exact up to ``_GAUSSIAN_FORM_TOLERANCE``, not
+    unconditionally. The identity holds only where the Gaussian sum built from
+    ``scaled_parameters`` equals the parametrization's own
+    ``projected_scattering_factor``, and the form check bounds their
+    disagreement globally, as ``max|difference| / max|own|``. A discrepancy
+    parked where ``own`` is small relative to the grid's peak therefore costs
+    almost nothing globally while being large locally: a Peng subclass with a
+    bump at k^2 = 150 on a 128^2 grid is accepted at a global deviation of
+    5.5e-05 while differing by 4.8 % locally, leaving the total off by 3.2e-04.
+    For the shipped Peng/Lobato default the disagreement is ~1.8e-07 and the
+    total is exact to that, but a custom ``gaussian_parametrization`` should not
+    read this as an unconditional guarantee.
+
+    Distribution between slices is a separate matter, and a worse one: it is a
+    good approximation only if the difference between the two parametrizations
+    is confined to a region thinner than a slice. It is not. Measured for silicon, the fraction
     of the correction that actually belongs in the atom's own slice is 11 % at
     dz = 0.5 A, 20 % at 1 A and 31 % at 2 A, against 44 / 67 / 90 % for the
     atom's own potential: the correction is *less* localised in z than the atom
