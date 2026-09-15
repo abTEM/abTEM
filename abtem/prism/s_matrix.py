@@ -63,7 +63,13 @@ from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
-from abtem.waves import BaseWaves, Probe, Waves, _antialias_cutoff_gpts
+from abtem.waves import (
+    BaseWaves,
+    Probe,
+    Waves,
+    _antialias_cutoff_gpts,
+    reduce_ensemble,
+)
 
 
 def _extract_measurement(array, index):
@@ -5227,7 +5233,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 double_channel=double_channel,
                 inelastic_crop=inelastic_crop,
             )
-            return _wrap_measurements(measurements)
+            # Squeeze once, here, on the assembled measurements -- the level
+            # Waves.transition_potential_multislice uses. The per-configuration
+            # driver deliberately no longer does it.
+            return _wrap_measurements(reduce_ensemble(measurements))
 
         blocks = self.ensemble_blocks(1)
 
@@ -5290,7 +5299,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             arrays, waves, detectors, extra_axes_metadata
         )
 
-        return _wrap_measurements(measurements)
+        # Squeeze once, here, on the assembled measurements -- the level
+        # Waves.transition_potential_multislice uses. The per-configuration
+        # driver deliberately no longer does it.
+        return _wrap_measurements(reduce_ensemble(measurements))
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
         extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
