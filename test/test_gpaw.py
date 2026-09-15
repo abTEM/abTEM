@@ -120,6 +120,89 @@ def gpaw_calculator_bonding():
 #     assert np.all(abtem_ae_density == gpaw_ae_density)
 
 
+def test_integrate_slice_thin_slice_gives_no_nan():
+    """A target slice thinner than (or misaligned with) the source grid's own z
+    spacing can land entirely between two grid points (nb == na): zero grid points
+    summed, and a 0/0 in the rescaling -- NaN, which then poisons the whole
+    potential once combined with other slices. Regression test for the fix
+    (always include at least one source grid point)."""
+    from abtem.potentials.gpaw import integrate_slice
+
+    rng = np.random.RandomState(0)
+    array = rng.rand(8, 8, 4)  # a coarse 4-point z-grid over a 1.0 A cell
+    thickness = 1.0
+    dz = thickness / array.shape[2]  # 0.25 A
+
+    # [a, b) falls strictly between two source grid points -> na == nb == 0
+    a, b = 0.51 * dz, 0.99 * dz
+    assert int(np.floor(a / dz)) == int(np.floor(b / dz))
+
+    result = integrate_slice(array, gpts=(8, 8), a=a, b=b, thickness=thickness)
+    assert np.all(np.isfinite(result))
+
+
+def test_refine_grid_reproduces_source_on_upsampling():
+    """_refine_grid must be a band-limited (exact, for a band-limited source)
+    upsampling: the original samples must reappear unchanged at the corresponding
+    positions of the refined grid."""
+    from abtem.potentials.gpaw import _refine_grid
+
+    rng = np.random.RandomState(0)
+    # A source that is exactly band-limited on this grid (a handful of nonzero
+    # low-frequency Fourier coefficients, Hermitian-symmetric so the real-space
+    # array comes out real), matching what a plane-wave-derived potential is.
+    shape = (6, 6, 4)
+    array_hat = np.zeros(shape, dtype=complex)
+    for k in [(0, 0, 0), (1, 0, 0), (0, 1, 1)]:
+        value = rng.rand() + 1j * rng.rand()
+        array_hat[k] = value
+        neg_k = tuple(-ki % ni for ki, ni in zip(k, shape))
+        array_hat[neg_k] = np.conj(value)
+    array = np.fft.ifftn(array_hat).real
+
+    factor = 3
+    new_shape = tuple(n * factor for n in shape)
+    refined = _refine_grid(array, new_shape)
+
+    assert refined.shape == new_shape
+    np.testing.assert_allclose(refined[::factor, ::factor, ::factor], array, atol=1e-8)
+
+
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_gridrefinement_changes_the_built_potential(gpaw_calculator_no_bonding):
+    """Regression test: gridrefinement used to be accepted but silently never
+    applied anywhere (a leftover from a removed, differently-structured
+    all-electron-density reconstruction). It must now actually affect the built
+    potential."""
+    coarse = GPAWPotential(
+        gpaw_calculator_no_bonding, gpts=(24, 24), slice_thickness=0.2, gridrefinement=1
+    ).build(lazy=False)
+    fine = GPAWPotential(
+        gpaw_calculator_no_bonding, gpts=(24, 24), slice_thickness=0.2, gridrefinement=8
+    ).build(lazy=False)
+
+    assert np.all(np.isfinite(coarse.array))
+    assert np.all(np.isfinite(fine.array))
+    assert not np.allclose(coarse.array, fine.array)
+
+
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_gridrefinement_floors_at_gpaw_native_fine_grid(gpaw_calculator_no_bonding):
+    """gridrefinement is relative to the coarse density grid `gd` (matching the old,
+    documented semantics), not to valence_potential's own shape -- which already
+    sits on GPAW's once-refined "fine grid" (2x the density grid, by GPAW's own
+    convention). gridrefinement=1 and gridrefinement=2 should therefore both just
+    floor to that native fine-grid resolution and agree exactly."""
+    pot1 = GPAWPotential(
+        gpaw_calculator_no_bonding, gpts=(24, 24), slice_thickness=0.2, gridrefinement=1
+    ).build(lazy=False)
+    pot2 = GPAWPotential(
+        gpaw_calculator_no_bonding, gpts=(24, 24), slice_thickness=0.2, gridrefinement=2
+    ).build(lazy=False)
+
+    np.testing.assert_allclose(pot1.array, pot2.array)
+
+
 def assert_psae_matches_abtem(calc):
     ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
     ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
