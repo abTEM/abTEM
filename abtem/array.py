@@ -222,6 +222,69 @@ def multi_output_blockwise(
     return outputs
 
 
+# Codecs (Blosc/zlib) reject a single buffer over 2**31 - 1 bytes. Writing a
+# whole array as one zarr chunk -- as this module used to always do -- hits
+# that limit for any reasonably large array, especially at float64. Stay well
+# under it (also a more sensible chunk size for parallel IO in general) by
+# halving the largest axis of the chunk shape until it fits the budget.
+_MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
+
+
+def _safe_zarr_chunks(
+    shape: tuple[int, ...],
+    itemsize: int,
+    max_bytes: Optional[int] = None,
+    n_fixed_trailing_axes: int = 0,
+) -> tuple[int, ...]:
+    """Pick a chunk shape that stays under ``max_bytes``, preferring to
+    shrink leading (ensemble) axes and never touching the trailing
+    ``n_fixed_trailing_axes`` (an ArrayObject's ``_base_dims``) unless there
+    is no other choice.
+
+    Several of abTEM's own lazy dask operations on measurements (e.g.
+    ``interpolate_line``'s ``da.map_blocks(..., drop_axis=...)``) require
+    their base/measurement axes to be a single dask chunk -- splitting them
+    doesn't raise, it silently produces wrong results (confirmed by direct
+    reproduction: a DiffractionPatterns array whose spatial axes were split
+    this way, then reloaded lazily, gave an all-zero momentum-resolved
+    spectrum while eagerly-computed data from the same file was correct).
+    Chunking only the ensemble axes keeps a round-tripped array safe for
+    every lazy operation that already assumes whole base-axis chunks,
+    matching e.g. ``PotentialArray``'s own ``("auto",) * n + (-1,) *
+    _base_dims`` convention elsewhere in this module.
+    """
+    if max_bytes is None:
+        # Read fresh rather than as a default-argument value, so overriding
+        # the module-level budget (e.g. in tests) takes effect.
+        max_bytes = _MAX_ZARR_CHUNK_BYTES
+
+    chunks = list(shape)
+
+    def nbytes() -> int:
+        n = itemsize
+        for c in chunks:
+            n *= c
+        return n
+
+    n_fixed = min(n_fixed_trailing_axes, len(chunks))
+    splittable = list(range(len(chunks) - n_fixed))
+
+    while nbytes() > max_bytes and any(chunks[i] > 1 for i in splittable):
+        i = max(splittable, key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    # Only reached if the base axes are themselves so large that shrinking
+    # every ensemble axis to 1 still isn't enough (e.g. a single very large
+    # image with little to no ensemble axis to shrink) -- fall back to
+    # splitting them too rather than failing outright; this is the one case
+    # where the lazy-op hazard described above is genuinely unavoidable.
+    while nbytes() > max_bytes and any(c > 1 for c in chunks):
+        i = max(range(len(chunks)), key=lambda j: chunks[j])
+        chunks[i] = max(1, chunks[i] // 2)
+
+    return tuple(chunks)
+
+
 class ComputableList(list):
     """A list with methods for conveniently computing its items."""
 
@@ -317,6 +380,7 @@ class ComputableList(list):
 
         arrays_to_write = []
         metadata_list = []
+        base_dims_by_index = {}
 
         for i, has_array in enumerate(self):
             has_array = has_array.ensure_lazy()
@@ -334,6 +398,7 @@ class ComputableList(list):
 
             arrays_to_write.append((i, array))
             metadata_list.append({f"metadata{i}": metadata_dict})
+            base_dims_by_index[i] = has_array._base_dims
 
         if is_zip:
             # Use ZipStore for .zip files
@@ -368,11 +433,27 @@ class ComputableList(list):
                             root.create_array(
                                 name=f"array{i}",
                                 data=computed_array,
-                                chunks=computed_array.shape,
+                                chunks=_safe_zarr_chunks(
+                                    computed_array.shape,
+                                    computed_array.dtype.itemsize,
+                                    n_fixed_trailing_axes=base_dims_by_index[i],
+                                ),
                                 overwrite=True,
                                 compressors=compressors,
                             )
-                    finally:
+                    except BaseException:
+                        # A failed write (e.g. a chunk still over a codec's
+                        # buffer limit) can leave a .zip with valid-looking
+                        # metadata (shape/dtype/chunks) but no actual chunk
+                        # data -- silently readable later as all zeros
+                        # (zarr's fill_value for a declared-but-missing
+                        # chunk) instead of raising again. Don't leave that
+                        # behind.
+                        store.close()
+                        if os.path.exists(url):
+                            os.remove(url)
+                        raise
+                    else:
                         store.close()
 
                 return url
@@ -389,6 +470,13 @@ class ComputableList(list):
 
                 root = zarr.open(url, mode="w")
 
+                def _close():
+                    store = getattr(root, "store", None)
+                    if store is not None:
+                        close_fn = getattr(store, "close", None)
+                        if callable(close_fn):
+                            close_fn()
+
                 try:
                     for metadata_dict in metadata_list:
                         for key, value in metadata_dict.items():
@@ -398,15 +486,23 @@ class ComputableList(list):
                         root.create_array(
                             name=f"array{i}",
                             data=computed_array,
-                            chunks=computed_array.shape,
+                            chunks=_safe_zarr_chunks(
+                                computed_array.shape,
+                                computed_array.dtype.itemsize,
+                                n_fixed_trailing_axes=base_dims_by_index[i],
+                            ),
                             overwrite=True,
                         )
-                finally:
-                    store = getattr(root, "store", None)
-                    if store is not None:
-                        close_fn = getattr(store, "close", None)
-                        if callable(close_fn):
-                            close_fn()
+                except BaseException:
+                    # See the matching comment in write_to_zipstore: don't
+                    # leave a partially-written store with valid-looking
+                    # metadata but missing/incomplete chunk data.
+                    _close()
+                    if os.path.exists(url):
+                        shutil.rmtree(url)
+                    raise
+                else:
+                    _close()
 
                 return url
 
@@ -2212,7 +2308,16 @@ def _from_zarr_canonical(root, chunks, decode_types):
         zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
-            array_chunks = "auto"
+            # Respect cls._base_dims the same way the legacy loader below
+            # already does: dask's own "auto" heuristic doesn't know which
+            # trailing axes are an ArrayObject's base (measurement) axes, and
+            # several of abTEM's own lazy operations (e.g. interpolate_line)
+            # assume those are never split across chunks. chunks=None (the
+            # default) already avoids this by mirroring whatever to_zarr
+            # actually wrote, which itself never splits base axes -- this
+            # branch only matters if a caller explicitly opts into "auto".
+            num_ensemble_axes = zarr_array.ndim - cls._base_dims
+            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
         elif chunks is None:
             array_chunks = zarr_array.chunks
         else:

@@ -192,3 +192,37 @@ def test_pixelated_detector_resample_uniform(lazy, extent, gpts):
     assert np.isclose(sampling[0], sampling[1]), (
         f"Sampling should be uniform but got {sampling}"
     )
+
+
+@pytest.mark.parametrize(
+    "detector_cls, kwargs",
+    [
+        (abtem.AnnularDetector, dict(inner=0, outer=20)),
+        (abtem.FlexibleAnnularDetector, dict()),
+        (
+            abtem.SegmentedDetector,
+            dict(inner=0, outer=20, nbins_radial=2, nbins_azimuthal=4),
+        ),
+        (abtem.PixelatedDetector, dict()),
+    ],
+)
+def test_measurement_detectors_default_to_cpu(detector_cls, kwargs):
+    """Every detector producing a measurement returns it on the host by
+    default.
+
+    SegmentedDetector used to default to ``to_cpu=False`` while its own
+    docstring (and every sibling detector) said True, so on a GPU run its
+    measurements came back as CuPy arrays while the others were NumPy --
+    an inconsistency that only surfaced on a CuPy workstation.
+    """
+    assert detector_cls(**kwargs).to_cpu is True
+
+
+def test_waves_detector_keeps_data_on_device_by_default():
+    """WavesDetector is deliberately the exception: it returns the (large)
+    wave functions themselves and is the implicit detector when none is
+    given, so it must not force a device-to-host copy of every exit wave.
+    """
+    from abtem.detectors import WavesDetector
+
+    assert WavesDetector().to_cpu is False

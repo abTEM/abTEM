@@ -337,7 +337,214 @@ def _annular_detector_mask(
     return bins
 
 
+def _hashable_cell(cell) -> Optional[tuple]:
+    """Convert a cell (array-like or ``None``) to a hashable, immutable form
+    suitable for use in an ``lru_cache`` key."""
+    if cell is None:
+        return None
+    return tuple(tuple(float(x) for x in row) for row in np.asarray(cell))
+
+
+def _polar_bins_key(
+    gpts,
+    sampling,
+    inner,
+    outer,
+    nbins_radial,
+    nbins_azimuthal,
+    rotation,
+    offset,
+    fftshift,
+    return_indices,
+    cell=None,
+    wavelength=None,
+) -> tuple:
+    """The canonical, hashable geometry key.
+
+    The single definition used by every cache in this module, so a parameter
+    added to the geometry cannot silently be left out of one cache's key.
+    """
+    return (
+        tuple(int(n) for n in gpts),
+        tuple(float(d) for d in sampling),
+        float(inner),
+        float(outer),
+        int(nbins_radial),
+        int(nbins_azimuthal),
+        float(rotation),
+        tuple(float(o) for o in offset),
+        bool(fftshift),
+        bool(return_indices),
+        _hashable_cell(cell),
+        None if wavelength is None else float(wavelength),
+    )
+
+
+def _radial_binning_device_arrays(
+    array,
+    sampling,
+    inner,
+    outer,
+    nbins_radial,
+    nbins_azimuthal,
+    rotation,
+    offset,
+    fftshift,
+    cell=None,
+    wavelength=None,
+):
+    """Flat bin indices and separators, resident on ``array``'s device.
+
+    Indexing a device array with a host index array transfers that array every
+    call; for a detector applied once per wave-function chunk this dominated a
+    core-loss scan's runtime. Both arrays depend only on the detector geometry
+    and the grid, so they are cached per (geometry, device).
+
+    The host-side indices are derived internally from the canonical geometry
+    key (a free lookup when the lru-cached geometry is warm), so there is no
+    key/data consistency contract for callers to uphold.
+    """
+    key = _polar_bins_key(
+        array.shape[-2:],
+        sampling,
+        inner,
+        outer,
+        nbins_radial,
+        nbins_azimuthal,
+        rotation,
+        offset,
+        fftshift,
+        True,
+        cell,
+        wavelength,
+    )
+
+    if get_array_module(array) is np:
+        device_key = "cpu"
+    else:
+        # Key on the device the array actually lives on -- read off the array
+        # itself, not the current-device context, which can differ from it
+        # under multi-GPU use.
+        device_key = ("gpu", int(array.device.id))
+
+    return _radial_binning_device_arrays_cached(key, device_key)
+
+
+@functools.lru_cache(maxsize=8)
+def _radial_binning_device_arrays_cached(key, device_key):
+    """The device-resident arrays behind ``_radial_binning_device_arrays``.
+
+    ``lru_cache`` supplies the locking and least-recently-used eviction (a
+    hand-rolled dict here raced under the threaded scheduler). The bound is a
+    single cap shared across all devices -- in the supported multi-GPU layout
+    (one process per GPU) each process only ever sees one device anyway.
+    """
+    indices = _polar_detector_bins_cached(*key)
+    flat_indices = np.concatenate(indices)
+    separators = np.concatenate(([0], np.cumsum([len(i) for i in indices])))
+
+    if device_key == "cpu":
+        # Shared between callers, like the lru-cached geometry.
+        flat_indices.flags.writeable = False
+        separators.flags.writeable = False
+        return flat_indices, separators
+
+    # Allocate on the keyed device, whatever device is current.
+    # (CuPy arrays cannot be flagged read-only; shared by convention.)
+    with cp.cuda.Device(device_key[1]):
+        return cp.asarray(flat_indices), cp.asarray(separators)
+
+
+@functools.lru_cache(maxsize=8)
+def _polar_detector_bins_cached(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    inner: float,
+    outer: float,
+    nbins_radial: int,
+    nbins_azimuthal: int,
+    rotation: float,
+    offset: tuple[float, float],
+    fftshift: bool,
+    return_indices: bool,
+    cell=None,
+    wavelength=None,
+):
+    """Cached bin geometry; see ``_polar_detector_bins``.
+
+    The result depends only on the detector geometry and the grid, but a
+    detector is applied once per wave-function chunk -- for a core-loss scan
+    that is hundreds of times per task, each one rebuilding full-grid polar
+    coordinates on the host and shipping the indices to the device. Profiling
+    such a scan put ~48 % of the runtime here.
+
+    Entries are full-grid arrays, so the bound is deliberately small: typical
+    workflows touch a handful of geometries, and 8 entries already cap the
+    retention at a few hundred MB for large grids.
+
+    Returned containers are immutable and their arrays read-only: they are
+    shared between all callers.
+
+    ``cell`` arrives here as the hashable (nested-tuple) form built by
+    ``_polar_bins_key`` -- converted back to an array before being passed on,
+    since ``_polar_detector_bins_uncached`` expects the array-like form
+    ``_metric_polar_angles`` requires.
+    """
+    result = _polar_detector_bins_uncached(
+        gpts=gpts,
+        sampling=sampling,
+        inner=inner,
+        outer=outer,
+        nbins_radial=nbins_radial,
+        nbins_azimuthal=nbins_azimuthal,
+        rotation=rotation,
+        offset=offset,
+        fftshift=fftshift,
+        return_indices=return_indices,
+        cell=None if cell is None else np.asarray(cell),
+        wavelength=wavelength,
+    )
+    if return_indices:
+        for array in result:
+            array.flags.writeable = False
+        return tuple(result)
+    result.flags.writeable = False
+    return result
+
+
 def _polar_detector_bins(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    inner: float,
+    outer: float,
+    nbins_radial: int,
+    nbins_azimuthal: int,
+    rotation: float = 0.0,
+    offset: tuple[float, float] = (0.0, 0.0),
+    fftshift: bool = False,
+    return_indices: bool = False,
+    cell=None,
+    wavelength: Optional[float] = None,
+) -> np.ndarray | tuple[np.ndarray, ...]:
+    """Bin geometry for a polar detector, cached on its arguments."""
+    key = _polar_bins_key(
+        gpts,
+        sampling,
+        inner,
+        outer,
+        nbins_radial,
+        nbins_azimuthal,
+        rotation,
+        offset,
+        fftshift,
+        return_indices,
+        cell,
+        wavelength,
+    )
+    return _polar_detector_bins_cached(*key)
+
+
+def _polar_detector_bins_uncached(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
     inner: float,
@@ -1138,8 +1345,21 @@ class _BaseMeasurement2D(BaseMeasurements):
             # raise NotImplementedError("Lazy interpolation not implemented.")
             # TDOO: Implement lazy interpolation
 
-            base_axes = tuple(range(len(self.base_shape)))
-            chunks = self.array.chunks[:-2] + (positions.shape[0],)
+            # The base (spatial) axes are the *last* len(self.base_shape) axes
+            # of self.array -- any ensemble axes come first. da.map_blocks's
+            # drop_axis must name their actual positions; previously this used
+            # range(len(self.base_shape)) == (0, 1), i.e. the *first* two axes,
+            # which is only correct for a bare 2D array with no ensemble axes.
+            # With any ensemble axis present this silently mismatches dask's
+            # block bookkeeping: it doesn't raise, but produces wrong output
+            # (extra, duplicated blocks) the moment an ensemble axis has more
+            # than one chunk, or wrong values once BOTH base axes have more
+            # than one chunk each (confirmed by direct reproduction -- e.g. a
+            # DiffractionPatterns array whose spatial axes were chunked by a
+            # sufficiently large zarr save/reload).
+            n_base = len(self.base_shape)
+            base_axes = tuple(range(self.array.ndim - n_base, self.array.ndim))
+            chunks = self.array.chunks[:-n_base] + (positions.shape[0],)
             new_axis = (base_axes[0],)
 
             if width:
@@ -2761,7 +2981,6 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     # filter stops matching and the GPU tests catch the change.
     result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
     return result.astype(array.dtype, copy=False)
-    return array
 
 
 def _lorentzian_source_size(
@@ -3793,24 +4012,23 @@ class DiffractionPatterns(_BaseMeasurement2D):
     ):
         xp = get_array_module(array)
 
-        indices = _polar_detector_bins(
-            gpts=array.shape[-2:],
+        # The flat index array and the separators are functions of the
+        # detector geometry alone, but indexing a device array with a host
+        # index array copies it every call -- up to one int64 per grid point.
+        flat_indices, separators = _radial_binning_device_arrays(
+            array,
             sampling=sampling,
             inner=inner,
             outer=outer,
             nbins_radial=nbins_radial,
             nbins_azimuthal=nbins_azimuthal,
-            fftshift=fftshift,
             rotation=rotation,
             offset=offset,
-            return_indices=True,
+            fftshift=fftshift,
             cell=cell,
             wavelength=wavelength,
         )
-
-        separators = xp.concatenate(
-            (xp.array([0]), xp.cumsum(xp.array([len(i) for i in indices])))
-        )
+        n_bins = int(len(separators)) - 1
 
         new_shape = array.shape[:-2] + (nbins_radial, nbins_azimuthal)
 
@@ -3819,7 +4037,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 -1,
                 array.shape[-2] * array.shape[-1],
             )
-        )[..., np.concatenate(indices)]
+        )[..., flat_indices]
 
         # Use the configured floating-point precision, not a hardcoded float32.
         # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
@@ -3828,7 +4046,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         result = xp.zeros(
             (
                 array.shape[0],
-                len(indices),
+                n_bins,
             ),
             dtype=fp_dtype,
         )
@@ -6216,6 +6434,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         explode: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
@@ -6244,7 +6463,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             from the global min/max across all panels so the shared colorbar is
             meaningful.
         power : float
-            Display on a power scale.
+            Display on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show the spectrum on a logarithmic intensity scale. Cannot
+            be used together with ``power != 1.0``. Non-positive values are
+            masked (log scale is undefined there).
         explode : bool or sequence of int
             If True, explode all ensemble axes into a panel grid. If a sequence
             of ints, explode only those ensemble-axis indices (the remaining
@@ -6268,7 +6491,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         import warnings
 
         import matplotlib.pyplot as plt
-        from matplotlib.colors import PowerNorm
+
+        from abtem.visualize.artists import _get_norm
 
         array = self.array
         if hasattr(array, "compute"):
@@ -6297,6 +6521,24 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         cbar_label = (
             f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]"
         )
+
+        if logscale:
+            # LogNorm masks values <= 0 (log is undefined there) rather than
+            # raising -- phonon-loss TDS intensity (incoherent - coherent) is
+            # routinely exactly zero, or, from floating-point noise, a tiny
+            # negative value. Masked entries render with the colormap's "bad"
+            # colour, which defaults to fully transparent -- i.e. the figure's
+            # white background shows through, easy to mistake for missing
+            # data. These pixels are real, valid, just-below-the-log-floor
+            # intensity, not missing data, so colour them as the darkest end
+            # of the scale instead of leaving a blank gap. with_extremes()
+            # returns a new Colormap rather than mutating in place (set_bad()
+            # does the latter and is being deprecated), so this can never
+            # affect the shared, globally registered colormap. Resolved here
+            # rather than in pcolormesh itself so it applies uniformly to
+            # every panel below.
+            resolved_cmap = plt.get_cmap(cmap)
+            cmap = resolved_cmap.with_extremes(bad=resolved_cmap(0.0))
 
         def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
             # Exploded axes take their grid value; other ensemble axes collapse
@@ -6352,7 +6594,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             panels = [panel_data(idx).T for idx in indices]
             _vmin = min(float(p.min()) for p in panels) if vmin is None else vmin
             _vmax = max(float(p.max()) for p in panels) if vmax is None else vmax
-            norm = PowerNorm(gamma=power, vmin=_vmin, vmax=_vmax)
+            norm = _get_norm(vmin=_vmin, vmax=_vmax, power=power, logscale=logscale)
 
             im = None
             for k, (idx, data_t) in enumerate(zip(indices, panels)):
@@ -6414,7 +6656,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         else:
             fig = ax.get_figure()
 
-        norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        norm = _get_norm(vmin=vmin, vmax=vmax, power=power, logscale=logscale)
         im = ax.pcolormesh(
             q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
         )

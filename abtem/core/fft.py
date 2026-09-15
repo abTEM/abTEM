@@ -1,5 +1,6 @@
 """Module for handling Fourier transforms and convolution in abTEM."""
 
+import contextlib
 import math
 import threading
 import warnings
@@ -365,8 +366,36 @@ U = TypeVar("U", np.ndarray, da.core.Array)
 
 # Cache the parsed cuFFT cache limit + the config value it was derived from.
 # Revalidated on every GPU FFT dispatch without reparsing when the config is
-# unchanged (the common case in a hot loop).
-_CUFFT_CACHE_STATE: tuple[object, int] | None = None
+# unchanged (the common case in a hot loop). CuPy's plan cache is per thread
+# (and per device), so the applied state must be thread-local as well: a
+# process-global slot would configure only the first dispatching thread and
+# leave every other dask worker thread's cache at CuPy's defaults.
+_CUFFT_CACHE_STATE = threading.local()
+
+
+def _reset_cufft_cache_state():
+    """Forget the applied plan-cache state for the calling thread (tests)."""
+    for attr in ("token", "limit"):
+        try:
+            delattr(_CUFFT_CACHE_STATE, attr)
+        except AttributeError:
+            pass
+
+
+def _parse_cufft_cache_entries() -> int:
+    """The configured plan-cache entry count, or 0 to leave the count alone.
+
+    Invalid values must not raise: this runs ahead of every GPU FFT, and an
+    exception here (e.g. ``int(None)``) would fail every dispatch. null and
+    non-positive values mean "do not touch the entry count", mirroring how a
+    user opts out of the sibling ``fft-cache-size`` bound.
+    """
+    raw = config.get("cupy.fft-cache-entries", 64)
+    try:
+        entries = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return entries if entries > 0 else 0
 
 
 def _configure_cufft_cache():
@@ -396,13 +425,14 @@ def _configure_cufft_cache():
     of successive computations. The limit is a ceiling, not a reservation —
     unused headroom costs no memory.
     """
-    global _CUFFT_CACHE_STATE
     raw = config.get("cupy.fft-cache-size", "auto")
 
     # The plan cache and the resolved "auto" limit are per device, so the
     # applied state is keyed on the current device as well as the raw value.
     device = cp.cuda.Device()
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
+    entries = _parse_cufft_cache_entries()
+    applied = getattr(_CUFFT_CACHE_STATE, "token", None)
+    if applied is not None and applied == (raw, entries, device.id):
         return
 
     if raw is None:
@@ -418,19 +448,32 @@ def _configure_cufft_cache():
     cache = cp.fft.config.get_plan_cache()
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
-    elif limit > 0:
-        if cache.get_size() == 0:
-            cache.set_size(16)  # re-enable a previously disabled cache
-        cache.set_memsize(limit)
     else:
-        # Explicitly restore "unlimited": an earlier bound (e.g. from the
-        # "auto" default) must be undoable at runtime -- the oversized-plan
-        # warning recommends exactly this.
-        if cache.get_size() == 0:
-            cache.set_size(16)
-        cache.set_memsize(-1)
+        # CuPy keeps at most 16 plans by default. Workloads whose batch
+        # dimension varies pass that within a few chunks and then rebuild
+        # plans continuously: profiling a core-loss scan, whose scattering
+        # batches follow the number of sites passing the threshold, put 30 %
+        # of the runtime in _get_cufft_plan_nd, and raising the limit made
+        # the same scan 18 % faster with identical results.
+        #
+        # Raise, never lower: a cache someone tuned larger through CuPy's own
+        # API keeps its size (the old code likewise never overrode a live
+        # cache, only re-enabled a disabled one). This also re-enables a
+        # disabled cache, whose size is 0.
+        if entries and cache.get_size() < entries:
+            cache.set_size(entries)
+        elif not entries and cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
+        if limit > 0:
+            cache.set_memsize(limit)
+        else:
+            # Explicitly restore "unlimited": an earlier bound (e.g. from the
+            # "auto" default) must be undoable at runtime -- the
+            # oversized-plan warning recommends exactly this.
+            cache.set_memsize(-1)
 
-    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
+    _CUFFT_CACHE_STATE.token = (raw, entries, device.id)
+    _CUFFT_CACHE_STATE.limit = limit
 
 
 _warned_plan_cache_bypass = False
@@ -552,6 +595,84 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     Using the FFT library specified in the configuration.
     """
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
+
+
+# --- Shared diffraction-pattern FFT ----------------------------------------
+#
+# Several radial detectors (AnnularDetector, FlexibleAnnularDetector,
+# SegmentedDetector, PixelatedDetector, ...) each derive their measurement
+# from ``Waves.diffraction_patterns``, which starts with a 2D FFT of the wave
+# function array. When several such detectors are evaluated against the same
+# array in one detection pass (once per detector, per site batch, per slice
+# in e.g. ``transition_potential_multislice_and_detect``), that FFT would
+# otherwise be recomputed once per detector even though the input and
+# normalization are identical every time. ``share_diffraction_pattern_fft``
+# below lets a caller precompute that FFT once and attach it directly to the
+# specific ``Waves`` object it was computed from, for the duration of a
+# ``with`` block; the (cheap) crop / intensity / fftshift that turns it into
+# a specific detector's diffraction pattern still runs once per call.
+#
+# Deliberately NOT a cache keyed by array identity: several in-place
+# multislice steps (e.g. propagating a wave with ``overwrite_x=True``)
+# legitimately reuse the exact same array object across multislice depths
+# while overwriting its contents, so identity alone cannot tell "the same
+# data" apart from "the same object, now holding different data." Attaching
+# the precomputed value as a plain attribute on one specific ``Waves``
+# instance sidesteps that: there is nothing to key or invalidate, because a
+# read only ever consults *that* object's own attribute, and the attribute
+# only exists for the lifetime of the ``with`` block that put it there.
+#
+#   * No global or thread-local state: the shared value lives on the Waves
+#     object itself, so a dask worker thread naturally only ever sees the
+#     ``waves``/``scattered_waves`` object local to its own call stack.
+#   * A caller not using ``share_diffraction_pattern_fft`` (any standalone
+#     ``detector.detect(waves)``, or any code path that hasn't opted in)
+#     never sees a ``_shared_diffraction_pattern_fft`` attribute at all, so
+#     it is unconditionally identical to the pre-sharing behavior.
+#   * The one rule callers must follow: do not mutate ``waves.array`` (e.g.
+#     run a multislice step) between entering and exiting the block. A
+#     mistake here can only affect reads of *that* object within *that*
+#     block -- there is no shared slot it could leak into for some later,
+#     unrelated array to read.
+
+
+@contextlib.contextmanager
+def share_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Attach ``compute()`` to ``waves`` as its shared diffraction-pattern FFT
+    for the duration of this block, so several detectors evaluated against
+    this exact, not-yet-mutated ``waves`` object can each reuse it via
+    ``get_shared_diffraction_pattern_fft`` instead of recomputing their own.
+    See the module comment above for the full rationale.
+
+    Do not mutate ``waves.array`` (e.g. run a multislice step) while this
+    block is active. Safe to nest on the same ``waves`` object: an outer
+    block's value (if any) is saved and restored around a nested one,
+    rather than a nested block's exit deleting an outer block's value.
+    """
+    previous = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    waves._shared_diffraction_pattern_fft = (normalize, compute())
+    try:
+        yield
+    finally:
+        if previous is None:
+            del waves._shared_diffraction_pattern_fft
+        else:
+            waves._shared_diffraction_pattern_fft = previous
+
+
+def get_shared_diffraction_pattern_fft(waves, normalize: bool, compute):
+    """Return ``compute()``, reusing the value attached to ``waves`` by an
+    enclosing ``share_diffraction_pattern_fft(waves, normalize, ...)`` if one
+    is active and its ``normalize`` matches; otherwise calls ``compute()``
+    directly. See the module comment above ``share_diffraction_pattern_fft``.
+    """
+    shared = getattr(waves, "_shared_diffraction_pattern_fft", None)
+    if shared is not None:
+        shared_normalize, shared_fft = shared
+        if shared_normalize == normalize:
+            return shared_fft
+
+    return compute()
 
 
 @overload

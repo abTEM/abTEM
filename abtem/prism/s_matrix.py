@@ -24,7 +24,13 @@ from abtem.core.axes import (
     UnknownAxis,
     WaveVectorAxis,
 )
-from abtem.core.backend import copy_to_device, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    copy_to_device,
+    cp,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -1251,8 +1257,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
                 pbar.update_if_exists(len(sub_scan))
 
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
+                # All detectors here see the same, not-yet-mutated ``waves``
+                # -- share one diffraction-pattern FFT across them.
+                with waves._share_diffraction_pattern_fft():
+                    for detector, measurement in zip(detectors, measurements):
+                        measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
 
@@ -2455,8 +2464,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                     pbar.update_if_exists((stop - start) * scan_shape[1])
 
-                    for detector, measurement in zip(detectors, measurements):
-                        measurement.array[indices] = detector.detect(waves).array
+                    # All detectors here see the same, not-yet-mutated
+                    # ``waves`` -- share one diffraction-pattern FFT across
+                    # them.
+                    with waves._share_diffraction_pattern_fft():
+                        for detector, measurement in zip(detectors, measurements):
+                            measurement.array[indices] = detector.detect(waves).array
 
                 del interpolated, plane_wave
 
@@ -2753,8 +2766,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         pbar.update_if_exists(n_reduced)
 
-        for detector, measurement in zip(detectors, measurements):
-            measurement.array[indices] = detector.detect(waves).array
+        # All detectors here see the same, not-yet-mutated ``waves`` --
+        # share one diffraction-pattern FFT across them.
+        with waves._share_diffraction_pattern_fft():
+            for detector, measurement in zip(detectors, measurements):
+                measurement.array[indices] = detector.detect(waves).array
 
     def _batch_reduce_to_measurements(
         self,
@@ -4708,9 +4724,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         w = xp.concatenate([lattice_basis, extra_basis], axis=0)
 
         # order the retained modes by how much of the expansion they carry, so
-        # that a rank cap keeps the largest and the reported spectrum descends
+        # that a rank cap keeps the largest and the reported spectrum descends;
+        # the argsort runs on the host: the vector holds one entry per retained
+        # mode, and CuPy's Thrust-backed sort is unavailable on some HIP/ROCm
+        # builds
         amplitudes = xp.ascontiguousarray((projected @ w.conj().T).T)
-        order = xp.argsort(xp.linalg.norm(amplitudes, axis=1))[::-1]
+        order = xp.asarray(
+            np.argsort(asnumpy(xp.linalg.norm(amplitudes, axis=1)))[::-1]
+        )
         if self._max_rank is not None:
             order = order[: max(1, self._max_rank)]
         w, amplitudes = w[order], xp.ascontiguousarray(amplitudes[order])
