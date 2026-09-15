@@ -871,14 +871,28 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # and CrystalPotential's tiled atoms, which do not come through
             # here.
             #
-            # ``copy=False`` preserves dev's behaviour exactly: atoms.wrap()
-            # mutated in place here too. Note these atoms are *not* this
-            # method's own -- for DummyFrozenPhonons, get_transformed_atoms()
-            # and randomize() are both identity, so this writes into the
-            # object the potential stores and ships as one graph node. That
-            # aliasing is a pre-existing defect tracked separately; do not read
-            # this copy=False as an assertion that the object is private.
-            atoms = wrap_and_snap_atoms(atoms, copy=False)
+            # Copy, because these atoms are *not* this method's own. For
+            # DummyFrozenPhonons -- the wrapper every plain Potential(atoms)
+            # gets -- get_transformed_atoms() and randomize() are both the
+            # identity, so writing in place here mutates the object the
+            # potential stores and ships into the task graph as ONE shared
+            # node. Every task on a worker then wraps the same Atoms.
+            #
+            # The previous `copy=False` preserved dev's in-place behaviour
+            # deliberately, with this aliasing noted as a separate defect.
+            # This is that defect: three entry points reach it, and two of
+            # them alias the CALLER's own object, because
+            # _validate_frozen_phonons copies a plain Atoms but passes a list
+            # (-> AtomsEnsemble, which stores references) and a pre-built
+            # frozen-phonons object straight through.
+            #
+            # wrap_and_snap_atoms already takes ownership as a parameter, so
+            # the fix is answering it correctly rather than adding machinery.
+            # This layer and not a neighbouring one: it is the only writer in
+            # the mechanism. get_transformed_atoms has five consumers of which
+            # only this one writes, and randomize copies unconditionally where
+            # this copies only when it must.
+            atoms = wrap_and_snap_atoms(atoms)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
