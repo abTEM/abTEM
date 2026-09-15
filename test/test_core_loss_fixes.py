@@ -277,6 +277,153 @@ def test_entrance_exit_plane_carries_no_core_loss_signal(device):
     assert np.all(np.diff(values) > 0)
 
 
+class TestPrismScanAxisSqueeze:
+    """The scan position axis was squeezed per dask block, not once at the end.
+
+    ``validate_scan`` turns any non-``BaseScan`` scan -- ``(x, y)``,
+    ``[(x, y)]``, ``np.array([[x, y]])`` -- into a ``CustomScan`` whose position
+    axis is tagged ``_squeeze=True``. The only reader of that flag is the
+    module-level ``reduce_ensemble`` in ``waves.py``.
+
+    ``Waves.transition_potential_multislice`` calls it **once, on the assembled
+    result**, after the graph is built, so blocks and declared chunks both keep
+    the axis and only the finished object loses it. The PRISM driver
+    ``prism_transition_potential_scan`` called it **inside every block**, below
+    the level that declares ``chunks`` and below the level that accumulates the
+    potential ensemble -- so two consumers were handed a shape the blocks did
+    not produce:
+
+    * the lazy branch declares ``chunks += scan.shape``;
+    * the eager branch pre-allocates from ``dummy_probes(scan)``.
+
+    The result was an output whose *rank* depended on whether the potential was
+    a ``FrozenPhonons`` ensemble and on whether the call was lazy -- silently,
+    with correct values, since a wrong axis count is only fatal where array rank
+    is paired with metadata.
+
+    The oracle throughout is the multislice path, which gets every case right.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8), pbc=True,
+        )
+
+    def _potential(self, ensemble):
+        atoms = self._atoms()
+        if ensemble:
+            atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.0, seed=1)
+        return abtem.Potential(atoms, gpts=(32, 32), slice_thickness=4.0)
+
+    def _prism(self, scan, ensemble, lazy):
+        potential = self._potential(ensemble)
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        return s_matrix.transition_potential_scan(
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            scan=scan, detectors=abtem.FlexibleAnnularDetector(),
+            sites=self._atoms(), lazy=lazy,
+        )
+
+    def _multislice(self, scan, ensemble, lazy):
+        potential = self._potential(ensemble)
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+        probe.grid.match(potential)
+        return probe.transition_potential_scan(
+            scan=scan, potential=potential,
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=self._atoms(), lazy=lazy,
+        )
+
+    @staticmethod
+    def _axes(measurement):
+        """The ensemble/scan axes and their count -- not the detector bins.
+
+        PRISM and multislice legitimately disagree on the detector base shape
+        (32 vs 50 radial bins here), because an S-matrix has a different
+        reciprocal sampling than a probe on the full grid. That difference is
+        algorithmic and pre-existing; what this defect moved is the *number*
+        of axes and which ones they are, so that is what to compare.
+        """
+        return (
+            len(measurement.shape),
+            len(measurement.axes_metadata),
+            tuple(type(a).__name__ for a in measurement.axes_metadata),
+        )
+
+    @pytest.mark.parametrize("ensemble", [False, True])
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "scan",
+        [(1.0, 1.0), [(1.0, 1.0)], np.array([[1.0, 1.0]])],
+        ids=["tuple", "list", "array"],
+    )
+    def test_a_single_position_scan_matches_the_multislice_oracle(
+        self, scan, ensemble, lazy
+    ):
+        """Every single-position non-BaseScan form, both ensembles, both modes.
+
+        ``ArrayObject.squeeze`` only drops length-1 axes, so all three of these
+        forms squeeze and a multi-position list does not -- which is why the
+        defect needed exactly one position to show.
+        """
+        got = self._axes(self._prism(scan, ensemble, lazy))
+        expected = self._axes(self._multislice(scan, ensemble, lazy))
+        assert got == expected
+
+    @pytest.mark.parametrize("ensemble", [False, True])
+    def test_the_rank_does_not_depend_on_laziness(self, ensemble):
+        """The sharpest form of the bug: eager and lazy disagreed with each
+        other, so the same call returned different ranks depending only on how
+        it was scheduled."""
+        eager = self._prism((1.0, 1.0), ensemble, lazy=False)
+        lazy = self._prism((1.0, 1.0), ensemble, lazy=True)
+        assert self._axes(eager) == self._axes(lazy)
+        assert eager.shape == lazy.shape
+
+    def test_the_rank_does_not_depend_on_the_potential_being_an_ensemble(self):
+        """With one exit plane the mechanism did not crash -- it returned a
+        result whose rank depended on whether the potential was a
+        ``FrozenPhonons`` ensemble, which is the silent half of the defect."""
+        plain = self._prism((1.0, 1.0), False, lazy=False)
+        ensemble = self._prism((1.0, 1.0), True, lazy=False)
+        assert self._axes(plain) == self._axes(ensemble)
+        assert plain.shape == ensemble.shape
+
+    def test_a_grid_scan_keeps_its_position_axes(self):
+        """The squeeze must fire only for ``_squeeze`` axes. A ``BaseScan``
+        carries no such flag and must be untouched -- this is the regression
+        guard for the fix itself."""
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=self._potential(False),
+        )
+        measurement = self._prism(scan, False, lazy=False)
+        assert measurement.shape[:2] == (2, 2)
+        assert len(measurement.axes_metadata) == len(measurement.shape)
+
+    def test_the_single_position_value_equals_that_point_of_a_grid_scan(self):
+        """Shapes agreeing is not enough: the surviving axis must carry the
+        same numbers it did before."""
+        potential = self._potential(False)
+        grid = abtem.GridScan(
+            start=(1.0, 1.0), end=(1.0, 1.0), gpts=(1, 1), endpoint=False,
+            potential=potential,
+        )
+        from_grid = np.squeeze(np.asarray(self._prism(grid, False, lazy=False).array))
+        from_point = np.squeeze(np.asarray(self._prism((1.0, 1.0), False, lazy=False).array))
+        assert from_grid.shape == from_point.shape
+        assert np.allclose(from_point, from_grid, rtol=1e-6, atol=0.0)
+
+
 class TestMultipleDetectorsInOnePass:
     """Passing several detectors raised AssertionError instead of working.
 
