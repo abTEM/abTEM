@@ -933,6 +933,49 @@ def test_line_profiles_add_to_plot_missing_metadata_raises():
         line.add_to_plot(None)
 
 
+def test_line_profiles_show_logscale():
+    array = np.abs(np.random.default_rng(0).standard_normal(32)) + 0.1
+    line = RealSpaceLineProfiles(array, sampling=1.0)
+
+    linear = line.show(display=False)
+    assert linear.axes[0, 0].get_yscale() == "linear"
+
+    log = line.show(logscale=True, display=False)
+    assert log.axes[0, 0].get_yscale() == "log"
+
+
+def test_line_profiles_show_logscale_exploded_common_scale_no_warning():
+    """A log-scaled y-axis' auto-computed limits must stay positive -- a plain
+    additive margin can push the lower bound to <= 0, which matplotlib then
+    silently ignores with a UserWarning (regression: this used to warn on every
+    logscale=True + common_scale call, exploded or not)."""
+    import warnings
+
+    from abtem.core.axes import OrdinalAxis
+
+    rng = np.random.default_rng(0)
+    array = np.stack(
+        [
+            np.abs(rng.standard_normal(32)) + 0.1,
+            np.abs(rng.standard_normal(32)) * 5,
+        ]
+    )
+    lines = RealSpaceLineProfiles(
+        array, sampling=1.0, ensemble_axes_metadata=[OrdinalAxis(values=("a", "b"))]
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        vis = lines.show(
+            explode=True, common_scale=True, logscale=True, display=False
+        )
+
+    for index in np.ndindex(vis.axes.shape):
+        ax = vis.axes[index]
+        assert ax.get_yscale() == "log"
+        assert ax.get_ylim()[0] > 0
+
+
 @given(
     data=st.data(), dose_per_area=abtem_st.sensible_floats(min_value=1e8, max_value=1e9)
 )
