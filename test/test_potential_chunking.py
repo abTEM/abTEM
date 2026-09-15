@@ -94,14 +94,14 @@ class TestEstimatePotentialChunkSize:
         2271 = 3*757 force the Bluestein fallback; 2625 = 3*5^3*7 and
         2268 = 2^2*3^4*7 do not, and the two grids differ in area by 0.06 %.
         Both must give the same chunk, fixed by bytes alone:
-        int(0.35 * 40 GB / (2623*2271*4 * 5)) = 117.  A doubled overhead like
-        the one in ``estimate_scan_batch_size`` would give 58.
+        int(0.35 * 40 GB / (2623*2271*4 * 2)) = 293.  A doubled overhead like
+        the one in ``estimate_scan_batch_size`` would give 146.
         """
         _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
         dtype = np.dtype(np.float32)
         bluestein = estimate_potential_chunk_size((2623, 2271), "gpu", dtype)
         fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
-        assert bluestein == fast == 117
+        assert bluestein == fast == 293
 
     def test_idle_pool_cache_counts_as_available(self, monkeypatch):
         """A pool that has grown but is mostly idle must not be treated as scarce.
@@ -126,11 +126,11 @@ class TestEstimatePotentialChunkSize:
             pool_used=pool_used, pool_free=pool_free,
         )
         dtype = np.dtype(np.float32)
-        # slice_bytes = 8000*8000*4 = 256,000,000; effective_per_slice x5.
-        # Without pool_free: effective_free=3.93 GB -> budget 1.375 GB -> chunk_size=1.
-        # With pool_free:    effective_free=15.32 GB -> budget 5.36 GB -> chunk_size=4.
+        # slice_bytes = 8000*8000*4 = 256,000,000; effective_per_slice x2.
+        # Without pool_free: effective_free=4.39 GB -> budget 1.54 GB -> chunk_size=3.
+        # With pool_free:    effective_free=15.78 GB -> budget 5.52 GB -> chunk_size=10.
         chunk_size = estimate_potential_chunk_size((8000, 8000), "gpu", dtype)
-        assert chunk_size == 4
+        assert chunk_size == 10
 
     def test_pool_used_still_caps_effective_free(self, monkeypatch):
         """Live (non-idle) pool usage must still shrink the estimate.
@@ -144,11 +144,11 @@ class TestEstimatePotentialChunkSize:
         )
         dtype = np.dtype(np.float32)
         # effective_free = min(free+pool_free, total-pool_used) = min(1, 1) = 1 GB
-        # -> budget 0.35 GB / (2048*2048*4*5 bytes/slice) = 4.
+        # -> budget 0.35 GB / (2048*2048*4*2 bytes/slice) = 10.
         # The point isn't the exact number -- it's that heavy live pool usage
         # (39/40 GB) still caps this near the CPU-reported free memory, unlike
         # a fix that added pool_used back in too and ignored it entirely.
-        assert estimate_potential_chunk_size((2048, 2048), "gpu", dtype) == 4
+        assert estimate_potential_chunk_size((2048, 2048), "gpu", dtype) == 10
 
 
 class TestEstimateScanBatchSize:

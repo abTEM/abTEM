@@ -427,8 +427,14 @@ def estimate_potential_chunk_size(
     On GPU the per-slice cost accounts for CuPy memory pool fragmentation —
     the pool may hold large contiguous blocks for live arrays (waves, probes)
     that prevent new allocations even when total free bytes suffice.  The
-    effective per-slice cost under fragmentation is empirically ~5× the raw
-    slice size for scan workloads at 4096² grids.
+    effective per-slice cost under fragmentation is empirically ~2× the raw
+    slice size, measured from real peak pool usage (not just pool
+    reservation, which can massively overshoot real need — see the comment
+    below) on an 8000×8000 grid: a fixed chunk_size=15 held live usage to a
+    stable ~0.31–0.38 GB per slice (~1.2–1.5× raw) across three separate
+    rotations of a real multislice run.  2× keeps a real margin above that
+    measured cost rather than tracking it exactly, since it is only
+    validated at one grid size and workload shape.
 
     On CPU there is no pool fragmentation and system RAM is typically
     abundant.  The default is therefore to place the entire potential in
@@ -523,9 +529,16 @@ def estimate_potential_chunk_size(
 
             # Per-slice cost: output array (1×) + transmission function
             # (2×) + build temporaries (FFTs, Gaussian integrals) +
-            # propagation FFT workspace. 5× is less conservative than the
-            # original 8× now that the synchronous scheduler prevents
-            # concurrent batch execution from multiplying peak VRAM.
+            # propagation FFT workspace, once assumed at 5× (originally 8×)
+            # to cover all of that simultaneously. Instrumenting real peak
+            # pool.used_bytes() during a fixed chunk_size=15 run (not just
+            # the pool's total reservation, which includes a large amount
+            # of idle over-provisioned cache that is never actually live at
+            # once) showed real cost around 1.2-1.5× raw slice_bytes, fairly
+            # stable across rotations -- those build/propagation
+            # temporaries are evidently freed and reused within a chunk
+            # rather than staying simultaneously resident with each other.
+            # 2× keeps real margin above that measured figure.
             #
             # Budget: 35 % of effective-free VRAM at computation time.
             # At this point the probe batch is already resident, so
@@ -535,10 +548,10 @@ def estimate_potential_chunk_size(
             # 40 % + 35 % × (1 − probe_fraction) ≈ 73 %, leaving 27 %
             # headroom.  (estimate_scan_batch_size uses effective_free too,
             # so both estimates operate on the same VRAM picture.)
-            effective_per_slice = slice_bytes * 5
+            effective_per_slice = slice_bytes * 2
             budget_bytes = int(effective_free * 0.35)
         except (ImportError, Exception):
-            effective_per_slice = slice_bytes * 5
+            effective_per_slice = slice_bytes * 2
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
         # On CPU, system RAM is typically abundant and there is no
