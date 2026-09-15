@@ -1419,6 +1419,25 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     # so an unbuilt TransitionPotential needs the grid first. This is the
     # order transition_potential_multislice_and_detect and
     # TransitionPotential.scatter already use.
+    # An ALREADY-BUILT transition potential cannot be matched: its array has a
+    # fixed shape, and _task_local below would overwrite the grid to agree with
+    # s_waves while leaving that array alone -- leaving an object whose grid
+    # lies about its own contents (gpts (64, 64) over a (4, 32, 32) array,
+    # measured). The scan then completes and returns a result on the wrong
+    # grid: 18.1 % low against the matched reference on a Si cell, with an
+    # identical output shape, so nothing downstream can notice.
+    #
+    # So check first, while the grid still reports what the array actually is.
+    # Checking after the match is useless, because the match is what destroys
+    # the evidence. Grid.check_match is the same guard iam.py:1948 already uses
+    # for a potential against its waves.
+    #
+    # The unbuilt case is untouched: it has no array yet, the match sets its
+    # grid, and build() then evaluates the form factors on the right gpts --
+    # which is what the preceding commit fixed.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(s_waves)
+
     transition_potential = transition_potential._task_local(match_to=s_waves)
 
     if isinstance(transition_potential, TransitionPotential):

@@ -277,6 +277,86 @@ def test_entrance_exit_plane_carries_no_core_loss_signal(device):
     assert np.all(np.diff(values) > 0)
 
 
+class TestPrismEelsBuiltTransitionPotentialGrid:
+    """A built transition potential on the wrong grid ran silently.
+
+    ``_prism_eels_common_setup`` matches the transition potential's grid to the
+    S-matrix waves. For an UNBUILT one that is the fix in the preceding commit:
+    it has no array yet, so the match sets the grid and ``build()`` then
+    evaluates the form factors at the right gpts.
+
+    For an already-BUILT one the array shape is fixed, so the match cannot
+    change it -- it overwrites the *grid* to agree with the waves and leaves the
+    array alone, producing an object whose grid lies about its own contents
+    (gpts (64, 64) over a (4, 32, 32) array). The scan then completed and
+    returned a result on the wrong grid: 18.1 % low against the matched
+    reference, with an identical output shape, so nothing downstream could
+    notice.
+
+    The guard therefore has to run BEFORE the match, while the grid still
+    reports what the array really is; checking afterwards is useless because
+    the match is what destroys the evidence.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8), pbc=True,
+        )
+
+    def _s_matrix(self, gpts):
+        potential = abtem.Potential(self._atoms(), gpts=gpts, slice_thickness=4.0)
+        return abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+
+    def _scan(self, s_matrix, transition_potentials, **kwargs):
+        return s_matrix.transition_potential_scan(
+            transition_potentials=transition_potentials,
+            scan=abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                                potential=s_matrix.potential),
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=self._atoms(), lazy=False, **kwargs,
+        )
+
+    def test_a_built_potential_on_the_wrong_grid_is_refused(self):
+        s_matrix = self._s_matrix((64, 64))
+        mismatched = _synthetic_transition_potential((8.0, 8.0), (32, 32), n=2)
+        with pytest.raises(RuntimeError, match="Inconsistent grid"):
+            self._scan(s_matrix, mismatched)
+
+    def test_a_built_potential_on_the_right_grid_still_runs(self):
+        """The guard must not fire on the case it is meant to allow."""
+        s_matrix = self._s_matrix((64, 64))
+        matched = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        measurement = self._scan(s_matrix, matched)
+        assert measurement.shape[:2] == (2, 2)
+
+    def test_a_mismatched_extent_is_refused_too(self):
+        """check_match compares extent as well as gpts, and an extent mismatch
+        is the same class of error -- the array cannot be re-gridded either."""
+        s_matrix = self._s_matrix((64, 64))
+        wrong_extent = _synthetic_transition_potential((6.0, 6.0), (64, 64), n=2)
+        with pytest.raises(RuntimeError, match="Inconsistent grid"):
+            self._scan(s_matrix, wrong_extent)
+
+    def test_an_unbuilt_potential_is_still_regridded(self):
+        """Regression guard for the preceding commit: an unbuilt potential has
+        no array, so a grid mismatch is not an error -- it is matched and then
+        built at the S-matrix's gpts."""
+        pytest.importorskip("gpaw")
+        from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+
+        s_matrix = self._s_matrix((64, 64))
+        transitions = SubshellTransitions(Z=14, n=1, l=0, xc="PBE").get_transitions()
+        unbuilt = TransitionPotential(
+            14, transitions, extent=8.0, gpts=32, energy=ENERGY, double_channel=False
+        )
+        measurement = self._scan(s_matrix, unbuilt)
+        assert measurement.shape[:2] == (2, 2)
+
+
 class TestMultipleDetectorsInOnePass:
     """Passing several detectors raised AssertionError instead of working.
 
