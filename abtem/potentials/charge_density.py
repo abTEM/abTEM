@@ -351,8 +351,51 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     return np.sum(slice_array, axis=-1) * dz
 
 
+def _add_core_density_correction_fourier(charge, atoms, core_density_correction):
+    """
+    Replace each atom's crude Gaussian-broadened point-charge contribution (added
+    by :func:`add_point_charges_fourier`) with an accurate per-species radial core
+    electron density, given in reciprocal space.
+
+    Parameters
+    ----------
+    charge : numpy.ndarray
+        Reciprocal-space charge array, already including the crude point charges
+        added by :func:`add_point_charges_fourier`.
+    atoms : ase.Atoms
+        Atoms from which the atomic positions and chemical symbols are determined.
+    core_density_correction : dict
+        Maps chemical symbol to a callable that, given an array of angular
+        wavenumbers `G` [1 / Å], returns the l=0 spherical Fourier transform of
+        that species' core electron density (in electrons, such that the value at
+        `G=0` equals the species' core electron count).
+
+    Returns
+    -------
+    charge : numpy.ndarray
+        The reciprocal-space charge array with the correction applied.
+    """
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for
+    # an orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(charge.shape)
+
+    kx, ky, kz = _spatial_frequencies(charge.shape, atoms.cell)
+    G = 2 * np.pi * np.sqrt(kx**2 + ky**2 + kz**2)
+
+    for atom in atoms:
+        n_core_hat = core_density_correction[atom.symbol](G)
+        phase = _fourier_space_delta(kx, ky, kz, *atom.position)
+        charge = charge - (n_core_hat / pixel_volume) * phase
+
+    return charge
+
+
 def _generate_slices(
-    charge, ewald_potential, first_slice: int = 0, last_slice: int = None
+    charge,
+    ewald_potential,
+    first_slice: int = 0,
+    last_slice: int = None,
+    core_density_correction: dict = None,
 ):
     if last_slice is None:
         last_slice = len(ewald_potential)
@@ -375,6 +418,11 @@ def _generate_slices(
     charge = add_point_charges_fourier(
         charge, atoms, ewald_potential.integrator.parametrization.width
     )
+
+    if core_density_correction is not None:
+        charge = _add_core_density_correction_fourier(
+            charge, atoms, core_density_correction
+        )
 
     potential = -(
         integrate_gradient_fourier(
@@ -756,24 +804,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             device=self.device,
         )
 
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-        """
-        Generate the slices for the potential.
-
-        Parameters
-        ----------
-        first_slice : int, optional
-            Index of the first slice of the generated potential.
-        last_slice : int, optional
-            Index of the last slice of the generated potential.
-        Returns
-        -------
-        slices : generator of numpy.ndarray
-            Generator for the array of slices.
-        """
-        if last_slice is None:
-            last_slice = len(self)
-
+    def _prepare_array_and_ewald_potential(self):
         if len(self.charge_density.shape) == 4:
             if self.charge_density.shape[0] > 1:
                 raise RuntimeError()
@@ -809,6 +840,28 @@ class ChargeDensityPotential(_PotentialBuilder):
             )
         else:
             ewald_potential = self._get_ewald_potential()
+
+        return array, ewald_potential
+
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+        """
+        Generate the slices for the potential.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the generated potential.
+        last_slice : int, optional
+            Index of the last slice of the generated potential.
+        Returns
+        -------
+        slices : generator of numpy.ndarray
+            Generator for the array of slices.
+        """
+        if last_slice is None:
+            last_slice = len(self)
+
+        array, ewald_potential = self._prepare_array_and_ewald_potential()
 
         for slic in _generate_slices(
             array, ewald_potential, first_slice=first_slice, last_slice=last_slice
