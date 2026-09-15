@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import itertools
 import os
 import warnings
@@ -599,6 +600,42 @@ class BaseTransitionPotential(
         self._accelerator = Accelerator(energy=energy)
         self._double_channel = double_channel
         super().__init__(**kwargs)
+
+    def _task_local(self, match_to=None):
+        """A private view of this transition potential for one task.
+
+        A transition potential travels through the task graph as a single
+        node (see ``shared_constant_arg``), so every task on a worker -- and
+        every thread of the local scheduler -- is handed the *same* object.
+        Matching its grid and accelerator to the wave functions mutates that
+        shared state, which concurrent tasks would race on (an energy
+        ensemble puts a different energy in each task). Work on a shallow
+        copy with a private grid and accelerator instead, so nothing large
+        is copied.
+
+        Everything else stays shared, so this view alone is **not** enough
+        to call the mutating methods on: ``scatter`` and
+        ``generate_scattered_waves`` rebind ``_array`` and re-match the grid
+        on ``self``. Both drivers rely on following this call with
+        ``copy_to_device``, which rebuilds the object and privatizes that
+        derived state; a caller that skips it must not mutate the result.
+        The payload buffer itself is only ever read (the transforms
+        allocate rather than overwrite their input). Note that
+        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
+        attribute there gets it blanked in this view as well.
+
+        Parameters
+        ----------
+        match_to : Waves, optional
+            Match the private grid and accelerator to these wave functions.
+        """
+        task_local = copy.copy(self)
+        task_local._grid = self._grid.copy()
+        task_local._accelerator = self._accelerator.copy()
+        if match_to is not None:
+            task_local.grid.match(match_to)
+            task_local.accelerator.match(match_to)
+        return task_local
 
     @property
     def double_channel(self) -> bool:
@@ -1333,9 +1370,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     else:
         transition_potential = transition_potentials
 
-    if isinstance(transition_potential, TransitionPotential):
-        transition_potential = transition_potential.build()
-
     potential = s_matrix.potential
     energy = s_matrix.energy
     extent = s_matrix.extent
@@ -1379,8 +1413,17 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         for s in potential.generate_slices()
     ]
 
-    transition_potential.grid.match(s_waves)
-    transition_potential.accelerator.match(s_waves)
+    # Arrives as one graph node shared by every task on this worker, so
+    # match on a private view rather than mutating it. See _task_local.
+    # Match BEFORE building: build() evaluates the form factors on self.gpts,
+    # so an unbuilt TransitionPotential needs the grid first. This is the
+    # order transition_potential_multislice_and_detect and
+    # TransitionPotential.scatter already use.
+    transition_potential = transition_potential._task_local(match_to=s_waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
     transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
