@@ -120,6 +120,12 @@ class AxisMetadata:
     _concatenate: bool = True
     _ensemble_mean: bool = False
     _squeeze: bool = False
+    # Set alongside _ensemble_mean=False by an ensemble class that forces it
+    # deliberately (e.g. because a downstream calculation needs individual
+    # ensemble members, not their average) rather than leaving it False by
+    # inaction. reduce_ensemble uses this to skip its "did you forget
+    # ensemble_mean=True" warning when it wasn't forgotten.
+    _ensemble_mean_forced: bool = False
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
@@ -596,6 +602,26 @@ class PositionsAxis(OrdinalAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class FrozenPhononsAxis(AxisMetadata):
     label: str = "Frozen phonons"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class PhononParityAxis(OrdinalAxis):
+    """Ensemble axis distinguishing the real displaced configuration from its
+    displacement-reversed twin.
+
+    Used to separate one-phonon from multi-phonon scattering in energy-
+    resolved phonon-loss simulations (see issue #373 and
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``parity_projection``). Always exactly length 2 (``("real", "twin")``),
+    on both the atoms/potential ensemble and the resulting exit-wave
+    ensemble. No static/equilibrium wave is needed alongside it: the
+    one-phonon channel is the odd part of the exit wave and the multi-phonon
+    channel is the variance of its even part over configurations (see
+    ``phonon_loss_diffraction_patterns``).
+    """
+
+    label: str = "phonon parity"
+    values: tuple = ("real", "twin")
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
