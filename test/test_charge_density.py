@@ -107,6 +107,28 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
     assert pot.repetitions == reps
 
 
+def test_subtract_min_defaults_to_false(carbon_atoms, charge_density_3d):
+    """subtract_min must default to False -- the per-slice minimum is not
+    subtracted unless explicitly requested."""
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert pot.subtract_min is False
+
+    slices = [slic.array[0] for slic in pot.generate_slices()]
+    # With the (nonzero, non-uniform) test charge_density, at least one slice's
+    # minimum should not land exactly at zero when left unsubtracted.
+    assert any(not np.isclose(s.min(), 0.0) for s in slices)
+
+
+def test_subtract_min_true_zeros_each_slice_minimum(carbon_atoms, charge_density_3d):
+    pot = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, subtract_min=True
+    )
+    assert pot.subtract_min is True
+
+    for slic in pot.generate_slices():
+        assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
+
+
 def test_charge_density_potential_on_skew_cell_preserves_cell():
     """ChargeDensityPotential.build on a non-orthogonal in-plane cell must produce a
     PotentialArray on the same skew grid (not silently rectified onto a Cartesian
