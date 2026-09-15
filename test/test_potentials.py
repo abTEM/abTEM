@@ -919,3 +919,228 @@ class TestIntegratorSharedAcrossEnsemble:
             np.testing.assert_allclose(
                 exit_waves.array[index], direct.array[0], atol=1e-10
             )
+
+
+class TestSliceIndexedAtomsWrapping:
+    """Atoms outside the cell were binned without being wrapped.
+
+    ``Potential._prepare_atoms`` wrapped, but the other two construction sites
+    -- explicit core-loss ``sites`` and ``CrystalPotential``'s tiled atoms --
+    hand ``SliceIndexedAtoms`` raw atoms. ``np.digitize`` returns 0 for any z
+    below the first bin edge, including arbitrarily negative z, so such an atom
+    was assigned to slice 0 whatever its true wrapped depth; one above the last
+    edge was discarded by ``label_to_index``. Both silent.
+
+    Parametrised over ``pbc``: the first attempt at this fix used
+    ``Atoms.wrap``, which is a no-op along non-periodic axes, so it left the
+    bug in place for ASE's default ``pbc=False`` and for every
+    ``build.*(vacuum=...)`` slab -- and the boundary snap then moved those
+    atoms to zero instead of wrapping them.
+    """
+
+    DZ = 2.0
+    N_SLICES = 4
+
+    def _atoms(self, pbc=True):
+        import ase
+        import numpy as np
+
+        z = [1.0, 3.0, 5.0, 7.0, -0.5, 8.5]  # last two outside the cell
+        return ase.Atoms(
+            "B" * len(z),
+            positions=[[1.0, 1.0, zz] for zz in z],
+            cell=np.diag([4.0, 4.0, self.DZ * self.N_SLICES]),
+            pbc=pbc,
+        )
+
+    def _expected(self, atoms):
+        height = self.DZ * self.N_SLICES
+        counts = [0] * self.N_SLICES
+        for z in atoms.positions[:, 2]:
+            counts[int((z % height) // self.DZ)] += 1
+        return counts
+
+    @staticmethod
+    def _per_slice(sliced):
+        return [
+            len(sliced.get_atoms_in_slices(i, atomic_number=5))
+            for i in range(sliced.num_slices)
+        ]
+
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_out_of_cell_atoms_land_in_their_wrapped_slice(self, pbc):
+        from abtem.slicing import SliceIndexedAtoms
+
+        atoms = self._atoms(pbc)
+        sliced = SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
+        assert self._per_slice(sliced) == self._expected(atoms)
+
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_explicit_sites_agree_with_the_potentials_own_atoms(self, pbc):
+        from abtem.inelastic.core_loss import _extract_scattering_sites
+
+        atoms = self._atoms(pbc)
+        potential = Potential(atoms, gpts=(32, 32), slice_thickness=self.DZ)
+        from_potential = self._per_slice(_extract_scattering_sites(potential, None))
+        from_caller = self._per_slice(_extract_scattering_sites(potential, atoms))
+        assert from_caller == from_potential == self._expected(atoms)
+
+    @pytest.mark.parametrize("pbc", [True, False], ids=["pbc", "nopbc"])
+    def test_in_plane_site_positions_are_wrapped_not_zeroed(self, pbc):
+        """The snap must only catch values a hair below the boundary.
+
+        Applied to an un-wrapped position it teleports the site to the cell
+        origin -- a real change of ionisation site, which ``dev`` did not make.
+        """
+        import ase
+        import numpy as np
+
+        from abtem.inelastic.core_loss import _extract_scattering_sites
+
+        atoms = ase.Atoms(
+            "B4",
+            positions=[
+                [1.0, 1.0, 1.0],
+                [4.3, 1.0, 1.0],
+                [2.0, 1.0, 3.0],
+                [2.0, 1.0, 5.0],
+            ],
+            cell=np.diag([4.0, 4.0, 8.0]),
+            pbc=pbc,
+        )
+        potential = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+        sites = _extract_scattering_sites(potential, atoms)
+        # 4.3 in a 4 A cell is 0.3, not 0.0.
+        assert np.allclose(sites.atoms.positions[:, 0], [1.0, 0.3, 2.0, 2.0])
+
+    def test_the_callers_atoms_are_not_modified(self):
+        import numpy as np
+
+        from abtem.slicing import SliceIndexedAtoms
+
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+        SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
+        assert np.array_equal(atoms.positions, before)
+
+    @pytest.mark.parametrize(
+        "pbc", [True, (True, True, False), False], ids=["pbc", "slab", "nopbc"]
+    )
+    def test_wrapping_is_idempotent(self, pbc):
+        import numpy as np
+
+        from abtem.slicing import SliceIndexedAtoms
+
+        atoms = self._atoms(pbc)
+        once = SliceIndexedAtoms(atoms, slice_thickness=self.DZ)
+        twice = SliceIndexedAtoms(once.atoms, slice_thickness=self.DZ)
+        # Bitwise, not approximately: a second pass must be a no-op.
+        assert np.array_equal(once.atoms.positions, twice.atoms.positions)
+        assert self._per_slice(once) == self._per_slice(twice)
+
+    def test_crystal_potential_slices_match_the_tiled_unit(self):
+        """A head count passes even when the atoms are in the wrong slices."""
+        import ase
+        import numpy as np
+
+        z = [1.0, 3.0, -0.5, 4.5]
+        unit = ase.Atoms(
+            "B" * len(z),
+            positions=[[1.0, 1.0, zz] for zz in z],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+        reps = (1, 1, 2)
+        unit_potential = Potential(unit, gpts=(32, 32), slice_thickness=2.0)
+        crystal = CrystalPotential(unit_potential, repetitions=reps)
+
+        got = self._per_slice(crystal.get_sliced_atoms())
+        per_unit = self._per_slice(unit_potential.get_sliced_atoms())
+        assert got == per_unit * reps[2]
+        assert sum(got) == len(z) * reps[2]
+
+    @pytest.mark.parametrize("periodic", [True, False])
+    def test_wrapping_follows_the_potentials_periodicity(self, periodic):
+        """``Potential(periodic=False)`` deliberately never wraps.
+
+        Its atoms are cut from a larger repeated potential and randomised
+        *after* padding, so an edge atom displaced just outside the cell
+        belongs at the face it left, not the opposite one. Wrapping it
+        unconditionally moved it the full height of the box -- the same depth
+        corruption the wrap exists to prevent, for the other path.
+        """
+        import ase
+
+        import numpy as np
+
+        from abtem.inelastic.core_loss import _extract_scattering_sites
+
+        # Sits just inside the entrance face, so the randomize that runs after
+        # padding on the non-periodic path pushes it out.
+        atoms = ase.Atoms(
+            "B4",
+            positions=[
+                [1.0, 1.0, 0.05],
+                [2.0, 2.0, 0.05],
+                [3.0, 3.0, 2.0],
+                [1.0, 3.0, 3.95],
+            ],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        phonons = FrozenPhonons(atoms, num_configs=1, sigmas=0.25, seed=1)
+        potential = Potential(
+            phonons, gpts=(32, 32), slice_thickness=1.0, periodic=periodic
+        )
+        sliced = potential.get_sliced_atoms()
+        z = sliced.atoms.positions[:, 2]
+
+        if periodic:
+            assert np.all((z >= 0.0) & (z < 4.0))
+        else:
+            # Unwrapped, exactly as on a potential built without this change.
+            assert z.min() < 0.0 or z.max() >= 4.0
+
+        # Explicitly passed sites must follow the same convention, so that
+        # sites=<Atoms> and sites=None never disagree.
+        from_potential = self._per_slice(_extract_scattering_sites(potential, None))
+        from_caller = self._per_slice(
+            _extract_scattering_sites(potential, sliced.atoms)
+        )
+        assert from_caller == from_potential
+
+    def test_out_of_range_guard_does_not_fire_when_wrapping_is_off(self):
+        """Without a wrap, an atom outside the cell is expected, not an error."""
+        import ase
+
+        import numpy as np
+
+        from abtem.slicing import SliceIndexedAtoms
+
+        atoms = ase.Atoms(
+            "B2",
+            positions=[[1.0, 1.0, 2.0], [1.0, 1.0, 4.36]],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+        sliced = SliceIndexedAtoms(atoms, slice_thickness=1.0, wrap=False)
+        # Dropped silently, as before this change.
+        assert sum(self._per_slice(sliced)) == 1
+
+    def test_non_orthogonal_cell_raises_before_any_wrapping(self):
+        import ase
+
+        from abtem.slicing import SliceIndexedAtoms
+
+        atoms = ase.Atoms(
+            "B", positions=[[1.0, 1.0, 1.0]], cell=[[4, 0, 0], [1, 4, 0], [0, 0, 4]],
+            pbc=True,
+        )
+        with pytest.raises(RuntimeError, match="orthogonal"):
+            SliceIndexedAtoms(atoms, slice_thickness=1.0)

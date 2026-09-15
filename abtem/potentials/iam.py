@@ -18,6 +18,7 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
@@ -865,21 +866,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap(eps=0.0)
-            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
-            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
-            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
-            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
-            # outside all bins and is silently dropped.  Snap those back to 0.
-            cell_z = atoms.cell[2, 2]
-            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
-            # Same issue for x and y: orthogonalize_cell can produce -0.0 or tiny-
-            # negative values from matrix multiplication.  wrap(eps=0.0) maps -ε to
-            # L-ε rather than 0, placing the atom's FFT peak at the wrong position.
-            for ax in (0, 1):
-                L = atoms.cell[ax, ax]
-                atoms.positions[atoms.positions[:, ax] > L - 1e-10, ax] = 0.0
-                atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+            # Shared with SliceIndexedAtoms, which applies the same wrap to the
+            # atoms it is handed directly -- e.g. explicit core-loss ``sites``
+            # and CrystalPotential's tiled atoms, which do not come through
+            # here.
+            #
+            # ``copy=False`` preserves dev's behaviour exactly: atoms.wrap()
+            # mutated in place here too. Note these atoms are *not* this
+            # method's own -- for DummyFrozenPhonons, get_transformed_atoms()
+            # and randomize() are both identity, so this writes into the
+            # object the potential stores and ships as one graph node. That
+            # aliasing is a pre-existing defect tracked separately; do not read
+            # this copy=False as an assertion that the object is private.
+            atoms = wrap_and_snap_atoms(atoms, copy=False)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -895,7 +894,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                # Non-periodic potentials are randomised after padding and are
+                # deliberately never wrapped; see the note in
+                # SliceIndexedAtoms.__init__.
+                wrap=self.periodic,
             )
 
         return sliced_atoms
