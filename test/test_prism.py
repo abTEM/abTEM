@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import assert_array_matches_device, gpu
+from utils import assert_array_matches_device, gpu, requires_gpu
 
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
@@ -202,7 +202,7 @@ def test_prism_scan(
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 def test_s_matrix_store_on_host(data, lazy):
     potential = data.draw(abtem_st.potential(device="gpu", ensemble_mean=False))
     s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
