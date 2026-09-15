@@ -341,3 +341,163 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     assert gpts[0] <= n_target * 1.12
     # The period is what the fallback exists to preserve, so it survives.
     assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0
+
+
+# ---------------------------------------------------------------------------
+# Skew-aware generalization: commensurate_gpts(cell=...) and
+# Potential(sampling='auto') on a non-orthogonal in-plane cell.
+# ---------------------------------------------------------------------------
+
+
+def _hex_cell_positions(a, reps, basis_frac):
+    """Cartesian atom positions for a 60-degree hex lattice with the given
+    fractional basis, tiled reps x reps times."""
+    a1 = np.array([a, 0.0])
+    a2 = np.array([a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))])
+    cell = np.stack([a1, a2])
+    positions = []
+    for i in range(reps):
+        for j in range(reps):
+            for f in basis_frac:
+                positions.append((f[0] + i) * a1 + (f[1] + j) * a2)
+    return np.array(positions), cell
+
+
+def test_commensurate_gpts_skew_reduces_to_orthogonal_for_diagonal_cell():
+    # cell=diag(extent) must reproduce the Cartesian-only algorithm exactly.
+    extent = (12.3, 9.7)
+    positions = _plane_positions(np.arange(4) * (extent[0] / 4), np.arange(3) * (extent[1] / 3))
+
+    gpts_ref = commensurate_gpts(extent, positions, target_sampling=0.05)
+    gpts_diag = commensurate_gpts(
+        extent, positions, target_sampling=0.05, cell=np.diag(extent)
+    )
+    assert gpts_ref == gpts_diag
+
+
+def test_commensurate_gpts_skew_finds_true_lattice_period():
+    # A hex-lattice period is invisible to a Cartesian-only (per-axis) search --
+    # atoms are periodic along a1/a2, not along Cartesian x or y -- but must be
+    # found once fractional (lattice) coordinates are used.
+    a, reps = 2.46, 6
+    basis = [(0.0, 0.0), (1 / 3, 1 / 3)]
+    positions, cell = _hex_cell_positions(a, reps, basis)
+    extent = (a * reps, a * reps)
+
+    gpts = commensurate_gpts(extent, positions, target_sampling=0.05, cell=cell)
+    for n in gpts:
+        assert n % reps == 0
+
+
+def test_commensurate_gpts_skew_is_translation_invariant():
+    a, reps = 2.46, 5
+    basis = [(0.0, 0.0), (1 / 3, 1 / 3)]
+    positions, cell = _hex_cell_positions(a, reps, basis)
+    extent = (a * reps, a * reps)
+
+    gpts_ref = commensurate_gpts(extent, positions, target_sampling=0.05, cell=cell)
+
+    supercell = cell * reps
+    inv_supercell = np.linalg.inv(supercell)
+    rng = np.random.RandomState(1)
+    for _ in range(3):
+        shift = rng.uniform(0, extent[0], 2)
+        # Wrap in FRACTIONAL (lattice) coordinates: the supercell is a
+        # parallelogram, not a Cartesian rectangle.
+        frac = ((positions + shift) @ inv_supercell) % 1.0
+        shifted = frac @ supercell
+        gpts_shifted = commensurate_gpts(
+            extent, shifted, target_sampling=0.05, cell=cell
+        )
+        assert gpts_shifted == gpts_ref
+
+
+def test_commensurate_gpts_skew_symmetry_equivalent_atoms_discretize_identically():
+    # The actual physical claim: atoms related by a lattice translation must
+    # land at the same fractional pixel offset, so they discretise identically.
+    a, reps = 2.46, 6
+    basis = [(0.0, 0.0), (1 / 3, 1 / 3)]
+    positions, cell = _hex_cell_positions(a, reps, basis)
+    extent = (a * reps, a * reps)
+
+    gpts = commensurate_gpts(extent, positions, target_sampling=0.05, cell=cell)
+
+    inv_cell = np.linalg.inv(cell)
+    frac = (positions @ inv_cell) % 1.0
+    pixel_frac = np.stack([frac[:, 0] * gpts[0], frac[:, 1] * gpts[1]], axis=1)
+    sub_pixel = pixel_frac % 1.0
+
+    def circular_spread(x):
+        theta = 2 * np.pi * x
+        c = np.cos(theta).mean(axis=0)
+        s = np.sin(theta).mean(axis=0)
+        resultant_length = np.sqrt(c**2 + s**2)
+        return np.arccos(np.clip(resultant_length, -1.0, 1.0)) / (2 * np.pi)
+
+    for basis_idx in range(len(basis)):
+        spread = circular_spread(sub_pixel[basis_idx::len(basis)])
+        assert np.all(spread < 1e-6)
+
+
+def test_commensurate_gpts_skew_incommensurate_fallback():
+    # A skewed cell with an irrational internal parameter (rutile-like u=0.306)
+    # has no exactly commensurate grid; the fallback must still preserve the
+    # translational period and stay within the documented overshoot window.
+    a, reps, u = 3.0, 4, 0.306
+    basis = [(0.0, 0.0), (u, u), (0.5 + u, 0.5 - u)]
+    positions, cell = _hex_cell_positions(a, reps, basis)
+    extent = (a * reps, a * reps)
+
+    gpts = commensurate_gpts(extent, positions, target_sampling=0.05, cell=cell)
+
+    for i, n in enumerate(gpts):
+        assert n % reps == 0
+        n_target = int(np.ceil(extent[i] / 0.05))
+        assert n <= n_target * 1.12 * 1.01
+
+
+def test_potential_auto_sampling_on_skewed_cell_is_commensurate():
+    # End-to-end: Potential(sampling='auto') on a non-orthogonal, z-separable
+    # cell must build a skew-native grid whose gpts is commensurate with the
+    # TRUE (skewed) lattice, not with an auxiliary orthogonalised supercell.
+    from ase import Atoms
+
+    a, c, reps = 2.46, 6.7, 6
+    cell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, c],
+    ]
+    atoms = Atoms(
+        "C2", cell=cell, pbc=True, scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)]
+    ) * (reps, reps, 1)
+
+    potential = Potential(atoms, sampling="auto", slice_thickness=c)
+
+    assert not potential.grid.is_orthogonal
+    assert potential.gpts[0] % reps == 0
+    assert potential.gpts[1] % reps == 0
+    # extent must be the true lattice-vector lengths, not the cell diagonal
+    # (which for a 60-degree cell differs from the vector length only along
+    # the second lattice vector, but must still match here).
+    true_extent = tuple(np.linalg.norm(np.asarray(atoms.cell)[:2, :2], axis=1))
+    assert np.allclose(potential.extent, true_extent)
+
+
+def test_potential_auto_sampling_non_orthogonal_false_forces_legacy_path():
+    from ase import Atoms
+
+    a, c, reps = 2.46, 6.7, 4
+    cell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, c],
+    ]
+    atoms = Atoms(
+        "C2", cell=cell, pbc=True, scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)]
+    ) * (reps, reps, 1)
+
+    potential = Potential(
+        atoms, sampling="auto", slice_thickness=c, non_orthogonal=False
+    )
+    assert potential.grid.is_orthogonal

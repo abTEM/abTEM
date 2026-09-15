@@ -136,37 +136,48 @@ fd_coefficients = {
 }
 
 
-def _build_matrix(offsets: list[int]):
-    import sympy  # type: ignore
-
-    """Constructs the equation system matrix for the finite difference coefficients"""
-    A = [([1 for _ in offsets])]
-    for i in range(1, len(offsets)):
-        A.append([j**i for j in offsets])
-    return sympy.Matrix(A)
-
-
-def _build_rhs(offsets: list[int], deriv: int):
-    import sympy  # type: ignore
-
-    """The right hand side of the equation system matrix"""
-    b = [0 for _ in offsets]
-    b[deriv] = math.factorial(deriv)
-    return sympy.Matrix(b)
-
-
 def _calculate_finite_difference_coefficient(derivative: int, accuracy: int = 2):
-    import sympy  # type: ignore
+    """Central finite-difference coefficients for the given derivative order.
+
+    Solves the Vandermonde system ``sum_j offsets[j]**i * c[j] = i! *
+    delta(i, derivative)`` exactly with stdlib rational arithmetic
+    (``fractions.Fraction``), so no computer-algebra dependency is needed
+    and the result is identical to a symbolic solve.
+    """
+    from fractions import Fraction
 
     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
     num_side = num_central // 2
     offsets = list(range(-num_side, num_side + 1))
+    n = len(offsets)
 
-    matrix = _build_matrix(offsets)
-    rhs = _build_rhs(offsets, derivative)
-    coefs = sympy.linsolve((matrix, rhs))
-    coefs = np.array([float(coef) for coef in tuple(coefs)[0]])
-    return coefs
+    matrix = [[Fraction(offset) ** i for offset in offsets] for i in range(n)]
+    rhs = [
+        Fraction(math.factorial(derivative)) if i == derivative else Fraction(0)
+        for i in range(n)
+    ]
+
+    # Gaussian elimination with partial pivoting; exact in rational arithmetic
+    # (pivoting only guards against a zero pivot, not rounding).
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(matrix[r][col]))
+        matrix[col], matrix[pivot] = matrix[pivot], matrix[col]
+        rhs[col], rhs[pivot] = rhs[pivot], rhs[col]
+        for row in range(col + 1, n):
+            factor = matrix[row][col] / matrix[col][col]
+            if factor:
+                for c in range(col, n):
+                    matrix[row][c] -= factor * matrix[col][c]
+                rhs[row] -= factor * rhs[col]
+
+    coefs = [Fraction(0)] * n
+    for row in range(n - 1, -1, -1):
+        residual = rhs[row] - sum(
+            matrix[row][c] * coefs[c] for c in range(row + 1, n)
+        )
+        coefs[row] = residual / matrix[row][row]
+
+    return np.array([float(coef) for coef in coefs])
 
 
 def finite_difference_coefficients(derivative: int, accuracy: int = 2):
@@ -387,6 +398,239 @@ def _laplace_operator_stencil(
         return _laplace_stencil
 
 
+_METRIC_LAPLACE_STENCIL_KERNEL = r"""
+#include <cupy/complex.cuh>
+
+// Batched 2-D anisotropic (skewed-grid) Laplacian finite-difference stencil:
+// out[m, i, j] = sum_k c2_row[k + n2] * a[m, i + k, j]
+//              + sum_k c2_col[k + n2] * a[m, i, j + k]
+//              + sum_{k, l} d1_scaled[k + n1] * d1[l + n1] * a[m, i + k, j + l]
+// over the interior i, j in [npad, H - npad) x [npad, W - npad), npad = max(n1, n2).
+// The boundary is left zero; the caller handles it via wrap padding.
+//
+// c2_row / c2_col are the second-derivative coefficients pre-scaled by the metric
+// components g11 / g22, and d1_scaled is the first-derivative coefficients
+// pre-scaled by 2 * g12 -- pushing the (otherwise scalar) metric components into
+// the coefficient arrays avoids needing a separate complex-scalar kernel
+// argument type per precision.
+//
+// Grid: x covers W (fastest axis, coalesced), y covers H, z strides over the
+// batch so any batch size is supported. Mirrors the layout of the orthogonal
+// Laplacian kernel below.
+//
+// Template parameter T is the complex floating-point type.
+template<typename T>
+__device__ __forceinline__ void metric_laplace_stencil_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c2_row,
+    const T* __restrict__ c2_col,
+    const T* __restrict__ d1,
+    const T* __restrict__ d1_scaled,
+    const int n1, const int n2, const int npad,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < npad || i >= H - npad || j < npad || j >= W - npad) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n2; k <= n2; k++) {
+            cumul += c2_row[k + n2] * am[(long long)(i + k) * W + j];
+            cumul += c2_col[k + n2] * am[(long long)i * W + (j + k)];
+        }
+        T cross = T(0);
+        for (int k = -n1; k <= n1; k++) {
+            for (int l = -n1; l <= n1; l++) {
+                cross += d1_scaled[k + n1] * d1[l + n1] * am[(long long)(i + k) * W + (j + l)];
+            }
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul + cross;
+    }
+}
+
+extern "C" __global__ void metric_laplace_stencil_c64(
+    complex<float>* out, const complex<float>* a,
+    const complex<float>* c2_row, const complex<float>* c2_col,
+    const complex<float>* d1, const complex<float>* d1_scaled,
+    int n1, int n2, int npad, int M, int H, int W
+) {
+    metric_laplace_stencil_impl<complex<float> >(
+        out, a, c2_row, c2_col, d1, d1_scaled, n1, n2, npad, M, H, W
+    );
+}
+
+extern "C" __global__ void metric_laplace_stencil_c128(
+    complex<double>* out, const complex<double>* a,
+    const complex<double>* c2_row, const complex<double>* c2_col,
+    const complex<double>* d1, const complex<double>* d1_scaled,
+    int n1, int n2, int npad, int M, int H, int W
+) {
+    metric_laplace_stencil_impl<complex<double> >(
+        out, a, c2_row, c2_col, d1, d1_scaled, n1, n2, npad, M, H, W
+    );
+}
+"""
+
+_metric_laplace_stencil_c64 = None
+_metric_laplace_stencil_c128 = None
+
+
+def _init_metric_laplace_stencil_kernels():
+    global _metric_laplace_stencil_c64, _metric_laplace_stencil_c128
+    if _metric_laplace_stencil_c64 is None:
+        mod = cp.RawModule(code=_METRIC_LAPLACE_STENCIL_KERNEL, options=("--std=c++14",))
+        _metric_laplace_stencil_c64 = mod.get_function("metric_laplace_stencil_c64")
+        _metric_laplace_stencil_c128 = mod.get_function("metric_laplace_stencil_c128")
+
+
+def _metric_laplace_operator_stencil(
+    accuracy,
+    metric,
+    mode: str = "wrap",
+    dtype=np.complex64,
+    device: str = "cpu",
+):
+    """Finite-difference transverse Laplacian on a non-orthogonal grid.
+
+    On a skewed grid the physical Laplacian is
+        d2/dx2 + d2/dy2 = g11 d2/di2 + 2 g12 d2/didj + g22 d2/dj2,
+    where g = (J^T J)^-1 is the contravariant metric of the sampling vectors
+    J = [a1 | a2] (columns). The separable terms reuse the second-derivative stencil;
+    the cross term is the outer product of the first-derivative stencils. Reduces to the
+    orthogonal Laplacian when g12 = 0.
+    """
+    g11, g12, g22 = float(metric[0, 0]), float(metric[0, 1]), float(metric[1, 1])
+
+    c2 = finite_difference_coefficients(2, accuracy).astype(dtype)
+    c2 = np.roll(c2, -(len(c2) // 2))
+    n2 = len(c2) // 2
+
+    d1 = _calculate_finite_difference_coefficient(1, accuracy).astype(dtype)
+    d1 = np.roll(d1, -(len(d1) // 2))
+    n1 = len(d1) // 2
+
+    npad = max(n1, n2)
+    padding = npad + 1
+
+    from numba import prange  # type: ignore
+
+    g11d = dtype(g11)
+    g22d = dtype(g22)
+    g12d = dtype(2.0 * g12)
+
+    @njit(parallel=True, fastmath=True)
+    def _metric_stencil_cpu_batch(a):
+        M, H, W = a.shape
+        out = a.copy()
+        out[:] = 0
+        for m in prange(M):
+            for i in range(npad, H - npad):
+                for j in range(npad, W - npad):
+                    cumul = dtype(0.0)
+                    for k in range(-n2, n2 + 1):
+                        cumul += g11d * c2[k] * a[m, i + k, j]
+                        cumul += g22d * c2[k] * a[m, i, j + k]
+                    if g12d != 0.0:
+                        cross = dtype(0.0)
+                        for k in range(-n1, n1 + 1):
+                            for l in range(-n1, n1 + 1):
+                                cross += d1[k] * d1[l] * a[m, i + k, j + l]
+                        cumul += g12d * cross
+                    out[m, i, j] = cumul
+        return out
+
+    if device == "gpu":
+        check_cupy_is_installed()
+        # the kernel indexes the coefficients in natural order (index k + n for
+        # offset k), so undo the rolls applied for the CPU stencil above
+        c2_natural = np.roll(c2, n2)
+        d1_natural = np.roll(d1, n1)
+        c2_row_gpu = cp.asarray(g11d * c2_natural)
+        c2_col_gpu = cp.asarray(g22d * c2_natural)
+        d1_gpu = cp.asarray(d1_natural)
+        d1_scaled_gpu = cp.asarray(g12d * d1_natural)
+
+    def _metric_stencil_gpu(a):
+        xp = get_array_module(a)
+        a = xp.ascontiguousarray(a)
+        out = xp.zeros_like(a)
+
+        M, H, W = a.shape
+
+        _init_metric_laplace_stencil_kernels()
+        if a.dtype == xp.complex128:
+            kernel = _metric_laplace_stencil_c128
+        else:
+            kernel = _metric_laplace_stencil_c64
+
+        threads_x = 16
+        threads_y = 16
+        block = (threads_x, threads_y, 1)
+        grid = (
+            math.ceil(W / threads_x),
+            math.ceil(H / threads_y),
+            min(M, 65535),
+        )
+        kernel(
+            grid,
+            block,
+            (
+                out,
+                a,
+                c2_row_gpu.astype(a.dtype, copy=False),
+                c2_col_gpu.astype(a.dtype, copy=False),
+                d1_gpu.astype(a.dtype, copy=False),
+                d1_scaled_gpu.astype(a.dtype, copy=False),
+                np.int32(n1),
+                np.int32(n2),
+                np.int32(npad),
+                np.int32(M),
+                np.int32(H),
+                np.int32(W),
+            ),
+        )
+
+        return out
+
+    def _metric_stencil(a):
+        original_shape = a.shape
+        if a.ndim == 2:
+            a = a.reshape(1, *a.shape)
+        elif a.ndim > 3:
+            a = a.reshape(-1, *a.shape[-2:])
+        elif a.ndim != 3:
+            raise ValueError(f"Array must have at least 2 dimensions, got {a.ndim}")
+
+        if device == "cpu":
+            result = _metric_stencil_cpu_batch(a)
+        elif device == "gpu":
+            result = _metric_stencil_gpu(a)
+        else:
+            raise ValueError(f"Unsupported device: {device}")
+
+        return result.reshape(original_shape)
+
+    def _apply_boundary(func):
+        def func_wrapper(a):
+            xp = get_array_module(a)
+            pad_width = [(0, 0)] * (a.ndim - 2) + [(padding,) * 2, (padding,) * 2]
+            slicing = tuple(
+                [slice(None)] * (a.ndim - 2)
+                + [slice(padding, -padding), slice(padding, -padding)]
+            )
+            a = xp.pad(a, pad_width=pad_width, mode="wrap")
+            return func(a)[slicing]
+
+        return func_wrapper
+
+    if mode != "none":
+        return _apply_boundary(_metric_stencil)
+    return _metric_stencil
+
+
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
@@ -416,10 +660,19 @@ class LaplaceOperator:
         self._stencil = None
 
     def _get_new_stencil(self, key, device: str = "cpu"):
-        wavelength, sampling = key
-        prefactor = 1 / np.prod(np.array(sampling, dtype=float))
-        return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap",
+        wavelength, sampling, cell, gpts = key
+        if cell is None:
+            prefactor = 1 / np.prod(np.array(sampling, dtype=float))
+            return _laplace_operator_stencil(
+                self._accuracy, prefactor, mode="wrap",
+                dtype=get_dtype(complex=True), device=device
+            )
+        # non-orthogonal grid: contravariant metric of the sampling vectors a_i = A_i / N_i
+        cell = np.array(cell, dtype=float)
+        sampling_vectors = np.stack([cell[0] / gpts[0], cell[1] / gpts[1]], axis=1)
+        metric = np.linalg.inv(sampling_vectors.T @ sampling_vectors)
+        return _metric_laplace_operator_stencil(
+            self._accuracy, metric, mode="wrap",
             dtype=get_dtype(complex=True), device=device
         )
 
@@ -443,6 +696,8 @@ class LaplaceOperator:
         key = (
             energy2wavelength(waves._valid_energy),
             waves.sampling,
+            getattr(waves.grid, "_cell", None),
+            waves.gpts,
         )
 
         if key == self._key:

@@ -18,6 +18,7 @@ from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
+from abtem.atoms import is_cell_orthogonal
 from abtem.potentials.iam import (
     BaseField,
     FieldArray,
@@ -72,15 +73,51 @@ def unit_vector_from_angles(theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
     return m
 
 
+def _parallelepiped_grid(
+    cell: np.ndarray,
+    gpts: tuple[int, int, int],
+    origin: tuple[float, float, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build Cartesian (x, y, z) coordinate arrays on a parallelepiped sampling
+    grid: pixel (i, j, k) sits at Cartesian ``i*a/Ni + j*b/Nj + k*c/Nk - origin``,
+    where ``a, b, c`` are the rows of ``cell``. Reduces to a rectangular grid for
+    a diagonal cell."""
+    cell = np.asarray(cell, dtype=float)
+    Ni, Nj, Nk = gpts
+    ni = np.arange(Ni, dtype=float) / Ni
+    nj = np.arange(Nj, dtype=float) / Nj
+    nk = np.arange(Nk, dtype=float) / Nk
+    NI, NJ, NK = np.meshgrid(ni, nj, nk, indexing="ij")
+    # Cartesian position = NI*a + NJ*b + NK*c
+    x = NI * cell[0, 0] + NJ * cell[1, 0] + NK * cell[2, 0] - origin[0]
+    y = NI * cell[0, 1] + NJ * cell[1, 1] + NK * cell[2, 1] - origin[1]
+    z = NI * cell[0, 2] + NJ * cell[1, 2] + NK * cell[2, 2] - origin[2]
+    return x, y, z
+
+
+def _atomic_field_coordinates(
+    extent: tuple[float, float, float] | np.ndarray,
+    gpts: tuple[int, int, int],
+    origin: tuple[float, float, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Coordinate grid on which the atomic field is sampled. ``extent`` is either a
+    3-tuple of lattice-vector lengths (orthorhombic; reproduces the legacy
+    rectangular grid) or a 3x3 cell matrix (sampling on the parallelepiped)."""
+    arr = np.asarray(extent)
+    if arr.ndim == 2:
+        return _parallelepiped_grid(arr, gpts, origin)
+    return coordinate_grid(extent, gpts, origin, endpoint=False)
+
+
 def atomic_vector_potential_3d(
-    extent: tuple[float, float, float],
+    extent: tuple[float, float, float] | np.ndarray,
     gpts: tuple[int, int, int],
     origin: tuple[float, float, float],
     magnetic_moment: np.ndarray,
     parameters: np.ndarray,
     cutoff: float,
 ) -> np.ndarray:
-    x, y, z = coordinate_grid(extent, gpts, origin, endpoint=False)
+    x, y, z = _atomic_field_coordinates(extent, gpts, origin)
     parameters = np.array(parameters)
     r = np.sqrt(x**2 + y**2 + z**2)
 
@@ -96,7 +133,7 @@ def atomic_vector_potential_3d(
 
 
 def atomic_magnetic_field_3d(
-    extent: tuple[float, float, float],
+    extent: tuple[float, float, float] | np.ndarray,
     gpts: tuple[int, int, int],
     origin: tuple[float, float, float],
     magnetic_moment: np.ndarray,
@@ -106,7 +143,7 @@ def atomic_magnetic_field_3d(
     magnetic_moment = np.array(magnetic_moment)
     parameters = np.array(parameters)
 
-    x, y, z = coordinate_grid(extent, gpts, origin, endpoint=False)
+    x, y, z = _atomic_field_coordinates(extent, gpts, origin)
 
     r = np.sqrt(x**2 + y**2 + z**2)
     r_vec = np.stack([x, y, z])
@@ -138,10 +175,19 @@ def _superpose_field_3d(
     if parameters is None:
         parameters = LyonParametrization().parameters
 
+    # For an orthogonal cell, sample on a Cartesian rectangle (legacy behaviour).
+    # For a non-orthogonal cell, sample on the parallelepiped: pixel (i, j, k)
+    # sits at Cartesian ``i*a/Ni + j*b/Nj + k*c/Nk`` so the field is correctly
+    # placed on the skew lattice. We pass the full cell matrix to the
+    # atom_field_func, which dispatches on ndim (3-tuple -> rectangular).
+    if is_cell_orthogonal(atoms.cell):
+        extent = atoms.cell.array.diagonal()
+    else:
+        extent = np.asarray(atoms.cell.array, dtype=float)
+
     for position, symbol, magnetic_moment in zip(
         atoms.positions, atoms.symbols, atoms.get_array("magnetic_moments")
     ):
-        extent = atoms.cell.array.diagonal()
         array += atom_field_func(
             extent=extent,
             gpts=gpts,
