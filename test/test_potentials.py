@@ -990,20 +990,49 @@ class TestPotentialDoesNotMutateItsAtoms:
         before = atoms.positions.copy()
         from abtem.inelastic.phonons import FrozenPhonons
 
-        phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.0, seed=1)
+        # sigmas must be NON-ZERO. With sigmas=0.0 randomize's displacement is
+        # `positions += 0 * r`, so an in-place randomize leaves the positions
+        # numerically identical and this test passes even with
+        # FrozenPhonons.randomize's own copy deleted -- it would be pinning a
+        # no-op. Verified: removing that copy is caught at 0.1 and missed at 0.0.
+        phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
         self._build(Potential(phonons, gpts=(32, 32), slice_thickness=1.0))
         assert np.array_equal(atoms.positions, before)
 
-    def test_building_twice_gives_the_same_result(self):
-        """The sharpest consequence of the in-place write: the second build saw
-        already-wrapped atoms, so a potential's output could depend on how many
-        times it had been built."""
-        potential = Potential(
-            self._atoms(), gpts=(32, 32), slice_thickness=1.0
+    def test_an_earlier_build_does_not_change_a_later_potentials_result(self):
+        """The sharpest consequence: the write crosses *objects*.
+
+        Not repeated builds of one potential -- `get_sliced_atoms` memoises
+        `_sliced_atoms`, so a second build never re-enters `_prepare_atoms`,
+        and `wrap_and_snap_atoms` is idempotent anyway. An earlier version of
+        this test asserted that and therefore could not fail.
+
+        What does fail is a second potential built from the SAME Atoms object:
+        the first build wrapped it in place, so the second sees pre-wrapped
+        atoms and slices them differently.
+        """
+        atoms = Atoms(
+            "Si2", positions=[(0.2, 0.2, -0.5), (2.0, 2.0, 1.5)],
+            cell=(4.0, 4.0, 4.0),
         )
-        first = np.asarray(self._build(potential).array)
-        second = np.asarray(self._build(potential).array)
-        assert np.array_equal(first, second)
+        reference = Potential(
+            [atoms.copy()], gpts=(32, 32), slice_thickness=1.0, periodic=False,
+            projection="infinite",
+        ).get_sliced_atoms()
+
+        shared = Potential([atoms], gpts=(32, 32), slice_thickness=1.0)
+        self._build(shared)  # wraps `atoms` in place on the unfixed code
+        after = Potential(
+            [atoms], gpts=(32, 32), slice_thickness=1.0, periodic=False,
+            projection="infinite",
+        ).get_sliced_atoms()
+
+        counts_ref = [len(reference.get_atoms_in_slices(i)) for i in range(4)]
+        counts_after = [len(after.get_atoms_in_slices(i)) for i in range(4)]
+        assert counts_after == counts_ref, (
+            f"an earlier build changed a later potential's slicing: "
+            f"{counts_after} != {counts_ref}"
+        )
 
     def test_the_wrapped_positions_still_reach_the_slicing(self):
         """Copying must not lose the wrap -- the potential still has to be
