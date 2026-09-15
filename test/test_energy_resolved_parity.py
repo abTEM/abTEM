@@ -62,11 +62,16 @@ def test_ensemble_mean_forced_false(equilibrium):
     assert ensemble.ensemble_mean is False
 
 
-def test_ensemble_mean_forced_false_does_not_warn(equilibrium, recwarn):
+def test_ensemble_mean_forced_false_does_not_warn(equilibrium):
     """Forcing ensemble_mean=False for parity_projection is deliberate, not
     a user oversight -- reduce_ensemble's generic "did you forget
     ensemble_mean=True" warning must not fire for it, while it must still
-    fire for an ordinary (non-parity) ensemble_mean=False."""
+    fire for an ordinary (non-parity) ensemble_mean=False. Scoped to just
+    the reduce_ensemble() call (rather than e.g. pytest's recwarn, which
+    records the whole test) so this can't be tripped up by an unrelated
+    warning from a dependency raised during fixture/object setup."""
+    import warnings
+
     import numpy as np
 
     from abtem.waves import Waves, reduce_ensemble
@@ -86,8 +91,10 @@ def test_ensemble_mean_forced_false_does_not_warn(equilibrium, recwarn):
         np.zeros((2, 4, 4), dtype=complex), energy=100e3, sampling=0.1,
         ensemble_axes_metadata=[fp_axis],
     )
-    reduce_ensemble(waves)
-    assert len(recwarn) == 0
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reduce_ensemble(waves)
+    assert not any("ensemble_mean=False" in str(w.message) for w in caught)
 
     # an ordinary (non-parity) ensemble_mean=False axis must still warn
     ordinary_fp_axis = FrozenPhononsAxis(_ensemble_mean=False)
