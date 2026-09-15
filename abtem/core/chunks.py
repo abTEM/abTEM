@@ -491,11 +491,26 @@ def estimate_potential_chunk_size(
 
             pool = cp.get_default_memory_pool()
 
-            # Use CUDA-reported free memory without calling
-            # free_all_blocks() first. Dead pool blocks represent recent
-            # memory pressure and keep the estimate conservative, which
-            # is the desired behaviour as the pool fills over successive
-            # scan batches.
+            # CUDA-reported free memory alone understates what is actually
+            # available on any workload that calls this more than once:
+            # CuPy's pool never returns freed blocks to the driver (no
+            # free_all_blocks() call here), so once the pool has grown to
+            # its steady-state size -- typically within the first handful
+            # of chunks -- cp.cuda.Device().mem_info()'s free figure gets
+            # stuck at that reservation's residual gap to total VRAM,
+            # forever, regardless of how much of that reservation is idle
+            # and reusable. Measured on a scan workload (8000x8000 grid,
+            # 5 batches): after batch 1 grew the pool to ~20.9 GB reserved,
+            # every subsequent batch read the *same* ~3.9 GB CUDA-free
+            # figure even though ~11.4 GB of that reservation was sitting
+            # in the pool's own idle cache (pool.free_bytes()) the whole
+            # time -- collapsing chunk_size to 1 (the worst case) for the
+            # rest of the run despite ~15 GB of real headroom. Adding the
+            # pool's idle cache back in avoids that: it does not need
+            # free_all_blocks() (no driver round-trip, no risk of evicting
+            # blocks another concurrent allocation still wants) because
+            # CuPy already tracks exactly how much of its own reservation
+            # is currently unused.
             free_mem, total_mem = cp.cuda.Device().mem_info
 
             # Cross-check against pool live usage. This guards the rare
@@ -503,7 +518,8 @@ def estimate_potential_chunk_size(
             # cuFFT plan cache eviction), making free_mem higher than the
             # live-data picture suggests.
             pool_used = pool.used_bytes()
-            effective_free = min(free_mem, total_mem - pool_used)
+            pool_free = pool.free_bytes()
+            effective_free = min(free_mem + pool_free, total_mem - pool_used)
 
             # Per-slice cost: output array (1×) + transmission function
             # (2×) + build temporaries (FFTs, Gaussian integrals) +
@@ -622,11 +638,14 @@ def estimate_scan_batch_size(
             pool = cp.get_default_memory_pool()
             free_mem, total_mem = cp.cuda.Device().mem_info
             pool_used = pool.used_bytes()
+            pool_free = pool.free_bytes()
             # Use the same effective-free formula as estimate_potential_chunk_size
-            # so both estimates operate on a consistent VRAM picture.  Dead pool
-            # blocks (cached but not live) are included in free_mem by CUDA, but
-            # total_mem - pool_used excludes them; taking the min is conservative.
-            effective_free = min(free_mem, total_mem - pool_used)
+            # so both estimates operate on a consistent VRAM picture -- see the
+            # comment there for why pool.free_bytes() (idle, already-reserved
+            # pool cache) is added back to CUDA-reported free memory rather than
+            # relying on free_mem alone, which never recovers once the pool has
+            # grown to its steady-state size.
+            effective_free = min(free_mem + pool_free, total_mem - pool_used)
 
             # Allocate up to 50 % of effective VRAM for probe-batch overhead.
             # A 6× overhead factor accounts for transient copies during

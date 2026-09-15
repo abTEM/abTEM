@@ -54,11 +54,12 @@ class TestNearestPowerOfTwo:
         assert _nearest_power_of_two(n) == expected
 
 
-def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
+def _install_fake_cupy(monkeypatch, free, total, pool_used=0, pool_free=0):
     """Install a minimal cupy stand-in exposing the memory-probing API."""
     fake = types.ModuleType("cupy")
     fake.get_default_memory_pool = lambda: types.SimpleNamespace(
-        used_bytes=lambda: pool_used
+        used_bytes=lambda: pool_used,
+        free_bytes=lambda: pool_free,
     )
     fake.cuda = types.SimpleNamespace(
         Device=lambda: types.SimpleNamespace(mem_info=(free, total))
@@ -102,6 +103,53 @@ class TestEstimatePotentialChunkSize:
         fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
         assert bluestein == fast == 117
 
+    def test_idle_pool_cache_counts_as_available(self, monkeypatch):
+        """A pool that has grown but is mostly idle must not be treated as scarce.
+
+        Reproduces the scan-workload regression: after the pool grows once
+        (e.g. during an earlier batch) and stops requesting more from CUDA,
+        cp.cuda.Device().mem_info()'s free figure never recovers even when
+        most of that reservation later sits idle in the pool's own cache.
+        Counting pool.free_bytes() as available fixes this without calling
+        free_all_blocks().
+        """
+        # 20.86 GB reserved total, of which 9.47 GB is live and 11.39 GB is
+        # idle pool cache; only 3.93 GB is unclaimed CUDA-level free memory --
+        # the exact figures observed on real hardware (RTX 4090, 25.25 GB) at
+        # the start of the second probe batch of a scan run.
+        total = 25_251_000_000
+        pool_used = 9_472_000_000
+        pool_free = 11_392_000_000
+        cuda_free = total - pool_used - pool_free
+        _install_fake_cupy(
+            monkeypatch, free=cuda_free, total=total,
+            pool_used=pool_used, pool_free=pool_free,
+        )
+        dtype = np.dtype(np.float32)
+        # slice_bytes = 8000*8000*4 = 256,000,000; effective_per_slice x5.
+        # Without pool_free: effective_free=3.93 GB -> budget 1.375 GB -> chunk_size=1.
+        # With pool_free:    effective_free=15.32 GB -> budget 5.36 GB -> chunk_size=4.
+        chunk_size = estimate_potential_chunk_size((8000, 8000), "gpu", dtype)
+        assert chunk_size == 4
+
+    def test_pool_used_still_caps_effective_free(self, monkeypatch):
+        """Live (non-idle) pool usage must still shrink the estimate.
+
+        Guards against a fix that naively adds the pool's *total* reservation
+        back in regardless of how much of it is actually live right now.
+        """
+        _install_fake_cupy(
+            monkeypatch, free=1_000_000_000, total=40_000_000_000,
+            pool_used=39_000_000_000, pool_free=0,
+        )
+        dtype = np.dtype(np.float32)
+        # effective_free = min(free+pool_free, total-pool_used) = min(1, 1) = 1 GB
+        # -> budget 0.35 GB / (2048*2048*4*5 bytes/slice) = 4.
+        # The point isn't the exact number -- it's that heavy live pool usage
+        # (39/40 GB) still caps this near the CPU-reported free memory, unlike
+        # a fix that added pool_used back in too and ignored it entirely.
+        assert estimate_potential_chunk_size((2048, 2048), "gpu", dtype) == 4
+
 
 class TestEstimateScanBatchSize:
     """Unit tests for the VRAM-aware scan-batch estimator (GPU path mocked)."""
@@ -127,6 +175,21 @@ class TestEstimateScanBatchSize:
         )
         # effective free = min(free, total - pool_used) = 10 GB -> budget 5 GB
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "gpu") <= 16
+
+    def test_idle_pool_cache_counts_as_available(self, monkeypatch):
+        """Same pool-aware fix as estimate_potential_chunk_size: an idle,
+        already-reserved pool cache must not be treated as scarce."""
+        _install_fake_cupy(
+            monkeypatch,
+            free=1_000_000_000,
+            total=40_000_000_000,
+            pool_used=1_000_000_000,
+            pool_free=28_000_000_000,
+        )
+        # Without pool_free: effective_free=1 GB -> tiny batch.
+        # With pool_free:    effective_free=29 GB -> budget 14.5 GB -> big batch.
+        without = estimate_scan_batch_size((2048, 2048), np.complex128, "gpu")
+        assert without >= 32
 
     def test_cpu_falls_back_to_chunk_size(self):
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "cpu") >= 1
