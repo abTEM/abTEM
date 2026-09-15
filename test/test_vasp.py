@@ -174,6 +174,34 @@ def test_vasp_potential_differs_from_crude_point_charge(
     assert not np.allclose(vasp_result.array, crude_result.array)
 
 
+def test_vasp_potential_subtract_min_defaults_to_false(
+    carbon_atoms, charge_density_3d, fake_potcar
+):
+    pot = VASPPotential(
+        carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
+    )
+    assert pot.subtract_min is False
+
+    slices = [slic.array[0] for slic in pot.generate_slices()]
+    assert any(not np.isclose(s.min(), 0.0) for s in slices)
+
+
+def test_vasp_potential_subtract_min_true_zeros_each_slice_minimum(
+    carbon_atoms, charge_density_3d, fake_potcar
+):
+    pot = VASPPotential(
+        carbon_atoms,
+        charge_density_3d,
+        potcar=fake_potcar,
+        sampling=0.1,
+        subtract_min=True,
+    )
+    assert pot.subtract_min is True
+
+    for slic in pot.generate_slices():
+        assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
+
+
 def test_vasp_potential_on_skew_cell(charge_density_3d, fake_potcar):
     """VASPPotential inherits ChargeDensityPotential's non-orthogonal (skewed)
     in-plane grid support unchanged -- the core-density correction is injected
