@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from abc import ABCMeta, abstractmethod
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -408,6 +409,31 @@ def superpose_deltas(
     return array
 
 
+_MAX_SCATTERING_FACTOR_ENTRIES = 32
+
+
+def _device_cache_key(device, like=None) -> str | tuple[str, int]:
+    """Name the concrete device a cached array belongs to.
+
+    The ``device`` threaded through the integrators is the plain "cpu"/"gpu"
+    string, which does not distinguish one GPU from another. Read the device
+    off ``like`` -- an array the cached value will be combined with -- the way
+    ``_local_potential_on_device`` (core_loss.py) and
+    ``_radial_binning_device_arrays`` (measurements.py) read it off theirs.
+    That is what makes the key right when one process drives several GPUs: the
+    ambient CUDA context can differ from the device an array actually lives on.
+
+    Without ``like`` there is nothing to anchor to and the current device is
+    the best available answer. Callers that have an array should pass it.
+    """
+    xp = get_array_module(device)
+    if xp is np:
+        return "cpu"
+    if like is not None and get_array_module(like) is not np:
+        return ("gpu", int(like.device.id))
+    return ("gpu", int(xp.cuda.Device().id))
+
+
 class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     """
     A FieldIntegrator calculating infinite projections of radial potential
@@ -428,7 +454,25 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
-        self._scattering_factors = {}
+        # An ordinary OrderedDict, bounded and least-recently-used.
+        #
+        # A per-instance functools.lru_cache built around a bound method was
+        # tried here and is the wrong tool: the wrapper is not picklable (it
+        # resolves by __qualname__ and no longer matches the class attribute),
+        # which breaks dask's processes scheduler and distributed -- and
+        # therefore the multi-GPU path this cache exists to serve. It also
+        # broke __eq__ (EqualityMixin compares __dict__, and a wrapper has
+        # identity equality, so two fresh integrators stopped comparing equal),
+        # made deepcopy return a fake copy sharing the original's cache and
+        # bound to the original instance, and created an instance -> wrapper ->
+        # bound method -> instance cycle that kept full-grid device arrays
+        # alive until a cyclic GC pass.
+        #
+        # Eviction is written so that it cannot race, which is what the
+        # previous hand-rolled version got wrong: popitem() and move_to_end()
+        # are single C-level dict operations, and the KeyError that a losing
+        # thread sees is caught rather than escaping to the caller.
+        self._scattering_factors: OrderedDict = OrderedDict()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -461,20 +505,71 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device):
-        try:
-            scattering_factor = self.scattering_factors[symbol]
-        except KeyError:
-            scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device
-            )
-            self._scattering_factors[symbol] = scattering_factor
+    def get_scattering_factor(self, symbol, gpts, sampling, device, like=None):
+        # The cached array depends on the grid and on the device it was
+        # allocated on, not on the element alone: keying on ``symbol`` served
+        # the first grid's array to every later grid (a broadcast error one
+        # frame away, in integrate_on_grid) and the first device's array to
+        # every later device (a numpy array handed to a cupy kernel).
+        #
+        # ``device`` itself is deliberately not part of the key: it may be an
+        # array or a module (get_array_module accepts both), which is not
+        # always hashable, and "gpu" and the cupy module would otherwise take
+        # two entries for one physical device. ``device_key`` is canonical.
+        device_key = _device_cache_key(device, like)
+        key = (symbol, tuple(gpts), tuple(sampling), device_key)
 
+        cache = self._scattering_factors
+        try:
+            scattering_factor = cache[key]
+        except KeyError:
+            pass
+        else:
+            try:
+                cache.move_to_end(key)
+            except KeyError:  # evicted by another thread; the value is still ours
+                pass
+            return scattering_factor
+
+        scattering_factor = self._calculate_scattering_factor_on_device(
+            symbol, gpts, sampling, device_key
+        )
+
+        # A full key admits one entry per (element, grid, device) rather than
+        # per element, so sharing an integrator across grids would otherwise
+        # grow the cache without bound.
+        while len(cache) >= _MAX_SCATTERING_FACTOR_ENTRIES:
+            try:
+                cache.popitem(last=False)
+            except KeyError:  # another thread emptied it; nothing to evict
+                break
+        cache[key] = scattering_factor
         return scattering_factor
 
+    def _calculate_scattering_factor_on_device(
+        self, symbol, gpts, sampling, device_key
+    ):
+        """Build the scattering factor *on the device named by the key*.
+
+        Anchoring only the key on ``like`` would have been half a fix: the key
+        would say one device while the allocation followed the ambient CUDA
+        context, so under multi-GPU use the array could be cached under a
+        device it does not live on. Allocate inside that device's context, as
+        ``_local_potential_on_device`` (core_loss.py) does with
+        ``with like.device:``.
+        """
+        if device_key == "cpu":
+            return self._calculate_scattering_factor(symbol, gpts, sampling, "cpu")
+
+        import cupy as cp  # noqa: PLC0415 -- optional dependency
+
+        with cp.cuda.Device(device_key[1]):
+            return self._calculate_scattering_factor(symbol, gpts, sampling, "gpu")
+
     @property
-    def scattering_factors(self) -> dict[str, np.ndarray]:
-        """Projected scattering factor array on a 2D grid."""
+    def scattering_factors(self) -> dict[tuple, np.ndarray]:
+        """Cached projected scattering factors, keyed by element, grid and
+        device."""
         return self._scattering_factors
 
     def integrate_on_grid(
@@ -492,8 +587,11 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
+            # Anchor the cache's device key on an array the scattering factor
+            # will actually be combined with, rather than on the ambient CUDA
+            # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device
+                chemical_symbols[number], gpts, sampling, device, like=array
             )
 
             positions = atoms.positions[atoms.numbers == number]
