@@ -38,12 +38,15 @@
 #   ABTEM_CI_MAILTO    address to email on failure; requires a working
 #                      mail/mailx/sendmail on the node (default: no mail)
 #   ABTEM_CI_MULTIGPU  set non-empty to also run the multigpu-marked tests
-#                      (default: off). This is a contract: the run FAILS unless
-#                      at least one multigpu test passes, so an environment
-#                      that cannot provide >= 2 GPUs plus a working dask-cuda
-#                      import gets a red run, not a silent all-skip. Managed
-#                      mode installs dask-cuda into its venv; with ABTEM_CI_VENV
-#                      or in-place mode the environment must already provide it
+#                      (default: off). NVIDIA/CUDA only: abTEM's multi-GPU path
+#                      is built on dask-cuda, which has no ROCm equivalent, so
+#                      this flag is not usable on a ROCm machine. This is a
+#                      contract: the run FAILS unless at least one multigpu
+#                      test passes, so an environment that cannot provide >= 2
+#                      GPUs plus a working dask-cuda import gets a red run, not
+#                      a silent all-skip. Managed mode installs dask-cuda into
+#                      its venv; with ABTEM_CI_VENV or in-place mode the
+#                      environment must already provide it
 #   ABTEM_CI_REPO_URL  clone URL for managed mode (default: anonymous HTTPS —
 #                      the runner only reads, and cluster compute nodes often
 #                      cannot use the SSH key that works on login nodes; set a
@@ -66,11 +69,28 @@ if [ -n "${ABTEM_CI_ROOT:-}" ]; then
     LOGS="${CI_ROOT}/logs"
 else
     MODE="in-place"
-    REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    # resolve symlinks so REPO is the repo the script physically lives in, not
+    # wherever a convenience symlink to it sits
+    _self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    REPO="$(cd "$(dirname "${_self}")/../.." && pwd)"
     LOGS="${REPO}/.gpu-test-logs"
 fi
 STATUS="${LOGS}/status.tsv"
 mkdir -p "${LOGS}"
+
+# Managed mode maintains one clone and venv under CI_ROOT, so two runs sharing
+# it must not overlap: the second's `git reset --hard` / reinstall would race
+# the first's in-flight checkout. If a previous run is still going (queued or
+# hung past the next trigger), skip this one rather than corrupt it. In-place
+# mode shares no such state, so it is not locked.
+if [ "${MODE}" != "in-place" ]; then
+    exec 200>"${CI_ROOT}/.run.lock"
+    if ! flock -n 200; then
+        echo "another run holds ${CI_ROOT}/.run.lock; skipping this trigger" >&2
+        exit 0
+    fi
+fi
+
 LOG="${LOGS}/${STAMP}.log"
 exec > >(tee "${LOG}") 2>&1
 
@@ -168,15 +188,26 @@ print("abtem:", abtem.__file__)
 print("cupy:", cupy.__version__, "device:", props["name"].decode())
 EOF
 
-# --- the two runs ------------------------------------------------------------
+# --- the test phases ---------------------------------------------------------
+# Each phase's pytest output is tee'd to its own tally file so status.tsv can
+# record a per-phase summary. Grepping the whole log for the last "N passed"
+# line instead would report only the small multi-GPU tally when
+# ABTEM_CI_MULTIGPU is set, hiding the ~540-test main sweep.
+_tally() { grep -E '[0-9]+ (passed|failed|skipped|error)' "$1" 2>/dev/null | tail -1; }
+
+STENCIL_TALLY="${LOGS}/${STAMP}.stencil-tally"
+SWEEP_TALLY="${LOGS}/${STAMP}.sweep-tally"
+MULTI_TALLY="${LOGS}/${STAMP}.multigpu-tally"
+
 echo "== stencil reference tests =="
 python -m pytest test/test_realspace_multislice.py -q -p no:cacheprovider \
-    -k "StencilNumericalAccuracy or rejects"
-STENCIL_RC=$?
+    -k "StencilNumericalAccuracy or rejects" | tee "${STENCIL_TALLY}"
+STENCIL_RC=${PIPESTATUS[0]}
 
 echo "== full GPU sweep =="
-python -m pytest test/ -q -p no:cacheprovider -k gpu -m "not multigpu"
-SWEEP_RC=$?
+python -m pytest test/ -q -p no:cacheprovider -k gpu -m "not multigpu" \
+    | tee "${SWEEP_TALLY}"
+SWEEP_RC=${PIPESTATUS[0]}
 
 MULTI_RC=0
 if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
@@ -187,7 +218,6 @@ if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
     # letting the run masquerade as green (observed: dask-cuda installed but
     # not importable -> 6 skipped -> "all green")
     echo "== multi-GPU tests =="
-    MULTI_TALLY="${LOGS}/${STAMP}.multigpu-tally"
     python -m pytest test/ -q -p no:cacheprovider -m multigpu -rs \
         | tee "${MULTI_TALLY}"
     MULTI_RC=${PIPESTATUS[0]}
@@ -199,10 +229,12 @@ if [ -n "${ABTEM_CI_MULTIGPU:-}" ]; then
             MULTI_RC=1
         fi
     fi
-    rm -f "${MULTI_TALLY}"
 fi
 
-SUMMARY="$(grep -E '[0-9]+ (passed|failed)' "${LOG}" | tail -1)"
+SUMMARY="stencil[$(_tally "${STENCIL_TALLY}")] sweep[$(_tally "${SWEEP_TALLY}")]"
+[ -n "${ABTEM_CI_MULTIGPU:-}" ] \
+    && SUMMARY="${SUMMARY} multigpu[$(_tally "${MULTI_TALLY}")]"
+rm -f "${STENCIL_TALLY}" "${SWEEP_TALLY}" "${MULTI_TALLY}"
 RCS="stencil_rc=${STENCIL_RC} sweep_rc=${SWEEP_RC} multigpu_rc=${MULTI_RC}"
 if [ "${STENCIL_RC}" -eq 0 ] && [ "${SWEEP_RC}" -eq 0 ] && [ "${MULTI_RC}" -eq 0 ]; then
     record PASS "${SUMMARY}"
