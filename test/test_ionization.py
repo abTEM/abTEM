@@ -259,10 +259,19 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
         chunked_explicit_sites = chunked_explicit_sites.to_cpu()
         unchunked = unchunked.to_cpu()
 
-    np.testing.assert_array_equal(chunked_auto_sites.array, unchunked.array)
-    np.testing.assert_array_equal(
-        chunked_auto_sites.array, chunked_explicit_sites.array
-    )
+    # On the CPU the chunked and unchunked paths issue the same operations in
+    # the same order, so bit-identity is a real guarantee worth asserting. An
+    # accelerator is free to reassociate the accumulation behind a batch, which
+    # moves the last ULP without saying anything about the chunking logic this
+    # test is about -- compare at the precision the device actually offers.
+    if device == "cpu":
+        assert_equal = np.testing.assert_array_equal
+    else:
+        def assert_equal(actual, desired):
+            np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
+
+    assert_equal(chunked_auto_sites.array, unchunked.array)
+    assert_equal(chunked_auto_sites.array, chunked_explicit_sites.array)
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
