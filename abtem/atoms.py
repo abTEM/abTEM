@@ -886,6 +886,15 @@ def orthogonalize_cell(
         The applied transform given as Euler angles (by default not returned).
     """
 
+    # Copy once, up front, rather than at each mutating call below. Three
+    # separate ASE calls on `atoms` in this function mutate in place --
+    # `set_cell`/`wrap` immediately below, `translate`/`wrap` when `origin`
+    # is non-default, and `_snap_scaled_positions_to_cell_boundary` right
+    # before `cut()` in the repeat-and-cut branch further down -- so copying
+    # at only one of those call sites still leaves the others writing into
+    # the caller's object.
+    atoms = atoms.copy()
+
     cell = atoms.cell
     cell[np.abs(cell) < 1e-6] = 0.0
     atoms.set_cell(cell)

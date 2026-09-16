@@ -937,7 +937,14 @@ class TestPotentialDoesNotMutateItsAtoms:
     references) and a pre-built frozen-phonons object straight through.
 
     ``FrozenPhonons`` is unaffected -- its ``randomize`` already copies -- which
-    is the oracle this fix follows.
+    is the oracle this fix follows. That holds only when ``get_transformed_atoms``
+    takes the identity path, which is the case for a cell that is already
+    orthogonal and box-matching. For any other cell, ``get_transformed_atoms``
+    calls ``orthogonalize_cell`` before ``randomize`` -- or any construction
+    path below -- gets a chance to copy, so ``orthogonalize_cell`` copying its
+    argument once, at entry (see ``abtem/atoms.py``), is what makes every entry
+    point below safe for a non-orthogonal cell too; ``TestNonOrthogonalCell``
+    exercises that case.
     """
 
     @staticmethod
@@ -1042,6 +1049,65 @@ class TestPotentialDoesNotMutateItsAtoms:
         sliced = potential.get_sliced_atoms()
         xs = np.asarray(sliced.atoms.positions)[:, 0]
         assert np.all(xs < 4.0), f"an unwrapped x survived into the slicing: {xs}"
+
+
+class TestNonOrthogonalCellDoesNotMutateItsAtoms:
+    """`TestPotentialDoesNotMutateItsAtoms._atoms()` hardcodes an orthogonal,
+    box-matching cell, so none of that class's tests reach
+    `get_transformed_atoms`'s `orthogonalize_cell` branch -- only its
+    `wrap_and_snap_atoms` call, which is a different mutation site with its
+    own fix. A non-orthogonal cell takes the `orthogonalize_cell` branch
+    instead, and that function mutated its argument in three places
+    internally (`set_cell`/`wrap`, `translate`/`wrap` for a non-default
+    origin, and `_snap_scaled_positions_to_cell_boundary` ahead of `cut()`
+    in the repeat-and-cut path) before copying anywhere -- so every
+    construction site that aliases the caller's `Atoms`, including
+    `FrozenPhonons`, was reachable through it regardless of `randomize`
+    copying, because `orthogonalize_cell` ran first and mutated in place.
+
+    `orthogonalize_cell` now copies its argument once, at entry, rather than
+    at one of the three mutating call sites, so no path through the function
+    can still be missed.
+    """
+
+    @staticmethod
+    def _atoms():
+        # A sheared (non-orthogonal) cell with the second atom given in
+        # fractional coordinates clearly outside [0, 1) along the sheared
+        # lattice vector, so wrapping moves it by a whole lattice vector --
+        # 3.46 A -- and an in-place write is unambiguous.
+        cell = np.array([[4.0, 0.0, 0.0], [2.0, 3.4641, 0.0], [0.0, 0.0, 6.0]])
+        scaled = np.array([[0.1, 0.1, 0.2], [1.3, -0.2, 0.5]])
+        return Atoms("Si2", positions=scaled @ cell, cell=cell, pbc=True)
+
+    @staticmethod
+    def _build(potential):
+        from abtem.core import config
+
+        with config.set({"fft": "numpy"}):
+            return potential.build(lazy=False)
+
+    @pytest.mark.parametrize(
+        "construction",
+        ["list_of_atoms", "dummy_frozen_phonons", "frozen_phonons"],
+    )
+    def test_a_non_orthogonal_cell_does_not_rewrite_the_callers_atoms(
+        self, construction
+    ):
+        from abtem.inelastic.phonons import DummyFrozenPhonons, FrozenPhonons
+
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+
+        if construction == "list_of_atoms":
+            wrapped = [atoms]
+        elif construction == "dummy_frozen_phonons":
+            wrapped = DummyFrozenPhonons(atoms)
+        else:
+            wrapped = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
+
+        self._build(Potential(wrapped, gpts=(32, 32), slice_thickness=1.0))
+        assert np.array_equal(atoms.positions, before)
 
 
 class TestSliceIndexedAtomsWrapping:
