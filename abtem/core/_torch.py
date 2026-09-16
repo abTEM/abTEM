@@ -17,9 +17,12 @@ MPS supports single precision only, so ``precision`` must be ``float32``.
 
 from __future__ import annotations
 
+import functools
+import threading
 from types import SimpleNamespace
 from typing import Any
 
+import dask.array as da
 import numpy as np
 
 try:
@@ -29,6 +32,37 @@ except ModuleNotFoundError:
 
 
 DEVICE = "mps"
+
+
+# PyTorch's MPS backend keeps a process-wide Metal shader-library cache that is
+# not thread-safe: two threads compiling or looking up the same kernel corrupt
+# its hash table, which surfaces either as a process spinning forever inside
+# ``MetalShaderLibrary::exec_unary_kernel`` or as an outright ``Fatal Python
+# error: Aborted``. Being a race, it strikes intermittently and in whichever
+# operation happens to collide, so it cannot be chased call site by call site.
+#
+# dask reaches this backend from its threaded scheduler's worker threads, and a
+# library's callers may thread on their own account, so the guard belongs here
+# at the boundary: one thread at a time enters torch. The lock is reentrant
+# because these wrappers legitimately call one another (``tensordot`` converts
+# its operands with ``asarray``, ``pad`` builds index tensors, ...).
+#
+# The cost is negligible against the operations it guards -- an uncontended
+# lock is tens of nanoseconds, a Metal kernel launch is microseconds at best --
+# and abTEM additionally steers Metal computations onto dask's synchronous
+# scheduler, so in the common case the lock is never contended at all.
+_TORCH_LOCK = threading.RLock()
+
+
+def _serialized(func):
+    """Run ``func`` holding the Metal lock; see :data:`_TORCH_LOCK`."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _TORCH_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 _TO_TORCH_DTYPE: dict = {}
@@ -135,7 +169,7 @@ def _forward(name: str):
         return _wrap(getattr(self._tensor, name)(*args, **kwargs))
 
     method.__name__ = name
-    return method
+    return _serialized(method)
 
 
 class TorchNDArray:
@@ -178,35 +212,64 @@ class TorchNDArray:
         return _wrap(self._tensor.real)
 
     @property
+    @_serialized
     def imag(self):
         # torch raises on .imag of a real tensor, where numpy returns zeros
         if self._tensor.is_complex():
             return _wrap(self._tensor.imag)
         return _wrap(torch.zeros_like(self._tensor))
 
+    @imag.setter
+    @_serialized
+    def imag(self, value):
+        # numpy supports assigning the imaginary part of a complex array in
+        # place; torch exposes it only as a view, so write through that.
+        self._tensor.imag.copy_(_unwrap(asarray(value)))
+
+    @real.setter
+    @_serialized
+    def real(self, value):
+        self._tensor.real.copy_(_unwrap(asarray(value)))
+
     @property
     def T(self):
         return _wrap(self._tensor.T)
 
+    @_serialized
     def astype(self, dtype, copy: bool = True):
         torch_dtype = to_torch_dtype(dtype)
         if not copy and self._tensor.dtype == torch_dtype:
             return self
         return _wrap(self._tensor.to(torch_dtype))
 
+    @_serialized
     def copy(self):
         return _wrap(self._tensor.clone())
 
+    @_serialized
+    def __deepcopy__(self, memo):
+        # Without this, copy.deepcopy recurses into __dict__ and reaches
+        # torch.Tensor.__deepcopy__, which touches Metal outside the lock --
+        # abtem.core.utils.CopyMixin.copy deepcopies whole objects, so this is
+        # on the ordinary path, not an exotic one. Cloning is also cheaper than
+        # torch's own deepcopy, which reconstructs the tensor's autograd state.
+        clone = TorchNDArray(self._tensor.clone())
+        memo[id(self)] = clone
+        return clone
+
+    @_serialized
     def conjugate(self):
         return _wrap(torch.conj(self._tensor))
 
     conj = conjugate
 
+    @_serialized
     def reshape(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
         return _wrap(self._tensor.reshape(shape))
 
+    @_serialized
     def transpose(self, *axes):
         if len(axes) == 1 and isinstance(axes[0], (tuple, list)):
             axes = tuple(axes[0])
@@ -214,33 +277,44 @@ class TorchNDArray:
             return _wrap(self._tensor.permute(*reversed(range(self._tensor.ndim))))
         return _wrap(self._tensor.permute(*axes))
 
+    @_serialized
     def swapaxes(self, axis1: int, axis2: int):
         return _wrap(self._tensor.transpose(axis1, axis2))
 
+    @_serialized
     def sum(self, axis=None, **kwargs):
+        if _is_empty_axis(axis):
+            return _wrap(self._tensor.clone())
         if axis is None:
             return _wrap(self._tensor.sum(**kwargs))
         return _wrap(self._tensor.sum(dim=axis, **kwargs))
 
+    @_serialized
     def mean(self, axis=None, **kwargs):
+        if _is_empty_axis(axis):
+            return _wrap(self._tensor.clone())
         if axis is None:
             return _wrap(self._tensor.mean(**kwargs))
         return _wrap(self._tensor.mean(dim=axis, **kwargs))
 
+    @_serialized
     def max(self, axis=None, **kwargs):
         if axis is None:
             return _wrap(self._tensor.max(**kwargs))
         return _wrap(self._tensor.amax(dim=axis, **kwargs))
 
+    @_serialized
     def min(self, axis=None, **kwargs):
         if axis is None:
             return _wrap(self._tensor.min(**kwargs))
         return _wrap(self._tensor.amin(dim=axis, **kwargs))
 
+    @_serialized
     def get(self):
         """Return this array as a NumPy array (mirrors ``cupy.ndarray.get``)."""
         return asnumpy(self)
 
+    @_serialized
     def __array__(self, dtype=None, copy=None):
         array = asnumpy(self)
         if dtype is not None:
@@ -250,12 +324,15 @@ class TorchNDArray:
     def __len__(self) -> int:
         return len(self._tensor)
 
+    @_serialized
     def __iter__(self):
         return (_wrap(item) for item in self._tensor)
 
+    @_serialized
     def __getitem__(self, key):
         return _wrap(self._tensor[_unwrap_key(key)])
 
+    @_serialized
     def __setitem__(self, key, value):
         value = _unwrap(value)
         # NumPy casts on assignment (e.g. a real result into a complex array);
@@ -267,12 +344,15 @@ class TorchNDArray:
     def __repr__(self) -> str:
         return f"TorchNDArray({self._tensor!r})"
 
+    @_serialized
     def __float__(self) -> float:
         return float(self._tensor)
 
+    @_serialized
     def __int__(self) -> int:
         return int(self._tensor)
 
+    @_serialized
     def __bool__(self) -> bool:
         return bool(self._tensor)
 
@@ -316,23 +396,28 @@ class TorchNDArray:
 
     # mypy compares these against the *args/**kwargs signatures _forward builds
     # for the matching binary operators, which it cannot see are compatible.
+    @_serialized
     def __iadd__(self, other):  # type: ignore[misc]
         self._tensor += _unwrap(other)
         return self
 
+    @_serialized
     def __isub__(self, other):  # type: ignore[misc]
         self._tensor -= _unwrap(other)
         return self
 
+    @_serialized
     def __imul__(self, other):  # type: ignore[misc]
         self._tensor *= _unwrap(other)
         return self
 
+    @_serialized
     def __itruediv__(self, other):  # type: ignore[misc]
         self._tensor /= _unwrap(other)
         return self
 
 
+@_serialized
 def asarray(data, dtype=None):
     """Copy ``data`` onto the Metal device as a :class:`TorchNDArray`."""
     _check_available()
@@ -365,6 +450,7 @@ def asarray(data, dtype=None):
     return TorchNDArray(tensor.to(torch_dtype).to(DEVICE))
 
 
+@_serialized
 def array(data, dtype=None):
     """Like :func:`asarray`, but also stacks sequences of device arrays."""
     if isinstance(data, (list, tuple)) and data:
@@ -377,6 +463,7 @@ def array(data, dtype=None):
     return asarray(data, dtype=dtype)
 
 
+@_serialized
 def asnumpy(x):
     """Copy a device array back to the host as a NumPy array."""
     if isinstance(x, TorchNDArray):
@@ -398,7 +485,7 @@ def _creation(name: str):
         return TorchNDArray(tensor)
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
 def _elementwise(name: str):
@@ -410,7 +497,19 @@ def _elementwise(name: str):
         return _wrap(getattr(torch, name)(_unwrap(x), *args, **kwargs))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
+
+
+def _is_empty_axis(axis) -> bool:
+    """Whether ``axis`` selects no axes at all.
+
+    NumPy reads an empty axis tuple as "reduce nothing" and returns the array
+    unchanged; torch reads ``dim=()`` as "reduce every axis" and returns a
+    scalar. abTEM reduces over a computed tuple of ensemble axes, which is
+    empty whenever there are none, so the two readings differ on a real code
+    path rather than a hypothetical one.
+    """
+    return isinstance(axis, (tuple, list)) and len(axis) == 0
 
 
 def _reduction(name: str):
@@ -418,14 +517,48 @@ def _reduction(name: str):
 
     def func(x, axis=None, **kwargs):
         tensor = _unwrap(x)
+        if "keepdims" in kwargs:
+            kwargs["keepdim"] = kwargs.pop("keepdims")
+        if _is_empty_axis(axis):
+            return _wrap(tensor.clone())
         if axis is None:
             return _wrap(getattr(torch, name)(tensor, **kwargs))
         return _wrap(getattr(torch, name)(tensor, dim=axis, **kwargs))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
+@_serialized
+def tensordot(a, b, axes=2):
+    """``numpy.tensordot``, whose ``axes`` torch spells ``dims``.
+
+    Both operands are moved onto the device first: callers routinely contract a
+    device array against a host-built one (a detector mask, say), which NumPy
+    handles implicitly and torch refuses. The axis pair is also normalized to
+    lists of non-negative ints, the only spelling torch's overload accepts.
+    """
+    a_tensor = _unwrap(asarray(a))
+    b_tensor = _unwrap(asarray(b))
+
+    def _axis_list(axis, ndim):
+        # NumPy accepts either a single axis or a sequence on each side.
+        if isinstance(axis, (int, np.integer)):
+            axis = (axis,)
+        return [int(a) % ndim for a in axis]
+
+    if isinstance(axes, (tuple, list)) and len(axes) == 2:
+        dims = (
+            _axis_list(axes[0], a_tensor.ndim),
+            _axis_list(axes[1], b_tensor.ndim),
+        )
+    else:
+        dims = int(axes)
+
+    return _wrap(torch.tensordot(a_tensor, b_tensor, dims=dims))
+
+
+@_serialized
 def where(condition, x, y):
     return _wrap(torch.where(_unwrap(condition), _unwrap(x), _unwrap(y)))
 
@@ -439,12 +572,13 @@ def _creation_like(name: str):
         return TorchNDArray(getattr(torch, name)(tensor, dtype=torch_dtype))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
 zeros_like = _creation_like("zeros_like")
 
 
+@_serialized
 def _add_at(a, indices, values):
     """In-place ``a[indices] += values`` accumulating repeated indices.
 
@@ -464,6 +598,7 @@ def _add_at(a, indices, values):
     return a
 
 
+@_serialized
 def sum_run_length_encoded(array, result, separators):
     """Sum run-length-encoded data into bins, the Metal counterpart of the
     CuPy kernel in :mod:`abtem.core._cuda` and the Numba loop on the CPU.
@@ -495,6 +630,7 @@ def sum_run_length_encoded(array, result, separators):
     result_tensor.index_add_(1, segments, array_tensor)
 
 
+@_serialized
 def fftfreq(n: int, d: float = 1.0, dtype=None):
     _check_available()
     torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
@@ -507,12 +643,34 @@ def synchronize() -> None:
         torch.mps.synchronize()
 
 
+class RandomState:
+    """``numpy.random.RandomState`` returning device-resident arrays.
+
+    Deliberately draws on the host with NumPy and transfers the result rather
+    than using torch's own generator: a device-parametrized test that seeds
+    identically on 'cpu' and 'mps' and compares the two results needs the same
+    numbers on both devices, and torch's RNG stream does not match NumPy's.
+    """
+
+    def __init__(self, seed=None):
+        self._random_state = np.random.RandomState(seed)
+
+    def rand(self, *shape):
+        return asarray(self._random_state.rand(*shape))
+
+    def randn(self, *shape):
+        return asarray(self._random_state.randn(*shape))
+
+
+_random = SimpleNamespace(RandomState=RandomState)
+
+
 def _fft_func(name: str):
     def func(x, **kwargs):
         return _wrap(getattr(torch.fft, name)(_unwrap(x), **kwargs))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
 def _fft_shift_func(name: str):
@@ -522,7 +680,7 @@ def _fft_shift_func(name: str):
         return _wrap(getattr(torch.fft, name)(_unwrap(x), dim=axes))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
 _fft = SimpleNamespace(
@@ -542,20 +700,56 @@ _fft = SimpleNamespace(
 _add = SimpleNamespace(at=_add_at)
 
 
+@_serialized
 def arange(*args, dtype=None):
     _check_available()
     torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
     return TorchNDArray(torch.arange(*args, dtype=torch_dtype, device=DEVICE))
 
 
-def linspace(start, stop, num=50, dtype=None):
+@_serialized
+def linspace(start, stop, num=50, endpoint=True, dtype=None):
     _check_available()
     torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    if not endpoint and num > 0:
+        # torch.linspace always includes the stop value; drop to the last
+        # sample of the half-open interval so the spacing stays (stop-start)/num
+        stop = start + (stop - start) * (num - 1) / num
     return TorchNDArray(
         torch.linspace(start, stop, num, dtype=torch_dtype, device=DEVICE)
     )
 
 
+@_serialized
+def squeeze(x, axis=None):
+    """``numpy.squeeze``, whose ``axis`` torch spells ``dim``."""
+    if axis is not None:
+        # numpy treats an empty axis tuple as "squeeze nothing"; torch rejects
+        # it. abtem.array.ArrayObject.squeeze passes one whenever no ensemble
+        # axis is of length one, which is the common case.
+        axis = tuple(int(a) for a in np.atleast_1d(axis).ravel())
+        if not axis:
+            return x
+
+    # A dask array is a container around device chunks, so the squeeze belongs
+    # to dask. NumPy and CuPy get here too, via their __array_function__
+    # dispatch; this namespace has to route it explicitly.
+    if isinstance(x, da.core.Array):
+        return da.squeeze(x, axis=axis)
+
+    tensor = _unwrap(x)
+    if axis is None:
+        return _wrap(torch.squeeze(tensor))
+    return _wrap(torch.squeeze(tensor, dim=axis))
+
+
+@_serialized
+def diff(x, n: int = 1, axis: int = -1):
+    """``numpy.diff``, whose ``axis`` torch spells ``dim``."""
+    return _wrap(torch.diff(_unwrap(x), n=n, dim=axis))
+
+
+@_serialized
 def full(shape, fill_value, dtype=None):
     _check_available()
     if isinstance(shape, (int, np.integer)):
@@ -566,6 +760,7 @@ def full(shape, fill_value, dtype=None):
     )
 
 
+@_serialized
 def expand_dims(x, axis):
     tensor = _unwrap(x)
     for ax in (axis,) if isinstance(axis, int) else sorted(axis):
@@ -573,14 +768,17 @@ def expand_dims(x, axis):
     return _wrap(tensor)
 
 
+@_serialized
 def concatenate(arrays, axis=0):
     return _wrap(torch.cat([_unwrap(asarray(a)) for a in arrays], dim=axis))
 
 
+@_serialized
 def stack(arrays, axis=0):
     return _wrap(torch.stack([_unwrap(asarray(a)) for a in arrays], dim=axis))
 
 
+@_serialized
 def transpose(x, axes=None):
     tensor = _unwrap(x)
     if axes is None:
@@ -588,20 +786,93 @@ def transpose(x, axes=None):
     return _wrap(tensor.permute(*axes))
 
 
+@_serialized
 def meshgrid(*arrays, indexing="xy"):
     tensors = torch.meshgrid(*[_unwrap(asarray(a)) for a in arrays], indexing=indexing)
     return tuple(_wrap(t) for t in tensors)
 
 
+@_serialized
 def tile(x, reps):
     if isinstance(reps, (int, np.integer)):
         reps = (reps,)
     return _wrap(torch.tile(_unwrap(x), tuple(reps)))
 
 
+@_serialized
 def clip(x, a_min=None, a_max=None):
     """``numpy.clip``, whose bounds torch spells ``min``/``max``."""
     return _wrap(torch.clamp(_unwrap(x), min=_unwrap(a_min), max=_unwrap(a_max)))
+
+
+@_serialized
+def _pad_indices(length: int, before: int, after: int, mode: str):
+    """Source indices along one axis for a padded output of ``numpy.pad``.
+
+    Expressing every mode as a gather keeps one implementation for any number
+    of dimensions. ``torch.nn.functional.pad`` is not usable here: it orders
+    its pad widths from the last axis backwards and restricts its non-constant
+    modes to the spatial axes of 3-to-5-dimensional tensors.
+    """
+    positions = torch.arange(-before, length + after, device=DEVICE)
+
+    if mode == "wrap":
+        return positions % length
+
+    if mode == "reflect":
+        if length == 1:
+            return torch.zeros_like(positions)
+        # Reflect about the edges without repeating them: a period of
+        # 2 * (length - 1), folded back into [0, length).
+        period = 2 * (length - 1)
+        folded = positions % period
+        return torch.where(folded >= length, period - folded, folded)
+
+    raise RuntimeError(f"pad mode {mode!r} is not implemented for Metal (MPS)")
+
+
+@_serialized
+def pad(array, pad_width, mode: str = "constant", constant_values=0):
+    """``numpy.pad`` for the modes abTEM uses: constant, wrap and reflect."""
+    tensor = _unwrap(array)
+    ndim = tensor.ndim
+
+    # numpy accepts a scalar, one (before, after) pair for every axis, or one
+    # pair per axis; normalize to the per-axis form.
+    if isinstance(pad_width, (int, np.integer)):
+        widths = [(int(pad_width), int(pad_width))] * ndim
+    else:
+        pad_width = list(pad_width)
+        if len(pad_width) == 2 and not isinstance(pad_width[0], (tuple, list)):
+            widths = [(int(pad_width[0]), int(pad_width[1]))] * ndim
+        else:
+            widths = [(int(before), int(after)) for before, after in pad_width]
+
+    if len(widths) != ndim:
+        raise ValueError(f"pad_width does not match the {ndim} array dimensions")
+
+    if mode == "constant":
+        shape = [
+            length + before + after
+            for length, (before, after) in zip(tensor.shape, widths)
+        ]
+        out = torch.full(
+            shape, constant_values, dtype=tensor.dtype, device=tensor.device
+        )
+        interior = tuple(
+            slice(before, before + length)
+            for length, (before, _) in zip(tensor.shape, widths)
+        )
+        out[interior] = tensor
+        return _wrap(out)
+
+    for axis, (before, after) in enumerate(widths):
+        if before == 0 and after == 0:
+            continue
+        indices = _pad_indices(tensor.shape[axis], before, after, mode)
+        tensor = torch.index_select(tensor, axis, indices)
+
+    return _wrap(tensor)
 
 
 def _binary(name: str):
@@ -611,7 +882,7 @@ def _binary(name: str):
         return _wrap(getattr(torch, name)(_unwrap(x), _unwrap(y), **kwargs))
 
     func.__name__ = name
-    return func
+    return _serialized(func)
 
 
 class _TorchNumpyNamespace:
@@ -628,6 +899,7 @@ class _TorchNumpyNamespace:
     Tensor = torch.Tensor if torch is not None else None
     fft = _fft
     add = _add
+    random = _random
 
     # array creation and host transfer
     asarray = staticmethod(asarray)
@@ -651,7 +923,8 @@ class _TorchNumpyNamespace:
     stack = staticmethod(stack)
     transpose = staticmethod(transpose)
     tile = staticmethod(tile)
-    squeeze = staticmethod(_elementwise("squeeze"))
+    pad = staticmethod(pad)
+    squeeze = staticmethod(squeeze)
     moveaxis = staticmethod(_elementwise("moveaxis"))
     swapaxes = staticmethod(_elementwise("swapaxes"))
     roll = staticmethod(_elementwise("roll"))
@@ -670,6 +943,7 @@ class _TorchNumpyNamespace:
     floor = staticmethod(_elementwise("floor"))
     ceil = staticmethod(_elementwise("ceil"))
     round = staticmethod(_elementwise("round"))
+    rint = staticmethod(_elementwise("round"))
     conjugate = staticmethod(_elementwise("conj"))
     conj = staticmethod(_elementwise("conj"))
     angle = staticmethod(_elementwise("angle"))
@@ -685,6 +959,11 @@ class _TorchNumpyNamespace:
     prod = staticmethod(_reduction("prod"))
     mean = staticmethod(_reduction("mean"))
     cumsum = staticmethod(_reduction("cumsum"))
+    diff = staticmethod(diff)
+    std = staticmethod(_reduction("std"))
+    min = staticmethod(_reduction("amin"))
+    max = staticmethod(_reduction("amax"))
+    tensordot = staticmethod(tensordot)
 
     # dtypes, mirroring numpy's names so ``xp.int32`` and friends keep working
     float32 = np.float32

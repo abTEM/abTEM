@@ -248,7 +248,10 @@ def _auto_chunks(
     if max_elements == "auto":
         if device == "gpu":
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu"))
-        elif device == "cpu":
+        elif device in ("cpu", "mps"):
+            # Metal shares the machine's memory with the host instead of having
+            # its own VRAM, so the host chunk size is what actually bounds a
+            # chunk there -- 'chunk-size-gpu' is sized for a discrete card.
             chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
         else:
             raise RuntimeError(f"Unknown device: {device}")

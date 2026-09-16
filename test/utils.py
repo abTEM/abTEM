@@ -114,11 +114,43 @@ def assert_scanned_measurement_as_expected(
 
         if detector.to_cpu:
             assert isinstance(measurement.array, np.ndarray)
-        elif waves.device == "gpu":
-            assert isinstance(measurement.array, cp.ndarray)
+        elif waves.device != "cpu":
+            assert_array_matches_device(measurement.array, waves.device)
 
 
-gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
+def _mps_is_usable() -> bool:
+    """Whether the Metal (MPS) backend is loaded and usable in this process."""
+    from abtem.core import backend
+
+    if backend.tp is None:
+        return False
+
+    from abtem.core._torch import is_available
+
+    return is_available()
+
+
+def _accelerator_device():
+    """The non-CPU device this machine actually has, or None."""
+    if cp is not None:
+        return "gpu"
+    if _mps_is_usable():
+        return "mps"
+    return None
+
+
+_ACCELERATOR = _accelerator_device()
+
+# The accelerator half of every ["cpu", gpu] device parametrization. It used to
+# be the literal "gpu" (CuPy/CUDA); it now resolves to whichever accelerator is
+# present, so the same tests exercise Metal on Apple silicon and CUDA
+# elsewhere. A test that needs the device string must compare against
+# `gpu.values[0]`, never the literal "gpu" -- or better, derive the array
+# module from `device` with `get_array_module`.
+gpu = pytest.param(
+    _ACCELERATOR or "gpu",
+    marks=pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+)
 
 
 def _gpu_count() -> int:

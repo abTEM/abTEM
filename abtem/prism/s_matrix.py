@@ -4916,7 +4916,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         compress_array = s_matrix_array.array
         if s_matrix_array.is_lazy:
-            compress_array = compress_array.compute()
+            # Compute through the ArrayObject rather than the bare dask array:
+            # that is what resolves the device-appropriate scheduler. Computing
+            # the raw array takes dask's default threaded scheduler, which
+            # drives a single CUDA or Metal context from several threads --
+            # unsupported on both, and on Metal it corrupts PyTorch's shader
+            # cache and hangs the process.
+            compress_array = s_matrix_array.compute().array
 
         metadata = dict(s_matrix_array.metadata)
 
