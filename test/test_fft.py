@@ -1,11 +1,14 @@
 """Tests for FFT helpers, in particular fast-radix transform-size handling."""
 
+import threading
 import warnings
 
+import numpy as np
 import pytest
 
 from utils import requires_gpu
 
+from abtem.core import fft as abtem_fft
 from abtem.core.fft import (
     _warn_slow_fft_size,
     _warned_slow_fft_shapes,
@@ -351,3 +354,139 @@ def test_plan_cache_entry_limit():
         # Reapply the process configuration whatever happened above.
         abtem_fft._reset_cufft_cache_state()
         abtem_fft._configure_cufft_cache()
+
+
+pyfftw = abtem_fft.pyfftw
+requires_pyfftw = pytest.mark.skipif(
+    pyfftw is None, reason="CachedFFTWConvolution needs pyfftw"
+)
+
+
+def _convolution_reference(array, kernel):
+    """The convolution ``CachedFFTWConvolution`` computes, via numpy."""
+    return np.fft.ifft2(np.fft.fft2(array.astype(np.complex128)) * kernel)
+
+
+def _random_convolution_inputs(rng, batch=3, gpts=32, dtype=np.complex64):
+    real = np.dtype(dtype).type(0).real.dtype
+    array = (
+        rng.random((batch, gpts, gpts), dtype=real)
+        + 1j * rng.random((batch, gpts, gpts), dtype=real)
+    ).astype(dtype)
+    kernel = (
+        rng.random((gpts, gpts), dtype=real)
+        + 1j * rng.random((gpts, gpts), dtype=real)
+    ).astype(dtype)
+    return array, kernel
+
+
+@pytest.fixture
+def count_fftw_plans(monkeypatch):
+    """Count the pyfftw plans built while the fixture is active."""
+    built = []
+    original = abtem_fft._new_fftw_object
+
+    def counted(array, name, flags=()):
+        built.append(name)
+        return original(array, name, flags=flags)
+
+    monkeypatch.setattr(abtem_fft, "_new_fftw_object", counted)
+    return built
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_reuses_plans(count_fftw_plans):
+    # The plan pair must be built once and then reused. Regression test: the
+    # shape was compared against an attribute that was never assigned, so every
+    # call rebuilt both plans (and zeroed a scratch array the size of the input).
+    rng = np.random.default_rng(0)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    for _ in range(4):
+        array, kernel = _random_convolution_inputs(rng)
+        convolution(array.copy(), kernel, True)
+
+    assert len(count_fftw_plans) == 2
+
+
+@pytest.mark.parametrize("overwrite_x", [True, False])
+@requires_pyfftw
+def test_cached_fftw_convolution_correct_on_a_cache_hit(overwrite_x):
+    # A cached plan still points at the previous call's buffer, so a hit is only
+    # correct if the plans are re-pointed at the current array every call.
+    rng = np.random.default_rng(1)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    for _ in range(4):
+        array, kernel = _random_convolution_inputs(rng)
+        source = array.copy()
+
+        result = convolution(source, kernel, overwrite_x)
+
+        expected = _convolution_reference(array, kernel)
+        assert np.allclose(result, expected, atol=1e-6)
+        if not overwrite_x:
+            assert np.array_equal(source, array)
+
+
+@pytest.mark.parametrize("changed", ["shape", "dtype"])
+@requires_pyfftw
+def test_cached_fftw_convolution_replans_on_layout_change(changed, count_fftw_plans):
+    # A plan is tied to the dtype, shape and strides it was made for --
+    # ``update_arrays`` raises otherwise -- so each must invalidate the cache.
+    rng = np.random.default_rng(2)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    array, kernel = _random_convolution_inputs(rng)
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 2
+
+    if changed == "shape":
+        array, kernel = _random_convolution_inputs(rng, gpts=64)
+    else:
+        array, kernel = _random_convolution_inputs(rng, dtype=np.complex128)
+
+    result = convolution(array.copy(), kernel, True)
+
+    assert len(count_fftw_plans) == 4
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_thread_safe():
+    # A plan points at exactly one buffer, so threads sharing a plan pair would
+    # transform each other's arrays. Each thread must get its own pair.
+    convolution = abtem_fft.CachedFFTWConvolution()
+    failures = []
+
+    def worker(seed):
+        rng = np.random.default_rng(seed)
+        array, kernel = _random_convolution_inputs(rng, gpts=64)
+        expected = _convolution_reference(array, kernel)
+        for _ in range(25):
+            result = convolution(array.copy(), kernel, True)
+            if not np.allclose(result, expected, atol=1e-6):
+                failures.append(seed)
+
+    threads = [threading.Thread(target=worker, args=(seed,)) for seed in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not failures
+
+
+@requires_pyfftw
+def test_fftw_alignment_flags_relaxes_the_plan_for_unaligned_arrays():
+    # A plan made for a SIMD-aligned buffer rejects a less aligned one, so an
+    # array that misses the alignment has to be planned for with FFTW_UNALIGNED.
+    aligned = pyfftw.empty_aligned((2, 8, 8), dtype=np.complex64)
+    assert abtem_fft._fftw_alignment_flags(aligned) == ()
+
+    itemsize = aligned.dtype.itemsize
+    buffer = pyfftw.empty_aligned(2 * 8 * 8 + 1, dtype=np.complex64)
+    offset = buffer[1:].reshape(2, 8, 8)
+    if pyfftw.is_byte_aligned(offset):
+        pytest.skip("this build of FFTW imposes no SIMD alignment requirement")
+    assert abtem_fft._fftw_alignment_flags(offset) == ("FFTW_UNALIGNED",)

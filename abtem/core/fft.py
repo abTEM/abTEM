@@ -250,31 +250,73 @@ def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
     return fftw_object
 
 
+def _fftw_alignment_flags(array: np.ndarray) -> tuple[str, ...]:
+    """
+    Planner flags describing what may be assumed about the alignment of ``array``.
+
+    A plan made for a SIMD-aligned buffer cannot later be pointed at a less
+    aligned one -- ``update_arrays`` raises ``ValueError`` -- so an array that
+    misses the alignment, such as a view offset into a larger buffer, needs a
+    plan that assumes nothing about it.
+    """
+    return () if pyfftw.is_byte_aligned(array) else ("FFTW_UNALIGNED",)
+
+
 class CachedFFTWConvolution:
+    """
+    Convolve an array with a kernel, reusing the pyfftw plan pair across calls.
+
+    Creating a plan costs a noticeable fraction of executing one -- it also
+    allocates and zeroes a scratch array the size of the input -- so the pair is
+    kept between calls rather than rebuilt on each one.
+
+    A plan is tied to one buffer *layout*: ``update_arrays`` rejects an array
+    whose dtype, shape, strides or alignment differ from the array the plan was
+    made for, so all four make up the cache key. It is equally tied to one
+    specific *buffer*, which on a cache hit is the previous call's array, so the
+    cached plans are re-pointed at the current array on every call and not only
+    when they are built.
+
+    The cache is thread-local. Dask's threaded scheduler can drive a single
+    shared propagator from several worker threads at once, and because a plan
+    points at exactly one buffer, sharing one pair between threads would make
+    concurrent calls transform each other's arrays.
+    """
+
     def __init__(self):
-        self._fftw_objects = None
-        self._shape = None
+        self._local = threading.local()
+
+    def _get_fftw_objects(self, array: np.ndarray) -> dict[str, "pyfftw.FFTW"]:
+        flags = _fftw_alignment_flags(array)
+        key = (array.shape, array.dtype, array.strides, flags)
+
+        cached = getattr(self._local, "cached", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        fftw_objects = {
+            name: _new_fftw_object(array, name=name, flags=flags)
+            for name in ("ifft2", "fft2")
+        }
+        self._local.cached = (key, fftw_objects)
+        return fftw_objects
 
     def __call__(
         self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool
     ) -> np.ndarray:
-        if array.shape != self._shape:
-            self._fftw_objects = None
-
-        if self._fftw_objects is None:
-            fftw_objects = {
-                name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
-            }
-            self._fftw_objects = fftw_objects
-
         if not overwrite_x:
             array = array.copy()
-            self._fftw_objects["fft2"].update_arrays(array, array)
-            self._fftw_objects["ifft2"].update_arrays(array, array)
 
-        array = self._fftw_objects["fft2"]()
+        fftw_objects = self._get_fftw_objects(array)
+
+        # A cache hit returns plans still bound to an earlier call's buffer, so
+        # they must be re-pointed even though nothing was rebuilt.
+        fftw_objects["fft2"].update_arrays(array, array)
+        fftw_objects["ifft2"].update_arrays(array, array)
+
+        array = fftw_objects["fft2"]()
         array *= kernel
-        array = self._fftw_objects["ifft2"]()
+        array = fftw_objects["ifft2"]()
         return array
 
 
