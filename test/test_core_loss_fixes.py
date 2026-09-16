@@ -341,6 +341,21 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
         with pytest.raises(RuntimeError, match="Inconsistent grid"):
             self._scan(s_matrix, wrong_extent)
 
+    def test_a_mismatched_energy_is_refused_too(self):
+        """A grid match is not enough: build() bakes self.energy into the
+        array's form factors (k0, kn, the relativistic mass correction, the
+        interaction parameter), so a built array on the right grid but the
+        wrong energy is exactly as stale as a gpts/extent mismatch. Without
+        the accelerator check, _task_local's match silently overwrites
+        .energy to agree with the S-matrix while those baked-in form factors
+        stay computed at the old one, and the scan completes with a plausible
+        but wrong result."""
+        s_matrix = self._s_matrix((64, 64))
+        wrong_energy = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        wrong_energy.accelerator._energy = 2 * ENERGY
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            self._scan(s_matrix, wrong_energy)
+
     def test_an_unbuilt_potential_is_still_regridded(self):
         """Regression guard for the preceding commit: an unbuilt potential has
         no array, so a grid mismatch is not an error -- it is matched and then

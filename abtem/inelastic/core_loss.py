@@ -1423,14 +1423,22 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     #
     # So check first, while the grid still reports what the array actually is.
     # Checking after the match is useless, because the match is what destroys
-    # the evidence. Grid.check_match is the same guard iam.py:1948 already uses
-    # for a potential against its waves.
+    # the evidence. Grid.check_match paired with Accelerator.check_match is
+    # the same guard iam.py:1948 already uses for a potential against its
+    # waves -- energy is checked for the same reason as gpts/extent: build()
+    # bakes self.energy into the array's form factors (k0, kn, the
+    # relativistic mass correction and the interaction parameter all derive
+    # from it), so a built array whose grid matches but whose energy does not
+    # is exactly as stale as a gpts/extent mismatch, and _task_local's match
+    # would silently overwrite .energy to agree with s_waves while those
+    # baked-in form factors stay computed at the old one.
     #
     # The unbuilt case is untouched: it has no array yet, the match sets its
-    # grid, and build() then evaluates the form factors on the right gpts --
-    # which is what the preceding commit fixed.
+    # grid and energy, and build() then evaluates the form factors on the
+    # right values -- which is what the preceding commit fixed.
     if not isinstance(transition_potential, TransitionPotential):
         transition_potential.grid.check_match(s_waves)
+        transition_potential.accelerator.check_match(s_waves)
 
     transition_potential = transition_potential._task_local(match_to=s_waves)
 
