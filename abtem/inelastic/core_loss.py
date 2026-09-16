@@ -1517,6 +1517,7 @@ def prism_transition_potential_scan(
     from abtem.multislice import (
         FresnelPropagator,
         _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
@@ -1525,7 +1526,7 @@ def prism_transition_potential_scan(
         minimum_crop,
         wrapped_crop_2d,
     )
-    from abtem.waves import Waves, reduce_ensemble
+    from abtem.waves import Waves
 
     ctx = _prism_eels_common_setup(
         s_matrix, transition_potentials, scan, detectors, sites
@@ -1667,6 +1668,21 @@ def prism_transition_potential_scan(
         pixel_positions, output_window_gpts
     )
 
+    # This driver processes one potential configuration per call and indexes
+    # the measurement's ensemble axes with zeros accordingly -- which holds for
+    # every SMatrix entry point, each of which passes a single-configuration
+    # sub-potential. Called directly with a multi-configuration potential it
+    # would silently return 1/num_configurations of the right answer, in a
+    # plausible, correctly shaped, monotone thickness series. Refuse instead,
+    # as prism_transition_potential_scan_beam_basis already does.
+    if any(n > 1 for n in potential.ensemble_shape):
+        raise NotImplementedError(
+            "prism_transition_potential_scan processes one potential "
+            f"configuration per call, got ensemble shape "
+            f"{potential.ensemble_shape!r}. Iterate the configurations and "
+            "average the results, as SMatrix.transition_potential_scan does."
+        )
+
     # --- Exit planes ---
     exit_planes = potential.exit_planes
     n_exit = len(exit_planes)
@@ -1762,13 +1778,24 @@ def prism_transition_potential_scan(
             for det_idx, detector in enumerate(detectors):
                 m = detector.detect(position_waves)
                 m = m.sum((0,))
-                if isinstance(exit_idx, int):
-                    idx = () if n_exit == 1 else (exit_idx,)
-                    measurements[det_idx].array[idx] += m.array
-                else:
-                    measurements[det_idx].array[exit_idx] += (
-                        m.array[(None,) * len(exit_idx)]
-                    )
+                # The measurement's leading axes are the potential's
+                # ensemble axes and then the exit-plane axis (see
+                # _potential_ensemble_shape_and_metadata, shared with the
+                # regular multislice driver). Indexing the plane part alone
+                # addressed the ensemble axis instead: this driver runs once
+                # per configuration with a length-1 ensemble axis, so an
+                # exit-plane slice starting at 1 or beyond selected nothing
+                # and the contribution was dropped in silence -- a whole
+                # thickness series came back zero.
+                indices = _validate_potential_ensemble_indices(
+                    (0,) * len(potential.ensemble_shape), exit_idx, potential
+                )
+                # Only the slice entries survive the indexing and need
+                # broadcasting; integer ensemble indices drop their axis.
+                n_slice_axes = sum(isinstance(i, slice) for i in indices)
+                measurements[det_idx].array[indices] += m.array[
+                    (None,) * n_slice_axes
+                ]
 
     def _scatter_at_site(atom):
         site_xy = np.array(
@@ -1891,12 +1918,27 @@ def prism_transition_potential_scan(
                         sw_out, site_xys[s_idx], ep_idx
                     )
 
-    # Squeeze out single-point-scan axes the same way the multislice path
-    # does (via reduce_ensemble inside Waves.transition_potential_multislice
-    # — see waves.py:1075). This is what makes ``scan=(0, 0)`` return a bare
-    # detector-shaped measurement instead of a ``(1, *detector_shape)``
-    # array with a singleton scan axis.
-    measurements = [reduce_ensemble(m) for m in measurements]
+    # Reduce the ensemble mean, but do NOT squeeze here.
+    #
+    # This function is the per-configuration driver: SMatrix calls it once per
+    # dask block and once per potential-ensemble member. The multislice path
+    # this used to imitate squeezes at the *outer* level instead --
+    # Waves.transition_potential_multislice ends in the module-level
+    # reduce_ensemble on the assembled result -- so blocks and declared chunks
+    # keep the axis and only the finished object loses it.
+    #
+    # Squeezing per block dropped the scan axis underneath two consumers that
+    # still expected it: the lazy branch declares ``chunks += scan.shape``, and
+    # the eager branch pre-allocates from ``dummy_probes(scan)``. A
+    # single-position non-BaseScan scan -- ``(x, y)``, ``[(x, y)]``,
+    # ``np.array([[x, y]])`` -- therefore came back one axis too wide, and
+    # whether it did depended on whether the potential was an ensemble.
+    #
+    # The module-level reduce_ensemble is squeeze-then-ensemble-mean; the
+    # method called below is only the second half, which is the half that
+    # belongs per block. SMatrix.transition_potential_scan applies the first
+    # half once, at the level the oracle uses.
+    measurements = [m.reduce_ensemble() for m in measurements]
 
     if len(measurements) == 1:
         return measurements[0]
