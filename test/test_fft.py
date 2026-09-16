@@ -4,6 +4,8 @@ import warnings
 
 import pytest
 
+from utils import requires_gpu
+
 from abtem.core.fft import (
     _warn_slow_fft_size,
     _warned_slow_fft_shapes,
@@ -219,6 +221,7 @@ def test_cufft_cache_auto_resolves_device_relative():
         assert abtem_fft._CUFFT_CACHE_STATE.limit == -1
 
 
+@requires_gpu
 def test_oversized_plan_bypasses_cache():
     cp = pytest.importorskip("cupy")
 

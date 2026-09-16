@@ -118,9 +118,6 @@ def assert_scanned_measurement_as_expected(
             assert isinstance(measurement.array, cp.ndarray)
 
 
-gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
-
-
 def _gpu_count() -> int:
     if cp is None:
         return 0
@@ -128,6 +125,24 @@ def _gpu_count() -> int:
         return cp.cuda.runtime.getDeviceCount()
     except Exception:  # pragma: no cover -- driver/runtime hiccup
         return 0
+
+
+# Gated on a usable DEVICE, not on cupy being importable. cupy imports fine with
+# no GPU present -- a hidden device (HIP_VISIBLE_DEVICES=""), a container without
+# /dev/kfd, a CI image that pip-installs cupy on a CPU runner -- and the failure
+# then surfaces later, at the first allocation, inside the array module. That
+# turns "hide the GPU" from a way to isolate GPU-specific behaviour into a way
+# to break the suite. `requires_multigpu` below already used _gpu_count(); only
+# this single-GPU gate was left keyed on the import.
+gpu = pytest.param(
+    "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+)
+
+# The same gate as a standalone marker, for tests that are GPU-only rather than
+# parametrized over devices. Several files had hand-rolled `skipif(cp is None)`
+# or a bare `importorskip("cupy")`, both of which ask whether cupy is installed
+# rather than whether a device exists.
+requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
 
 
 try:
