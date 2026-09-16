@@ -65,6 +65,15 @@ def _serialized(func):
     return wrapper
 
 
+# NumPy functions this namespace implements for device arrays, consulted by
+# TorchNDArray.__array_function__. Without it, a NumPy function handed a device
+# array falls back to __array__ and silently copies to the host -- which is how
+# dask's finalize step was quietly turning a Metal result back into a NumPy one
+# (it calls np.concatenate to assemble the chunks). Populated below, once the
+# implementations exist.
+_ARRAY_FUNCTIONS: dict = {}
+
+
 _TO_TORCH_DTYPE: dict = {}
 _TO_NUMPY_DTYPE: dict = {}
 
@@ -158,6 +167,43 @@ def _unwrap_key(key):
     if isinstance(key, tuple):
         return tuple(_unwrap_key(k) for k in key)
     return _unwrap(key)
+
+
+def _resolve_reversed_slices(tensor, key):
+    """Rewrite negative-step slices, which torch rejects but NumPy allows.
+
+    ``array[::-1]`` is ordinary NumPy; torch raises "step must be greater than
+    zero". Each reversed slice is turned into an explicit gather of the indices
+    it selects, which reproduces NumPy's semantics exactly (including its
+    handling of negative bounds) and leaves every other index form untouched.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+
+    if not any(
+        isinstance(entry, slice) and entry.step is not None and entry.step < 0
+        for entry in entries
+    ):
+        return tensor, key
+
+    # Ellipsis and None shift the mapping from key entries to tensor axes; the
+    # gather below assumes they line up, so leave those keys to torch.
+    if any(entry is Ellipsis or entry is None for entry in entries):
+        return tensor, key
+
+    resolved = []
+    for axis, entry in enumerate(entries):
+        if isinstance(entry, slice) and entry.step is not None and entry.step < 0:
+            indices = range(*entry.indices(tensor.shape[axis]))
+            tensor = torch.index_select(
+                tensor,
+                axis,
+                torch.tensor(list(indices), dtype=torch.int64, device=tensor.device),
+            )
+            resolved.append(slice(None))
+        else:
+            resolved.append(entry)
+
+    return tensor, tuple(resolved)
 
 
 def _forward(name: str):
@@ -314,6 +360,22 @@ class TorchNDArray:
         """Return this array as a NumPy array (mirrors ``cupy.ndarray.get``)."""
         return asnumpy(self)
 
+    def __array_function__(self, func, types, args, kwargs):
+        """Keep NumPy's dispatched functions on the device where implemented.
+
+        Anything absent from the registry returns ``NotImplemented``, so NumPy
+        raises rather than quietly copying the array to the host through
+        ``__array__`` -- the same loud behavior CuPy has, and the one that suits
+        a simulation library, where a silent host fallback shows up only as
+        mysterious slowness.
+        """
+        implementation = _ARRAY_FUNCTIONS.get(func)
+
+        if implementation is None:
+            return NotImplemented
+
+        return implementation(*args, **kwargs)
+
     @_serialized
     def __array__(self, dtype=None, copy=None):
         array = asnumpy(self)
@@ -330,7 +392,9 @@ class TorchNDArray:
 
     @_serialized
     def __getitem__(self, key):
-        return _wrap(self._tensor[_unwrap_key(key)])
+        key = _unwrap_key(key)
+        tensor, key = _resolve_reversed_slices(self._tensor, key)
+        return _wrap(tensor[key])
 
     @_serialized
     def __setitem__(self, key, value):
@@ -492,9 +556,16 @@ def _elementwise(name: str):
     """Build a unary ufunc that forwards to ``torch`` and rewraps the result."""
 
     def func(x, *args, **kwargs):
+        tensor = _unwrap(x)
+        if not isinstance(tensor, torch.Tensor):
+            # A plain Python or NumPy scalar: torch's ufuncs insist on a tensor,
+            # while NumPy's answer here is a host scalar. Keep it on the host --
+            # moving a scalar to the device to take its sine would be silly.
+            return getattr(np, name)(tensor, *args, **kwargs)
+
         args = tuple(_unwrap(arg) for arg in args)
         kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
-        return _wrap(getattr(torch, name)(_unwrap(x), *args, **kwargs))
+        return _wrap(getattr(torch, name)(tensor, *args, **kwargs))
 
     func.__name__ = name
     return _serialized(func)
@@ -566,9 +637,20 @@ def where(condition, x, y):
 def _creation_like(name: str):
     """Build ``zeros_like``/``ones_like``/``empty_like`` over a device array."""
 
-    def func(x, dtype=None):
+    def func(x, dtype=None, shape=None):
         tensor = _unwrap(x)
         torch_dtype = to_torch_dtype(dtype) if dtype is not None else tensor.dtype
+        if shape is not None:
+            # numpy's *_like take a shape override, which torch's spell as a
+            # plain creation call on the same device and dtype.
+            if isinstance(shape, (int, np.integer)):
+                shape = (shape,)
+            creation = name.replace("_like", "")
+            return TorchNDArray(
+                getattr(torch, creation)(
+                    tuple(shape), dtype=torch_dtype, device=tensor.device
+                )
+            )
         return TorchNDArray(getattr(torch, name)(tensor, dtype=torch_dtype))
 
     func.__name__ = name
@@ -875,6 +957,30 @@ def pad(array, pad_width, mode: str = "constant", constant_values=0):
     return _wrap(tensor)
 
 
+def iscomplexobj(x) -> bool:
+    """``numpy.iscomplexobj`` -- a dtype question, answered without the device."""
+    return _unwrap(x).is_complex()
+
+
+def roll(x, shift, axis=None):
+    """``numpy.roll``, whose ``shift``/``axis`` torch spells ``shifts``/``dims``."""
+    return _wrap(torch.roll(_unwrap(x), shifts=shift, dims=axis))
+
+
+@_serialized
+def allclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False) -> bool:
+    """``numpy.allclose``, compared on the device rather than on the host."""
+    return bool(
+        torch.allclose(
+            _unwrap(asarray(a)),
+            _unwrap(asarray(b)),
+            rtol=rtol,
+            atol=atol,
+            equal_nan=equal_nan,
+        )
+    )
+
+
 def _binary(name: str):
     """Build a binary ufunc (``maximum``, ``minimum``, ...) over two arrays."""
 
@@ -927,7 +1033,7 @@ class _TorchNumpyNamespace:
     squeeze = staticmethod(squeeze)
     moveaxis = staticmethod(_elementwise("moveaxis"))
     swapaxes = staticmethod(_elementwise("swapaxes"))
-    roll = staticmethod(_elementwise("roll"))
+    roll = staticmethod(roll)
 
     # elementwise
     exp = staticmethod(_elementwise("exp"))
@@ -989,3 +1095,38 @@ class _TorchNumpyNamespace:
 
 
 torch_numpy = _TorchNumpyNamespace()
+
+
+# See _ARRAY_FUNCTIONS above. np.concatenate is the one dask itself needs (to
+# assemble computed chunks); the rest spare callers who reach for the NumPy
+# spelling of an operation this namespace already provides.
+_ARRAY_FUNCTIONS.update(
+    {
+        np.concatenate: concatenate,
+        np.stack: stack,
+        np.squeeze: squeeze,
+        np.expand_dims: expand_dims,
+        np.transpose: transpose,
+        np.tile: tile,
+        np.pad: pad,
+        np.diff: diff,
+        np.tensordot: tensordot,
+        np.where: where,
+        np.clip: clip,
+        np.zeros_like: zeros_like,
+        np.ones_like: torch_numpy.ones_like,
+        np.empty_like: torch_numpy.empty_like,
+        np.sum: torch_numpy.sum,
+        np.prod: torch_numpy.prod,
+        np.mean: torch_numpy.mean,
+        np.abs: torch_numpy.abs,
+        np.conjugate: torch_numpy.conjugate,
+        np.angle: torch_numpy.angle,
+        np.round: torch_numpy.round,
+        np.iscomplexobj: iscomplexobj,
+        np.allclose: allclose,
+        np.roll: roll,
+        np.fft.fftshift: _fft.fftshift,
+        np.fft.ifftshift: _fft.ifftshift,
+    }
+)
