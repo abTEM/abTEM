@@ -1,0 +1,712 @@
+"""NumPy-like array namespace backed by PyTorch tensors on Apple Metal (MPS).
+
+abTEM dispatches array operations on an "array module" (``xp``) that is NumPy on
+the CPU and CuPy on CUDA GPUs. Metal has no CuPy equivalent, so this module
+adapts PyTorch's MPS backend to the same interface: :class:`TorchNDArray` wraps a
+``torch.Tensor`` and presents the parts of the ``numpy.ndarray`` API that abTEM
+relies on, while :data:`torch_numpy` plays the role of the ``numpy`` module
+itself.
+
+The adaptation is deliberately partial -- only the operations reached by the
+multislice and potential-projection code paths are implemented. Anything else
+raises ``AttributeError``, which callers treat as "not supported on this device"
+and handle by falling back to NumPy.
+
+MPS supports single precision only, so ``precision`` must be ``float32``.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import numpy as np
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None  # type: ignore[assignment]
+
+
+DEVICE = "mps"
+
+
+_TO_TORCH_DTYPE: dict = {}
+_TO_NUMPY_DTYPE: dict = {}
+
+if torch is not None:
+    _TO_TORCH_DTYPE = {
+        np.dtype("float32"): torch.float32,
+        np.dtype("float64"): torch.float64,
+        np.dtype("complex64"): torch.complex64,
+        np.dtype("complex128"): torch.complex128,
+        np.dtype("int32"): torch.int32,
+        np.dtype("int64"): torch.int64,
+        np.dtype("bool"): torch.bool,
+    }
+    _TO_NUMPY_DTYPE = {v: k for k, v in _TO_TORCH_DTYPE.items()}
+
+
+def is_available() -> bool:
+    """Whether PyTorch is installed and its Metal (MPS) backend is usable."""
+    return torch is not None and torch.backends.mps.is_available()
+
+
+def _check_available() -> None:
+    if torch is None:
+        raise RuntimeError(
+            "PyTorch is not installed, Metal (MPS) calculations are disabled. "
+            "Install it from https://pytorch.org, or change the device to 'cpu'."
+        )
+    if not torch.backends.mps.is_available():
+        raise RuntimeError(
+            "The Metal (MPS) backend is not available in this PyTorch build. "
+            "Metal requires macOS on Apple silicon; change the device to 'cpu'."
+        )
+
+
+_DOWNCAST = {
+    np.dtype("float64"): np.dtype("float32"),
+    np.dtype("complex128"): np.dtype("complex64"),
+}
+
+
+def to_torch_dtype(dtype, downcast: bool = False) -> Any:
+    """Translate a NumPy dtype to the equivalent ``torch`` dtype.
+
+    Metal is a single-precision backend, so double precision has no
+    representation on the device. ``downcast`` narrows it to single precision
+    instead of raising, for a dtype that was merely inferred from the input --
+    NumPy defaults a Python float to float64, and rejecting that would make
+    ordinary values like a sampling tuple unusable. An explicitly requested
+    double-precision dtype still raises, rather than quietly losing precision
+    the caller asked for.
+    """
+    dtype = np.dtype(dtype)
+
+    if dtype in _DOWNCAST:
+        if not downcast:
+            raise RuntimeError(
+                f"Metal (MPS) does not support {dtype} arrays; it is a "
+                "single-precision backend. Set "
+                "abtem.config.set({'precision': 'float32'}), or change the device "
+                "to 'cpu' for double precision."
+            )
+        dtype = _DOWNCAST[dtype]
+
+    try:
+        return _TO_TORCH_DTYPE[dtype]
+    except KeyError:
+        raise RuntimeError(f"dtype {dtype} is not supported on Metal (MPS)") from None
+
+
+def to_numpy_dtype(dtype) -> np.dtype:
+    """Translate a ``torch`` dtype to the equivalent NumPy dtype."""
+    return _TO_NUMPY_DTYPE[dtype]
+
+
+def _unwrap(x):
+    """Return the underlying tensor of a :class:`TorchNDArray`, else ``x``."""
+    if isinstance(x, TorchNDArray):
+        return x._tensor
+    return x
+
+
+def _wrap(x):
+    """Wrap a tensor as a :class:`TorchNDArray`, passing anything else through."""
+    if torch is not None and isinstance(x, torch.Tensor):
+        return TorchNDArray(x)
+    return x
+
+
+def _unwrap_key(key):
+    """Unwrap the (possibly nested) index expression of a ``__getitem__``."""
+    if isinstance(key, tuple):
+        return tuple(_unwrap_key(k) for k in key)
+    return _unwrap(key)
+
+
+def _forward(name: str):
+    """Build a method that applies the tensor's ``name`` and rewraps the result."""
+
+    def method(self, *args, **kwargs):
+        args = tuple(_unwrap(arg) for arg in args)
+        kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
+        return _wrap(getattr(self._tensor, name)(*args, **kwargs))
+
+    method.__name__ = name
+    return method
+
+
+class TorchNDArray:
+    """A ``torch.Tensor`` presenting the ``numpy.ndarray`` interface abTEM uses.
+
+    Wrapping rather than subclassing keeps the NumPy-flavored parts of the API
+    that ``torch.Tensor`` spells differently -- ``dtype`` as a NumPy dtype,
+    ``size`` as an element count, ``astype``, ``copy`` -- from colliding with
+    the tensor's own meanings for those names.
+    """
+
+    __array_priority__ = 100  # bind ndarray op TorchNDArray to our reflected dunder
+
+    def __init__(self, tensor):
+        self._tensor = tensor
+
+    @property
+    def tensor(self):
+        """The wrapped ``torch.Tensor``."""
+        return self._tensor
+
+    @property
+    def dtype(self) -> np.dtype:
+        return to_numpy_dtype(self._tensor.dtype)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return tuple(self._tensor.shape)
+
+    @property
+    def ndim(self) -> int:
+        return self._tensor.ndim
+
+    @property
+    def size(self) -> int:
+        return self._tensor.numel()
+
+    @property
+    def real(self):
+        return _wrap(self._tensor.real)
+
+    @property
+    def imag(self):
+        # torch raises on .imag of a real tensor, where numpy returns zeros
+        if self._tensor.is_complex():
+            return _wrap(self._tensor.imag)
+        return _wrap(torch.zeros_like(self._tensor))
+
+    @property
+    def T(self):
+        return _wrap(self._tensor.T)
+
+    def astype(self, dtype, copy: bool = True):
+        torch_dtype = to_torch_dtype(dtype)
+        if not copy and self._tensor.dtype == torch_dtype:
+            return self
+        return _wrap(self._tensor.to(torch_dtype))
+
+    def copy(self):
+        return _wrap(self._tensor.clone())
+
+    def conjugate(self):
+        return _wrap(torch.conj(self._tensor))
+
+    conj = conjugate
+
+    def reshape(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        return _wrap(self._tensor.reshape(shape))
+
+    def transpose(self, *axes):
+        if len(axes) == 1 and isinstance(axes[0], (tuple, list)):
+            axes = tuple(axes[0])
+        if not axes:
+            return _wrap(self._tensor.permute(*reversed(range(self._tensor.ndim))))
+        return _wrap(self._tensor.permute(*axes))
+
+    def swapaxes(self, axis1: int, axis2: int):
+        return _wrap(self._tensor.transpose(axis1, axis2))
+
+    def sum(self, axis=None, **kwargs):
+        if axis is None:
+            return _wrap(self._tensor.sum(**kwargs))
+        return _wrap(self._tensor.sum(dim=axis, **kwargs))
+
+    def mean(self, axis=None, **kwargs):
+        if axis is None:
+            return _wrap(self._tensor.mean(**kwargs))
+        return _wrap(self._tensor.mean(dim=axis, **kwargs))
+
+    def max(self, axis=None, **kwargs):
+        if axis is None:
+            return _wrap(self._tensor.max(**kwargs))
+        return _wrap(self._tensor.amax(dim=axis, **kwargs))
+
+    def min(self, axis=None, **kwargs):
+        if axis is None:
+            return _wrap(self._tensor.min(**kwargs))
+        return _wrap(self._tensor.amin(dim=axis, **kwargs))
+
+    def get(self):
+        """Return this array as a NumPy array (mirrors ``cupy.ndarray.get``)."""
+        return asnumpy(self)
+
+    def __array__(self, dtype=None, copy=None):
+        array = asnumpy(self)
+        if dtype is not None:
+            array = array.astype(dtype)
+        return array
+
+    def __len__(self) -> int:
+        return len(self._tensor)
+
+    def __iter__(self):
+        return (_wrap(item) for item in self._tensor)
+
+    def __getitem__(self, key):
+        return _wrap(self._tensor[_unwrap_key(key)])
+
+    def __setitem__(self, key, value):
+        value = _unwrap(value)
+        # NumPy casts on assignment (e.g. a real result into a complex array);
+        # torch instead refuses a dtype mismatch, so cast to match NumPy.
+        if isinstance(value, torch.Tensor) and value.dtype != self._tensor.dtype:
+            value = value.to(self._tensor.dtype)
+        self._tensor[_unwrap_key(key)] = value
+
+    def __repr__(self) -> str:
+        return f"TorchNDArray({self._tensor!r})"
+
+    def __float__(self) -> float:
+        return float(self._tensor)
+
+    def __int__(self) -> int:
+        return int(self._tensor)
+
+    def __bool__(self) -> bool:
+        return bool(self._tensor)
+
+    def __getattr__(self, name):
+        # only reached for names not defined above; forwards e.g. .item(), .flatten()
+        if name.startswith("_"):
+            raise AttributeError(name)
+        attribute = getattr(self._tensor, name)
+        if callable(attribute):
+            return _forward(name).__get__(self, type(self))
+        return _wrap(attribute)
+
+    __add__ = _forward("__add__")
+    __radd__ = _forward("__radd__")
+    __sub__ = _forward("__sub__")
+    __rsub__ = _forward("__rsub__")
+    __mul__ = _forward("__mul__")
+    __rmul__ = _forward("__rmul__")
+    __truediv__ = _forward("__truediv__")
+    __rtruediv__ = _forward("__rtruediv__")
+    __pow__ = _forward("__pow__")
+    __rpow__ = _forward("__rpow__")
+    __mod__ = _forward("__mod__")
+    __rmod__ = _forward("__rmod__")
+    __matmul__ = _forward("__matmul__")
+    __neg__ = _forward("__neg__")
+    __abs__ = _forward("__abs__")
+    __and__ = _forward("__and__")
+    __rand__ = _forward("__rand__")
+    __or__ = _forward("__or__")
+    __ror__ = _forward("__ror__")
+    __xor__ = _forward("__xor__")
+    __rxor__ = _forward("__rxor__")
+    __invert__ = _forward("__invert__")
+    __eq__ = _forward("__eq__")
+    __ne__ = _forward("__ne__")
+    __lt__ = _forward("__lt__")
+    __le__ = _forward("__le__")
+    __gt__ = _forward("__gt__")
+    __ge__ = _forward("__ge__")
+
+    # mypy compares these against the *args/**kwargs signatures _forward builds
+    # for the matching binary operators, which it cannot see are compatible.
+    def __iadd__(self, other):  # type: ignore[misc]
+        self._tensor += _unwrap(other)
+        return self
+
+    def __isub__(self, other):  # type: ignore[misc]
+        self._tensor -= _unwrap(other)
+        return self
+
+    def __imul__(self, other):  # type: ignore[misc]
+        self._tensor *= _unwrap(other)
+        return self
+
+    def __itruediv__(self, other):  # type: ignore[misc]
+        self._tensor /= _unwrap(other)
+        return self
+
+
+def asarray(data, dtype=None):
+    """Copy ``data`` onto the Metal device as a :class:`TorchNDArray`."""
+    _check_available()
+
+    if isinstance(data, TorchNDArray):
+        return data.astype(dtype, copy=False) if dtype is not None else data
+
+    if isinstance(data, torch.Tensor):
+        tensor = data.to(DEVICE)
+        if dtype is not None:
+            tensor = tensor.to(to_torch_dtype(dtype))
+        return TorchNDArray(tensor)
+
+    if not isinstance(data, np.ndarray):
+        data = np.asarray(data)
+
+    # A dtype the caller did not ask for is inferred from the data, so double
+    # precision there is incidental (NumPy's default for a Python float) and is
+    # narrowed rather than rejected.
+    inferred = dtype is None
+    if inferred:
+        dtype = data.dtype
+    if not data.flags["C_CONTIGUOUS"]:
+        # not np.ascontiguousarray: it promotes a 0-d scalar to shape (1,),
+        # which would add a spurious dimension to every scalar parameter
+        data = np.asarray(data, order="C")
+    # from_numpy avoids a host-side copy before the device transfer
+    tensor = torch.from_numpy(data)
+    torch_dtype = to_torch_dtype(dtype, downcast=inferred)
+    return TorchNDArray(tensor.to(torch_dtype).to(DEVICE))
+
+
+def array(data, dtype=None):
+    """Like :func:`asarray`, but also stacks sequences of device arrays."""
+    if isinstance(data, (list, tuple)) and data:
+        if any(isinstance(item, (TorchNDArray, torch.Tensor)) for item in data):
+            tensor = torch.stack([_unwrap(asarray(item)) for item in data])
+            if dtype is not None:
+                tensor = tensor.to(to_torch_dtype(dtype))
+            return TorchNDArray(tensor)
+
+    return asarray(data, dtype=dtype)
+
+
+def asnumpy(x):
+    """Copy a device array back to the host as a NumPy array."""
+    if isinstance(x, TorchNDArray):
+        x = x.tensor
+    if torch is not None and isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def _creation(name: str):
+    """Build ``zeros``/``ones``/``empty``, which take a shape and a NumPy dtype."""
+
+    def func(shape, dtype=None):
+        _check_available()
+        if isinstance(shape, (int, np.integer)):
+            shape = (shape,)
+        torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+        tensor = getattr(torch, name)(tuple(shape), dtype=torch_dtype, device=DEVICE)
+        return TorchNDArray(tensor)
+
+    func.__name__ = name
+    return func
+
+
+def _elementwise(name: str):
+    """Build a unary ufunc that forwards to ``torch`` and rewraps the result."""
+
+    def func(x, *args, **kwargs):
+        args = tuple(_unwrap(arg) for arg in args)
+        kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
+        return _wrap(getattr(torch, name)(_unwrap(x), *args, **kwargs))
+
+    func.__name__ = name
+    return func
+
+
+def _reduction(name: str):
+    """Build a reduction that accepts NumPy's ``axis=`` rather than ``dim=``."""
+
+    def func(x, axis=None, **kwargs):
+        tensor = _unwrap(x)
+        if axis is None:
+            return _wrap(getattr(torch, name)(tensor, **kwargs))
+        return _wrap(getattr(torch, name)(tensor, dim=axis, **kwargs))
+
+    func.__name__ = name
+    return func
+
+
+def where(condition, x, y):
+    return _wrap(torch.where(_unwrap(condition), _unwrap(x), _unwrap(y)))
+
+
+def _creation_like(name: str):
+    """Build ``zeros_like``/``ones_like``/``empty_like`` over a device array."""
+
+    def func(x, dtype=None):
+        tensor = _unwrap(x)
+        torch_dtype = to_torch_dtype(dtype) if dtype is not None else tensor.dtype
+        return TorchNDArray(getattr(torch, name)(tensor, dtype=torch_dtype))
+
+    func.__name__ = name
+    return func
+
+
+zeros_like = _creation_like("zeros_like")
+
+
+def _add_at(a, indices, values):
+    """In-place ``a[indices] += values`` accumulating repeated indices.
+
+    The NumPy/CuPy spelling of this is ``np.add.at`` / ``cupyx.scatter_add``;
+    unlike plain fancy-index assignment, contributions to a repeated index are
+    summed rather than overwriting each other. That is what makes it correct for
+    superposing delta functions of atoms that land in the same pixel.
+    """
+    tensor = _unwrap(a)
+    if isinstance(indices, tuple):
+        indices = tuple(_unwrap(asarray(index)).long() for index in indices)
+    else:
+        indices = (_unwrap(asarray(indices)).long(),)
+
+    values = _unwrap(asarray(values, dtype=to_numpy_dtype(tensor.dtype)))
+    tensor.index_put_(indices, values.expand(indices[0].shape), accumulate=True)
+    return a
+
+
+def sum_run_length_encoded(array, result, separators):
+    """Sum run-length-encoded data into bins, the Metal counterpart of the
+    CuPy kernel in :mod:`abtem.core._cuda` and the Numba loop on the CPU.
+
+    Parameters
+    ----------
+    array : TorchNDArray, shape (n_batch, n_selected)
+        The reindexed diffraction-pattern data (selected pixels only, in bin
+        order).
+    result : TorchNDArray, shape (n_batch, n_bins)
+        Output array, added to in place (must be pre-zeroed).
+    separators : TorchNDArray, shape (n_bins + 1,)
+        Cumulative bin boundary offsets into the second axis of ``array``.
+    """
+    array_tensor = _unwrap(array)
+    result_tensor = _unwrap(result)
+    separators_tensor = _unwrap(separators).to(torch.int64)
+
+    n_bins = result_tensor.shape[1]
+    if n_bins == 0:
+        return
+
+    # Expand the run-length encoding into a per-column bin index, so the whole
+    # reduction is a single scatter-add rather than a loop over bins.
+    counts = separators_tensor[1:] - separators_tensor[:-1]
+    segments = torch.repeat_interleave(
+        torch.arange(n_bins, device=array_tensor.device), counts
+    )
+    result_tensor.index_add_(1, segments, array_tensor)
+
+
+def fftfreq(n: int, d: float = 1.0, dtype=None):
+    _check_available()
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    return TorchNDArray(torch.fft.fftfreq(n, d=d, dtype=torch_dtype, device=DEVICE))
+
+
+def synchronize() -> None:
+    """Block until all queued Metal work has completed (for timing)."""
+    if torch is not None and torch.backends.mps.is_available():
+        torch.mps.synchronize()
+
+
+def _fft_func(name: str):
+    def func(x, **kwargs):
+        return _wrap(getattr(torch.fft, name)(_unwrap(x), **kwargs))
+
+    func.__name__ = name
+    return func
+
+
+def _fft_shift_func(name: str):
+    """``fftshift``/``ifftshift``, whose ``axes`` torch spells ``dim``."""
+
+    def func(x, axes=None):
+        return _wrap(getattr(torch.fft, name)(_unwrap(x), dim=axes))
+
+    func.__name__ = name
+    return func
+
+
+_fft = SimpleNamespace(
+    fft2=_fft_func("fft2"),
+    ifft2=_fft_func("ifft2"),
+    fftn=_fft_func("fftn"),
+    ifftn=_fft_func("ifftn"),
+    fft=_fft_func("fft"),
+    ifft=_fft_func("ifft"),
+    fftshift=_fft_shift_func("fftshift"),
+    ifftshift=_fft_shift_func("ifftshift"),
+    fftfreq=fftfreq,
+)
+
+
+# ``xp.add.at(...)`` is how abTEM spells scatter-add; mirror NumPy's ufunc shape.
+_add = SimpleNamespace(at=_add_at)
+
+
+def arange(*args, dtype=None):
+    _check_available()
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    return TorchNDArray(torch.arange(*args, dtype=torch_dtype, device=DEVICE))
+
+
+def linspace(start, stop, num=50, dtype=None):
+    _check_available()
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    return TorchNDArray(
+        torch.linspace(start, stop, num, dtype=torch_dtype, device=DEVICE)
+    )
+
+
+def full(shape, fill_value, dtype=None):
+    _check_available()
+    if isinstance(shape, (int, np.integer)):
+        shape = (shape,)
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    return TorchNDArray(
+        torch.full(tuple(shape), fill_value, dtype=torch_dtype, device=DEVICE)
+    )
+
+
+def expand_dims(x, axis):
+    tensor = _unwrap(x)
+    for ax in (axis,) if isinstance(axis, int) else sorted(axis):
+        tensor = torch.unsqueeze(tensor, ax)
+    return _wrap(tensor)
+
+
+def concatenate(arrays, axis=0):
+    return _wrap(torch.cat([_unwrap(asarray(a)) for a in arrays], dim=axis))
+
+
+def stack(arrays, axis=0):
+    return _wrap(torch.stack([_unwrap(asarray(a)) for a in arrays], dim=axis))
+
+
+def transpose(x, axes=None):
+    tensor = _unwrap(x)
+    if axes is None:
+        return _wrap(tensor.permute(*reversed(range(tensor.ndim))))
+    return _wrap(tensor.permute(*axes))
+
+
+def meshgrid(*arrays, indexing="xy"):
+    tensors = torch.meshgrid(*[_unwrap(asarray(a)) for a in arrays], indexing=indexing)
+    return tuple(_wrap(t) for t in tensors)
+
+
+def tile(x, reps):
+    if isinstance(reps, (int, np.integer)):
+        reps = (reps,)
+    return _wrap(torch.tile(_unwrap(x), tuple(reps)))
+
+
+def clip(x, a_min=None, a_max=None):
+    """``numpy.clip``, whose bounds torch spells ``min``/``max``."""
+    return _wrap(torch.clamp(_unwrap(x), min=_unwrap(a_min), max=_unwrap(a_max)))
+
+
+def _binary(name: str):
+    """Build a binary ufunc (``maximum``, ``minimum``, ...) over two arrays."""
+
+    def func(x, y, **kwargs):
+        return _wrap(getattr(torch, name)(_unwrap(x), _unwrap(y), **kwargs))
+
+    func.__name__ = name
+    return func
+
+
+class _TorchNumpyNamespace:
+    """The ``numpy``-module stand-in for arrays living on the Metal device.
+
+    Only the operations abTEM's Metal-supported code paths reach are defined.
+    Anything else raises :class:`AttributeError` naming the missing operation,
+    which is both how callers detect an unsupported path (and fall back to
+    NumPy) and how a developer learns exactly what to add here.
+    """
+
+    # identity of the namespace and its array type
+    ndarray = TorchNDArray
+    Tensor = torch.Tensor if torch is not None else None
+    fft = _fft
+    add = _add
+
+    # array creation and host transfer
+    asarray = staticmethod(asarray)
+    array = staticmethod(array)
+    asnumpy = staticmethod(asnumpy)
+    zeros = staticmethod(_creation("zeros"))
+    ones = staticmethod(_creation("ones"))
+    empty = staticmethod(_creation("empty"))
+    zeros_like = staticmethod(zeros_like)
+    ones_like = staticmethod(_creation_like("ones_like"))
+    empty_like = staticmethod(_creation_like("empty_like"))
+    full = staticmethod(full)
+    arange = staticmethod(arange)
+    linspace = staticmethod(linspace)
+    meshgrid = staticmethod(meshgrid)
+    where = staticmethod(where)
+
+    # shape manipulation
+    expand_dims = staticmethod(expand_dims)
+    concatenate = staticmethod(concatenate)
+    stack = staticmethod(stack)
+    transpose = staticmethod(transpose)
+    tile = staticmethod(tile)
+    squeeze = staticmethod(_elementwise("squeeze"))
+    moveaxis = staticmethod(_elementwise("moveaxis"))
+    swapaxes = staticmethod(_elementwise("swapaxes"))
+    roll = staticmethod(_elementwise("roll"))
+
+    # elementwise
+    exp = staticmethod(_elementwise("exp"))
+    log = staticmethod(_elementwise("log"))
+    sqrt = staticmethod(_elementwise("sqrt"))
+    square = staticmethod(_elementwise("square"))
+    abs = staticmethod(_elementwise("abs"))
+    sin = staticmethod(_elementwise("sin"))
+    cos = staticmethod(_elementwise("cos"))
+    tan = staticmethod(_elementwise("tan"))
+    sinc = staticmethod(_elementwise("sinc"))
+    sign = staticmethod(_elementwise("sign"))
+    floor = staticmethod(_elementwise("floor"))
+    ceil = staticmethod(_elementwise("ceil"))
+    round = staticmethod(_elementwise("round"))
+    conjugate = staticmethod(_elementwise("conj"))
+    conj = staticmethod(_elementwise("conj"))
+    angle = staticmethod(_elementwise("angle"))
+    real = staticmethod(_elementwise("real"))
+    imag = staticmethod(_elementwise("imag"))
+    clip = staticmethod(clip)
+    maximum = staticmethod(_binary("maximum"))
+    minimum = staticmethod(_binary("minimum"))
+    arctan2 = staticmethod(_binary("atan2"))
+
+    # reductions
+    sum = staticmethod(_reduction("sum"))
+    prod = staticmethod(_reduction("prod"))
+    mean = staticmethod(_reduction("mean"))
+    cumsum = staticmethod(_reduction("cumsum"))
+
+    # dtypes, mirroring numpy's names so ``xp.int32`` and friends keep working
+    float32 = np.float32
+    float64 = np.float64
+    complex64 = np.complex64
+    complex128 = np.complex128
+    int32 = np.int32
+    int64 = np.int64
+    bool_ = np.bool_
+    pi = np.pi
+    inf = np.inf
+
+    # device control
+    synchronize = staticmethod(synchronize)
+
+    def __getattr__(self, name):
+        raise AttributeError(
+            f"'{name}' is not implemented for the Metal (MPS) backend. Metal "
+            "support is experimental and covers only part of abTEM; run this "
+            "part of the calculation on the 'cpu' device, or add '{name}' to "
+            "abtem/core/_torch.py.".replace("{name}", name)
+        )
+
+
+torch_numpy = _TorchNumpyNamespace()

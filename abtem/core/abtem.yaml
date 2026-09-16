@@ -9,6 +9,10 @@
 
 # The device can be either 'cpu' or 'gpu'
 device: cpu
+# Enable the experimental Metal (MPS) backend on Apple silicon, making the
+# device 'mps' available. Requires PyTorch (https://pytorch.org) and single
+# precision. Features without a Metal implementation fall back to NumPy.
+enable_mps: false
 # The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw
 # The float precision to use. Options are 'float32' or 'float64'
