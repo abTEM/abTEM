@@ -173,3 +173,38 @@ class TestEqualityDiscriminates:
             dask.base.compute = real_compute
 
         assert not calls, f"`==` executed {len(calls)} dask graph(s)"
+
+    def test_transition_potential_array_ignores_its_device_cache(self):
+        """`_local_potential_device_cache` is populated lazily by
+        `_local_potential_on_device()`, a normal side effect of core-loss
+        multislice -- the same shape of defect `_sliced_atoms` had for
+        `Potential`. Two transition potentials with identical arrays stopped
+        comparing equal once one of them had been used on a device."""
+        import numpy as np
+
+        from abtem.core.axes import OrdinalAxis
+        from abtem.inelastic.core_loss import TransitionPotentialArray
+
+        def make():
+            rng = np.random.default_rng(0)
+            array = (
+                rng.standard_normal((2, 16, 16))
+                + 1j * rng.standard_normal((2, 16, 16))
+            ).astype(np.complex64)
+            return TransitionPotentialArray(
+                Z=14,
+                array=array,
+                energy=100e3,
+                extent=4.0,
+                ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+                metadata={"Z": 14, "n": 1, "l": 0},
+            )
+
+        tp1, tp2 = make(), make()
+        assert tp1 == tp2
+
+        tp1._local_potential_on_device(np.zeros((16, 16), dtype=np.complex64))
+        assert tp1.__dict__["_local_potential_device_cache"] is not None
+        assert tp2.__dict__["_local_potential_device_cache"] is None
+
+        assert tp1 == tp2

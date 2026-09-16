@@ -920,6 +920,14 @@ def fast_roll(array, shifts):
 class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _base_dims = 2
 
+    # _local_potential_device_cache is derived state: local_potential_on_device()
+    # populates it lazily from _local_potential (itself derived from the array
+    # already compared) and the requesting device. __getstate__ already drops
+    # it for pickling, for the same reason -- it is a per-process convenience,
+    # not part of the object's identity. Same pattern as Potential._sliced_atoms
+    # in abtem/potentials/iam.py.
+    _eq_exclude = ("_local_potential_device_cache",)
+
     def __init__(
         self,
         Z: int,
