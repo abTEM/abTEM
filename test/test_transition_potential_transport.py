@@ -144,7 +144,16 @@ def test_graph_computes_on_a_distributed_cluster_and_survives_client_loss():
 
 
 def test_prism_lazy_and_eager_agree():
+    """Uses its own energy-matched tp rather than `_setup()`'s: that fixture
+    deliberately mismatches energy to exercise the multislice driver's
+    private-view matching (see `_setup`'s own comment), which
+    `_prism_eels_common_setup` now refuses outright for a built transition
+    potential (abtem/inelastic/core_loss.py) -- correctly, since its array
+    was never computed for any other energy. Lazy/eager agreement is
+    orthogonal to that; a mismatch here would only make both branches raise
+    identically, testing nothing."""
     potential, tp, _, scan, sites = _setup()
+    tp = _synthetic_tp(gpts=potential.gpts, extent=potential.extent)  # energy=60e3
     s_matrix = abtem.SMatrix(
         potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
     )
@@ -209,16 +218,25 @@ def test_scan_leaves_the_users_object_unmutated():
     assert tp.array is array_before
 
 
-def test_prism_threaded_and_synchronous_schedulers_agree():
+def test_prism_threaded_and_synchronous_schedulers_refuse_a_mismatch_alike():
     """The PRISM-EELS driver shares the materialized transition potential
-    through its own mechanism (a delayed ``map_blocks`` kwarg), so it needs
-    race coverage of its own.
+    through its own mechanism (a delayed ``map_blocks`` kwarg), so its
+    guards need race coverage of their own.
 
     Concurrency requires more than one task, and a plain potential gives
     PRISM exactly one block -- hence the frozen-phonon ensemble, which puts
-    one block per configuration. As above, the scheduler comparison alone
-    cannot see the idempotent grid/accelerator race; the closing assertion
-    on the caller's energy is what bites.
+    one block per configuration.
+
+    This used to assert the opposite: that a built, energy-mismatched
+    transition potential's accelerator was silently matched on a private
+    view, leaving the caller's object untouched, under both schedulers.
+    ``_prism_eels_common_setup`` now refuses that case outright
+    (abtem/inelastic/core_loss.py) -- correctly, since a built array's form
+    factors were computed for the transition potential's own energy and
+    cannot be silently reinterpreted as another one's. What still needs race
+    coverage is that every concurrent task hits the same refusal: a refusal
+    that only some threads see, or that corrupts partial state before
+    raising, would be worse than no guard at all.
     """
     import ase
 
@@ -227,8 +245,7 @@ def test_prism_threaded_and_synchronous_schedulers_agree():
     )
     phonons = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=11)
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
-    # Energy differs from the S-matrix, so accelerator.match must write and a
-    # shared-object mutation would actually be observable.
+    # Energy differs from the S-matrix: every task's guard must fire.
     tp = _synthetic_tp(gpts=(64, 64), extent=potential.extent, energy=80e3)
     scan = abtem.GridScan(
         start=(0, 0), end=(1, 1), gpts=(4, 4), fractional=True, potential=potential
@@ -244,17 +261,12 @@ def test_prism_threaded_and_synchronous_schedulers_agree():
     )
     assert len(lazy.array.__dask_graph__()) > 1  # the test must have concurrency
 
-    threaded = np.asarray(
-        lazy.copy().compute(
-            progress_bar=False, scheduler="threads", num_workers=8
-        ).to_cpu().array
-    )
-    synchronous = np.asarray(
-        lazy.compute(progress_bar=False, scheduler="synchronous").to_cpu().array
-    )
+    with pytest.raises(RuntimeError, match="Inconsistent energies"):
+        lazy.copy().compute(progress_bar=False, scheduler="threads", num_workers=8)
+    with pytest.raises(RuntimeError, match="Inconsistent energies"):
+        lazy.compute(progress_bar=False, scheduler="synchronous")
 
-    assert np.array_equal(threaded, synchronous)
-    assert tp.energy == 80e3, "the scan re-matched the caller's energy in place"
+    assert tp.energy == 80e3, "the refused scan still mutated the caller's object"
 
 
 def test_prism_graph_carries_the_transition_potential_once():
