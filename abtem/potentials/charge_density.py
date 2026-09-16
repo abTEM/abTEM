@@ -413,7 +413,7 @@ def _generate_slices(
     charge = -np.fft.fftn(charge)
 
     charge = fft_crop(
-        charge, charge.shape[:2] + (ewald_potential.num_slices,), normalize=True
+        charge, ewald_potential.gpts + (ewald_potential.num_slices,), normalize=True
     )
 
     charge = add_point_charges_fourier(
