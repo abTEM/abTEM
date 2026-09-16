@@ -617,6 +617,30 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement.center_of_mass().compute()
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("captured_fraction", [1.0, 0.5, 0.1])
+def test_diffraction_patterns_center_of_mass_is_normalized(device, captured_fraction):
+    # A center of mass is a normalized (intensity-weighted average) quantity, so
+    # scaling the total intensity of a diffraction pattern must not change the
+    # computed center of mass. This did not hold before the sum was normalized by
+    # the total captured intensity: https://github.com/abTEM/abTEM/discussions/402
+    gpts = 33
+    sampling = 0.4436
+    shift = (-10, 10)
+
+    y, x = np.mgrid[0:gpts, 0:gpts]
+    disk = np.exp(-((y - gpts // 2) ** 2 + (x - gpts // 2) ** 2) / (2 * 3.0**2))
+    disk = np.roll(disk, shift, axis=(0, 1))
+    disk = copy_to_device((disk / disk.sum() * captured_fraction).astype(np.float32), device)
+
+    measurement = DiffractionPatterns(disk, sampling=sampling, fftshift=True)
+
+    com = measurement.center_of_mass(units="1/Å").array
+
+    expected = (shift[0] * sampling) + 1.0j * (shift[1] * sampling)
+    assert abs(com - expected) < 0.1 * abs(expected)
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
