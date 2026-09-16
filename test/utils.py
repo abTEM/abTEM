@@ -145,3 +145,29 @@ requires_multigpu = pytest.mark.skipif(
     _gpu_count() < 2 or not _HAS_DASK_CUDA,
     reason="requires >=2 GPUs and dask-cuda",
 )
+
+
+def _mps_is_usable() -> bool:
+    """Whether the Metal (MPS) backend is loaded and usable in this process."""
+    from abtem.core import backend
+
+    if backend.tp is None:
+        return False
+
+    from abtem.core._torch import is_available
+
+    return is_available()
+
+
+# Skip marker for the Metal backend. Note that 'enable_mps' selects the library
+# load order and so has to be set before abTEM is imported -- setting it from
+# inside a test is too late, which is why this tests what actually loaded rather
+# than what the configuration says.
+requires_mps = pytest.mark.skipif(
+    not _mps_is_usable(),
+    reason=(
+        "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
+        "installed, and 'enable_mps' set before abTEM is imported "
+        "(e.g. DASK_ENABLE_MPS=true pytest ...)"
+    ),
+)

@@ -54,9 +54,17 @@ gpaw = [
     "hankel",
     "sympy",
 ]
-# Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
-# are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
-# must be installed to match the local toolkit (see the multi-GPU docs).
+# The experimental Metal (MPS) backend on Apple silicon. Restricted to macOS on
+# arm64, the only platform with a Metal device: elsewhere the torch wheel pulls
+# in the whole CUDA stack (several GB) to back a device that cannot exist there.
+# Developed against torch 2.14; 2.4 is the floor for MPS complex-valued FFTs.
+mps = [
+    "torch>=2.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+# Install every optional runtime extra at once. GPU packages (cupy, dask-cuda,
+# torch) are intentionally excluded: their wheels are CUDA/RAPIDS-version or
+# platform specific and must be installed to match the local machine (see the
+# multi-GPU docs, and the 'mps' extra above for Apple silicon).
 all = [
     "abtem[extra]",
     "abtem[gpaw]",
