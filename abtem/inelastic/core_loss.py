@@ -103,12 +103,6 @@ def check_valid_quantum_number(Z, n, ell):
         )
 
 
-def _validate_transition_potentials(transition_potentials):
-    if hasattr(transition_potentials, "scatter"):
-        transition_potentials = [transition_potentials]
-    return transition_potentials
-
-
 class RadialWavefunction:
     def __init__(
         self,

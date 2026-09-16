@@ -918,6 +918,19 @@ def _back_propagate_backscattered_waves(
     return backscattered_waves
 
 
+_DETECTORS_ELASTIC_MESSAGE = (
+    # Declared but never read: elastic detectors passed here were accepted in
+    # silence and only the inelastic measurement came back, so a caller
+    # expecting a simultaneous elastic image got a short list and no
+    # explanation. Every other unsupported keyword reaching this function
+    # through **multislice_func_kwargs raises TypeError; this one spelling
+    # quietly absorbed the caller's intent. Say so until it is implemented.
+    "detectors_elastic is not implemented: the core-loss multislice returns "
+    "only the inelastic measurement. Run a separate Probe.scan() with the "
+    "same scan and potential for the elastic image."
+)
+
+
 def transition_potential_multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -953,6 +966,11 @@ def transition_potential_multislice_and_detect(
     measurements : :class:`.Waves` or tuple of :class:`.BaseMeasurements`
         Exit waves or detected measurements or lists of measurements.
     """
+
+    if detectors_elastic:
+        # Belt and braces: Waves.transition_potential_multislice refuses this
+        # before a graph is built, but the driver is also a public entry point.
+        raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
