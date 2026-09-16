@@ -32,13 +32,13 @@ def _setup(gpts=(64, 64)):
         "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
     )
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2.0)
-    # Deliberately NOT pre-matched to the probe: the energy differs, so the
-    # drivers' accelerator.match must write. A transition potential that
-    # already agrees with the waves makes that call a no-op, and then no test
-    # can tell a private view from a mutated shared one. (The extent must be
-    # defined -- TransitionPotentialArray builds its local potential in
-    # __init__, which needs the grid.)
-    tp = _synthetic_tp(gpts=gpts, extent=potential.extent, energy=80e3)
+    # Matched to the probe: a built TransitionPotentialArray whose energy
+    # disagrees with the waves is refused outright by the driver's guard
+    # (transition_potential_multislice_and_detect, abtem/multislice.py), so a
+    # shared fixture used by tests that do not care about that guard must not
+    # trip it. The two tests that specifically exercise the guard's
+    # private-view isolation build their own mismatched tp instead.
+    tp = _synthetic_tp(gpts=gpts, extent=potential.extent, energy=60e3)
     probe = abtem.Probe(semiangle_cutoff=32, energy=60e3)
     probe.grid.match(potential)
     scan = abtem.GridScan(
@@ -188,30 +188,42 @@ def test_task_local_view_shields_the_shared_object():
     assert tp.extent == (8.0, 8.0)
 
 
-def test_scan_does_not_rematch_the_callers_energy_in_place():
-    """The end-to-end guard that actually bites: the fixture's transition
-    potential carries a different energy from the probe, so the drivers must
-    re-match it -- on their own view, never on the caller's object."""
-    potential, tp, probe, scan, sites = _setup()
-    assert tp.energy == 80e3  # fixture precondition: matching must do work
+def test_scan_refuses_a_mismatch_rather_than_rematching_in_place():
+    """The end-to-end guard that actually bites: a transition potential
+    carrying a different energy from the probe used to be silently re-matched
+    -- on a private view, never on the caller's object, but silently all the
+    same. transition_potential_multislice_and_detect (abtem/multislice.py)
+    now refuses it outright, before _task_local's match ever runs, the same
+    guard and the same reason as the PRISM-EELS driver's own
+    accelerator.check_match. Concurrency is part of what needs guarding: a
+    refusal only some threads see, or that mutates the caller before raising,
+    would be worse than no guard."""
+    potential, _, probe, scan, sites = _setup()
+    tp = _synthetic_tp(gpts=potential.gpts, extent=potential.extent, energy=80e3)
+    assert tp.energy == 80e3  # fixture precondition: a genuine mismatch
 
-    _scan(probe, potential, tp, scan, sites).compute(
-        progress_bar=False, scheduler="threads", num_workers=8
-    )
+    with pytest.raises(RuntimeError, match="Inconsistent energies"):
+        _scan(probe, potential, tp, scan, sites).compute(
+            progress_bar=False, scheduler="threads", num_workers=8
+        )
 
-    assert tp.energy == 80e3, "the scan re-matched the caller's energy in place"
+    assert tp.energy == 80e3, "the refused scan still mutated the caller's object"
 
 
-def test_scan_leaves_the_users_object_unmutated():
-    """End to end: after lazy compute, the user's transition potential still
-    has exactly the state it was built with."""
-    potential, tp, probe, scan, sites = _setup()
+def test_scan_leaves_the_users_object_unmutated_even_when_refused():
+    """End to end: a refused scan raises before touching anything, so the
+    user's transition potential keeps exactly the state it was built with --
+    stronger than just its energy, since _task_local's private view shares
+    the payload and only privatises grid and accelerator."""
+    potential, _, probe, scan, sites = _setup()
+    tp = _synthetic_tp(gpts=potential.gpts, extent=potential.extent, energy=80e3)
     energy_before = tp.energy
     extent_before = tp.extent
     array_before = tp.array
-    assert energy_before == 80e3  # the match below has to actually do work
+    assert energy_before == 80e3  # the guard has to actually have something to refuse
 
-    _scan(probe, potential, tp, scan, sites).compute(progress_bar=False)
+    with pytest.raises(RuntimeError, match="Inconsistent energies"):
+        _scan(probe, potential, tp, scan, sites).compute(progress_bar=False)
 
     assert tp.energy == energy_before
     assert tp.extent == extent_before

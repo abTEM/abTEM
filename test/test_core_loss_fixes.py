@@ -372,6 +372,42 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
         assert measurement.shape[:2] == (2, 2)
 
 
+class TestMultisliceBuiltTransitionPotentialEnergy:
+    """The sibling of TestPrismEelsBuiltTransitionPotentialGrid's energy
+    check above, for the plain multislice EELS driver
+    (transition_potential_multislice_and_detect, abtem/multislice.py) rather
+    than the PRISM-EELS one. Same guard, same reason, same place: before
+    _task_local's match, which would otherwise silently overwrite a built
+    transition potential's energy to agree with the waves while its baked-in
+    form factors stay computed at the old one.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8), pbc=True,
+        )
+
+    def test_a_mismatched_energy_is_refused_too(self):
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=4.0)
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+        probe.grid.match(potential)
+
+        wrong_energy = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        wrong_energy.accelerator._energy = 2 * ENERGY
+
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            probe.transition_potential_scan(
+                potential=potential, transition_potentials=wrong_energy,
+                scan=abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 2),
+                                    fractional=True, potential=potential),
+                detectors=abtem.FlexibleAnnularDetector(), sites=atoms,
+                double_channel=False, lazy=False,
+            )
+
+
 class TestPrismScanAxisSqueeze:
     """The scan position axis was squeezed per dask block, not once at the end.
 

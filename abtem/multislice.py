@@ -1047,6 +1047,21 @@ def transition_potential_multislice_and_detect(
 
     # Arrives as one graph node shared by every task on this worker, so
     # match on a private view rather than mutating it. See _task_local.
+    #
+    # A built TransitionPotentialArray cannot be matched: build() bakes
+    # self.energy into the array's form factors (k0, kn, the relativistic
+    # mass correction, the interaction parameter), and its array shape is
+    # fixed, so the match below can only change the private view's grid or
+    # accelerator, never recompute the array to agree with them. Checking
+    # first, while grid/accelerator still report what the array actually is,
+    # catches both -- the grid case already failed with an opaque broadcast
+    # ValueError inside scatter below; this gives it (and the previously
+    # unguarded energy case) the same clear RuntimeError as the PRISM-EELS
+    # driver's identical guard in abtem/inelastic/core_loss.py.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(waves)
+        transition_potential.accelerator.check_match(waves)
+
     transition_potential = transition_potential._task_local(match_to=waves)
 
     if isinstance(transition_potential, TransitionPotential):
