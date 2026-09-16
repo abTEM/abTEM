@@ -250,6 +250,23 @@ def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
     return fftw_object
 
 
+def _fftw_plan_config() -> tuple:
+    """
+    The configuration ``_new_fftw_object`` bakes into a plan.
+
+    Part of the plan cache key. abTEM's config is meant to be changed at runtime
+    inside a ``config.set`` block, and every call re-read these before the plans
+    were cached, so a plan built under one configuration must not be reused
+    under another -- a user who asks for more threads would otherwise keep
+    getting plans made for the old count.
+    """
+    return (
+        config.get("fftw.threads"),
+        config.get("fftw.planning_effort"),
+        config.get("fftw.planning_timelimit"),
+    )
+
+
 class CachedFFTWConvolution:
     """
     Convolve an array with a kernel, reusing the pyfftw plan pair across calls.
@@ -260,10 +277,10 @@ class CachedFFTWConvolution:
 
     A plan is tied to one buffer *layout*: ``update_arrays`` rejects an array
     whose dtype, shape or strides differ from the array the plan was made for,
-    so those make up the cache key. It is equally tied to one specific *buffer*,
-    which on a cache hit is the previous call's array, so the cached plans are
-    re-pointed at the current array on every call and not only when they are
-    built.
+    so those make up the cache key, together with the configuration the plan was
+    built under. It is equally tied to one specific *buffer*, which on a cache
+    hit is the previous call's array, so the cached plans are re-pointed at the
+    current array on every call and not only when they are built.
 
     The plans are deliberately built with the same flags every time, never flags
     derived from the buffer being transformed. An ``FFTW_UNALIGNED`` plan
@@ -285,7 +302,7 @@ class CachedFFTWConvolution:
         self._local = threading.local()
 
     def _get_fftw_objects(self, array: np.ndarray) -> dict[str, "pyfftw.FFTW"]:
-        key = (array.shape, array.dtype, array.strides)
+        key = (array.shape, array.dtype, array.strides, _fftw_plan_config())
 
         cached = getattr(self._local, "cached", None)
         if cached is not None and cached[0] == key:

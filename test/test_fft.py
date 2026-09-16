@@ -8,6 +8,7 @@ import pytest
 
 from utils import requires_gpu
 
+from abtem.core import config
 from abtem.core import fft as abtem_fft
 from abtem.core.fft import (
     _warn_slow_fft_size,
@@ -504,3 +505,40 @@ def test_cached_fftw_convolution_result_is_independent_of_buffer_alignment():
     assert np.array_equal(aligned_result, offset_result), (
         "convolution result depends on input buffer alignment"
     )
+
+
+@requires_pyfftw
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"fftw.threads": 4},
+        {"fftw.planning_effort": "FFTW_ESTIMATE"},
+        {"fftw.planning_timelimit": 5},
+    ],
+    ids=["threads", "planning_effort", "planning_timelimit"],
+)
+def test_cached_fftw_convolution_respects_config_changes(setting, count_fftw_plans):
+    """Caching must not pin the plans to the configuration of the first call.
+
+    Every call re-read these settings before the plans were cached, so a
+    ``config.set`` block took effect immediately. A plan built under the old
+    configuration must not outlive it -- a user asking for more threads would
+    otherwise keep getting plans made for the old count.
+    """
+    rng = np.random.default_rng(4)
+    array, kernel = _random_convolution_inputs(rng)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 2
+
+    with config.set(setting):
+        convolution(array.copy(), kernel, True)
+        assert len(count_fftw_plans) == 4, f"{setting} ignored by the plan cache"
+        # ...and the plans built under it are themselves reused
+        convolution(array.copy(), kernel, True)
+        assert len(count_fftw_plans) == 4
+
+    # leaving the block restores the original configuration's plans
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 6
