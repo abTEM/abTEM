@@ -80,6 +80,56 @@ class TestPlaneWaveEnergyEnsemble:
         assert result.array.shape[0] == 3
 
 
+class TestEnergyEnsembleChunkSplitting:
+    """An energy ensemble split across dask chunks must keep its ensemble axis.
+
+    A chunk holding exactly one member reconstructs as a builder with a scalar
+    energy and no ensemble axis, so _calculate_array returns the bare base
+    array while map_blocks has been told to expect one axis per ensemble
+    dimension. Downstream, ArrayObject._apply_transform splits its blockwise
+    args positionally, so a block of the wrong ndim silently feeds the array's
+    own RealSpaceAxis to the transform's reconstruction chain.
+
+    The split only happens once a single wave exceeds the chunk-size budget --
+    at production grids, not at test grids -- so force it by shrinking the
+    budget rather than growing gpts.
+    """
+
+    @staticmethod
+    def _build_with_chunk_size(chunk_size):
+        with abtem.config.set({"dask.chunk-size": chunk_size}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            return pw.build(lazy=True)
+
+    def test_split_blocks_keep_ensemble_axis(self):
+        waves = self._build_with_chunk_size("4 kB")
+        array = waves.array
+        assert len(array.chunks[0]) > 1, "ensemble was not split; lower chunk-size"
+
+        for i in range(array.numblocks[0]):
+            block = array.blocks[i, 0, 0].compute()
+            assert block.ndim == array.ndim, (
+                f"block {i} has ndim {block.ndim} (shape {block.shape}), "
+                f"expected {array.ndim}"
+            )
+
+    def test_split_matches_unsplit(self):
+        split = self._build_with_chunk_size("4 kB")
+        whole = self._build_with_chunk_size("128 MB")
+
+        assert len(split.array.chunks[0]) > 1
+        assert len(whole.array.chunks[0]) == 1
+        assert np.array_equal(split.compute().array, whole.compute().array)
+
+    def test_multislice_over_split_ensemble(self):
+        atoms = ase.build.bulk("Si", cubic=True)
+        with abtem.config.set({"dask.chunk-size": "4 kB"}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            assert len(pw.build(lazy=True).array.chunks[0]) > 1
+            result = pw.multislice(atoms).compute()
+        assert result.array.shape[0] == len(ENERGIES)
+
+
 class TestProbeEnergyEnsemble:
     def test_ensemble_shape(self):
         probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)

@@ -2164,8 +2164,34 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
             xp = get_array_module(self.device)
 
+            calculate_array = self._calculate_array
+
+            def _calculate_array_block(block, block_info=None):
+                array = calculate_array(block)
+
+                # A chunk holding exactly one ensemble member reconstructs as
+                # a builder with a scalar parameter and no ensemble axis at
+                # all -- an energy ensemble of one is just an energy -- so
+                # _calculate_array hands back the bare base array while
+                # map_blocks below has been told to expect one axis per
+                # ensemble dimension. Restore the length-1 axes that the
+                # collapse dropped, so every block matches the ndim the graph
+                # was built for.
+                #
+                # Nothing catches this until the ensemble is big enough to be
+                # split at all: with a single chunk the member count is never
+                # one, and a split that leaves a remainder of one (5 energies
+                # into 4 + 1, say) produces one malformed block among several
+                # sound ones, so most of the run succeeds before it surfaces.
+                if block_info is not None:
+                    expected = tuple(block_info[None]["chunk-shape"])
+                    if array.shape != expected:
+                        array = array.reshape(expected)
+
+                return array
+
             array = da.map_blocks(
-                self._calculate_array,
+                _calculate_array_block,
                 blocks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
                 new_axis=tuple_range(length=2, offset=len(self.ensemble_shape)),
