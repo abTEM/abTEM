@@ -107,6 +107,40 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
     assert pot.repetitions == reps
 
 
+def test_generate_slices_poisson_solve_matches_requested_gpts(
+    monkeypatch, carbon_atoms, charge_density_3d
+):
+    """The internal reciprocal-space Poisson solve (which places the point-charge
+    correction, and for VASPPotential the core-density correction too) must be
+    built at the requested output `gpts` -- not silently pinned to
+    `charge_density`'s own native resolution via `fft_crop`. Before this was
+    fixed, `fft_crop`'s target used `charge.shape[:2]` (the *input* array's own
+    resolution) instead of `ewald_potential.gpts`, so refining `gpts` never
+    actually increased the resolution at which atomic-scale features were
+    resolved -- it only amplified `_interpolate_slice`'s downstream resampling
+    artifacts (see the VASPPotential vacuum/core-sharpness investigation)."""
+    import abtem.potentials.charge_density as cd_mod
+
+    requested_gpts = (77, 77)  # deliberately different from charge_density_3d's
+    assert charge_density_3d.shape[:2] != requested_gpts  # native resolution (32, 32)
+
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, gpts=requested_gpts)
+
+    seen_shapes = []
+    original_fft_crop = cd_mod.fft_crop
+
+    def spy_fft_crop(array, new_shape, **kwargs):
+        seen_shapes.append(new_shape)
+        return original_fft_crop(array, new_shape, **kwargs)
+
+    monkeypatch.setattr(cd_mod, "fft_crop", spy_fft_crop)
+
+    next(pot.generate_slices())
+
+    assert seen_shapes, "fft_crop was not called"
+    assert seen_shapes[0][:2] == requested_gpts
+
+
 def test_subtract_min_defaults_to_false(carbon_atoms, charge_density_3d):
     """subtract_min must default to False -- the per-slice minimum is not
     subtracted unless explicitly requested."""

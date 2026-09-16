@@ -225,7 +225,11 @@ class VASPPotential(ChargeDensityPotential):
         entry for every chemical species present in `atoms`.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
-        calculated by specifying either `sampling` or `gpts`.
+        calculated by specifying either `sampling` or `gpts`. The core-density
+        correction is resolved at this grid -- unlike the crude
+        :class:`.ChargeDensityPotential` correction, its accuracy near each nucleus
+        keeps improving with finer `gpts`/`sampling`, even beyond `charge_density`'s
+        own native resolution.
     sampling : one or two float, optional
         Sampling of the potential in `x` and `y` [1 / Å] calculated by specifying either
         `sampling` or `gpts`.
