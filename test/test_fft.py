@@ -478,15 +478,29 @@ def test_cached_fftw_convolution_is_thread_safe():
 
 
 @requires_pyfftw
-def test_fftw_alignment_flags_relaxes_the_plan_for_unaligned_arrays():
-    # A plan made for a SIMD-aligned buffer rejects a less aligned one, so an
-    # array that misses the alignment has to be planned for with FFTW_UNALIGNED.
-    aligned = pyfftw.empty_aligned((2, 8, 8), dtype=np.complex64)
-    assert abtem_fft._fftw_alignment_flags(aligned) == ()
+def test_cached_fftw_convolution_result_is_independent_of_buffer_alignment():
+    """The numbers must not depend on where the input buffer happens to land.
 
-    itemsize = aligned.dtype.itemsize
-    buffer = pyfftw.empty_aligned(2 * 8 * 8 + 1, dtype=np.complex64)
-    offset = buffer[1:].reshape(2, 8, 8)
-    if pyfftw.is_byte_aligned(offset):
-        pytest.skip("this build of FFTW imposes no SIMD alignment requirement")
-    assert abtem_fft._fftw_alignment_flags(offset) == ("FFTW_UNALIGNED",)
+    Regression test: keying the plan flags off the input's alignment made the
+    convolution pick ``FFTW_UNALIGNED`` codelets for some buffers and aligned
+    ones for others. Those differ by ~1e-7 relative, so two runs that differed
+    only in how arrays had been allocated -- e.g. the same multislice with a
+    different potential chunk size -- stopped agreeing.
+    """
+    rng = np.random.default_rng(3)
+    array, kernel = _random_convolution_inputs(rng, gpts=64)
+
+    # a buffer deliberately offset inside a larger allocation: still contiguous
+    # and still C-ordered, but not necessarily aligned for SIMD
+    spare = np.empty(array.size + 1, dtype=array.dtype)
+    offset = spare[1:].reshape(array.shape)
+    offset[...] = array
+    assert offset.strides == array.strides
+
+    convolution = abtem_fft.CachedFFTWConvolution()
+    aligned_result = convolution(array.copy(), kernel, True)
+    offset_result = convolution(offset, kernel, True)
+
+    assert np.array_equal(aligned_result, offset_result), (
+        "convolution result depends on input buffer alignment"
+    )
