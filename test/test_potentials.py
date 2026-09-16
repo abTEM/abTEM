@@ -1109,6 +1109,40 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
         self._build(Potential(wrapped, gpts=(32, 32), slice_thickness=1.0))
         assert np.array_equal(atoms.positions, before)
 
+    @pytest.mark.parametrize(
+        "construction",
+        ["list_of_atoms", "dummy_frozen_phonons", "frozen_phonons"],
+    )
+    def test_sampling_auto_does_not_rewrite_the_callers_atoms_either(
+        self, construction
+    ):
+        """`orthogonalize_cell` has a second call site: `Potential.__init__`
+        itself, reached through `sampling="auto"` when the cell needs a
+        transform (iam.py, `_require_cell_transform`). That call runs
+        synchronously in the constructor, before `build()` is ever called --
+        an independent path into the same aliasing bug, not merely the same
+        bug reached twice through one call. Both call sites go through the
+        same `orthogonalize_cell`, so the fix covers this one too, but
+        nothing above pins it: every test in this class builds before
+        checking, which only exercises the first call site.
+        """
+        from abtem.inelastic.phonons import DummyFrozenPhonons, FrozenPhonons
+
+        atoms = self._atoms()
+        before = atoms.positions.copy()
+
+        if construction == "list_of_atoms":
+            wrapped = [atoms]
+        elif construction == "dummy_frozen_phonons":
+            wrapped = DummyFrozenPhonons(atoms)
+        else:
+            wrapped = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
+
+        # No .build() call: sampling="auto" must do its own damage, if any,
+        # inside __init__ alone.
+        Potential(wrapped, sampling="auto", slice_thickness=1.0)
+        assert np.array_equal(atoms.positions, before)
+
 
 class TestSliceIndexedAtomsWrapping:
     """Atoms outside the cell were binned without being wrapped.
