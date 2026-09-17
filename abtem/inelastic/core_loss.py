@@ -1844,6 +1844,20 @@ def prism_transition_potential_scan(
         for r in range(0, n_rows, rows_per_batch)
     ]
 
+    # minimum_crop's result for a given batch depends only on that batch's
+    # own positions, never on the site or exit plane -- but _reduce_and_record
+    # runs once per (site, exit plane), so computing it there recomputed the
+    # identical box for every batch on every one of those calls. Hoisting it
+    # here, once per batch, turns that into O(n_batches) instead of
+    # O(n_batches * n_sites * n_exit_planes).
+    row_batch_boxes = [
+        minimum_crop(
+            pixel_positions[row_start * row_cols : row_end * row_cols],
+            output_window_gpts,
+        )
+        for row_start, row_end in row_batches
+    ]
+
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
         ds_sampling_arr = np.array(ds_sampling, dtype=get_dtype())
@@ -1855,13 +1869,13 @@ def prism_transition_potential_scan(
         )
         n_T = scattered_window.shape[0]
 
-        for row_start, row_end in row_batches:
+        for (row_start, row_end), (
+            reduce_crop_corner,
+            reduce_size,
+            reduce_corners,
+        ) in zip(row_batches, row_batch_boxes):
             flat_start = row_start * row_cols
             flat_end = row_end * row_cols
-
-            reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
-                pixel_positions[flat_start:flat_end], output_window_gpts
-            )
 
             site_in_bbox = (
                 site_crop_corner_ds[0] - reduce_crop_corner[0],

@@ -1185,6 +1185,57 @@ class TestPrismEelsReductionChunking:
             "in one call -- the reduction still crops around the whole scan"
         )
 
+    def test_minimum_crop_does_not_scale_with_the_number_of_sites(
+        self, monkeypatch
+    ):
+        """minimum_crop's result for a row batch depends only on that
+        batch's own positions, never on which site or exit plane is being
+        recorded -- but it was called from inside _reduce_and_record, which
+        runs once per (site, exit plane). Computing it there recomputed the
+        identical box on every one of those calls, scaling the call count
+        with the site count for no reason.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 1,
+            raising=False,
+        )
+
+        def _call_count(n_sites):
+            atoms = ase.Atoms(
+                numbers=[14] * n_sites,
+                positions=[(i * 1.0, i * 1.0, i * 0.5) for i in range(n_sites)],
+                cell=(8, 8, 8),
+                pbc=True,
+            )
+            potential = abtem.Potential(
+                atoms, gpts=(64, 64), slice_thickness=1.0, exit_planes=1
+            )
+            s_matrix = abtem.SMatrix(
+                potential=potential, energy=ENERGY, semiangle_cutoff=20,
+                interpolation=1,
+            )
+            scan = abtem.GridScan(
+                start=(0, 0), end=(7, 5), gpts=(7, 5), fractional=False,
+                potential=potential,
+            )
+
+            calls = []
+
+            def _recording_minimum_crop(positions, shape):
+                calls.append(int(positions.shape[0]))
+                return _real_minimum_crop(positions, shape)
+
+            monkeypatch.setattr(
+                "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+            )
+            self._run(atoms, s_matrix, scan)
+            return len(calls)
+
+        assert _call_count(n_sites=2) == _call_count(n_sites=8)
+
     def test_matches_reference_with_a_custom_scans_positions_axis(
         self, monkeypatch
     ):
