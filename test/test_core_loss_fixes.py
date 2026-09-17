@@ -1065,6 +1065,124 @@ def test_prism_driver_refuses_a_multi_configuration_potential():
         )
 
 
+class TestPrismEelsReductionChunking:
+    """The per-site reduction cropped a bounding box spanning the *whole*
+    scan and ran one ``tensordot`` over every position at once, so peak
+    memory was ``n_positions * (scan_span + window)**2`` -- growing with the
+    scan's spatial extent rather than with the output window. A
+    production-sized PRISM-EELS scan demanded a single allocation in the
+    hundreds of GB (abtem_issues/prism_eels_reduction_allocates_whole_scan.md).
+
+    The reduction is now chunked over spatially contiguous blocks of scan
+    rows, sized from the same memory-budget heuristic
+    ``estimate_scan_batch_size`` already uses for the probe batch elsewhere,
+    so each block's bounding box shrinks along with the block.
+    """
+
+    @staticmethod
+    def _setup(n_rows, n_cols):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0),
+            end=(n_rows, n_cols),
+            gpts=(n_rows, n_cols),
+            fractional=False,
+            potential=potential,
+        )
+        return atoms, potential, s_matrix, scan
+
+    @staticmethod
+    def _run(atoms, s_matrix, scan, double_channel=False):
+        measurement = s_matrix.transition_potential_scan(
+            transition_potentials=_synthetic_transition_potential(
+                s_matrix.potential.extent, s_matrix.potential.gpts, n=2
+            ),
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=False,
+        )
+        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
+
+    @pytest.mark.parametrize("double_channel", [False, True])
+    @pytest.mark.parametrize("forced_budget", [1, 3, 7])
+    def test_chunked_reduction_matches_a_single_whole_scan_batch(
+        self, monkeypatch, double_channel, forced_budget
+    ):
+        # 7x5=35 positions, not a multiple of any of the forced budgets --
+        # exercises an uneven last batch.
+        atoms, _, s_matrix, scan = self._setup(n_rows=7, n_cols=5)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan, double_channel)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: forced_budget,
+            raising=False,
+        )
+        got = self._run(atoms, s_matrix, scan, double_channel)
+
+        scale = np.abs(reference).max()
+        assert scale > 0
+        assert got.shape == reference.shape
+        assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
+    def test_the_reduction_never_crops_around_the_whole_scan(self, monkeypatch):
+        """A budget of one position per batch collapses every block to a
+        single scan row, so no crop call should ever see the full scan.
+
+        On unfixed code the bounding box is computed once, globally, before
+        the site loop -- so ``minimum_crop`` sees every position in that one
+        call regardless of how small a budget is forced here, and this
+        assertion catches that directly.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        n_rows, n_cols = 9, 6
+        atoms, _, s_matrix, scan = self._setup(n_rows=n_rows, n_cols=n_cols)
+        n_positions = n_rows * n_cols
+
+        call_sizes = []
+
+        def _recording_minimum_crop(positions, shape):
+            call_sizes.append(int(positions.shape[0]))
+            return _real_minimum_crop(positions, shape)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 1,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+        )
+
+        self._run(atoms, s_matrix, scan)
+
+        assert call_sizes
+        assert max(call_sizes) < n_positions, (
+            f"minimum_crop saw {max(call_sizes)} of {n_positions} positions "
+            "in one call -- the reduction still crops around the whole scan"
+        )
+
+
 class TestPrismLazyExitPlanes:
     """The lazy PRISM path omitted the exit-plane axis from its block shape.
 
