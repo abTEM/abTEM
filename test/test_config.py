@@ -135,6 +135,39 @@ class TestEnvironmentVariables:
         assert "chunk_size" not in fresh_config["dask"]
 
 
+class TestControlEnvVarsDoNotLeak:
+    """ABTEM_CONFIG/ABTEM_ROOT_CONFIG control config *discovery* (_get_paths);
+    they must not also be read as configuration values by collect_env, or
+    they'd land in the config dict as stray `config`/`root_config` keys."""
+
+    def test_abtem_config_does_not_leak(self):
+        assert config.collect_env({"ABTEM_CONFIG": "/some/dir"}) == {}
+
+    def test_abtem_root_config_does_not_leak(self):
+        assert config.collect_env({"ABTEM_ROOT_CONFIG": "/some/dir"}) == {}
+
+    def test_real_keys_still_pass_through(self):
+        # Sanity check that the exclusion is scoped to the two control
+        # variables, not to ABTEM_ variables in general.
+        assert config.collect_env({"ABTEM_DEVICE": "gpu"}) == {"device": "gpu"}
+
+
+class TestMalformedYaml:
+    def test_malformed_yaml_warns_and_falls_back_instead_of_crashing_import(
+        self, tmp_path, fresh_config
+    ):
+        (tmp_path / "abtem.yaml").write_text(
+            "device: [unterminated\n  - this is not valid yaml: :\n",
+            encoding="utf-8",
+        )
+
+        with pytest.warns(RuntimeWarning, match="abtem.yaml|malformed"):
+            refresh_into(fresh_config, paths=[tmp_path])
+
+        # Falls back to the shipped default rather than raising.
+        assert config.get("device", config=fresh_config) == "cpu"
+
+
 class TestLegacyDaskEnvironmentVariables:
     def test_abtem_key_still_works_but_warns(self):
         with pytest.warns(FutureWarning, match="ABTEM_DEVICE"):

@@ -45,10 +45,11 @@ def _get_paths() -> list[str]:
 
 paths = _get_paths()
 
-if "ABTEM_CONFIG" in os.environ:
-    PATH = os.environ["ABTEM_CONFIG"]
-else:
-    PATH = os.path.join(os.path.expanduser("~"), ".config", "abtem")
+#: Environment variables that control config *discovery* itself (see
+#: :func:`_get_paths`) rather than naming a configuration value. Excluded from
+#: :func:`collect_env` so they don't leak into the config dict as stray
+#: top-level keys (``config``, ``root_config``).
+_CONTROL_ENV_VARS = frozenset({"ABTEM_CONFIG", "ABTEM_ROOT_CONFIG"})
 
 config: dict = {}
 
@@ -188,6 +189,12 @@ def collect_env(env: Mapping[str, str] | None = None) -> dict:
     -  Treats ``__`` (double-underscore) as nested access
     -  Calls ``ast.literal_eval`` on the value
 
+    ``ABTEM_CONFIG`` and ``ABTEM_ROOT_CONFIG`` are excluded even though they
+    carry the ``ABTEM_`` prefix: they control where :func:`collect` looks for
+    yaml files (see :func:`_get_paths`) rather than naming a configuration
+    value, and must not leak into the config dict as a stray ``config`` or
+    ``root_config`` key.
+
     Parameters
     ----------
     env : Mapping[str, str], optional
@@ -203,7 +210,7 @@ def collect_env(env: Mapping[str, str] | None = None) -> dict:
     d = {
         name[len(ENV_PREFIX) :].lower().replace("__", "."): interpret_value(value)
         for name, value in env.items()
-        if name.startswith(ENV_PREFIX)
+        if name.startswith(ENV_PREFIX) and name not in _CONTROL_ENV_VARS
     }
 
     result: dict = {}
@@ -291,8 +298,25 @@ def collect(
     --------
     abtem.config.refresh: collect configuration and update into primary config
     """
+    try:
+        yaml_configs = list(collect_yaml(paths=paths))
+    except ValueError as e:
+        # A malformed yaml file in the user's config directory must not take
+        # down `import abtem` -- a typo should degrade to a warning, not a raw
+        # parser traceback. Coarse-grained: this drops every yaml source for
+        # this call rather than isolating just the one bad file among several
+        # in `paths`; real per-file isolation would mean replicating
+        # collect_yaml's own path-discovery loop.
+        warnings.warn(
+            f"Failed to read abTEM's yaml configuration files under {paths}; "
+            f"configuration from these files is being skipped: {e}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        yaml_configs = []
+
     configs = [
-        *collect_yaml(paths=paths),
+        *yaml_configs,
         collect_legacy_env(env=env, defaults=defaults),
         collect_env(env=env),
     ]
