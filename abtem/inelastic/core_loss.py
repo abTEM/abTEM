@@ -7,7 +7,7 @@ import os
 import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import numpy as np
 from ase import Atom, Atoms, units
@@ -46,6 +46,7 @@ from abtem.core.energy import (
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin, get_dtype
+from abtem.integrals import _device_cache_key
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
@@ -920,13 +921,13 @@ def fast_roll(array, shifts):
 class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _base_dims = 2
 
-    # _local_potential_device_cache is derived state: local_potential_on_device()
-    # populates it lazily from _local_potential (itself derived from the array
-    # already compared) and the requesting device. __getstate__ already drops
-    # it for pickling, for the same reason -- it is a per-process convenience,
-    # not part of the object's identity. Same pattern as Potential._sliced_atoms
-    # in abtem/potentials/iam.py.
-    _eq_exclude = ("_local_potential_device_cache",)
+    # _local_potential_device_cache and _device_array_cache are derived state:
+    # populated lazily from the array already compared and the requesting
+    # device. __getstate__ already drops them for pickling, for the same
+    # reason -- they are a per-process convenience, not part of the object's
+    # identity. Same pattern as Potential._sliced_atoms in
+    # abtem/potentials/iam.py.
+    _eq_exclude = ("_local_potential_device_cache", "_device_array_cache")
 
     def __init__(
         self,
@@ -951,6 +952,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._local_potential_device_cache = None
+        # Memo for copy_to_device, keyed by target device -- see that method.
+        # Set here, on the object every _task_local view is shallow-copied
+        # from, so copy.copy's shared dict reference is what makes every
+        # per-task view see what any sibling view already uploaded.
+        self._device_array_cache: dict = {}
         self._threshold = None
 
     def from_array_and_metadata(self, array, metadata):
@@ -1101,12 +1107,87 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         self._local_potential_device_cache = (device, on_device)
         return on_device
 
+    def copy_to_device(self, device: str) -> Self:
+        """Copy to a device, memoized per (shared graph node, device).
+
+        ``ArrayObject.copy_to_device`` always rebuilds through ``__init__``,
+        which recomputes ``_local_potential`` from the array -- an ``ifft2``
+        + ``abs2`` + sum over the whole payload -- even when the array is
+        already on the target device, since the free ``copy_to_device`` being
+        a no-op there is invisible to ``__init__``. Once this object arrives
+        as one graph node shared by every task on a worker (see
+        ``BaseTransitionPotential._task_local``), both that recomputation and,
+        on GPU, the host-to-device upload beneath it happen once per task
+        rather than once per worker.
+
+        This does NOT memoize the returned *object* -- ``scatter`` and
+        ``generate_scattered_waves`` mutate what they are handed
+        (``self._array = ...``, ``self.grid.match(...)``), so two tasks
+        sharing one returned instance would race on those mutations exactly
+        as ``_task_local`` exists to prevent one step earlier. What is safe
+        to share is the immutable-in-practice *array data*: the device-
+        resident array and the local potential derived from it are cached,
+        and a fresh, independently-mutable wrapper is copied out each call.
+
+        The cache lives in ``_device_array_cache``, set in ``__init__`` on
+        the object every ``_task_local`` view is shallow-copied from --
+        ``copy.copy`` shares dict *references*, not contents, so every
+        per-task view sees the same dict and therefore whatever a sibling
+        view already uploaded, with its lifetime tied to the shared node.
+        """
+        key = _device_cache_key(device)
+        cached = self._device_array_cache.get(key)
+
+        if cached is None:
+            array_on_device = copy_to_device(self.array, device)
+            if array_on_device is self.array:
+                local_potential_on_device = self._local_potential
+            else:
+                if get_array_module(array_on_device) is np:
+                    local_potential_on_device = copy_to_device(
+                        self._local_potential, array_on_device
+                    )
+                else:
+                    with array_on_device.device:
+                        local_potential_on_device = copy_to_device(
+                            self._local_potential, array_on_device
+                        )
+            cached = (array_on_device, local_potential_on_device)
+            self._device_array_cache[key] = cached
+
+        array_on_device, local_potential_on_device = cached
+
+        result = copy.copy(self)
+        result._array = array_on_device
+        result._local_potential = local_potential_on_device
+        result._local_potential_device_cache = None
+        return result
+
+    def __copy__(self):
+        # Without this, copy.copy(self) -- what _task_local uses to build a
+        # per-task view -- goes through __reduce_ex__/__getstate__ instead of
+        # a plain __dict__ share, since a class with __getstate__ but no
+        # __copy__ uses the former for BOTH pickling and copy.copy. That
+        # silently gave every _task_local view its own fresh
+        # _device_array_cache (__getstate__ always resets it, correctly for
+        # pickling), defeating the memo in copy_to_device: sibling per-task
+        # views never saw what one another had already uploaded. A real
+        # shallow copy -- sharing __dict__ values by reference, which is what
+        # _task_local's own docstring already promises ("everything else
+        # stays shared") -- fixes it for this cache and matches the intended
+        # semantics generally.
+        cls = self.__class__
+        new = cls.__new__(cls)
+        new.__dict__.update(self.__dict__)
+        return new
+
     def __getstate__(self):
-        # The device cache is a per-process convenience and may hold a cupy
-        # array; letting it ride through pickle would bloat every dask task
-        # carrying this object and break unpickling on CPU-only workers.
+        # Both device caches are a per-process convenience and may hold cupy
+        # arrays; letting them ride through pickle would bloat every dask
+        # task carrying this object and break unpickling on CPU-only workers.
         state = self.__dict__.copy()
         state["_local_potential_device_cache"] = None
+        state["_device_array_cache"] = {}
         return state
 
     def filter_sites(self, waves, sites, threshold):
