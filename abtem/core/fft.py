@@ -1031,7 +1031,12 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[: -len(new_shape)] + new_shape
+        # Not `array.shape[: -len(new_shape)]`: -0 is 0, not "the end", so
+        # for `new_shape == ()` that slice was `[:0]`, always empty, rather
+        # than `[:len(array.shape)]` -- every dimension is a batch
+        # dimension when none are being resized.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        new_shape = array.shape[:n_batch_dims] + new_shape
 
     # Build per-dimension slice-pair lists.  Dimensions with equal in/out size
     # (e.g. batch dims) take a single full-slice pair; the rest contribute 1–2
@@ -1084,7 +1089,11 @@ def fft_interpolate(
     numpy.ndarray
         Interpolated array.
     """
-    old_size = np.prod(array.shape[-len(new_shape) :])
+    # Not `array.shape[-len(new_shape):]`: the same -0 problem, mirrored --
+    # for `new_shape == ()` that slice was `[0:]`, everything, rather than
+    # `[len(array.shape):]`, nothing (no axes are being resized).
+    n_batch_dims = len(array.shape) - len(new_shape)
+    old_size = np.prod(array.shape[n_batch_dims:])
 
     is_complex = np.iscomplexobj(array)
 
@@ -1108,7 +1117,9 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
+        # See the comment above old_size: same -0 fix, same reasoning.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        array *= np.prod(array.shape[n_batch_dims:]) / old_size
     elif normalization in ("amplitude", "intensity"):
         pass
     else:
