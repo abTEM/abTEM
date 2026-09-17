@@ -461,9 +461,15 @@ def _warn_if_not_valence_only(
     charge_density: np.ndarray, atoms: Atoms, cls_name: str = "ChargeDensityPotential"
 ) -> None:
     """
-    Warn if `charge_density` looks like an all-electron density (e.g. from summing
-    VASP AECCAR0 and AECCAR2, as in ``chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum``) rather
-    than the valence-only density :class:`.ChargeDensityPotential` expects.
+    Warn if `charge_density` looks like an all-electron density covering core *and*
+    valence (e.g. from summing VASP AECCAR0 and AECCAR2, as in
+    ``chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum``) rather than the valence-only density
+    :class:`.ChargeDensityPotential` expects.
+
+    Two independent signals must both hold before warning: the density integrates to
+    close to the atoms' total atomic number (rather than to the smaller valence count),
+    *and* its peak is large. Requiring both matters because either on its own fires on
+    legitimate input -- see the comment at the check itself.
 
     :class:`.ChargeDensityPotential` adds its own approximate nuclear/core correction
     (a Gaussian-broadened point charge equal to each atom's full atomic number, see
@@ -482,20 +488,26 @@ def _warn_if_not_valence_only(
     total_atomic_number = float(np.sum(atoms.numbers))
     max_density = float(np.max(charge_density))
 
+    # Both signals are required. Either alone gives false positives on legitimate
+    # input: a valence-only `AECCAR2` keeps the true orbitals' nodal structure near
+    # each nucleus, so its peak is large for heavy elements on a fine grid (SrTiO3
+    # reaches ~900 e/Å³), while a hydrogen-rich system has almost no core electrons
+    # to omit, so its valence count sits close to the total atomic number. An
+    # all-electron density shows both at once.
     reasons = []
-    if total_electrons > 1.5 * total_atomic_number:
+    if total_electrons > 0.9 * total_atomic_number:
         reasons.append(
-            f"it integrates to ~{total_electrons:.1f} electrons, well above the "
-            f"atoms' total atomic number ({total_atomic_number:.0f}) -- implausible "
-            "unless the density already includes the core electrons"
+            f"it integrates to ~{total_electrons:.1f} electrons, close to the atoms' "
+            f"total atomic number ({total_atomic_number:.0f}) rather than to the "
+            "smaller valence-electron count a valence-only density would have"
         )
     if max_density > 1000.0:
         reasons.append(
-            f"its peak value ({max_density:.3g} e/Å³) is implausibly large for a "
-            "smooth valence-only density"
+            f"its peak value ({max_density:.3g} e/Å³) is large even for a valence "
+            "density retaining the near-nucleus nodal structure"
         )
 
-    if reasons:
+    if len(reasons) == 2:
         warnings.warn(
             "charge_density looks like it may be an all-electron density (e.g. "
             "from summing VASP AECCAR0 and AECCAR2, or a 'CHGCAR_sum' file) rather "
