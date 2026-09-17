@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
-from abtem.core.utils import EqualityMixin, label_to_index
+from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -720,6 +720,31 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
         ]
+
+    def __eq__(self, other) -> bool:
+        # _slice_index is a list of integer arrays, one per slice. list.__eq__
+        # compares elementwise and reduces the per-element `==` (itself an
+        # array) to a bool, which numpy refuses for anything but a length-1
+        # array -- generic EqualityMixin.__eq__ (safe_equality) catches that
+        # ValueError and reports "unequal", so this class never compared equal
+        # to anything, including an identical twin. Compare it directly with
+        # np.array_equal and let safe_equality handle every other attribute
+        # exactly as it would without this override.
+        if not isinstance(other, SliceIndexedAtoms):
+            return False
+
+        if len(self._slice_index) != len(other._slice_index):
+            return False
+
+        if not all(
+            np.array_equal(a, b)
+            for a, b in zip(self._slice_index, other._slice_index)
+        ):
+            return False
+
+        return safe_equality(
+            self, other, exclude=("_slice_index",) + self._eq_exclude
+        )
 
     def get_atoms_in_slices(
         self,
