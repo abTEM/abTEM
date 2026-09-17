@@ -23,6 +23,30 @@ config_lock = threading.Lock()
 defaults: list[Mapping] = []
 
 
+_METAL_DEVICES = frozenset({"mps", "metal", "torch"})
+
+
+def _check_consistent(config: dict) -> None:
+    """Reject configurations the hardware cannot honour.
+
+    Metal is a single-precision backend -- PyTorch refuses a float64 tensor on
+    the MPS device outright -- so pairing it with double precision cannot work.
+    Saying so when the configuration is set beats failing later, somewhere
+    inside a computation, where the cause is much harder to see.
+    """
+    if str(config.get("device", "")).lower() not in _METAL_DEVICES:
+        return
+
+    precision = config.get("precision", "float32")
+
+    if precision != "float32":
+        raise ValueError(
+            f"device 'mps' cannot be combined with precision {precision!r}: Metal "
+            "is a single-precision backend. Use precision 'float32', or the 'cpu' "
+            "or 'gpu' device for double precision."
+        )
+
+
 class set:
     """Temporarily set configuration values within a context manager
 
@@ -62,10 +86,22 @@ class set:
                     key = check_deprecations(key)
                     self._assign(key.split("."), value, config)
 
+            try:
+                _check_consistent(config)
+            except Exception:
+                # A rejected combination must not leave half of itself applied;
+                # put the configuration back as it was before re-raising.
+                self._unwind()
+                raise
+
     def __enter__(self):
         return self.config
 
     def __exit__(self, type, value, traceback):
+        self._unwind()
+
+    def _unwind(self) -> None:
+        """Undo this object's assignments, most recent first."""
         for op, path, value in reversed(self._record):
             d = self.config
             if op == "replace":
@@ -80,6 +116,7 @@ class set:
                         break
                 else:
                     d.pop(path[-1], None)
+        self._record = []
 
     def _assign(
         self,

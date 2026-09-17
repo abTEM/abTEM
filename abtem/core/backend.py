@@ -124,8 +124,8 @@ def check_mps_is_enabled():
         raise RuntimeError(
             "Metal (MPS) is a single-precision backend, but the configured "
             f"precision is '{config.get('precision')}'. Set "
-            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' "
-            "device for double precision."
+            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
+            "'gpu' device for double precision."
         )
 
     return tp

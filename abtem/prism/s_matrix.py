@@ -28,6 +28,7 @@ from abtem.core.backend import (
     asnumpy,
     copy_to_device,
     cp,
+    device_name_from_array_module,
     get_array_module,
     validate_device,
 )
@@ -4570,25 +4571,40 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # to ~1e-3 relative, well above the smallest supported tolerance. The
         # eigenvalues near the round-off floor (the coarse expansion is rank
         # deficient) are dropped.
-        gram = xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
+        # Metal has no double precision at all, so this one accumulation cannot
+        # run on the device. It streams to the host instead of dropping to
+        # single precision, which would cost exactly the spectral resolution the
+        # paragraph above explains this step exists to keep. The Gram matrix is
+        # (n_beams, n_beams) and the transfer is one pass over a matrix the
+        # build has already streamed several times.
+        gram_xp = np if device_name_from_array_module(xp) == "mps" else xp
+
+        gram = gram_xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
         pixel_batch = self._expansion_batch_size(len(matrix))
         for start in range(0, matrix.shape[1], pixel_batch):
-            chunk = matrix[:, start : start + pixel_batch].astype(np.complex128)
+            chunk = matrix[:, start : start + pixel_batch]
+            if gram_xp is np:
+                chunk = asnumpy(chunk)
+            chunk = chunk.astype(np.complex128)
             gram += chunk @ chunk.T.conj()
 
-        eigenvalues, eigenvectors = xp.linalg.eigh(gram)
-        eigenvalues = xp.clip(eigenvalues[::-1], 0.0, None)
+        eigenvalues, eigenvectors = gram_xp.linalg.eigh(gram)
+        eigenvalues = gram_xp.clip(eigenvalues[::-1], 0.0, None)
         eigenvectors = eigenvectors[:, ::-1]
 
         # a round-off floor only: the tolerance must not truncate here, or the
         # row space of the built beams is already incomplete before the
         # interpolation and the plane-wave branch stops being exact
         keep = max(1, int((eigenvalues > eigenvalues[0] * 1e-14).sum()))
-        singular_values = xp.sqrt(eigenvalues[:keep])
+        singular_values = gram_xp.sqrt(eigenvalues[:keep])
 
         # L = V diag(s) and Q = diag(1 / s) V^H T, with T = L Q exact on the
         # retained subspace
         beam_factor = (eigenvectors[:, :keep] * singular_values[None]).astype(dtype)
+
+        if gram_xp is not xp:
+            # back to the device now that the double-precision part is done
+            beam_factor = xp.asarray(beam_factor)
 
         dense_indices = self._dense_indices()
 
