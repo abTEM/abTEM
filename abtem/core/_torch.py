@@ -1075,6 +1075,20 @@ ndimage = SimpleNamespace(
 )
 
 
+def _boolean_reduction(name: str):
+    """Build ``all``/``any``, which NumPy spells with ``axis``."""
+
+    def func(x, axis=None, **kwargs):
+        tensor = _unwrap(asarray(x))
+        kwargs = _torch_kwargs(kwargs)
+        if axis is None:
+            return _wrap(getattr(torch, name)(tensor, **kwargs))
+        return _wrap(getattr(torch, name)(tensor, dim=axis, **kwargs))
+
+    func.__name__ = name
+    return _serialized(func)
+
+
 def iscomplexobj(x) -> bool:
     """``numpy.iscomplexobj`` -- a dtype question, answered without the device."""
     return _unwrap(x).is_complex()
@@ -1214,6 +1228,9 @@ class _TorchNumpyNamespace:
     tan = staticmethod(_elementwise("tan"))
     sinc = staticmethod(_elementwise("sinc"))
     sign = staticmethod(_elementwise("sign"))
+    isfinite = staticmethod(_elementwise("isfinite"))
+    isnan = staticmethod(_elementwise("isnan"))
+    isinf = staticmethod(_elementwise("isinf"))
     floor = staticmethod(_elementwise("floor"))
     ceil = staticmethod(_elementwise("ceil"))
     round = staticmethod(_elementwise("round"))
@@ -1233,6 +1250,8 @@ class _TorchNumpyNamespace:
     prod = staticmethod(_reduction("prod"))
     mean = staticmethod(_reduction("mean"))
     cumsum = staticmethod(_reduction("cumsum"))
+    all = staticmethod(_boolean_reduction("all"))
+    any = staticmethod(_boolean_reduction("any"))
     diff = staticmethod(diff)
     std = staticmethod(_reduction("std"))
     min = staticmethod(_reduction("amin"))
@@ -1292,6 +1311,11 @@ _ARRAY_FUNCTIONS.update(
         np.angle: torch_numpy.angle,
         np.round: torch_numpy.round,
         np.iscomplexobj: iscomplexobj,
+        np.isfinite: _elementwise("isfinite"),
+        np.isnan: _elementwise("isnan"),
+        np.isinf: _elementwise("isinf"),
+        np.all: _boolean_reduction("all"),
+        np.any: _boolean_reduction("any"),
         np.nonzero: nonzero,
         np.einsum: einsum,
         np.allclose: allclose,

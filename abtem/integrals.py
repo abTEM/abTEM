@@ -18,6 +18,7 @@ from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
 from abtem.core.backend import (
+    asnumpy,
     cp,
     cupyx,
     device_name_from_array_module,
@@ -1557,6 +1558,24 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                             chunk_offset=start,
                         )
                         del disk_chunk
+            elif device_name_from_array_module(xp) == "mps":
+                # The threaded interpolation is a numba routine over host
+                # memory and Metal has no kernel of its own, so it runs on the
+                # host and the result is added back. Finite projections are
+                # thereby available on Metal rather than unsupported; the
+                # multislice they feed still runs on the device.
+                host_temp = np.zeros(temp.shape, dtype=fp_dtype)
+                _threaded_interpolate_radial_functions(
+                    array=host_temp,
+                    positions=asnumpy(positions),
+                    disk_indices=disk,
+                    disk_counts=disk_counts,
+                    sampling=sampling,
+                    radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
+                    radial_functions=asnumpy(radial_potential),
+                    radial_derivative=asnumpy(radial_potential_derivative),
+                )
+                temp += xp.asarray(host_temp)
             else:
                 _threaded_interpolate_radial_functions(
                     array=temp,
