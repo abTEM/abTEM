@@ -234,6 +234,14 @@ def _forward(name: str):
     """Build a method that applies the tensor's ``name`` and rewraps the result."""
 
     def method(self, *args, **kwargs):
+        if any(isinstance(arg, da.core.Array) for arg in args):
+            # A dask array is a graph, not a buffer, so the operation has to
+            # join the graph rather than force it. Returning NotImplemented
+            # would not do: dask does not recognize this type either, and the
+            # operator would fail on both sides. Entering the graph as a
+            # single-chunk array keeps the result lazy and on the device.
+            return getattr(da.from_array(self, chunks=-1), name)(*args, **kwargs)
+
         args = tuple(_unwrap(arg) for arg in args)
         kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
         return _wrap(getattr(self._tensor, name)(*args, **kwargs))
@@ -353,6 +361,7 @@ class TorchNDArray:
 
     @_serialized
     def sum(self, axis=None, **kwargs):
+        kwargs = _torch_kwargs(kwargs)
         if _is_empty_axis(axis):
             return _wrap(self._tensor.clone())
         if axis is None:
@@ -361,6 +370,7 @@ class TorchNDArray:
 
     @_serialized
     def mean(self, axis=None, **kwargs):
+        kwargs = _torch_kwargs(kwargs)
         if _is_empty_axis(axis):
             return _wrap(self._tensor.clone())
         if axis is None:
@@ -441,7 +451,11 @@ class TorchNDArray:
 
     @_serialized
     def __setitem__(self, key, value):
-        value = _unwrap(value)
+        if isinstance(value, np.ndarray):
+            # torch will not take a host array as the right-hand side
+            value = _unwrap(asarray(value))
+        else:
+            value = _unwrap(value)
         # NumPy casts on assignment (e.g. a real result into a complex array);
         # torch instead refuses a dtype mismatch, so cast to match NumPy.
         if isinstance(value, torch.Tensor) and value.dtype != self._tensor.dtype:
@@ -1075,6 +1089,33 @@ ndimage = SimpleNamespace(
 )
 
 
+def _host_signal_func(name: str):
+    """Run a ``scipy.signal`` function on the host, returning a device array.
+
+    The counterpart of :func:`_host_ndimage_func`, and for the same reason:
+    Metal has no signal-processing library, and the one function abTEM reaches
+    for convolves a measurement with a small kernel.
+    """
+    import scipy.signal  # noqa: PLC0415 -- only needed on this fallback
+
+    def func(*args, **kwargs):
+        args = tuple(
+            asnumpy(arg) if isinstance(arg, TorchNDArray) else arg for arg in args
+        )
+        return asarray(getattr(scipy.signal, name)(*args, **kwargs))
+
+    func.__name__ = name
+    return func
+
+
+# scipy's namespace as abTEM reaches it -- only ``.signal``, and only
+# ``fftconvolve`` within it.
+scipy = SimpleNamespace(
+    signal=SimpleNamespace(fftconvolve=_host_signal_func("fftconvolve")),
+    ndimage=ndimage,
+)
+
+
 def _boolean_reduction(name: str):
     """Build ``all``/``any``, which NumPy spells with ``axis``."""
 
@@ -1087,6 +1128,19 @@ def _boolean_reduction(name: str):
 
     func.__name__ = name
     return _serialized(func)
+
+
+def isclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False):
+    """``numpy.isclose``, elementwise, on the device."""
+    return _wrap(
+        torch.isclose(
+            _unwrap(asarray(a)),
+            _unwrap(asarray(b)),
+            rtol=rtol,
+            atol=atol,
+            equal_nan=equal_nan,
+        )
+    )
 
 
 def iscomplexobj(x) -> bool:
@@ -1233,6 +1287,7 @@ class _TorchNumpyNamespace:
     isinf = staticmethod(_elementwise("isinf"))
     floor = staticmethod(_elementwise("floor"))
     ceil = staticmethod(_elementwise("ceil"))
+    isclose = staticmethod(isclose)
     round = staticmethod(_elementwise("round"))
     rint = staticmethod(_elementwise("round"))
     conjugate = staticmethod(_elementwise("conj"))
@@ -1319,6 +1374,7 @@ _ARRAY_FUNCTIONS.update(
         np.nonzero: nonzero,
         np.einsum: einsum,
         np.allclose: allclose,
+        np.isclose: isclose,
         np.roll: roll,
         np.fft.fftshift: _fft.fftshift,
         np.fft.ifftshift: _fft.ifftshift,
