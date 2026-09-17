@@ -543,8 +543,17 @@ def asnumpy(array: np.ndarray | da.Array):
     numpy.ndarray
         The array converted to NumPy.
     """
-    if tp is not None and isinstance(array, (TorchNDArray, tp.Tensor)):
-        return tp.asnumpy(array)
+    if tp is not None:
+        if isinstance(array, (TorchNDArray, tp.Tensor)):
+            return tp.asnumpy(array)
+
+        # A lazy array whose chunks live on Metal still has to be brought
+        # across. Without this it falls to the cp-less short-circuit below and
+        # is handed back untouched -- still device-backed, so the caller's next
+        # reduction runs against Metal chunks rather than host memory, having
+        # asked for NumPy.
+        if isinstance(array, da.core.Array) and get_array_module(array) is tp:
+            return da.map_blocks(asnumpy, array)
 
     if cp is None:
         return array
