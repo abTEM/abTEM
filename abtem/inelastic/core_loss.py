@@ -1818,12 +1818,20 @@ def prism_transition_potential_scan(
     )
     rows_per_batch = min(rows_per_batch, n_rows)
 
-    if rows_per_batch < n_rows:
-        # The guess above assumes the ideal case; verify it against the
-        # actual box a batch of this size produces -- translation-invariant
-        # for a regular raster scan, so the first candidate batch is
-        # representative -- and shrink until it fits the same byte budget
-        # the guess was converted from.
+    # The guess above assumes the ideal case (no bounding-box growth), which
+    # is exactly wrong when the batch covers a large fraction of the scan --
+    # that is where the box is at its largest. This must run even when the
+    # guess already covers the whole scan (rows_per_batch == n_rows): gating
+    # it on rows_per_batch < n_rows skipped verification in precisely that
+    # case, silently reproducing the original whole-scan-as-one-block defect
+    # whenever the naive per-position estimate happened to clear the row
+    # count (a large output_window_gpts -- e.g. interpolation=1, no PRISM
+    # downsampling -- makes this the common case, not a corner one).
+    if rows_per_batch > 1:
+        # Verify the guess against the actual box a batch of this size
+        # produces -- translation-invariant for a regular raster scan, so
+        # the first candidate batch is representative -- and shrink until it
+        # fits the same byte budget the guess was converted from.
         budget_bytes = (
             budget_positions * int(np.prod(output_window_gpts)) * itemsize
         )

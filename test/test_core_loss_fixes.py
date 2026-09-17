@@ -1185,6 +1185,82 @@ class TestPrismEelsReductionChunking:
             "in one call -- the reduction still crops around the whole scan"
         )
 
+    def test_the_reduction_still_shrinks_when_the_naive_guess_already_covers_the_whole_scan(
+        self, monkeypatch
+    ):
+        """The sizing guess assumes no bounding-box growth; verifying and
+        shrinking it against the actual box only ran when the guess landed
+        BELOW the row count (``rows_per_batch < n_rows``). Capping the guess
+        at n_rows and then skipping verification because the capped value no
+        longer compares less than itself reproduced the original defect
+        exactly for that case -- a whole-scan block, never checked -- and it
+        is not a corner case: any scan whose physical span exceeds its
+        output window (i.e. most of them) grows the real box past the
+        no-growth estimate, so this triggers whenever the naive guess merely
+        reaches the row count, not only when it wildly overshoots it.
+
+        A scan physically wider than the ~8 A window (unlike this class's
+        other tests, whose scans are drawn in the same few Angstrom as the
+        window and never exercise real box growth) with a budget picked to
+        land the naive guess exactly at the row count reproduces this
+        directly: found by running the fix's own benchmark script against a
+        real GPU, where interpolation=1 (a large, undownsampled window) hit
+        it immediately.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        atoms = ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        n_rows, n_cols = 9, 6
+        n_positions = n_rows * n_cols
+        # Span (40 x 30 A) well past the ~8 A window -- unlike _setup's scans,
+        # whose end == gpts puts every position within the window itself.
+        scan = abtem.GridScan(
+            start=(0, 0), end=(40, 30), gpts=(n_rows, n_cols), fractional=False,
+            potential=potential,
+        )
+
+        call_sizes = []
+
+        def _recording_minimum_crop(positions, shape):
+            call_sizes.append(int(positions.shape[0]))
+            return _real_minimum_crop(positions, shape)
+
+        # n_T=2, row_cols=6: guess = budget // 2 // 6. 300 -> 25, capped to
+        # n_rows=9 -- the exact "guess already covers everything" case.
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 300,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+        )
+
+        self._run(atoms, s_matrix, scan)
+
+        # The sizing pass itself legitimately probes the full-size candidate
+        # first (it has to, to find out it is too big) -- max(call_sizes)
+        # would see that probe regardless of whether the fix works. The
+        # sizing pass always finishes before any site's real reduction call,
+        # so the LAST recorded call is from that real work; on unfixed code
+        # (no sizing pass at all when the guess lands at n_rows) every call,
+        # including the last, is the unchunked whole-scan size.
+        assert call_sizes
+        assert call_sizes[-1] < n_positions, (
+            f"the last minimum_crop call saw {call_sizes[-1]} of "
+            f"{n_positions} positions -- the reduction itself is still "
+            f"unchunked (all calls: {call_sizes})"
+        )
+
     def test_minimum_crop_does_not_scale_with_the_number_of_sites(
         self, monkeypatch
     ):
