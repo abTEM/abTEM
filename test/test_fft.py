@@ -415,6 +415,11 @@ def test_cached_fftw_convolution_reuses_plans(count_fftw_plans):
 def test_cached_fftw_convolution_correct_on_a_cache_hit(overwrite_x):
     # A cached plan still points at the previous call's buffer, so a hit is only
     # correct if the plans are re-pointed at the current array every call.
+    #
+    # Note: this also passes unmodified against the pre-fix code, since
+    # "rebuild from scratch on every call" trivially satisfies "plan matches
+    # the current buffer" -- there is no cache there to get wrong. It still
+    # guards a real invariant of the fixed implementation.
     rng = np.random.default_rng(1)
     convolution = abtem_fft.CachedFFTWConvolution()
 
@@ -435,6 +440,10 @@ def test_cached_fftw_convolution_correct_on_a_cache_hit(overwrite_x):
 def test_cached_fftw_convolution_replans_on_layout_change(changed, count_fftw_plans):
     # A plan is tied to the dtype, shape and strides it was made for --
     # ``update_arrays`` raises otherwise -- so each must invalidate the cache.
+    #
+    # Note: this also passes unmodified against the pre-fix code, since a
+    # shape/dtype change there triggers a rebuild anyway (every call does).
+    # It still guards a real invariant of the fixed implementation.
     rng = np.random.default_rng(2)
     convolution = abtem_fft.CachedFFTWConvolution()
 
@@ -542,3 +551,41 @@ def test_cached_fftw_convolution_respects_config_changes(setting, count_fftw_pla
     # leaving the block restores the original configuration's plans
     convolution(array.copy(), kernel, True)
     assert len(count_fftw_plans) == 6
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_picklable_before_first_use():
+    # threading.local is not picklable, so storing the cache in one made every
+    # instance unpicklable -- including one that has never built a plan.
+    # FresnelPropagator's documented `propagator=` reuse argument invites
+    # sending exactly such an unused instance to a dask.distributed worker.
+    cloudpickle = pytest.importorskip("cloudpickle")
+
+    convolution = abtem_fft.CachedFFTWConvolution()
+    restored = cloudpickle.loads(cloudpickle.dumps(convolution))
+
+    rng = np.random.default_rng(5)
+    array, kernel = _random_convolution_inputs(rng)
+    result = restored(array.copy(), kernel, True)
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_picklable_after_use():
+    # A plan cache built in one process/thread is not valid in another, so a
+    # restored instance must drop it and transparently rebuild rather than
+    # shipping a stale cache across the pickle boundary.
+    cloudpickle = pytest.importorskip("cloudpickle")
+
+    rng = np.random.default_rng(6)
+    array, kernel = _random_convolution_inputs(rng)
+    convolution = abtem_fft.CachedFFTWConvolution()
+    convolution(array.copy(), kernel, True)
+
+    restored = cloudpickle.loads(cloudpickle.dumps(convolution))
+    assert not hasattr(restored, "_local") or not hasattr(
+        restored._local, "cached"
+    )
+
+    result = restored(array.copy(), kernel, True)
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)

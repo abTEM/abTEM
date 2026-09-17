@@ -301,6 +301,20 @@ class CachedFFTWConvolution:
     def __init__(self):
         self._local = threading.local()
 
+    def __getstate__(self) -> dict:
+        # threading.local is not picklable, and a plan cache built on one
+        # process/thread is not valid on another -- drop it rather than the
+        # object as a whole failing to pickle. FresnelPropagator's documented
+        # `propagator=` reuse argument invites sending an unused instance to
+        # a dask.distributed worker before it has cached anything.
+        state = self.__dict__.copy()
+        del state["_local"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._local = threading.local()
+
     def _get_fftw_objects(self, array: np.ndarray) -> dict[str, "pyfftw.FFTW"]:
         key = (array.shape, array.dtype, array.strides, _fftw_plan_config())
 
