@@ -3,7 +3,7 @@
 Skipped unless PyTorch is installed on Apple silicon *and* 'enable_mps' was set
 before abTEM was imported, e.g.::
 
-    DASK_ENABLE_MPS=true pytest test/test_mps.py
+    ABTEM_ENABLE_MPS=true pytest test/test_mps.py
 
 Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.

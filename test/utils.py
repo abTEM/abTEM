@@ -205,7 +205,7 @@ requires_mps = pytest.mark.skipif(
     reason=(
         "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
         "installed, and 'enable_mps' set before abTEM is imported "
-        "(e.g. DASK_ENABLE_MPS=true pytest ...)"
+        "(e.g. ABTEM_ENABLE_MPS=true pytest ...)"
     ),
 )
 

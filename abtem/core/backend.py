@@ -111,9 +111,10 @@ def check_mps_is_enabled():
             "The Metal (MPS) backend is experimental and disabled by default. "
             "Set 'enable_mps' to true before importing abTEM -- it selects the "
             "library load order and so cannot be turned on afterwards -- either "
-            "in the configuration file or with the environment variable "
-            "DASK_ENABLE_MPS=true. It requires PyTorch (https://pytorch.org) on "
-            "macOS with Apple silicon."
+            "in ~/.config/abtem/abtem.yaml or with the environment variable "
+            "ABTEM_ENABLE_MPS=true (DASK_ENABLE_MPS on abTEM releases before "
+            "the configuration paths were fixed). It requires PyTorch "
+            "(https://pytorch.org) on macOS with Apple silicon."
         )
 
     from abtem.core import _torch
