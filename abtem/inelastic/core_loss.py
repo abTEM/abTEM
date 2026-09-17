@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import itertools
 import os
 import warnings
@@ -593,6 +594,42 @@ class BaseTransitionPotential(
         self._accelerator = Accelerator(energy=energy)
         self._double_channel = double_channel
         super().__init__(**kwargs)
+
+    def _task_local(self, match_to=None):
+        """A private view of this transition potential for one task.
+
+        A transition potential travels through the task graph as a single
+        node (see ``shared_constant_arg``), so every task on a worker -- and
+        every thread of the local scheduler -- is handed the *same* object.
+        Matching its grid and accelerator to the wave functions mutates that
+        shared state, which concurrent tasks would race on (an energy
+        ensemble puts a different energy in each task). Work on a shallow
+        copy with a private grid and accelerator instead, so nothing large
+        is copied.
+
+        Everything else stays shared, so this view alone is **not** enough
+        to call the mutating methods on: ``scatter`` and
+        ``generate_scattered_waves`` rebind ``_array`` and re-match the grid
+        on ``self``. Both drivers rely on following this call with
+        ``copy_to_device``, which rebuilds the object and privatizes that
+        derived state; a caller that skips it must not mutate the result.
+        The payload buffer itself is only ever read (the transforms
+        allocate rather than overwrite their input). Note that
+        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
+        attribute there gets it blanked in this view as well.
+
+        Parameters
+        ----------
+        match_to : Waves, optional
+            Match the private grid and accelerator to these wave functions.
+        """
+        task_local = copy.copy(self)
+        task_local._grid = self._grid.copy()
+        task_local._accelerator = self._accelerator.copy()
+        if match_to is not None:
+            task_local.grid.match(match_to)
+            task_local.accelerator.match(match_to)
+        return task_local
 
     @property
     def double_channel(self) -> bool:
@@ -1327,9 +1364,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
     else:
         transition_potential = transition_potentials
 
-    if isinstance(transition_potential, TransitionPotential):
-        transition_potential = transition_potential.build()
-
     potential = s_matrix.potential
     energy = s_matrix.energy
     extent = s_matrix.extent
@@ -1373,8 +1407,44 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         for s in potential.generate_slices()
     ]
 
-    transition_potential.grid.match(s_waves)
-    transition_potential.accelerator.match(s_waves)
+    # Arrives as one graph node shared by every task on this worker, so
+    # match on a private view rather than mutating it. See _task_local.
+    # Match BEFORE building: build() evaluates the form factors on self.gpts,
+    # so an unbuilt TransitionPotential needs the grid first. This is the
+    # order transition_potential_multislice_and_detect and
+    # TransitionPotential.scatter already use.
+    # An ALREADY-BUILT transition potential cannot be matched: its array has a
+    # fixed shape, and _task_local below would overwrite the grid to agree with
+    # s_waves while leaving that array alone -- leaving an object whose grid
+    # lies about its own contents (gpts (64, 64) over a (4, 32, 32) array,
+    # measured). The scan then completes and returns a result on the wrong
+    # grid: 18.1 % low against the matched reference on a Si cell, with an
+    # identical output shape, so nothing downstream can notice.
+    #
+    # So check first, while the grid still reports what the array actually is.
+    # Checking after the match is useless, because the match is what destroys
+    # the evidence. Grid.check_match paired with Accelerator.check_match is
+    # the same guard iam.py:1948 already uses for a potential against its
+    # waves -- energy is checked for the same reason as gpts/extent: build()
+    # bakes self.energy into the array's form factors (k0, kn, the
+    # relativistic mass correction and the interaction parameter all derive
+    # from it), so a built array whose grid matches but whose energy does not
+    # is exactly as stale as a gpts/extent mismatch, and _task_local's match
+    # would silently overwrite .energy to agree with s_waves while those
+    # baked-in form factors stay computed at the old one.
+    #
+    # The unbuilt case is untouched: it has no array yet, the match sets its
+    # grid and energy, and build() then evaluates the form factors on the
+    # right values -- which is what the preceding commit fixed.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(s_waves)
+        transition_potential.accelerator.check_match(s_waves)
+
+    transition_potential = transition_potential._task_local(match_to=s_waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
     transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
