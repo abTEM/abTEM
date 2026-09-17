@@ -631,3 +631,95 @@ def test_concatenates_with_self(data, has_array, lazy, device):
 # concat_array_object = concat_array_object_ensemble_blocks(blocks)
 #
 # assert array_object.compute() == concat_array_object
+
+
+class TestBaseLessArrayObject:
+    """`-len(self.base_shape)` is `-0` for a base-less object (`base_shape == ()`),
+    and Python has no negative zero: `[: -0]` is `[:0]`, always empty, and
+    `[-0 :]` is `[0:]`, always everything. Five sites in `abtem/array.py` used
+    that form; `MeasurementsEnsemble` (`abtem/measurements.py`, `_base_dims = 0`)
+    is the base-less class, reachable from public API via
+    `Images.to_measurement_ensemble()`.
+    """
+
+    @staticmethod
+    def _ensemble(chunks=None):
+        import ase.build
+
+        import abtem
+
+        atoms = ase.build.bulk("Si", cubic=True)
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+        scan = abtem.GridScan(start=(0, 0), end=(2, 2), sampling=1.0)
+        with abtem.config.set({"fft": "numpy"}):
+            images = probe.scan(
+                potential,
+                scan=scan,
+                detectors=abtem.AnnularDetector(inner=50, outer=150),
+                lazy=True,
+            )
+            m = images.to_measurement_ensemble()
+        assert m.base_shape == ()
+        if chunks is not None:
+            m = m.rechunk(chunks)
+        return m
+
+    def test_squeeze_removes_a_length_one_ensemble_axis(self):
+        m = self._ensemble()
+        sliced = m[0:1]
+        assert sliced.shape == (1, 2)
+        assert sliced.squeeze().shape == (2,)
+
+    def test_has_base_chunks_is_false_with_no_base_dims(self):
+        m = self._ensemble(chunks=(1, 1))
+        assert m.array.chunks == ((1, 1), (1, 1))
+        assert m._has_base_chunks is False
+
+    def test_no_base_chunks_is_a_no_op(self):
+        m = self._ensemble(chunks=(1, 1))
+        before = m.array.chunks
+        after = m.no_base_chunks().array.chunks
+        assert after == before
+
+    def test_no_base_chunks_own_arithmetic_is_correct_even_if_reached(
+        self, monkeypatch
+    ):
+        """`no_base_chunks()`'s early return on a correct `_has_base_chunks`
+        already keeps the buggy line from firing for a base-less object --
+        the test above pins that. This pins the line itself: forcing the
+        guard open (as a stale or differently-computed `_has_base_chunks`
+        might) must not resurrect the -0 collapse into one block."""
+        m = self._ensemble(chunks=(1, 1))
+        monkeypatch.setattr(
+            type(m), "_has_base_chunks", property(lambda self: True)
+        )
+        after = m.no_base_chunks().array.chunks
+        assert after == ((1, 1), (1, 1))
+
+    def test_partition_args_does_not_raise(self):
+        m = self._ensemble()
+        m._partition_args()  # used to raise ValueError
+
+    def test_apply_transform_reaches_every_ensemble_axis(self):
+        """`ArrayObject.apply_transform`'s blockwise callback sliced ensemble
+        axes off with the same -0 bug (`_apply_transform`'s `base_ndims`
+        argument), so applying any `ArrayObjectTransform` to a base-less
+        object either crashed (axes-metadata/array-ndim mismatch) or silently
+        dropped every ensemble axis."""
+        from abtem.transform import TransformFromFunc
+
+        m = self._ensemble()
+
+        def double(array_object, **kwargs):
+            return array_object.array * 2
+
+        transformed = TransformFromFunc(func=double, func_kwargs={}).apply(m)
+        assert transformed.shape == m.shape
+
+        import numpy as np
+
+        assert np.allclose(
+            np.asarray(transformed.compute().array),
+            np.asarray(m.compute().array) * 2,
+        )
