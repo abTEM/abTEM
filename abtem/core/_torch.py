@@ -187,10 +187,32 @@ def _wrap(x):
 
 
 def _unwrap_key(key):
-    """Unwrap the (possibly nested) index expression of a ``__getitem__``."""
+    """Unwrap the (possibly nested) index expression of a ``__getitem__``.
+
+    An integer index array is also widened to int64. NumPy reads *any*
+    non-boolean integer dtype as a list of indices, while torch still reads
+    uint8 as a boolean mask -- its pre-bool spelling -- so ``a[:, :, idx]``
+    with a uint8 ``idx`` silently means two different things. Only a genuine
+    bool array stays a mask.
+    """
     if isinstance(key, tuple):
         return tuple(_unwrap_key(k) for k in key)
-    return _unwrap(key)
+
+    key = _unwrap(key)
+
+    if isinstance(key, np.ndarray) and key.dtype != np.bool_:
+        if np.issubdtype(key.dtype, np.integer):
+            key = key.astype(np.int64)
+    elif (
+        torch is not None
+        and isinstance(key, torch.Tensor)
+        and key.dtype not in (torch.bool, torch.int64)
+        and not key.is_floating_point()
+        and not key.is_complex()
+    ):
+        key = key.long()
+
+    return key
 
 
 def _resolve_reversed_slices(tensor, key):
