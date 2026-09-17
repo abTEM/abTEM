@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_ab_in_plane, is_cell_orthogonal
+from abtem.atoms import is_cell_ab_in_plane, is_cell_orthogonal, wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -688,8 +688,41 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Wrapping unconditionally moved such
+        # an atom the full height of the box, which is the same depth
+        # corruption this wrap exists to prevent, just for the other path.
+        # Callers that know the potential's convention pass it through; the
+        # default wraps, since that is right for everything else that reaches
+        # here.
+        # Validate first: BaseSlicedAtoms checks the weaker is_cell_ab_in_plane
+        # (a and b in the xy-plane; the in-plane cell may itself be skewed --
+        # see test_skew_potential_non_orthogonal_cell, which builds an
+        # "infinite" projection Potential, i.e. through this class, on a
+        # genuinely non-orthogonal cell). A cell that fails even that (e.g.
+        # the a-axis has a z-component) must be rejected here rather than by
+        # wrap_and_snap_atoms below, which reads np.diag(atoms.cell) and would
+        # silently ignore shear terms instead of raising.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
@@ -702,6 +735,22 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         bin_edges -= 1e-12
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
+
+        # label_to_index silently discards labels outside [0, num_slices - 1],
+        # which is how an out-of-cell atom used to disappear. After the wrap
+        # above there is no such atom, so say so rather than dropping one.
+        # Only meaningful after a wrap: with wrap=False (a non-periodic
+        # potential) an atom outside the cell is expected, and label_to_index
+        # dropping it is the pre-existing behaviour this must not change.
+        # np.digitize against increasing bins returns [0, len(bins)], never
+        # negative, so only the upper end can escape.
+        if wrap and len(labels) and labels.max() > len(self) - 1:
+            raise RuntimeError(
+                f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
+                f"every one of the {len(self)} slices after wrapping; the "
+                "first is at z = "
+                f"{self.atoms.positions[labels > len(self) - 1][0, 2]!r}"
+            )
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)

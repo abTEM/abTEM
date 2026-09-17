@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 from abc import ABCMeta, abstractmethod
+from collections import OrderedDict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -53,6 +55,201 @@ def _require_orthogonal_cell(cell: Optional[np.ndarray]) -> None:
             "this projection integrator does not yet support non-orthogonal grids; "
             "use the (default) ScatteringFactorProjectionIntegrals"
         )
+
+
+_MAX_CACHE_ENTRIES = 32
+
+# Kept as the name the scattering-factor tests import.
+_MAX_SCATTERING_FACTOR_ENTRIES = _MAX_CACHE_ENTRIES
+
+
+class _CacheStateMixin:
+    """Normalise cache attributes restored from an older pickle.
+
+    ``__setstate__`` gets ``__dict__`` verbatim, so an integrator pickled
+    before these caches existed -- ``_sinc_cache`` only arrived in PR #269 --
+    comes back missing them, and one pickled while they were plain dicts comes
+    back with objects that have ``.get`` but not ``.put``. The miss path, not
+    the hit path, would then raise. Restore both to the current container.
+    """
+
+    _cache_attributes: tuple[str, ...] = ()
+
+    def __getstate__(self):
+        """Drop the caches on the way out.
+
+        abTEM pickles integrators into every task graph, so a populated cache
+        rides along to every worker. Measured on a warm four-configuration
+        frozen-phonon graph at 512^2, the caches this file keeps inflate it
+        126x (scattering factor), 532x (quadrature) and 39x (gaussian); a
+        sampling sweep takes a pickled quadrature integrator to 69 MB. That is
+        the same mechanism this commit cites when deleting the two caches that
+        never stored -- keeping the others un-dropped while deleting those for
+        graph inflation would be incoherent.
+
+        They are pure derived state that any worker can rebuild, and
+        __setstate__ below recreates them empty. Same discipline as
+        _local_potential_on_device.__getstate__ in core_loss.py (PR #375).
+
+        This also settles the __eq__/tokenize disagreement: two integrators
+        that compare equal now tokenize equal, because tokenize pickles.
+        """
+        state = self.__dict__.copy()
+        for name in self._cache_attributes:
+            state.pop(name, None)
+        return state
+
+    def __setstate__(self, state):
+        """Restore, with every cache empty.
+
+        Contents are deliberately not carried over, even when the state dict
+        has them. Only a pickle written before __getstate__ existed can, and
+        its entries are keyed in the *old* shape -- _sorted_disks without a
+        precision component, _tables without sampling -- so reusing them would
+        serve a value found under an incomplete key, which is the whole defect
+        this commit exists to fix. They are derived state; recomputing costs a
+        miss and gives the same answer.
+
+        The attribute still has to be replaced rather than trusted: an
+        integrator pickled before these caches existed (_sinc_cache post-dates
+        PR #269) comes back missing them entirely, and one pickled while they
+        were plain dicts comes back with an object that has .get but not .put,
+        so the miss path -- not the hit path -- raised AttributeError.
+        """
+        self.__dict__.update(state)
+        for name in self._cache_attributes:
+            self.__dict__[name] = _DeviceArrayCache()
+
+
+class _DeviceArrayCache(Mapping):
+    """A bounded, least-recently-used cache of computed arrays.
+
+    Deliberately a plain ``OrderedDict`` rather than ``functools.lru_cache``: a
+    per-instance ``lru_cache`` wrapping a bound method is not picklable -- it
+    resolves by ``__qualname__`` and no longer matches the class attribute of
+    that name -- which breaks dask's processes scheduler and ``distributed``,
+    i.e. the multi-GPU layout these device keys exist to serve. It also breaks
+    ``EqualityMixin`` comparison and ``deepcopy``. See PR #388.
+
+    Eviction cannot race: ``popitem`` and ``move_to_end`` are single C-level
+    dict operations, and the ``KeyError`` a losing thread sees is caught rather
+    than escaping to the caller.
+    """
+
+    def __init__(self, maxsize: int = _MAX_CACHE_ENTRIES):
+        self._maxsize = maxsize
+        self._entries: OrderedDict = OrderedDict()
+
+    def get(self, key, default=None):
+        """The cached value for ``key``, or ``default``, refreshing its recency.
+
+        The two-argument form matters: ``tables`` and ``scattering_factors``
+        are public properties that returned a plain dict before this container
+        existed, and keeping them dict-like is the whole reason this is a
+        Mapping. A one-argument override shadows ``Mapping.get`` and makes
+        ``scattering_factors.get(key, "not cached")`` -- ordinary dict usage --
+        raise TypeError instead of returning the default.
+        """
+        try:
+            value = self._entries[key]
+        except KeyError:
+            return default
+        try:
+            self._entries.move_to_end(key)
+        except KeyError:  # evicted by another thread; the value is still ours
+            pass
+        return value
+
+    def put(self, key, value):
+        """Store ``value`` under ``key`` and return it."""
+        while len(self._entries) >= self._maxsize:
+            try:
+                self._entries.popitem(last=False)
+            except KeyError:  # another thread emptied it
+                break
+        self._entries[key] = value
+        return value
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    # ``QuadratureProjectionIntegrals.tables`` and
+    # ``ScatteringFactorProjectionIntegrals.scattering_factors`` are public
+    # properties that returned a plain dict before this container existed, so
+    # it has to keep behaving like one -- Mapping supplies keys/values/items/
+    # __contains__/get on top of __getitem__/__iter__/__len__. Note Mapping
+    # also supplies __eq__, which is why ours is defined *after* this in the
+    # class body and wins.
+    def __getitem__(self, key):
+        return self._entries[key]
+
+    def __eq__(self, other) -> bool:
+        # A cache is incidental state, never identity: two integrators with the
+        # same parametrization are the same integrator whether or not either
+        # has been used. Comparing contents would compare numpy arrays, which
+        # safe_equality turns into an unequal verdict via its ValueError guard,
+        # so a used integrator would stop comparing equal to an identical fresh
+        # one.
+        #
+        # This fixes the comparison at the *integrator* level only. A built
+        # Potential still compares unequal to an identical unbuilt one, because
+        # Potential.build() populates _sliced_atoms lazily -- the same defect
+        # shape one level up, and out of scope here.
+        return isinstance(other, _DeviceArrayCache)
+
+    __hash__ = None
+
+
+def _precision_key() -> str:
+    """The current precision, as a cache-key component.
+
+    Every cached value here is built through ``get_dtype``, directly or via
+    ``spatial_frequencies``, so a key without it serves a float32 entry to a
+    float64 request. Silent, and small enough that ``np.allclose`` with default
+    tolerances calls the wrong answer correct.
+    """
+    return str(np.dtype(get_dtype(complex=False)))
+
+
+def _hashable_cell(cell: Optional[np.ndarray]) -> Optional[tuple]:
+    """Convert a cell (array-like or ``None``) to a hashable, immutable form
+    suitable for use as a cache-key component.
+
+    A skewed cell changes the reciprocal metric the scattering factor is built
+    from, so a key without it would serve one cell's array to a different
+    cell's request -- the same class of bug ``_precision_key`` exists to avoid
+    elsewhere in this file. Duplicated from
+    ``abtem.measurements._hashable_cell`` rather than imported, to avoid a
+    circular import (``measurements`` sits above this module).
+    """
+    if cell is None:
+        return None
+    return tuple(tuple(float(x) for x in row) for row in np.asarray(cell))
+
+
+def _device_cache_key(device, like=None) -> str | tuple[str, int]:
+    """Name the concrete device a cached array belongs to.
+
+    The ``device`` threaded through the integrators is the plain "cpu"/"gpu"
+    string, which does not distinguish one GPU from another. Read the device
+    off ``like`` -- an array the cached value will be combined with -- the way
+    ``_local_potential_on_device`` (core_loss.py) and
+    ``_radial_binning_device_arrays`` (measurements.py) read it off theirs.
+    That is what makes the key right when one process drives several GPUs: the
+    ambient CUDA context can differ from the device an array actually lives on.
+
+    Without ``like`` there is nothing to anchor to and the current device is
+    the best available answer. Callers that have an array should pass it.
+    """
+    xp = get_array_module(device)
+    if xp is np:
+        return "cpu"
+    if like is not None and get_array_module(like) is not np:
+        return ("gpu", int(like.device.id))
+    return ("gpu", int(xp.cuda.Device().id))
 
 
 class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -145,7 +342,12 @@ def correction_projected_scattering_factors(
     long_range = long_range.projected_scattering_factor(symbol)
 
     correction = short_range(k**2) - long_range(k**2)
-    # correction /= sinc()
+    # A commented-out `correction /= sinc()` sat here and read like an
+    # unfinished step. It is not: integrate_on_grid divides the *summed*
+    # gaussian-plus-correction array by sinc once, so dividing here as well
+    # double-divides. Restoring it makes the result diverge rather than
+    # converge as the sampling is refined -- total ratio against the quadrature
+    # integrator goes 2.70 / 7.78 / 28.12 at gpts 128 / 256 / 512.
     return correction
 
 
@@ -180,7 +382,114 @@ def gaussian_projection_weights(symbol, a, b, parametrization="peng"):
     return weights
 
 
-class GaussianProjectionIntegrals(FieldIntegrator):
+def _sinc_on_device(gpts, sampling, device, device_key):
+    """``sinc`` built inside the context of the device its key names."""
+    if device_key == "cpu":
+        return sinc(gpts, sampling, "cpu")
+
+    import cupy as cp  # noqa: PLC0415 -- optional dependency
+
+    with cp.cuda.Device(device_key[1]):
+        return sinc(gpts, sampling, "gpu")
+
+
+# The largest scale-relative deviation a Gaussian-form parametrization may show
+# when rebuilt from its own parameters. Peng, the only one abTEM ships, reaches
+# 1.8e-07 at float32 and 1.8e-16 at float64 over all 98 elements it covers on a
+# 128^2 grid; the nearest rejection, Kirkland, is 0.275, and Lobato is 2.3-3.8.
+# Three decades of headroom above the former and three below the latter.
+_GAUSSIAN_FORM_TOLERANCE = 1e-4
+
+
+def _validate_gaussian_form(parametrization, symbol: str, gpts, sampling):
+    """Reject a parametrization that is not a superposition of Gaussians.
+
+    ``gaussian_parametrization`` is documented as requiring that form and
+    nothing checked it: ``gaussian_projected_scattering_factors`` evaluates
+    ``a exp(-b k^2)`` on whatever ``(2, n)`` array it is handed, so Lobato --
+    same shape, different functional form -- produced a potential whose plane
+    integral is 3.3x too large for carbon and 4.8x for silicon, finite
+    everywhere.
+
+    The test is functional rather than a name check: rebuild the scattering
+    factor from the parameters as a Gaussian sum and compare with the
+    parametrization's own.
+
+    **On the grid the call is about to use**, not on a fixed window. An earlier
+    version sampled ``linspace(0.01, 4.0, 32)``, which covers 2.3 % of the k^2
+    a 128^2 build evaluates and 0.1 % of a 512^2 one -- and 32 points across
+    that window sit 0.13 apart, so a feature narrower than that fell between
+    them as well. Both holes were reachable: a Peng subclass carrying a bump at
+    k^2 = 20, or one between two sample points, passed the check and built a
+    potential several per cent to tens of per cent wrong. Using the real grid
+    costs nothing, since ``gaussian_projected_scattering_factors`` computes it
+    one call later.
+
+    Both sides are evaluated at the configured precision. Mixing them made the
+    verdict depend on ``abtem.config``: ``scaled_parameters`` is float64 while
+    ``Parametrization._get_function`` casts to ``get_dtype``, so the same
+    parametrization could be accepted at float64 and rejected at float32.
+
+    Checked **per element, for the element actually being used**, not once at
+    construction for a fixed one. A first version validated only carbon, which
+    rejected the shipped ``peng_ionic.json`` (all ions, no carbon) and let a
+    parametrization whose carbon entry is sound but whose silicon entry is not
+    through silently.
+
+    This also rejects a parametrization whose ``scaled_parameters`` and whose
+    own scattering-factor function disagree about the number of terms -- which
+    is what Peng does if its parameter table is extended past five, because
+    ``scattering_factor_k2`` is hardcoded to five. That rejection is wanted:
+    the extra Gaussians would be added to the field while ``get_corrections``
+    and ``cutoff`` still saw five.
+    """
+    fp_dtype = get_dtype(complex=False)
+    try:
+        parameters = parametrization.scaled_parameters(
+            symbol, "projected_scattering_factor"
+        )
+        own_function = parametrization.projected_scattering_factor(symbol)
+    except Exception as exc:  # noqa: BLE001 -- re-raised with context
+        raise ValueError(
+            f"{type(parametrization).__name__} cannot provide a projected "
+            f"scattering factor for {symbol!r}, so it cannot be used as "
+            "gaussian_parametrization"
+        ) from exc
+
+    parameters = np.asarray(parameters, dtype=fp_dtype)
+    if parameters.ndim != 2 or parameters.shape[0] != 2:
+        raise ValueError(
+            f"{type(parametrization).__name__} is not a superposition of "
+            f"Gaussians for {symbol!r}: expected (2, n) amplitude/width "
+            f"parameters, got {parameters.shape}"
+        )
+
+    k, _ = polar_spatial_frequencies(gpts, sampling)
+    k2 = np.asarray(k, dtype=fp_dtype) ** 2.0
+    own = np.asarray(own_function(k2), dtype=fp_dtype)
+    reconstructed = (
+        parameters[0][:, None, None] * np.exp(-parameters[1][:, None, None] * k2[None])
+    ).sum(0)
+
+    # Scale-relative, not np.allclose: these span many orders of magnitude
+    # across the grid, and at large k^2 both sides are ~0, where a per-element
+    # relative tolerance compares noise with noise.
+    deviation = float(np.abs(reconstructed - own).max() / np.abs(own).max())
+    if not deviation <= _GAUSSIAN_FORM_TOLERANCE:
+        raise ValueError(
+            f"{type(parametrization).__name__} is not a superposition of "
+            f"Gaussians for {symbol!r}: rebuilding its projected scattering "
+            "factor from its own parameters as a sum of Gaussians does not "
+            f"reproduce it on a {tuple(gpts)} grid (max deviation "
+            f"{deviation:.3g} of peak, tolerance "
+            f"{_GAUSSIAN_FORM_TOLERANCE:g}). gaussian_parametrization requires "
+            "a Gaussian-form parametrization such as Peng, and its parameter "
+            "table must have the same number of terms its own "
+            "scattering-factor function uses."
+        )
+
+
+class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     """
     Parameters
     ----------
@@ -195,7 +504,55 @@ class GaussianProjectionIntegrals(FieldIntegrator):
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the
         potential [eV / e]. Default is 1e-3.
+
+    Notes
+    -----
+    The short-range correction is **not** resolved along z. The Gaussian term is:
+    each atom contributes to every slice, weighted by the analytic z-integral of
+    each Gaussian between that slice's limits. The correction term is not: the
+    whole infinitely-projected difference between the two parametrizations is
+    added to the one slice the atom's centre falls in.
+
+    Summed over slices the two terms recover the full projection of
+    ``parametrization`` -- exact up to ``_GAUSSIAN_FORM_TOLERANCE``, not
+    unconditionally. The identity holds only where the Gaussian sum built from
+    ``scaled_parameters`` equals the parametrization's own
+    ``projected_scattering_factor``, and the form check bounds their
+    disagreement globally, as ``max|difference| / max|own|``. A discrepancy
+    parked where ``own`` is small relative to the grid's peak therefore costs
+    almost nothing globally while being large locally: a Peng subclass with a
+    bump at k^2 = 150 on a 128^2 grid is accepted at a global deviation of
+    5.5e-05 while differing by 4.8 % locally, leaving the total off by 3.2e-04.
+    For the shipped Peng/Lobato default the disagreement is ~1.8e-07 and the
+    total is exact to that, but a custom ``gaussian_parametrization`` should not
+    read this as an unconditional guarantee.
+
+    Distribution between slices is a separate matter, and a worse one: it is a
+    good approximation only if the difference between the two parametrizations
+    is confined to a region thinner than a slice. It is not. Measured for silicon, the fraction
+    of the correction that actually belongs in the atom's own slice is 11 % at
+    dz = 0.5 A, 20 % at 1 A and 31 % at 2 A, against 44 / 67 / 90 % for the
+    atom's own potential: the correction is *less* localised in z than the atom
+    it corrects, because a five-Gaussian fit crosses a different functional form
+    repeatedly rather than agreeing with it outside the core.
+
+    The cost is a redistribution of potential between neighbouring slices, not a
+    change in the total. Building a single silicon atom against
+    ``QuadratureProjectionIntegrals`` at matched cutoff, the largest per-slice
+    deviation grows as 1/dz -- 0.16 % for one slice holding the whole atom,
+    0.62 % at dz = 1 A, 3.5 % at dz = 0.125 A -- while the total stays within
+    1563-1643 ppm throughout. **Refining the slicing makes it worse**, which is
+    the signature of a model choice rather than a discretisation error.
+
+    Whether that is acceptable, and whether the correction should carry a real
+    z-profile, is an open question: giving it one means a numerical z-quadrature
+    for that term, since the difference of the two parametrizations has no
+    closed-form z-integral. Until it is settled, prefer
+    ``QuadratureProjectionIntegrals`` where the distribution of potential within
+    a slice matters, and this class where periodicity does.
     """
+
+    _cache_attributes = ("_gaussians", "_corrections", "_sinc_cache")
 
     def __init__(
         self,
@@ -213,8 +570,16 @@ class GaussianProjectionIntegrals(FieldIntegrator):
 
         super().__init__(periodic=True, finite=True)
 
-        self._gaussians = {}
-        self._corrections = {}
+        # integrate_on_grid runs once per slice per species and recomputes
+        # both parametrization arrays each time -- 46x redundant for a 46-slice
+        # cell, and 65-70 % of CPU build time (89 % on GPU at 1024^2, which is
+        # why the device could not help). The previous commit deleted these two
+        # caches because as written they were unusable: they never stored, their
+        # key omitted precision, and they rode into every task graph. Restored
+        # here with the key they always needed and excluded from __getstate__.
+        self._gaussians = _DeviceArrayCache()
+        self._corrections = _DeviceArrayCache()
+        self._sinc_cache = _DeviceArrayCache()
 
     @property
     def cutoff_tolerance(self):
@@ -224,12 +589,16 @@ class GaussianProjectionIntegrals(FieldIntegrator):
 
     @property
     def gaussian_parametrization(self):
-        """The error tolerance used for deciding the radial cutoff distance of the
-        potential [eV / e]."""
+        """The Gaussian radial potential parametrization that is superposed to build
+        the projected field. Must be a superposition of Gaussians."""
         return self._gaussian_parametrization
 
     @property
     def correction_parametrization(self):
+        """The radial potential parametrization the short-range correction is taken
+        from. Set by the `parametrization` argument, which is named for consistency
+        with the other integrators; the correction is the difference between this
+        parametrization and `gaussian_parametrization`."""
         return self._correction_parametrization
 
     def cutoff(self, symbol: str) -> float:
@@ -241,18 +610,48 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        key = (symbol, gpts, sampling)
-        if key in self._gaussians:
-            return self._gaussians[key]
+        # Host-side: the helper takes no device, so the key needs none -- but
+        # it does need the precision, which reaches the value through
+        # spatial_frequencies.
+        key = (symbol, tuple(gpts), tuple(sampling), _precision_key())
+        cached = self._gaussians.get(key)
+        if cached is not None:
+            return cached
 
-        return gaussian_projected_scattering_factors(symbol, gpts, sampling)
+        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+
+        return self._gaussians.put(
+            key,
+            gaussian_projected_scattering_factors(
+                symbol, gpts, sampling, parametrization=self._gaussian_parametrization
+            ),
+        )
 
     def get_corrections(self, symbol, gpts, sampling):
-        key = (symbol, gpts, sampling)
-        if key in self._corrections:
-            return self._corrections[key]
+        key = (symbol, tuple(gpts), tuple(sampling), _precision_key())
+        cached = self._corrections.get(key)
+        if cached is not None:
+            return cached
 
-        return correction_projected_scattering_factors(symbol, gpts, sampling)
+        # Validated here too, not only in get_gaussians. The correction is
+        # short_range - long_range with long_range = gaussian_parametrization,
+        # so a non-Gaussian one yields a plausible-looking array rather than an
+        # error. integrate_on_grid happens to call get_gaussians first, which
+        # would raise before this is reached -- but that is an ordering
+        # accident, and get_corrections is public. Validating both makes the
+        # guarantee a property of the methods rather than of their call order.
+        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+
+        return self._corrections.put(
+            key,
+            correction_projected_scattering_factors(
+                symbol,
+                gpts,
+                sampling,
+                short_range=self._correction_parametrization,
+                long_range=self._gaussian_parametrization,
+            ),
+        )
 
     def _integrate_gaussians(self, positions, symbol, a, b, gpts, sampling, device):
         gaussians = self.get_gaussians(symbol, gpts, sampling)
@@ -260,18 +659,38 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         shifted_a = a - positions[:, 2]
         shifted_b = b - positions[:, 2]
 
-        weights = gaussian_projection_weights(symbol, shifted_a, shifted_b)
+        weights = gaussian_projection_weights(
+            symbol,
+            shifted_a,
+            shifted_b,
+            parametrization=self._gaussian_parametrization,
+        )
 
         xp = get_array_module(device)
         fp_dtype = get_dtype(complex=False)
         cx_dtype = get_dtype(complex=True)
         positions = (positions[:, :2] / sampling).astype(fp_dtype)
+        # The parametrization helpers are host-only, so move their results
+        # across before they meet a device array. Cast on the way: the
+        # parameters are float64 regardless of the configured precision, so
+        # transferring them raw moves twice the bytes a float32 run needs.
+        # Only on device -- casting on the host path would change CPU results.
+        if xp is not np:
+            gaussians = xp.asarray(gaussians, dtype=fp_dtype)
+            weights = xp.asarray(weights, dtype=fp_dtype)
 
         array = xp.zeros(gpts, dtype=cx_dtype)
-        for i in range(5):
-            temp = xp.zeros_like(array, dtype=cx_dtype)
+        # Was hardcoded to 5 while the parametrization became configurable, so
+        # a six-term parametrization silently dropped its last Gaussian and a
+        # three-term one raised IndexError.
+        for i in range(len(gaussians)):
+            # Superpose into a real array and cast afterwards, as the infinite
+            # projection does: cupy's scatter-add has no complex overload.
+            temp = xp.zeros(gpts, dtype=fp_dtype)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(cx_dtype)
+            array += fft2(temp.astype(cx_dtype), overwrite_x=True) * gaussians[
+                i
+            ].astype(cx_dtype)
 
         return array
 
@@ -281,15 +700,20 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         xp = get_array_module(device)
         fp_dtype = get_dtype(complex=False)
         cx_dtype = get_dtype(complex=True)
+        if xp is not np:
+            # Real, not complex: the imaginary part is identically zero, so a
+            # complex cast saved nothing at float32 and doubled the transfer at
+            # float64 -- and left cpu and gpu disagreeing on dtype.
+            corrections = xp.asarray(corrections, dtype=fp_dtype)
 
         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
         positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=cx_dtype)
+        array = xp.zeros(gpts, dtype=fp_dtype)
 
         superpose_deltas(positions, array)
 
-        corrections = fft2(array, overwrite_x=False) * corrections
+        corrections = fft2(array.astype(cx_dtype), overwrite_x=False) * corrections
 
         return corrections
 
@@ -301,7 +725,6 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-        fourier_space: bool = False,
         cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         _require_orthogonal_cell(cell)
@@ -319,14 +742,19 @@ class GaussianProjectionIntegrals(FieldIntegrator):
                 positions, symbol, a, b, gpts, sampling, device
             )
 
-        if not hasattr(self, "_sinc_cache"):
-            self._sinc_cache = {}
+        # `array` is already on the device this result must live on, so use it
+        # as the anchor rather than the ambient CUDA context, and build the
+        # sinc there too -- keying on one device while allocating on another is
+        # the half-fix PR #388 had to correct.
+        device_key = _device_cache_key(device, like=array)
+        sinc_key = (tuple(gpts), tuple(sampling), device_key, _precision_key())
+        sinc_array = self._sinc_cache.get(sinc_key)
+        if sinc_array is None:
+            sinc_array = self._sinc_cache.put(
+                sinc_key, _sinc_on_device(gpts, sampling, device, device_key)
+            )
 
-        sinc_key = (gpts, sampling, device)
-        if sinc_key not in self._sinc_cache:
-            self._sinc_cache[sinc_key] = sinc(gpts, sampling, device)
-
-        return ifft2(array / self._sinc_cache[sinc_key]).real
+        return ifft2(array / sinc_array).real
 
 
 def sinc(
@@ -438,7 +866,7 @@ def superpose_deltas(
     return array
 
 
-class ScatteringFactorProjectionIntegrals(FieldIntegrator):
+class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     """
     A FieldIntegrator calculating infinite projections of radial potential
     parametrizations. The hybrid real and reciprocal space method by
@@ -456,9 +884,12 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     doi:10.1016/j.ultramic.2015.07.005.
     """
 
+    _cache_attributes = ("_scattering_factors",)
+
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
-        self._scattering_factors = {}
+        # See _DeviceArrayCache for why this is not a functools.lru_cache.
+        self._scattering_factors = _DeviceArrayCache()
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -499,20 +930,68 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device, cell=None):
-        try:
-            scattering_factor = self.scattering_factors[symbol]
-        except KeyError:
-            scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device, cell=cell
+    def get_scattering_factor(self, symbol, gpts, sampling, device, cell=None, like=None):
+        # The cached array depends on the grid, the (possibly skewed) cell and
+        # the device it was allocated on, not on the element alone: keying on
+        # ``symbol`` served the first grid's array to every later grid (a
+        # broadcast error one frame away, in integrate_on_grid), the first
+        # cell's array to every later cell (wrong reciprocal metric for a
+        # skewed grid), and the first device's array to every later device (a
+        # numpy array handed to a cupy kernel).
+        #
+        # ``device`` itself is deliberately not part of the key: it may be an
+        # array or a module (get_array_module accepts both), which is not
+        # always hashable, and "gpu" and the cupy module would otherwise take
+        # two entries for one physical device. ``device_key`` is canonical.
+        device_key = _device_cache_key(device, like)
+        key = (
+            symbol,
+            tuple(gpts),
+            tuple(sampling),
+            _hashable_cell(cell),
+            device_key,
+            _precision_key(),
+        )
+
+        scattering_factor = self._scattering_factors.get(key)
+        if scattering_factor is None:
+            scattering_factor = self._scattering_factors.put(
+                key,
+                self._calculate_scattering_factor_on_device(
+                    symbol, gpts, sampling, device_key, cell=cell
+                ),
             )
-            self._scattering_factors[symbol] = scattering_factor
 
         return scattering_factor
 
+    def _calculate_scattering_factor_on_device(
+        self, symbol, gpts, sampling, device_key, cell=None
+    ):
+        """Build the scattering factor *on the device named by the key*.
+
+        Anchoring only the key on ``like`` would have been half a fix: the key
+        would say one device while the allocation followed the ambient CUDA
+        context, so under multi-GPU use the array could be cached under a
+        device it does not live on. Allocate inside that device's context, as
+        ``_local_potential_on_device`` (core_loss.py) does with
+        ``with like.device:``.
+        """
+        if device_key == "cpu":
+            return self._calculate_scattering_factor(
+                symbol, gpts, sampling, "cpu", cell=cell
+            )
+
+        import cupy as cp  # noqa: PLC0415 -- optional dependency
+
+        with cp.cuda.Device(device_key[1]):
+            return self._calculate_scattering_factor(
+                symbol, gpts, sampling, "gpu", cell=cell
+            )
+
     @property
-    def scattering_factors(self) -> dict[str, np.ndarray]:
-        """Projected scattering factor array on a 2D grid."""
+    def scattering_factors(self) -> Mapping[tuple, np.ndarray]:
+        """Cached projected scattering factors, keyed by element, grid and
+        device."""
         return self._scattering_factors
 
     def integrate_on_grid(
@@ -533,8 +1012,11 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
+            # Anchor the cache's device key on an array the scattering factor
+            # will actually be combined with, rather than on the ambient CUDA
+            # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device, cell=cell
+                chemical_symbols[number], gpts, sampling, device, cell=cell, like=array
             )
 
             positions = atoms.positions[atoms.numbers == number]
@@ -845,7 +1327,7 @@ def cutoff_taper(radial_gpts, cutoff, taper):
     return taper_values
 
 
-class QuadratureProjectionIntegrals(FieldIntegrator):
+class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     """
     Projection integration plan for calculating finite projection integrals based on
     Gaussian quadrature rule.
@@ -870,6 +1352,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         Default is 8.
     """
 
+    _cache_attributes = ("_tables", "_sorted_disks", "_device_arrays")
+
     def __init__(
         self,
         parametrization: str | Parametrization = "lobato",
@@ -885,10 +1369,15 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._cutoff_tolerance = cutoff_tolerance
         self._inner_cutoff_factor = inner_cutoff_factor
         self._integration_step = integration_step
-        self._tables: dict[str, ProjectionIntegralTable] = {}
-        self._sorted_disks: dict[
-            tuple[str, tuple[float, float]], tuple[np.ndarray, np.ndarray]
-        ] = {}
+        # Keyed on the element ALONE until 2026-09: _calculate_integral_table
+        # sets inner_limit from min(sampling), which sets the radial grid, so
+        # reusing one integrator across a sampling sweep served the first
+        # sampling's table and built a potential ~54 % wrong.
+        self._tables = _DeviceArrayCache()
+        # Host-side sorted disk, keyed by (symbol, sampling) -- correct, but
+        # previously unbounded, so a sampling sweep accumulated it without
+        # limit while its device-resident twin below was capped.
+        self._sorted_disks = _DeviceArrayCache()
         # Device-resident copy of the sorted disk, keyed by
         # (symbol, sampling, device). The disk is invariant per (symbol,
         # sampling) across all slices, but integrate_on_grid is called once
@@ -898,7 +1387,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         # changing between calls. Only disks small enough to fit within
         # the chunked-transfer bound are cached; larger disks are streamed
         # in memory-bounded chunks instead (see integrate_on_grid).
-        self._device_arrays: dict[tuple[str, tuple[float, float], str], object] = {}
+        self._device_arrays = _DeviceArrayCache()
 
         super().__init__(periodic=False, finite=True)
 
@@ -1003,9 +1492,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
 
         table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
 
-        self._tables[symbol] = ProjectionIntegralTable(radial_gpts, limits[1:], table)
-
-        return self._tables[symbol]
+        return ProjectionIntegralTable(radial_gpts, limits[1:], table)
 
     def get_integral_table(self, symbol, sampling):
         """
@@ -1024,13 +1511,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         projection_integral_table :
             ProjectionIntegralTable
         """
-        try:
-            scattering_factor = self.tables[symbol]
-        except KeyError:
-            scattering_factor = self._calculate_integral_table(symbol, sampling)
-            self._tables[symbol] = scattering_factor
+        key = (symbol, tuple(sampling), _precision_key())
+        table = self._tables.get(key)
+        if table is None:
+            table = self._tables.put(
+                key, self._calculate_integral_table(symbol, sampling)
+            )
 
-        return scattering_factor
+        return table
 
     def integrate_on_grid(
         self,
@@ -1085,10 +1573,19 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 # the Ewald short-range correction) rescans the full, hugely oversized
                 # mesh for every slice even though most slices are far enough from the
                 # atom in z that only a tiny lateral neighborhood can contribute.
+                #
+                # The cache key also carries precision (see the non-skew branch's
+                # comment for why: `cutoff` is precision-dependent, and serving a
+                # float32 disk to a float64 build is measurably wrong).
                 cutoff = table.radial_gpts[-1]
-                disk_key = (chemical_symbols[number], tuple(sampling_vectors.ravel()))
-                if disk_key in self._sorted_disks:
-                    disk, disk_radii = self._sorted_disks[disk_key]
+                disk_key = (
+                    chemical_symbols[number],
+                    tuple(sampling_vectors.ravel()),
+                    _precision_key(),
+                )
+                cached_disk = self._sorted_disks.get(disk_key)
+                if cached_disk is not None:
+                    disk, disk_radii = cached_disk
                 else:
                     op_norm = float(np.linalg.norm(inv_jacobian, ord=2))
                     disk_radius_pixels = int(np.ceil(cutoff * op_norm))
@@ -1100,7 +1597,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     order = np.argsort(disk_radii)
                     disk = np.ascontiguousarray(disk[order])
                     disk_radii = disk_radii[order]
-                    self._sorted_disks[disk_key] = (disk, disk_radii)
+                    self._sorted_disks.put(disk_key, (disk, disk_radii))
 
                 dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
                 lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
@@ -1113,9 +1610,39 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 )
             else:
                 cutoff = table.radial_gpts[-1]
-                disk_key = (chemical_symbols[number], tuple(sampling))
-                if disk_key in self._sorted_disks:
-                    disk, disk_radii = self._sorted_disks[disk_key]
+                # Precision is the one key component this needed; the symbol was
+                # already here. It belongs for the same reason as everywhere else
+                # in this file, though it takes two steps to get there: the disk is
+                # sized int(ceil(cutoff / min(sampling))), and `cutoff` is
+                # precision-dependent (optimize_cutoff evaluates the parametrization
+                # at the configured dtype) -- 5.066261105906332 against
+                # 5.066261205200659 for Si, ~2e-8 relative.
+                #
+                # That is enough to move the integer. Solving cutoff32/m <= s <
+                # cutoff64/m gives a counterexample for every element tried; at
+                # sampling 0.281458955844481 Si wants radius 18 at float32 and 19
+                # at float64. Serving the float32 disk to a float64 build is then
+                # measurably wrong -- 4.6e-05 absolute on a peak of 312, i.e. 1.5e-7
+                # relative -- because the missing ring lands just inside the last
+                # radial gridpoint, where interpolate_radial_functions still
+                # contributes (idx == n - 2) rather than clamping to zero.
+                #
+                # An earlier version of this key omitted precision, on the argument
+                # that a 400-sampling scan found no case where the integer moves.
+                # It found none because a linear scan cannot: the cases have to be
+                # solved for, not stumbled on.
+                #
+                # The symbol component is older than this commit and was never
+                # missing -- see test_the_sorted_disk_is_not_served_across_elements,
+                # which covers it for the first time rather than fixing it.
+                disk_key = (
+                    chemical_symbols[number],
+                    tuple(sampling),
+                    _precision_key(),
+                )
+                cached_disk = self._sorted_disks.get(disk_key)
+                if cached_disk is not None:
+                    disk, disk_radii = cached_disk
                 else:
                     disk = disk_meshgrid(int(np.ceil(cutoff / np.min(sampling))))
                     # Sort the disk pixels by physical radial distance so that the
@@ -1126,7 +1653,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     order = np.argsort(disk_radii)
                     disk = np.ascontiguousarray(disk[order])
                     disk_radii = disk_radii[order]
-                    self._sorted_disks[disk_key] = (disk, disk_radii)
+                    self._sorted_disks.put(disk_key, (disk, disk_radii))
 
                 # A pixel at lateral distance r only receives contributions from
                 # the part of the radial potential at 3D distance
@@ -1198,11 +1725,20 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     # Common case: the disk fits comfortably on device, so keep
                     # a cached copy -- re-uploading it every slice measurably
                     # dominated GPU build time (see PR #309 discussion).
-                    device_key = disk_key + (device,)
-                    disk_device = self._device_arrays.get(device_key)
+                    # disk_counts_device was just allocated for this work, so
+                    # it names the device this copy has to live on. Keying on
+                    # the plain "gpu" string instead served an array cached for
+                    # one GPU to a kernel running on another, whenever a single
+                    # process drives several.
+                    cache_key = disk_key + (
+                        _device_cache_key(device, like=disk_counts_device),
+                    )
+                    disk_device = self._device_arrays.get(cache_key)
                     if disk_device is None:
-                        disk_device = cp.asarray(disk)
-                        self._device_arrays[device_key] = disk_device
+                        with disk_counts_device.device:
+                            disk_device = self._device_arrays.put(
+                                cache_key, cp.asarray(disk)
+                            )
                     interpolate_radial_functions_cuda(
                         array=temp,
                         positions=positions,

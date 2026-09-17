@@ -118,9 +118,6 @@ def assert_scanned_measurement_as_expected(
             assert isinstance(measurement.array, cp.ndarray)
 
 
-gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))
-
-
 def _gpu_count() -> int:
     if cp is None:
         return 0
@@ -128,6 +125,24 @@ def _gpu_count() -> int:
         return cp.cuda.runtime.getDeviceCount()
     except Exception:  # pragma: no cover -- driver/runtime hiccup
         return 0
+
+
+# Gated on a usable DEVICE, not on cupy being importable. cupy imports fine with
+# no GPU present -- a hidden device (HIP_VISIBLE_DEVICES=""), a container without
+# /dev/kfd, a CI image that pip-installs cupy on a CPU runner -- and the failure
+# then surfaces later, at the first allocation, inside the array module. That
+# turns "hide the GPU" from a way to isolate GPU-specific behaviour into a way
+# to break the suite. `requires_multigpu` below already used _gpu_count(); only
+# this single-GPU gate was left keyed on the import.
+gpu = pytest.param(
+    "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+)
+
+# The same gate as a standalone marker, for tests that are GPU-only rather than
+# parametrized over devices. Several files had hand-rolled `skipif(cp is None)`
+# or a bare `importorskip("cupy")`, both of which ask whether cupy is installed
+# rather than whether a device exists.
+requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
 
 
 try:
@@ -145,3 +160,36 @@ requires_multigpu = pytest.mark.skipif(
     _gpu_count() < 2 or not _HAS_DASK_CUDA,
     reason="requires >=2 GPUs and dask-cuda",
 )
+
+
+def synthetic_transition_potential(
+    Z: int = 14,
+    gpts: tuple[int, int] = (64, 64),
+    extent: tuple[float, float] | None = (8.0, 8.0),
+    energy: float | None = 100e3,
+    n_transitions: int = 2,
+    seed: int = 0,
+):
+    """A seeded ``TransitionPotentialArray`` with a synthetic payload.
+
+    Tests that exercise machinery *around* the transition potentials --
+    graph transport, caching, detector wiring -- need an object of the right
+    shape, not real physics. Building one directly skips the GPAW atomic
+    solvers, so these tests also run where GPAW is not installed (CI).
+    """
+    from abtem.core.axes import OrdinalAxis
+    from abtem.inelastic.core_loss import TransitionPotentialArray
+
+    rng = np.random.default_rng(seed)
+    array = (
+        rng.standard_normal((n_transitions, *gpts))
+        + 1j * rng.standard_normal((n_transitions, *gpts))
+    ).astype(np.complex64)
+    return TransitionPotentialArray(
+        Z=Z,
+        array=array,
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
+        metadata={"Z": Z, "n": 1, "l": 0},
+    )
