@@ -515,6 +515,11 @@ def get_ndimage_module(
     if xp is cp:
         return cupyx_ndimage  # type: ignore
 
+    if tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.ndimage
+
     raise RuntimeError("Invalid array module")
 
 
