@@ -1911,6 +1911,21 @@ def prism_transition_potential_scan(
                 position_waves_shape
             )
 
+            # scan_axes_metadata[0] describes every position in the full
+            # scan; some axis types (e.g. CustomScan's PositionsAxis) carry
+            # an explicit per-position ``values`` tuple whose length Waves
+            # validates against the array, so it must be restricted to this
+            # batch's row range -- the same restriction dask's own ensemble
+            # partitioning applies per block (AxisMetadata.__getitem__).
+            # ScanAxis-like linear axes have no such tuple and are
+            # unaffected by the slice.
+            if scan_shape:
+                batch_axes_metadata = [scan_axes_metadata[0][row_start:row_end]] + list(
+                    scan_axes_metadata[1:]
+                )
+            else:
+                batch_axes_metadata = []
+
             position_waves = Waves(
                 waves_at_positions,
                 energy=energy,
@@ -1918,7 +1933,7 @@ def prism_transition_potential_scan(
                 ensemble_axes_metadata=[
                     OrdinalAxis(values=tuple(range(n_T)))
                 ]
-                + list(scan_axes_metadata),
+                + batch_axes_metadata,
             )
 
             # All detectors here see the same, not-yet-mutated

@@ -1185,6 +1185,101 @@ class TestPrismEelsReductionChunking:
             "in one call -- the reduction still crops around the whole scan"
         )
 
+    def test_matches_reference_with_a_custom_scans_positions_axis(
+        self, monkeypatch
+    ):
+        """``CustomScan.ensemble_axes_metadata`` is a ``PositionsAxis``, which
+        carries an explicit per-position ``values`` tuple -- unlike
+        ``GridScan``'s linear ``ScanAxis``, which every other test here uses.
+        Reusing that tuple unchanged for a batch covering fewer positions
+        than the full scan raises inside ``Waves.__init__`` (it validates an
+        ordinal axis's ``values`` length against the array), so this needs
+        the axis restricted to the batch's own row range -- the same
+        restriction dask's own ensemble partitioning already applies per
+        block via ``AxisMetadata.__getitem__``.
+        """
+        atoms, potential, s_matrix, _ = self._setup(n_rows=1, n_cols=1)
+        rng = np.random.default_rng(3)
+        # A deliberately non-uniform layout: two tight clusters far apart,
+        # so the sizing heuristic's "first batch is representative" guess
+        # (built for a regular raster) does not hold -- correctness must
+        # not depend on it, only the chosen batch size might be suboptimal.
+        positions = np.concatenate(
+            [
+                rng.uniform(0.1, 0.3, size=(4, 2)),
+                rng.uniform(7.0, 7.9, size=(4, 2)),
+            ]
+        ).astype(np.float32)
+        scan = abtem.scan.CustomScan(positions)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan)
+
+        for forced_budget in (1, 3):
+            monkeypatch.setattr(
+                "abtem.inelastic.core_loss.estimate_scan_batch_size",
+                lambda *a, _f=forced_budget, **k: _f,
+                raising=False,
+            )
+            got = self._run(atoms, s_matrix, scan)
+
+            scale = np.abs(reference).max()
+            assert scale > 0
+            assert got.shape == reference.shape
+            assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
+    @pytest.mark.parametrize("double_channel", [False, True])
+    def test_matches_reference_with_multiple_exit_planes(
+        self, monkeypatch, double_channel
+    ):
+        """Multiple exit planes add a broadcast slice (single-channel) or a
+        plain int (double-channel) ahead of the scan axes in the
+        measurement's leading indices (see
+        ``TestPrismPotentialEnsembleAccumulation``) -- composing that with
+        the new row slice is the trickiest indexing case this change adds,
+        and no other test here uses more than one exit plane.
+        """
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        assert len(potential.exit_planes) > 1
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0), end=(7, 5), gpts=(7, 5), fractional=False, potential=potential
+        )
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan, double_channel)
+
+        for forced_budget in (1, 25, 40):
+            monkeypatch.setattr(
+                "abtem.inelastic.core_loss.estimate_scan_batch_size",
+                lambda *a, _f=forced_budget, **k: _f,
+                raising=False,
+            )
+            got = self._run(atoms, s_matrix, scan, double_channel)
+
+            scale = np.abs(reference).max()
+            assert scale > 0
+            assert got.shape == reference.shape
+            assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
 
 class TestPrismLazyExitPlanes:
     """The lazy PRISM path omitted the exit-plane axis from its block shape.
