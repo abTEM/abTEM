@@ -1,20 +1,55 @@
 from __future__ import annotations
 
 import os
+import site
+import sys
 import threading
 import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Union
 
 import yaml  # type: ignore
-from dask.config import canonical_name, collect, update
+from dask.config import canonical_name, collect_yaml, interpret_value, merge, update
 
 no_default = "__no_default__"
 
-if "ABTEM_CONFIG" in os.environ:
-    PATH = os.environ["ABTEM_CONFIG"]
-else:
-    PATH = os.path.join(os.path.expanduser("~"), ".config", "abtem")
+#: Prefix of the environment variables abTEM reads its configuration from,
+#: e.g. ``ABTEM_DEVICE=gpu`` or ``ABTEM_DASK__CHUNK_SIZE="256 MB"``.
+ENV_PREFIX = "ABTEM_"
+
+#: abTEM used to read its configuration from dask's environment namespace by
+#: accident. Variables in that namespace are still honored, but only for keys
+#: abTEM actually defines, and they warn. See :func:`collect_legacy_env`.
+LEGACY_ENV_PREFIX = "DASK_"
+
+
+def _get_paths() -> list[str]:
+    """Get locations to search for YAML configuration files.
+
+    This logic exists as a separate function for testing purposes.
+    """
+    paths = [
+        os.getenv("ABTEM_ROOT_CONFIG", "/etc/abtem"),
+        os.path.join(sys.prefix, "etc", "abtem"),
+        *[os.path.join(prefix, "etc", "abtem") for prefix in site.PREFIXES],
+        os.path.join(os.path.expanduser("~"), ".config", "abtem"),
+    ]
+    if "ABTEM_CONFIG" in os.environ:
+        paths.append(os.environ["ABTEM_CONFIG"])
+
+    # Remove duplicate paths while preserving ordering
+    paths = list(reversed(list(dict.fromkeys(reversed(paths)))))
+
+    return paths
+
+
+paths = _get_paths()
+
+#: Environment variables that control config *discovery* itself (see
+#: :func:`_get_paths`) rather than naming a configuration value. Excluded from
+#: :func:`collect_env` so they don't leak into the config dict as stray
+#: top-level keys (``config``, ``root_config``).
+_CONTROL_ENV_VARS = frozenset({"ABTEM_CONFIG", "ABTEM_ROOT_CONFIG"})
 
 config: dict = {}
 
@@ -125,6 +160,169 @@ class set:
             self._assign(keys[1:], value, d[key], path, record=record)
 
 
+def _defines_key(key: str, defaults: list[Mapping] = defaults) -> bool:
+    """Whether ``key`` (in dotted form) is a key defined by abTEM's defaults."""
+    for default in defaults:
+        node: Any = default
+        for part in key.split("."):
+            # dict rather than Mapping: the defaults are parsed from yaml, and
+            # canonical_name is typed for dict.
+            if not isinstance(node, dict):
+                break
+            part = canonical_name(part, node)
+            if part not in node:
+                break
+            node = node[part]
+        else:
+            return True
+    return False
+
+
+def collect_env(env: Mapping[str, str] | None = None) -> dict:
+    """Collect config from environment variables
+
+    This grabs environment variables of the form ``ABTEM_FOO__BAR_BAZ=123`` and
+    turns these into config variables of the form ``{"foo": {"bar-baz": 123}}``.
+    It transforms the key and value in the following way:
+
+    -  Lower-cases the key text
+    -  Treats ``__`` (double-underscore) as nested access
+    -  Calls ``ast.literal_eval`` on the value
+
+    ``ABTEM_CONFIG`` and ``ABTEM_ROOT_CONFIG`` are excluded even though they
+    carry the ``ABTEM_`` prefix: they control where :func:`collect` looks for
+    yaml files (see :func:`_get_paths`) rather than naming a configuration
+    value, and must not leak into the config dict as a stray ``config`` or
+    ``root_config`` key.
+
+    Parameters
+    ----------
+    env : Mapping[str, str], optional
+        The system environment variables. Defaults to ``os.environ``.
+
+    Returns
+    -------
+    config : dict
+    """
+    if env is None:
+        env = os.environ
+
+    d = {
+        name[len(ENV_PREFIX) :].lower().replace("__", "."): interpret_value(value)
+        for name, value in env.items()
+        if name.startswith(ENV_PREFIX) and name not in _CONTROL_ENV_VARS
+    }
+
+    result: dict = {}
+    set(d, config=result, lock=threading.Lock())
+    return result
+
+
+def collect_legacy_env(
+    env: Mapping[str, str] | None = None, defaults: list[Mapping] = defaults
+) -> dict:
+    """Collect config from deprecated ``DASK_``-prefixed environment variables
+
+    Before abTEM read its own configuration location, ``refresh`` delegated
+    wholesale to :func:`dask.config.collect`, so the only environment variables
+    that reached abTEM were dask's. Those keep working for a transition period,
+    but they warn, and only for keys abTEM itself defines -- a genuine dask
+    setting such as ``DASK_DISTRIBUTED__WORKER__MEMORY__TARGET`` is left to
+    dask and never enters abTEM's config.
+
+    Parameters
+    ----------
+    env : Mapping[str, str], optional
+        The system environment variables. Defaults to ``os.environ``.
+    defaults : list of Mapping, optional
+        The registered default configurations, used to decide which variables
+        in dask's namespace are meant for abTEM.
+
+    Returns
+    -------
+    config : dict
+    """
+    if env is None:
+        env = os.environ
+
+    d = {}
+    for name, value in env.items():
+        if not name.startswith(LEGACY_ENV_PREFIX):
+            continue
+
+        key = name[len(LEGACY_ENV_PREFIX) :].lower().replace("__", ".")
+
+        if not _defines_key(key, defaults):
+            continue
+
+        new_name = ENV_PREFIX + name[len(LEGACY_ENV_PREFIX) :]
+        warnings.warn(
+            "Setting abTEM configuration through the environment variable "
+            f'"{name}" is deprecated, as it collides with dask\'s '
+            f'configuration namespace. Please use "{new_name}" instead.',
+            FutureWarning,
+            stacklevel=2,
+        )
+        d[key] = interpret_value(value)
+
+    result: dict = {}
+    set(d, config=result, lock=threading.Lock())
+    return result
+
+
+def collect(
+    paths: list[str] = paths,
+    env: Mapping[str, str] | None = None,
+    defaults: list[Mapping] = defaults,
+) -> dict:
+    """
+    Collect configuration from paths and environment variables
+
+    Parameters
+    ----------
+    paths : list[str]
+        A list of paths to search for yaml config files. Defaults to
+        ``abtem.config.paths``, i.e. ``/etc/abtem``, ``<sys.prefix>/etc/abtem``,
+        ``~/.config/abtem`` and ``$ABTEM_CONFIG``, in increasing priority.
+    env : Mapping[str, str], optional
+        The system environment variables. Defaults to ``os.environ``.
+    defaults : list of Mapping, optional
+        The registered default configurations, used by
+        :func:`collect_legacy_env`.
+
+    Returns
+    -------
+    config : dict
+
+    See Also
+    --------
+    abtem.config.refresh: collect configuration and update into primary config
+    """
+    try:
+        yaml_configs = list(collect_yaml(paths=paths))
+    except ValueError as e:
+        # A malformed yaml file in the user's config directory must not take
+        # down `import abtem` -- a typo should degrade to a warning, not a raw
+        # parser traceback. Coarse-grained: this drops every yaml source for
+        # this call rather than isolating just the one bad file among several
+        # in `paths`; real per-file isolation would mean replicating
+        # collect_yaml's own path-discovery loop.
+        warnings.warn(
+            f"Failed to read abTEM's yaml configuration files under {paths}; "
+            f"configuration from these files is being skipped: {e}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        yaml_configs = []
+
+    configs = [
+        *yaml_configs,
+        collect_legacy_env(env=env, defaults=defaults),
+        collect_env(env=env),
+    ]
+    return merge(*configs)
+
+
 def refresh(
     config: dict = config, defaults: list[Mapping] = defaults, **kwargs
 ) -> None:
@@ -139,7 +337,8 @@ def refresh(
     1.  Clearing out all old configuration
     2.  Updating from the stored defaults from downstream libraries
         (see update_defaults)
-    3.  Updating from yaml files and environment variables
+    3.  Updating from abTEM's yaml files (see ``abtem.config.paths``) and
+        ``ABTEM_``-prefixed environment variables
 
     Note that some functionality only checks configuration once at startup and
     may not change behavior, even if configuration changes.  It is recommended
@@ -155,6 +354,8 @@ def refresh(
 
     for d in defaults:
         update(config, d, priority="old")
+
+    kwargs.setdefault("defaults", defaults)
 
     update(config, collect(**kwargs))
 
@@ -246,5 +447,5 @@ def _initialize() -> None:
     update_defaults(_defaults)
 
 
-refresh()
 _initialize()
+refresh()
