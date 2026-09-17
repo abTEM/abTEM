@@ -1018,6 +1018,10 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
 
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+# A single Si unit cell is far smaller than the inelastic delocalisation, so
+# the cross-section here is not converged. That is fine for a smoke test of
+# the GPAW pipeline, but it trips the convergence warning.
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 def test_subshell_transitions_real_gpaw_pipeline():
     """End-to-end regression test using GPAW's real atomic all-electron
     solvers (``gpaw.atom.all_electron.AllElectron`` and

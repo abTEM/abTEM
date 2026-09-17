@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.core.chunks import Chunks
+from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
@@ -1497,6 +1498,109 @@ class SpectralAnnularDetector(AnnularDetector):
             f"  angle={self._sweep_angle}°"
         )
         return ax
+
+
+class IonizationDetector(AnnularDetector):
+    """
+    Detects the total ionisation probability, integrated over all scattering
+    angles.
+
+    This is the detector for X-ray emission. The emitted photon carries no
+    information about where the fast electron went, so the X-ray yield is
+    proportional to the ionisation probability summed over every final state of
+    the electron. Collecting all angles is therefore the physically correct
+    model, and imposing an angular aperture -- as an EELS spectrometer does --
+    would be the approximation. Note that this is a model of the *X-ray*
+    measurement, not of an electron detector: an unrestricted electron aperture
+    is of course not realisable.
+
+    Applied to the scattered waves of a transition-potential simulation it gives
+    that total directly. It is both cheaper and more accurate than
+    ``AnnularDetector(inner=0, outer=None)``, which pays a diffraction-pattern
+    FFT and truncates at the antialiasing cutoff.
+
+    Pair it with an angular detector in a single
+    :meth:`~abtem.Probe.transition_potential_scan` to obtain EELS and EDX from
+    one pass, since the elastic multislice and the scattered waves are shared.
+
+    Parameters
+    ----------
+    mu : np.ndarray or float, optional
+        Weight applied to the intensity before integrating. The default, None,
+        weights uniformly, which is what detecting scattered waves needs. The
+        effective local ionisation potential is passed here instead when the
+        detector is applied to *elastic* waves, as
+        :func:`~abtem.inelastic.core_loss.effective_ionization_multislice_and_detect`
+        does.
+    to_cpu : bool, optional
+        If True, copy the measurement data to CPU memory. Default is True.
+
+    Examples
+    --------
+    >>> eels = abtem.AnnularDetector(inner=0.0, outer=30.0)  # doctest: +SKIP
+    >>> edx = abtem.IonizationDetector()  # doctest: +SKIP
+    >>> maps = probe.transition_potential_scan(  # doctest: +SKIP
+    ...     potential, transitions, scan=scan, detectors=[eels, edx]
+    ... )
+
+    See Also
+    --------
+    abtem.XrayDetector : converts the ionisation probability into X-ray counts.
+    """
+
+    def __init__(
+        self, mu: np.ndarray | float | None = None, to_cpu: bool = True
+    ):
+        self._mu = mu
+        super().__init__(inner=0.0, outer=None, to_cpu=to_cpu)
+
+    @property
+    def mu(self) -> np.ndarray | float | None:
+        """Weight applied to the intensity; None weights uniformly."""
+        return self._mu
+
+    @mu.setter
+    def mu(self, value: np.ndarray | float | None):
+        self._mu = value
+
+    def _photon_yield(self, metadata: dict) -> float:
+        """Conversion from ionisation events to detected quanta.
+
+        One for a bare ionisation probability; :class:`~abtem.XrayDetector`
+        overrides it with the fluorescence yield, branching ratio, solid angle
+        and detection efficiency of the ionised edge.
+        """
+        return 1.0
+
+    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
+        xp = get_array_module(waves.array)
+
+        intensity = abs2(waves.array)
+
+        if self._mu is not None:
+            mu = self._mu
+            if not np.isscalar(mu):
+                mu = copy_to_device(mu, waves.array)
+            intensity = intensity * mu
+
+        # abTEM's detectors report a fraction of the incident intensity: an
+        # AnnularDetector reads 1.0 on an unscattered probe, which corresponds
+        # to scaling the real-space integral by gpts / sampling. Writing
+        # int |psi|^2 mu dr = sum(|psi|^2 mu) * sampling, the sampling cancels.
+        values = intensity.sum((-2, -1)) * np.prod(waves.gpts)
+        values = values * self._photon_yield(waves.metadata)
+
+        # Match AnnularDetector, which puts the scan axes last.
+        scan_axes = _scan_axes(waves)
+        if scan_axes:
+            order = [i for i in range(values.ndim) if i not in scan_axes]
+            order += list(scan_axes)
+            values = xp.transpose(values, order)
+
+        if self.to_cpu:
+            values = asnumpy(values)
+
+        return values
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
