@@ -73,6 +73,13 @@ def _serialized(func):
 # implementations exist.
 _ARRAY_FUNCTIONS: dict = {}
 
+# NumPy ufuncs this namespace implements, consulted by
+# TorchNDArray.__array_ufunc__. Operators and ufuncs dispatch through a
+# different protocol than the functions above: `host_array @ device_array`
+# reaches np.matmul, not np.__array_function__, and without this it fails
+# outright because ndarray does not know what to do with the right operand.
+_ARRAY_UFUNCS: dict = {}
+
 
 _TO_TORCH_DTYPE: dict = {}
 _TO_NUMPY_DTYPE: dict = {}
@@ -133,7 +140,7 @@ def to_torch_dtype(dtype, downcast: bool = False) -> Any:
                 f"Metal (MPS) does not support {dtype} arrays; it is a "
                 "single-precision backend. Set "
                 "abtem.config.set({'precision': 'float32'}), or change the device "
-                "to 'cpu' for double precision."
+                "to 'cpu' or 'gpu' for double precision."
             )
         dtype = _DOWNCAST[dtype]
 
@@ -360,6 +367,25 @@ class TorchNDArray:
         """Return this array as a NumPy array (mirrors ``cupy.ndarray.get``)."""
         return asnumpy(self)
 
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """Run NumPy's ufuncs and operators on the device where implemented.
+
+        This is the protocol behind ``host_array * device_array`` and
+        ``host_array @ device_array``: the operator resolves to a ufunc, and
+        without a say here NumPy either refuses outright or coerces the device
+        operand to the host. Operands are moved onto the device, so the device
+        side wins, which is what the caller asking for a device array wants.
+        """
+        if method != "__call__" or kwargs.get("out") is not None:
+            return NotImplemented
+
+        implementation = _ARRAY_UFUNCS.get(ufunc)
+
+        if implementation is None:
+            return NotImplemented
+
+        return implementation(*inputs, **kwargs)
+
     def __array_function__(self, func, types, args, kwargs):
         """Keep NumPy's dispatched functions on the device where implemented.
 
@@ -442,6 +468,9 @@ class TorchNDArray:
     __mod__ = _forward("__mod__")
     __rmod__ = _forward("__rmod__")
     __matmul__ = _forward("__matmul__")
+    # numpy's ndarray.__matmul__ defers to us (see __array_priority__), so the
+    # reflected form is what actually runs for `host_array @ device_array`.
+    __rmatmul__ = _forward("__rmatmul__")
     __neg__ = _forward("__neg__")
     __abs__ = _forward("__abs__")
     __and__ = _forward("__and__")
@@ -504,10 +533,15 @@ def asarray(data, dtype=None):
     inferred = dtype is None
     if inferred:
         dtype = data.dtype
-    if not data.flags["C_CONTIGUOUS"]:
-        # not np.ascontiguousarray: it promotes a 0-d scalar to shape (1,),
-        # which would add a spurious dimension to every scalar parameter
-        data = np.asarray(data, order="C")
+    if not data.flags["C_CONTIGUOUS"] or any(stride < 0 for stride in data.strides):
+        # The stride test is not redundant: NumPy calls a size-1 array
+        # contiguous whatever its stride sign, so `argsort(...)[::-1]` of a
+        # single element passes the flag while still carrying a negative
+        # stride, which torch refuses. copy() rather than np.asarray(order="C")
+        # for the same reason -- asarray believes the flag and declines to
+        # copy -- and rather than np.ascontiguousarray, which would promote a
+        # 0-d scalar to shape (1,) and add a dimension to every scalar.
+        data = data.copy(order="C")
     # from_numpy avoids a host-side copy before the device transfer
     tensor = torch.from_numpy(data)
     torch_dtype = to_torch_dtype(dtype, downcast=inferred)
@@ -749,6 +783,12 @@ _random = SimpleNamespace(RandomState=RandomState)
 
 def _fft_func(name: str):
     def func(x, **kwargs):
+        # numpy's transformed axes are `axes` (or `axis` for the 1-D
+        # transforms); torch spells both `dim`.
+        if "axes" in kwargs:
+            kwargs["dim"] = kwargs.pop("axes")
+        if "axis" in kwargs:
+            kwargs["dim"] = kwargs.pop("axis")
         return _wrap(getattr(torch.fft, name)(_unwrap(x), **kwargs))
 
     func.__name__ = name
@@ -957,6 +997,30 @@ def pad(array, pad_width, mode: str = "constant", constant_values=0):
     return _wrap(tensor)
 
 
+def _binary_ufunc(name: str):
+    """Build a binary ufunc that brings both operands onto the device first."""
+
+    def func(a, b, **kwargs):
+        return _wrap(
+            getattr(torch, name)(_unwrap(asarray(a)), _unwrap(asarray(b)), **kwargs)
+        )
+
+    func.__name__ = name
+    return _serialized(func)
+
+
+@_serialized
+def nonzero(x):
+    """``numpy.nonzero`` -- a tuple of index arrays, one per dimension."""
+    indices = torch.nonzero(_unwrap(asarray(x)), as_tuple=True)
+    return tuple(_wrap(index) for index in indices)
+
+
+@_serialized
+def einsum(subscripts, *operands, **kwargs):
+    return _wrap(torch.einsum(subscripts, *[_unwrap(asarray(o)) for o in operands]))
+
+
 def iscomplexobj(x) -> bool:
     """``numpy.iscomplexobj`` -- a dtype question, answered without the device."""
     return _unwrap(x).is_complex()
@@ -965,6 +1029,51 @@ def iscomplexobj(x) -> bool:
 def roll(x, shift, axis=None):
     """``numpy.roll``, whose ``shift``/``axis`` torch spells ``shifts``/``dims``."""
     return _wrap(torch.roll(_unwrap(x), shifts=shift, dims=axis))
+
+
+@_serialized
+def eye(n, m=None, dtype=None):
+    _check_available()
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
+    return TorchNDArray(
+        torch.eye(n, m if m is not None else n, dtype=torch_dtype, device=DEVICE)
+    )
+
+
+@_serialized
+def ascontiguousarray(x):
+    return _wrap(_unwrap(asarray(x)).contiguous())
+
+
+def _linalg_func(name: str):
+    def func(*args, **kwargs):
+        # Through asarray rather than a bare unwrap: an operand may still be a
+        # host array, and a reversed one (``vectors[:, ::-1]``) carries negative
+        # strides that torch cannot adopt. asarray makes a contiguous device
+        # copy instead.
+        args = tuple(
+            _unwrap(asarray(arg)) if hasattr(arg, "dtype") else arg for arg in args
+        )
+        result = getattr(torch.linalg, name)(*args, **kwargs)
+        # torch returns named tuples where numpy returns plain ones
+        if isinstance(result, tuple):
+            return tuple(_wrap(item) for item in result)
+        return _wrap(result)
+
+    func.__name__ = name
+    return _serialized(func)
+
+
+# Metal supports these in single precision, which is all abTEM asks of them
+# here -- the one place needing double precision streams to the host instead.
+_linalg = SimpleNamespace(
+    eigh=_linalg_func("eigh"),
+    eigvalsh=_linalg_func("eigvalsh"),
+    svd=_linalg_func("svd"),
+    norm=_linalg_func("norm"),
+    solve=_linalg_func("solve"),
+    inv=_linalg_func("inv"),
+)
 
 
 @_serialized
@@ -1006,6 +1115,7 @@ class _TorchNumpyNamespace:
     fft = _fft
     add = _add
     random = _random
+    linalg = _linalg
 
     # array creation and host transfer
     asarray = staticmethod(asarray)
@@ -1021,6 +1131,10 @@ class _TorchNumpyNamespace:
     arange = staticmethod(arange)
     linspace = staticmethod(linspace)
     meshgrid = staticmethod(meshgrid)
+    eye = staticmethod(eye)
+    nonzero = staticmethod(nonzero)
+    einsum = staticmethod(einsum)
+    ascontiguousarray = staticmethod(ascontiguousarray)
     where = staticmethod(where)
 
     # shape manipulation
@@ -1124,9 +1238,34 @@ _ARRAY_FUNCTIONS.update(
         np.angle: torch_numpy.angle,
         np.round: torch_numpy.round,
         np.iscomplexobj: iscomplexobj,
+        np.nonzero: nonzero,
+        np.einsum: einsum,
         np.allclose: allclose,
         np.roll: roll,
         np.fft.fftshift: _fft.fftshift,
         np.fft.ifftshift: _fft.ifftshift,
+    }
+)
+
+
+# See _ARRAY_UFUNCS above. Binary entries move both operands onto the device,
+# so a host operand on either side of an operator works the way NumPy's own
+# mixed-type arithmetic does.
+_ARRAY_UFUNCS.update(
+    {
+        np.matmul: _binary_ufunc("matmul"),
+        np.multiply: _binary_ufunc("multiply"),
+        np.add: _binary_ufunc("add"),
+        np.subtract: _binary_ufunc("subtract"),
+        np.true_divide: _binary_ufunc("true_divide"),
+        np.power: _binary_ufunc("pow"),
+        np.maximum: _binary_ufunc("maximum"),
+        np.minimum: _binary_ufunc("minimum"),
+        np.exp: torch_numpy.exp,
+        np.sqrt: torch_numpy.sqrt,
+        np.absolute: torch_numpy.abs,
+        np.conjugate: torch_numpy.conjugate,
+        np.sin: torch_numpy.sin,
+        np.cos: torch_numpy.cos,
     }
 )

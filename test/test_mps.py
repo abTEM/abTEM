@@ -80,6 +80,25 @@ def test_double_precision_configuration_is_rejected():
             get_array_module("mps")
 
 
+def test_metal_device_rejects_double_precision_when_configured():
+    # The combination is refused where it is set, not later inside a
+    # computation, and a refused set leaves the configuration untouched.
+    before = (abtem.config.get("device"), abtem.config.get("precision"))
+
+    with pytest.raises(ValueError, match="single-precision"):
+        abtem.config.set({"device": "mps", "precision": "float64"})
+
+    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
+
+    with abtem.config.set({"device": "mps"}):
+        with pytest.raises(ValueError, match="single-precision"):
+            abtem.config.set({"precision": "float64"})
+
+        assert abtem.config.get("precision") == "float32"
+
+    assert (abtem.config.get("device"), abtem.config.get("precision")) == before
+
+
 def test_unsupported_operation_names_itself():
     xp = get_array_module("mps")
 
