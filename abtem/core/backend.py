@@ -486,6 +486,11 @@ def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = N
     elif xp is cp:
         return cupyx.scipy  # type: ignore
 
+    elif tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.scipy
+
     else:
         raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
 
