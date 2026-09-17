@@ -2417,13 +2417,40 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             np.swapaxes(orientation_matrices, -2, -1),
         )
 
+        multi_energy = len(self._energies) > 1
+
+        # reciprocal_lattice_vectors never depends on energy -- the Ewald
+        # sphere does, but the rotated lattice itself doesn't -- so it has
+        # no energy axis of its own. `array`, however, does get one: its
+        # shape is self.ensemble_shape + energy_shape + (thicknesses, hkl).
+        # A size-1 placeholder has to be inserted here for every ensemble
+        # axis array has beyond RLV's own rotation axes, in the same order,
+        # or the two disagree by exactly one position the moment both a
+        # rotation ensemble and an energy ensemble are combined -- which
+        # only surfaces once something actually builds both together
+        # (single-energy rotation series and multi-energy without a
+        # rotation ensemble each stay one axis short of triggering it).
+        # Downstream, __getitem__ and all_positions zip RLV's leading dims
+        # against array's positionally, so a missing placeholder isn't just
+        # a broadcast check away from being wrong -- it silently misaligns
+        # slicing on this object too.
         if squeeze_thickness_dim:
             array = array[..., 0, :]
             ensemble_axes_metadata = ensemble_axes_metadata[:-1]
+            if multi_energy:
+                reciprocal_lattice_vectors = reciprocal_lattice_vectors[
+                    ..., None, :, :
+                ]
         else:
-            reciprocal_lattice_vectors = reciprocal_lattice_vectors[..., None, :, :]
+            if multi_energy:
+                reciprocal_lattice_vectors = reciprocal_lattice_vectors[
+                    ..., None, None, :, :
+                ]
+            else:
+                reciprocal_lattice_vectors = reciprocal_lattice_vectors[
+                    ..., None, :, :
+                ]
 
-        multi_energy = len(self._energies) > 1
         energy_axes_metadata = (
             [EnergyAxis(values=tuple(float(e) for e in self._energies))]
             if multi_energy

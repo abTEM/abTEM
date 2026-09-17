@@ -548,6 +548,83 @@ class TestBlochWavesEnergyEnsemble:
                 )
 
 
+BLOCH_ENSEMBLE_N_ROTATIONS = 4
+
+
+@pytest.mark.slow
+@pytest.mark.xdist_group("bloch_energy_ensemble")
+class TestBlochwaveEnsembleEnergyEnsemble:
+    """BlochWaves.rotate() with a rotation ensemble returns a BlochwaveEnsemble,
+    a different class from BlochWaves with its own calculate_diffraction_patterns.
+    Combined with a multi-energy ensemble, reciprocal_lattice_vectors -- which has
+    no energy dependence of its own -- needs an explicit size-1 placeholder axis
+    for energy, in the same position array has one, or the two disagree by one
+    axis the moment both ensembles are present together (rotation ensemble alone,
+    or energy ensemble alone as covered above, each stay one axis short of
+    triggering it)."""
+
+    @staticmethod
+    def _rotated_ensemble(n_rotations, energies):
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(atoms, energy=energies, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
+        angles = np.linspace(0.0, 10.0, n_rotations)
+        zero = np.zeros_like(angles)
+        all_angles = np.stack((zero, angles, -zero), axis=-1)
+        return bw.rotate("zxz", all_angles, degrees=True)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def rotated_multi_energy(cls):
+        """Shared rotation+energy ensemble (expensive: rebuilds the structure
+        factor once instead of once per test)."""
+        return cls._rotated_ensemble(BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES)
+
+    @pytest.fixture(scope="class")
+    def dp_multi(self, rotated_multi_energy):
+        """Cached multi-thickness diffraction patterns, shared by the tests
+        that only read the result rather than re-triggering the bug."""
+        return rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+
+    def test_diffraction_patterns_shape_with_thicknesses(self, dp_multi):
+        n_rot = BLOCH_ENSEMBLE_N_ROTATIONS
+        n_energies, n_thick = len(BLOCH_ENERGIES), len(BLOCH_THICKNESS)
+        assert dp_multi.array.shape[:-1] == (n_rot, n_energies, n_thick)
+        assert isinstance(dp_multi.ensemble_axes_metadata[1], EnergyAxis)
+        assert isinstance(dp_multi.ensemble_axes_metadata[2], ThicknessAxis)
+
+    def test_diffraction_patterns_shape_scalar_thickness(self, rotated_multi_energy):
+        result = rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS[0], lazy=False
+        )
+        n_rot, n_energies = BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_ENERGIES)
+        assert result.array.shape[:-1] == (n_rot, n_energies)
+
+    def test_getitem_after_multi_energy(self, dp_multi):
+        """__getitem__ zips items against reciprocal_lattice_vectors.shape
+        positionally, so a missing energy placeholder there mis-slices this
+        even where __init__'s broadcast check alone would not catch it."""
+        sub = dp_multi[1]
+        assert sub.array.shape == dp_multi.array.shape[1:]
+
+    def test_crop_after_multi_energy(self, dp_multi):
+        cropped = dp_multi.crop(k_max=BLOCH_G_MAX / 2)
+        assert cropped.array.shape[:-1] == dp_multi.array.shape[:-1]
+
+    def test_single_energy_rotation_ensemble_unchanged(self):
+        """No regression for the rotation-ensemble-only path (single energy)."""
+        rotated = self._rotated_ensemble(
+            BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES[0]
+        )
+        result = rotated.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+        assert result.array.shape[:-1] == (
+            BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_THICKNESS)
+        )
+
+
 # ---------------------------------------------------------------------------
 # SMatrix (PRISM) energy ensemble tests
 # ---------------------------------------------------------------------------
