@@ -1,7 +1,7 @@
 """Module to build the electrostatic potential directly from VASP output files.
 
-:class:`.VASPPotential` combines a valence-only electron density (e.g. a plain
-VASP `CHGCAR`) with an accurate per-species core electron correction parsed
+:class:`.VASPPotential` combines VASP's self-consistent valence electron density
+(`AECCAR2`) with an accurate per-species core electron correction parsed
 directly out of the corresponding `POTCAR` file. VASP's PAW datasets tabulate
 the core electron density on a fine (typically 300+ point) logarithmic radial
 grid; this is used exactly as it is -- no auxiliary DFT calculation (VASP,
@@ -196,11 +196,24 @@ def get_core_density_fourier_interpolator(
 
 class VASPPotential(ChargeDensityPotential):
     """
-    The VASP potential calculates the electrostatic potential from a VASP
-    valence-only electron density (e.g. a plain `CHGCAR`) plus an accurate
+    The VASP potential calculates the electrostatic potential from VASP's
+    self-consistent valence electron density (`AECCAR2`) plus an accurate
     per-species core electron correction parsed directly from the
     corresponding `POTCAR` file -- no auxiliary DFT calculation is needed for
     the core correction.
+
+    `AECCAR2` is written when the VASP run sets `LAECHG = .TRUE.`, which
+    reconstructs the all-electron charge density on the fine
+    (`NGXF` x `NGYF` x `NGZF`) FFT grid and writes it as three files: the core
+    density (`AECCAR0`), the proto-atomic valence density (`AECCAR1`), and the
+    self-consistent valence density (`AECCAR2`). Only the last is wanted here --
+    this class supplies the core contribution itself, from `POTCAR`.
+
+    In PAW terminology "all-electron" does not mean "the density of all
+    electrons"; it means a density that retains the nodal structure near the
+    nucleus belonging to the true one-electron orbitals, rather than the
+    pseudized ones. A plain `CHGCAR` is the pseudo charge density and lacks that
+    structure, so it will work but is less accurate near each nucleus.
 
     This refines :class:`.ChargeDensityPotential`'s crude, single
     Gaussian-broadened point-charge correction (equal to each atom's full
@@ -214,9 +227,12 @@ class VASPPotential(ChargeDensityPotential):
         Atomic configuration(s) used in the independent atom model for calculating
         the electrostatic potential(s).
     charge_density : numpy.ndarray
-        Valence-only electron density as a 3D NumPy array [electrons / Å^3] -- e.g.
-        a plain VASP `CHGCAR` (not the `AECCAR0+AECCAR2` sum some VASP workflows
-        produce for Bader charge analysis).
+        Valence-only electron density as a 3D NumPy array [electrons / Å^3] --
+        VASP's `AECCAR2`, written when the run sets `LAECHG = .TRUE.`. A plain
+        `CHGCAR` (the pseudo charge density) is accepted but is less accurate near
+        each nucleus. Must not be an all-electron density covering core *and*
+        valence, such as the `AECCAR0+AECCAR2` sum some VASP workflows produce for
+        Bader charge analysis -- this class adds the core contribution itself.
     potcar : str, Path, or dict
         Path to the VASP `POTCAR` file used to generate `charge_density`, or an
         already-parsed dict as returned by :func:`parse_potcar`. Must contain an

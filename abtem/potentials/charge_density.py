@@ -505,8 +505,10 @@ def _warn_if_not_valence_only(
             "correction on top of the given density equal to each atom's full "
             "atomic number; if the density already includes the core electrons, "
             "this double-counts them and can severely distort the potential near "
-            "atoms. Pass a valence-only density instead -- a plain VASP CHGCAR, a "
-            "GPAW pseudo-density, or AECCAR2 alone (not the AECCAR0+AECCAR2 sum).",
+            "atoms. Pass a valence-only density instead -- VASP's AECCAR2 (the "
+            "self-consistent valence density, written when LAECHG = .TRUE.), a "
+            "plain CHGCAR, or a GPAW pseudo-density -- not the AECCAR0+AECCAR2 "
+            "sum, which covers the core electrons too.",
             stacklevel=3,
         )
 
@@ -517,10 +519,12 @@ class ChargeDensityPotential(_PotentialBuilder):
     set of core charges defined by an ASE `Atoms` object and corresponding electron
     charge density defined by a NumPy array.
 
-    `charge_density` must be a smooth, **valence-only** electron density -- e.g. a
-    plain VASP `CHGCAR`, a GPAW pseudo-density, or VASP's `AECCAR2` alone -- not an
-    all-electron density such as the `AECCAR0+AECCAR2` sum some VASP workflows
-    produce for Bader charge analysis (`chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum`).
+    `charge_density` must be a **valence-only** electron density -- VASP's
+    `AECCAR2` (the self-consistent valence density, written when the run sets
+    `LAECHG = .TRUE.`), a plain VASP `CHGCAR` (the pseudo charge density), or a
+    GPAW pseudo-density -- not an all-electron density covering core *and* valence,
+    such as the `AECCAR0+AECCAR2` sum some VASP workflows produce for Bader charge
+    analysis (`chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum`).
     This class adds its own approximate nuclear/core correction on top of the given
     density -- a Gaussian-broadened point charge equal to each atom's full atomic
     number, see :func:`add_point_charges_fourier` -- which plays the same role as
