@@ -1117,12 +1117,15 @@ class TestPrismEelsReductionChunking:
         return np.asarray(abtem.core.backend.asnumpy(measurement.array))
 
     @pytest.mark.parametrize("double_channel", [False, True])
-    @pytest.mark.parametrize("forced_budget", [1, 3, 7])
+    # With this test's n_T=2 and 5 columns, these forced "position" budgets
+    # resolve (guess, then verified against the actual crop box) to row
+    # batches of 1, 2 and 4 respectively -- checked directly by recording
+    # minimum_crop's call sizes for each value. 7 rows is not a multiple of
+    # 2 or 4, so two of the three exercise an uneven last batch.
+    @pytest.mark.parametrize("forced_budget", [1, 25, 40])
     def test_chunked_reduction_matches_a_single_whole_scan_batch(
         self, monkeypatch, double_channel, forced_budget
     ):
-        # 7x5=35 positions, not a multiple of any of the forced budgets --
-        # exercises an uneven last batch.
         atoms, _, s_matrix, scan = self._setup(n_rows=7, n_cols=5)
 
         monkeypatch.setattr(
