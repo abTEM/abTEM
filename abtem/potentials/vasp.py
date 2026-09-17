@@ -21,9 +21,6 @@ from abtem.core.ensemble import _wrap_with_array
 from abtem.inelastic.phonons import DummyFrozenPhonons
 from abtem.potentials.charge_density import ChargeDensityPotential, _generate_slices
 
-#: Bohr radius in Ångström (matches ase.units.Bohr).
-_BOHR = 0.5291772105638411
-
 _SQRT_4PI = np.sqrt(4 * np.pi)
 
 
@@ -60,7 +57,8 @@ def parse_potcar(path: Union[str, Path]) -> Dict[str, dict]:
         Maps chemical symbol to a dict with keys:
 
         - `"nmax"` : number of radial grid points.
-        - `"grid"` : radial grid `r` [Bohr], shape `(nmax,)`.
+        - `"grid"` : radial grid `r` [Å], shape `(nmax,)`. VASP tabulates the
+          PAW radial sets in its own internal units (Ångström), not atomic units.
         - `"core_density"` : the POTCAR's tabulated `"core charge-density"` block,
           shape `(nmax,)`. This is `sqrt(4 pi) * r**2 * n_core(r)` (VASP tabulates
           radial densities expanded in real spherical harmonics, for which
@@ -152,8 +150,8 @@ def core_density_fourier_transform(
 def get_core_density_fourier_interpolator(
     symbol: str,
     elements: Dict[str, dict],
-    n_G: int = 2000,
-    G_max: float = 100.0,
+    n_G: int = 4000,
+    G_max: float = 200.0,
 ) -> "tuple[Callable[[np.ndarray], np.ndarray], float]":
     """
     Build an interpolator for the l=0 spherical Fourier transform of one
@@ -168,7 +166,7 @@ def get_core_density_fourier_interpolator(
     n_G : int
         Number of points used to tabulate the transform before interpolating.
     G_max : float
-        Maximum angular wavenumber [1 / Bohr] used to tabulate the transform.
+        Maximum angular wavenumber [1 / Å] used to tabulate the transform.
         The default comfortably covers the spatial frequencies of typical
         multislice grids; increasing it (and `n_G` to match) leaves converged
         results unchanged.
@@ -185,14 +183,14 @@ def get_core_density_fourier_interpolator(
     r = d["grid"]
     core_density = d["core_density"]
 
-    G_bohr = np.linspace(0.0, G_max, n_G)
-    f_k = core_density_fourier_transform(r, core_density, G_bohr)
+    # `r` is in Å, so the conjugate variable is already in 1 / Å -- no unit
+    # conversion belongs here. Reading the POTCAR grid as Bohr instead would
+    # compress the core density by 1 / 0.529, pushing V_core(0) ~1.9x too high.
+    G = np.linspace(0.0, G_max, n_G)
+    f_k = core_density_fourier_transform(r, core_density, G)
     Nc = float(f_k[0])
 
-    G_angstrom = G_bohr / _BOHR
-    interpolator = interp1d(
-        G_angstrom, f_k, bounds_error=False, fill_value=(f_k[0], 0.0)
-    )
+    interpolator = interp1d(G, f_k, bounds_error=False, fill_value=(f_k[0], 0.0))
     return interpolator, Nc
 
 

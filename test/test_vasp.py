@@ -95,6 +95,25 @@ def test_fourier_transform_at_zero_equals_core_electron_count(fake_potcar):
     assert interp_o(0.0) == pytest.approx(Nc_o)
 
 
+def test_interpolator_g_axis_is_inverse_angstrom(fake_potcar):
+    """The POTCAR radial grid is in Ångström (VASP's own internal length unit),
+    so the interpolator's argument must be an angular wavenumber in 1 / Å.
+
+    The fixture's oxygen core is a Gaussian of width `a = 1.3` (in grid units),
+    whose l=0 transform is `Nc * exp(-(a * G / 2) ** 2)`. Reading the grid as
+    Bohr instead would rescale the G axis by 1 / 0.529, compressing the core
+    density in real space and driving `V_core(0)` ~1.9x too high.
+    """
+    elements = parse_potcar(fake_potcar)
+    interp, Nc = get_core_density_fourier_interpolator("O", elements)
+
+    a = 1.3  # Å, matching the fixture
+    G = np.linspace(0.0, 4.0, 25)  # 1 / Å
+    # The tolerance is set by the fixture's own trapezoid quadrature; misreading
+    # the grid as Bohr would miss by ~0.9 here, some 450x larger.
+    assert interp(G) == pytest.approx(Nc * np.exp(-((a * G / 2) ** 2)), abs=2e-3)
+
+
 def test_interpolator_decays_with_increasing_g(fake_potcar):
     elements = parse_potcar(fake_potcar)
     interp, Nc = get_core_density_fourier_interpolator("O", elements)
