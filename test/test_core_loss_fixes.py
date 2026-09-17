@@ -1270,3 +1270,21 @@ class TestTransitionPotentialDeviceMemo:
         assert np.array_equal(
             np.asarray(memoized._local_potential), np.asarray(plain._local_potential)
         )
+
+    def test_pickling_still_drops_both_device_caches(self):
+        """__copy__ exists so copy.copy shares _device_array_cache; pickling
+        must still go through __getstate__ and drop it (and the older
+        _local_potential_device_cache), same as before __copy__ existed --
+        a cupy array riding through pickle would break unpickling on a
+        CPU-only worker.
+        """
+        import pickle
+
+        tp = self._make()
+        tp.copy_to_device("cpu")
+        assert tp._device_array_cache
+
+        restored = pickle.loads(pickle.dumps(tp))
+        assert restored._device_array_cache == {}
+        assert restored._local_potential_device_cache is None
+        assert np.array_equal(np.asarray(restored.array), np.asarray(tp.array))
