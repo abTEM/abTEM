@@ -12,6 +12,8 @@ from unittest import mock
 
 import pytest
 
+from utils import requires_gpu
+
 import abtem
 import abtem.array
 from abtem.core import backend
@@ -193,7 +195,7 @@ def _build_lazy_gpu():
     return abtem.Probe(energy=100e3, semiangle_cutoff=20, gpts=32, extent=5).build(lazy=True)
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_gpu_no_client_forces_synchronous(monkeypatch):
     import distributed
@@ -213,7 +215,7 @@ def test_gpu_no_client_forces_synchronous(monkeypatch):
     assert "num_workers" not in captured and "threads_per_worker" not in captured
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_multigpu_config_starts_cluster(monkeypatch):
     import distributed
@@ -233,7 +235,7 @@ def test_multigpu_config_starts_cluster(monkeypatch):
     assert started == [1]
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_single_gpu_multigpu_config_no_cluster(monkeypatch):
     import distributed
@@ -255,7 +257,7 @@ def test_single_gpu_multigpu_config_no_cluster(monkeypatch):
     assert captured.get("scheduler") == "synchronous"
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 @pytest.mark.filterwarnings("ignore")
 def test_explicit_scheduler_skips_cluster(monkeypatch):
     import distributed

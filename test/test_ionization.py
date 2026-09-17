@@ -33,7 +33,7 @@ try:
 except ImportError:
     pass
 
-from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
+from utils import gpu, requires_gpu  # noqa: E402  -- device-gated markers
 
 
 def _make_synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=2, seed=0):
@@ -58,7 +58,7 @@ def _make_synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=2, seed=0):
 # "cupy"); the abtem-level GPU dispatch tests use the standard device kwarg.
 xp_params = [
     "numpy",
-    pytest.param("cupy", marks=pytest.mark.skipif(cp is None, reason="no gpu")),
+    pytest.param("cupy", marks=requires_gpu),
 ]
 
 
@@ -1150,7 +1150,7 @@ def test_local_potential_device_cache_survives_use_but_not_pickle():
     assert clone._local_potential_device_cache is not None
 
 
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 def test_local_potential_device_cache_keys_on_the_arrays_device():
     """The cache key must carry the concrete GPU id, read off the array
     itself -- never a bare 'gpu' bucket that could alias devices."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import itertools
 import os
 import warnings
@@ -27,6 +28,7 @@ except ImportError:
 
 
 from abtem.array import ArrayObject
+from abtem.core import backend
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
@@ -101,12 +103,6 @@ def check_valid_quantum_number(Z, n, ell):
         raise RuntimeError(
             f"Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}"
         )
-
-
-def _validate_transition_potentials(transition_potentials):
-    if hasattr(transition_potentials, "scatter"):
-        transition_potentials = [transition_potentials]
-    return transition_potentials
 
 
 class RadialWavefunction:
@@ -600,6 +596,42 @@ class BaseTransitionPotential(
         self._double_channel = double_channel
         super().__init__(**kwargs)
 
+    def _task_local(self, match_to=None):
+        """A private view of this transition potential for one task.
+
+        A transition potential travels through the task graph as a single
+        node (see ``shared_constant_arg``), so every task on a worker -- and
+        every thread of the local scheduler -- is handed the *same* object.
+        Matching its grid and accelerator to the wave functions mutates that
+        shared state, which concurrent tasks would race on (an energy
+        ensemble puts a different energy in each task). Work on a shallow
+        copy with a private grid and accelerator instead, so nothing large
+        is copied.
+
+        Everything else stays shared, so this view alone is **not** enough
+        to call the mutating methods on: ``scatter`` and
+        ``generate_scattered_waves`` rebind ``_array`` and re-match the grid
+        on ``self``. Both drivers rely on following this call with
+        ``copy_to_device``, which rebuilds the object and privatizes that
+        derived state; a caller that skips it must not mutate the result.
+        The payload buffer itself is only ever read (the transforms
+        allocate rather than overwrite their input). Note that
+        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
+        attribute there gets it blanked in this view as well.
+
+        Parameters
+        ----------
+        match_to : Waves, optional
+            Match the private grid and accelerator to these wave functions.
+        """
+        task_local = copy.copy(self)
+        task_local._grid = self._grid.copy()
+        task_local._accelerator = self._accelerator.copy()
+        if match_to is not None:
+            task_local.grid.match(match_to)
+            task_local.accelerator.match(match_to)
+        return task_local
+
     @property
     def double_channel(self) -> bool:
         return self._double_channel
@@ -889,6 +921,14 @@ def fast_roll(array, shifts):
 class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _base_dims = 2
 
+    # _local_potential_device_cache is derived state: local_potential_on_device()
+    # populates it lazily from _local_potential (itself derived from the array
+    # already compared) and the requesting device. __getstate__ already drops
+    # it for pickling, for the same reason -- it is a per-process convenience,
+    # not part of the object's identity. Same pattern as Potential._sliced_atoms
+    # in abtem/potentials/iam.py.
+    _eq_exclude = ("_local_potential_device_cache",)
+
     def __init__(
         self,
         Z: int,
@@ -1041,6 +1081,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         xp = get_array_module(like)
         if xp is np:
             device = "cpu"
+        elif backend.tp is not None and xp is backend.tp:
+            # Metal exposes a single device, so its identity needs no index --
+            # and a torch device carries neither an `id` nor a context to enter.
+            device = "mps"
         else:
             # One process can drive several GPUs (outside the dask-cuda
             # process-per-GPU layout); an array cached for one device must
@@ -1053,7 +1097,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if cache is not None and cache[0] == device:
             return cache[1]
 
-        if xp is np:
+        if xp is np or device == "mps":
             on_device = copy_to_device(self._local_potential, like)
         else:
             # Allocate on like's device, whatever device is current.
@@ -1301,7 +1345,13 @@ def _extract_scattering_sites(potential, sites):
             sites = unit_atoms * potential.repetitions
 
     if isinstance(sites, Atoms):
-        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+        # Follow the potential's own convention, so explicitly passed sites
+        # are sliced exactly as sites=None would be.
+        sites = SliceIndexedAtoms(
+            sites,
+            slice_thickness=potential.slice_thickness,
+            wrap=getattr(potential, "periodic", True),
+        )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(
             "Could not derive scattering sites from the potential "
@@ -1332,9 +1382,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         transition_potential = transition_potentials[0]
     else:
         transition_potential = transition_potentials
-
-    if isinstance(transition_potential, TransitionPotential):
-        transition_potential = transition_potential.build()
 
     potential = s_matrix.potential
     energy = s_matrix.energy
@@ -1379,8 +1426,44 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         for s in potential.generate_slices()
     ]
 
-    transition_potential.grid.match(s_waves)
-    transition_potential.accelerator.match(s_waves)
+    # Arrives as one graph node shared by every task on this worker, so
+    # match on a private view rather than mutating it. See _task_local.
+    # Match BEFORE building: build() evaluates the form factors on self.gpts,
+    # so an unbuilt TransitionPotential needs the grid first. This is the
+    # order transition_potential_multislice_and_detect and
+    # TransitionPotential.scatter already use.
+    # An ALREADY-BUILT transition potential cannot be matched: its array has a
+    # fixed shape, and _task_local below would overwrite the grid to agree with
+    # s_waves while leaving that array alone -- leaving an object whose grid
+    # lies about its own contents (gpts (64, 64) over a (4, 32, 32) array,
+    # measured). The scan then completes and returns a result on the wrong
+    # grid: 18.1 % low against the matched reference on a Si cell, with an
+    # identical output shape, so nothing downstream can notice.
+    #
+    # So check first, while the grid still reports what the array actually is.
+    # Checking after the match is useless, because the match is what destroys
+    # the evidence. Grid.check_match paired with Accelerator.check_match is
+    # the same guard iam.py:1948 already uses for a potential against its
+    # waves -- energy is checked for the same reason as gpts/extent: build()
+    # bakes self.energy into the array's form factors (k0, kn, the
+    # relativistic mass correction and the interaction parameter all derive
+    # from it), so a built array whose grid matches but whose energy does not
+    # is exactly as stale as a gpts/extent mismatch, and _task_local's match
+    # would silently overwrite .energy to agree with s_waves while those
+    # baked-in form factors stay computed at the old one.
+    #
+    # The unbuilt case is untouched: it has no array yet, the match sets its
+    # grid and energy, and build() then evaluates the form factors on the
+    # right values -- which is what the preceding commit fixed.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(s_waves)
+        transition_potential.accelerator.check_match(s_waves)
+
+    transition_potential = transition_potential._task_local(match_to=s_waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
     transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
@@ -1517,6 +1600,7 @@ def prism_transition_potential_scan(
     from abtem.multislice import (
         FresnelPropagator,
         _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
@@ -1525,7 +1609,7 @@ def prism_transition_potential_scan(
         minimum_crop,
         wrapped_crop_2d,
     )
-    from abtem.waves import Waves, reduce_ensemble
+    from abtem.waves import Waves
 
     ctx = _prism_eels_common_setup(
         s_matrix, transition_potentials, scan, detectors, sites
@@ -1667,6 +1751,21 @@ def prism_transition_potential_scan(
         pixel_positions, output_window_gpts
     )
 
+    # This driver processes one potential configuration per call and indexes
+    # the measurement's ensemble axes with zeros accordingly -- which holds for
+    # every SMatrix entry point, each of which passes a single-configuration
+    # sub-potential. Called directly with a multi-configuration potential it
+    # would silently return 1/num_configurations of the right answer, in a
+    # plausible, correctly shaped, monotone thickness series. Refuse instead,
+    # as prism_transition_potential_scan_beam_basis already does.
+    if any(n > 1 for n in potential.ensemble_shape):
+        raise NotImplementedError(
+            "prism_transition_potential_scan processes one potential "
+            f"configuration per call, got ensemble shape "
+            f"{potential.ensemble_shape!r}. Iterate the configurations and "
+            "average the results, as SMatrix.transition_potential_scan does."
+        )
+
     # --- Exit planes ---
     exit_planes = potential.exit_planes
     n_exit = len(exit_planes)
@@ -1762,13 +1861,24 @@ def prism_transition_potential_scan(
             for det_idx, detector in enumerate(detectors):
                 m = detector.detect(position_waves)
                 m = m.sum((0,))
-                if isinstance(exit_idx, int):
-                    idx = () if n_exit == 1 else (exit_idx,)
-                    measurements[det_idx].array[idx] += m.array
-                else:
-                    measurements[det_idx].array[exit_idx] += (
-                        m.array[(None,) * len(exit_idx)]
-                    )
+                # The measurement's leading axes are the potential's
+                # ensemble axes and then the exit-plane axis (see
+                # _potential_ensemble_shape_and_metadata, shared with the
+                # regular multislice driver). Indexing the plane part alone
+                # addressed the ensemble axis instead: this driver runs once
+                # per configuration with a length-1 ensemble axis, so an
+                # exit-plane slice starting at 1 or beyond selected nothing
+                # and the contribution was dropped in silence -- a whole
+                # thickness series came back zero.
+                indices = _validate_potential_ensemble_indices(
+                    (0,) * len(potential.ensemble_shape), exit_idx, potential
+                )
+                # Only the slice entries survive the indexing and need
+                # broadcasting; integer ensemble indices drop their axis.
+                n_slice_axes = sum(isinstance(i, slice) for i in indices)
+                measurements[det_idx].array[indices] += m.array[
+                    (None,) * n_slice_axes
+                ]
 
     def _scatter_at_site(atom):
         site_xy = np.array(
@@ -1891,12 +2001,27 @@ def prism_transition_potential_scan(
                         sw_out, site_xys[s_idx], ep_idx
                     )
 
-    # Squeeze out single-point-scan axes the same way the multislice path
-    # does (via reduce_ensemble inside Waves.transition_potential_multislice
-    # — see waves.py:1075). This is what makes ``scan=(0, 0)`` return a bare
-    # detector-shaped measurement instead of a ``(1, *detector_shape)``
-    # array with a singleton scan axis.
-    measurements = [reduce_ensemble(m) for m in measurements]
+    # Reduce the ensemble mean, but do NOT squeeze here.
+    #
+    # This function is the per-configuration driver: SMatrix calls it once per
+    # dask block and once per potential-ensemble member. The multislice path
+    # this used to imitate squeezes at the *outer* level instead --
+    # Waves.transition_potential_multislice ends in the module-level
+    # reduce_ensemble on the assembled result -- so blocks and declared chunks
+    # keep the axis and only the finished object loses it.
+    #
+    # Squeezing per block dropped the scan axis underneath two consumers that
+    # still expected it: the lazy branch declares ``chunks += scan.shape``, and
+    # the eager branch pre-allocates from ``dummy_probes(scan)``. A
+    # single-position non-BaseScan scan -- ``(x, y)``, ``[(x, y)]``,
+    # ``np.array([[x, y]])`` -- therefore came back one axis too wide, and
+    # whether it did depended on whether the potential was an ensemble.
+    #
+    # The module-level reduce_ensemble is squeeze-then-ensemble-mean; the
+    # method called below is only the second half, which is the half that
+    # belongs per block. SMatrix.transition_potential_scan applies the first
+    # half once, at the level the oracle uses.
+    measurements = [m.reduce_ensemble() for m in measurements]
 
     if len(measurements) == 1:
         return measurements[0]

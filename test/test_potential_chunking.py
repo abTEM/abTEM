@@ -5,6 +5,8 @@ import types
 
 import numpy as np
 import pytest
+
+from utils import requires_gpu
 from ase.build import bulk
 
 from abtem import PlaneWave, Potential
@@ -518,6 +520,7 @@ class TestComplexExponential:
         (np.float32, np.complex64),
         (np.float64, np.complex128),
     ])
+    @requires_gpu
     def test_gpu_matches_cpu(self, dtype, expected_cdtype):
         cp = pytest.importorskip("cupy")
         x_cpu = np.linspace(-np.pi, np.pi, 64, dtype=dtype)
