@@ -376,8 +376,16 @@ class GPAWPotential(_PotentialBuilder):
         applying frozen phonon displacements to calculate the potential contribution of
         the nuclear cores. Necessary when using frozen phonons.
     gridrefinement : int
-        Necessary interpolation of the charge density into a finer grid for improved
-        numerical precision. Allowed values are '2' and '4'.
+        Interpolation of GPAW's valence potential onto a finer grid before the
+        per-atom PAW corrections are added and projected, for numerical precision.
+        It is relative to GPAW's *coarse* density grid, and never refines below the
+        "fine" grid GPAW has already computed -- so 1 and 2 both reproduce that
+        native fine grid and do nothing. Any positive integer is accepted: the
+        refinement is performed by abTEM, not handed to GPAW, so GPAW's own
+        restriction on `get_all_electron_density` does not apply here. The default
+        of 4 is converged -- for hBN the low-order structure factors are identical
+        from 3 through 8, while 1 and 2 are ~4.5% high. Distinct from `gpts`, which
+        sets the output grid.
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
