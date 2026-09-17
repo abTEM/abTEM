@@ -153,7 +153,11 @@ filterwarnings = [
     "ignore:ensemble_mean=False returns the full frozen-phonon ensemble:UserWarning",
     "ignore:.*Grid size.*will likely result in GPU under-utilization:numba.core.errors.NumbaPerformanceWarning",
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
-    "ignore:cupyx.jit.rawkernel is experimental:FutureWarning"
+    "ignore:cupyx.jit.rawkernel is experimental:FutureWarning",
+    # PyTorch reports that an eigendecomposition too large for Metal's
+    # threadgroup memory ran on the CPU instead. That is the right thing for it
+    # to do and nothing for a test to fail over.
+    "ignore:linalg.eigh:UserWarning",
 ]
 
 [tool.numpydoc_validation]

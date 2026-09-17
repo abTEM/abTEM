@@ -2774,11 +2774,21 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # the positions are grouped by their fractional pixel offset
                 # rounded to 1e-4 pixels, which single-precision positions of a
                 # large cell cannot resolve
-                pixel_positions = positions.astype(np.float64) / sampling
+                if device_name_from_array_module(xp) == "mps":
+                    # Metal has no double precision. This is one row per probe
+                    # position, and the grouping already finishes on the host
+                    # anyway, so do all of it there and send back only the
+                    # snapped pixels, which index on the device below.
+                    pixel_positions = asnumpy(positions).astype(np.float64) / asnumpy(
+                        sampling
+                    )
+                else:
+                    pixel_positions = positions.astype(np.float64) / sampling
 
                 snapped, unique_offsets, inverse = self._group_by_fractional_offset(
                     pixel_positions
                 )
+                snapped = xp.asarray(snapped)
 
                 waves_array = xp.zeros(
                     (len(positions),) + self.window_gpts,
