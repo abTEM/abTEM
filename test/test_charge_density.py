@@ -257,15 +257,30 @@ def test_warns_for_implausibly_peaked_density(carbon_atoms):
         ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
 
 
-def test_warns_for_implausible_total_charge(carbon_atoms):
-    """A smooth density whose integrated electron count greatly exceeds the atoms'
-    total atomic number (as a genuinely all-electron density would, once summed)
-    must raise the all-electron-density warning, even without an extreme peak."""
-    # carbon_atoms is a single C atom (Z=6) in a 5x5x5 cell; a uniform density of
-    # 1.0 e/A^3 integrates to 125 electrons, far more than the atomic number.
+def test_no_warning_for_sharply_peaked_valence_density(carbon_atoms):
+    """A large peak alone must not trigger the warning. VASP's AECCAR2 is
+    valence-only yet keeps the true orbitals' nodal structure near each nucleus, so
+    for a heavy element on a fine grid its peak is genuinely large (SrTiO3 reaches
+    ~900 e/A^3) while its integrated count stays far below the total atomic
+    number."""
+    charge_density = np.random.RandomState(0).rand(64, 64, 64).astype(np.float32) * 1e-3
+    charge_density[32, 32, 32] = 5e3  # ~2.4 electrons in one voxel; total stays low
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_no_warning_for_smooth_density_near_total_atomic_number(carbon_atoms):
+    """A high integrated count alone must not trigger the warning either: a
+    hydrogen-rich system has almost no core electrons to omit, so a legitimate
+    valence-only density integrates to close to the total atomic number."""
+    # Uniform 1.0 e/A^3 in the 5x5x5 cell integrates to 125 electrons, but has no
+    # sharp near-nuclear feature -- nothing here looks all-electron.
     charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
 
-    with pytest.warns(UserWarning, match="all-electron density"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
 
 
