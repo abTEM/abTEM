@@ -54,6 +54,23 @@ DEVICE = "mps"
 _TORCH_LOCK = threading.RLock()
 
 
+def _torch_kwargs(kwargs: dict) -> dict:
+    """Translate NumPy's keyword spellings to torch's.
+
+    ``dtype`` arrives as a NumPy dtype, which torch will not accept, and NumPy's
+    ``keepdims`` is torch's ``keepdim``. Both turn up on ordinary calls such as
+    ``np.sum(x, dtype=np.float32)``.
+    """
+    if "dtype" in kwargs and kwargs["dtype"] is not None:
+        kwargs = {**kwargs, "dtype": to_torch_dtype(kwargs["dtype"], downcast=True)}
+
+    if "keepdims" in kwargs:
+        kwargs = dict(kwargs)
+        kwargs["keepdim"] = kwargs.pop("keepdims")
+
+    return kwargs
+
+
 def _serialized(func):
     """Run ``func`` holding the Metal lock; see :data:`_TORCH_LOCK`."""
 
@@ -598,7 +615,7 @@ def _elementwise(name: str):
             return getattr(np, name)(tensor, *args, **kwargs)
 
         args = tuple(_unwrap(arg) for arg in args)
-        kwargs = {key: _unwrap(value) for key, value in kwargs.items()}
+        kwargs = _torch_kwargs({key: _unwrap(v) for key, v in kwargs.items()})
         return _wrap(getattr(torch, name)(tensor, *args, **kwargs))
 
     func.__name__ = name
@@ -622,8 +639,7 @@ def _reduction(name: str):
 
     def func(x, axis=None, **kwargs):
         tensor = _unwrap(x)
-        if "keepdims" in kwargs:
-            kwargs["keepdim"] = kwargs.pop("keepdims")
+        kwargs = _torch_kwargs(kwargs)
         if _is_empty_axis(axis):
             return _wrap(tensor.clone())
         if axis is None:
@@ -1002,7 +1018,9 @@ def _binary_ufunc(name: str):
 
     def func(a, b, **kwargs):
         return _wrap(
-            getattr(torch, name)(_unwrap(asarray(a)), _unwrap(asarray(b)), **kwargs)
+            getattr(torch, name)(
+                _unwrap(asarray(a)), _unwrap(asarray(b)), **_torch_kwargs(kwargs)
+            )
         )
 
     func.__name__ = name
@@ -1019,6 +1037,42 @@ def nonzero(x):
 @_serialized
 def einsum(subscripts, *operands, **kwargs):
     return _wrap(torch.einsum(subscripts, *[_unwrap(asarray(o)) for o in operands]))
+
+
+def _host_ndimage_func(name: str):
+    """Run a ``scipy.ndimage`` function on the host, returning a device array.
+
+    Metal has no image-processing library of its own (CuPy has
+    ``cupyx.scipy.ndimage``, which is what the CUDA path uses). These are
+    measurement-space operations -- resampling an image, smoothing a line
+    profile -- on arrays orders of magnitude smaller than the wave functions
+    they came from, so the round trip costs little and keeps the operation
+    available rather than unsupported.
+    """
+    import scipy.ndimage  # noqa: PLC0415 -- only needed on this fallback
+
+    def func(input, *args, output=None, **kwargs):
+        args = tuple(
+            asnumpy(arg) if isinstance(arg, TorchNDArray) else arg for arg in args
+        )
+        result = getattr(scipy.ndimage, name)(asnumpy(input), *args, **kwargs)
+
+        if output is not None:
+            # the caller passed a device array to write into
+            output[...] = asarray(result)
+            return output
+
+        return asarray(result)
+
+    func.__name__ = name
+    return func
+
+
+# The subset of scipy.ndimage abTEM reaches; see _host_ndimage_func.
+ndimage = SimpleNamespace(
+    map_coordinates=_host_ndimage_func("map_coordinates"),
+    gaussian_filter=_host_ndimage_func("gaussian_filter"),
+)
 
 
 def iscomplexobj(x) -> bool:
