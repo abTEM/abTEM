@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -129,8 +131,13 @@ def carbon_atoms():
 
 
 @pytest.fixture
-def charge_density_3d():
-    return np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+def charge_density_3d(carbon_atoms):
+    """Random, but normalised to the valence-electron count `fake_potcar` implies
+    for a single carbon atom (Z=6, Nc=2 -> 4 valence electrons), so that
+    `VASPPotential`'s POTCAR-based electron-count check is satisfied."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    voxel_volume = carbon_atoms.cell.volume / rho.size
+    return (rho * (4.0 / (rho.sum() * voxel_volume))).astype(np.float32)
 
 
 def test_vasp_potential_build(carbon_atoms, charge_density_3d, fake_potcar):
@@ -221,7 +228,7 @@ def test_vasp_potential_subtract_min_true_zeros_each_slice_minimum(
         assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
 
 
-def test_vasp_potential_on_skew_cell(charge_density_3d, fake_potcar):
+def test_vasp_potential_on_skew_cell(fake_potcar):
     """VASPPotential inherits ChargeDensityPotential's non-orthogonal (skewed)
     in-plane grid support unchanged -- the core-density correction is injected
     into the same reciprocal-space charge array as the crude point charges, so
@@ -237,10 +244,40 @@ def test_vasp_potential_on_skew_cell(charge_density_3d, fake_potcar):
         pbc=True,
         scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
     )
-    pot = VASPPotential(atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1)
+    # normalised to this cell's own valence count: 2 C atoms, Z-Nc = 4 each
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    rho *= 8.0 / (rho.sum() * atoms.cell.volume / rho.size)
+
+    pot = VASPPotential(atoms, rho.astype(np.float32), potcar=fake_potcar, sampling=0.1)
     assert not pot.grid.is_orthogonal
 
     built = pot.build(lazy=False)
     assert np.all(np.isfinite(built.array))
     assert built.cell is not None
     assert not built.grid.is_orthogonal
+
+
+def test_warns_when_density_misses_potcar_valence_count(carbon_atoms, fake_potcar):
+    """POTCAR states each species' core-electron count, so the valence count the
+    density must integrate to is known exactly (sum of Z - Nc). A density carrying
+    the core electrons too -- e.g. VASP's AECCAR0+AECCAR2 sum -- integrates to
+    roughly the total atomic number instead, and must be flagged."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    voxel_volume = carbon_atoms.cell.volume / rho.size
+    all_electron = rho * (6.0 / (rho.sum() * voxel_volume))  # Z=6, not Z-Nc=4
+
+    with pytest.warns(UserWarning, match="valence electrons"):
+        VASPPotential(
+            carbon_atoms, all_electron, potcar=fake_potcar, sampling=0.1
+        )
+
+
+def test_no_warning_when_density_matches_potcar_valence_count(
+    carbon_atoms, charge_density_3d, fake_potcar
+):
+    """The correctly normalised valence density must not trip the check."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        VASPPotential(
+            carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
+        )
