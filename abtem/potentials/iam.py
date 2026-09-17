@@ -749,6 +749,32 @@ class _FieldBuilder(BaseField):
 
 
 class _FieldBuilderFromAtoms(_FieldBuilder):
+    # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from
+    # the atoms, the slicing and the cell, all of which are compared already.
+    # Declared here, where the attribute is created, so that Potential,
+    # MagneticField and VectorPotential all inherit it rather than one of them
+    # carrying it for the others. Without it a built field stopped comparing
+    # equal to an identical unbuilt one, i.e. equality depended on whether a
+    # result had been computed.
+    #
+    # The exclusion is blunt, and deliberately so for now. get_sliced_atoms()
+    # returns this object rather than a copy, so a caller who mutates what it
+    # returned changes what the field builds while `==` still reports equal.
+    # What that costs depends on the projection, because the two cache classes
+    # differ. For projection="infinite" the cache is a SliceIndexedAtoms,
+    # whose _slice_index is a list of arrays that safe_equality cannot compare
+    # -- `==` on it raises ValueError, which becomes "unequal" -- so the
+    # comparison is constant-False and excluding it gives up nothing. For
+    # projection="finite" the cache is a SlicedAtoms, which has no
+    # _slice_index and compares correctly; there the exclusion does give up a
+    # real check, one that the np.all fix above would otherwise have made
+    # catch the mutation. Neither path regresses against the old behaviour,
+    # which missed the mutation on both. Comparing derived state only when
+    # both operands have it is the better rule, and belongs with the same
+    # question for lazy arrays -- both are abTEM issue #413 -- rather than
+    # here.
+    _eq_exclude = ("_sliced_atoms",)
+
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons,
@@ -2020,6 +2046,11 @@ class CrystalPotential(_PotentialBuilder):
         If True (default), the mean over the frozen-phonon ensemble is calculated.
         If False, the individual configurations are returned.
     """
+
+    # Same derived state as _FieldBuilderFromAtoms, built by this class's own
+    # get_sliced_atoms(). CrystalPotential descends from _PotentialBuilder, not
+    # from _FieldBuilderFromAtoms, so it does not inherit that declaration.
+    _eq_exclude = ("_sliced_atoms",)
 
     def __init__(
         self,
