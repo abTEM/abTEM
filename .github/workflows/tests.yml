@@ -60,3 +60,23 @@ jobs:
         run: >-
           uv run pytest test -n auto
           ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && '--runslow' || '' }}
+
+  # A single, stable check to require in branch protection. The `tests` job
+  # above fans out into a differently-named check per matrix cell (e.g.
+  # "ubuntu-latest / python 3.11"), and that set changes shape whenever the
+  # OS or Python matrix does (1 OS x 4 Python versions for PRs into dev, 3 OS
+  # x 4 Python versions for PRs into main) -- naming those individually as
+  # required checks would need re-editing on every matrix change. This job
+  # instead reduces the whole matrix to one pass/fail result.
+  all-tests-passed:
+    name: All tests passed
+    needs: tests
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test matrix result
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "One or more test matrix jobs did not succeed (result: ${{ needs.tests.result }})."
+            exit 1
+          fi
