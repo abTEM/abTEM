@@ -547,6 +547,23 @@ class TestBlochWavesEnergyEnsemble:
                     err_msg=f"Inactive beams non-zero at energy index {i}",
                 )
 
+    def test_diffraction_patterns_eager_matches_lazy(self, bw_multi, dp_multi):
+        """lazy=False takes a separate code path through the same _embed_beams/
+        stack helpers (used directly, not via da.stack/map_blocks) -- this is
+        the path BlochwaveEnsemble._run_calculate_diffraction_patterns actually
+        calls (it always computes eagerly per dask block), so a bug specific
+        to it doesn't show up through dp_multi/dp_single above, which only
+        exercise the lazy branch via .compute(). On CPU both branches use
+        numpy either way; the eager branch additionally needs to allocate its
+        zero-padding array on whatever device the per-energy result is
+        actually on, rather than assuming numpy, since it runs unconditionally
+        for every _run_calculate_diffraction_patterns block regardless of
+        device."""
+        eager = bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS, lazy=False)
+        assert isinstance(eager, IndexedDiffractionPatterns)
+        assert eager.array.shape == dp_multi.array.shape
+        np.testing.assert_array_equal(eager.array, dp_multi.array)
+
 
 BLOCH_ENSEMBLE_N_ROTATIONS = 4
 
