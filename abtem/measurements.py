@@ -1283,7 +1283,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                 drop_axis=base_axes,
                 new_axis=new_axis,
                 chunks=chunks,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = _interpolate_stack(self.array, positions, mode="wrap", order=order)
@@ -2014,6 +2014,10 @@ class Images(_BaseMeasurement2D):
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
+                # Real on purpose, unlike the dtype-preserving map_blocks
+                # elsewhere: the input is required to be complex (its real and
+                # imaginary parts are the two gradient components) and
+                # _integrate_gradient_2d returns xp.real(...) of the result.
                 meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
@@ -2304,6 +2308,9 @@ class Images(_BaseMeasurement2D):
             array = self.array.rechunk(
                 chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
             )
+            # Real on purpose, unlike the dtype-preserving map_blocks
+            # elsewhere: _diffractograms returns xp.abs(...), so the output is
+            # a power spectrum even when the image itself is complex.
             array = array.map_blocks(
                 self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
             )
@@ -2424,7 +2431,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         xp = get_array_module(array)
         array = array - xp.max(array, axis=-1, keepdims=True) * height
 
-        widths = xp.zeros(array.shape[:-1], dtype=np.float32)
+        widths = xp.zeros(array.shape[:-1], dtype=get_dtype(complex=False))
         for i in np.ndindex(array.shape[:-1]):
             zero_crossings = xp.where(xp.diff(xp.sign(array[i]), axis=-1))[0]
             left, right = zero_crossings[0], zero_crossings[-1]
@@ -2452,7 +2459,9 @@ class _BaseMeasurement1D(BaseMeasurements):
             return self.array.map_blocks(
                 self._calculate_widths,
                 drop_axis=(len(self.array.shape) - 1,),
-                dtype=np.float32,
+                # A width is real whatever the profile is, but it still has
+                # to follow the configured precision.
+                dtype=get_dtype(complex=False),
                 sampling=self.sampling,
                 height=height,
             )
@@ -2472,7 +2481,10 @@ class _BaseMeasurement1D(BaseMeasurements):
             None
         ]
 
-        new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=xp.float32)
+        # Follow the input dtype: hardcoding float32 downgrades a float64
+        # profile and makes map_coordinates reject a complex one outright
+        # ("output must have complex dtype").
+        new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
             map_coordinates(array[i], new_points, new_array[i], order=order)
 
@@ -2531,7 +2543,7 @@ class _BaseMeasurement1D(BaseMeasurements):
                 endpoint=endpoint,
                 order=order,
                 chunks=self.array.chunks[:-1] + (gpts,),
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._interpolate(self.array, gpts, endpoint, order)
@@ -4380,7 +4392,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     len(self.shape) - 2,
                     len(self.shape) - 1,
                 ),
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._radial_binning(
@@ -4518,7 +4530,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             integrated_intensity = self._integrate_fourier_space(
@@ -4650,7 +4662,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 inner=inner,
                 outer=outer,
                 angular_coordinates=self.angular_coordinates,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._bandlimit(self.array, inner, outer, self.angular_coordinates)
@@ -4743,7 +4755,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         centers = np.arange(0, max_angle, radial_sampling)
 
-        values = np.zeros(array.shape[:-2] + centers.shape)
+        # Follow the input dtype: the default float64 both ignores the
+        # configured precision and silently drops the imaginary part when
+        # the summed values are assigned back in.
+        values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = np.abs(r - center) < width
@@ -4820,7 +4835,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (n,),
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._azimuthal_average(

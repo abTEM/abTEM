@@ -1,3 +1,5 @@
+import warnings
+
 import ase
 import dask.array as da
 import hypothesis.strategies as st
@@ -537,6 +539,74 @@ def test_filters_preserve_complex_images(boundary):
         out = getattr(images, method)(*args, boundary=boundary, **kwargs).array
         assert np.iscomplexobj(out), method
         assert np.abs(out.imag).max() > 0, method
+
+
+def test_dtype_preserving_operations_keep_complex():
+    """Operations that pass their input values through must declare a dask
+    dtype that follows the input, not the configured precision.
+
+    The declared dtype is the invariant worth pinning: a lazy array declared
+    real while its blocks are complex is already wrong, and whether it goes on
+    to actually lose the imaginary part depends on the chunking and on which
+    dask assembly path runs -- which is exactly what made this hide (it
+    surfaced only for voigtian_filter with boundary="constant"). So assert on
+    the graph's dtype rather than hoping a given shape happens to trigger the
+    cast, and check the computed result against the eager one as well.
+
+    Complex measurements are ordinary here: center_of_mass returns complex
+    Images, differential(return_complex=True) produces them.
+    """
+    rng = np.random.default_rng(0)
+
+    def pair(measurement_cls, array, chunks, **kwargs):
+        return (
+            measurement_cls(array, **kwargs),
+            measurement_cls(da.from_array(array, chunks=chunks), **kwargs),
+        )
+
+    dp_kwargs = dict(
+        sampling=0.1,
+        ensemble_axes_metadata=[ScanAxis(sampling=0.2, _main=True)] * 2,
+        metadata={"energy": 100e3},
+    )
+
+    im_e, im_l = pair(
+        Images, rng.random((32, 32)) + 1j * rng.random((32, 32)), (16, 16), sampling=0.1
+    )
+    lp_e, lp_l = pair(
+        RealSpaceLineProfiles, rng.random(64) + 1j * rng.random(64), 32, sampling=0.1
+    )
+    dp_e, dp_l = pair(
+        DiffractionPatterns,
+        rng.random((4, 4, 16, 16)) + 1j * rng.random((4, 4, 16, 16)),
+        (2, 2, 16, 16),
+        **dp_kwargs,
+    )
+
+    cases = {
+        "interpolate_line": (lambda m: m.interpolate_line((0, 0), (2, 2)), im_e, im_l),
+        "line_profile_interpolate": (lambda m: m.interpolate(gpts=128), lp_e, lp_l),
+        "bandlimit": (lambda m: m.bandlimit(0, 10), dp_e, dp_l),
+        "polar_binning": (lambda m: m.polar_binning(4, 4, 0, 10), dp_e, dp_l),
+        "integrate_radial": (lambda m: m.integrate_radial(0, 10), dp_e, dp_l),
+        "azimuthal_average": (lambda m: m.azimuthal_average(), dp_e, dp_l),
+    }
+
+    for name, (operation, eager_in, lazy_in) in cases.items():
+        lazy_result = operation(lazy_in)
+        assert np.iscomplexobj(
+            np.empty(0, dtype=lazy_result.array.dtype)
+        ), f"{name} declares a real dask dtype for complex input"
+
+        # A silent downcast only warns, so make it fail loudly here.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", np.exceptions.ComplexWarning)
+            computed = np.asarray(lazy_result.compute().array)
+
+        assert np.iscomplexobj(computed), f"{name} dropped the complex dtype"
+        np.testing.assert_allclose(
+            computed, np.asarray(operation(eager_in).compute().array), err_msg=name
+        )
 
 
 def test_filter_boundary_modes():
