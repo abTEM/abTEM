@@ -249,3 +249,31 @@ def test_rest_parity_damps_one_phonon_channel(equilibrium):
     np.testing.assert_allclose(ratio, dw[peaks], atol=0.08, rtol=0)  # per-pixel, sample noise
     assert 0 < np.mean(ratio - dw[peaks]) < 0.04  # residual is a small positive bias
     assert one_damped.sum() < 0.97 * one_plain.sum()
+
+
+def test_rest_parity_multi_channel_is_the_damped_bin_multi_channel(equilibrium):
+    """With rest fields the multi channel must be the bin's own two-phonon
+    scattering (damped by the rest field), not the two-rest-phonon
+    fluctuations, which are larger: the per-realization static reference
+    removes them. Check the multi/one weight ratio, which the damping
+    leaves nearly unchanged, against the bin-only run."""
+    n_configs, sigma = 12, 0.04
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=n_configs, scale=0.06)
+    rest = _rest_fields(equilibrium, n_configs, scale=sigma, seed=31)
+    with abtem.config.set({"precision": "float64"}):
+        plain = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True),
+            max_angle=60,
+        )
+        damped = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest),
+            max_angle=60,
+        )
+    ratio_plain = plain.array[2, 0].sum() / plain.array[1, 0].sum()
+    ratio_damped = damped.array[2, 0].sum() / damped.array[1, 0].sum()
+    assert 0.7 < ratio_damped / ratio_plain < 1.3, (ratio_plain, ratio_damped)
+    # and the multi weight itself decreases with the damping, never grows
+    assert damped.array[2, 0].sum() < plain.array[2, 0].sum()

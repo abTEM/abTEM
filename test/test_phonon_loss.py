@@ -464,9 +464,11 @@ class TestParityProjection:
 
     def test_rest_parity_axis_is_averaged_out_before_projection(self):
         """With a rest-parity axis the waves are first averaged over the two
-        rest signs. Build psi(s, t) = static + s*delta + t*rho + eps so that
-        the rest-odd part rho must drop out exactly, leaving one = mean|delta|^2
-        and multi = variance(eps), regardless of rho's size."""
+        rest signs and the static member is subtracted from the even part.
+        Build psi(s, t) = static + s*delta + t*rho + chi + eps (eps absent
+        from the static member) so that the rest-odd part rho and the
+        rest-even, bin-independent part chi must both drop out exactly,
+        leaving one = mean|delta|^2 and multi = variance(eps)."""
         from abtem.core.axes import PhononRestParityAxis
 
         e_values = [0.02, 0.05]
@@ -482,15 +484,21 @@ class TestParityProjection:
         static, delta, eps = rc((gpts, gpts)), rc(shape), rc(shape)
         rho = 5.0 * rc(shape)  # deliberately large rest-odd part
 
-        members = np.empty((2, 2) + shape, dtype=np.complex64)
-        for parity, s_sign in enumerate((1, -1)):
+        # members: real/twin/static x rest sign; the static member carries the
+        # rest-odd part rho and a rest-realization-dependent even part chi
+        # that must cancel against the same chi in real and twin
+        chi = 3.0 * rc(shape)
+        members = np.empty((3, 2) + shape, dtype=np.complex64)
+        for parity, s_sign in enumerate((1, -1, 0)):
             for rest, t_sign in enumerate((1, -1)):
-                members[parity, rest] = static + s_sign * delta + t_sign * rho + eps
+                members[parity, rest] = (
+                    static + s_sign * delta + t_sign * rho + chi + (eps if s_sign else 0)
+                )
 
         waves = Waves(
             members, energy=100e3, sampling=0.1,
             ensemble_axes_metadata=[
-                PhononParityAxis(values=("real", "twin")),
+                PhononParityAxis(values=("real", "twin", "static")),
                 PhononRestParityAxis(values=("plus", "minus")),
                 EnergyLossAxis(values=tuple(e_values)),
                 FrozenPhononsAxis(_ensemble_mean=False),

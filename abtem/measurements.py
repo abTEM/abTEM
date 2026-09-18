@@ -6537,14 +6537,18 @@ def _phonon_loss_diffraction_patterns_parity_projection(
         )
 
     parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
-    if tuple(parity_axis.values) != ("real", "twin"):
+    parity_values = tuple(parity_axis.values)
+    expected_values = (
+        ("real", "twin", "static") if rest_axis_idx is not None else ("real", "twin")
+    )
+    if parity_values != expected_values:
         raise ValueError(
             "phonon_loss_diffraction_patterns requires a PhononParityAxis "
-            "with values ('real', 'twin'), got "
-            f"{tuple(parity_axis.values)}. Build the Potential from a "
-            "parity_projection=True EnergyResolvedAtomsEnsemble and run "
-            "multislice (with a WavesDetector, so the exit waves stay "
-            "complex) before calling this function."
+            f"with values {expected_values}, got {parity_values}. Build the "
+            "Potential from a parity_projection=True "
+            "EnergyResolvedAtomsEnsemble and run multislice (with a "
+            "WavesDetector, so the exit waves stay complex) before calling "
+            "this function."
         )
 
     if not np.iscomplexobj(exit_waves.array):
@@ -6563,6 +6567,14 @@ def _phonon_loss_diffraction_patterns_parity_projection(
 
     waves_real = _select(0)
     waves_twin = _select(1)
+    # With rest fields, the "static" member is the rest-displaced structure
+    # without the bin displacement, per realization. Subtracting it from the
+    # even part cancels the two-rest-phonon fluctuations (order u_rest^4,
+    # usually larger than the bin's own two-phonon signal) that would
+    # otherwise dominate the multi-phonon channel. Without rest fields the
+    # reference is a constant and drops out of the variance, so none is
+    # needed.
+    waves_static = _select(2) if rest_axis_idx is not None else None
 
     fp_axis_idx = None
     energy_axis_idx = None
@@ -6605,6 +6617,8 @@ def _phonon_loss_diffraction_patterns_parity_projection(
 
     # --- "multi": variance of psi_even = (real + twin) / 2, in complex128 ---
     psi_even = ((waves_real.array + waves_twin.array) / 2).astype(np.complex128)
+    if waves_static is not None:
+        psi_even = psi_even - waves_static.array.astype(np.complex128)
     waves_even = waves_real.__class__(psi_even, **wave_kwargs)
     # The intensities below are float64 by construction, but the lazy
     # diffraction-pattern path stamps them with the *configured* dtype as

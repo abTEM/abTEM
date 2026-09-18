@@ -812,15 +812,26 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         ``(energy, configuration)`` layout as ``energy_resolved_snapshots``,
         or as one list of ``n_configs`` fields reused for every energy bin.
         Requires ``parity_projection=True``. Every snapshot is then
-        propagated at the four sign combinations ``R_eq ± u_bin ± u_rest``,
-        adding a :class:`~abtem.core.axes.PhononRestParityAxis`
-        (``values=("plus", "minus")``) after the parity axis. Averaging the
-        exit waves over it keeps the part even in the rest displacement,
+        propagated at the six structures ``R_eq + s u_bin + t u_rest`` with
+        ``s`` in (+1, -1, 0) and ``t`` in (+1, -1): the parity axis gains a
+        third member ``"static"`` (``s = 0``, the rest-displaced structure
+        without the bin displacement) and a
+        :class:`~abtem.core.axes.PhononRestParityAxis`
+        (``values=("plus", "minus")``) follows it. Averaging the exit waves
+        over the rest axis keeps the part even in the rest displacement,
         which carries the Debye-Waller damping of the bin's one-phonon
         amplitude by all other modes -- the factor a bin-restricted
         snapshot lacks -- while the part odd in the rest displacement (one
         bin phonon plus one rest phonon, mis-binned at this energy) cancels
-        exactly. Costs four multislice runs per snapshot instead of two.
+        exactly. The ``"static"`` member is the per-realization reference
+        the multi-phonon channel subtracts; without it that channel would
+        be dominated by two-rest-phonon fluctuations (order ``u_rest**4``).
+        Costs six multislice runs per snapshot instead of two. Drawing the
+        rest field from the full thermal ensemble (bin modes included)
+        double-counts the bin modes' own damping, an error of about
+        ``2 M_bin`` in the one-phonon intensity, i.e. ``2 M / n_bins`` for
+        bins of comparable weight -- negligible for narrow bins, a few
+        percent for a handful of bins.
     parity_projection : bool, optional
         If True (default False), separate one-phonon from multi-phonon
         scattering by also propagating, for every snapshot, its
@@ -924,14 +935,25 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
             if rest is not None:
                 # (parity, rest sign, energy, config): R_eq + s u_bin + t u_rest
-                with_rest = np.empty((2, 2) + rest.shape, dtype=object)
+                # for the "real" (s = +1) and "twin" (s = -1) members, plus a
+                # third "static" member (s = 0): R_eq + t u_rest, the
+                # rest-displaced structure without the bin displacement. It
+                # is the per-realization reference the multi-phonon channel
+                # subtracts, so that the two-rest-phonon fluctuations (of
+                # order u_rest^4, typically larger than the bin's own
+                # two-phonon signal) cancel per realization instead of
+                # contaminating that channel.
+                with_rest = np.empty((3, 2) + rest.shape, dtype=object)
                 for index in np.ndindex(rest.shape):
                     u_rest = rest[index].positions - eq_positions
-                    for parity in range(2):
-                        for sign_index, sign in enumerate((1.0, -1.0)):
+                    for sign_index, sign in enumerate((1.0, -1.0)):
+                        for parity in range(2):
                             atoms = snapshots[(parity,) + index].copy()
                             atoms.positions = atoms.positions + sign * u_rest
                             itemset(with_rest, (parity, sign_index) + index, atoms)
+                        static = snapshots[(0,) + index].copy()
+                        static.positions = eq_positions + sign * u_rest
+                        itemset(with_rest, (2, sign_index) + index, static)
                 snapshots = with_rest
         elif parity_projection and snapshots.ndim >= 3 and not _validated:
             # A `snapshots.ndim >= 3` input with `_validated=True` is a
@@ -985,9 +1007,13 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 ),
             ]
             if parity_projection:
-                leading = [PhononParityAxis(values=("real", "twin"))]
                 if snapshots.ndim == 4:
-                    leading.append(PhononRestParityAxis(values=("plus", "minus")))
+                    leading = [
+                        PhononParityAxis(values=("real", "twin", "static")),
+                        PhononRestParityAxis(values=("plus", "minus")),
+                    ]
+                else:
+                    leading = [PhononParityAxis(values=("real", "twin"))]
                 self._ensemble_axes_metadata = leading + energy_and_config_axes
             else:
                 self._ensemble_axes_metadata = energy_and_config_axes
@@ -996,8 +1022,9 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     def snapshots(self) -> np.ndarray:
         """Object array of Atoms, ``(n_energies, n_configs)`` normally,
         ``(2, n_energies, n_configs)`` if ``parity_projection`` is True, or
-        ``(2, 2, n_energies, n_configs)`` if ``rest_snapshots`` were given
-        as well (parity, rest sign, energy, configuration)."""
+        ``(3, 2, n_energies, n_configs)`` if ``rest_snapshots`` were given
+        as well (parity member real/twin/static, rest sign, energy,
+        configuration)."""
         return self._snapshots
 
     @property
@@ -1030,7 +1057,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     @property
     def rest_parity(self) -> bool:
         """Whether the ensemble carries the rest-parity axis (both signs of a
-        rest displacement field on top of every bin snapshot)."""
+        rest displacement field on top of every bin snapshot, plus the
+        rest-displaced static reference)."""
         return self._snapshots.ndim == 4
 
     @property
