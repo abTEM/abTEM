@@ -180,9 +180,24 @@ def test_tile_images(data, tile, lazy, device):
     )
 
 
+def _sigma_strategy(max_value=5.0):
+    """Physical-unit sigma/half-width, either exactly 0.0 or a "sensible"
+    nonzero float.
+
+    Excludes hypothesis' extreme near-zero (but nonzero) floats -- e.g.
+    ~1e-300 -- which are physically indistinguishable from zero at any sane
+    pixel sampling, provide no additional test coverage over the sigma=0.0
+    case the filters already special-case, and can silently underflow to 0
+    when squared (``sigma**2`` for such a value is smaller than the
+    smallest representable float64), which previously raised a bare
+    ZeroDivisionError deep inside the Gaussian kernel construction.
+    """
+    return st.one_of(st.just(0.0), st.floats(min_value=1e-6, max_value=max_value))
+
+
 @composite
-def sigma(draw):
-    sigma = st.floats(min_value=0.0, max_value=5.0)
+def sigma(draw, max_value=5.0):
+    sigma = _sigma_strategy(max_value)
     return draw(st.one_of(st.tuples(sigma, sigma), sigma))
 
 
@@ -727,7 +742,7 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
 
 
 @settings(deadline=None, max_examples=10)
-@given(data=st.data(), sigma=st.floats(min_value=0.0, max_value=2.0))
+@given(data=st.data(), sigma=_sigma_strategy(max_value=2.0))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
