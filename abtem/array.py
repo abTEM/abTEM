@@ -1480,7 +1480,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             axis = normalize_axes(axis, self.shape)
 
-        shape = self.shape[: -len(self.base_shape)]
+        # Not `self.shape[: -len(self.base_shape)]`: Python has no negative
+        # zero, so for a base-less object (base_shape == ()) that slice is
+        # `[:0]`, always empty, rather than `[:len(self.shape)]`.
+        n_ensemble_dims = len(self.shape) - len(self.base_shape)
+        shape = self.shape[:n_ensemble_dims]
 
         squeezed = tuple(
             np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0]
@@ -1703,14 +1707,20 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(self.array, da.core.Array):
             return False
 
-        base_chunks = self.array.chunks[-len(self.base_shape) :]
+        # Not `chunks[-len(self.base_shape):]`: the same -0 problem, mirrored --
+        # for a base-less object that slice is `[0:]`, everything, rather than
+        # `[len(chunks):]`, nothing.
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        base_chunks = self.array.chunks[n_ensemble_dims:]
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
         """Rechunk to remove chunks across the base dimensions."""
         if not self._has_base_chunks:
             return self
-        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
+        # See the comment in _has_base_chunks: -0 is 0, not "the end".
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(
             self.base_shape
         )
         return self.rechunk(chunks)
@@ -1756,7 +1766,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
         array_axes = axes[:num_array_axes]
-        ensemble_axes = array_axes[:-base_ndims]
+        # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
+        # comment in ArrayObject.squeeze for a base-less array_object.
+        n_ensemble_axes = len(array_axes) - base_ndims
+        ensemble_axes = array_axes[:n_ensemble_axes]
         transform_axes = axes[num_array_axes:]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
@@ -2171,7 +2184,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         if chunks is None and self.is_lazy:
-            chunks = self._lazy_array.chunks[: -len(self.base_shape)]
+            # See the comment in ArrayObject.squeeze: -0 is 0, not "the end".
+            n_ensemble_dims = len(self._lazy_array.chunks) - len(self.base_shape)
+            chunks = self._lazy_array.chunks[:n_ensemble_dims]
         elif chunks is None:
             chunks = (1,) * len(self.ensemble_shape)
 

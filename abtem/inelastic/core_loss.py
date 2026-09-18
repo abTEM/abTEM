@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import itertools
 import os
 import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import numpy as np
 from ase import Atom, Atoms, units
@@ -32,7 +33,7 @@ from abtem.core.backend import (
     copy_to_device,
     get_array_module,
 )
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import estimate_scan_batch_size, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -45,6 +46,7 @@ from abtem.core.energy import (
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin, get_dtype
+from abtem.integrals import _device_cache_key
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
@@ -101,12 +103,6 @@ def check_valid_quantum_number(Z, n, ell):
         raise RuntimeError(
             f"Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}"
         )
-
-
-def _validate_transition_potentials(transition_potentials):
-    if hasattr(transition_potentials, "scatter"):
-        transition_potentials = [transition_potentials]
-    return transition_potentials
 
 
 class RadialWavefunction:
@@ -600,6 +596,42 @@ class BaseTransitionPotential(
         self._double_channel = double_channel
         super().__init__(**kwargs)
 
+    def _task_local(self, match_to=None):
+        """A private view of this transition potential for one task.
+
+        A transition potential travels through the task graph as a single
+        node (see ``shared_constant_arg``), so every task on a worker -- and
+        every thread of the local scheduler -- is handed the *same* object.
+        Matching its grid and accelerator to the wave functions mutates that
+        shared state, which concurrent tasks would race on (an energy
+        ensemble puts a different energy in each task). Work on a shallow
+        copy with a private grid and accelerator instead, so nothing large
+        is copied.
+
+        Everything else stays shared, so this view alone is **not** enough
+        to call the mutating methods on: ``scatter`` and
+        ``generate_scattered_waves`` rebind ``_array`` and re-match the grid
+        on ``self``. Both drivers rely on following this call with
+        ``copy_to_device``, which rebuilds the object and privatizes that
+        derived state; a caller that skips it must not mutate the result.
+        The payload buffer itself is only ever read (the transforms
+        allocate rather than overwrite their input). Note that
+        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
+        attribute there gets it blanked in this view as well.
+
+        Parameters
+        ----------
+        match_to : Waves, optional
+            Match the private grid and accelerator to these wave functions.
+        """
+        task_local = copy.copy(self)
+        task_local._grid = self._grid.copy()
+        task_local._accelerator = self._accelerator.copy()
+        if match_to is not None:
+            task_local.grid.match(match_to)
+            task_local.accelerator.match(match_to)
+        return task_local
+
     @property
     def double_channel(self) -> bool:
         return self._double_channel
@@ -889,6 +921,14 @@ def fast_roll(array, shifts):
 class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _base_dims = 2
 
+    # _local_potential_device_cache and _device_array_cache are derived state:
+    # populated lazily from the array already compared and the requesting
+    # device. __getstate__ already drops them for pickling, for the same
+    # reason -- they are a per-process convenience, not part of the object's
+    # identity. Same pattern as Potential._sliced_atoms in
+    # abtem/potentials/iam.py.
+    _eq_exclude = ("_local_potential_device_cache", "_device_array_cache")
+
     def __init__(
         self,
         Z: int,
@@ -912,6 +952,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._local_potential_device_cache = None
+        # Memo for copy_to_device, keyed by target device -- see that method.
+        # Set here, on the object every _task_local view is shallow-copied
+        # from, so copy.copy's shared dict reference is what makes every
+        # per-task view see what any sibling view already uploaded.
+        self._device_array_cache: dict = {}
         self._threshold = None
 
     def from_array_and_metadata(self, array, metadata):
@@ -1062,12 +1107,87 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         self._local_potential_device_cache = (device, on_device)
         return on_device
 
+    def copy_to_device(self, device: str) -> Self:
+        """Copy to a device, memoized per (shared graph node, device).
+
+        ``ArrayObject.copy_to_device`` always rebuilds through ``__init__``,
+        which recomputes ``_local_potential`` from the array -- an ``ifft2``
+        + ``abs2`` + sum over the whole payload -- even when the array is
+        already on the target device, since the free ``copy_to_device`` being
+        a no-op there is invisible to ``__init__``. Once this object arrives
+        as one graph node shared by every task on a worker (see
+        ``BaseTransitionPotential._task_local``), both that recomputation and,
+        on GPU, the host-to-device upload beneath it happen once per task
+        rather than once per worker.
+
+        This does NOT memoize the returned *object* -- ``scatter`` and
+        ``generate_scattered_waves`` mutate what they are handed
+        (``self._array = ...``, ``self.grid.match(...)``), so two tasks
+        sharing one returned instance would race on those mutations exactly
+        as ``_task_local`` exists to prevent one step earlier. What is safe
+        to share is the immutable-in-practice *array data*: the device-
+        resident array and the local potential derived from it are cached,
+        and a fresh, independently-mutable wrapper is copied out each call.
+
+        The cache lives in ``_device_array_cache``, set in ``__init__`` on
+        the object every ``_task_local`` view is shallow-copied from --
+        ``copy.copy`` shares dict *references*, not contents, so every
+        per-task view sees the same dict and therefore whatever a sibling
+        view already uploaded, with its lifetime tied to the shared node.
+        """
+        key = _device_cache_key(device)
+        cached = self._device_array_cache.get(key)
+
+        if cached is None:
+            array_on_device = copy_to_device(self.array, device)
+            if array_on_device is self.array:
+                local_potential_on_device = self._local_potential
+            else:
+                if get_array_module(array_on_device) is np:
+                    local_potential_on_device = copy_to_device(
+                        self._local_potential, array_on_device
+                    )
+                else:
+                    with array_on_device.device:
+                        local_potential_on_device = copy_to_device(
+                            self._local_potential, array_on_device
+                        )
+            cached = (array_on_device, local_potential_on_device)
+            self._device_array_cache[key] = cached
+
+        array_on_device, local_potential_on_device = cached
+
+        result = copy.copy(self)
+        result._array = array_on_device
+        result._local_potential = local_potential_on_device
+        result._local_potential_device_cache = None
+        return result
+
+    def __copy__(self):
+        # Without this, copy.copy(self) -- what _task_local uses to build a
+        # per-task view -- goes through __reduce_ex__/__getstate__ instead of
+        # a plain __dict__ share, since a class with __getstate__ but no
+        # __copy__ uses the former for BOTH pickling and copy.copy. That
+        # silently gave every _task_local view its own fresh
+        # _device_array_cache (__getstate__ always resets it, correctly for
+        # pickling), defeating the memo in copy_to_device: sibling per-task
+        # views never saw what one another had already uploaded. A real
+        # shallow copy -- sharing __dict__ values by reference, which is what
+        # _task_local's own docstring already promises ("everything else
+        # stays shared") -- fixes it for this cache and matches the intended
+        # semantics generally.
+        cls = self.__class__
+        new = cls.__new__(cls)
+        new.__dict__.update(self.__dict__)
+        return new
+
     def __getstate__(self):
-        # The device cache is a per-process convenience and may hold a cupy
-        # array; letting it ride through pickle would bloat every dask task
-        # carrying this object and break unpickling on CPU-only workers.
+        # Both device caches are a per-process convenience and may hold cupy
+        # arrays; letting them ride through pickle would bloat every dask
+        # task carrying this object and break unpickling on CPU-only workers.
         state = self.__dict__.copy()
         state["_local_potential_device_cache"] = None
+        state["_device_array_cache"] = {}
         return state
 
     def filter_sites(self, waves, sites, threshold):
@@ -1301,7 +1421,13 @@ def _extract_scattering_sites(potential, sites):
             sites = unit_atoms * potential.repetitions
 
     if isinstance(sites, Atoms):
-        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+        # Follow the potential's own convention, so explicitly passed sites
+        # are sliced exactly as sites=None would be.
+        sites = SliceIndexedAtoms(
+            sites,
+            slice_thickness=potential.slice_thickness,
+            wrap=getattr(potential, "periodic", True),
+        )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(
             "Could not derive scattering sites from the potential "
@@ -1332,9 +1458,6 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         transition_potential = transition_potentials[0]
     else:
         transition_potential = transition_potentials
-
-    if isinstance(transition_potential, TransitionPotential):
-        transition_potential = transition_potential.build()
 
     potential = s_matrix.potential
     energy = s_matrix.energy
@@ -1379,8 +1502,44 @@ def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, s
         for s in potential.generate_slices()
     ]
 
-    transition_potential.grid.match(s_waves)
-    transition_potential.accelerator.match(s_waves)
+    # Arrives as one graph node shared by every task on this worker, so
+    # match on a private view rather than mutating it. See _task_local.
+    # Match BEFORE building: build() evaluates the form factors on self.gpts,
+    # so an unbuilt TransitionPotential needs the grid first. This is the
+    # order transition_potential_multislice_and_detect and
+    # TransitionPotential.scatter already use.
+    # An ALREADY-BUILT transition potential cannot be matched: its array has a
+    # fixed shape, and _task_local below would overwrite the grid to agree with
+    # s_waves while leaving that array alone -- leaving an object whose grid
+    # lies about its own contents (gpts (64, 64) over a (4, 32, 32) array,
+    # measured). The scan then completes and returns a result on the wrong
+    # grid: 18.1 % low against the matched reference on a Si cell, with an
+    # identical output shape, so nothing downstream can notice.
+    #
+    # So check first, while the grid still reports what the array actually is.
+    # Checking after the match is useless, because the match is what destroys
+    # the evidence. Grid.check_match paired with Accelerator.check_match is
+    # the same guard iam.py:1948 already uses for a potential against its
+    # waves -- energy is checked for the same reason as gpts/extent: build()
+    # bakes self.energy into the array's form factors (k0, kn, the
+    # relativistic mass correction and the interaction parameter all derive
+    # from it), so a built array whose grid matches but whose energy does not
+    # is exactly as stale as a gpts/extent mismatch, and _task_local's match
+    # would silently overwrite .energy to agree with s_waves while those
+    # baked-in form factors stay computed at the old one.
+    #
+    # The unbuilt case is untouched: it has no array yet, the match sets its
+    # grid and energy, and build() then evaluates the form factors on the
+    # right values -- which is what the preceding commit fixed.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(s_waves)
+        transition_potential.accelerator.check_match(s_waves)
+
+    transition_potential = transition_potential._task_local(match_to=s_waves)
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
     transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
@@ -1517,6 +1676,7 @@ def prism_transition_potential_scan(
     from abtem.multislice import (
         FresnelPropagator,
         _potential_ensemble_shape_and_metadata,
+        _validate_potential_ensemble_indices,
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
@@ -1525,7 +1685,7 @@ def prism_transition_potential_scan(
         minimum_crop,
         wrapped_crop_2d,
     )
-    from abtem.waves import Waves, reduce_ensemble
+    from abtem.waves import Waves
 
     ctx = _prism_eels_common_setup(
         s_matrix, transition_potentials, scan, detectors, sites
@@ -1663,9 +1823,21 @@ def prism_transition_potential_scan(
 
     # Reduction helpers operate in the downsampled grid.
     pixel_positions = positions / xp.asarray(ds_sampling, dtype=get_dtype())
-    reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
-        pixel_positions, output_window_gpts
-    )
+
+    # This driver processes one potential configuration per call and indexes
+    # the measurement's ensemble axes with zeros accordingly -- which holds for
+    # every SMatrix entry point, each of which passes a single-configuration
+    # sub-potential. Called directly with a multi-configuration potential it
+    # would silently return 1/num_configurations of the right answer, in a
+    # plausible, correctly shaped, monotone thickness series. Refuse instead,
+    # as prism_transition_potential_scan_beam_basis already does.
+    if any(n > 1 for n in potential.ensemble_shape):
+        raise NotImplementedError(
+            "prism_transition_potential_scan processes one potential "
+            f"configuration per call, got ensemble shape "
+            f"{potential.ensemble_shape!r}. Iterate the configurations and "
+            "average the results, as SMatrix.transition_potential_scan does."
+        )
 
     # --- Exit planes ---
     exit_planes = potential.exit_planes
@@ -1691,6 +1863,90 @@ def prism_transition_potential_scan(
         extra_ensemble_axes_metadata,
     )
 
+    # --- Chunk the reduction over scan positions ---
+    #
+    # minimum_crop's bounding box spans every position handed to it, so
+    # cropping around the *whole* scan (as a single reduce_and_record call
+    # used to) makes the box -- and the tensordot below -- scale with the
+    # scan's spatial extent rather than with output_window_gpts. Peak memory
+    # is n_positions * (scan_span + window)^2, growing with both factors as
+    # the field of view grows; a production-sized PRISM-EELS scan can demand
+    # a single allocation in the hundreds of GB.
+    #
+    # Chunking over spatially contiguous blocks of scan rows shrinks the
+    # bounding box along with the block -- a strided block scheme would keep
+    # the full box and gain nothing, since the box is set by the block's own
+    # spatial spread, not its position count. Positions are already
+    # flattened in scan-raster order (positions_np above), so a contiguous
+    # range of the flat axis is a contiguous range of whole rows of
+    # scan_shape's leading axis for any scan dimensionality, including the
+    # 0-d single-point case (n_rows = row_cols = 1 below, one batch, no
+    # behaviour change).
+    n_rows = scan_shape[0] if scan_shape else 1
+    row_cols = int(np.prod(scan_shape[1:])) if len(scan_shape) > 1 else 1
+    n_T_estimate = transition_potential.array.shape[0]
+    n_k = coefficients.shape[-1]
+    itemsize = np.dtype(complex_dtype).itemsize
+
+    # First guess: convert the existing probe-batch memory budget (sized for
+    # one position at output_window_gpts, with no bounding-box growth) into a
+    # row count, dividing by the number of transitions sharing that budget.
+    budget_positions = estimate_scan_batch_size(
+        output_window_gpts, complex_dtype, s_matrix.device
+    )
+    rows_per_batch = max(
+        1, budget_positions // max(1, n_T_estimate) // max(1, row_cols)
+    )
+    rows_per_batch = min(rows_per_batch, n_rows)
+
+    # The guess above assumes the ideal case (no bounding-box growth), which
+    # is exactly wrong when the batch covers a large fraction of the scan --
+    # that is where the box is at its largest. This must run even when the
+    # guess already covers the whole scan (rows_per_batch == n_rows): gating
+    # it on rows_per_batch < n_rows skipped verification in precisely that
+    # case, silently reproducing the original whole-scan-as-one-block defect
+    # whenever the naive per-position estimate happened to clear the row
+    # count (a large output_window_gpts -- e.g. interpolation=1, no PRISM
+    # downsampling -- makes this the common case, not a corner one).
+    if rows_per_batch > 1:
+        # Verify the guess against the actual box a batch of this size
+        # produces -- translation-invariant for a regular raster scan, so
+        # the first candidate batch is representative -- and shrink until it
+        # fits the same byte budget the guess was converted from.
+        budget_bytes = (
+            budget_positions * int(np.prod(output_window_gpts)) * itemsize
+        )
+
+        def _batch_bytes(rows):
+            end = min(n_rows, rows) * row_cols
+            _, size, _ = minimum_crop(pixel_positions[:end], output_window_gpts)
+            size_px = int(np.prod(size))
+            # bbox_scattered (n_T, n_k, *size) plus the dominant ``reduced``
+            # tensor (end, n_T, *size) -- see _reduce_and_record below.
+            return (n_T_estimate * n_k + end * n_T_estimate) * size_px * itemsize
+
+        while rows_per_batch > 1 and _batch_bytes(rows_per_batch) > budget_bytes:
+            rows_per_batch = max(1, rows_per_batch // 2)
+
+    row_batches = [
+        (r, min(r + rows_per_batch, n_rows))
+        for r in range(0, n_rows, rows_per_batch)
+    ]
+
+    # minimum_crop's result for a given batch depends only on that batch's
+    # own positions, never on the site or exit plane -- but _reduce_and_record
+    # runs once per (site, exit plane), so computing it there recomputed the
+    # identical box for every batch on every one of those calls. Hoisting it
+    # here, once per batch, turns that into O(n_batches) instead of
+    # O(n_batches * n_sites * n_exit_planes).
+    row_batch_boxes = [
+        minimum_crop(
+            pixel_positions[row_start * row_cols : row_end * row_cols],
+            output_window_gpts,
+        )
+        for row_start, row_end in row_batches
+    ]
+
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
         ds_sampling_arr = np.array(ds_sampling, dtype=get_dtype())
@@ -1700,75 +1956,117 @@ def prism_transition_potential_scan(
             int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
             int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
         )
-        site_in_bbox = (
-            site_crop_corner_ds[0] - reduce_crop_corner[0],
-            site_crop_corner_ds[1] - reduce_crop_corner[1],
-        )
-        bbox_scattered = xp.zeros(
-            scattered_window.shape[:-2] + tuple(reduce_size),
-            dtype=complex_dtype,
-        )
-        for _n0 in range(-1, 2):
-            for _n1 in range(-1, 2):
-                _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
-                _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
-                _s0 = max(0, -_r0)
-                _s1 = max(0, -_r1)
-                _d0 = max(0, _r0)
-                _d1 = max(0, _r1)
-                _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
-                _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
-                if _d0 >= _e0 or _d1 >= _e1:
-                    continue
-                bbox_scattered[
-                    ..., _d0:_e0, _d1:_e1
-                ] = scattered_window[
-                    ...,
-                    _s0 : _s0 + (_e0 - _d0),
-                    _s1 : _s1 + (_e1 - _d1),
+        n_T = scattered_window.shape[0]
+
+        for (row_start, row_end), (
+            reduce_crop_corner,
+            reduce_size,
+            reduce_corners,
+        ) in zip(row_batches, row_batch_boxes):
+            flat_start = row_start * row_cols
+            flat_end = row_end * row_cols
+
+            site_in_bbox = (
+                site_crop_corner_ds[0] - reduce_crop_corner[0],
+                site_crop_corner_ds[1] - reduce_crop_corner[1],
+            )
+            bbox_scattered = xp.zeros(
+                scattered_window.shape[:-2] + tuple(reduce_size),
+                dtype=complex_dtype,
+            )
+            for _n0 in range(-1, 2):
+                for _n1 in range(-1, 2):
+                    _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
+                    _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
+                    _s0 = max(0, -_r0)
+                    _s1 = max(0, -_r1)
+                    _d0 = max(0, _r0)
+                    _d1 = max(0, _r1)
+                    _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
+                    _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
+                    if _d0 >= _e0 or _d1 >= _e1:
+                        continue
+                    bbox_scattered[
+                        ..., _d0:_e0, _d1:_e1
+                    ] = scattered_window[
+                        ...,
+                        _s0 : _s0 + (_e0 - _d0),
+                        _s1 : _s1 + (_e1 - _d1),
+                    ]
+
+            reduced = xp.tensordot(
+                coefficients[flat_start:flat_end], bbox_scattered, axes=[-1, -3]
+            )
+            reduced = xp.moveaxis(reduced, 1, 0)
+            waves_at_positions = batch_crop_2d(
+                reduced, reduce_corners, output_window_gpts
+            )
+
+            batch_scan_shape = (
+                (row_end - row_start,) + scan_shape[1:] if scan_shape else ()
+            )
+            position_waves_shape = (
+                waves_at_positions.shape[:-3]
+                + batch_scan_shape
+                + waves_at_positions.shape[-2:]
+            )
+            waves_at_positions = waves_at_positions.reshape(
+                position_waves_shape
+            )
+
+            # scan_axes_metadata[0] describes every position in the full
+            # scan; some axis types (e.g. CustomScan's PositionsAxis) carry
+            # an explicit per-position ``values`` tuple whose length Waves
+            # validates against the array, so it must be restricted to this
+            # batch's row range -- the same restriction dask's own ensemble
+            # partitioning applies per block (AxisMetadata.__getitem__).
+            # ScanAxis-like linear axes have no such tuple and are
+            # unaffected by the slice.
+            if scan_shape:
+                batch_axes_metadata = [scan_axes_metadata[0][row_start:row_end]] + list(
+                    scan_axes_metadata[1:]
+                )
+            else:
+                batch_axes_metadata = []
+
+            position_waves = Waves(
+                waves_at_positions,
+                energy=energy,
+                extent=output_window_extent,
+                ensemble_axes_metadata=[
+                    OrdinalAxis(values=tuple(range(n_T)))
                 ]
+                + batch_axes_metadata,
+            )
 
-        reduced = xp.tensordot(
-            coefficients, bbox_scattered, axes=[-1, -3]
-        )
-        reduced = xp.moveaxis(reduced, 1, 0)
-        waves_at_positions = batch_crop_2d(
-            reduced, reduce_corners, output_window_gpts
-        )
-
-        position_waves_shape = (
-            waves_at_positions.shape[:-3]
-            + scan_shape
-            + waves_at_positions.shape[-2:]
-        )
-        waves_at_positions = waves_at_positions.reshape(
-            position_waves_shape
-        )
-
-        n_T = waves_at_positions.shape[0]
-        position_waves = Waves(
-            waves_at_positions,
-            energy=energy,
-            extent=output_window_extent,
-            ensemble_axes_metadata=[
-                OrdinalAxis(values=tuple(range(n_T)))
-            ]
-            + list(scan_axes_metadata),
-        )
-
-        # All detectors here see the same, not-yet-mutated ``position_waves``
-        # -- share one diffraction-pattern FFT across them.
-        with position_waves._share_diffraction_pattern_fft():
-            for det_idx, detector in enumerate(detectors):
-                m = detector.detect(position_waves)
-                m = m.sum((0,))
-                if isinstance(exit_idx, int):
-                    idx = () if n_exit == 1 else (exit_idx,)
-                    measurements[det_idx].array[idx] += m.array
-                else:
-                    measurements[det_idx].array[exit_idx] += (
-                        m.array[(None,) * len(exit_idx)]
+            # All detectors here see the same, not-yet-mutated
+            # ``position_waves`` -- share one diffraction-pattern FFT across
+            # them.
+            with position_waves._share_diffraction_pattern_fft():
+                for det_idx, detector in enumerate(detectors):
+                    m = detector.detect(position_waves)
+                    m = m.sum((0,))
+                    # The measurement's leading axes are the potential's
+                    # ensemble axes and then the exit-plane axis (see
+                    # _potential_ensemble_shape_and_metadata, shared with the
+                    # regular multislice driver). Indexing the plane part
+                    # alone addressed the ensemble axis instead: this driver
+                    # runs once per configuration with a length-1 ensemble
+                    # axis, so an exit-plane slice starting at 1 or beyond
+                    # selected nothing and the contribution was dropped in
+                    # silence -- a whole thickness series came back zero.
+                    indices = _validate_potential_ensemble_indices(
+                        (0,) * len(potential.ensemble_shape), exit_idx, potential
                     )
+                    # Only the slice entries survive the indexing and need
+                    # broadcasting; integer ensemble indices drop their axis.
+                    n_slice_axes = sum(isinstance(i, slice) for i in indices)
+                    row_index = (
+                        (slice(row_start, row_end),) if scan_shape else ()
+                    )
+                    measurements[det_idx].array[
+                        indices + row_index
+                    ] += m.array[(None,) * n_slice_axes]
 
     def _scatter_at_site(atom):
         site_xy = np.array(
@@ -1891,12 +2189,27 @@ def prism_transition_potential_scan(
                         sw_out, site_xys[s_idx], ep_idx
                     )
 
-    # Squeeze out single-point-scan axes the same way the multislice path
-    # does (via reduce_ensemble inside Waves.transition_potential_multislice
-    # — see waves.py:1075). This is what makes ``scan=(0, 0)`` return a bare
-    # detector-shaped measurement instead of a ``(1, *detector_shape)``
-    # array with a singleton scan axis.
-    measurements = [reduce_ensemble(m) for m in measurements]
+    # Reduce the ensemble mean, but do NOT squeeze here.
+    #
+    # This function is the per-configuration driver: SMatrix calls it once per
+    # dask block and once per potential-ensemble member. The multislice path
+    # this used to imitate squeezes at the *outer* level instead --
+    # Waves.transition_potential_multislice ends in the module-level
+    # reduce_ensemble on the assembled result -- so blocks and declared chunks
+    # keep the axis and only the finished object loses it.
+    #
+    # Squeezing per block dropped the scan axis underneath two consumers that
+    # still expected it: the lazy branch declares ``chunks += scan.shape``, and
+    # the eager branch pre-allocates from ``dummy_probes(scan)``. A
+    # single-position non-BaseScan scan -- ``(x, y)``, ``[(x, y)]``,
+    # ``np.array([[x, y]])`` -- therefore came back one axis too wide, and
+    # whether it did depended on whether the potential was an ensemble.
+    #
+    # The module-level reduce_ensemble is squeeze-then-ensemble-mean; the
+    # method called below is only the second half, which is the half that
+    # belongs per block. SMatrix.transition_potential_scan applies the first
+    # half once, at the level the oracle uses.
+    measurements = [m.reduce_ensemble() for m in measurements]
 
     if len(measurements) == 1:
         return measurements[0]

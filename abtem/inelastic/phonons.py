@@ -29,7 +29,12 @@ from abtem.core.axes import (
     UnknownAxis,
 )
 from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
-from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    Ensemble,
+    _wrap_with_array,
+    shared_constant_arg,
+    unpack_blockwise_args,
+)
 from abtem.core.utils import CopyMixin, EqualityMixin, itemset
 
 if TYPE_CHECKING:
@@ -209,16 +214,9 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         return partial(self._from_partitioned_args_func, **kwargs)
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
-        if chunks is None:
-            chunks = 1
-
-        if lazy:
-            lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=0)
-            array = da.from_delayed(lazy_args, shape=(), dtype=object)
-        else:
-            atoms = self.atoms
-            array = _wrap_with_array(atoms, ndims=0)
-        return (array,)
+        # This ensemble has no chunking: a single constant travels as one
+        # graph node. `chunks` is part of the Ensemble signature only.
+        return (shared_constant_arg(self.atoms, lazy=lazy),)
 
     def __len__(self):
         if self._num_configs is None:
