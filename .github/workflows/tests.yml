@@ -50,4 +50,13 @@ jobs:
         run: uv sync --group test
 
       - name: Run tests
-        run: uv run pytest test
+        # --runslow is skipped only for the common case (a PR into dev), to
+        # keep that feedback loop fast. It's included for PRs into main
+        # (release gate -- see the full OS matrix above), and for every
+        # push/schedule/workflow_dispatch run (i.e. right after something
+        # actually merges into dev or main), so a slow-test regression on
+        # dev surfaces within minutes of merge rather than only in the
+        # weekly cron run.
+        run: >-
+          uv run pytest test -n auto
+          ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && '--runslow' || '' }}

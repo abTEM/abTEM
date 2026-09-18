@@ -132,6 +132,10 @@ select = [
 ignore = ["E741", "E743"]
 
 [tool.pytest.ini_options]
+# loadgroup is required for the `xdist_group("gpu")` marker conftest.py
+# applies to every GPU-touching test to take effect; it's a no-op without
+# -n/--numprocesses, so it's harmless for a plain, non-parallel `pytest` run.
+addopts = "--dist=loadgroup"
 filterwarnings = [
     "error",
     "ignore:Overspecified grid, the provided sampling:UserWarning",

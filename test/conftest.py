@@ -4,8 +4,14 @@ import pytest
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
+from utils import gpu as _gpu_param
 
 config.set({"diagnostics.progress_bar": False})
+
+# The literal device string that actually exercises an accelerator (e.g.
+# "gpu", or "mps" once abTEM/abTEM#414 lands) -- whatever `gpu` in
+# test/utils.py currently resolves to.
+_GPU_DEVICE = _gpu_param.values[0]
 
 settings.register_profile(
     "dev",
@@ -38,10 +44,36 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--runslow"):
-        return
+    """Skip slow tests by default, and confine every GPU-touching test to a
+    single pytest-xdist worker.
 
+    ``-n auto`` sizes the worker pool from the CPU core count, with no idea
+    that a "device" parametrization means real VRAM. Each worker that lands a
+    GPU-parametrized test brings up its own CUDA/CuPy context, and enough of
+    them running at once exhausts the card -- the actual failure mode is an
+    OOM deep inside a kernel launch, not a clean skip or a clear message.
+
+    Routing every such test into one ``xdist_group`` makes xdist schedule
+    them onto the same worker, so at most one runs at a time regardless of
+    ``-n`` -- while CPU-only tests still fan out across every worker. This
+    only takes effect together with ``--dist=loadgroup`` (see pyproject.toml);
+    without it, xdist's default scheduler ignores ``xdist_group`` entirely.
+    A test is "GPU-touching" if any of its parametrized values -- direct or
+    indirect, whatever the parameter's name -- is the resolved `gpu` device
+    string, or if it carries the `multigpu` marker (real multi-GPU tests want
+    exclusive access even more, not less).
+    """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+    runslow = config.getoption("--runslow")
+
     for item in items:
-        if "slow" in item.keywords:
+        if not runslow and "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+        callspec = getattr(item, "callspec", None)
+        is_gpu = callspec is not None and any(
+            isinstance(v, str) and v == _GPU_DEVICE
+            for v in callspec.params.values()
+        )
+        if is_gpu or "multigpu" in item.keywords:
+            item.add_marker(pytest.mark.xdist_group("gpu"))
