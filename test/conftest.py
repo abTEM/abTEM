@@ -5,6 +5,8 @@ from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
 from utils import gpu as _gpu_param
+from utils import requires_gpu as _requires_gpu
+from utils import requires_multigpu as _requires_multigpu
 
 config.set({"diagnostics.progress_bar": False})
 
@@ -12,6 +14,17 @@ config.set({"diagnostics.progress_bar": False})
 # "gpu", or "mps" once abTEM/abTEM#414 lands) -- whatever `gpu` in
 # test/utils.py currently resolves to.
 _GPU_DEVICE = _gpu_param.values[0]
+
+# The `reason=` strings `requires_gpu`/`requires_multigpu` attach their
+# `skipif` marker with, imported rather than duplicated so a test carrying
+# either -- however it's applied: bare `@requires_gpu`, mixed with an
+# unrelated parametrize, or passed via a `pytest.param(..., marks=...)` --
+# is still recognized as GPU-touching even when it has no `device`
+# parametrization for the check below to inspect.
+_GPU_SKIP_REASONS = {
+    _requires_gpu.mark.kwargs.get("reason"),
+    _requires_multigpu.mark.kwargs.get("reason"),
+}
 
 settings.register_profile(
     "dev",
@@ -66,8 +79,10 @@ def pytest_collection_modifyitems(config, items):
     without it, xdist's default scheduler ignores ``xdist_group`` entirely.
     A test is "GPU-touching" if any of its parametrized values -- direct or
     indirect, whatever the parameter's name -- is the resolved `gpu` device
-    string, or if it carries the `multigpu` marker (real multi-GPU tests want
-    exclusive access even more, not less).
+    string, if it carries a `requires_gpu`/`requires_multigpu` skip (bare or
+    mixed with an unrelated parametrize, however it's applied), or if it
+    carries the `multigpu` marker (real multi-GPU tests want exclusive
+    access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
     runslow = config.getoption("--runslow")
@@ -77,9 +92,13 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_slow)
 
         callspec = getattr(item, "callspec", None)
-        is_gpu = callspec is not None and any(
+        is_gpu_param = callspec is not None and any(
             isinstance(v, str) and v == _GPU_DEVICE
             for v in callspec.params.values()
         )
-        if is_gpu or "multigpu" in item.keywords:
+        is_gpu_marked = any(
+            mark.name == "skipif" and mark.kwargs.get("reason") in _GPU_SKIP_REASONS
+            for mark in item.iter_markers()
+        )
+        if is_gpu_param or is_gpu_marked or "multigpu" in item.keywords:
             item.add_marker(pytest.mark.xdist_group("gpu"))
