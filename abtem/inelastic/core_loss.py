@@ -33,7 +33,7 @@ from abtem.core.backend import (
     copy_to_device,
     get_array_module,
 )
-from abtem.core.chunks import estimate_scan_batch_size, validate_chunks
+from abtem.core.chunks import _ceil_to_multiple, estimate_scan_batch_size, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -280,6 +280,15 @@ _CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
 
 # Fraction of the grid, measured from the outer edge, used to read the amplitude.
 _ASYMPTOTIC_REGION_FRACTION = 0.25
+
+# generate_scattered_waves pads each site chunk up to a multiple of this before
+# scattering, so the ifft2 batch shape depends on the bucket rather than on
+# the data-dependent surviving-site count -- see
+# scatter_batch_sizes_unbounded_fft_shapes.md. 8 measured at ~10 % average
+# padding slack with 32 distinct shapes for a 256-site max_batch, comfortably
+# inside the cuFFT plan cache #378 sized to 64 entries; a smaller multiple
+# pads less but lets more distinct shapes through, a larger one the reverse.
+_SCATTER_BATCH_BUCKET = 8
 
 
 def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
@@ -1386,8 +1395,24 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             sites_chunk = sites[start:end]
             start = end
 
+            # Pad the batch scatter() actually runs to a bucketed size, so
+            # the ifft2 batch shape (n_padded * len(self)) depends on the
+            # bucket rather than on the data-dependent surviving-site count.
+            # Any real position works as padding -- sliced away below before
+            # anything downstream sees it -- so the last site in the chunk is
+            # repeated rather than fabricating a new one.
+            n_real = len(sites_chunk)
+            n_padded = _ceil_to_multiple(n_real, _SCATTER_BATCH_BUCKET)
+            if n_padded > n_real:
+                pad = np.repeat(sites_chunk[-1:], n_padded - n_real, axis=0)
+                scatter_sites = np.concatenate([sites_chunk, pad], axis=0)
+            else:
+                scatter_sites = sites_chunk
+
             # threshold is None here: the sites were filtered above.
-            scattered_waves = self.scatter(waves, sites_chunk, threshold=threshold)
+            scattered_waves = self.scatter(waves, scatter_sites, threshold=threshold)
+            if n_padded > n_real:
+                scattered_waves = scattered_waves[: n_real * len(self)]
             yield sites_chunk, scattered_waves
 
     def to_images(self):

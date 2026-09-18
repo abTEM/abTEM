@@ -564,6 +564,21 @@ def _nearest_power_of_two(n: int) -> int:
     return floor_pot
 
 
+def _ceil_to_multiple(n: int, multiple: int) -> int:
+    """Round n UP to the next multiple of ``multiple``.
+
+    Not `_nearest_power_of_two`: that one rounds *down* when the next power
+    of two would overshoot by more than 25 %, which is safe for a VRAM
+    budget (its only current caller) but would silently drop items for a
+    batch bucket, where every item must be kept -- see
+    `scatter_batch_sizes_unbounded_fft_shapes.md`. This one never rounds
+    down, so bucketing a real batch this way pads, never truncates.
+    """
+    if n <= 0:
+        return 0
+    return -(-n // multiple) * multiple
+
+
 def estimate_scan_batch_size(
     gpts: tuple[int, int],
     dtype,

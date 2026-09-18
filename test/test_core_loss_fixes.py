@@ -1631,3 +1631,122 @@ class TestTransitionPotentialDeviceMemo:
         assert restored._device_array_cache == {}
         assert restored._local_potential_device_cache is None
         assert np.array_equal(np.asarray(restored.array), np.asarray(tp.array))
+
+
+class TestScatterBatchBucketing:
+    """generate_scattered_waves pads each site chunk to a multiple of
+    core_loss._SCATTER_BATCH_BUCKET before scattering, so the ifft2 batch
+    shape depends on the bucket rather than the data-dependent
+    surviving-site count -- see scatter_batch_sizes_unbounded_fft_shapes.md.
+    """
+
+    @staticmethod
+    def _make_tp(n_transitions=2, gpts=(32, 32)):
+        rng = np.random.default_rng(0)
+        array = (
+            rng.standard_normal((n_transitions, *gpts))
+            + 1j * rng.standard_normal((n_transitions, *gpts))
+        ).astype(np.complex64)
+        return TransitionPotentialArray(
+            Z=5, array=array, energy=ENERGY, extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
+            metadata={"Z": 5, "n": 1, "l": 0},
+        )
+
+    @staticmethod
+    def _make_waves(gpts=(32, 32)):
+        probe = abtem.Probe(energy=ENERGY, extent=(8.0, 8.0), gpts=gpts, semiangle_cutoff=20)
+        return probe.build(lazy=False)
+
+    def test_ifft2_batch_shapes_are_bucketed(self, monkeypatch):
+        import abtem.inelastic.core_loss as cl
+
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+
+        real_ifft2 = cl.ifft2
+        batch_shapes = set()
+
+        def recording_ifft2(x, *args, **kwargs):
+            batch_shapes.add(x.shape[0])
+            return real_ifft2(x, *args, **kwargs)
+
+        monkeypatch.setattr(cl, "ifft2", recording_ifft2)
+
+        rng = np.random.default_rng(1)
+        for n_sites in (3, 5, 7, 11, 17, 23):
+            sites = rng.uniform(0, 8, size=(n_sites, 2)).astype(np.float32)
+            for _ in tp.generate_scattered_waves(waves, sites, max_batch=10**9):
+                pass
+
+        # Unbucketed, this reproduces the issue file's own numbers exactly:
+        # {6, 10, 14, 22, 34, 46}, one distinct shape per site count. Bucketed
+        # to multiples of 8 (n_transitions=2, so multiples of 16 once the
+        # transition axis is folded in), every one collapses onto one of 3.
+        assert batch_shapes == {8, 16, 24}
+
+    @pytest.mark.parametrize(
+        "n_sites", [1, 2, 3, 5, 7, 8, 9, 11, 15, 16, 17, 23, 24, 25]
+    )
+    def test_matches_a_direct_unchunked_unpadded_scatter(self, n_sites):
+        """n_sites sweeps across and exactly on bucket boundaries (8, 16,
+        24): the padded, chunked path must match scatter() called directly
+        on the real sites, which pads and chunks nothing."""
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+        rng = np.random.default_rng(2)
+        sites = rng.uniform(0, 8, size=(n_sites, 2)).astype(np.float32)
+
+        chunks = list(
+            tp.generate_scattered_waves(waves, sites, max_batch=10**9, threshold=0.0)
+        )
+        assert len(chunks) == 1  # max_batch huge enough for one chunk
+        sites_chunk, padded = chunks[0]
+        assert len(sites_chunk) == n_sites  # yielded chunk is never padded
+
+        direct = tp.scatter(waves, sites)
+        assert np.array_equal(np.asarray(padded.array), np.asarray(direct.array))
+
+    def test_small_max_batch_still_matches_with_multiple_real_chunks(self):
+        """Padding is per real chunk, not per whole site list -- exercise it
+        with several genuinely separate chunks in the same call."""
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+        rng = np.random.default_rng(3)
+        sites = rng.uniform(0, 8, size=(37, 2)).astype(np.float32)
+
+        chunks = list(
+            tp.generate_scattered_waves(waves, sites, max_batch=6, threshold=0.0)
+        )
+        assert len(chunks) > 1
+        assert sum(len(c[0]) for c in chunks) == 37
+
+        reassembled = np.concatenate([np.asarray(c[1].array) for c in chunks], axis=0)
+        direct = tp.scatter(waves, sites)
+        assert np.array_equal(reassembled, np.asarray(direct.array))
+
+
+class TestCeilToMultiple:
+    """Contrast case for _nearest_power_of_two (core/chunks.py), which
+    rounds *down* when the upper power would overshoot by more than 25% --
+    safe for a VRAM budget, unsafe for a batch bucket that must keep every
+    item. _ceil_to_multiple must never round down."""
+
+    @pytest.mark.parametrize(
+        "n,multiple,expected",
+        [
+            (0, 8, 0),
+            (1, 8, 8),
+            (7, 8, 8),
+            (8, 8, 8),
+            (9, 8, 16),
+            (16, 8, 16),
+            (17, 8, 24),
+            (100, 8, 104),
+        ],
+    )
+    def test_rounds_up_never_down(self, n, multiple, expected):
+        from abtem.core.chunks import _ceil_to_multiple
+
+        assert _ceil_to_multiple(n, multiple) == expected
+        assert _ceil_to_multiple(n, multiple) >= n
