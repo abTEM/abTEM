@@ -268,6 +268,82 @@ class TestLazyExitWaves:
         np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)
 
 
+class TestClassicalStatistics:
+    """Unfolding of snapshots sampled with classical (equipartition)
+    amplitudes, e.g. from molecular dynamics."""
+
+    def test_classical_weights_apply_the_quantum_correction(self):
+        """classical weights = quantum weights * x coth x, x = E / 2kT: the
+        standard correction of a classical spectrum, and detailed balance
+        holds in both modes."""
+        from ase import units
+
+        from abtem.measurements import _loss_gain_weights
+
+        e = np.array([0.01, 0.05, 0.2])
+        T = 300.0
+        x = e / (2 * units.kB * T)
+        loss_q, gain_q = _loss_gain_weights(e, T, "quantum")
+        loss_c, gain_c = _loss_gain_weights(e, T, "classical")
+
+        np.testing.assert_allclose(loss_q + gain_q, 1.0)
+        np.testing.assert_allclose(loss_c + gain_c, x / np.tanh(x))
+        np.testing.assert_allclose(loss_c, loss_q * x / np.tanh(x))
+        np.testing.assert_allclose(gain_c, gain_q * x / np.tanh(x))
+        for loss, gain in ((loss_q, gain_q), (loss_c, gain_c)):
+            np.testing.assert_allclose(loss / gain, np.exp(e / (units.kB * T)))
+
+        # high temperature: the classical split is even and unscaled
+        loss_hot, gain_hot = _loss_gain_weights(np.array([0.001]), 5000.0, "classical")
+        np.testing.assert_allclose([loss_hot[0], gain_hot[0]], [0.5, 0.5], atol=1e-3)  # deviation is x/2 ~ 6e-4
+        # low temperature: zero-point motion restored, gain switched off
+        loss_cold, gain_cold = _loss_gain_weights(np.array([0.1]), 10.0, "classical")
+        assert gain_cold[0] < 1e-40
+        np.testing.assert_allclose(loss_cold[0], 0.1 / (2 * units.kB * 10.0))
+
+    def test_invalid_statistics_rejected(self):
+        from abtem.measurements import _loss_gain_weights, unfold_loss_gain
+
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            _loss_gain_weights(np.array([0.05]), 300.0, "bogus")
+        waves = _make_exit_waves([0.0, 0.02, 0.05], n_configs=4)
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            phonon_loss_diffraction_patterns(
+                waves, temperature=300.0, snapshot_statistics="bogus"
+            )
+        dp = phonon_loss_diffraction_patterns(waves)
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            unfold_loss_gain(dp, 300.0, snapshot_statistics="md")
+
+    def test_classical_mode_threads_through_both_entry_points(self):
+        from ase import units
+
+        from abtem.measurements import unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_exit_waves(e_values, n_configs=4)
+        T = 300.0
+        via_call = phonon_loss_diffraction_patterns(
+            waves, temperature=T, snapshot_statistics="classical", max_angle="full"
+        )
+        via_helper = unfold_loss_gain(
+            phonon_loss_diffraction_patterns(waves, max_angle="full"),
+            T, snapshot_statistics="classical",
+        )
+        quantum = phonon_loss_diffraction_patterns(waves, temperature=T, max_angle="full")
+        np.testing.assert_allclose(via_call.array, via_helper.array, rtol=1e-6)
+
+        # classical / quantum = x coth x on every non-zero energy, both sides
+        x = np.array(e_values[1:]) / (2 * units.kB * T)
+        factor = x / np.tanh(x)
+        for k, f in enumerate(factor):
+            loss_ratio = via_call.array[3 + k] / quantum.array[3 + k]
+            gain_ratio = via_call.array[1 - k] / quantum.array[1 - k]
+            np.testing.assert_allclose(loss_ratio, f, rtol=1e-5)
+            np.testing.assert_allclose(gain_ratio, f, rtol=1e-5)
+        np.testing.assert_allclose(via_call.array[2], quantum.array[2])  # zero bin
+
+
 class TestParityProjection:
     """Tests for the "Phonon order"=("all", "one", "multi") ensemble output
     when exit_waves carries a PhononParityAxis (issue #373).

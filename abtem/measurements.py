@@ -6237,30 +6237,69 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         return fig, ax
 
 
+_SNAPSHOT_STATISTICS = ("quantum", "classical")
+
+
+def _loss_gain_weights(
+    e_values: np.ndarray, temperature: float, snapshot_statistics: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Loss and gain weights for energy magnitudes ``e_values`` [eV] at
+    ``temperature`` [K], given how the snapshot amplitudes were drawn.
+
+    A frozen-phonon snapshot is time-reversal symmetric, so one multislice
+    run per energy magnitude gives the combined loss + gain intensity; the
+    split is imposed afterwards from the Bose-Einstein occupation
+    ``n(E)``. What the combined intensity is proportional to depends on the
+    sampling of the mode amplitudes:
+
+    - ``"quantum"``: mode variance proportional to ``2n + 1`` (zero-point
+      motion included, e.g. `rattling` with ``quantum=True``). The combined
+      intensity is the quantum total ``(n + 1) + n``, so the weights are
+      ``(n + 1) / (2n + 1)`` and ``n / (2n + 1)``, summing to 1.
+    - ``"classical"``: mode variance proportional to ``2 k_B T / E``
+      (equipartition, e.g. molecular-dynamics snapshots). With
+      ``x = E / (2 k_B T)`` the combined intensity is the classical total
+      ``2 n_cl = 1 / x``, and the weights are ``x (n + 1)`` and ``x n``.
+      They sum to ``x coth x``, the standard quantum correction of a
+      classical spectrum, tend to ``1/2`` each at high temperature, and
+      restore the zero-point contribution the classical sampling lacks at
+      low temperature.
+
+    Both choices satisfy detailed balance, ``loss / gain = exp(E / k_B T)``.
+    """
+    from ase import units
+
+    if snapshot_statistics not in _SNAPSHOT_STATISTICS:
+        raise ValueError(
+            f"snapshot_statistics must be one of {_SNAPSHOT_STATISTICS}, got "
+            f"{snapshot_statistics!r}."
+        )
+
+    x = e_values / (2.0 * units.kB * temperature)
+    n_occ = 1.0 / np.expm1(2.0 * x)
+    if snapshot_statistics == "quantum":
+        loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
+        gain_weight = n_occ / (2.0 * n_occ + 1.0)
+    else:
+        loss_weight = x * (n_occ + 1.0)
+        gain_weight = x * n_occ
+    return loss_weight, gain_weight
+
+
 def _thermal_weight_tds(
     I_tds: np.ndarray,
     e_values: np.ndarray,
     energy_axis_idx: int,
     temperature: float,
+    snapshot_statistics: str = "quantum",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Unfold a classical (loss/gain-symmetric) TDS intensity, computed at
-    energy magnitudes ``|E|`` only, into quantum loss (``+E``) and gain
-    (``-E``) sides via detailed balance.
-
-    A single frozen-phonon multislice run per energy magnitude already
-    contains the *combined* loss + gain intensity — the split between the
-    two sides is a quantum-statistical effect governed by the Bose-Einstein
-    phonon occupation ``n(E)``, not something the classical thermal sampling
-    distinguishes. The zero-energy bin is passed through unweighted: there is
-    no loss/gain asymmetry at zero energy transfer, and the classical
-    sampling already accounts for the thermal occupation there.
-
-    Loss and gain weights, ``(n+1)/(2n+1)`` and ``n/(2n+1)``, sum to 1, so
-    splitting preserves the total (loss + gain) spectral weight of the
-    unweighted input at each energy magnitude.
+    """Unfold a frozen-phonon (loss/gain-symmetric) TDS intensity, computed
+    at energy magnitudes ``|E|`` only, into loss (``+E``) and gain (``-E``)
+    sides with the weights of :func:`_loss_gain_weights`, which depend on
+    whether the snapshots were sampled with quantum or classical
+    statistics. The zero-energy bin is passed through unweighted: there is
+    no loss/gain asymmetry at zero energy transfer.
     """
-    from ase import units
-
     if e_values[0] != 0.0 or np.any(np.diff(e_values) <= 0):
         raise ValueError(
             "temperature-based loss/gain unfolding requires energies "
@@ -6274,10 +6313,9 @@ def _thermal_weight_tds(
     flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
-    beta = 1.0 / (units.kB * temperature)
-    n_occ = 1.0 / (np.exp(nonzero_e * beta) - 1.0)
-    loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
-    gain_weight = n_occ / (2.0 * n_occ + 1.0)
+    loss_weight, gain_weight = _loss_gain_weights(
+        nonzero_e, temperature, snapshot_statistics
+    )
 
     def _broadcast(weight):
         shape = [1] * I_tds.ndim
@@ -6314,7 +6352,9 @@ def _thermal_weight_tds(
     return result_array, e_values_signed
 
 
-def _unfold_loss_gain_array(array, axes_metadata, energy_axis_idx, temperature):
+def _unfold_loss_gain_array(
+    array, axes_metadata, energy_axis_idx, temperature, snapshot_statistics="quantum"
+):
     """Core of the loss/gain unfolding: reweight ``array`` along
     ``energy_axis_idx`` via :func:`_thermal_weight_tds` and replace that
     axis's :class:`~abtem.core.axes.EnergyLossAxis` with its signed
@@ -6327,7 +6367,7 @@ def _unfold_loss_gain_array(array, axes_metadata, energy_axis_idx, temperature):
     energy_axis = axes_metadata[energy_axis_idx]
     e_values = np.asarray(energy_axis.values, dtype=float)
     array, e_values_signed = _thermal_weight_tds(
-        array, e_values, energy_axis_idx, temperature
+        array, e_values, energy_axis_idx, temperature, snapshot_statistics
     )
     axes_metadata = list(axes_metadata)
     axes_metadata[energy_axis_idx] = EnergyLossAxis(
@@ -6336,7 +6376,9 @@ def _unfold_loss_gain_array(array, axes_metadata, energy_axis_idx, temperature):
     return array, axes_metadata
 
 
-def unfold_loss_gain(measurement, temperature: float):
+def unfold_loss_gain(
+    measurement, temperature: float, snapshot_statistics: str = "quantum"
+):
     """Unfold an energy-resolved TDS measurement, computed at energy
     magnitudes ``|E|`` only, into signed loss (``+E``) and gain (``-E``)
     sides using Bose-Einstein detailed balance.
@@ -6364,6 +6406,14 @@ def unfold_loss_gain(measurement, temperature: float):
         integrates every energy independently.
     temperature : float
         Sample temperature [K].
+    snapshot_statistics : {"quantum", "classical"}
+        How the frozen-phonon snapshot amplitudes were sampled. ``"quantum"``
+        (default): mode variance proportional to ``2n + 1``, zero-point
+        motion included; weights ``(n+1)/(2n+1)`` and ``n/(2n+1)``.
+        ``"classical"``: equipartition variance ``2 k_B T / E``, as in
+        molecular-dynamics snapshots; weights ``x (n+1)`` and ``x n`` with
+        ``x = E / (2 k_B T)``, which together apply the quantum correction
+        ``x coth x`` to the classical intensity. Both obey detailed balance.
 
     Returns
     -------
@@ -6380,6 +6430,7 @@ def unfold_loss_gain(measurement, temperature: float):
             np.asarray(measurement.e_values, dtype=float),
             measurement.array.ndim - 1,
             temperature,
+            snapshot_statistics,
         )
         kwargs = measurement._copy_kwargs(exclude=("array", "e_values"))
         return measurement.__class__(array, e_values=e_values_signed, **kwargs)
@@ -6403,6 +6454,7 @@ def unfold_loss_gain(measurement, temperature: float):
         measurement.ensemble_axes_metadata,
         energy_axis_idx,
         temperature,
+        snapshot_statistics,
     )
     kwargs = measurement._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
     return measurement.__class__(
@@ -6634,6 +6686,7 @@ def phonon_loss_diffraction_patterns(
     parity: str = "odd",
     block_direct: bool | float = False,
     temperature: Optional[float] = None,
+    snapshot_statistics: str = "quantum",
 ) -> "DiffractionPatterns":
     """
     Compute inelastic (TDS) diffraction patterns from energy-resolved
@@ -6693,6 +6746,13 @@ def phonon_loss_diffraction_patterns(
         energy axis is the bin's mode energy rather than the energy
         transfer. Select the ``"one"`` slot and apply
         :func:`unfold_loss_gain` to it instead.
+    snapshot_statistics : {"quantum", "classical"}
+        How the snapshot amplitudes were sampled, used by the unfolding:
+        ``"quantum"`` (default) for amplitudes drawn with the Bose-Einstein
+        variance ``2n + 1`` (zero-point motion included), ``"classical"``
+        for equipartition amplitudes such as molecular-dynamics snapshots,
+        in which case the unfolding also applies the quantum correction
+        ``x coth x``, ``x = E / (2 k_B T)``. See :func:`unfold_loss_gain`.
 
     Returns
     -------
@@ -6810,7 +6870,8 @@ def phonon_loss_diffraction_patterns(
             i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
         )
         I_tds, remaining_axes = _unfold_loss_gain_array(
-            I_tds, remaining_axes, remaining_energy_axis_idx, temperature
+            I_tds, remaining_axes, remaining_energy_axis_idx, temperature,
+            snapshot_statistics,
         )
 
     if component == "all":
