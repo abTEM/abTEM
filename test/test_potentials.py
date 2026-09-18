@@ -1915,3 +1915,122 @@ class TestSliceIndexedAtomsWrapping:
         )
         with pytest.raises(RuntimeError, match="xy-plane"):
             SliceIndexedAtoms(atoms, slice_thickness=1.0)
+
+
+def _hexagonal_graphene(a=2.46, c=6.0):
+    import numpy as np
+    from ase import Atoms
+
+    return Atoms(
+        "C2",
+        cell=[
+            [a, 0, 0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+            [0, 0, c],
+        ],
+        pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+@pytest.mark.parametrize("order", [1, 2, "exact"])
+def test_fresnel_propagator_orders_work_on_a_skewed_grid(order):
+    """Every Fourier propagator order depends only on `k2`, never on `kx` and `ky`
+    separately -- the order-2 term has been `|k|^4` since the cross-term fix in #302,
+    not the separable `kx^4 + ky^4` it once was. They therefore all generalise to a
+    skewed grid unchanged once `k2` carries the reciprocal metric, and order 2 in
+    particular must not be rejected there.
+    """
+    import numpy as np
+
+    import abtem
+    from abtem.core.energy import energy2wavelength
+    from abtem.multislice import _fresnel_propagator_array
+
+    energy = 100e3
+    grid = abtem.Potential(
+        _hexagonal_graphene(), gpts=(128, 128), slice_thickness=0.5
+    ).grid
+    assert not grid.is_orthogonal
+
+    array = _fresnel_propagator_array(0.5, grid, energy, "cpu", order=order)
+    assert np.all(np.isfinite(array))
+
+    # Free-space propagation is unitary for propagating components. Only `exact`
+    # models evanescent ones, where |f| < 1 on purpose, so restrict the check.
+    propagating = energy2wavelength(energy) ** 2 * grid.k_squared(np) <= 1.0
+    assert np.abs(np.abs(array[propagating]) - 1.0).max() < 1e-5
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+@pytest.mark.parametrize("orthogonal", [True, False], ids=["orthogonal", "skewed"])
+def test_order_2_propagator_beats_order_1_on_either_grid(orthogonal):
+    """Order 2 exists to be a better truncation than order 1, and must earn that on a
+    skewed grid too. Were the reciprocal metric not threaded through, the extra `|k|^4`
+    term would be evaluated against the wrong `k2` and could make things worse.
+    """
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.antialias import antialias_aperture
+    from abtem.multislice import _fresnel_propagator_array
+
+    a, c = 2.46, 6.0
+    atoms = (
+        Atoms("C", cell=(a, a, c), pbc=True, scaled_positions=[(0, 0, 0)])
+        if orthogonal
+        else _hexagonal_graphene(a, c)
+    )
+    grid = abtem.Potential(atoms, gpts=(128, 128), slice_thickness=0.5).grid
+    assert grid.is_orthogonal is orthogonal
+
+    arrays = {
+        order: _fresnel_propagator_array(0.5, grid, 100e3, "cpu", order=order)
+        for order in ("exact", 1, 2)
+    }
+    # Compare only where the antialias aperture passes. Beyond it the truncations are
+    # meaningless and both saturate at |exp(ia) - exp(ib)| = 2.
+    aperture = (
+        antialias_aperture(grid._valid_gpts, grid._valid_sampling, np, cell=grid.cell)
+        > 0
+    )
+    error_1 = np.abs(arrays[1][aperture] - arrays["exact"][aperture]).max()
+    error_2 = np.abs(arrays[2][aperture] - arrays["exact"][aperture]).max()
+
+    assert error_2 < error_1
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+def test_order_2_multislice_runs_on_a_skewed_cell():
+    """End to end, not just the propagator array: a skewed-cell multislice at order 2
+    must run, and land closer to the exact propagator than order 1 does."""
+    import numpy as np
+
+    import abtem
+    from abtem.multislice import FourierMultislice, multislice_and_detect
+
+    potential = abtem.Potential(
+        _hexagonal_graphene(), gpts=(128, 128), slice_thickness=0.5
+    ).build(lazy=False)
+    assert not potential.grid.is_orthogonal
+
+    exit_waves = {}
+    for order in ("exact", 1, 2):
+        plane_wave = abtem.PlaneWave(energy=100e3)
+        plane_wave.grid.match(potential)
+        result = multislice_and_detect(
+            plane_wave.build(lazy=False),
+            potential,
+            algorithm=FourierMultislice(order=order),
+        )
+        if isinstance(result, list):
+            result = result[0]
+        exit_waves[order] = np.asarray(result.array)
+
+    error_1 = np.abs(exit_waves[1] - exit_waves["exact"]).max()
+    error_2 = np.abs(exit_waves[2] - exit_waves["exact"]).max()
+
+    assert np.all(np.isfinite(exit_waves[2]))
+    assert error_2 < error_1

@@ -61,15 +61,10 @@ def _fresnel_propagator_array(
 
     if not grid.is_orthogonal:
         # Non-orthogonal (skewed) grid: the free-space propagator is still diagonal in
-        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell. The
-        # exact/order-1 formulas below depend only on k2 (not on kx, ky separately), so
-        # they generalise to a skewed grid unchanged once k2 uses the correct metric;
-        # only the order-2 term (untested for a skewed metric) stays unsupported.
-        if order == 2:
-            raise NotImplementedError(
-                "the order-2 Fourier propagator is not implemented for non-orthogonal "
-                "grids; use order=1, order='exact', or the realspace multislice"
-            )
+        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell. Every
+        # order below depends only on k2 (not on kx, ky separately) -- including the
+        # order-2 term, which is |k|^4 since the cross-term fix in #302 -- so they all
+        # generalise to a skewed grid unchanged once k2 uses the correct metric.
         k2 = grid.k_squared(xp)
     else:
         # Orthogonal grid: keep the separable form (bit-identical to the previous code).
