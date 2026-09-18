@@ -248,8 +248,8 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -263,14 +263,12 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ----------
         atoms : ase.Atoms
             The atoms whose radial functions are integrated onto the grid.
-        a : numpy.ndarray
-            Lower integration limit of the pr
-            ojection integrals along z for each position [Å]. The limit is given
-            relative to the center of the radial function.
-        b : numpy.ndarray
-            Upper integration limit of the projection integrals along z for each
-            position [Å]. The limit is given relative to the center of the radial
-            function.
+        a : float
+            Lower integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
+        b : float
+            Upper integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
         gpts : two int
             Number of grid points in `x` and `y` describing each slice of the potential.
         sampling : two float
@@ -687,8 +685,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -936,8 +934,8 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",

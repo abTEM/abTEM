@@ -197,6 +197,40 @@ class TestFieldIntegratorSignature:
         concrete_param = list(inspect.signature(cls.integrate_on_grid).parameters)[1]
         assert base_param == concrete_param == "atoms"
 
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+            QuadratureProjectionIntegrals,
+        ],
+        ids=["gaussian", "scattering_factor", "quadrature"],
+    )
+    def test_a_b_annotations_match_the_base_class(self, cls):
+        """Comparing only parameter *names* (the test above) missed a
+        companion defect: the base and two of the three concrete
+        implementations annotated `a`/`b` as `np.ndarray` while the only
+        caller (iam.py) always passes scalar floats
+        (`sliced_atoms.slice_limits[slice_idx][0]`/`[1]`) and
+        `QuadratureProjectionIntegrals` alone annotated them correctly.
+        Comparing the full parameter objects (annotations included) catches
+        that class of drift too.
+        """
+        import inspect
+
+        # `from __future__ import annotations` in abtem/integrals.py means
+        # these come back as strings ("float"), not the builtin type.
+        base_params = inspect.signature(
+            FieldIntegrator.integrate_on_grid
+        ).parameters
+        concrete_params = inspect.signature(cls.integrate_on_grid).parameters
+        for name in ("a", "b"):
+            assert (
+                base_params[name].annotation
+                == concrete_params[name].annotation
+                == "float"
+            )
+
 
 class TestScatteringFactorCacheKey:
     """``get_scattering_factor`` cached on the chemical symbol alone.
