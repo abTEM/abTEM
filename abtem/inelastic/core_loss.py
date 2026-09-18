@@ -294,9 +294,13 @@ _SCATTER_BATCH_BUCKET = 8
 
 # Sentinel axis length used to probe validate_chunks for the real per-chunk
 # site ceiling max_batch/the VRAM budget allows, far larger than any
-# max_elements-derived chunk size on any real device -- see
+# max_elements-derived chunk size on any real device (2**24 sites is already
+# a multi-hundred-GB chunk at any real gpts/dtype) while staying cheap: a
+# sentinel this large still returns a several-thousand-entry chunk tuple
+# from validate_chunks, which costs under 1 ms, against ~4 ms for a 10**9
+# sentinel's quarter-million-entry tuple -- see
 # generate_scattered_waves's site_ceiling.
-_SCATTER_BATCH_CEILING_PROBE_SITES = 10**9
+_SCATTER_BATCH_CEILING_PROBE_SITES = 2**24
 
 
 def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
@@ -1395,24 +1399,34 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )[0]
 
         # The real per-chunk site ceiling max_batch/the VRAM budget allows,
-        # independent of how many sites this call actually has. Probing with
-        # a sentinel axis length far larger than any real max_elements-driven
-        # chunk size recovers that ceiling even though the call above used
-        # the real (possibly smaller) len(sites): when len(sites) already
-        # fits in one chunk -- the common case -- `chunks` above is just
+        # independent of how many sites this call actually has. When
+        # max_batch is an explicit int, chunks[0] above already *is* that
+        # ceiling -- validate_chunks tiles it verbatim regardless of
+        # max_elements. Only the "auto" case needs probing: `chunks` above
+        # used the real (possibly smaller) len(sites), so when it already
+        # fits in one chunk -- the common case -- `chunks` is just
         # `(len(sites),)`, which would be mistaken for the ceiling itself if
-        # read directly. Needed below so padding a chunk up to a bucket
-        # multiple can never exceed what the caller's max_batch/budget
-        # allows -- see the guard there.
-        site_ceiling = max(
-            validate_chunks(
-                shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
-                chunks=(max_batch,) + (-1,) * len(waves.shape),
-                max_elements=limit,
-                dtype=waves.dtype,
-                device=self.device,
-            )[0]
-        )
+        # read directly. Probing with a sentinel axis length far larger than
+        # any realistic max_elements-driven chunk size (2**24 sites is
+        # already a multi-hundred-GB chunk at any real gpts/dtype) recovers
+        # the true ceiling instead; a sentinel of 10**9 gave the same answer
+        # but cost ~4ms/call from the resulting quarter-million-entry chunk
+        # tuple, against <1ms here -- this runs once per
+        # generate_scattered_waves call, not per chunk. Needed below so
+        # padding a chunk up to a bucket multiple can never exceed what the
+        # caller's max_batch/budget allows -- see the guard there.
+        if isinstance(max_batch, int):
+            site_ceiling = max_batch
+        else:
+            site_ceiling = max(
+                validate_chunks(
+                    shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
+                    chunks=(max_batch,) + (-1,) * len(waves.shape),
+                    max_elements=limit,
+                    dtype=waves.dtype,
+                    device=self.device,
+                )[0]
+            )
 
         start = 0
         for chunk in chunks:
