@@ -58,6 +58,107 @@ def _scan(probe, potential, tp, scan, sites, lazy=True, threshold=1.0, **kwargs)
     )
 
 
+class TestDelayedTransitionPotentialMemo:
+    """`dask.delayed(tp, pure=True)` tokenizes the whole payload via a
+    content hash (~0.4 ms/MB); a sweep calling `transition_potential_scan`
+    many times against the same live object used to pay that on every call.
+    `_as_pure_delayed()` memoizes it on the object itself."""
+
+    def test_repeated_calls_return_the_same_delayed_object(self):
+        tp = _synthetic_tp()
+        first = tp._as_pure_delayed()
+        second = tp._as_pure_delayed()
+        assert first is second
+
+    def test_distinct_objects_get_distinct_delayed_nodes(self):
+        a = _synthetic_tp(seed=0)
+        b = _synthetic_tp(seed=1)
+        assert a._as_pure_delayed() is not b._as_pure_delayed()
+
+    def test_memoized_call_skips_the_content_hash(self, monkeypatch):
+        import dask
+
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()  # first call: real tokenize
+
+        calls = []
+        real_delayed = dask.delayed
+        monkeypatch.setattr(
+            dask, "delayed", lambda *a, **k: calls.append((a, k)) or real_delayed(*a, **k)
+        )
+        tp._as_pure_delayed()
+        tp._as_pure_delayed()
+        assert calls == []  # memo hit both times, dask.delayed never called again
+
+    def test_prism_scan_gives_the_same_result_called_twice(self):
+        """Reusing the memoized node across two separate graph builds must
+        not change the computed result -- pure=True already guarantees the
+        same content tokenizes to the same key regardless of memoization,
+        but this checks the actual observable behaviour at the call site
+        the fix touches (abtem/prism/s_matrix.py), not just the token."""
+        potential, tp, _, scan, sites = _setup()
+        tp = _synthetic_tp(gpts=potential.gpts, extent=potential.extent)
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+        )
+
+        def run():
+            m = s_matrix.transition_potential_scan(
+                transition_potentials=tp, scan=scan,
+                detectors=abtem.FlexibleAnnularDetector(), sites=sites,
+                double_channel=False, lazy=True,
+            ).compute(progress_bar=False)
+            return np.asarray(m.to_cpu().array)
+
+        first = run()
+        second = run()  # tp._delayed_pure_node is already populated here
+        assert np.array_equal(first, second)
+
+    def test_pickling_drops_the_memoized_node(self):
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()
+        assert tp._delayed_pure_node is not None
+
+        restored = cloudpickle.loads(cloudpickle.dumps(tp))
+        assert restored._delayed_pure_node is None
+        # a fresh call still works and produces an equivalent result
+        assert np.array_equal(
+            restored._as_pure_delayed().compute().array, tp.array
+        )
+
+    def test_equal_objects_compare_equal_regardless_of_memo_state(self):
+        a = _synthetic_tp(seed=7)
+        b = _synthetic_tp(seed=7)
+        a._as_pure_delayed()  # only a's memo is populated
+        assert a == b
+
+    def test_task_local_copy_of_a_bare_transition_potential_still_shares_state(self):
+        """Regression guard for adding __getstate__ to the shared
+        BaseTransitionPotential base: TransitionPotential (unbuilt, no
+        __copy__ of its own, so copy.copy goes through __getstate__) must
+        still get a _task_local() copy that shares everything except the
+        one thing __getstate__ deliberately resets."""
+        from abtem.inelastic.core_loss import TransitionPotential
+
+        transitions = ["marker"]
+        tp = TransitionPotential(
+            Z=5, transitions=transitions, extent=(8.0, 8.0), gpts=(32, 32), energy=100e3
+        )
+        tp._as_pure_delayed()
+        view = tp._task_local()
+
+        assert view is not tp
+        # _grid/_accelerator are deliberately privatized by _task_local, but
+        # everything else -- untouched by this fix -- stays shared by
+        # reference, per its docstring ("everything else stays shared").
+        assert view._grid is not tp._grid
+        assert view._transitions is tp._transitions
+        # __getstate__ resets this on any copy (pickling or copy.copy alike),
+        # since it wraps tp itself -- see _as_pure_delayed's docstring.
+        assert view._delayed_pure_node is None
+        assert tp._delayed_pure_node is not None  # the original's memo is untouched
+
+
 def test_graph_carries_the_transition_potential_once():
     """A many-task lazy scan's graph must hold exactly one payload copy."""
     potential, tp, probe, scan, sites = _setup()
