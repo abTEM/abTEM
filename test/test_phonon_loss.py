@@ -88,6 +88,36 @@ def test_invalid_component_raises():
         phonon_loss_diffraction_patterns(waves, component="bogus")
 
 
+def test_invalid_component_raises_for_parity_projected_input():
+    """component is ignored (not applicable) once exit_waves carries a
+    PhononParityAxis, but an invalid value must still be rejected rather
+    than silently dropped -- the parity path must not bypass this check
+    just because it doesn't use the value."""
+    waves = _make_parity_exit_waves([0.02, 0.05])
+    with pytest.raises(ValueError, match="component must be one of"):
+        phonon_loss_diffraction_patterns(waves, component="bogus")
+
+
+def test_block_direct_true_infers_radius_from_metadata():
+    """block_direct=True must resolve to radius=None (auto-infer from
+    metadata), not a literal radius of 1 -- bool is a subclass of int, so
+    isinstance(True, (int, float)) is True, and a naive check would silently
+    treat block_direct=True as block_direct=1."""
+    waves = _make_exit_waves([0.02, 0.05])
+    waves.metadata["semiangle_cutoff"] = 15.0
+
+    dp_auto = phonon_loss_diffraction_patterns(waves, component="tds", block_direct=True)
+    dp_explicit = phonon_loss_diffraction_patterns(
+        waves, component="tds", block_direct=15.0
+    )
+    dp_wrong = phonon_loss_diffraction_patterns(
+        waves, component="tds", block_direct=1.0
+    )
+
+    np.testing.assert_array_equal(dp_auto.array, dp_explicit.array)
+    assert not np.array_equal(dp_auto.array, dp_wrong.array)
+
+
 @pytest.mark.parametrize("component", ["tds", "all"])
 def test_single_config_tds_raises_instead_of_returning_zeros(component):
     """With one frozen-phonon configuration, I_incoherent == I_coherent by
@@ -242,6 +272,17 @@ class TestParityProjection:
     """Tests for the "Phonon order"=("all", "one", "multi") ensemble output
     when exit_waves carries a PhononParityAxis (issue #373).
     """
+
+    def test_block_direct_true_infers_radius_from_metadata(self):
+        waves = _make_parity_exit_waves([0.02, 0.05], n_configs=6)
+        waves.metadata["semiangle_cutoff"] = 15.0
+
+        dp_auto = phonon_loss_diffraction_patterns(waves, block_direct=True)
+        dp_explicit = phonon_loss_diffraction_patterns(waves, block_direct=15.0)
+        dp_wrong = phonon_loss_diffraction_patterns(waves, block_direct=1.0)
+
+        np.testing.assert_array_equal(dp_auto.array, dp_explicit.array)
+        assert not np.array_equal(dp_auto.array, dp_wrong.array)
 
     def test_shape_and_axes(self):
         e_values = [0.02, 0.05, 0.10]

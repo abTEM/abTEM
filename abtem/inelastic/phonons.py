@@ -18,6 +18,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, data
 from ase.cell import Cell
+from ase.geometry import find_mic
 from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
@@ -679,12 +680,15 @@ def _validate_parity_snapshot(
         return
 
     displacement = atoms.positions - equilibrium_atoms.positions
-    cell = np.asarray(atoms.cell)
-    if atoms.cell.rank == 3:
-        # minimum image, so snapshots wrapped back into the cell (an atom
-        # near a boundary displaced across it) are not flagged
-        fractional = displacement @ np.linalg.inv(cell)
-        displacement = displacement - np.round(fractional) @ cell
+    # minimum image, so snapshots wrapped back into the cell (an atom near a
+    # boundary displaced across it) are not flagged. find_mic (rather than a
+    # hand-rolled fractional-coordinate wrap requiring an invertible 3x3
+    # cell) also handles the common case of a 2D material with a degenerate
+    # or undefined out-of-plane cell vector (e.g. ase.build.graphene()'s
+    # default cell has rank 2, pbc=(True, True, False)): it wraps only the
+    # periodic directions and leaves the rest untouched.
+    if atoms.cell.rank > 0 and np.any(atoms.pbc):
+        displacement, _ = find_mic(displacement, atoms.cell, pbc=atoms.pbc)
     largest = np.linalg.norm(displacement, axis=1)
     worst = int(np.argmax(largest))
     if largest[worst] > max_displacement:
@@ -838,6 +842,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         ensemble_mean: bool = True,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         cell: Optional[Cell] = None,
+        _validated: bool = False,
     ):
         if rest_snapshots is not None and not parity_projection:
             raise ValueError("rest_snapshots requires parity_projection=True.")
@@ -880,10 +885,11 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             # Fresh, real-configuration-only input (the public contract of
             # this constructor): build the displacement-reversed twin and
             # stack it as a new leading axis. A `snapshots.ndim >= 3` input
-            # here means this is instead a dask/chunk reconstruction of an
-            # ensemble that already has the parity axis (and, if used, the
-            # rest-parity axis) baked in (see `_from_partition_args_func`
-            # below) -- must not be re-twinned.
+            # is either a dask/chunk reconstruction of an ensemble that
+            # already has the parity axis (and, if used, the rest-parity
+            # axis) baked in (see `_from_partition_args_func` below), or a
+            # pre-built array passed directly -- never re-twinned, but the
+            # latter is validated below.
             eq_positions = equilibrium_atoms.positions
             rest = _validate_rest_snapshots(
                 rest_snapshots, snapshots.shape, equilibrium_atoms, max_displacement
@@ -910,6 +916,21 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                             atoms.positions = atoms.positions + sign * u_rest
                             itemset(with_rest, (parity, sign_index) + index, atoms)
                 snapshots = with_rest
+        elif parity_projection and snapshots.ndim >= 3 and not _validated:
+            # A `snapshots.ndim >= 3` input with `_validated=True` is a
+            # dask/chunk reconstruction of an ensemble that was already
+            # validated once (see `_from_partitioned_args`/
+            # `_from_partition_args_func` below, which forward `_validated`
+            # via `_copy_kwargs`) -- re-checking every chunk would be
+            # redundant. `_validated=False` (the default for anyone calling
+            # this constructor directly, which is not the documented way to
+            # build a parity_projection ensemble but is not prevented
+            # either) means this 3D array has never been checked against
+            # equilibrium_atoms, so validate both halves now.
+            for index in np.ndindex(snapshots.shape):
+                _validate_parity_snapshot(
+                    snapshots[index], equilibrium_atoms, max_displacement, index
+                )
 
         atoms = snapshots.ravel()[0]
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
@@ -922,6 +943,12 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         self._parity_projection = parity_projection
         self._max_displacement = max_displacement
         self._rest_snapshots = rest_snapshots
+        # Every snapshot has now been checked (or checking was skipped
+        # because a validated instance is being re-chunked) -- record this
+        # so a downstream dask reconstruction of this instance (which
+        # forwards constructor kwargs via _copy_kwargs) skips redundant
+        # re-validation instead of inferring it from array rank alone.
+        self._validated = True
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -935,7 +962,10 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                     values=tuple(float(e) for e in energies),
                     units="eV",
                 ),
-                FrozenPhononsAxis(_ensemble_mean=ensemble_mean),
+                FrozenPhononsAxis(
+                    _ensemble_mean=ensemble_mean,
+                    _ensemble_mean_forced=parity_projection,
+                ),
             ]
             if parity_projection:
                 leading = [PhononParityAxis(values=("real", "twin"))]
@@ -1008,19 +1038,14 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     def __len__(self) -> int:
         return len(self._energies)
 
-    def __getitem__(self, item):
-        if self._parity_projection:
-            raise NotImplementedError(
-                "Indexing a parity_projection=True EnergyResolvedAtomsEnsemble "
-                "is not supported; slice energy_resolved_snapshots/energies "
-                "before constructing it instead."
-            )
-
-        new_snapshots = self._snapshots[item]
+    @staticmethod
+    def _getitem_2d(snapshots_2d, energies, item):
+        """Index a plain (n_energies, n_configs) snapshots array + energies
+        array, collapsing whichever axis a scalar index hits the same way
+        a non-parity ensemble's __getitem__ always has."""
+        new_snapshots = snapshots_2d[item]
         new_energies = (
-            self._energies[item]
-            if not isinstance(item, tuple)
-            else self._energies[item[0]]
+            energies[item] if not isinstance(item, tuple) else energies[item[0]]
         )
         if new_snapshots.ndim < 2:
             # `snapshots` is (n_energies, n_configs). A 1D result means one
@@ -1039,8 +1064,68 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 new_snapshots = new_snapshots.reshape(-1, 1)
         if np.ndim(new_energies) == 0:
             new_energies = np.atleast_1d(new_energies)
-        kwargs = self._copy_kwargs(
-            exclude=("energy_resolved_snapshots", "energies")
+        return new_snapshots, new_energies
+
+    def __getitem__(self, item):
+        kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies"))
+
+        if self._parity_projection and self._snapshots.ndim == 4:
+            raise NotImplementedError(
+                "Indexing an EnergyResolvedAtomsEnsemble with rest_snapshots "
+                "(parity, rest sign, energy, configuration) is not supported; "
+                "slice the inputs before constructing it instead."
+            )
+
+        if self._parity_projection:
+            # The (parity, energy, config) 3D layout makes the plain/2D-
+            # style syntax below ambiguous (e.g. `ensemble[i]` would mean
+            # "parity member i" here but "energy i" for a non-parity
+            # ensemble), so only the unambiguous form -- an explicit
+            # leading ':' keeping the parity axis whole -- is supported:
+            # `ensemble[:, energy_slice]` or
+            # `ensemble[:, energy_slice, config_slice]`.
+            is_bare_full_slice = item == slice(None)
+            is_leading_full_slice = (
+                isinstance(item, tuple)
+                and len(item) >= 1
+                and item[0] == slice(None)
+            )
+            if not (is_bare_full_slice or is_leading_full_slice):
+                raise NotImplementedError(
+                    "Indexing a parity_projection=True "
+                    "EnergyResolvedAtomsEnsemble requires an explicit "
+                    "leading ':' to keep the parity axis whole, e.g. "
+                    "ensemble[:, energy_slice] or "
+                    "ensemble[:, energy_slice, config_slice]. Slice "
+                    "energy_resolved_snapshots/energies before constructing "
+                    "it instead if you need something else."
+                )
+            if is_bare_full_slice:
+                sub_item = slice(None)
+            else:
+                sub_item = item[1:]
+                if len(sub_item) == 0:
+                    sub_item = slice(None)
+                elif len(sub_item) == 1:
+                    sub_item = sub_item[0]
+
+            real_snapshots, new_energies = self._getitem_2d(
+                self._snapshots[0], self._energies, sub_item
+            )
+            twin_snapshots, _ = self._getitem_2d(
+                self._snapshots[1], self._energies, sub_item
+            )
+            new_snapshots = np.stack([real_snapshots, twin_snapshots], axis=0)
+            # Both halves are still an untouched subset of a previously-
+            # validated real/twin pairing -- selecting a subset cannot
+            # introduce a mismatch, so re-validation would be redundant.
+            kwargs["_validated"] = True
+            return EnergyResolvedAtomsEnsemble(
+                new_snapshots, new_energies, **kwargs
+            )
+
+        new_snapshots, new_energies = self._getitem_2d(
+            self._snapshots, self._energies, item
         )
         return EnergyResolvedAtomsEnsemble(
             new_snapshots, new_energies, **kwargs

@@ -120,6 +120,12 @@ class AxisMetadata:
     _concatenate: bool = True
     _ensemble_mean: bool = False
     _squeeze: bool = False
+    # Set alongside _ensemble_mean=False by an ensemble class that forces it
+    # deliberately (e.g. because a downstream calculation needs individual
+    # ensemble members, not their average) rather than leaving it False by
+    # inaction. reduce_ensemble uses this to skip its "did you forget
+    # ensemble_mean=True" warning when it wasn't forgotten.
+    _ensemble_mean_forced: bool = False
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
