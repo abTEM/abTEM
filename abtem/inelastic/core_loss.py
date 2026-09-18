@@ -33,7 +33,7 @@ from abtem.core.backend import (
     copy_to_device,
     get_array_module,
 )
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import estimate_scan_batch_size, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -1742,9 +1742,6 @@ def prism_transition_potential_scan(
 
     # Reduction helpers operate in the downsampled grid.
     pixel_positions = positions / xp.asarray(ds_sampling, dtype=get_dtype())
-    reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
-        pixel_positions, output_window_gpts
-    )
 
     # This driver processes one potential configuration per call and indexes
     # the measurement's ensemble axes with zeros accordingly -- which holds for
@@ -1785,6 +1782,90 @@ def prism_transition_potential_scan(
         extra_ensemble_axes_metadata,
     )
 
+    # --- Chunk the reduction over scan positions ---
+    #
+    # minimum_crop's bounding box spans every position handed to it, so
+    # cropping around the *whole* scan (as a single reduce_and_record call
+    # used to) makes the box -- and the tensordot below -- scale with the
+    # scan's spatial extent rather than with output_window_gpts. Peak memory
+    # is n_positions * (scan_span + window)^2, growing with both factors as
+    # the field of view grows; a production-sized PRISM-EELS scan can demand
+    # a single allocation in the hundreds of GB.
+    #
+    # Chunking over spatially contiguous blocks of scan rows shrinks the
+    # bounding box along with the block -- a strided block scheme would keep
+    # the full box and gain nothing, since the box is set by the block's own
+    # spatial spread, not its position count. Positions are already
+    # flattened in scan-raster order (positions_np above), so a contiguous
+    # range of the flat axis is a contiguous range of whole rows of
+    # scan_shape's leading axis for any scan dimensionality, including the
+    # 0-d single-point case (n_rows = row_cols = 1 below, one batch, no
+    # behaviour change).
+    n_rows = scan_shape[0] if scan_shape else 1
+    row_cols = int(np.prod(scan_shape[1:])) if len(scan_shape) > 1 else 1
+    n_T_estimate = transition_potential.array.shape[0]
+    n_k = coefficients.shape[-1]
+    itemsize = np.dtype(complex_dtype).itemsize
+
+    # First guess: convert the existing probe-batch memory budget (sized for
+    # one position at output_window_gpts, with no bounding-box growth) into a
+    # row count, dividing by the number of transitions sharing that budget.
+    budget_positions = estimate_scan_batch_size(
+        output_window_gpts, complex_dtype, s_matrix.device
+    )
+    rows_per_batch = max(
+        1, budget_positions // max(1, n_T_estimate) // max(1, row_cols)
+    )
+    rows_per_batch = min(rows_per_batch, n_rows)
+
+    # The guess above assumes the ideal case (no bounding-box growth), which
+    # is exactly wrong when the batch covers a large fraction of the scan --
+    # that is where the box is at its largest. This must run even when the
+    # guess already covers the whole scan (rows_per_batch == n_rows): gating
+    # it on rows_per_batch < n_rows skipped verification in precisely that
+    # case, silently reproducing the original whole-scan-as-one-block defect
+    # whenever the naive per-position estimate happened to clear the row
+    # count (a large output_window_gpts -- e.g. interpolation=1, no PRISM
+    # downsampling -- makes this the common case, not a corner one).
+    if rows_per_batch > 1:
+        # Verify the guess against the actual box a batch of this size
+        # produces -- translation-invariant for a regular raster scan, so
+        # the first candidate batch is representative -- and shrink until it
+        # fits the same byte budget the guess was converted from.
+        budget_bytes = (
+            budget_positions * int(np.prod(output_window_gpts)) * itemsize
+        )
+
+        def _batch_bytes(rows):
+            end = min(n_rows, rows) * row_cols
+            _, size, _ = minimum_crop(pixel_positions[:end], output_window_gpts)
+            size_px = int(np.prod(size))
+            # bbox_scattered (n_T, n_k, *size) plus the dominant ``reduced``
+            # tensor (end, n_T, *size) -- see _reduce_and_record below.
+            return (n_T_estimate * n_k + end * n_T_estimate) * size_px * itemsize
+
+        while rows_per_batch > 1 and _batch_bytes(rows_per_batch) > budget_bytes:
+            rows_per_batch = max(1, rows_per_batch // 2)
+
+    row_batches = [
+        (r, min(r + rows_per_batch, n_rows))
+        for r in range(0, n_rows, rows_per_batch)
+    ]
+
+    # minimum_crop's result for a given batch depends only on that batch's
+    # own positions, never on the site or exit plane -- but _reduce_and_record
+    # runs once per (site, exit plane), so computing it there recomputed the
+    # identical box for every batch on every one of those calls. Hoisting it
+    # here, once per batch, turns that into O(n_batches) instead of
+    # O(n_batches * n_sites * n_exit_planes).
+    row_batch_boxes = [
+        minimum_crop(
+            pixel_positions[row_start * row_cols : row_end * row_cols],
+            output_window_gpts,
+        )
+        for row_start, row_end in row_batches
+    ]
+
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
         ds_sampling_arr = np.array(ds_sampling, dtype=get_dtype())
@@ -1794,86 +1875,117 @@ def prism_transition_potential_scan(
             int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
             int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
         )
-        site_in_bbox = (
-            site_crop_corner_ds[0] - reduce_crop_corner[0],
-            site_crop_corner_ds[1] - reduce_crop_corner[1],
-        )
-        bbox_scattered = xp.zeros(
-            scattered_window.shape[:-2] + tuple(reduce_size),
-            dtype=complex_dtype,
-        )
-        for _n0 in range(-1, 2):
-            for _n1 in range(-1, 2):
-                _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
-                _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
-                _s0 = max(0, -_r0)
-                _s1 = max(0, -_r1)
-                _d0 = max(0, _r0)
-                _d1 = max(0, _r1)
-                _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
-                _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
-                if _d0 >= _e0 or _d1 >= _e1:
-                    continue
-                bbox_scattered[
-                    ..., _d0:_e0, _d1:_e1
-                ] = scattered_window[
-                    ...,
-                    _s0 : _s0 + (_e0 - _d0),
-                    _s1 : _s1 + (_e1 - _d1),
-                ]
+        n_T = scattered_window.shape[0]
 
-        reduced = xp.tensordot(
-            coefficients, bbox_scattered, axes=[-1, -3]
-        )
-        reduced = xp.moveaxis(reduced, 1, 0)
-        waves_at_positions = batch_crop_2d(
-            reduced, reduce_corners, output_window_gpts
-        )
+        for (row_start, row_end), (
+            reduce_crop_corner,
+            reduce_size,
+            reduce_corners,
+        ) in zip(row_batches, row_batch_boxes):
+            flat_start = row_start * row_cols
+            flat_end = row_end * row_cols
 
-        position_waves_shape = (
-            waves_at_positions.shape[:-3]
-            + scan_shape
-            + waves_at_positions.shape[-2:]
-        )
-        waves_at_positions = waves_at_positions.reshape(
-            position_waves_shape
-        )
+            site_in_bbox = (
+                site_crop_corner_ds[0] - reduce_crop_corner[0],
+                site_crop_corner_ds[1] - reduce_crop_corner[1],
+            )
+            bbox_scattered = xp.zeros(
+                scattered_window.shape[:-2] + tuple(reduce_size),
+                dtype=complex_dtype,
+            )
+            for _n0 in range(-1, 2):
+                for _n1 in range(-1, 2):
+                    _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
+                    _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
+                    _s0 = max(0, -_r0)
+                    _s1 = max(0, -_r1)
+                    _d0 = max(0, _r0)
+                    _d1 = max(0, _r1)
+                    _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
+                    _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
+                    if _d0 >= _e0 or _d1 >= _e1:
+                        continue
+                    bbox_scattered[
+                        ..., _d0:_e0, _d1:_e1
+                    ] = scattered_window[
+                        ...,
+                        _s0 : _s0 + (_e0 - _d0),
+                        _s1 : _s1 + (_e1 - _d1),
+                    ]
 
-        n_T = waves_at_positions.shape[0]
-        position_waves = Waves(
-            waves_at_positions,
-            energy=energy,
-            extent=output_window_extent,
-            ensemble_axes_metadata=[
-                OrdinalAxis(values=tuple(range(n_T)))
-            ]
-            + list(scan_axes_metadata),
-        )
+            reduced = xp.tensordot(
+                coefficients[flat_start:flat_end], bbox_scattered, axes=[-1, -3]
+            )
+            reduced = xp.moveaxis(reduced, 1, 0)
+            waves_at_positions = batch_crop_2d(
+                reduced, reduce_corners, output_window_gpts
+            )
 
-        # All detectors here see the same, not-yet-mutated ``position_waves``
-        # -- share one diffraction-pattern FFT across them.
-        with position_waves._share_diffraction_pattern_fft():
-            for det_idx, detector in enumerate(detectors):
-                m = detector.detect(position_waves)
-                m = m.sum((0,))
-                # The measurement's leading axes are the potential's
-                # ensemble axes and then the exit-plane axis (see
-                # _potential_ensemble_shape_and_metadata, shared with the
-                # regular multislice driver). Indexing the plane part alone
-                # addressed the ensemble axis instead: this driver runs once
-                # per configuration with a length-1 ensemble axis, so an
-                # exit-plane slice starting at 1 or beyond selected nothing
-                # and the contribution was dropped in silence -- a whole
-                # thickness series came back zero.
-                indices = _validate_potential_ensemble_indices(
-                    (0,) * len(potential.ensemble_shape), exit_idx, potential
+            batch_scan_shape = (
+                (row_end - row_start,) + scan_shape[1:] if scan_shape else ()
+            )
+            position_waves_shape = (
+                waves_at_positions.shape[:-3]
+                + batch_scan_shape
+                + waves_at_positions.shape[-2:]
+            )
+            waves_at_positions = waves_at_positions.reshape(
+                position_waves_shape
+            )
+
+            # scan_axes_metadata[0] describes every position in the full
+            # scan; some axis types (e.g. CustomScan's PositionsAxis) carry
+            # an explicit per-position ``values`` tuple whose length Waves
+            # validates against the array, so it must be restricted to this
+            # batch's row range -- the same restriction dask's own ensemble
+            # partitioning applies per block (AxisMetadata.__getitem__).
+            # ScanAxis-like linear axes have no such tuple and are
+            # unaffected by the slice.
+            if scan_shape:
+                batch_axes_metadata = [scan_axes_metadata[0][row_start:row_end]] + list(
+                    scan_axes_metadata[1:]
                 )
-                # Only the slice entries survive the indexing and need
-                # broadcasting; integer ensemble indices drop their axis.
-                n_slice_axes = sum(isinstance(i, slice) for i in indices)
-                measurements[det_idx].array[indices] += m.array[
-                    (None,) * n_slice_axes
+            else:
+                batch_axes_metadata = []
+
+            position_waves = Waves(
+                waves_at_positions,
+                energy=energy,
+                extent=output_window_extent,
+                ensemble_axes_metadata=[
+                    OrdinalAxis(values=tuple(range(n_T)))
                 ]
+                + batch_axes_metadata,
+            )
+
+            # All detectors here see the same, not-yet-mutated
+            # ``position_waves`` -- share one diffraction-pattern FFT across
+            # them.
+            with position_waves._share_diffraction_pattern_fft():
+                for det_idx, detector in enumerate(detectors):
+                    m = detector.detect(position_waves)
+                    m = m.sum((0,))
+                    # The measurement's leading axes are the potential's
+                    # ensemble axes and then the exit-plane axis (see
+                    # _potential_ensemble_shape_and_metadata, shared with the
+                    # regular multislice driver). Indexing the plane part
+                    # alone addressed the ensemble axis instead: this driver
+                    # runs once per configuration with a length-1 ensemble
+                    # axis, so an exit-plane slice starting at 1 or beyond
+                    # selected nothing and the contribution was dropped in
+                    # silence -- a whole thickness series came back zero.
+                    indices = _validate_potential_ensemble_indices(
+                        (0,) * len(potential.ensemble_shape), exit_idx, potential
+                    )
+                    # Only the slice entries survive the indexing and need
+                    # broadcasting; integer ensemble indices drop their axis.
+                    n_slice_axes = sum(isinstance(i, slice) for i in indices)
+                    row_index = (
+                        (slice(row_start, row_end),) if scan_shape else ()
+                    )
+                    measurements[det_idx].array[
+                        indices + row_index
+                    ] += m.array[(None,) * n_slice_axes]
 
     def _scatter_at_site(atom):
         site_xy = np.array(
