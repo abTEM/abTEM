@@ -1,11 +1,12 @@
 import ase
+import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, ensure_is_tuple, gpu
+from utils import array_is_close, ensure_is_tuple, gpu, requires_gpu
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
@@ -399,6 +400,73 @@ def test_filter_boundary_modes():
         images.lorentzian_filter(0.3, boundary=boundary).array
         images.voigtian_filter(0.3, 0.3, boundary=boundary).array
         images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
+
+
+@requires_gpu
+@pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy):
+    """gaussian_filter (and, through it, voigtian_filter/pseudo_voigtian_filter) uses
+    a different implementation on GPU than on CPU -- FFT-based convolution instead of
+    cupyx.scipy.ndimage.gaussian_filter -- to avoid per-(sigma, shape) CUDA kernel
+    recompilation overhead. Nothing else in the suite checks the two backends agree
+    numerically, so do that explicitly here for all three boundary modes.
+    """
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=48)
+    images_cpu = wave.build((0, 0), lazy=lazy).intensity()
+    images_gpu = images_cpu.to_gpu()
+
+    sigma, gamma = 0.7, 0.4
+    for method, kwargs in [
+        ("gaussian_filter", dict(sigma=sigma)),
+        ("voigtian_filter", dict(gaussian_sigma=sigma, lorentzian_gamma=gamma)),
+        (
+            "pseudo_voigtian_filter",
+            dict(gaussian_sigma=sigma, lorentzian_gamma=gamma, eta=0.5),
+        ),
+    ]:
+        cpu = getattr(images_cpu, method)(boundary=boundary, **kwargs)
+        gpu_result = getattr(images_gpu, method)(boundary=boundary, **kwargs)
+        np.testing.assert_allclose(
+            cpu.compute().array,
+            gpu_result.to_cpu().compute().array,
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+
+@requires_gpu
+@pytest.mark.parametrize("lazy", [False, True])
+def test_gaussian_source_size_matches_cpu_and_gpu(lazy):
+    """gaussian_source_size hits the same GPU-only FFT code path as
+    Images.gaussian_filter, but convolves along the (non-trailing) scan axes
+    instead of the trailing two -- check CPU/GPU agreement there too.
+    """
+    rng = np.random.default_rng(0)
+    array = rng.random((6, 5, 12, 12))
+    if lazy:
+        array = da.from_array(array, chunks=(2, 2, 12, 12))
+
+    ensemble_axes_metadata = [
+        ScanAxis(sampling=0.5, _main=True),
+        ScanAxis(sampling=0.5, _main=True),
+    ]
+    measurement_cpu = DiffractionPatterns(
+        array,
+        sampling=0.1,
+        ensemble_axes_metadata=ensemble_axes_metadata,
+        metadata={"energy": 100e3},
+    )
+    measurement_gpu = measurement_cpu.to_gpu()
+
+    cpu = measurement_cpu.gaussian_source_size(0.6)
+    gpu_result = measurement_gpu.gaussian_source_size(0.6)
+    np.testing.assert_allclose(
+        cpu.compute().array,
+        gpu_result.to_cpu().compute().array,
+        atol=1e-5,
+        rtol=1e-5,
+    )
 
 
 def test_lorentzian_filter_lazy():

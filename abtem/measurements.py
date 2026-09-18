@@ -1358,7 +1358,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         whereas σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
         """
         xp = get_array_module(self.array)
-        gaussian_filter = get_ndimage_module(self.array).gaussian_filter
 
         if boundary == "periodic":
             mode = "wrap"
@@ -1367,6 +1366,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         else:
             raise ValueError()
 
+        # dask.array.map_overlap's own `boundary` only understands
+        # 'reflect'/'periodic'/'nearest'/'none' or a numeric fill value --
+        # not the string "constant" -- so translate that one case to the
+        # actual fill value it expects.
+        dask_boundary = cval if boundary == "constant" else boundary
+
         if np.isscalar(sigma):
             sigma = (sigma,) * 2
 
@@ -1374,23 +1379,68 @@ class _BaseMeasurement2D(BaseMeasurements):
             s / d for s, d in zip(sigma, self.sampling)
         )
 
-        if self.is_lazy:
-            depth = tuple(
-                min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
-            )
+        if xp is np:
+            gaussian_filter = get_ndimage_module(self.array).gaussian_filter
 
-            array = da.map_overlap(
-                gaussian_filter,
-                self.array,
-                sigma=sigma,
-                boundary=boundary,
-                mode=mode,
-                cval=cval,
-                depth=depth,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
-            )
+            if self.is_lazy:
+                depth = tuple(
+                    min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
+                )
+
+                array = da.map_overlap(
+                    gaussian_filter,
+                    self.array,
+                    sigma=sigma,
+                    boundary=dask_boundary,
+                    mode=mode,
+                    cval=cval,
+                    depth=depth,
+                    meta=xp.array((), dtype=get_dtype(complex=False)),
+                )
+            else:
+                array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
         else:
-            array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
+            # cupyx.scipy.ndimage.gaussian_filter bakes each axis's kernel
+            # radius (radius = int(truncate * sigma + 0.5)) into an unrolled,
+            # shape-specific compiled CUDA kernel, so every distinct
+            # sigma/array-shape combination triggers a fresh NVRTC compile --
+            # this dominates the runtime when sigma varies from call to call
+            # (e.g. across hypothesis-generated examples in the test suite).
+            # The Gaussian is separable, so build the same kernel as
+            # scipy.ndimage would (see _gaussian_kernel_2d) and apply it via
+            # the FFT-based convolution already used by lorentzian_filter,
+            # which only depends on array shape (cuFFT plans are cheaply
+            # cached) and not on the kernel radius.
+            axes = (self.array.ndim - 2, self.array.ndim - 1)
+            kernel_2d = _gaussian_kernel_2d(sigma[-2:])
+            pad_mode = {
+                "wrap": "wrap",
+                "reflect": "symmetric",
+                "constant": "constant",
+            }[mode]
+
+            if self.is_lazy:
+                depth = tuple(
+                    min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
+                )
+
+                array = da.map_overlap(
+                    functools.partial(
+                        _apply_convolve_2d_on_axes,
+                        kernel_2d=kernel_2d,
+                        axes=axes,
+                        mode=pad_mode,
+                        cval=cval,
+                    ),
+                    self.array,
+                    depth=depth,
+                    boundary=dask_boundary,
+                    meta=xp.array((), dtype=get_dtype(complex=False)),
+                )
+            else:
+                array = _apply_convolve_2d_on_axes(
+                    self.array, kernel_2d, axes=axes, mode=pad_mode, cval=cval
+                )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -1473,6 +1523,12 @@ class _BaseMeasurement2D(BaseMeasurements):
             depth[axes[0]] = min(kernel_2d.shape[0] // 2, self.shape[axes[0]])
             depth[axes[1]] = min(kernel_2d.shape[1] // 2, self.shape[axes[1]])
 
+            # dask.array.map_overlap's own `boundary` only understands
+            # 'reflect'/'periodic'/'nearest'/'none' or a numeric fill value --
+            # not the string "constant" -- so translate that one case to the
+            # actual fill value it expects.
+            dask_boundary = cval if boundary == "constant" else boundary
+
             array = da.map_overlap(
                 functools.partial(
                     _apply_convolve_2d_on_axes,
@@ -1483,7 +1539,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                 ),
                 self.array,
                 depth=tuple(depth),
-                boundary=boundary,
+                boundary=dask_boundary,
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
@@ -2750,6 +2806,40 @@ def _fourier_space_bilinear_nodes_and_weight(
     return v, u, vw, uw
 
 
+def _gaussian_kernel_1d(sigma: float, truncate: float = 4.0) -> np.ndarray:
+    """Build a normalized 1-D Gaussian convolution kernel in pixel units.
+
+    Matches ``scipy.ndimage``'s internal kernel exactly (same radius formula
+    and same ``exp(-0.5 * (x / sigma) ** 2)`` profile, normalized to sum to
+    one), so an FFT-based convolution built from this kernel reproduces
+    ``scipy.ndimage.gaussian_filter``'s per-axis result.
+
+    An axis with ``sigma <= 0`` is treated as a no-op and returns a
+    single-tap delta kernel.
+    """
+    if sigma <= 0:
+        return np.array([1.0])
+
+    radius = int(truncate * sigma + 0.5)
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel = np.exp(-0.5 / sigma**2 * x**2)
+    return kernel / kernel.sum()
+
+
+def _gaussian_kernel_2d(
+    sigma_pixels: tuple[float, float],
+    truncate: float = 4.0,
+) -> np.ndarray:
+    """Build a normalized separable 2-D Gaussian kernel as an outer product
+    of two 1-D kernels (see :func:`_gaussian_kernel_1d`), in the dtype
+    configured via ``abtem.config['precision']``.
+    """
+    ky = _gaussian_kernel_1d(sigma_pixels[0], truncate)
+    kx = _gaussian_kernel_1d(sigma_pixels[1], truncate)
+    kernel = np.outer(ky, kx)
+    return kernel.astype(get_dtype(complex=False))
+
+
 # Threshold below which (1/hw)^2 would overflow float64.
 # For the Lorentzian kernel the minimum radius is 1, so the maximum operand
 # is x/hw = 1/hw; squaring overflows when hw < 1/sqrt(float_max).
@@ -2849,6 +2939,12 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
         padded = xp.pad(array, pad_widths, mode="wrap")
     elif mode == "reflect":
         padded = xp.pad(array, pad_widths, mode="reflect")
+    elif mode == "symmetric":
+        # Edge-duplicated mirror (d c b a | a b c d | d c b a), matching
+        # scipy.ndimage's own mode="reflect" convention -- distinct from
+        # numpy/this function's "reflect" above, which does not duplicate
+        # the edge sample.
+        padded = xp.pad(array, pad_widths, mode="symmetric")
     elif mode == "constant":
         padded = xp.pad(array, pad_widths, mode="constant", constant_values=cval)
     else:
@@ -2998,7 +3094,6 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         sigma = (sigma,) * 2
 
     xp = get_array_module(measurements.array)
-    gaussian_filter = get_ndimage_module(measurements._array).gaussian_filter
 
     ensemble_axes = tuple(range(len(measurements.ensemble_shape)))
     padded_sigma = ()
@@ -3017,16 +3112,45 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
     padded_sigma += (0.0,) * 2
     depth += (0,) * 2
 
-    if measurements.is_lazy:
-        array = measurements.array.map_overlap(
-            gaussian_filter,
-            sigma=padded_sigma,
-            mode="wrap",
-            depth=depth,
-            meta=xp.array((), dtype=get_dtype(complex=False)),
-        )
+    if xp is np:
+        gaussian_filter = get_ndimage_module(measurements._array).gaussian_filter
+
+        if measurements.is_lazy:
+            array = measurements.array.map_overlap(
+                gaussian_filter,
+                sigma=padded_sigma,
+                mode="wrap",
+                depth=depth,
+                meta=xp.array((), dtype=get_dtype(complex=False)),
+            )
+        else:
+            array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
     else:
-        array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
+        # See the matching comment in Images.gaussian_filter: avoid
+        # cupyx.scipy.ndimage.gaussian_filter's per-(sigma, shape) NVRTC
+        # recompilation by using an FFT-based separable convolution instead.
+        axes = _scan_axes(measurements)
+        kernel_2d = _gaussian_kernel_2d((padded_sigma[axes[0]], padded_sigma[axes[1]]))
+
+        if measurements.is_lazy:
+            # No explicit `boundary=` here, matching the xp is np branch
+            # above (and the pre-existing behavior of this lazy path), which
+            # also lets dask's own default apply at true array edges.
+            array = measurements.array.map_overlap(
+                functools.partial(
+                    _apply_convolve_2d_on_axes,
+                    kernel_2d=kernel_2d,
+                    axes=axes,
+                    mode="wrap",
+                    cval=0.0,
+                ),
+                depth=depth,
+                meta=xp.array((), dtype=get_dtype(complex=False)),
+            )
+        else:
+            array = _apply_convolve_2d_on_axes(
+                measurements.array, kernel_2d, axes=axes, mode="wrap", cval=0.0
+            )
 
     kwargs = measurements._copy_kwargs(exclude=("array",))
 
