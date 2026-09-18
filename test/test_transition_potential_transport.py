@@ -158,6 +158,47 @@ class TestDelayedTransitionPotentialMemo:
         assert view._delayed_pure_node is None
         assert tp._delayed_pure_node is not None  # the original's memo is untouched
 
+    def test_task_local_copy_of_an_array_transition_potential_shares_the_memo(self):
+        """Counterpart to the bare-TransitionPotential test above:
+        TransitionPotentialArray.__copy__ shares __dict__ by reference
+        instead of routing through __getstate__ (see that method's own
+        comment), so a _task_local() view of an array TP does NOT get
+        _delayed_pure_node blanked -- it shares the same Delayed object.
+        Harmless today because _as_pure_delayed is never called on such a
+        view and pickling still blanks the memo via __getstate__ before the
+        view reaches a worker; this test pins that behaviour down so a
+        future change either preserves it or updates the documented
+        invariant in _task_local's docstring alongside it."""
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()
+        view = tp._task_local()
+
+        assert view is not tp
+        assert view._delayed_pure_node is tp._delayed_pure_node
+
+    def test_memo_key_goes_stale_under_in_place_mutation(self):
+        """Pins down the residual hazard _as_pure_delayed's docstring now
+        documents: the memo is identity-keyed and so survives rebinding,
+        but the underlying dask.delayed(..., pure=True) key is a content
+        hash frozen at first call. Mutating the payload buffer in place
+        after that leaves the memoized key describing stale content even
+        though the node still wraps a live (now-mutated) `self` -- the same
+        hazard a cached content hash would have. Nothing under abtem/
+        mutates a transition potential's array in place today, so this is
+        latent, not a defect to fix; the test exists so the invariant stays
+        verified rather than merely asserted in prose."""
+        import dask
+
+        tp = _synthetic_tp()
+        stale_key = tp._as_pure_delayed().key
+
+        tp.array[0, 0, 0] += 1.0
+        memoized_key = tp._as_pure_delayed().key
+        fresh_key = dask.delayed(tp, pure=True).key
+
+        assert memoized_key == stale_key
+        assert memoized_key != fresh_key
+
 
 def test_graph_carries_the_transition_potential_once():
     """A many-task lazy scan's graph must hold exactly one payload copy."""

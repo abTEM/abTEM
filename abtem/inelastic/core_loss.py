@@ -606,8 +606,7 @@ class BaseTransitionPotential(
         Computing this tokenizes the whole payload via a content hash (dask's
         ``_normalize_pickle`` fallback for objects with no
         ``__dask_tokenize__``), which costs ~0.4 ms per MB of the underlying
-        array -- see ``delayed_transition_potential_rehashes_payload.md``.
-        Building the same scan graph many times against the same live
+        array. Building the same scan graph many times against the same live
         object -- a frozen-phonon or energy sweep reusing one transition
         potential -- currently pays that cost on every call; memoizing here
         means it pays it once.
@@ -615,11 +614,24 @@ class BaseTransitionPotential(
         Identity-keyed rather than content-keyed: an id()-based token would
         be unsafe on its own (ids are reused after garbage collection, and
         using one to build a token breaks determinism across processes), but
-        caching the ``Delayed`` as an attribute of the object it wraps has
-        neither problem -- there is exactly one per live object, it cannot
-        go stale under mutation the way a cached content hash could, and it
-        is dropped before this object is ever pickled (see ``__getstate__``),
-        so a stale copy can never outlive the object it was built from.
+        caching the ``Delayed`` as an attribute of the object it wraps
+        sidesteps that -- there is exactly one per live object, and it is
+        dropped before this object is ever pickled (see ``__getstate__``), so
+        a stale copy can never outlive the object it was built from.
+
+        This memo is only valid while the wrapped object's payload is not
+        mutated in place after the first call. The cached ``Delayed``'s dask
+        *key* is frozen from the content tokenized at that first call, but
+        the node still wraps a live reference to ``self``; an in-place edit
+        to ``self.array`` (or to any other state dask would tokenize) leaves
+        the key describing stale content while the node computes against
+        whatever ``self`` currently holds -- the same staleness hazard a
+        cached content hash would have, just moved one level up rather than
+        eliminated. Nothing under ``abtem/`` mutates a transition potential's
+        payload in place after handing it to ``transition_potential_scan``
+        today, so the risk is latent rather than live; a caller that does
+        would need to build its own fresh ``dask.delayed`` instead of going
+        through this memo.
         """
         if self._delayed_pure_node is None:
             self._delayed_pure_node = dask.delayed(self, pure=True)
@@ -657,8 +669,16 @@ class BaseTransitionPotential(
         derived state; a caller that skips it must not mutate the result.
         The payload buffer itself is only ever read (the transforms
         allocate rather than overwrite their input). Note that
-        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
-        attribute there gets it blanked in this view as well.
+        ``copy.copy`` honours ``__getstate__`` by default, so a subclass
+        that blanks an attribute there gets it blanked in this view as
+        well -- except ``TransitionPotentialArray``, which defines its own
+        ``__copy__`` that shares ``__dict__`` by reference instead (see that
+        method), so a ``_task_local`` view of an array transition potential
+        shares ``_delayed_pure_node`` with its source rather than getting it
+        blanked. That is inert today: ``_as_pure_delayed`` is only ever
+        called on the object handed directly to a scan method, never on a
+        ``_task_local``/``copy_to_device`` view, and pickling any view still
+        blanks the memo via ``__getstate__`` before it reaches a worker.
 
         Parameters
         ----------
