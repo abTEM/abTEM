@@ -686,8 +686,14 @@ def _validate_parity_snapshot(
     # or undefined out-of-plane cell vector (e.g. ase.build.graphene()'s
     # default cell has rank 2, pbc=(True, True, False)): it wraps only the
     # periodic directions and leaves the rest untouched.
-    if atoms.cell.rank > 0 and np.any(atoms.pbc):
-        displacement, _ = find_mic(displacement, atoms.cell, pbc=atoms.pbc)
+    # abTEM treats the potential as periodic along every non-degenerate cell
+    # vector whatever `atoms.pbc` says (hand-built ASE Atoms default to
+    # pbc=False), so wrap along those directions rather than only the
+    # pbc-flagged ones; a zero cell vector (2D materials built by ASE) is
+    # simply not wrapped.
+    periodic = np.array([np.linalg.norm(vector) > 0 for vector in atoms.cell])
+    if periodic.any():
+        displacement, _ = find_mic(displacement, atoms.cell, pbc=periodic)
     largest = np.linalg.norm(displacement, axis=1)
     worst = int(np.argmax(largest))
     if largest[worst] > max_displacement:
@@ -977,10 +983,13 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             # leading ':' keeping the parity axis whole -- is supported:
             # `ensemble[:, energy_slice]` or
             # `ensemble[:, energy_slice, config_slice]`.
-            is_bare_full_slice = item == slice(None)
+            # isinstance guards first: comparing a numpy index array to a
+            # slice would evaluate elementwise and raise on `not (...)`
+            is_bare_full_slice = isinstance(item, slice) and item == slice(None)
             is_leading_full_slice = (
                 isinstance(item, tuple)
                 and len(item) >= 1
+                and isinstance(item[0], slice)
                 and item[0] == slice(None)
             )
             if not (is_bare_full_slice or is_leading_full_slice):

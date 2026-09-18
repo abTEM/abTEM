@@ -403,3 +403,33 @@ def test_wrapped_snapshot_passes_minimum_image_check_2d_material():
     diff = twin.positions[0] - expected
     vmin, _ = find_mic(diff[None, :], equilibrium_2d.cell, pbc=equilibrium_2d.pbc)
     np.testing.assert_allclose(vmin[0], 0.0, atol=1e-10)
+
+
+def test_wrapped_snapshot_passes_minimum_image_check_pbc_false():
+    """A bulk cell built by hand carries ASE's default pbc=False, but abTEM
+    treats it as periodic along every cell vector; the minimum-image check
+    must wrap along those directions regardless of the pbc flags."""
+    equilibrium_bulk = Atoms("H2", positions=[[0, 0, 0], [1.0, 0, 0]], cell=[10, 10, 10])
+    assert not equilibrium_bulk.pbc.any()
+
+    u = np.array([-0.05, 0.02, 0.0])
+    atoms = equilibrium_bulk.copy()
+    atoms.positions[0] += u
+    atoms.wrap(pbc=True)
+    assert atoms.positions[0, 0] > 9.0  # really wrapped
+
+    ensemble = EnergyResolvedAtomsEnsemble(
+        [[atoms, atoms]], [0.02], equilibrium_atoms=equilibrium_bulk,
+        parity_projection=True,
+    )
+    assert ensemble.ensemble_shape == (2, 1, 2)
+
+
+def test_getitem_rejects_array_index_with_parity_projection(equilibrium):
+    snapshots = _make_snapshots(equilibrium)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=equilibrium,
+        parity_projection=True,
+    )
+    with pytest.raises(NotImplementedError, match="leading ':'"):
+        ensemble[np.array([0, 1])]
