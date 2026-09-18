@@ -1395,7 +1395,11 @@ class _BaseMeasurement2D(BaseMeasurements):
                     mode=mode,
                     cval=cval,
                     depth=depth,
-                    meta=xp.array((), dtype=get_dtype(complex=False)),
+                    # `meta` must follow the input dtype, not the configured
+                    # precision: a complex measurement declared as real gets
+                    # its imaginary part silently discarded when dask
+                    # concatenates the blocks into the output buffer.
+                    meta=xp.array((), dtype=self.array.dtype),
                 )
             else:
                 array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
@@ -1436,7 +1440,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                     self.array,
                     depth=depth,
                     boundary=dask_boundary,
-                    meta=xp.array((), dtype=get_dtype(complex=False)),
+                    meta=xp.array((), dtype=self.array.dtype),
                 )
             else:
                 array = _apply_convolve_2d_on_axes(
@@ -3358,7 +3362,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                 sigma=padded_sigma,
                 mode="wrap",
                 depth=depth,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
             array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
@@ -3385,7 +3389,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                     cval=0.0,
                 ),
                 depth=depth,
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
             array = _apply_convolve_2d_on_axes(

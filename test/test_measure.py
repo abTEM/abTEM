@@ -553,15 +553,28 @@ def test_filter_boundary_modes():
 @requires_gpu
 @pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
 @pytest.mark.parametrize("lazy", [False, True])
-def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy):
+@pytest.mark.parametrize("complex_input", [False, True])
+def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy, complex_input):
     """gaussian_filter (and, through it, voigtian_filter/pseudo_voigtian_filter) uses
     a different implementation on GPU than on CPU -- FFT-based convolution instead of
     cupyx.scipy.ndimage.gaussian_filter -- to avoid per-(sigma, shape) CUDA kernel
     recompilation overhead. Nothing else in the suite checks the two backends agree
     numerically, so do that explicitly here for all three boundary modes.
+
+    Complex measurements take a different branch again (the real-input FFTs reject
+    them), and they are an ordinary case: DiffractionPatterns.center_of_mass returns
+    complex Images, so smoothing one is a normal DPC/CoM step. A complex wave function
+    stands in for that here -- it exercises the same dtype without needing a scan.
     """
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=48)
-    images_cpu = wave.build((0, 0), lazy=lazy).intensity()
+    built = wave.build((0, 0), lazy=lazy)
+
+    if complex_input:
+        images_cpu = Images(built.array, sampling=built.sampling)
+    else:
+        images_cpu = built.intensity()
+
+    assert np.iscomplexobj(images_cpu.array) == complex_input
     images_gpu = images_cpu.to_gpu()
 
     sigma, gamma = 0.7, 0.4
@@ -573,13 +586,24 @@ def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy):
             dict(gaussian_sigma=sigma, lorentzian_gamma=gamma, eta=0.5),
         ),
     ]:
-        cpu = getattr(images_cpu, method)(boundary=boundary, **kwargs)
-        gpu_result = getattr(images_gpu, method)(boundary=boundary, **kwargs)
+        cpu_array = getattr(images_cpu, method)(boundary=boundary, **kwargs)
+        gpu_array = getattr(images_gpu, method)(boundary=boundary, **kwargs)
+        cpu_array = cpu_array.compute().array
+        gpu_array = gpu_array.to_cpu().compute().array
+
+        assert np.iscomplexobj(gpu_array) == complex_input, method
+
+        # Scale the absolute tolerance to the data: a probe's values are of
+        # order 1e-5 here, so a fixed atol would pass no matter what the two
+        # backends returned. The two paths (scipy.ndimage vs the FFT helper)
+        # differ by ~2e-7 of the peak when measured on the same input, so
+        # this leaves a comfortable margin for cuFFT rounding.
         np.testing.assert_allclose(
-            cpu.compute().array,
-            gpu_result.to_cpu().compute().array,
-            atol=1e-5,
+            cpu_array,
+            gpu_array,
+            atol=1e-5 * np.abs(cpu_array).max(),
             rtol=1e-5,
+            err_msg=f"{method} disagrees between CPU and GPU",
         )
 
 
