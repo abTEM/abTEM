@@ -1,11 +1,12 @@
 from typing import Iterable
 
+import ase.build
 import dask.array as da
 import numpy as np
 import pytest
 from hypothesis import assume
 
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.potentials.iam import Potential
 from abtem.waves import Waves
@@ -145,6 +146,15 @@ gpu = pytest.param(
 requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
 
 
+# Shared `device`/`lazy` parametrize decorators. Every test file used to
+# spell `@pytest.mark.parametrize("device", ["cpu", gpu])` (or the
+# argument-order-flipped `[gpu, "cpu"]`) inline; that copy-paste had drifted
+# into two orderings with no functional difference. Use these two decorators
+# instead so the order/spelling is uniform everywhere.
+devices = pytest.mark.parametrize("device", [gpu, "cpu"])
+lazy_params = pytest.mark.parametrize("lazy", [True, False])
+
+
 try:
     import dask_cuda as _dask_cuda  # noqa: F401
 
@@ -169,6 +179,7 @@ def synthetic_transition_potential(
     energy: float | None = 100e3,
     n_transitions: int = 2,
     seed: int = 0,
+    device: str = "cpu",
 ):
     """A seeded ``TransitionPotentialArray`` with a synthetic payload.
 
@@ -180,11 +191,14 @@ def synthetic_transition_potential(
     from abtem.core.axes import OrdinalAxis
     from abtem.inelastic.core_loss import TransitionPotentialArray
 
+    xp = cp if device == "gpu" else np
     rng = np.random.default_rng(seed)
-    array = (
-        rng.standard_normal((n_transitions, *gpts))
-        + 1j * rng.standard_normal((n_transitions, *gpts))
-    ).astype(np.complex64)
+    array = xp.asarray(
+        (
+            rng.standard_normal((n_transitions, *gpts))
+            + 1j * rng.standard_normal((n_transitions, *gpts))
+        ).astype(np.complex64)
+    )
     return TransitionPotentialArray(
         Z=Z,
         array=array,
@@ -193,3 +207,32 @@ def synthetic_transition_potential(
         ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
         metadata={"Z": Z, "n": 1, "l": 0},
     )
+
+
+def to_host_array(measurement):
+    """The array of a measurement, wave function, or bare array, on the host.
+
+    Detectors return host arrays by default, but reductions to wave functions
+    and their derived measurements may stay on the device (and can be dask-
+    or cupy-backed), so cross-device/laziness comparisons should go through
+    this rather than each test reimplementing the unwrap-then-convert dance.
+    """
+    array = measurement.array if hasattr(measurement, "array") else measurement
+    if isinstance(array, da.core.Array):
+        array = array.compute()
+    return asnumpy(array)
+
+
+def si_cubic_atoms():
+    """A cubic-conventional-cell Si ``Atoms`` (diamond structure)."""
+    return ase.build.bulk("Si", cubic=True)
+
+
+def si_diamond_atoms():
+    """The same cubic-conventional-cell diamond Si, built explicitly.
+
+    Equivalent to :func:`si_cubic_atoms`; kept as a separate name for tests
+    that spell out ``crystalstructure="diamond", a=5.43`` explicitly rather
+    than relying on ASE's default lattice constant for Si.
+    """
+    return ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)

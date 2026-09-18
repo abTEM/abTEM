@@ -2,6 +2,7 @@ import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
 from hypothesis import given
+from utils import si_cubic_atoms
 
 
 @given(data=st.data())
@@ -47,9 +48,7 @@ class TestEqualityDiscriminates:
 
     @staticmethod
     def _atoms(dx=0.0):
-        import ase.build
-
-        atoms = ase.build.bulk("Si", cubic=True)
+        atoms = si_cubic_atoms()
         if dx:
             atoms.positions[0] += [dx, 0.0, 0.0]
         return atoms
