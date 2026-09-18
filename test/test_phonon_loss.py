@@ -453,6 +453,30 @@ class TestParityProjection:
             ratio, np.exp(np.array([0.02, 0.05]) / (units.kB * 300.0)), rtol=1e-5
         )
 
+    def test_unfold_loss_gain_commutes_with_momentum_resolved_spectrum(self):
+        """unfold_loss_gain must accept a MomentumResolvedSpectrum (energy is
+        its last base axis) and give the same result as unfolding the
+        diffraction patterns before building the spectrum."""
+        from abtem.detectors import SpectralSlitDetector
+        from abtem.measurements import momentum_resolved_spectrum, unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        dp_one = phonon_loss_diffraction_patterns(waves, max_angle="full")[1]
+        detector = SpectralSlitDetector(width=20.0, q_min=0.0, q_max=60.0)
+
+        spectrum_then_unfold = unfold_loss_gain(
+            momentum_resolved_spectrum(dp_one, detector), 300.0
+        )
+        unfold_then_spectrum = momentum_resolved_spectrum(
+            unfold_loss_gain(dp_one, 300.0), detector
+        )
+        assert spectrum_then_unfold.e_values == (-0.05, -0.02, 0.0, 0.02, 0.05)
+        assert spectrum_then_unfold.e_values == unfold_then_spectrum.e_values
+        np.testing.assert_allclose(
+            spectrum_then_unfold.array, unfold_then_spectrum.array, rtol=1e-6
+        )
+
     def test_unfold_loss_gain_requires_energy_axis(self):
         from abtem.measurements import unfold_loss_gain
 

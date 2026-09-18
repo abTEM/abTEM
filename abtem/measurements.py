@@ -6356,10 +6356,12 @@ def unfold_loss_gain(measurement, temperature: float):
     Parameters
     ----------
     measurement : ArrayObject
-        Any array object (typically :class:`DiffractionPatterns` or
-        :class:`MomentumResolvedSpectrum`) with an
-        :class:`~abtem.core.axes.EnergyLossAxis` among its ensemble axes,
-        whose values start at 0 and strictly increase.
+        Any array object with an :class:`~abtem.core.axes.EnergyLossAxis`
+        among its ensemble axes (typically :class:`DiffractionPatterns`), or
+        a :class:`MomentumResolvedSpectrum`, whose energy is its last base
+        axis. The energies must start at 0 and strictly increase. Unfolding
+        commutes with :func:`momentum_resolved_spectrum`, since the spectrum
+        integrates every energy independently.
     temperature : float
         Sample temperature [K].
 
@@ -6370,6 +6372,17 @@ def unfold_loss_gain(measurement, temperature: float):
         (``-E_max, ..., 0, ..., +E_max``).
     """
     from abtem.core.axes import EnergyLossAxis
+
+    if isinstance(measurement, MomentumResolvedSpectrum):
+        # the energy is the last *base* axis here, not an ensemble axis
+        array, e_values_signed = _thermal_weight_tds(
+            measurement.array,
+            np.asarray(measurement.e_values, dtype=float),
+            measurement.array.ndim - 1,
+            temperature,
+        )
+        kwargs = measurement._copy_kwargs(exclude=("array", "e_values"))
+        return measurement.__class__(array, e_values=e_values_signed, **kwargs)
 
     energy_axis_idx = next(
         (
