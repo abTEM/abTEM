@@ -1406,13 +1406,13 @@ class _BaseMeasurement2D(BaseMeasurements):
             # sigma/array-shape combination triggers a fresh NVRTC compile --
             # this dominates the runtime when sigma varies from call to call
             # (e.g. across hypothesis-generated examples in the test suite).
-            # The Gaussian is separable, so build the same kernel as
-            # scipy.ndimage would (see _gaussian_kernel_2d) and apply it via
+            # The Gaussian is separable, so build the same kernels
+            # scipy.ndimage would (see _gaussian_kernels_1d) and apply them via
             # the FFT-based convolution already used by lorentzian_filter,
             # which only depends on array shape (cuFFT plans are cheaply
             # cached) and not on the kernel radius.
             axes = (self.array.ndim - 2, self.array.ndim - 1)
-            kernel_2d = _gaussian_kernel_2d(sigma[-2:])
+            kernels_1d = _gaussian_kernels_1d(sigma[-2:])
             pad_mode = {
                 "wrap": "wrap",
                 "reflect": "symmetric",
@@ -1427,7 +1427,8 @@ class _BaseMeasurement2D(BaseMeasurements):
                 array = da.map_overlap(
                     functools.partial(
                         _apply_convolve_2d_on_axes,
-                        kernel_2d=kernel_2d,
+                        kernel_2d=None,
+                        kernels_1d=kernels_1d,
                         axes=axes,
                         mode=pad_mode,
                         cval=cval,
@@ -1439,7 +1440,12 @@ class _BaseMeasurement2D(BaseMeasurements):
                 )
             else:
                 array = _apply_convolve_2d_on_axes(
-                    self.array, kernel_2d, axes=axes, mode=pad_mode, cval=cval
+                    self.array,
+                    None,
+                    axes=axes,
+                    mode=pad_mode,
+                    cval=cval,
+                    kernels_1d=kernels_1d,
                 )
 
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -2829,18 +2835,39 @@ def _gaussian_kernel_1d(sigma: float, truncate: float = 4.0) -> np.ndarray:
     return kernel / kernel.sum()
 
 
+def _gaussian_kernels_1d(
+    sigma_pixels: tuple[float, float],
+    truncate: float = 4.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build the pair of normalized 1-D Gaussian kernels (axis 0, axis 1) in
+    the dtype configured via ``abtem.config['precision']``.
+
+    The Gaussian is separable, so the filters pass this pair around rather
+    than the 2-D outer product: the kernel radius scales with
+    ``sigma / sampling`` and can be far larger than the array itself, and the
+    dense 2-D kernel would then cost O(radius**2) while every use of it here
+    (folding onto the array's own extent, or a separable convolution) only
+    needs O(radius).
+    """
+    dtype = get_dtype(complex=False)
+    return (
+        _gaussian_kernel_1d(sigma_pixels[0], truncate).astype(dtype),
+        _gaussian_kernel_1d(sigma_pixels[1], truncate).astype(dtype),
+    )
+
+
 def _gaussian_kernel_2d(
     sigma_pixels: tuple[float, float],
     truncate: float = 4.0,
 ) -> np.ndarray:
-    """Build a normalized separable 2-D Gaussian kernel as an outer product
-    of two 1-D kernels (see :func:`_gaussian_kernel_1d`), in the dtype
-    configured via ``abtem.config['precision']``.
+    """Build a normalized 2-D Gaussian kernel as the outer product of the two
+    1-D kernels from :func:`_gaussian_kernels_1d`.
+
+    Prefer passing the 1-D pair itself where possible -- this materializes an
+    O(radius**2) array.
     """
-    ky = _gaussian_kernel_1d(sigma_pixels[0], truncate)
-    kx = _gaussian_kernel_1d(sigma_pixels[1], truncate)
-    kernel = np.outer(ky, kx)
-    return kernel.astype(get_dtype(complex=False))
+    ky, kx = _gaussian_kernels_1d(sigma_pixels, truncate)
+    return np.outer(ky, kx).astype(get_dtype(complex=False))
 
 
 # Threshold below which (1/hw)^2 would overflow float64.
@@ -2905,7 +2932,26 @@ def _lorentzian_kernel_2d(
     return (kernel / kernel.sum()).astype(out_dtype)
 
 
-def _circular_convolve_2d_on_axes(array, kernel_2d, axes):
+def _fold_kernel_1d(kernel_1d, n):
+    """Alias a 1-D kernel (center tap at index ``len // 2``) onto a periodic
+    domain of length ``n``, summing taps that land on the same residue.
+
+    Uses a one-hot matmul rather than a scatter-add (e.g. bincount): every
+    shape involved is already a plain Python int known without touching the
+    device, so this stays fully asynchronous. bincount is the wrong tool here
+    even though it looks like a natural fit -- it always falls back to a
+    slower kernel whenever ``weights`` is passed, and (even given
+    ``minlength``) still computes ``int(xp.max(...))`` internally, which
+    forces a blocking device sync on every single call.
+    """
+    xp = get_array_module(kernel_1d)
+    m = kernel_1d.shape[0]
+    idx = (xp.arange(m) - m // 2) % n
+    fold = (idx[:, None] == xp.arange(n)[None, :]).astype(kernel_1d.dtype)
+    return kernel_1d @ fold
+
+
+def _circular_convolve_2d_on_axes(array, kernel_2d, axes, kernels_1d=None):
     """Exact circular (periodic) 2-D convolution via FFT, without ever
     padding ``array``.
 
@@ -2932,39 +2978,107 @@ def _circular_convolve_2d_on_axes(array, kernel_2d, axes):
     scipy.ndimage's index-based wrap boundary already does internally.
     """
     xp = get_array_module(array)
-    kh, kw = kernel_2d.shape
     ay, ax = axes
     sy, sx = array.shape[ay], array.shape[ax]
-    ry, rx = kh // 2, kw // 2
 
-    kernel_2d = xp.asarray(kernel_2d)
-    iy = (xp.arange(kh) - ry) % sy
-    ix = (xp.arange(kw) - rx) % sx
+    if kernels_1d is not None:
+        # Separable kernel: fold each axis on its own, so the dense O(radius**2)
+        # kernel is never built (folding it would only collapse it to (sy, sx)
+        # anyway). fold(outer(ky, kx)) == outer(fold(ky), fold(kx)).
+        ky = _fold_kernel_1d(xp.asarray(kernels_1d[0]), sy)
+        kx = _fold_kernel_1d(xp.asarray(kernels_1d[1]), sx)
+        embedded = ky[:, None] * kx[None, :]
+    else:
+        kernel_2d = xp.asarray(kernel_2d)
+        kh, kw = kernel_2d.shape
+        iy = (xp.arange(kh) - kh // 2) % sy
+        ix = (xp.arange(kw) - kw // 2) % sx
+        fold_y = (iy[:, None] == xp.arange(sy)[None, :]).astype(kernel_2d.dtype)
+        fold_x = (ix[:, None] == xp.arange(sx)[None, :]).astype(kernel_2d.dtype)
+        embedded = fold_y.T @ kernel_2d @ fold_x
 
-    # Fold ("alias") the kernel onto the array's own axis lengths via two
-    # small one-hot matmuls rather than a scatter-add (e.g. bincount): every
-    # shape involved here (kh, kw, sy, sx) is already a plain Python int
-    # known without touching the device, so this stays fully asynchronous.
-    # bincount is the wrong tool here even though it looks like a natural
-    # fit -- it always falls back to a slower kernel whenever `weights` is
-    # passed, and (even given `minlength`) still computes `int(xp.max(...))`
-    # internally, which forces a blocking device sync on every single call.
-    fold_y = (iy[:, None] == xp.arange(sy)[None, :]).astype(kernel_2d.dtype)
-    fold_x = (ix[:, None] == xp.arange(sx)[None, :]).astype(kernel_2d.dtype)
-    embedded = fold_y.T @ kernel_2d @ fold_x
+    # The real-input transforms are cheaper, but they reject complex input --
+    # and complex measurements are a supported case here (e.g. the complex
+    # Images that DiffractionPatterns.center_of_mass returns).
+    if xp.iscomplexobj(array):
+        forward, inverse = xp.fft.fftn, xp.fft.ifftn
+    else:
+        forward, inverse = xp.fft.rfftn, xp.fft.irfftn
 
-    freq = xp.fft.rfftn(array, axes=axes)
-    kernel_freq = xp.fft.rfftn(embedded, s=(sy, sx), axes=(0, 1))
+    freq = forward(array, axes=axes)
+    kernel_freq = forward(embedded, s=(sy, sx), axes=(0, 1))
     kernel_shape = [1] * array.ndim
     kernel_shape[ay] = kernel_freq.shape[0]
     kernel_shape[ax] = kernel_freq.shape[1]
-    result = xp.fft.irfftn(
-        freq * kernel_freq.reshape(kernel_shape), s=(sy, sx), axes=axes
-    )
+    result = inverse(freq * kernel_freq.reshape(kernel_shape), s=(sy, sx), axes=axes)
     return result.astype(array.dtype, copy=False)
 
 
-def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
+def _mirror_extend(array, axes, mode):
+    """Extend ``array`` along ``axes`` to one full period of its mirrored
+    extension: ``2N`` for ``"symmetric"`` (edge sample duplicated) and
+    ``2N - 2`` for numpy's ``"reflect"`` (edge sample not duplicated).
+
+    A mirrored boundary extension is periodic, so a circular convolution on
+    this extended domain reproduces it exactly -- for any kernel size, and
+    with the cost bounded by the array rather than by the kernel radius.
+    """
+    xp = get_array_module(array)
+
+    for axis in axes:
+        if array.shape[axis] < 2:
+            # The mirrored extension of a single sample is that sample
+            # repeated, i.e. already periodic with period 1.
+            continue
+
+        tail = xp.flip(array, axis=axis)
+        if mode == "reflect":
+            index = [slice(None)] * array.ndim
+            index[axis] = slice(1, -1)
+            tail = tail[tuple(index)]
+
+        if tail.shape[axis]:
+            array = xp.concatenate([array, tail], axis=axis)
+
+    return array
+
+
+def _crop_kernel_to_extent(kernel_2d, kernels_1d, extent):
+    """Drop kernel taps that can never reach inside an array of the given
+    ``extent`` along the two filtered axes.
+
+    An output pixel of a length-``n`` axis only ever samples offsets in
+    ``[-(n - 1), n - 1]``; every tap beyond that lies outside the array for
+    *every* output pixel. Under a ``"constant"`` boundary those taps all
+    sample ``cval``, so dropping them and adding back ``cval`` times their
+    summed weight is exact -- and it bounds the padding (and therefore the
+    memory) by the array's own extent instead of the kernel radius, which
+    scales with ``sigma / sampling`` and can be far larger.
+
+    Returns ``(kernel_2d, kernels_1d, dropped_weight)``.
+    """
+
+    def crop_1d(kernel, n):
+        radius = kernel.shape[0] // 2
+        keep = min(radius, max(n - 1, 0))
+        return kernel[radius - keep : radius + keep + 1]
+
+    if kernels_1d is not None:
+        cropped = tuple(crop_1d(k, n) for k, n in zip(kernels_1d, extent))
+        dropped = float(
+            kernels_1d[0].sum() * kernels_1d[1].sum()
+            - cropped[0].sum() * cropped[1].sum()
+        )
+        return None, cropped, dropped
+
+    ry, rx = kernel_2d.shape[0] // 2, kernel_2d.shape[1] // 2
+    ky = min(ry, max(extent[0] - 1, 0))
+    kx = min(rx, max(extent[1] - 1, 0))
+    cropped = kernel_2d[ry - ky : ry + ky + 1, rx - kx : rx + kx + 1]
+    return cropped, None, float(kernel_2d.sum() - cropped.sum())
+
+
+def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1d=None):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
     Uses FFT-based convolution (``scipy.signal.fftconvolve`` on CPU,
@@ -2975,24 +3089,76 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     The image is first padded according to ``mode`` so that the valid-mode
     convolution returns the same shape as the input.
 
-    The kernel is broadcast to ``array.ndim`` with size-1 dimensions on all
-    axes other than ``axes``. Suitable for ``dask.array.map_overlap``.
+    The kernel is either a dense 2-D array (``kernel_2d``) or, for a
+    separable kernel, the pair of 1-D kernels it would be the outer product
+    of (``kernels_1d``); the latter avoids ever materializing an
+    O(radius**2) array. The kernel is broadcast to ``array.ndim`` with
+    size-1 dimensions on all axes other than ``axes``. Suitable for
+    ``dask.array.map_overlap``.
 
-    ``mode="wrap"`` is delegated to :func:`_circular_convolve_2d_on_axes`
-    instead, which needs no padding at all -- see that function's docstring
-    for why padding is unsafe for a periodic boundary specifically.
+    Padding by the kernel radius is only safe while that radius is smaller
+    than the array's own extent along ``axes``. It need not be: the radius
+    scales with ``sigma / sampling`` (or ``half_width / sampling``), so a
+    short axis -- a handful of scan positions, say -- combined with a fine
+    sampling can make it orders of magnitude larger, inflating the padded
+    buffer to many GB for an array of a few KB. Each boundary mode therefore
+    has a bounded route for that case: ``"wrap"`` always goes to
+    :func:`_circular_convolve_2d_on_axes` (no padding at all), the mirrored
+    modes fall back to a circular convolution on one period of
+    :func:`_mirror_extend`, and ``"constant"`` crops the unreachable taps via
+    :func:`_crop_kernel_to_extent`.
     """
     xp = get_array_module(array)
     scipy_signal = get_scipy_module(array).signal
 
-    kh, kw = kernel_2d.shape
+    if kernels_1d is not None:
+        kh, kw = kernels_1d[0].shape[0], kernels_1d[1].shape[0]
+    else:
+        kh, kw = kernel_2d.shape
 
     # Delta kernel → no-op shortcut.
     if kh == 1 and kw == 1:
-        return (array * float(kernel_2d[0, 0])).astype(array.dtype, copy=False)
+        if kernels_1d is not None:
+            scale = float(kernels_1d[0][0] * kernels_1d[1][0])
+        else:
+            scale = float(kernel_2d[0, 0])
+        return (array * scale).astype(array.dtype, copy=False)
 
     if mode == "wrap":
-        return _circular_convolve_2d_on_axes(array, kernel_2d, axes)
+        return _circular_convolve_2d_on_axes(
+            array, kernel_2d, axes, kernels_1d=kernels_1d
+        )
+
+    extent = (array.shape[axes[0]], array.shape[axes[1]])
+    offset = 0.0
+
+    if mode in ("reflect", "symmetric"):
+        if kh // 2 >= extent[0] or kw // 2 >= extent[1]:
+            original_shape = array.shape
+            extended = _mirror_extend(array, axes, mode)
+            result = _circular_convolve_2d_on_axes(
+                extended, kernel_2d, axes, kernels_1d=kernels_1d
+            )
+            index = [slice(None)] * array.ndim
+            for axis in axes:
+                index[axis] = slice(0, original_shape[axis])
+            return result[tuple(index)]
+    elif mode == "constant":
+        kernel_2d, kernels_1d, dropped_weight = _crop_kernel_to_extent(
+            kernel_2d, kernels_1d, extent
+        )
+        if kernels_1d is not None:
+            kh, kw = kernels_1d[0].shape[0], kernels_1d[1].shape[0]
+        else:
+            kh, kw = kernel_2d.shape
+        offset = cval * dropped_weight
+    elif mode != "reflect":
+        raise ValueError(f"Unknown convolution mode: {mode!r}")
+
+    if kernels_1d is not None:
+        kernel_2d = xp.asarray(kernels_1d[0])[:, None] * xp.asarray(kernels_1d[1])[
+            None, :
+        ]
 
     # Kernels from _lorentzian_kernel_2d always have odd sizes; `valid`-mode
     # convolution on a (kh//2, kw//2)-padded array then returns the original
@@ -3012,10 +3178,8 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
         # numpy/this function's "reflect" above, which does not duplicate
         # the edge sample.
         padded = xp.pad(array, pad_widths, mode="symmetric")
-    elif mode == "constant":
-        padded = xp.pad(array, pad_widths, mode="constant", constant_values=cval)
     else:
-        raise ValueError(f"Unknown convolution mode: {mode!r}")
+        padded = xp.pad(array, pad_widths, mode="constant", constant_values=cval)
 
     shape = [1] * array.ndim
     shape[axes[0]] = kh
@@ -3035,6 +3199,12 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     # warning text, the category, or the fftconvolve interface itself, the
     # filter stops matching and the GPU tests catch the change.
     result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
+
+    if offset:
+        # Weight of the taps _crop_kernel_to_extent dropped, all of which
+        # sample `cval` for every output pixel.
+        result = result + offset
+
     return result.astype(array.dtype, copy=False)
 
 
@@ -3197,7 +3367,9 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         # cupyx.scipy.ndimage.gaussian_filter's per-(sigma, shape) NVRTC
         # recompilation by using an FFT-based separable convolution instead.
         axes = _scan_axes(measurements)
-        kernel_2d = _gaussian_kernel_2d((padded_sigma[axes[0]], padded_sigma[axes[1]]))
+        kernels_1d = _gaussian_kernels_1d(
+            (padded_sigma[axes[0]], padded_sigma[axes[1]])
+        )
 
         if measurements.is_lazy:
             # No explicit `boundary=` here, matching the xp is np branch
@@ -3206,7 +3378,8 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
             array = measurements.array.map_overlap(
                 functools.partial(
                     _apply_convolve_2d_on_axes,
-                    kernel_2d=kernel_2d,
+                    kernel_2d=None,
+                    kernels_1d=kernels_1d,
                     axes=axes,
                     mode="wrap",
                     cval=0.0,
@@ -3216,7 +3389,12 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
             )
         else:
             array = _apply_convolve_2d_on_axes(
-                measurements.array, kernel_2d, axes=axes, mode="wrap", cval=0.0
+                measurements.array,
+                None,
+                axes=axes,
+                mode="wrap",
+                cval=0.0,
+                kernels_1d=kernels_1d,
             )
 
     kwargs = measurements._copy_kwargs(exclude=("array",))

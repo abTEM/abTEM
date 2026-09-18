@@ -19,6 +19,7 @@ from abtem.measurements import (
     ReciprocalSpaceLineProfiles,
     _apply_convolve_2d_on_axes,
     _gaussian_kernel_2d,
+    _gaussian_kernels_1d,
     _scan_sampling,
     _scan_shape,
 )
@@ -408,10 +409,21 @@ def test_pseudo_voigtian_filter_pure_lorentzian_limit():
     assert np.allclose(lor.array, pv.array, atol=1e-5)
 
 
-def test_circular_convolve_handles_kernel_radius_larger_than_axis():
-    """_apply_convolve_2d_on_axes(mode="wrap") must stay exact -- and not
-    blow up memory -- when the kernel radius (sigma / sampling) vastly
-    exceeds the array's own axis length along the filtered axes.
+# Maps _apply_convolve_2d_on_axes' internal mode names onto the
+# scipy.ndimage mode that defines the same boundary extension.
+_CONVOLVE_MODE_TO_SCIPY = {
+    "wrap": "wrap",
+    "symmetric": "reflect",
+    "constant": "constant",
+    "reflect": "mirror",
+}
+
+
+@pytest.mark.parametrize("mode", list(_CONVOLVE_MODE_TO_SCIPY))
+def test_convolve_handles_kernel_radius_larger_than_axis(mode):
+    """_apply_convolve_2d_on_axes must stay exact -- and not blow up memory --
+    when the kernel radius (sigma / sampling) vastly exceeds the array's own
+    axis length along the filtered axes, for *every* boundary mode.
 
     This is exactly the shape gaussian_source_size hits for a small scan
     grid smoothed with a much finer sampling than the scan step (e.g. a
@@ -419,13 +431,17 @@ def test_circular_convolve_handles_kernel_radius_larger_than_axis():
     few sampling units): the physical-to-pixel sigma conversion then yields
     a kernel radius far larger than the scan axis itself.
 
-    Padding the array by that radius (as the non-"wrap" modes still do)
-    scales the padded axis -- and multiplicatively every other axis of the
-    buffer -- by orders of magnitude; on GPU this produced a CuPy
-    OutOfMemoryError trying to allocate tens of GB for an array whose raw
-    data was a few hundred KB. This function is backend-agnostic (dispatches
-    via get_array_module), so this regression check runs on CPU without a
-    GPU, exercising the same code GPU calls run.
+    Padding the array by that radius scales the padded axis -- and
+    multiplicatively every other axis of the buffer -- by orders of
+    magnitude; on GPU this produced a CuPy OutOfMemoryError trying to
+    allocate tens of GB for an array whose raw data was a few KB. Each mode
+    now has a route whose cost is bounded by the array instead: no padding
+    at all for "wrap", one period of the mirrored signal for "reflect" and
+    "symmetric", and dropping the unreachable taps for "constant".
+
+    These helpers are backend-agnostic (they dispatch via
+    get_array_module), so this runs on CPU without a GPU while exercising
+    the same code GPU calls run.
     """
     from scipy.ndimage import gaussian_filter
 
@@ -436,14 +452,91 @@ def test_circular_convolve_handles_kernel_radius_larger_than_axis():
     # sigma=1.7 physical units at sampling=0.01 -> ~170 px sigma -> radius
     # ~680, vastly larger than the scan axes' own length of 3 and 4.
     sigma_pixels = 1.7 / 0.01
-    kernel_2d = _gaussian_kernel_2d((sigma_pixels, sigma_pixels))
-    assert kernel_2d.shape[0] > 10 * array.shape[0]
+    kernels_1d = _gaussian_kernels_1d((sigma_pixels, sigma_pixels))
+    assert kernels_1d[0].shape[0] > 10 * array.shape[0]
 
-    got = _apply_convolve_2d_on_axes(array, kernel_2d, axes=(0, 1), mode="wrap")
+    cval = 2.5 if mode == "constant" else 0.0
+    got = _apply_convolve_2d_on_axes(
+        array, None, axes=(0, 1), mode=mode, cval=cval, kernels_1d=kernels_1d
+    )
     expected = gaussian_filter(
-        array, sigma=(sigma_pixels, sigma_pixels, 0.0, 0.0), mode="wrap"
+        array,
+        sigma=(sigma_pixels, sigma_pixels, 0.0, 0.0),
+        mode=_CONVOLVE_MODE_TO_SCIPY[mode],
+        cval=cval,
     )
     np.testing.assert_allclose(got, expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("mode", list(_CONVOLVE_MODE_TO_SCIPY))
+def test_convolve_separable_kernels_match_dense_kernel(mode):
+    """Passing the separable 1-D Gaussian kernels must be equivalent to
+    passing their dense outer product.
+
+    The 1-D form is what the filters actually use, so that kernel memory
+    stays O(radius) rather than O(radius**2) -- the radius scales with
+    sigma / sampling and can be far larger than the array itself.
+    """
+    rng = np.random.default_rng(0)
+    array = rng.random((5, 7, 4)).astype(np.float64)
+
+    kernels_1d = _gaussian_kernels_1d((1.7, 0.9))
+    kernel_2d = _gaussian_kernel_2d((1.7, 0.9))
+
+    separable = _apply_convolve_2d_on_axes(
+        array, None, axes=(0, 1), mode=mode, cval=1.5, kernels_1d=kernels_1d
+    )
+    dense = _apply_convolve_2d_on_axes(
+        array, kernel_2d, axes=(0, 1), mode=mode, cval=1.5
+    )
+    # Tolerance is set by the kernel dtype (abtem.config['precision'], float32
+    # by default): the two representations sum the same weights in a different
+    # order, so they agree only to kernel precision, not bitwise.
+    np.testing.assert_allclose(separable, dense, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
+def test_filters_preserve_complex_images(boundary):
+    """The filters must keep working on complex measurements.
+
+    DiffractionPatterns.center_of_mass returns complex Images by default
+    (real/imaginary hold the two CoM components), differential(
+    return_complex=True) produces them, and integrate_gradient requires
+    them -- so smoothing a complex image is an ordinary DPC/CoM step. The
+    real-input FFTs (rfftn/irfftn) reject complex arrays, so the filters
+    must dispatch to the full complex transforms instead.
+
+    Each component must come back filtered exactly as if it had been
+    filtered on its own.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(0)
+    array = rng.random((16, 16)) + 1j * rng.random((16, 16))
+    images = Images(array, sampling=0.1)
+
+    sigma = 0.3
+    filtered = images.gaussian_filter(sigma, boundary=boundary).array
+    assert np.iscomplexobj(filtered)
+
+    scipy_mode = {"periodic": "wrap", "reflect": "reflect", "constant": "constant"}[
+        boundary
+    ]
+    sigma_pixels = sigma / images.sampling[0]
+    expected = gaussian_filter(
+        array.real, sigma=sigma_pixels, mode=scipy_mode
+    ) + 1j * gaussian_filter(array.imag, sigma=sigma_pixels, mode=scipy_mode)
+    np.testing.assert_allclose(filtered, expected, atol=1e-9)
+
+    # The Lorentzian family shares the same convolution helper.
+    for method, args, kwargs in [
+        ("lorentzian_filter", (0.3,), {}),
+        ("voigtian_filter", (0.3, 0.3), {}),
+        ("pseudo_voigtian_filter", (0.3, 0.3), dict(eta=0.5)),
+    ]:
+        out = getattr(images, method)(*args, boundary=boundary, **kwargs).array
+        assert np.iscomplexobj(out), method
+        assert np.abs(out.imag).max() > 0, method
 
 
 def test_filter_boundary_modes():
