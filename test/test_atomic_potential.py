@@ -7,6 +7,7 @@ import abtem
 from abtem.integrals import (
     _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
+    FieldIntegrator,
     GaussianProjectionIntegrals,
     QuadratureProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
@@ -169,6 +170,32 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 #     gaussian_potential = gaussian_scattering_factors.integrate_on_grid(positions, a, b, gpts, sampling)
 #
 #     assert np.allclose(quadrature_potential[0, :gpts[1] // 2], gaussian_potential[0, :gpts[1] // 2], atol=2)
+
+
+class TestFieldIntegratorSignature:
+    """``FieldIntegrator.integrate_on_grid``'s abstract signature must name the
+    argument every concrete implementation actually takes, since it is the
+    interface a custom integrator is written against."""
+
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+            QuadratureProjectionIntegrals,
+        ],
+        ids=["gaussian", "scattering_factor", "quadrature"],
+    )
+    def test_first_parameter_name_matches_the_base_class(self, cls):
+        import inspect
+
+        # index 1, not 0 -- index 0 is `self` on both the abstract and concrete
+        # unbound methods.
+        base_param = list(
+            inspect.signature(FieldIntegrator.integrate_on_grid).parameters
+        )[1]
+        concrete_param = list(inspect.signature(cls.integrate_on_grid).parameters)[1]
+        assert base_param == concrete_param == "atoms"
 
 
 class TestScatteringFactorCacheKey:

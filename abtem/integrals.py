@@ -247,7 +247,7 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def integrate_on_grid(
         self,
-        positions: np.ndarray,
+        atoms: Atoms,
         a: np.ndarray,
         b: np.ndarray,
         gpts: tuple[int, int],
@@ -255,14 +255,14 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         device: str = "cpu",
     ) -> np.ndarray:
         """
-        Integrate radial potential between two limits at the given 2D positions on a
-        grid. The integration limits are only used when the integration method is
+        Integrate radial potential between two limits at the given atomic positions on
+        a grid. The integration limits are only used when the integration method is
         finite.
 
         Parameters
         ----------
-        positions : numpy.ndarray
-            2D array of xy-positions of the centers of each radial function [Å].
+        atoms : ase.Atoms
+            The atoms whose radial functions are integrated onto the grid.
         a : numpy.ndarray
             Lower integration limit of the pr
             ojection integrals along z for each position [Å]. The limit is given
