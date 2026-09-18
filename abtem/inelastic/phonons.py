@@ -743,6 +743,12 @@ def _validate_rest_snapshots(
         _validate_parity_snapshot(
             rest[index], equilibrium_atoms, max_displacement, ("rest",) + index
         )
+        if not np.allclose(rest[index].cell, equilibrium_atoms.cell, atol=1e-6):
+            raise ValueError(
+                f"rest snapshot {index} has a different cell than "
+                "equilibrium_atoms; the rest displacement field must be a "
+                "displacement of the same structure."
+            )
     return rest
 
 
@@ -846,6 +852,17 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     ):
         if rest_snapshots is not None and not parity_projection:
             raise ValueError("rest_snapshots requires parity_projection=True.")
+        if (
+            rest_snapshots is not None
+            and isinstance(energy_resolved_snapshots, np.ndarray)
+            and energy_resolved_snapshots.ndim != 2
+        ):
+            raise ValueError(
+                "rest_snapshots can only be combined with real-configuration "
+                "snapshots of shape (n_energies, n_configs); a pre-built "
+                f"{energy_resolved_snapshots.ndim}D snapshot array already "
+                "carries its parity (and rest) members."
+            )
 
         if parity_projection and equilibrium_atoms is None:
             raise ValueError(

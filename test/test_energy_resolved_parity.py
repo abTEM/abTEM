@@ -543,3 +543,29 @@ def test_direct_4d_construction_is_validated(equilibrium):
         parity_projection=True, _validated=True,
     )
     assert rebuilt.ensemble_shape == (2, 2, 1, 2)
+
+
+def test_rest_snapshots_rejected_with_prebuilt_array(equilibrium):
+    """A pre-built 3D/4D snapshot array already carries its members; the rest
+    fields cannot be applied to it and must not be silently dropped."""
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=2)
+    rest = _rest_fields(equilibrium, 2)
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02], equilibrium_atoms=equilibrium, parity_projection=True,
+    )
+    with pytest.raises(ValueError, match="pre-built"):
+        EnergyResolvedAtomsEnsemble(
+            ensemble.snapshots, [0.02], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_snapshots=rest,
+        )
+
+
+def test_rest_snapshots_rejected_with_different_cell(equilibrium):
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=2)
+    rest = _rest_fields(equilibrium, 2)
+    rest[1].set_cell([20, 20, 20])
+    with pytest.raises(ValueError, match="different cell"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_snapshots=rest,
+        )
