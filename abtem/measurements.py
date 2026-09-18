@@ -2905,6 +2905,59 @@ def _lorentzian_kernel_2d(
     return (kernel / kernel.sum()).astype(out_dtype)
 
 
+def _circular_convolve_2d_on_axes(array, kernel_2d, axes):
+    """Exact circular (periodic) 2-D convolution via FFT, without ever
+    padding ``array``.
+
+    The general pad-then-``'valid'``-fftconvolve approach in
+    :func:`_apply_convolve_2d_on_axes` pads ``array`` by the kernel's own
+    radius on each side before convolving. For a periodic (``"wrap"``)
+    boundary that is not just wasteful but can be catastrophic: the kernel
+    radius scales with ``sigma / pixel_sampling`` (or ``half_width /
+    sampling``), and the sampling can be far smaller than the array's own
+    axis length along ``axes`` -- e.g. a handful of scan positions smoothed
+    with sub-pixel-scale sampling -- so the radius can vastly exceed that
+    axis length. Padding then inflates that axis (and, multiplicatively,
+    every other axis of the resulting buffer) by orders of magnitude, which
+    is exactly what caused ``OutOfMemoryError`` on GPU for
+    ``gaussian_source_size`` (which always uses ``"wrap"``) even on
+    otherwise tiny arrays.
+
+    A period-N domain makes padding unnecessary: wrap-around is already what
+    a circular convolution computes, for *any* kernel size, without
+    touching the array's own extent. We only need to fold ("alias") the
+    kernel's taps onto the array's own ``[0, N)`` index range first -- taps
+    that land on the same residue after wrapping around a short axis
+    (possibly more than once) simply sum, matching the aliasing
+    scipy.ndimage's index-based wrap boundary already does internally.
+    """
+    xp = get_array_module(array)
+    kh, kw = kernel_2d.shape
+    ay, ax = axes
+    sy, sx = array.shape[ay], array.shape[ax]
+    ry, rx = kh // 2, kw // 2
+
+    kernel_2d = xp.asarray(kernel_2d)
+    iy = (xp.arange(kh) - ry) % sy
+    ix = (xp.arange(kw) - rx) % sx
+    flat_idx = (iy[:, None] * sx + ix[None, :]).ravel()
+    embedded = (
+        xp.bincount(flat_idx, weights=kernel_2d.ravel(), minlength=sy * sx)
+        .astype(kernel_2d.dtype)
+        .reshape(sy, sx)
+    )
+
+    freq = xp.fft.rfftn(array, axes=axes)
+    kernel_freq = xp.fft.rfftn(embedded, s=(sy, sx), axes=(0, 1))
+    kernel_shape = [1] * array.ndim
+    kernel_shape[ay] = kernel_freq.shape[0]
+    kernel_shape[ax] = kernel_freq.shape[1]
+    result = xp.fft.irfftn(
+        freq * kernel_freq.reshape(kernel_shape), s=(sy, sx), axes=axes
+    )
+    return result.astype(array.dtype, copy=False)
+
+
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
@@ -2918,6 +2971,10 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
 
     The kernel is broadcast to ``array.ndim`` with size-1 dimensions on all
     axes other than ``axes``. Suitable for ``dask.array.map_overlap``.
+
+    ``mode="wrap"`` is delegated to :func:`_circular_convolve_2d_on_axes`
+    instead, which needs no padding at all -- see that function's docstring
+    for why padding is unsafe for a periodic boundary specifically.
     """
     xp = get_array_module(array)
     scipy_signal = get_scipy_module(array).signal
@@ -2927,6 +2984,9 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     # Delta kernel → no-op shortcut.
     if kh == 1 and kw == 1:
         return (array * float(kernel_2d[0, 0])).astype(array.dtype, copy=False)
+
+    if mode == "wrap":
+        return _circular_convolve_2d_on_axes(array, kernel_2d, axes)
 
     # Kernels from _lorentzian_kernel_2d always have odd sizes; `valid`-mode
     # convolution on a (kh//2, kw//2)-padded array then returns the original
@@ -2938,9 +2998,7 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     pad_widths[axes[0]] = (ph, ph)
     pad_widths[axes[1]] = (pw, pw)
 
-    if mode == "wrap":
-        padded = xp.pad(array, pad_widths, mode="wrap")
-    elif mode == "reflect":
+    if mode == "reflect":
         padded = xp.pad(array, pad_widths, mode="reflect")
     elif mode == "symmetric":
         # Edge-duplicated mirror (d c b a | a b c d | d c b a), matching

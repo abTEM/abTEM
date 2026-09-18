@@ -17,6 +17,8 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
+    _apply_convolve_2d_on_axes,
+    _gaussian_kernel_2d,
     _scan_sampling,
     _scan_shape,
 )
@@ -404,6 +406,44 @@ def test_pseudo_voigtian_filter_pure_lorentzian_limit():
     lor = images.lorentzian_filter(hw)
     pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
     assert np.allclose(lor.array, pv.array, atol=1e-5)
+
+
+def test_circular_convolve_handles_kernel_radius_larger_than_axis():
+    """_apply_convolve_2d_on_axes(mode="wrap") must stay exact -- and not
+    blow up memory -- when the kernel radius (sigma / sampling) vastly
+    exceeds the array's own axis length along the filtered axes.
+
+    This is exactly the shape gaussian_source_size hits for a small scan
+    grid smoothed with a much finer sampling than the scan step (e.g. a
+    handful of scan positions with sub-pixel-scale sampling and sigma of a
+    few sampling units): the physical-to-pixel sigma conversion then yields
+    a kernel radius far larger than the scan axis itself.
+
+    Padding the array by that radius (as the non-"wrap" modes still do)
+    scales the padded axis -- and multiplicatively every other axis of the
+    buffer -- by orders of magnitude; on GPU this produced a CuPy
+    OutOfMemoryError trying to allocate tens of GB for an array whose raw
+    data was a few hundred KB. This function is backend-agnostic (dispatches
+    via get_array_module), so this regression check runs on CPU without a
+    GPU, exercising the same code GPU calls run.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    rng = np.random.default_rng(0)
+    # Mimics a DiffractionPatterns array: 2 small scan axes + 2 base axes.
+    array = rng.random((3, 4, 16, 16)).astype(np.float64)
+
+    # sigma=1.7 physical units at sampling=0.01 -> ~170 px sigma -> radius
+    # ~680, vastly larger than the scan axes' own length of 3 and 4.
+    sigma_pixels = 1.7 / 0.01
+    kernel_2d = _gaussian_kernel_2d((sigma_pixels, sigma_pixels))
+    assert kernel_2d.shape[0] > 10 * array.shape[0]
+
+    got = _apply_convolve_2d_on_axes(array, kernel_2d, axes=(0, 1), mode="wrap")
+    expected = gaussian_filter(
+        array, sigma=(sigma_pixels, sigma_pixels, 0.0, 0.0), mode="wrap"
+    )
+    np.testing.assert_allclose(got, expected, atol=1e-6)
 
 
 def test_filter_boundary_modes():
