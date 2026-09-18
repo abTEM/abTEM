@@ -2814,10 +2814,13 @@ def _gaussian_kernel_1d(sigma: float, truncate: float = 4.0) -> np.ndarray:
     one), so an FFT-based convolution built from this kernel reproduces
     ``scipy.ndimage.gaussian_filter``'s per-axis result.
 
-    An axis with ``sigma <= 0`` is treated as a no-op and returns a
-    single-tap delta kernel.
+    An axis with ``sigma <= 1e-15`` is treated as a no-op and returns a
+    single-tap delta kernel -- matching scipy.ndimage.gaussian_filter's own
+    threshold (it skips filtering an axis outright when
+    ``sigma <= 1e-15``), which also avoids ``sigma**2`` underflowing to
+    0.0 for subnormal sigma and raising a ZeroDivisionError.
     """
-    if sigma <= 0:
+    if sigma <= 1e-15:
         return np.array([1.0])
 
     radius = int(truncate * sigma + 0.5)
