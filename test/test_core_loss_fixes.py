@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import abtem
+from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import (
     AtomicWaveFunction,
@@ -1516,3 +1517,117 @@ class TestPrismLazyExitPlanes:
         array = np.asarray(abtem.core.backend.asnumpy(measurement.array))
         assert array.ndim == len(measurement.axes_metadata)
         measurement.to_cpu()  # raised before the fix
+
+
+class TestTransitionPotentialDeviceMemo:
+    """``copy_to_device`` rebuilds through ``__init__``, which recomputes
+    ``_local_potential`` from the array even when the array is already on
+    the target device (the free ``copy_to_device`` being a no-op there is
+    invisible to ``__init__``). Both core-loss drivers call it once per task
+    on a transition potential that arrives as one graph node shared by every
+    task on a worker, so the recomputation -- and, on GPU, the host-to-device
+    upload beneath it -- happened once per task rather than once per worker.
+
+    The memo must not hand out the same wrapper object twice: ``scatter``
+    mutates what it is given (``self._array = ...``, ``self.grid.match``),
+    so two tasks sharing one instance would race on those mutations exactly
+    as ``BaseTransitionPotential._task_local`` exists to prevent one step
+    earlier. What is cached is the immutable-in-practice array data; each
+    call still returns a fresh, independently-mutable wrapper.
+    """
+
+    @staticmethod
+    def _make():
+        rng = np.random.default_rng(0)
+        array = (
+            rng.standard_normal((2, 32, 32)) + 1j * rng.standard_normal((2, 32, 32))
+        ).astype(np.complex64)
+        return TransitionPotentialArray(
+            Z=14,
+            array=array,
+            energy=ENERGY,
+            extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            metadata={"Z": 14, "n": 1, "l": 0},
+        )
+
+    def test_repeated_calls_share_the_uploaded_array(self):
+        tp = self._make()
+        a = tp.copy_to_device("cpu")
+        b = tp.copy_to_device("cpu")
+
+        assert a is not b, "each call must return an independently-mutable wrapper"
+        assert a.array is b.array, "the array data itself should be memoized"
+        assert a._local_potential is b._local_potential
+
+    def test_mutating_one_wrapper_does_not_corrupt_the_cache(self):
+        """The defect this guards against: if the memo cached the *wrapper*
+        rather than its array data, mutating one task's copy (as ``scatter``
+        does) would corrupt what the next task pulls from the cache.
+        """
+        tp = self._make()
+        a = tp.copy_to_device("cpu")
+        untouched_array = a.array.copy()
+
+        a._array = np.zeros_like(a._array)  # exactly what scatter() does
+
+        c = tp.copy_to_device("cpu")
+        assert np.array_equal(c.array, untouched_array)
+
+    def test_sibling_task_local_views_share_one_upload(self, monkeypatch):
+        """The mechanism the fix relies on: _task_local's shallow copy shares
+        the cache dict *reference*, so two per-task views spawned from the
+        same shared node see the same memo -- the shape every real driver
+        call takes (_task_local, then copy_to_device, per task).
+        """
+        import abtem.inelastic.core_loss as cl
+
+        tp = self._make()
+        calls = []
+        real_copy_to_device = cl.copy_to_device
+
+        def counting_copy_to_device(array, device):
+            calls.append(device)
+            return real_copy_to_device(array, device)
+
+        monkeypatch.setattr(cl, "copy_to_device", counting_copy_to_device)
+
+        view1 = tp._task_local()
+        view2 = tp._task_local()
+        view1.copy_to_device("cpu")
+        view2.copy_to_device("cpu")
+
+        assert len(calls) == 1, (
+            f"expected one upload shared across sibling task-local views, "
+            f"got {len(calls)}"
+        )
+
+    def test_matches_an_unmemoized_rebuild(self):
+        tp = self._make()
+        memoized = tp.copy_to_device("cpu")
+        plain = ArrayObject.copy_to_device(tp, "cpu")
+
+        assert np.array_equal(
+            np.asarray(memoized.array), np.asarray(plain.array)
+        )
+        assert np.array_equal(
+            np.asarray(memoized._local_potential), np.asarray(plain._local_potential)
+        )
+
+    def test_pickling_still_drops_both_device_caches(self):
+        """__copy__ exists so copy.copy shares _device_array_cache; pickling
+        must still go through __getstate__ and drop it (and the older
+        _local_potential_device_cache), same as before __copy__ existed --
+        a cupy array riding through pickle would break unpickling on a
+        CPU-only worker.
+        """
+        import pickle
+
+        tp = self._make()
+        tp.copy_to_device("cpu")
+        assert tp._device_array_cache
+
+        restored = pickle.loads(pickle.dumps(tp))
+        assert restored._device_array_cache == {}
+        assert restored._local_potential_device_cache is None
+        assert np.array_equal(np.asarray(restored.array), np.asarray(tp.array))
