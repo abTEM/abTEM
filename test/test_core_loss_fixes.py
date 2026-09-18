@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import abtem
+from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import (
     AtomicWaveFunction,
@@ -1065,6 +1066,349 @@ def test_prism_driver_refuses_a_multi_configuration_potential():
         )
 
 
+class TestPrismEelsReductionChunking:
+    """The per-site reduction cropped a bounding box spanning the *whole*
+    scan and ran one ``tensordot`` over every position at once, so peak
+    memory was ``n_positions * (scan_span + window)**2`` -- growing with the
+    scan's spatial extent rather than with the output window. A
+    production-sized PRISM-EELS scan demanded a single allocation in the
+    hundreds of GB (abtem_issues/prism_eels_reduction_allocates_whole_scan.md).
+
+    The reduction is now chunked over spatially contiguous blocks of scan
+    rows, sized from the same memory-budget heuristic
+    ``estimate_scan_batch_size`` already uses for the probe batch elsewhere,
+    so each block's bounding box shrinks along with the block.
+    """
+
+    @staticmethod
+    def _setup(n_rows, n_cols):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0),
+            end=(n_rows, n_cols),
+            gpts=(n_rows, n_cols),
+            fractional=False,
+            potential=potential,
+        )
+        return atoms, potential, s_matrix, scan
+
+    @staticmethod
+    def _run(atoms, s_matrix, scan, double_channel=False):
+        measurement = s_matrix.transition_potential_scan(
+            transition_potentials=_synthetic_transition_potential(
+                s_matrix.potential.extent, s_matrix.potential.gpts, n=2
+            ),
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=False,
+        )
+        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
+
+    @pytest.mark.parametrize("double_channel", [False, True])
+    # With this test's n_T=2 and 5 columns, these forced "position" budgets
+    # resolve (guess, then verified against the actual crop box) to row
+    # batches of 1, 2 and 4 respectively -- checked directly by recording
+    # minimum_crop's call sizes for each value. 7 rows is not a multiple of
+    # 2 or 4, so two of the three exercise an uneven last batch.
+    @pytest.mark.parametrize("forced_budget", [1, 25, 40])
+    def test_chunked_reduction_matches_a_single_whole_scan_batch(
+        self, monkeypatch, double_channel, forced_budget
+    ):
+        atoms, _, s_matrix, scan = self._setup(n_rows=7, n_cols=5)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan, double_channel)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: forced_budget,
+            raising=False,
+        )
+        got = self._run(atoms, s_matrix, scan, double_channel)
+
+        scale = np.abs(reference).max()
+        assert scale > 0
+        assert got.shape == reference.shape
+        assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
+    def test_the_reduction_never_crops_around_the_whole_scan(self, monkeypatch):
+        """A budget of one position per batch collapses every block to a
+        single scan row, so no crop call should ever see the full scan.
+
+        On unfixed code the bounding box is computed once, globally, before
+        the site loop -- so ``minimum_crop`` sees every position in that one
+        call regardless of how small a budget is forced here, and this
+        assertion catches that directly.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        n_rows, n_cols = 9, 6
+        atoms, _, s_matrix, scan = self._setup(n_rows=n_rows, n_cols=n_cols)
+        n_positions = n_rows * n_cols
+
+        call_sizes = []
+
+        def _recording_minimum_crop(positions, shape):
+            call_sizes.append(int(positions.shape[0]))
+            return _real_minimum_crop(positions, shape)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 1,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+        )
+
+        self._run(atoms, s_matrix, scan)
+
+        assert call_sizes
+        assert max(call_sizes) < n_positions, (
+            f"minimum_crop saw {max(call_sizes)} of {n_positions} positions "
+            "in one call -- the reduction still crops around the whole scan"
+        )
+
+    def test_the_reduction_still_shrinks_when_the_naive_guess_already_covers_the_whole_scan(
+        self, monkeypatch
+    ):
+        """The sizing guess assumes no bounding-box growth; verifying and
+        shrinking it against the actual box only ran when the guess landed
+        BELOW the row count (``rows_per_batch < n_rows``). Capping the guess
+        at n_rows and then skipping verification because the capped value no
+        longer compares less than itself reproduced the original defect
+        exactly for that case -- a whole-scan block, never checked -- and it
+        is not a corner case: any scan whose physical span exceeds its
+        output window (i.e. most of them) grows the real box past the
+        no-growth estimate, so this triggers whenever the naive guess merely
+        reaches the row count, not only when it wildly overshoots it.
+
+        A scan physically wider than the ~8 A window (unlike this class's
+        other tests, whose scans are drawn in the same few Angstrom as the
+        window and never exercise real box growth) with a budget picked to
+        land the naive guess exactly at the row count reproduces this
+        directly: found by running the fix's own benchmark script against a
+        real GPU, where interpolation=1 (a large, undownsampled window) hit
+        it immediately.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        atoms = ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        n_rows, n_cols = 9, 6
+        n_positions = n_rows * n_cols
+        # Span (40 x 30 A) well past the ~8 A window -- unlike _setup's scans,
+        # whose end == gpts puts every position within the window itself.
+        scan = abtem.GridScan(
+            start=(0, 0), end=(40, 30), gpts=(n_rows, n_cols), fractional=False,
+            potential=potential,
+        )
+
+        call_sizes = []
+
+        def _recording_minimum_crop(positions, shape):
+            call_sizes.append(int(positions.shape[0]))
+            return _real_minimum_crop(positions, shape)
+
+        # n_T=2, row_cols=6: guess = budget // 2 // 6. 300 -> 25, capped to
+        # n_rows=9 -- the exact "guess already covers everything" case.
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 300,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+        )
+
+        self._run(atoms, s_matrix, scan)
+
+        # The sizing pass itself legitimately probes the full-size candidate
+        # first (it has to, to find out it is too big) -- max(call_sizes)
+        # would see that probe regardless of whether the fix works. The
+        # sizing pass always finishes before any site's real reduction call,
+        # so the LAST recorded call is from that real work; on unfixed code
+        # (no sizing pass at all when the guess lands at n_rows) every call,
+        # including the last, is the unchunked whole-scan size.
+        assert call_sizes
+        assert call_sizes[-1] < n_positions, (
+            f"the last minimum_crop call saw {call_sizes[-1]} of "
+            f"{n_positions} positions -- the reduction itself is still "
+            f"unchunked (all calls: {call_sizes})"
+        )
+
+    def test_minimum_crop_does_not_scale_with_the_number_of_sites(
+        self, monkeypatch
+    ):
+        """minimum_crop's result for a row batch depends only on that
+        batch's own positions, never on which site or exit plane is being
+        recorded -- but it was called from inside _reduce_and_record, which
+        runs once per (site, exit plane). Computing it there recomputed the
+        identical box on every one of those calls, scaling the call count
+        with the site count for no reason.
+        """
+        from abtem.prism.utils import minimum_crop as _real_minimum_crop
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 1,
+            raising=False,
+        )
+
+        def _call_count(n_sites):
+            atoms = ase.Atoms(
+                numbers=[14] * n_sites,
+                positions=[(i * 1.0, i * 1.0, i * 0.5) for i in range(n_sites)],
+                cell=(8, 8, 8),
+                pbc=True,
+            )
+            potential = abtem.Potential(
+                atoms, gpts=(64, 64), slice_thickness=1.0, exit_planes=1
+            )
+            s_matrix = abtem.SMatrix(
+                potential=potential, energy=ENERGY, semiangle_cutoff=20,
+                interpolation=1,
+            )
+            scan = abtem.GridScan(
+                start=(0, 0), end=(7, 5), gpts=(7, 5), fractional=False,
+                potential=potential,
+            )
+
+            calls = []
+
+            def _recording_minimum_crop(positions, shape):
+                calls.append(int(positions.shape[0]))
+                return _real_minimum_crop(positions, shape)
+
+            monkeypatch.setattr(
+                "abtem.prism.utils.minimum_crop", _recording_minimum_crop
+            )
+            self._run(atoms, s_matrix, scan)
+            return len(calls)
+
+        assert _call_count(n_sites=2) == _call_count(n_sites=8)
+
+    def test_matches_reference_with_a_custom_scans_positions_axis(
+        self, monkeypatch
+    ):
+        """``CustomScan.ensemble_axes_metadata`` is a ``PositionsAxis``, which
+        carries an explicit per-position ``values`` tuple -- unlike
+        ``GridScan``'s linear ``ScanAxis``, which every other test here uses.
+        Reusing that tuple unchanged for a batch covering fewer positions
+        than the full scan raises inside ``Waves.__init__`` (it validates an
+        ordinal axis's ``values`` length against the array), so this needs
+        the axis restricted to the batch's own row range -- the same
+        restriction dask's own ensemble partitioning already applies per
+        block via ``AxisMetadata.__getitem__``.
+        """
+        atoms, potential, s_matrix, _ = self._setup(n_rows=1, n_cols=1)
+        rng = np.random.default_rng(3)
+        # A deliberately non-uniform layout: two tight clusters far apart,
+        # so the sizing heuristic's "first batch is representative" guess
+        # (built for a regular raster) does not hold -- correctness must
+        # not depend on it, only the chosen batch size might be suboptimal.
+        positions = np.concatenate(
+            [
+                rng.uniform(0.1, 0.3, size=(4, 2)),
+                rng.uniform(7.0, 7.9, size=(4, 2)),
+            ]
+        ).astype(np.float32)
+        scan = abtem.scan.CustomScan(positions)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan)
+
+        for forced_budget in (1, 3):
+            monkeypatch.setattr(
+                "abtem.inelastic.core_loss.estimate_scan_batch_size",
+                lambda *a, _f=forced_budget, **k: _f,
+                raising=False,
+            )
+            got = self._run(atoms, s_matrix, scan)
+
+            scale = np.abs(reference).max()
+            assert scale > 0
+            assert got.shape == reference.shape
+            assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
+    @pytest.mark.parametrize("double_channel", [False, True])
+    def test_matches_reference_with_multiple_exit_planes(
+        self, monkeypatch, double_channel
+    ):
+        """Multiple exit planes add a broadcast slice (single-channel) or a
+        plain int (double-channel) ahead of the scan axes in the
+        measurement's leading indices (see
+        ``TestPrismPotentialEnsembleAccumulation``) -- composing that with
+        the new row slice is the trickiest indexing case this change adds,
+        and no other test here uses more than one exit plane.
+        """
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(
+            atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
+        )
+        assert len(potential.exit_planes) > 1
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+        )
+        scan = abtem.GridScan(
+            start=(0, 0), end=(7, 5), gpts=(7, 5), fractional=False, potential=potential
+        )
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.estimate_scan_batch_size",
+            lambda *a, **k: 10**9,
+            raising=False,
+        )
+        reference = self._run(atoms, s_matrix, scan, double_channel)
+
+        for forced_budget in (1, 25, 40):
+            monkeypatch.setattr(
+                "abtem.inelastic.core_loss.estimate_scan_batch_size",
+                lambda *a, _f=forced_budget, **k: _f,
+                raising=False,
+            )
+            got = self._run(atoms, s_matrix, scan, double_channel)
+
+            scale = np.abs(reference).max()
+            assert scale > 0
+            assert got.shape == reference.shape
+            assert np.allclose(got, reference, rtol=1e-5, atol=scale * 1e-6)
+
+
 class TestPrismLazyExitPlanes:
     """The lazy PRISM path omitted the exit-plane axis from its block shape.
 
@@ -1173,3 +1517,117 @@ class TestPrismLazyExitPlanes:
         array = np.asarray(abtem.core.backend.asnumpy(measurement.array))
         assert array.ndim == len(measurement.axes_metadata)
         measurement.to_cpu()  # raised before the fix
+
+
+class TestTransitionPotentialDeviceMemo:
+    """``copy_to_device`` rebuilds through ``__init__``, which recomputes
+    ``_local_potential`` from the array even when the array is already on
+    the target device (the free ``copy_to_device`` being a no-op there is
+    invisible to ``__init__``). Both core-loss drivers call it once per task
+    on a transition potential that arrives as one graph node shared by every
+    task on a worker, so the recomputation -- and, on GPU, the host-to-device
+    upload beneath it -- happened once per task rather than once per worker.
+
+    The memo must not hand out the same wrapper object twice: ``scatter``
+    mutates what it is given (``self._array = ...``, ``self.grid.match``),
+    so two tasks sharing one instance would race on those mutations exactly
+    as ``BaseTransitionPotential._task_local`` exists to prevent one step
+    earlier. What is cached is the immutable-in-practice array data; each
+    call still returns a fresh, independently-mutable wrapper.
+    """
+
+    @staticmethod
+    def _make():
+        rng = np.random.default_rng(0)
+        array = (
+            rng.standard_normal((2, 32, 32)) + 1j * rng.standard_normal((2, 32, 32))
+        ).astype(np.complex64)
+        return TransitionPotentialArray(
+            Z=14,
+            array=array,
+            energy=ENERGY,
+            extent=(8.0, 8.0),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            metadata={"Z": 14, "n": 1, "l": 0},
+        )
+
+    def test_repeated_calls_share_the_uploaded_array(self):
+        tp = self._make()
+        a = tp.copy_to_device("cpu")
+        b = tp.copy_to_device("cpu")
+
+        assert a is not b, "each call must return an independently-mutable wrapper"
+        assert a.array is b.array, "the array data itself should be memoized"
+        assert a._local_potential is b._local_potential
+
+    def test_mutating_one_wrapper_does_not_corrupt_the_cache(self):
+        """The defect this guards against: if the memo cached the *wrapper*
+        rather than its array data, mutating one task's copy (as ``scatter``
+        does) would corrupt what the next task pulls from the cache.
+        """
+        tp = self._make()
+        a = tp.copy_to_device("cpu")
+        untouched_array = a.array.copy()
+
+        a._array = np.zeros_like(a._array)  # exactly what scatter() does
+
+        c = tp.copy_to_device("cpu")
+        assert np.array_equal(c.array, untouched_array)
+
+    def test_sibling_task_local_views_share_one_upload(self, monkeypatch):
+        """The mechanism the fix relies on: _task_local's shallow copy shares
+        the cache dict *reference*, so two per-task views spawned from the
+        same shared node see the same memo -- the shape every real driver
+        call takes (_task_local, then copy_to_device, per task).
+        """
+        import abtem.inelastic.core_loss as cl
+
+        tp = self._make()
+        calls = []
+        real_copy_to_device = cl.copy_to_device
+
+        def counting_copy_to_device(array, device):
+            calls.append(device)
+            return real_copy_to_device(array, device)
+
+        monkeypatch.setattr(cl, "copy_to_device", counting_copy_to_device)
+
+        view1 = tp._task_local()
+        view2 = tp._task_local()
+        view1.copy_to_device("cpu")
+        view2.copy_to_device("cpu")
+
+        assert len(calls) == 1, (
+            f"expected one upload shared across sibling task-local views, "
+            f"got {len(calls)}"
+        )
+
+    def test_matches_an_unmemoized_rebuild(self):
+        tp = self._make()
+        memoized = tp.copy_to_device("cpu")
+        plain = ArrayObject.copy_to_device(tp, "cpu")
+
+        assert np.array_equal(
+            np.asarray(memoized.array), np.asarray(plain.array)
+        )
+        assert np.array_equal(
+            np.asarray(memoized._local_potential), np.asarray(plain._local_potential)
+        )
+
+    def test_pickling_still_drops_both_device_caches(self):
+        """__copy__ exists so copy.copy shares _device_array_cache; pickling
+        must still go through __getstate__ and drop it (and the older
+        _local_potential_device_cache), same as before __copy__ existed --
+        a cupy array riding through pickle would break unpickling on a
+        CPU-only worker.
+        """
+        import pickle
+
+        tp = self._make()
+        tp.copy_to_device("cpu")
+        assert tp._device_array_cache
+
+        restored = pickle.loads(pickle.dumps(tp))
+        assert restored._device_array_cache == {}
+        assert restored._local_potential_device_cache is None
+        assert np.array_equal(np.asarray(restored.array), np.asarray(tp.array))

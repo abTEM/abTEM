@@ -174,6 +174,71 @@ class TestEqualityDiscriminates:
 
         assert not calls, f"`==` executed {len(calls)} dask graph(s)"
 
+    def test_slice_indexed_atoms_equals_an_identical_twin(self):
+        """`_slice_index` is a list of integer arrays, one per slice.
+        `list.__eq__` reduces each pairwise `==` (itself an array) to a bool,
+        which numpy refuses for anything but a length-1 array -- the generic
+        safe_equality catches that ValueError and reports "unequal", so this
+        class never compared equal to anything, including an identical twin.
+        """
+        from abtem.slicing import SliceIndexedAtoms
+
+        a, b = SliceIndexedAtoms(self._atoms(), 1.0), SliceIndexedAtoms(self._atoms(), 1.0)
+        assert a == b
+
+    def test_slice_indexed_atoms_with_different_binning_are_not_equal(self):
+        """The fix must not make every SliceIndexedAtoms equal regardless of
+        content -- different slice thicknesses bin the same atoms differently
+        and must still compare unequal."""
+        from abtem.slicing import SliceIndexedAtoms
+
+        a = SliceIndexedAtoms(self._atoms(), 1.0)
+        b = SliceIndexedAtoms(self._atoms(), 0.5)
+        assert a != b
+
+    def test_magnetic_field_equals_its_own_copy(self):
+        """`QuasiDipoleProjections` (the integrator `MagneticField`/
+        `VectorPotential` hold as `_integrator`) was a plain class with no
+        `__eq__`, so it fell back to object identity and every `MagneticField`
+        compared unequal to its own copy, including an untouched one."""
+        from abtem.magnetism.iam import MagneticField
+
+        atoms = self._atoms()
+        m = MagneticField(atoms, gpts=(32, 32), slice_thickness=1.0)
+        assert m == m.copy()
+
+    def test_magnetic_field_with_different_atoms_is_not_equal(self):
+        from abtem.magnetism.iam import MagneticField
+
+        a = MagneticField(self._atoms(), gpts=(32, 32), slice_thickness=1.0)
+        b = MagneticField(self._atoms(dx=1.234), gpts=(32, 32), slice_thickness=1.0)
+        assert a != b
+
+    def test_quasi_dipole_integrator_ignores_its_table_cache(self):
+        """`_tables` is populated lazily by `get_integral_table`, one entry
+        per element on first use -- the same shape of defect `_sliced_atoms`
+        had for `Potential`, and doubly so: an unpopulated cache made a used
+        integrator stop comparing equal to a fresh one, and a *populated* one
+        made two integrators that cached the identical element compare
+        unequal anyway, since dict.__eq__ on numpy-array values hits the same
+        ValueError the list case above does.
+        """
+        from abtem.magnetism.iam import MagneticField
+
+        atoms = self._atoms()
+        atoms.numbers[:] = 26  # Fe, present in the Lyon parametrization
+        m1 = MagneticField(atoms, gpts=(32, 32), slice_thickness=1.0)
+        m2 = m1.copy()
+        assert m1 == m2
+
+        m1._integrator.get_integral_table("Fe")
+        assert m1.__dict__["_integrator"].__dict__["_tables"]
+        assert not m2.__dict__["_integrator"].__dict__["_tables"]
+        assert m1 == m2
+
+        m2._integrator.get_integral_table("Fe")
+        assert m1 == m2
+
     def test_transition_potential_array_ignores_its_device_cache(self):
         """`_local_potential_device_cache` is populated lazily by
         `_local_potential_on_device()`, a normal side effect of core-loss
