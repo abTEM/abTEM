@@ -227,8 +227,10 @@ def test_rest_parity_damps_one_phonon_channel(equilibrium):
             max_angle="full",
         )
 
-    assert damped.array.shape == plain.array.shape
-    one_plain, one_damped = plain.array[1, 0], damped.array[1, 0]
+    # four runs per snapshot: only the one-phonon channel comes back
+    assert damped.array.shape == plain.array.shape[1:]
+    assert damped.metadata["phonon_loss_component"] == "one"
+    one_plain, one_damped = plain.array[1, 0], damped.array[0]
 
     ny, nx = one_plain.shape
     ang = plain.angular_sampling  # mrad
@@ -269,11 +271,21 @@ def test_rest_parity_multi_channel_is_the_damped_bin_multi_channel(equilibrium):
         damped = phonon_loss_diffraction_patterns(
             _run(equilibrium, snapshots, [0.02],
                  equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest, rest_static_reference=True),
+            max_angle=60,
+        )
+        one_only = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True,
                  rest_snapshots=rest),
             max_angle=60,
         )
+    assert damped.array.shape[0] == 3  # six runs: all three channels
     ratio_plain = plain.array[2, 0].sum() / plain.array[1, 0].sum()
     ratio_damped = damped.array[2, 0].sum() / damped.array[1, 0].sum()
     assert 0.7 < ratio_damped / ratio_plain < 1.3, (ratio_plain, ratio_damped)
     # and the multi weight itself decreases with the damping, never grows
     assert damped.array[2, 0].sum() < plain.array[2, 0].sum()
+    # the four-run one-phonon channel is the six-run one, bit for bit: the
+    # real/twin members and rest fields are the same structures
+    np.testing.assert_allclose(one_only.array, damped.array[1], rtol=0, atol=0)

@@ -394,15 +394,42 @@ def test_rest_snapshots_add_rest_parity_axis_and_members(equilibrium):
         snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
         parity_projection=True, rest_snapshots=rest,
     )
-    assert ensemble.ensemble_shape == (3, 2, 2, 3)
+    assert ensemble.ensemble_shape == (2, 2, 2, 3)
     assert ensemble.rest_parity is True
+    assert ensemble.rest_static_reference is False
     assert ensemble.num_configs == 3
     axes = ensemble.ensemble_axes_metadata
-    assert isinstance(axes[0], PhononParityAxis) and axes[0].values == ("real", "twin", "static")
+    assert isinstance(axes[0], PhononParityAxis) and axes[0].values == ("real", "twin")
     assert isinstance(axes[1], PhononRestParityAxis) and axes[1].values == ("plus", "minus")
     assert isinstance(axes[2], EnergyLossAxis)
     assert isinstance(axes[3], FrozenPhononsAxis)
 
+    eq = equilibrium.positions
+    for i in range(2):
+        for j in range(3):
+            u_bin = snapshots[i][j].positions - eq
+            u_rest = rest[i][j].positions - eq
+            for parity, s in enumerate((1, -1)):
+                for sign_index, t in enumerate((1, -1)):
+                    member = ensemble.snapshots[parity, sign_index, i, j]
+                    np.testing.assert_allclose(
+                        member.positions, eq + s * u_bin + t * u_rest, atol=1e-12
+                    )
+
+
+def test_rest_static_reference_adds_third_member(equilibrium):
+    """rest_static_reference=True adds R_eq +- u_rest (no bin displacement)
+    as a third parity member, the multi-phonon channel's reference."""
+    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
+    rest = [_rest_fields(equilibrium, 3, seed=1), _rest_fields(equilibrium, 3, seed=2)]
+    ensemble = EnergyResolvedAtomsEnsemble(
+        snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+        parity_projection=True, rest_snapshots=rest, rest_static_reference=True,
+    )
+    assert ensemble.ensemble_shape == (3, 2, 2, 3)
+    assert ensemble.rest_static_reference is True
+    axes = ensemble.ensemble_axes_metadata
+    assert axes[0].values == ("real", "twin", "static")
     eq = equilibrium.positions
     for i in range(2):
         for j in range(3):
@@ -414,6 +441,11 @@ def test_rest_snapshots_add_rest_parity_axis_and_members(equilibrium):
                     np.testing.assert_allclose(
                         member.positions, eq + s * u_bin + t * u_rest, atol=1e-12
                     )
+    with pytest.raises(ValueError, match="requires rest_snapshots"):
+        EnergyResolvedAtomsEnsemble(
+            snapshots, [0.02, 0.05], equilibrium_atoms=equilibrium,
+            parity_projection=True, rest_static_reference=True,
+        )
 
 
 def test_flat_rest_snapshots_are_reused_for_every_energy(equilibrium):
@@ -423,7 +455,7 @@ def test_flat_rest_snapshots_are_reused_for_every_energy(equilibrium):
         snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=equilibrium,
         parity_projection=True, rest_snapshots=rest,
     )
-    assert ensemble.ensemble_shape == (3, 2, 3, 2)
+    assert ensemble.ensemble_shape == (2, 2, 3, 2)
     eq = equilibrium.positions
     for i in range(3):
         for j in range(2):
@@ -467,7 +499,7 @@ def test_rest_parity_ensemble_blocks_reconstruct(equilibrium):
         parity_projection=True, rest_snapshots=rest,
     )
     blocks = ensemble.ensemble_blocks(chunks=1).compute()
-    assert blocks.shape == (3, 2, 2, 2)
+    assert blocks.shape == (2, 2, 2, 2)
     member = blocks[0, 1, 1, 0]
     assert member.ensemble_shape == (1, 1, 1, 1)
     np.testing.assert_allclose(
@@ -542,7 +574,7 @@ def test_direct_4d_construction_is_validated(equilibrium):
         ensemble.snapshots, [0.02], equilibrium_atoms=equilibrium,
         parity_projection=True, _validated=True,
     )
-    assert rebuilt.ensemble_shape == (3, 2, 1, 2)
+    assert rebuilt.ensemble_shape == (2, 2, 1, 2)
 
 
 def test_rest_snapshots_rejected_with_prebuilt_array(equilibrium):

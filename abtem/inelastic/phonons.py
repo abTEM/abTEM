@@ -812,26 +812,34 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         ``(energy, configuration)`` layout as ``energy_resolved_snapshots``,
         or as one list of ``n_configs`` fields reused for every energy bin.
         Requires ``parity_projection=True``. Every snapshot is then
-        propagated at the six structures ``R_eq + s u_bin + t u_rest`` with
-        ``s`` in (+1, -1, 0) and ``t`` in (+1, -1): the parity axis gains a
-        third member ``"static"`` (``s = 0``, the rest-displaced structure
-        without the bin displacement) and a
+        propagated at the four structures ``R_eq ± u_bin ± u_rest``, and a
         :class:`~abtem.core.axes.PhononRestParityAxis`
-        (``values=("plus", "minus")``) follows it. Averaging the exit waves
-        over the rest axis keeps the part even in the rest displacement,
-        which carries the Debye-Waller damping of the bin's one-phonon
-        amplitude by all other modes -- the factor a bin-restricted
-        snapshot lacks -- while the part odd in the rest displacement (one
-        bin phonon plus one rest phonon, mis-binned at this energy) cancels
-        exactly. The ``"static"`` member is the per-realization reference
-        the multi-phonon channel subtracts; without it that channel would
-        be dominated by two-rest-phonon fluctuations (order ``u_rest**4``).
-        Costs six multislice runs per snapshot instead of two. Drawing the
-        rest field from the full thermal ensemble (bin modes included)
-        double-counts the bin modes' own damping, an error of about
-        ``2 M_bin`` in the one-phonon intensity, i.e. ``2 M / n_bins`` for
-        bins of comparable weight -- negligible for narrow bins, a few
-        percent for a handful of bins.
+        (``values=("plus", "minus")``) follows the parity axis. Averaging
+        the exit waves over the rest axis keeps the part even in the rest
+        displacement, which carries the Debye-Waller damping of the bin's
+        one-phonon amplitude by all other modes -- the factor a
+        bin-restricted snapshot lacks -- while the part odd in the rest
+        displacement (one bin phonon plus one rest phonon, mis-binned at
+        this energy) cancels exactly. With rest fields,
+        :func:`~abtem.measurements.phonon_loss_diffraction_patterns`
+        returns the one-phonon channel only, unless
+        ``rest_static_reference`` is set. Costs four multislice runs per
+        snapshot instead of two. Drawing the rest field from the full
+        thermal ensemble (bin modes included) double-counts the bin modes'
+        own damping, an error of about ``2 M_bin`` in the one-phonon
+        intensity, i.e. ``2 M / n_bins`` for bins of comparable weight --
+        negligible for narrow bins, a few percent for a handful of bins.
+    rest_static_reference : bool, optional
+        If True (default False), also propagate, per rest realization, the
+        rest-displaced structure without the bin displacement
+        (``R_eq ± u_rest``) as a third parity member ``"static"``. It is
+        the per-realization reference the multi-phonon channel subtracts;
+        without it that channel would be dominated by two-rest-phonon
+        fluctuations (order ``u_rest**4``), so it is only computed when
+        this reference is present. Six multislice runs per snapshot, and
+        :func:`~abtem.measurements.phonon_loss_diffraction_patterns` then
+        returns all three channels as without rest fields. Requires
+        ``rest_snapshots``.
     parity_projection : bool, optional
         If True (default False), separate one-phonon from multi-phonon
         scattering by also propagating, for every snapshot, its
@@ -856,6 +864,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         parity_projection: bool = False,
         max_displacement: Optional[float] = 1.0,
         rest_snapshots: Optional[list[Sequence[Atoms]] | Sequence[Atoms]] = None,
+        rest_static_reference: bool = False,
         ensemble_mean: bool = True,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         cell: Optional[Cell] = None,
@@ -909,6 +918,11 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                 for j, atoms in enumerate(trajectory):
                     itemset(snapshots, (i, j), atoms)
 
+        if parity_projection and snapshots.ndim == 2 and rest_static_reference and rest_snapshots is None:
+            # only meaningful for fresh input; a chunk reconstruction passes
+            # rest_snapshots=None with the members already baked in
+            raise ValueError("rest_static_reference requires rest_snapshots.")
+
         if parity_projection and snapshots.ndim == 2:
             # Fresh, real-configuration-only input (the public contract of
             # this constructor): build the displacement-reversed twin and
@@ -935,15 +949,17 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
             if rest is not None:
                 # (parity, rest sign, energy, config): R_eq + s u_bin + t u_rest
-                # for the "real" (s = +1) and "twin" (s = -1) members, plus a
-                # third "static" member (s = 0): R_eq + t u_rest, the
-                # rest-displaced structure without the bin displacement. It
-                # is the per-realization reference the multi-phonon channel
-                # subtracts, so that the two-rest-phonon fluctuations (of
-                # order u_rest^4, typically larger than the bin's own
-                # two-phonon signal) cancel per realization instead of
-                # contaminating that channel.
-                with_rest = np.empty((3, 2) + rest.shape, dtype=object)
+                # for the "real" (s = +1) and "twin" (s = -1) members and,
+                # if rest_static_reference, a third "static" member (s = 0):
+                # R_eq + t u_rest, the rest-displaced structure without the
+                # bin displacement. That member is the per-realization
+                # reference the multi-phonon channel subtracts, so that the
+                # two-rest-phonon fluctuations (of order u_rest^4, typically
+                # larger than the bin's own two-phonon signal) cancel per
+                # realization instead of contaminating that channel; the
+                # one-phonon channel does not need it.
+                n_members = 3 if rest_static_reference else 2
+                with_rest = np.empty((n_members, 2) + rest.shape, dtype=object)
                 for index in np.ndindex(rest.shape):
                     u_rest = rest[index].positions - eq_positions
                     for sign_index, sign in enumerate((1.0, -1.0)):
@@ -951,9 +967,10 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
                             atoms = snapshots[(parity,) + index].copy()
                             atoms.positions = atoms.positions + sign * u_rest
                             itemset(with_rest, (parity, sign_index) + index, atoms)
-                        static = snapshots[(0,) + index].copy()
-                        static.positions = eq_positions + sign * u_rest
-                        itemset(with_rest, (2, sign_index) + index, static)
+                        if rest_static_reference:
+                            static = snapshots[(0,) + index].copy()
+                            static.positions = eq_positions + sign * u_rest
+                            itemset(with_rest, (2, sign_index) + index, static)
                 snapshots = with_rest
         elif parity_projection and snapshots.ndim >= 3 and not _validated:
             # A `snapshots.ndim >= 3` input with `_validated=True` is a
@@ -982,6 +999,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         self._parity_projection = parity_projection
         self._max_displacement = max_displacement
         self._rest_snapshots = rest_snapshots
+        self._rest_static_reference = rest_static_reference
         # Every snapshot has now been checked (or checking was skipped
         # because a validated instance is being re-chunked) -- record this
         # so a downstream dask reconstruction of this instance (which
@@ -1008,8 +1026,13 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             ]
             if parity_projection:
                 if snapshots.ndim == 4:
+                    members = (
+                        ("real", "twin", "static")
+                        if snapshots.shape[0] == 3
+                        else ("real", "twin")
+                    )
                     leading = [
-                        PhononParityAxis(values=("real", "twin", "static")),
+                        PhononParityAxis(values=members),
                         PhononRestParityAxis(values=("plus", "minus")),
                     ]
                 else:
@@ -1022,8 +1045,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     def snapshots(self) -> np.ndarray:
         """Object array of Atoms, ``(n_energies, n_configs)`` normally,
         ``(2, n_energies, n_configs)`` if ``parity_projection`` is True, or
-        ``(3, 2, n_energies, n_configs)`` if ``rest_snapshots`` were given
-        as well (parity member real/twin/static, rest sign, energy,
+        ``(2 or 3, 2, n_energies, n_configs)`` if ``rest_snapshots`` were
+        given as well (parity member real/twin[/static], rest sign, energy,
         configuration)."""
         return self._snapshots
 
@@ -1057,9 +1080,14 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     @property
     def rest_parity(self) -> bool:
         """Whether the ensemble carries the rest-parity axis (both signs of a
-        rest displacement field on top of every bin snapshot, plus the
-        rest-displaced static reference)."""
+        rest displacement field on top of every bin snapshot)."""
         return self._snapshots.ndim == 4
+
+    @property
+    def rest_static_reference(self) -> bool:
+        """Whether the rest-displaced static reference member is included
+        (needed for the multi-phonon channel with rest fields)."""
+        return self._rest_static_reference
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:

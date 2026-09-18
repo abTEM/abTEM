@@ -515,17 +515,52 @@ class TestParityProjection:
         scale = np.abs(dp_ref.array[1]).max()
         np.testing.assert_allclose(dp.array, dp_ref.array, atol=1e-5 * scale, rtol=0)
 
-        for lazy in (True,):
-            lazy_waves = Waves(
-                da.from_array(members, chunks=(1, 1, 1, 1, gpts, gpts)),
-                energy=100e3, sampling=0.1,
-                ensemble_axes_metadata=waves.ensemble_axes_metadata,
-            )
-            dp_lazy = phonon_loss_diffraction_patterns(lazy_waves, max_angle="full")
-            assert isinstance(dp_lazy.array, da.core.Array)
-            np.testing.assert_allclose(
-                dp_lazy.array.compute(), dp.array, atol=1e-5 * scale, rtol=0
-            )
+        lazy_waves = Waves(
+            da.from_array(members, chunks=(1, 1, 1, 1, gpts, gpts)),
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
+        )
+        dp_lazy = phonon_loss_diffraction_patterns(lazy_waves, max_angle="full")
+        assert isinstance(dp_lazy.array, da.core.Array)
+        np.testing.assert_allclose(
+            dp_lazy.array.compute(), dp.array, atol=1e-5 * scale, rtol=0
+        )
+
+        # without the static member (the four-run default) only the
+        # one-phonon channel is returned, as a plain DiffractionPatterns
+        waves_four = Waves(
+            members[:2], energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        dp_four = phonon_loss_diffraction_patterns(waves_four, max_angle="full")
+        assert dp_four.metadata["phonon_loss_component"] == "one"
+        assert not any(
+            getattr(ax, "label", None) == "Phonon order"
+            for ax in dp_four.ensemble_axes_metadata
+        )
+        np.testing.assert_allclose(dp_four.array, dp.array[1], atol=1e-5 * scale, rtol=0)
+
+        # ... and temperature unfolding is then allowed (one-phonon weights)
+        waves_four_t = Waves(
+            members[:2], energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=(0.0, 0.05)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        unfolded = phonon_loss_diffraction_patterns(
+            waves_four_t, max_angle="full", temperature=300.0
+        )
+        assert unfolded.array.shape[0] == 3
+        with pytest.raises(ValueError, match="unfold_loss_gain"):
+            phonon_loss_diffraction_patterns(waves, max_angle="full", temperature=300.0)
 
     def test_lazy_matches_eager(self):
         e_values = [0.02, 0.05, 0.10]
