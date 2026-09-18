@@ -2940,12 +2940,18 @@ def _circular_convolve_2d_on_axes(array, kernel_2d, axes):
     kernel_2d = xp.asarray(kernel_2d)
     iy = (xp.arange(kh) - ry) % sy
     ix = (xp.arange(kw) - rx) % sx
-    flat_idx = (iy[:, None] * sx + ix[None, :]).ravel()
-    embedded = (
-        xp.bincount(flat_idx, weights=kernel_2d.ravel(), minlength=sy * sx)
-        .astype(kernel_2d.dtype)
-        .reshape(sy, sx)
-    )
+
+    # Fold ("alias") the kernel onto the array's own axis lengths via two
+    # small one-hot matmuls rather than a scatter-add (e.g. bincount): every
+    # shape involved here (kh, kw, sy, sx) is already a plain Python int
+    # known without touching the device, so this stays fully asynchronous.
+    # bincount is the wrong tool here even though it looks like a natural
+    # fit -- it always falls back to a slower kernel whenever `weights` is
+    # passed, and (even given `minlength`) still computes `int(xp.max(...))`
+    # internally, which forces a blocking device sync on every single call.
+    fold_y = (iy[:, None] == xp.arange(sy)[None, :]).astype(kernel_2d.dtype)
+    fold_x = (ix[:, None] == xp.arange(sx)[None, :]).astype(kernel_2d.dtype)
+    embedded = fold_y.T @ kernel_2d @ fold_x
 
     freq = xp.fft.rfftn(array, axes=axes)
     kernel_freq = xp.fft.rfftn(embedded, s=(sy, sx), axes=(0, 1))
