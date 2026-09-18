@@ -127,7 +127,15 @@ def test_graph_computes_on_a_distributed_cluster_and_survives_client_loss():
 
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1,
-        dashboard_address=None,
+        # dashboard_address=None does NOT pick a random port -- Scheduler's
+        # start_http_server does `dashboard_address or default_port`, so
+        # None falls through to the hardcoded default (8787). Two of these
+        # running concurrently (e.g. under pytest-xdist -n auto) then race
+        # for that one port; the loser gets a UserWarning promoted to a hard
+        # failure by this repo's filterwarnings=["error", ...]. ":0" is the
+        # actual "pick an ephemeral port" spelling, already used correctly
+        # by every LocalCluster(...) call in test_multigpu_logic.py.
+        dashboard_address=":0",
     ) as cluster, distributed.Client(cluster):
         on_cluster = np.asarray(
             lazy.copy().compute(progress_bar=False).to_cpu().array
