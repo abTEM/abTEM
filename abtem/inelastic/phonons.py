@@ -953,6 +953,11 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         new_energies = (
             energies[item] if not isinstance(item, tuple) else energies[item[0]]
         )
+        if isinstance(new_snapshots, Atoms):
+            # both axes collapsed (``ensemble[i, j]``): a single configuration
+            single = np.empty((1, 1), dtype=object)
+            itemset(single, (0, 0), new_snapshots)
+            new_snapshots = single
         if new_snapshots.ndim < 2:
             # `snapshots` is (n_energies, n_configs). A 1D result means one
             # of the two axes collapsed to a scalar index -- which one
@@ -973,7 +978,14 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         return new_snapshots, new_energies
 
     def __getitem__(self, item):
-        kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies"))
+        # `ensemble_axes_metadata` is deliberately not copied: the parent's
+        # EnergyLossAxis carries every energy, but the sliced ensemble has
+        # fewer, so the constructor must rebuild the axes from the new
+        # energies (a stale axis makes the next Potential/multislice raise
+        # an ordinal-axis size mismatch).
+        kwargs = self._copy_kwargs(
+            exclude=("energy_resolved_snapshots", "energies", "ensemble_axes_metadata")
+        )
 
         if self._parity_projection:
             # The (parity, energy, config) 3D layout makes the plain/2D-

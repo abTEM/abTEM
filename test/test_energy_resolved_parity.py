@@ -433,3 +433,32 @@ def test_getitem_rejects_array_index_with_parity_projection(equilibrium):
     )
     with pytest.raises(NotImplementedError, match="leading ':'"):
         ensemble[np.array([0, 1])]
+
+
+def test_getitem_rebuilds_energy_axis_for_the_slice(equilibrium):
+    """The sliced ensemble must carry an EnergyLossAxis matching its own
+    energies, not the parent's, or the next Potential/multislice raises an
+    ordinal-axis size mismatch."""
+    import abtem
+
+    snapshots = _make_snapshots(equilibrium, n_energies=3, n_configs=2)
+    energies = [0.02, 0.05, 0.10]
+    for ensemble, item in (
+        (
+            EnergyResolvedAtomsEnsemble(
+                snapshots, energies, equilibrium_atoms=equilibrium, parity_projection=True
+            ),
+            (slice(None), 1),
+        ),
+        (EnergyResolvedAtomsEnsemble(snapshots, energies), 1),
+        (EnergyResolvedAtomsEnsemble(snapshots, energies), (1, 0)),
+    ):
+        sub = ensemble[item]
+        energy_axis = next(
+            ax for ax in sub.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        )
+        assert energy_axis.values == (0.05,)
+        assert len(sub.ensemble_axes_metadata) == len(sub.ensemble_shape)
+        potential = abtem.Potential(sub, sampling=0.5, slice_thickness=5.0)
+        waves = abtem.PlaneWave(energy=100e3).multislice(potential, lazy=False)
+        assert waves.shape[: len(sub.ensemble_shape)] == sub.ensemble_shape
