@@ -43,6 +43,12 @@ def pytest_configure(config):
     )
 
 
+# tryfirst=True is required, not stylistic: pytest-xdist's own
+# pytest_collection_modifyitems (xdist/remote.py) reads each item's
+# xdist_group marker to build the nodeid suffix its scheduler groups on.
+# Without tryfirst, xdist's copy runs before this one adds the marker, so
+# grouping silently never happens for any test.
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Skip slow tests by default, and confine every GPU-touching test to a
     single pytest-xdist worker.
