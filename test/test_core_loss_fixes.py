@@ -1634,10 +1634,13 @@ class TestTransitionPotentialDeviceMemo:
 
 
 class TestScatterBatchBucketing:
-    """generate_scattered_waves pads each site chunk to a multiple of
-    core_loss._SCATTER_BATCH_BUCKET before scattering, so the ifft2 batch
-    shape depends on the bucket rather than the data-dependent
-    surviving-site count -- see scatter_batch_sizes_unbounded_fft_shapes.md.
+    """generate_scattered_waves pads each site chunk at or above
+    core_loss._SCATTER_BATCH_BUCKET up to a multiple of it before
+    scattering, so the ifft2 batch shape depends on the bucket rather than
+    the data-dependent surviving-site count. Chunks smaller than one bucket
+    are left unpadded (see the guard in generate_scattered_waves) so a
+    VRAM-constrained run's small max_batch chunks are never rounded up to a
+    multiple of their own memory budget.
     """
 
     @staticmethod
@@ -1679,10 +1682,12 @@ class TestScatterBatchBucketing:
             for _ in tp.generate_scattered_waves(waves, sites, max_batch=10**9):
                 pass
 
-        # Unbucketed, this reproduces the issue file's own numbers exactly:
-        # {6, 10, 14, 22, 34, 46}, one distinct shape per site count. Bucketed
-        # to multiples of 8 (n_transitions=2, so multiples of 16 once the
-        # transition axis is folded in), every one collapses onto one of 3.
+        # ifft2's batch axis is the site axis alone -- the transitions axis
+        # (length n_transitions=2 here) is a separate, un-folded dimension,
+        # e.g. (11, 2, 32, 32) for 11 sites, not (22, 32, 32). Unbucketed,
+        # this reproduces the site counts exactly: {3, 5, 7, 11, 17, 23}, one
+        # distinct shape per call. Bucketed to multiples of 8, every one
+        # collapses onto one of 3.
         assert batch_shapes == {8, 16, 24}
 
     @pytest.mark.parametrize(
@@ -1723,6 +1728,44 @@ class TestScatterBatchBucketing:
 
         reassembled = np.concatenate([np.asarray(c[1].array) for c in chunks], axis=0)
         direct = tp.scatter(waves, sites)
+        assert np.array_equal(reassembled, np.asarray(direct.array))
+
+    def test_padding_never_exceeds_a_small_explicit_max_batch(self, monkeypatch):
+        """A memory-tight run (small max_batch, below _SCATTER_BATCH_BUCKET)
+        must not have its declared per-chunk budget multiplied by padding.
+        Without the site_ceiling cap, max_batch=2 chunks would pad from 2
+        real sites up to a full bucket of 8 -- a 4x blowup of exactly the
+        allocation max_batch exists to bound."""
+        import abtem.inelastic.core_loss as cl
+
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+
+        real_ifft2 = cl.ifft2
+        batch_shapes = set()
+
+        def recording_ifft2(x, *args, **kwargs):
+            batch_shapes.add(x.shape[0])
+            return real_ifft2(x, *args, **kwargs)
+
+        monkeypatch.setattr(cl, "ifft2", recording_ifft2)
+
+        rng = np.random.default_rng(4)
+        sites = rng.uniform(0, 8, size=(9, 2)).astype(np.float32)
+        for _ in tp.generate_scattered_waves(
+            waves, sites, max_batch=2, threshold=0.0
+        ):
+            pass
+
+        assert max(batch_shapes) <= 2
+        # Correctness is unaffected: still matches a direct unchunked call.
+        direct = tp.scatter(waves, sites)
+        chunks = list(
+            tp.generate_scattered_waves(waves, sites, max_batch=2, threshold=0.0)
+        )
+        reassembled = np.concatenate(
+            [np.asarray(c[1].array) for c in chunks], axis=0
+        )
         assert np.array_equal(reassembled, np.asarray(direct.array))
 
 

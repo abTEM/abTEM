@@ -283,12 +283,20 @@ _ASYMPTOTIC_REGION_FRACTION = 0.25
 
 # generate_scattered_waves pads each site chunk up to a multiple of this before
 # scattering, so the ifft2 batch shape depends on the bucket rather than on
-# the data-dependent surviving-site count -- see
-# scatter_batch_sizes_unbounded_fft_shapes.md. 8 measured at ~10 % average
+# the data-dependent surviving-site count. 8 measured at ~10 % average
 # padding slack with 32 distinct shapes for a 256-site max_batch, comfortably
 # inside the cuFFT plan cache #378 sized to 64 entries; a smaller multiple
 # pads less but lets more distinct shapes through, a larger one the reverse.
+# That 10 % figure only holds once a chunk is comfortably above the bucket
+# size -- see generate_scattered_waves's site_ceiling, which caps how far a
+# small, memory-budget-limited chunk is allowed to pad.
 _SCATTER_BATCH_BUCKET = 8
+
+# Sentinel axis length used to probe validate_chunks for the real per-chunk
+# site ceiling max_batch/the VRAM budget allows, far larger than any
+# max_elements-derived chunk size on any real device -- see
+# generate_scattered_waves's site_ceiling.
+_SCATTER_BATCH_CEILING_PROBE_SITES = 10**9
 
 
 def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
@@ -1386,6 +1394,26 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             device=self.device,
         )[0]
 
+        # The real per-chunk site ceiling max_batch/the VRAM budget allows,
+        # independent of how many sites this call actually has. Probing with
+        # a sentinel axis length far larger than any real max_elements-driven
+        # chunk size recovers that ceiling even though the call above used
+        # the real (possibly smaller) len(sites): when len(sites) already
+        # fits in one chunk -- the common case -- `chunks` above is just
+        # `(len(sites),)`, which would be mistaken for the ceiling itself if
+        # read directly. Needed below so padding a chunk up to a bucket
+        # multiple can never exceed what the caller's max_batch/budget
+        # allows -- see the guard there.
+        site_ceiling = max(
+            validate_chunks(
+                shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
+                chunks=(max_batch,) + (-1,) * len(waves.shape),
+                max_elements=limit,
+                dtype=waves.dtype,
+                device=self.device,
+            )[0]
+        )
+
         start = 0
         for chunk in chunks:
             end = start + chunk
@@ -1401,8 +1429,19 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             # Any real position works as padding -- sliced away below before
             # anything downstream sees it -- so the last site in the chunk is
             # repeated rather than fabricating a new one.
+            #
+            # Capped at site_ceiling: `chunk` was already sized by
+            # validate_chunks against a VRAM target (max_elements=limit
+            # above), and rounding it UP to a full bucket can multiply its
+            # memory footprint by up to _SCATTER_BATCH_BUCKET -- exactly the
+            # allocation the budget exists to bound, worst on memory-tight,
+            # small-max_batch runs. site_ceiling >= n_real always (chunk
+            # never exceeds it by construction), so the cap never truncates
+            # real sites -- only how far padding is allowed to go.
             n_real = len(sites_chunk)
-            n_padded = _ceil_to_multiple(n_real, _SCATTER_BATCH_BUCKET)
+            n_padded = min(
+                _ceil_to_multiple(n_real, _SCATTER_BATCH_BUCKET), site_ceiling
+            )
             if n_padded > n_real:
                 pad = np.repeat(sites_chunk[-1:], n_padded - n_real, axis=0)
                 scatter_sites = np.concatenate([sites_chunk, pad], axis=0)
