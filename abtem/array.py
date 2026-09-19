@@ -51,7 +51,12 @@ from abtem.core.backend import (
     push_config_to_workers,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
-from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    Ensemble,
+    _prescatter_shared_constants,
+    _wrap_with_array,
+    unpack_blockwise_args,
+)
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -533,10 +538,17 @@ class ComputableList(list):
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
+        # See _compute's identical check: "scheduler" not in kwargs is when a
+        # real active client, if any, is left in charge of this compute call.
+        client = _get_active_distributed_client() if "scheduler" not in kwargs else None
+        arrays_to_compute = _prescatter_shared_constants(
+            [array for _, array in arrays_to_write], client
+        )
+
         with _nested_compute_guard(kwargs), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+            arrays = dask.compute(arrays_to_compute, **kwargs)[0]
 
         output = write_func(
             [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
@@ -708,6 +720,16 @@ def _nested_compute_guard(kwargs: dict):
         yield
 
 
+def _get_active_distributed_client():
+    """Return the active ``distributed.Client``, or ``None`` if there isn't one."""
+    try:
+        from distributed import get_client
+
+        return get_client()
+    except (ImportError, ValueError):
+        return None
+
+
 def _push_config_to_active_client():
     """Mirror the configuration onto an active distributed client's workers.
 
@@ -717,11 +739,8 @@ def _push_config_to_active_client():
     ``abtem.config.set``. Deduplicated inside push_config_to_workers, so
     calling this on every dispatch is cheap.
     """
-    try:
-        from distributed import get_client
-
-        client = get_client()
-    except (ImportError, ValueError):
+    client = _get_active_distributed_client()
+    if client is None:
         return
     push_config_to_workers(client)
 
@@ -742,10 +761,21 @@ def _compute(
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
 
+    # "scheduler" not in kwargs is the same signal _resolve_gpu_scheduler
+    # itself relies on: it is only ever absent when a real active client (if
+    # any) is left in charge of this specific compute call -- an explicit
+    # scheduler string (including the "synchronous" fallback it sets when no
+    # suitable client exists) bypasses any client entirely, so prescattering
+    # into one here would be wasted work at best.
+    client = _get_active_distributed_client() if "scheduler" not in kwargs else None
+    arrays_to_compute = _prescatter_shared_constants(
+        [wrapper.array for wrapper in array_objects], client
+    )
+
     with _nested_compute_guard(kwargs), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
-        arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
+        arrays = dask.compute(arrays_to_compute, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
         wrapper._array = array
