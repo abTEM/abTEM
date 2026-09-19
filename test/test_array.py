@@ -8,28 +8,39 @@ import strategies as abtem_st
 from hypothesis import assume, given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
-                   gpu, remove_dummy_dimensions, requires_gpu)
+                   devices, gpu, lazy_params, remove_dummy_dimensions,
+                   requires_gpu, si_cubic_atoms)
 
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
 
+# The full set of `has_array` strategies exercised by most array-object tests.
+ALL_HAS_ARRAY = [
+    abtem_st.images,
+    abtem_st.diffraction_patterns,
+    abtem_st.line_profiles,
+    abtem_st.polar_measurements,
+    abtem_st.waves,
+    abtem_st.potential_array,
+    abtem_st.s_matrix_array,
+]
+
+# The subset used by tests that don't support potential arrays or S-matrix
+# arrays (e.g. from_array_and_metadata, concatenation).
+HAS_ARRAY_NO_POTENTIAL = [
+    abtem_st.images,
+    abtem_st.diffraction_patterns,
+    abtem_st.line_profiles,
+    abtem_st.polar_measurements,
+    abtem_st.waves,
+]
+
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_indexing(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
 
@@ -50,8 +61,8 @@ def test_indexing(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("has_array", [abtem_st.potential_array])
 def test_indexing_potential(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
@@ -73,8 +84,8 @@ def test_indexing_potential(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize(
     "has_array",
     [
@@ -102,20 +113,9 @@ def test_indexing_raises(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_shape(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     assert len(has_array.base_shape) == has_array._base_dims
@@ -125,20 +125,9 @@ def test_shape(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_ensure_lazy(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array = has_array.ensure_lazy()
@@ -148,20 +137,9 @@ def test_ensure_lazy(data, has_array, lazy, device):
 
 @settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr(data, has_array, url, lazy, device):
     waves = data.draw(has_array(lazy=lazy, device=device))
     waves.to_zarr(url)
@@ -169,20 +147,9 @@ def test_to_zarr(data, has_array, url, lazy, device):
 
 @settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_zip(data, has_array, url, lazy, device):
     waves = data.draw(has_array(lazy=lazy, device=device))
     waves.to_zarr(url)
@@ -190,20 +157,9 @@ def test_to_zarr_zip(data, has_array, url, lazy, device):
 
 @settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
@@ -217,20 +173,9 @@ def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
 
 @settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_from_zarr_zip(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
@@ -463,20 +408,9 @@ def test_to_zarr_cleans_up_on_failed_write(tmp_path, monkeypatch, suffix):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_expand_dims(data, has_array, lazy, device):
     waves = data.draw(has_array(lazy=lazy, device=device))
     expanded = waves.expand_dims((0,))
@@ -486,20 +420,9 @@ def test_expand_dims(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_squeeze(data, has_array, lazy, device):
     waves = data.draw(has_array(lazy=lazy, device=device))
     squeezed = waves.squeeze()
@@ -510,21 +433,10 @@ def test_squeeze(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("destination", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_cpu(data, has_array, lazy, device, destination):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array = has_array.copy_to_device(device=destination)
@@ -534,20 +446,9 @@ def test_to_cpu(data, has_array, lazy, device, destination):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_stacks_with_self(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     stacked = stack(
@@ -559,19 +460,9 @@ def test_stacks_with_self(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        # abtem_st.potential_array
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL)
 def test_from_array_and_metadata(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     new = has_array.__class__.from_array_and_metadata(
@@ -582,18 +473,8 @@ def test_from_array_and_metadata(data, has_array, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        # abtem_st.potential_array
-    ],
-)
+@devices
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL)
 def test_concatenates_with_self(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
 
@@ -815,11 +696,9 @@ class TestBaseLessArrayObject:
 
     @staticmethod
     def _ensemble(chunks=None):
-        import ase.build
-
         import abtem
 
-        atoms = ase.build.bulk("Si", cubic=True)
+        atoms = si_cubic_atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
         probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
         scan = abtem.GridScan(start=(0, 0), end=(2, 2), sampling=1.0)

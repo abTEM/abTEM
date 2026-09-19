@@ -13,7 +13,7 @@ from abtem.integrals import (
     ScatteringFactorProjectionIntegrals,
     _DeviceArrayCache,
 )
-from utils import assert_array_matches_device, gpu
+from utils import assert_array_matches_device, devices, si_cubic_atoms
 
 # from abtem.integrals import GaussianProjectionIntegrals
 from abtem.parametrizations import (
@@ -242,12 +242,6 @@ class TestScatteringFactorCacheKey:
     is a documented ``Potential`` parameter, so sharing one is ordinary use.
     """
 
-    @staticmethod
-    def _atoms():
-        import ase.build
-
-        return ase.build.bulk("Si", cubic=True)
-
     def test_second_grid_is_not_served_the_first_grids_array(self):
         integrator = ScatteringFactorProjectionIntegrals()
         for gpts, sampling in (((64, 64), (0.125, 0.125)), ((128, 128), (0.0625,) * 2)):
@@ -255,7 +249,7 @@ class TestScatteringFactorCacheKey:
             assert array.shape == gpts
 
     def test_potentials_on_two_grids_may_share_an_integrator(self):
-        atoms = self._atoms()
+        atoms = si_cubic_atoms()
         shared = ScatteringFactorProjectionIntegrals()
         for gpts in ((64, 64), (128, 128)):
             got = abtem.Potential(
@@ -269,7 +263,7 @@ class TestScatteringFactorCacheKey:
             ).build(lazy=False)
             assert np.array_equal(got.array, reference.array)
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_array_lands_on_the_requested_device(self, device):
         integrator = ScatteringFactorProjectionIntegrals()
         # Warm the cache on the cpu first: the array served for ``device``
@@ -278,9 +272,9 @@ class TestScatteringFactorCacheKey:
         array = integrator.get_scattering_factor("Si", (64, 64), (0.125, 0.125), device)
         assert_array_matches_device(array, device)
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_potential_may_share_an_integrator_across_devices(self, device):
-        atoms = self._atoms()
+        atoms = si_cubic_atoms()
         shared = ScatteringFactorProjectionIntegrals()
         abtem.Potential(
             atoms, gpts=(64, 64), slice_thickness=1.0, integrator=shared, device="cpu"
@@ -342,6 +336,7 @@ class TestScatteringFactorCacheKey:
             "touched entry is never evicted, so once is the only right answer"
         )
 
+    @pytest.mark.slow
     def test_concurrent_access_does_not_race(self):
         """Hand-rolled dict eviction raced: two threads evicting the same key
         gave KeyError, and iteration could see the dict resized underneath."""
@@ -834,6 +829,7 @@ class TestIntegratorCaches:
         assert clone._tables is not used._tables
         assert len(clone._tables) == 0
 
+    @pytest.mark.slow
     def test_concurrent_access_serves_correct_values(self):
         """Not just "nothing raised": check what the cache hands back."""
         import sys
@@ -884,23 +880,17 @@ class TestGaussianProjectionIntegralsUsable:
     `fourier_space` flag it never read, and it could not run on GPU at all.
     """
 
-    @staticmethod
-    def _atoms():
-        import ase.build
-
-        return ase.build.bulk("Si", cubic=True)
-
     def _build(self, integrator, device="cpu", gpts=(128, 128)):
         return np.asarray(
             abtem.core.backend.asnumpy(
                 abtem.Potential(
-                    self._atoms(), gpts=gpts, slice_thickness=1.0,
+                    si_cubic_atoms(), gpts=gpts, slice_thickness=1.0,
                     integrator=integrator, device=device,
                 ).build(lazy=False).array
             )
         )
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_builds_on_both_devices_and_they_agree(self, device):
         """It failed on GPU with TypeError: Unsupported type numpy.ndarray."""
         if device == "cpu":
@@ -1257,7 +1247,7 @@ class TestGaussianProjectionIntegralsUsable:
 
         with pytest.raises(TypeError):
             integrator.integrate_on_grid(
-                self._atoms(),
+                si_cubic_atoms(),
                 a=0.0,
                 b=1.0,
                 gpts=(32, 32),

@@ -56,20 +56,7 @@ try:
 except ImportError:
     cp = None
 
-from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
-
-
-def to_numpy(array):
-    """Convert array to numpy, handling both CPU and GPU arrays.
-
-    CuPy refuses implicit conversion (``np.asarray`` on a CuPy array raises
-    ``TypeError: Implicit conversion to a NumPy array is not allowed``), so
-    go through ``.get()`` first. Same helper as in test_simulate.py /
-    test_realspace_multislice.py.
-    """
-    if hasattr(array, "get"):  # CuPy array
-        return np.asarray(array.get())
-    return np.asarray(array)
+from utils import devices, to_host_array  # noqa: E402
 
 
 class _FakeWaves:
@@ -260,6 +247,12 @@ def _make_probe_waves(potential, device, scan_gpts=(2, 2)):
     return probe.build(scan=scan, lazy=False)
 
 
+def _make_probe_waves_no_scan(potential, device):
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    return probe.build(lazy=False)
+
+
 ALL_RADIAL_DETECTORS = [
     lambda: AnnularDetector(inner=0, outer=15),
     lambda: FlexibleAnnularDetector(step_size=10),
@@ -269,7 +262,7 @@ ALL_RADIAL_DETECTORS = [
 DETECTOR_IDS = ["annular", "flexible_annular", "segmented", "pixelated"]
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("double_channel", [True, False])
 def test_transition_potential_multiple_radial_detectors_match_uncached(
     si_atoms, device, double_channel
@@ -305,8 +298,8 @@ def test_transition_potential_multiple_radial_detectors_match_uncached(
             double_channel=double_channel,
         )[0]
 
-        combined_array = to_numpy(combined_result.array)
-        solo_array = to_numpy(solo.array)
+        combined_array = to_host_array(combined_result.array)
+        solo_array = to_host_array(solo.array)
 
         np.testing.assert_allclose(
             combined_array,
@@ -317,16 +310,14 @@ def test_transition_potential_multiple_radial_detectors_match_uncached(
         )
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_standalone_detect_calls_never_share(si_atoms, device):
     """A plain, standalone ``detector.detect(waves)`` (not wrapped in
     ``waves._share_diffraction_pattern_fft()``) must never see sharing --
     this is the default, always-safe path used throughout the rest of the
     codebase and by any user calling ``detect`` directly."""
     potential = _make_potential(si_atoms, device)
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-    waves = probe.build(lazy=False)
+    waves = _make_probe_waves_no_scan(potential, device)
 
     calls = []
     from abtem.waves import Waves
@@ -358,7 +349,7 @@ def test_standalone_detect_calls_never_share(si_atoms, device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_multislice_step_array_identity_and_contents(si_atoms, device):
     """Sanity check for the hazard this design guards against, and for the
     premise the other tests in this module rely on.
@@ -383,9 +374,7 @@ def test_multislice_step_array_identity_and_contents(si_atoms, device):
     rather than pinning backend-specific allocation behaviour on GPU.
     """
     potential = _make_potential(si_atoms, device)
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-    waves = probe.build(lazy=False)
+    waves = _make_probe_waves_no_scan(potential, device)
 
     propagator = FresnelPropagator()
     aperture = AntialiasAperture()
@@ -396,7 +385,7 @@ def test_multislice_step_array_identity_and_contents(si_atoms, device):
     for potential_slice in potential.generate_slices():
         w = conventional_multislice_step(w, potential_slice, propagator, aperture)
         array_ids.add(id(w.array))
-        fingerprints.append(float(to_numpy(w.array).real.sum()))
+        fingerprints.append(float(to_host_array(w.array).real.sum()))
 
     assert len(fingerprints) == potential.num_slices
     for depth in range(1, len(fingerprints)):
@@ -417,7 +406,7 @@ def test_multislice_step_array_identity_and_contents(si_atoms, device):
         )
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device):
     """A bare loop calling ``detector.detect(w)`` once per multislice depth,
     with no ``_share_diffraction_pattern_fft`` block, must give the same
@@ -428,9 +417,7 @@ def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device
     alone.
     """
     potential = _make_potential(si_atoms, device, gpts=48, num_slices=3)
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-    waves = probe.build(lazy=False)
+    waves = _make_probe_waves_no_scan(potential, device)
 
     propagator = FresnelPropagator()
     aperture = AntialiasAperture()
@@ -441,7 +428,7 @@ def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device
         results = []
         for potential_slice in potential.generate_slices():
             w = conventional_multislice_step(w, potential_slice, propagator, aperture)
-            results.append(to_numpy(detector.detect(w).array).copy())
+            results.append(to_host_array(detector.detect(w).array).copy())
         return results
 
     reference = run_pass()
@@ -459,7 +446,7 @@ def test_unshared_loop_survives_in_place_mutation_across_depths(si_atoms, device
     assert len(set(round(float(v), 5) for v in reference)) > 1
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
     """Using ``waves._share_diffraction_pattern_fft()`` per depth (the
     pattern used by the real multislice call sites) must (a) give the same
@@ -468,9 +455,7 @@ def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
     evaluated there.
     """
     potential = _make_potential(si_atoms, device, gpts=48, num_slices=3)
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-    waves = probe.build(lazy=False)
+    waves = _make_probe_waves_no_scan(potential, device)
 
     propagator = FresnelPropagator()
     aperture = AntialiasAperture()
@@ -500,7 +485,7 @@ def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
                 else:
                     r1 = d1.detect(w).array
                     r2 = d2.detect(w).array
-                results.append((to_numpy(r1).copy(), to_numpy(r2).copy()))
+                results.append((to_host_array(r1).copy(), to_host_array(r2).copy()))
         finally:
             Waves._diffraction_pattern_fft = staticmethod(original)
         return results, len(calls)

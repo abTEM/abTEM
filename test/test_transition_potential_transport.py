@@ -1,5 +1,6 @@
 """Transition potentials travel as single graph nodes, not per-task copies."""
 
+import ase
 import cloudpickle
 import numpy as np
 import pytest
@@ -8,6 +9,12 @@ import abtem
 from abtem.core import config
 
 from utils import synthetic_transition_potential
+
+
+def _bn_atoms():
+    return ase.Atoms(
+        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -26,11 +33,7 @@ def _synthetic_tp(gpts=(64, 64), extent=(8.0, 8.0), energy=60e3, n_transitions=4
 
 
 def _setup(gpts=(64, 64)):
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2.0)
     # Matched to the probe: a built TransitionPotentialArray whose energy
     # disagrees with the waves is refused outright by the driver's guard
@@ -266,7 +269,15 @@ def test_graph_computes_on_a_distributed_cluster_and_survives_client_loss():
 
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1,
-        dashboard_address=None,
+        # dashboard_address=None does NOT pick a random port -- Scheduler's
+        # start_http_server does `dashboard_address or default_port`, so
+        # None falls through to the hardcoded default (8787). Two of these
+        # running concurrently (e.g. under pytest-xdist -n auto) then race
+        # for that one port; the loser gets a UserWarning promoted to a hard
+        # failure by this repo's filterwarnings=["error", ...]. ":0" is the
+        # actual "pick an ephemeral port" spelling, already used correctly
+        # by every LocalCluster(...) call in test_multigpu_logic.py.
+        dashboard_address=":0",
     ) as cluster, distributed.Client(cluster):
         on_cluster = np.asarray(
             lazy.copy().compute(progress_bar=False).to_cpu().array
@@ -392,11 +403,7 @@ def test_prism_threaded_and_synchronous_schedulers_refuse_a_mismatch_alike():
     that only some threads see, or that corrupts partial state before
     raising, would be worse than no guard at all.
     """
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     phonons = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=11)
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
     # Energy differs from the S-matrix: every task's guard must fire.
@@ -427,11 +434,7 @@ def test_prism_graph_carries_the_transition_potential_once():
     """The PRISM path's transport needs its own assertion: without the
     delayed wrapper dask would embed one copy per ensemble block, and the
     result-only tests above would not notice."""
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     phonons = abtem.FrozenPhonons(atoms, num_configs=6, sigmas=0.05, seed=3)
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
     tp = _synthetic_tp(extent=potential.extent, energy=80e3)
@@ -460,15 +463,12 @@ def test_reconstructor_without_its_graph_node_args_fails_clearly():
     """Calling the partial from _from_partitioned_args with only the
     potential's args used to die inside the potential's own reconstructor,
     naming a function the caller never invoked."""
-    import ase
-
     from abtem.multislice import (
         MultisliceTransform,
         transition_potential_multislice_and_detect,
     )
 
-    atoms = ase.Atoms("BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
-                      cell=(8, 8, 4), pbc=True)
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
     tp = _synthetic_tp(extent=potential.extent, energy=80e3)
     transform = MultisliceTransform(
@@ -498,8 +498,6 @@ def test_prism_matches_the_grid_before_building():
     unbuilt transition potential that multislice accepts. Uses a stub rather
     than real `SubshellTransitions` so it runs without GPAW.
     """
-    import ase
-
     from abtem.inelastic.core_loss import TransitionPotential
 
     class _RecordingTransitionPotential(TransitionPotential):
@@ -520,9 +518,7 @@ def test_prism_matches_the_grid_before_building():
             assert self.gpts is not None, "build() called before the grid was matched"
             return _synthetic_tp(gpts=self.gpts, extent=self.extent, energy=self.energy)
 
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
     scan = abtem.GridScan(
         start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential

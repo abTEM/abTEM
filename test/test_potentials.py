@@ -6,7 +6,7 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from hypothesis import given
-from utils import gpu
+from utils import devices, gpu, si_cubic_atoms, si_diamond_atoms
 
 from abtem.core.grid import disk_meshgrid
 from abtem.integrals import (
@@ -15,6 +15,14 @@ from abtem.integrals import (
     interpolate_radial_functions,
 )
 from abtem.potentials.iam import CrystalPotential, Potential
+
+
+def _build_with_numpy_fft(potential):
+    from abtem.core import config
+
+    with config.set({"fft": "numpy"}):
+        return potential.build(lazy=False)
+
 
 # @given(atoms=abtem_st.atoms(),
 #        gpts=abtem_st.gpts(),
@@ -53,7 +61,7 @@ def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, p
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_build_device_lazy(atoms, gpts, slice_thickness, lazy, device):
     potential = Potential(
         atoms,
@@ -140,12 +148,11 @@ def test_crystal_potential_with_frozen_phonons(
 def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
     """CrystalPotential.get_sliced_atoms tiles the unit's transformed atoms by
     the repetitions, matching a manually-tiled Potential's sliced atoms."""
-    import ase
     import numpy as np
 
     from abtem.slicing import SliceIndexedAtoms
 
-    unit_atoms = ase.build.bulk("Si", cubic=True)
+    unit_atoms = si_cubic_atoms()
     reps = (2, 2, 3)
     slice_thickness = float(unit_atoms.cell[2, 2])
 
@@ -179,10 +186,8 @@ def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
 def test_crystal_potential_get_sliced_atoms_is_cached():
     """The sliced-atoms tile is non-trivial for big supercells; it must be
     cached on the instance (mirrors _FieldBuilderFromAtoms.get_sliced_atoms)."""
-    import ase
-
     unit_pot = Potential(
-        ase.build.bulk("Si", cubic=True), gpts=(16, 16), slice_thickness=5.43
+        si_cubic_atoms(), gpts=(16, 16), slice_thickness=5.43
     )
     cryst = CrystalPotential(unit_pot, repetitions=(2, 2, 2))
     assert cryst.get_sliced_atoms() is cryst.get_sliced_atoms()
@@ -193,12 +198,11 @@ def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
     equilibrium (un-displaced) atoms, because the ensemble draws an independent
     random unit configuration per z-repetition (no single displaced
     realisation) and column identification wants equilibrium positions."""
-    import ase
     import numpy as np
 
     import abtem
 
-    unit_atoms = ase.build.bulk("Si", cubic=True)
+    unit_atoms = si_cubic_atoms()
     fp = abtem.FrozenPhonons(unit_atoms, num_configs=3, sigmas=0.1, seed=7)
     unit_pot = Potential(fp, gpts=(32, 32), slice_thickness=5.43)
     # The unit already carries frozen phonons; CrystalPotential draws one of its
@@ -212,7 +216,7 @@ def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
     )
 
 
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_eager_build_populates_all_frozen_phonon_configs(device):
     """Eager ``build(lazy=False)`` of a multi-config frozen-phonon potential must
     populate *every* ensemble member, not just the first. Regression for a bug
@@ -220,13 +224,12 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
     overwrote config 0 and configs 1..N-1 were left as zeros -- which in turn
     made CrystalPotential (it builds its pool eagerly) reshuffle a pool of one
     real config plus N-1 vacuum slices."""
-    import ase
     import numpy as np
 
     import abtem
     from abtem.core.backend import asnumpy
 
-    unit_atoms = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    unit_atoms = si_diamond_atoms()
     num_configs = 4
     fp = abtem.FrozenPhonons(
         unit_atoms, num_configs=num_configs, sigmas=0.1, seed=7
@@ -254,7 +257,7 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
     assert np.allclose(eager, lazy)
 
 
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 @pytest.mark.parametrize("lazy", [True, False])
 def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     """A frozen-phonon CrystalPotential must reproduce *lateral* (in-plane)
@@ -263,13 +266,12 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     the original ``.tile()`` behaviour that replicated a single displaced unit
     across every tile -- giving zero in-plane disorder (and hence no diffuse /
     Kikuchi scattering)."""
-    import ase
     import numpy as np
 
     import abtem
     from abtem.core.backend import asnumpy
 
-    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    si = si_diamond_atoms()
     reps = (2, 3, 2)  # asymmetric to catch tile-axis-order mistakes
     ug = 32
     fp = abtem.FrozenPhonons(si, num_configs=20, sigmas=0.1, seed=2)
@@ -305,18 +307,17 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     assert inter_tile_std > 100 * single_config_floor
 
 
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     """When the frozen-phonon pool is smaller than the number of lateral tiles,
     CrystalPotential enlarges it (warning) so every tile draws a distinct
     configuration and no two tiles in a layer are identical."""
-    import ase
     import numpy as np
 
     import abtem
     from abtem.core.backend import asnumpy
 
-    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    si = si_diamond_atoms()
     reps = (5, 4, 2)  # 20 lateral tiles
     ug = 24
     n_tiles = reps[0] * reps[1]
@@ -350,7 +351,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     )
 
 
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_crystal_potential_balanced_pool_drawing(device):
     """Pool configurations are drawn without replacement over the WHOLE
     crystal (balanced budgets), not just within a z-layer: a pool matching
@@ -359,12 +360,10 @@ def test_crystal_potential_balanced_pool_drawing(device):
     smaller pool spreads reuse exactly evenly."""
     from collections import Counter
 
-    import ase
-
     import abtem
     from abtem.core.backend import asnumpy
 
-    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    si = si_diamond_atoms()
     ug = 16
 
     # z-only pool (full-lateral pattern): pool == nz -> every z-rep distinct
@@ -408,7 +407,7 @@ def test_crystal_potential_balanced_pool_drawing(device):
     assert set(counts.values()) == {tile_reps[2]}
 
 
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_crystal_potential_ensemble_members_have_independent_pools(device):
     """Ensemble members (num_frozen_phonons / seeds) all share the same
     ``potential_unit`` object, so without reseeding they would rebuild the
@@ -418,12 +417,10 @@ def test_crystal_potential_ensemble_members_have_independent_pools(device):
     own seed, even when the pool is already at (or above) the size needed for
     a single crystal to be exact, so the ensemble does not need to be sized
     for the number of members."""
-    import ase
-
     import abtem
     from abtem.core.backend import asnumpy
 
-    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    si = si_diamond_atoms()
     ug = 16
     nz = 6  # pool == nz: already exact for one member (see test above)
 
@@ -448,10 +445,8 @@ def test_crystal_potential_ensemble_members_have_independent_pools(device):
 def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
     """A precomputed PotentialArray unit has no atoms, so get_sliced_atoms must
     raise an actionable error rather than failing obscurely downstream."""
-    import ase
-
     unit_pot = Potential(
-        ase.build.bulk("Si", cubic=True), gpts=(16, 16), slice_thickness=5.43
+        si_cubic_atoms(), gpts=(16, 16), slice_thickness=5.43
     ).build(lazy=False)
     cryst = CrystalPotential(unit_pot, repetitions=(1, 1, 2))
     with pytest.raises(RuntimeError, match="get_transformed_atoms"):
@@ -575,13 +570,11 @@ def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
 @pytest.fixture
 def si_potential():
     """Build a Si 2x2x5 potential for depth profile tests."""
-    from ase.build import bulk
-
-    atoms = bulk("Si", cubic=True) * (2, 2, 5)
+    atoms = si_cubic_atoms() * (2, 2, 5)
     return Potential(atoms, slice_thickness=1.0, gpts=(32, 32))
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_potential_depth_profile_shape(si_potential, device):
     pot = si_potential.build().compute()
     profile = pot.depth_profile()
@@ -590,7 +583,7 @@ def test_potential_depth_profile_shape(si_potential, device):
     assert profile.shape == (n_x, n_z)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_potential_depth_profile_x_projection(si_potential, device):
     pot = si_potential.build().compute()
     profile = pot.depth_profile(projection_axis="x")
@@ -599,7 +592,7 @@ def test_potential_depth_profile_x_projection(si_potential, device):
     assert profile.shape == (n_y, n_z)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_potential_depth_profile_sampling(si_potential, device):
     pot = si_potential.build().compute()
     profile = pot.depth_profile()
@@ -842,9 +835,8 @@ def test_potential_array_slicing_maps_exit_planes():
     # otherwise the exit plane can fall outside the slices and the multislice
     # algorithm silently returns an unpropagated wave function
     import abtem
-    from ase.build import bulk
 
-    atoms = bulk("Si", cubic=True) * (2, 2, 8)
+    atoms = si_cubic_atoms() * (2, 2, 8)
     potential = Potential(atoms, gpts=128, slice_thickness=2.0).build(lazy=False)
 
     assert potential.exit_planes == (potential.num_slices - 1,)
@@ -955,26 +947,19 @@ class TestPotentialDoesNotMutateItsAtoms:
             "Si2", positions=[(0.2, 0.2, 0.5), (4.2, 2.0, 1.5)], cell=(4.0, 4.0, 4.0)
         )
 
-    @staticmethod
-    def _build(potential):
-        from abtem.core import config
-
-        with config.set({"fft": "numpy"}):
-            return potential.build(lazy=False)
-
     def test_a_plain_atoms_potential_does_not_rewrite_its_own_atoms(self):
         atoms = self._atoms()
         potential = Potential(atoms, gpts=(32, 32), slice_thickness=1.0)
         stored = potential.frozen_phonons.atoms
         before = stored.positions.copy()
-        self._build(potential)
+        _build_with_numpy_fft(potential)
         assert np.array_equal(stored.positions, before)
 
     def test_a_list_of_atoms_does_not_rewrite_the_callers_objects(self):
         """`Potential([a])` keeps a reference, so the write reached the caller."""
         atoms = self._atoms()
         before = atoms.positions.copy()
-        self._build(Potential([atoms], gpts=(32, 32), slice_thickness=1.0))
+        _build_with_numpy_fft(Potential([atoms], gpts=(32, 32), slice_thickness=1.0))
         assert np.array_equal(atoms.positions, before)
 
     def test_a_prebuilt_dummy_frozen_phonons_does_not_rewrite_the_callers_atoms(self):
@@ -982,7 +967,7 @@ class TestPotentialDoesNotMutateItsAtoms:
 
         atoms = self._atoms()
         before = atoms.positions.copy()
-        self._build(
+        _build_with_numpy_fft(
             Potential(
                 DummyFrozenPhonons(atoms), gpts=(32, 32), slice_thickness=1.0
             )
@@ -1003,7 +988,7 @@ class TestPotentialDoesNotMutateItsAtoms:
         # FrozenPhonons.randomize's own copy deleted -- it would be pinning a
         # no-op. Verified: removing that copy is caught at 0.1 and missed at 0.0.
         phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
-        self._build(Potential(phonons, gpts=(32, 32), slice_thickness=1.0))
+        _build_with_numpy_fft(Potential(phonons, gpts=(32, 32), slice_thickness=1.0))
         assert np.array_equal(atoms.positions, before)
 
     def test_an_earlier_build_does_not_change_a_later_potentials_result(self):
@@ -1028,7 +1013,7 @@ class TestPotentialDoesNotMutateItsAtoms:
         ).get_sliced_atoms()
 
         shared = Potential([atoms], gpts=(32, 32), slice_thickness=1.0)
-        self._build(shared)  # wraps `atoms` in place on the unfixed code
+        _build_with_numpy_fft(shared)  # wraps `atoms` in place on the unfixed code
         after = Potential(
             [atoms], gpts=(32, 32), slice_thickness=1.0, periodic=False,
             projection="infinite",
@@ -1080,13 +1065,6 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
         scaled = np.array([[0.1, 0.1, 0.2], [1.3, -0.2, 0.5]])
         return Atoms("Si2", positions=scaled @ cell, cell=cell, pbc=True)
 
-    @staticmethod
-    def _build(potential):
-        from abtem.core import config
-
-        with config.set({"fft": "numpy"}):
-            return potential.build(lazy=False)
-
     @pytest.mark.parametrize(
         "construction",
         ["list_of_atoms", "dummy_frozen_phonons", "frozen_phonons"],
@@ -1106,7 +1084,7 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
         else:
             wrapped = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
 
-        self._build(Potential(wrapped, gpts=(32, 32), slice_thickness=1.0))
+        _build_with_numpy_fft(Potential(wrapped, gpts=(32, 32), slice_thickness=1.0))
         assert np.array_equal(atoms.positions, before)
 
     @pytest.mark.parametrize(
