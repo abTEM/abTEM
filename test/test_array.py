@@ -9,7 +9,7 @@ from hypothesis import assume, given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
                    devices, gpu, lazy_params, remove_dummy_dimensions,
-                   si_cubic_atoms)
+                   requires_gpu, si_cubic_atoms)
 
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
@@ -512,6 +512,177 @@ def test_concatenates_with_self(data, has_array, lazy, device):
 # concat_array_object = concat_array_object_ensemble_blocks(blocks)
 #
 # assert array_object.compute() == concat_array_object
+
+
+class TestStackAndHyperspyTrustTheRealArrayType:
+    """A detector's `to_cpu=True` (the default) moves a measurement's array
+    to `numpy` without updating the object's own `.device` label, so
+    `.device` can say `"gpu"` while `.array` is already a plain `ndarray`.
+    `ArrayObject._stack` and `.to_hyperspy` used to pick their array module
+    from that possibly-stale `.device` label instead of the real `.array`
+    type, and crashed handing a `numpy.ndarray` to `cupy.stack`/
+    `cupy.moveaxis`. Fixing the underlying label inconsistency itself is out
+    of scope here (see the issue file) -- these tests only pin down that the
+    two consumers no longer trust it.
+    """
+
+    @staticmethod
+    def _stale_label_measurement():
+        import ase
+
+        import abtem
+
+        atoms = ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+        with abtem.config.set({"device": "gpu"}):
+            pot = abtem.Potential(
+                atoms, gpts=(32, 32), slice_thickness=2.0, device="gpu"
+            )
+            probe = abtem.Probe(
+                semiangle_cutoff=20, energy=60e3, extent=(8.0, 8.0), gpts=(32, 32)
+            )
+            scan = abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                potential=pot,
+            )
+            # to_cpu=True is the AnnularDetector default; spelled out here
+            # since it's the whole reason .array and .device disagree.
+            return probe.scan(
+                potential=pot, scan=scan,
+                detectors=abtem.AnnularDetector(inner=0, outer=30, to_cpu=True),
+                lazy=False,
+            )
+
+    @requires_gpu
+    def test_precondition_device_label_disagrees_with_array_type(self):
+        """Pins down the setup every test below depends on, so a future fix
+        to the underlying label inconsistency (out of scope here) doesn't
+        silently turn these into tests of nothing."""
+        import numpy as np
+
+        m = self._stale_label_measurement()
+        assert isinstance(m.array, np.ndarray)
+        assert m.device == "gpu"
+
+    @requires_gpu
+    def test_stack_does_not_crash_on_a_stale_device_label(self):
+        import numpy as np
+
+        m = self._stale_label_measurement()
+        stacked = stack(
+            (m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0
+        )
+        assert np.array_equal(
+            np.asarray(stacked.array), np.stack([np.asarray(m.array)] * 2, axis=0)
+        )
+
+    @requires_gpu
+    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(self, monkeypatch):
+        """hyperspy isn't installed in every environment this suite runs
+        in; stubbing its two signal classes lets this test exercise the
+        real to_hyperspy code path -- including the line that crashed --
+        everywhere, rather than only wherever hyperspy happens to be
+        installed. A version of this test gated behind hyperspy's presence
+        (test_hyperspy.py's own skipif) would silently skip in exactly the
+        environments where this regression would go unnoticed."""
+        import types
+
+        import numpy as np
+
+        import abtem.array as abtem_array_module
+
+        class _FakeSignal:
+            def __init__(self, data, axes=None):
+                self.data = data
+
+            def as_lazy(self):
+                return self
+
+        monkeypatch.setattr(
+            abtem_array_module,
+            "hs",
+            types.SimpleNamespace(
+                signals=types.SimpleNamespace(
+                    Signal1D=_FakeSignal, Signal2D=_FakeSignal
+                )
+            ),
+        )
+        m = self._stale_label_measurement()
+        sig = m.to_hyperspy()
+        # transpose=True (the default) is what exercises the crashing line
+        # (xp.moveaxis); for this measurement -- base_dims=2, no ensemble
+        # axes -- that reverses the two base axes, i.e. a plain transpose.
+        assert np.array_equal(np.asarray(sig.data), np.asarray(m.array).T)
+
+    def test_get_array_module_receives_the_array_not_the_device_label(
+        self, monkeypatch
+    ):
+        """CPU-runnable complement to the two GPU-only tests above. Those
+        need get_array_module("gpu") to actually resolve to cupy to
+        reproduce the crash, so (like every @requires_gpu test) they never
+        run in CI -- no GPU runner is configured -- and only ever execute
+        on a workstation with cupy. This doesn't reproduce the crash, but
+        it runs everywhere and directly asserts the fix's actual invariant
+        -- _stack and to_hyperspy call get_array_module with the real
+        array, never with .device -- independent of cupy or a GPU being
+        present at all.
+
+        Deliberately does not use _stale_label_measurement: that needs a
+        real GPU to produce a genuine numpy/cupy mismatch, but the
+        invariant under test here (which argument gets passed) doesn't
+        care what .device or .array actually contain, only that they
+        disagree -- so an arbitrary marker string standing in for .device
+        is enough, and keeps this test runnable without a GPU.
+        """
+        import types
+
+        import numpy as np
+
+        import abtem.array as abtem_array_module
+        from abtem.measurements import Images
+
+        array = np.random.default_rng(0).random((4, 4)).astype(np.float32)
+        m = Images(array=array, sampling=(0.1, 0.1))
+        m._device = "not-a-real-device"  # disagrees with .array on purpose
+
+        real_get_array_module = abtem_array_module.get_array_module
+        calls = []
+
+        def recording_get_array_module(x):
+            calls.append(x)
+            return real_get_array_module("cpu" if isinstance(x, str) else x)
+
+        monkeypatch.setattr(
+            abtem_array_module, "get_array_module", recording_get_array_module
+        )
+
+        stack((m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0)
+        assert any(c is m.array for c in calls)
+        assert not any(isinstance(c, str) for c in calls)
+
+        calls.clear()
+
+        class _FakeSignal:
+            def __init__(self, data, axes=None):
+                self.data = data
+
+            def as_lazy(self):
+                return self
+
+        monkeypatch.setattr(
+            abtem_array_module,
+            "hs",
+            types.SimpleNamespace(
+                signals=types.SimpleNamespace(
+                    Signal1D=_FakeSignal, Signal2D=_FakeSignal
+                )
+            ),
+        )
+        m.to_hyperspy()
+        assert any(c is m.array for c in calls)
+        assert not any(isinstance(c, str) for c in calls)
 
 
 class TestBaseLessArrayObject:
