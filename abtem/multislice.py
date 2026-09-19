@@ -1564,6 +1564,26 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         if energy_axis_idx is not None:
             import numpy as np
 
+            # Match every detector against the *full*, un-indexed ensemble
+            # waves before splitting into per-energy members below -- the
+            # same waves the lazy path's `_out_base_shape` matches against to
+            # size the output array up front (abtem/detectors.py). Without
+            # this, an auto-sizing radial detector (e.g.
+            # FlexibleAnnularDetector with no explicit outer) would instead
+            # see each per-energy `member` one at a time -- via
+            # `_match_waves`'s own per-call energy-ensemble guard -- either
+            # raising there in an order that varies with which member the
+            # detector is reused across, or, once unguarded, sizing its bins
+            # from each member's own cutoff angle and producing per-member
+            # arrays of different shapes for `np.stack` below to fail on.
+            # Matching here instead reaches the same
+            # cannot-auto-size-for-an-ensemble guard while still holding the
+            # full ensemble, so eager raises the same clear error as lazy,
+            # regardless of energy order.
+            for detector in self.detectors:
+                if hasattr(detector, "_match_waves"):
+                    detector._match_waves(waves)
+
             energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
             per_energy = []
             for j in range(len(energy_axis.values)):

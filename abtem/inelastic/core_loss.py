@@ -9,6 +9,7 @@ from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
 from typing import TYPE_CHECKING, Self
 
+import dask
 import numpy as np
 from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
@@ -617,7 +618,59 @@ class BaseTransitionPotential(
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._double_channel = double_channel
+        # Memo for _as_pure_delayed, keyed by nothing but object identity --
+        # see that method.
+        self._delayed_pure_node = None
         super().__init__(**kwargs)
+
+    def _as_pure_delayed(self):
+        """A ``dask.delayed(self, pure=True)`` wrapper, memoized on this object.
+
+        Computing this tokenizes the whole payload via a content hash (dask's
+        ``_normalize_pickle`` fallback for objects with no
+        ``__dask_tokenize__``), which costs ~0.4 ms per MB of the underlying
+        array. Building the same scan graph many times against the same live
+        object -- a frozen-phonon or energy sweep reusing one transition
+        potential -- currently pays that cost on every call; memoizing here
+        means it pays it once.
+
+        Identity-keyed rather than content-keyed: an id()-based token would
+        be unsafe on its own (ids are reused after garbage collection, and
+        using one to build a token breaks determinism across processes), but
+        caching the ``Delayed`` as an attribute of the object it wraps
+        sidesteps that -- there is exactly one per live object, and it is
+        dropped before this object is ever pickled (see ``__getstate__``), so
+        a stale copy can never outlive the object it was built from.
+
+        This memo is only valid while the wrapped object's payload is not
+        mutated in place after the first call. The cached ``Delayed``'s dask
+        *key* is frozen from the content tokenized at that first call, but
+        the node still wraps a live reference to ``self``; an in-place edit
+        to ``self.array`` (or to any other state dask would tokenize) leaves
+        the key describing stale content while the node computes against
+        whatever ``self`` currently holds -- the same staleness hazard a
+        cached content hash would have, just moved one level up rather than
+        eliminated. Nothing under ``abtem/`` mutates a transition potential's
+        payload in place after handing it to ``transition_potential_scan``
+        today, so the risk is latent rather than live; a caller that does
+        would need to build its own fresh ``dask.delayed`` instead of going
+        through this memo.
+        """
+        if self._delayed_pure_node is None:
+            self._delayed_pure_node = dask.delayed(self, pure=True)
+        return self._delayed_pure_node
+
+    def __getstate__(self):
+        # The memoized node wraps self -- pickling it verbatim alongside self
+        # would embed a self-referential graph node inside the pickle, which
+        # at best doubles the payload for no benefit (the memo is a
+        # per-process, per-object convenience, not part of this object's
+        # identity) and at worst is exactly the kind of thing that made this
+        # object expensive to tokenize in the first place. Recomputed fresh
+        # wherever it is next needed.
+        state = self.__dict__.copy()
+        state["_delayed_pure_node"] = None
+        return state
 
     def _task_local(self, match_to=None):
         """A private view of this transition potential for one task.
@@ -639,8 +692,16 @@ class BaseTransitionPotential(
         derived state; a caller that skips it must not mutate the result.
         The payload buffer itself is only ever read (the transforms
         allocate rather than overwrite their input). Note that
-        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
-        attribute there gets it blanked in this view as well.
+        ``copy.copy`` honours ``__getstate__`` by default, so a subclass
+        that blanks an attribute there gets it blanked in this view as
+        well -- except ``TransitionPotentialArray``, which defines its own
+        ``__copy__`` that shares ``__dict__`` by reference instead (see that
+        method), so a ``_task_local`` view of an array transition potential
+        shares ``_delayed_pure_node`` with its source rather than getting it
+        blanked. That is inert today: ``_as_pure_delayed`` is only ever
+        called on the object handed directly to a scan method, never on a
+        ``_task_local``/``copy_to_device`` view, and pickling any view still
+        blanks the memo via ``__getstate__`` before it reaches a worker.
 
         Parameters
         ----------
@@ -946,8 +1007,13 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
     # _local_potential_device_cache and _device_array_cache are derived state:
     # populated lazily from the array already compared and the requesting
-    # device. __getstate__ already drops them for pickling, for the same
-    # reason -- they are a per-process convenience, not part of the object's
+    # device. _delayed_pure_node is also derived (a memoized graph node, see
+    # _as_pure_delayed) and additionally would compare via Delayed.__eq__,
+    # which builds another lazy value rather than a bool -- exactly the
+    # "deferred content is guessed equal" trap fixed elsewhere in
+    # safe_equality, so it must be excluded rather than merely reset.
+    # __getstate__ already drops all three for pickling, for the same reason
+    # -- they are a per-process convenience, not part of the object's
     # identity. Same pattern as Potential._sliced_atoms in
     # abtem/potentials/iam.py. _site_ceiling_cache is the same kind of
     # derived state, but its values are small ints, not device-resident
@@ -956,6 +1022,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _eq_exclude = (
         "_local_potential_device_cache",
         "_device_array_cache",
+        "_delayed_pure_node",
         "_site_ceiling_cache",
     )
 
@@ -1215,12 +1282,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return new
 
     def __getstate__(self):
-        # Both device caches are a per-process convenience and may hold cupy
-        # arrays; letting them ride through pickle would bloat every dask
-        # task carrying this object and break unpickling on CPU-only workers.
+        # All three caches are a per-process convenience and must not ride
+        # through pickle: the two device caches may hold cupy arrays and
+        # would bloat every dask task carrying this object (and break
+        # unpickling on CPU-only workers); _delayed_pure_node wraps self, so
+        # pickling it verbatim would embed a self-referential graph node
+        # inside the pickle. This overrides BaseTransitionPotential's own
+        # __getstate__ rather than calling it, so its reset is repeated here.
         state = self.__dict__.copy()
         state["_local_potential_device_cache"] = None
         state["_device_array_cache"] = {}
+        state["_delayed_pure_node"] = None
         return state
 
     def filter_sites(self, waves, sites, threshold):
