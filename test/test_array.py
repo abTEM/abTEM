@@ -735,6 +735,74 @@ class TestStackAndHyperspyTrustTheRealArrayType:
         # axes -- that reverses the two base axes, i.e. a plain transpose.
         assert np.array_equal(np.asarray(sig.data), np.asarray(m.array).T)
 
+    def test_get_array_module_receives_the_array_not_the_device_label(
+        self, monkeypatch
+    ):
+        """CPU-runnable complement to the two GPU-only tests above. Those
+        need get_array_module("gpu") to actually resolve to cupy to
+        reproduce the crash, so (like every @requires_gpu test) they never
+        run in CI -- no GPU runner is configured -- and only ever execute
+        on a workstation with cupy. This doesn't reproduce the crash, but
+        it runs everywhere and directly asserts the fix's actual invariant
+        -- _stack and to_hyperspy call get_array_module with the real
+        array, never with .device -- independent of cupy or a GPU being
+        present at all.
+
+        Deliberately does not use _stale_label_measurement: that needs a
+        real GPU to produce a genuine numpy/cupy mismatch, but the
+        invariant under test here (which argument gets passed) doesn't
+        care what .device or .array actually contain, only that they
+        disagree -- so an arbitrary marker string standing in for .device
+        is enough, and keeps this test runnable without a GPU.
+        """
+        import types
+
+        import numpy as np
+
+        import abtem.array as abtem_array_module
+        from abtem.measurements import Images
+
+        array = np.random.default_rng(0).random((4, 4)).astype(np.float32)
+        m = Images(array=array, sampling=(0.1, 0.1))
+        m._device = "not-a-real-device"  # disagrees with .array on purpose
+
+        real_get_array_module = abtem_array_module.get_array_module
+        calls = []
+
+        def recording_get_array_module(x):
+            calls.append(x)
+            return real_get_array_module("cpu" if isinstance(x, str) else x)
+
+        monkeypatch.setattr(
+            abtem_array_module, "get_array_module", recording_get_array_module
+        )
+
+        stack((m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0)
+        assert any(c is m.array for c in calls)
+        assert not any(isinstance(c, str) for c in calls)
+
+        calls.clear()
+
+        class _FakeSignal:
+            def __init__(self, data, axes=None):
+                self.data = data
+
+            def as_lazy(self):
+                return self
+
+        monkeypatch.setattr(
+            abtem_array_module,
+            "hs",
+            types.SimpleNamespace(
+                signals=types.SimpleNamespace(
+                    Signal1D=_FakeSignal, Signal2D=_FakeSignal
+                )
+            ),
+        )
+        m.to_hyperspy()
+        assert any(c is m.array for c in calls)
+        assert not any(isinstance(c, str) for c in calls)
+
 
 class TestBaseLessArrayObject:
     """`-len(self.base_shape)` is `-0` for a base-less object (`base_shape == ()`),
