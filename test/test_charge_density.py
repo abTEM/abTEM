@@ -13,8 +13,13 @@ def carbon_atoms():
 
 
 @pytest.fixture
-def charge_density_3d():
-    return np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+def charge_density_3d(carbon_atoms):
+    """Random, but normalised to the valence-electron count a conventional frozen
+    core implies for a single carbon atom (Z=6, Nc=2 -> 4 valence electrons), so the
+    core-subtraction consistency check is satisfied."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    voxel_volume = carbon_atoms.cell.volume / rho.size
+    return (rho * (4.0 / (rho.sum() * voxel_volume))).astype(np.float32)
 
 
 def test_build_lazy(carbon_atoms, charge_density_3d):
@@ -183,9 +188,11 @@ def test_charge_density_potential_on_skew_cell_preserves_cell():
         pbc=True,
         scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
     )
-    density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+    # normalised to this cell's own valence count: 2 C atoms, Z - Nc = 4 each
+    density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    density *= 8.0 / (density.sum() * atoms.cell.volume / density.size)
 
-    pot = ChargeDensityPotential(atoms, density, sampling=0.1)
+    pot = ChargeDensityPotential(atoms, density.astype(np.float32), sampling=0.1)
     assert not pot.grid.is_orthogonal
     assert pot.cell is not None
 
@@ -253,8 +260,12 @@ def test_warns_for_implausibly_peaked_density(carbon_atoms):
     charge_density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
     charge_density[16, 16, 16] = 1e5
 
-    with pytest.warns(UserWarning, match="all-electron density"):
+    # such a density also fails the core-subtraction electron-count check, which
+    # warns separately -- capture everything and assert on the one under test
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+    assert any("all-electron density" in str(w.message) for w in caught)
 
 
 def test_no_warning_for_sharply_peaked_valence_density(carbon_atoms):
@@ -263,25 +274,32 @@ def test_no_warning_for_sharply_peaked_valence_density(carbon_atoms):
     for a heavy element on a fine grid its peak is genuinely large (SrTiO3 reaches
     ~900 e/A^3) while its integrated count stays far below the total atomic
     number."""
-    charge_density = np.random.RandomState(0).rand(64, 64, 64).astype(np.float32) * 1e-3
-    charge_density[32, 32, 32] = 5e3  # ~2.4 electrons in one voxel; total stays low
+    charge_density = np.random.RandomState(0).rand(64, 64, 64).astype(np.float64) * 1e-3
+    charge_density[32, 32, 32] = 5e3
+    voxel_volume = carbon_atoms.cell.volume / charge_density.size
+    charge_density *= 4.0 / (charge_density.sum() * voxel_volume)  # C: Z - Nc = 4
+    assert charge_density.max() > 1000.0
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+        ChargeDensityPotential(
+            carbon_atoms, charge_density.astype(np.float32), sampling=0.1
+        )
 
 
 def test_no_warning_for_smooth_density_near_total_atomic_number(carbon_atoms):
-    """A high integrated count alone must not trigger the warning either: a
-    hydrogen-rich system has almost no core electrons to omit, so a legitimate
-    valence-only density integrates to close to the total atomic number."""
-    # Uniform 1.0 e/A^3 in the 5x5x5 cell integrates to 125 electrons, but has no
-    # sharp near-nuclear feature -- nothing here looks all-electron.
-    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+    """A high integrated count alone must not trigger the warning either. Hydrogen
+    has no core electrons to omit, so its legitimate valence-only density integrates
+    to exactly the total atomic number -- the case the two-signal rule protects."""
+    atoms = Atoms("H", positions=[(2.5, 2.5, 2.5)], cell=(5, 5, 5), pbc=True)
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float64)
+    charge_density *= 1.0 / (charge_density.sum() * atoms.cell.volume / charge_density.size)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+        ChargeDensityPotential(
+            atoms, charge_density.astype(np.float32), sampling=0.1
+        )
 
 
 def test_no_warning_for_lazy_charge_density(carbon_atoms):
@@ -295,3 +313,77 @@ def test_no_warning_for_lazy_charge_density(carbon_atoms):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         ChargeDensityPotential(carbon_atoms, lazy_charge_density, sampling=0.1)
+
+
+def _total_charge(potential, atoms, density):
+    """Net charge of the array handed to the Poisson solve, in electrons."""
+    from abtem.potentials.charge_density import (
+        _add_core_density_correction_fourier,
+        add_point_charges_fourier,
+    )
+
+    charge = -np.fft.fftn(density)
+    charge = add_point_charges_fourier(charge, atoms, 0.05)
+    if potential._core_density_correction is not None:
+        charge = _add_core_density_correction_fourier(
+            charge, atoms, potential._core_density_correction
+        )
+    voxel_volume = atoms.cell.volume / np.prod(density.shape)
+    return float(charge[0, 0, 0].real) * voxel_volume
+
+
+def test_core_subtraction_makes_the_cell_neutral(carbon_atoms, charge_density_3d):
+    """The point that motivates the whole correction: adding each atom's full Z to a
+    valence-only density leaves a net +Nc per atom, which the Poisson solve can only
+    absorb into a uniform background. A net charge contributes q / (eps0 k^2), so the
+    error lands at low spatial frequency -- in the low-order structure factors."""
+    density = np.asarray(charge_density_3d, dtype=float)
+    potential = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+
+    without = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    without._core_density_correction = None
+
+    assert _total_charge(without, carbon_atoms, density) == pytest.approx(2.0, abs=0.05)
+    assert _total_charge(potential, carbon_atoms, density) == pytest.approx(0.0, abs=0.05)
+
+
+def test_conventional_core_is_used_by_default(carbon_atoms, charge_density_3d):
+    potential = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert potential.core_electrons == {"C": 2}
+
+
+def test_explicit_valence_electrons_override_the_table(carbon_atoms):
+    """Semicore pseudopotentials keep shells in the valence that the conventional
+    table assigns to the core, so the caller must be able to say so."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    rho *= 5.0 / (rho.sum() * carbon_atoms.cell.volume / rho.size)
+
+    potential = ChargeDensityPotential(
+        carbon_atoms, rho.astype(np.float32), sampling=0.1, valence_electrons={"C": 5}
+    )
+    assert potential.core_electrons == {"C": 1}
+
+
+def test_inconsistent_electron_count_warns_and_skips_the_correction(carbon_atoms):
+    """Subtracting the wrong core is worse than subtracting none -- on SrTiO3 the
+    conventional table taken on trust scores below making no correction at all. So an
+    inconsistency falls back to the old behaviour rather than guessing."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    rho *= 5.0 / (rho.sum() * carbon_atoms.cell.volume / rho.size)  # not 4
+
+    with pytest.warns(UserWarning, match="will not be subtracted"):
+        potential = ChargeDensityPotential(
+            carbon_atoms, rho.astype(np.float32), sampling=0.1
+        )
+    assert potential.core_electrons == {"C": 0}
+
+
+def test_lazy_charge_density_skips_the_electron_count_check(carbon_atoms):
+    """The check would force an eager computation of a potentially large array."""
+    import dask.array as da
+
+    rho = da.random.random((32, 32, 32), chunks=(32, 32, 32)) * 0.1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        potential = ChargeDensityPotential(carbon_atoms, rho, sampling=0.1)
+    assert potential.core_electrons == {"C": 2}
