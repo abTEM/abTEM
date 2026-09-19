@@ -381,12 +381,15 @@ class _AbstractRadialDetector(BaseDetector):
         the common case (repeated calls at one energy already agree).
 
         A multi-member energy ensemble cannot be auto-sized at all: each
-        member has its own cutoff angle, so a single radial axis cannot fit
-        all of them (see the module docstring analogue: this is the
-        `FlexibleAnnularDetector` gotcha; unlike a single-value cutoff, the
-        two shortest-first / longest-first energy orders would otherwise
-        silently size the bins differently). Refuse it instead of picking
-        one member's cutoff (or lazy's own, different, convention) silently.
+        member has its own antialias cutoff angle (`waves.cutoff_angles`,
+        which scales with wavelength at a fixed grid -- it is not the
+        semiangle_cutoff/aperture, which does not enter it at all), so a
+        single radial axis cannot fit all of them (see the module docstring
+        analogue: this is the `FlexibleAnnularDetector` gotcha; unlike a
+        single-value cutoff, the two shortest-first / longest-first energy
+        orders would otherwise silently size the bins differently). Refuse
+        it instead of picking one member's cutoff (or lazy's own, different,
+        convention) silently.
         """
         if self._outer_is_explicit:
             return
@@ -397,11 +400,11 @@ class _AbstractRadialDetector(BaseDetector):
         ):
             raise RuntimeError(
                 f"{type(self).__name__} cannot auto-size its outer angle for "
-                "a multi-energy ensemble: each energy has its own cutoff "
-                "angle (aperture), so no single radial axis fits every "
-                "member. Pass an explicit outer= (a value valid for every "
-                "member), or run one energy at a time and combine the "
-                "results yourself."
+                "a multi-energy ensemble: each energy has its own antialias "
+                "cutoff angle (it scales with wavelength at fixed grid), so "
+                "no single radial axis fits every member. Pass an explicit "
+                "outer= (a value valid for every member), or run one energy "
+                "at a time and combine the results yourself."
             )
 
         self._outer = min(waves.cutoff_angles)
