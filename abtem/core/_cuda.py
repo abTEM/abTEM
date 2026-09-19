@@ -134,6 +134,9 @@ def sum_run_length_encoded(array, result, separators):
     # each step (offset >>= 1) and only sums pairs at that stride, which is
     # only exhaustive when blockDim.x is a power of two.
     threads = 256
+    assert threads & (threads - 1) == 0, (
+        "the kernel's tree reduction requires a power-of-two block size"
+    )
     grid = (n_bins * n_batch, 1, 1)
     block = (threads, 1, 1)
     shared_mem = threads * itemsize
