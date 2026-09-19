@@ -167,7 +167,17 @@ class BaseScan(ReciprocalSpaceMultiplication):
         if len(positions) == 0:
             return xp.ones(waves.gpts, dtype=get_dtype(complex=False))
 
-        positions = xp.asarray(positions) / xp.asarray(waves.sampling)
+        cell = waves.grid.cell
+        if cell is None:
+            positions = xp.asarray(positions) / xp.asarray(waves.sampling)
+        else:
+            # skewed grid: a Cartesian scan position maps to fractional grid coordinates
+            # via inv(cell) (the same mapping as atom placement), so the Fourier-shift
+            # phase exp(-2 pi i k . r) lands the probe at the right physical position.
+            inverse_cell = xp.asarray(np.linalg.inv(np.asarray(cell, dtype=float)))
+            positions = (xp.asarray(positions) @ inverse_cell) * xp.asarray(
+                waves._valid_gpts
+            )
         positions = positions.astype(get_dtype(complex=False))
 
         kernel = fft_shift_kernel(positions, shape=waves._valid_gpts)
@@ -902,6 +912,7 @@ class GridScan(HasGrid2DMixin, BaseScan):
             endpoint=endpoint,
             fft_grid=False,
         )
+        self._cell = None  # set by match_probe for skew grids
 
     def __len__(self):
         return self.gpts[0] * self.gpts[1]
@@ -965,6 +976,14 @@ class GridScan(HasGrid2DMixin, BaseScan):
             self.end = probe.extent
 
         _validate_scan_sampling(self, probe)
+
+        # store cell for skew-grid coordinate mapping in get_positions
+        cell = getattr(probe.grid, "cell", None)
+        if cell is not None:
+            cell = np.asarray(cell, dtype=float)
+            # only store if truly non-orthogonal
+            if not np.allclose(cell, np.diag(np.diag(cell))):
+                self._cell = cell
 
     @classmethod
     def commensurate(
@@ -1114,7 +1133,24 @@ class GridScan(HasGrid2DMixin, BaseScan):
         if len(xi) == 1:
             return xi[0]
 
-        return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
+        positions = np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
+
+        # For skew cells, map along-axis (u, v) coordinates to Cartesian
+        # (x, y) so the probe tiles the parallelogram cell uniformly.
+        # The kernel code (BaseScan._build_kernel) maps Cartesian ->
+        # fractional via inv(cell), giving uniform fractional sampling
+        # (u/|a1|, v/|a2|) that matches the display mesh.
+        if self._cell is not None:
+            norms = np.linalg.norm(self._cell, axis=1)
+            hat1 = self._cell[0] / norms[0]
+            hat2 = self._cell[1] / norms[1]
+            u = positions[..., 0]
+            v = positions[..., 1]
+            positions = np.stack(
+                [u * hat1[0] + v * hat2[0], u * hat1[1] + v * hat2[1]], axis=-1
+            )
+
+        return positions
 
     def _sort_into_extents(self, extents):
         x = np.linspace(
@@ -1186,6 +1222,10 @@ class GridScan(HasGrid2DMixin, BaseScan):
         gpts = (x_scan["gpts"], y_scan["gpts"])
         endpoint = (x_scan["endpoint"], y_scan["endpoint"])
         new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint, **kwargs)
+        # propagate cell for skew-grid coordinate mapping
+        cell = x_scan.get("cell", None)
+        if cell is not None:
+            new_scan._cell = cell
         new_scan = _wrap_with_array(new_scan, 2)
         return new_scan
 
@@ -1215,6 +1255,7 @@ class GridScan(HasGrid2DMixin, BaseScan):
                     "end": end,
                     "gpts": chunk,
                     "endpoint": False,
+                    "cell": self._cell,
                 }
 
             if lazy:

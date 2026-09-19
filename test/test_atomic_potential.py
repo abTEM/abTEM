@@ -318,9 +318,9 @@ class TestScatteringFactorCacheKey:
         recomputations: dict = collections.Counter()
         original = integrator._calculate_scattering_factor_on_device
 
-        def counting(symbol, gpts, sampling, device_key):
+        def counting(symbol, gpts, sampling, device_key, cell=None):
             recomputations[tuple(gpts)] += 1
-            return original(symbol, gpts, sampling, device_key)
+            return original(symbol, gpts, sampling, device_key, cell=cell)
 
         integrator._calculate_scattering_factor_on_device = counting
 

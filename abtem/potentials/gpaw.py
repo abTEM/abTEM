@@ -175,6 +175,12 @@ def integrate_slice(array, gpts, a, b, thickness):
     dz = thickness / array.shape[2]
     na = int(np.floor(a / dz))
     nb = int(np.floor(b / dz))
+    # A requested slice thinner than the native z-grid spacing (na == nb) would sum
+    # over an empty range, leaving (nb - na) == 0 in both new_shape and old_shape
+    # below and producing a 0 / 0 division. Fall back to the nearest single native
+    # bin, matching how _interpolate_slice (charge_density.py) guards the analogous
+    # case with max(nz, 2).
+    nb = max(nb, na + 1)
     slice_array = np.sum(array[..., na:nb], axis=-1) * dz
     new_shape = (nb - na,) + gpts
     old_shape = (nb - na,) + slice_array.shape
@@ -225,7 +231,11 @@ def _generate_slices(
     transform_valence_potential = None
     if potential.plane != "xy":
         if not is_cell_orthogonal(atoms.cell):
-            raise NotImplementedError
+            raise NotImplementedError(
+                "GPAW valence-potential projection along a non-xy plane is not "
+                "supported on non-orthogonal cells; use plane='xy' (matching the "
+                "general non-orthogonal Potential support, which is also xy-only)."
+            )
 
         axes = plane_to_axes(potential.plane)
         valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
@@ -383,7 +393,12 @@ class GPAWPotential(_PotentialBuilder):
         self._gridrefinement = gridrefinement
         self._repetitions = repetitions
 
-        cell = frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
         frozen_phonons.atoms.calc = None
 
         super().__init__(
@@ -531,6 +546,14 @@ class GPAWPotential(_PotentialBuilder):
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("calculators", "frozen_phonons"))
+        # self.box has already been resolved from None to a concrete tuple (see
+        # _FieldBuilder.__init__): non-orthogonal auto-detection only triggers when
+        # box is None, so feeding the resolved box back into a fresh GPAWPotential
+        # (as happens on every lazy/dask block reconstruction) would silently skip
+        # skew detection and orthogonalise the cell. Reset it to None here so the
+        # reconstructed instance re-detects the skew from the atoms.
+        if self._non_orthogonal:
+            kwargs["box"] = None
 
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
 
