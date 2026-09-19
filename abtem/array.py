@@ -1966,7 +1966,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             self.ensemble_shape,
         )
 
-        xp = get_array_module(self.device)
+        # Not self.device: a detector's to_cpu=True (the default) moves a
+        # measurement's array to numpy without updating the object's own
+        # device label, so self.device can say "gpu" while self.array is
+        # already a plain ndarray. get_array_module(self.array) reads the
+        # real backing type instead of that possibly-stale label -- the same
+        # fix as _stack below, and the pattern every other get_array_module
+        # call in this file already uses.
+        xp = get_array_module(self.array)
 
         axes_base_indices = tuple_range(
             offset=len(self.ensemble_shape), length=len(self.base_shape)
@@ -2096,7 +2103,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis_metadata: AxisMetadata,
         axis: int,
     ) -> Self:
-        xp = get_array_module(array_objects[0].device)
+        # Not array_objects[0].device: a detector's to_cpu=True (the
+        # default) moves a measurement's array to numpy without updating
+        # the object's own device label, so .device can say "gpu" while
+        # .array is already a plain ndarray. Only used below in the eager
+        # (xp.stack) branch -- the lazy (da.stack) branch below doesn't
+        # need to know the concrete backing type -- but get_array_module
+        # already handles a dask array via its _meta, so resolving it from
+        # the real array here rather than the label is safe either way.
+        xp = get_array_module(array_objects[0].array)
 
         if any(array.is_lazy for array in array_objects):
             array = da.stack(
