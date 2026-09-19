@@ -1768,6 +1768,76 @@ class TestScatterBatchBucketing:
         )
         assert np.array_equal(reassembled, np.asarray(direct.array))
 
+    def test_site_ceiling_is_memoized_per_waves_shape_and_not_recomputed(
+        self, monkeypatch
+    ):
+        """The site_ceiling probe (an extra validate_chunks call, needed
+        only for max_batch="auto") must run at most once per distinct
+        (max_batch, waves.shape, dtype, device) -- calling it on every
+        generate_scattered_waves invocation measured as a ~10x regression
+        on the "auto" path in a real per-slice driver loop, even though an
+        isolated call to validate_chunks alone looked cheap."""
+        from abtem.core.chunks import validate_chunks as real_validate_chunks
+
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+        rng = np.random.default_rng(5)
+        sites = rng.uniform(0, 8, size=(5, 2)).astype(np.float32)
+
+        calls = []
+
+        def counting_validate_chunks(*args, **kwargs):
+            calls.append(kwargs.get("shape", args[0] if args else None))
+            return real_validate_chunks(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "abtem.inelastic.core_loss.validate_chunks", counting_validate_chunks
+        )
+
+        for _ in range(5):
+            for _ in tp.generate_scattered_waves(
+                waves, sites, max_batch="auto", threshold=0.0
+            ):
+                pass
+
+        # One validate_chunks call per invocation for the real chunking
+        # (always needed, cheap, shape[0] == len(sites)) plus exactly one
+        # ceiling-probe call total (shape[0] == the sentinel), not one per
+        # invocation -- 5 invocations, 6 calls, not 10.
+        probe_calls = [
+            c for c in calls if c[0] == abtem.inelastic.core_loss._SCATTER_BATCH_CEILING_PROBE_SITES
+        ]
+        assert len(calls) == 6
+        assert len(probe_calls) == 1
+
+    def test_site_ceiling_cache_distinguishes_waves_shapes(self):
+        """A stale ceiling from one waves shape must never leak into a
+        different one -- the cache key has to include enough of the call's
+        own inputs to keep them apart."""
+        tp = self._make_tp(n_transitions=2)
+        small = self._make_waves(gpts=(16, 16))
+        large = self._make_waves(gpts=(64, 64))
+
+        ceiling_small = tp._get_site_ceiling("auto", small, "auto")
+        ceiling_large = tp._get_site_ceiling("auto", large, "auto")
+
+        # Same VRAM budget, more elements per site at the larger grid, so
+        # the ceiling (in sites) must not increase.
+        assert ceiling_large <= ceiling_small
+        assert len(tp._site_ceiling_cache) == 2
+
+    def test_site_ceiling_int_max_batch_bypasses_the_cache(self):
+        """An explicit int max_batch already is the ceiling (validate_chunks
+        tiles it verbatim); this must return immediately without touching
+        the cache, matching the description in _get_site_ceiling."""
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+
+        ceiling = tp._get_site_ceiling(7, waves, limit=123)
+
+        assert ceiling == 7
+        assert tp._site_ceiling_cache == {}
+
 
 class TestCeilToMultiple:
     """Contrast case for _nearest_power_of_two (core/chunks.py), which

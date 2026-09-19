@@ -294,12 +294,14 @@ _SCATTER_BATCH_BUCKET = 8
 
 # Sentinel axis length used to probe validate_chunks for the real per-chunk
 # site ceiling max_batch/the VRAM budget allows, far larger than any
-# max_elements-derived chunk size on any real device (2**24 sites is already
-# a multi-hundred-GB chunk at any real gpts/dtype) while staying cheap: a
-# sentinel this large still returns a several-thousand-entry chunk tuple
-# from validate_chunks, which costs under 1 ms, against ~4 ms for a 10**9
-# sentinel's quarter-million-entry tuple -- see
-# generate_scattered_waves's site_ceiling.
+# max_elements-derived chunk size on any real device -- 2**24 sites is
+# already a multi-hundred-GB chunk at any real gpts/dtype. The probe's cost
+# does not scale with this constant the way it first looked like it did (a
+# quarter-million-entry chunk tuple at a 10**9 sentinel was not the
+# bottleneck -- shrinking it to 2**24's ~1000-entry tuple barely moved the
+# measured cost), so this is sized for correctness margin, not performance;
+# see _get_site_ceiling for how the actual per-call cost is avoided
+# (memoization, not sentinel tuning).
 _SCATTER_BATCH_CEILING_PROBE_SITES = 2**24
 
 
@@ -947,8 +949,15 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     # device. __getstate__ already drops them for pickling, for the same
     # reason -- they are a per-process convenience, not part of the object's
     # identity. Same pattern as Potential._sliced_atoms in
-    # abtem/potentials/iam.py.
-    _eq_exclude = ("_local_potential_device_cache", "_device_array_cache")
+    # abtem/potentials/iam.py. _site_ceiling_cache is the same kind of
+    # derived state, but its values are small ints, not device-resident
+    # arrays -- safe to pickle, so __getstate__ does not reset it (see
+    # _get_site_ceiling).
+    _eq_exclude = (
+        "_local_potential_device_cache",
+        "_device_array_cache",
+        "_site_ceiling_cache",
+    )
 
     def __init__(
         self,
@@ -973,6 +982,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._local_potential_device_cache = None
+        # Memo for _get_site_ceiling, keyed by (max_batch, waves.shape,
+        # dtype, device) -- see that method.
+        self._site_ceiling_cache: dict = {}
         # Memo for copy_to_device, keyed by target device -- see that method.
         # Set here, on the object every _task_local view is shallow-copied
         # from, so copy.copy's shared dict reference is what makes every
@@ -1356,6 +1368,48 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
         return waves.__class__(**d)
 
+    def _get_site_ceiling(self, max_batch, waves: Waves, limit) -> int:
+        """The real per-chunk site ceiling max_batch/the VRAM budget allows,
+        independent of how many sites the calling generate_scattered_waves
+        invocation happens to have -- see the padding block there for why
+        this matters.
+
+        Memoized on this object: generate_scattered_waves runs once per
+        potential slice in the multislice driver against the same waves
+        shape throughout one scan (see multislice.py's per-slice loop
+        calling it on the same transition_potential), so recomputing this
+        via validate_chunks on every call is pure waste. Measured inside a
+        real driver loop -- not an isolated call to validate_chunks alone,
+        which understated it -- the unmemoized probe cost ~3-6 ms/call
+        against ~0.3 ms/call for an explicit int max_batch (which never
+        probes at all, see below): a ~10x regression on the "auto" path
+        that the sentinel-size tuning alone did not fix, since the cost
+        scales with validate_chunks's internal handling of the sentinel
+        axis length, not with the returned tuple's size.
+
+        When max_batch is an explicit int, chunks[0] in the caller already
+        *is* the ceiling -- validate_chunks tiles it verbatim regardless of
+        max_elements -- so this returns immediately without touching the
+        cache or calling validate_chunks again.
+        """
+        if isinstance(max_batch, int):
+            return max_batch
+
+        key = (max_batch, waves.shape, waves.dtype, self.device)
+        cached = self._site_ceiling_cache.get(key)
+        if cached is None:
+            cached = max(
+                validate_chunks(
+                    shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
+                    chunks=(max_batch,) + (-1,) * len(waves.shape),
+                    max_elements=limit,
+                    dtype=waves.dtype,
+                    device=self.device,
+                )[0]
+            )
+            self._site_ceiling_cache[key] = cached
+        return cached
+
     def generate_scattered_waves(
         self,
         waves: Waves,
@@ -1398,35 +1452,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             device=self.device,
         )[0]
 
-        # The real per-chunk site ceiling max_batch/the VRAM budget allows,
-        # independent of how many sites this call actually has. When
-        # max_batch is an explicit int, chunks[0] above already *is* that
-        # ceiling -- validate_chunks tiles it verbatim regardless of
-        # max_elements. Only the "auto" case needs probing: `chunks` above
-        # used the real (possibly smaller) len(sites), so when it already
-        # fits in one chunk -- the common case -- `chunks` is just
-        # `(len(sites),)`, which would be mistaken for the ceiling itself if
-        # read directly. Probing with a sentinel axis length far larger than
-        # any realistic max_elements-driven chunk size (2**24 sites is
-        # already a multi-hundred-GB chunk at any real gpts/dtype) recovers
-        # the true ceiling instead; a sentinel of 10**9 gave the same answer
-        # but cost ~4ms/call from the resulting quarter-million-entry chunk
-        # tuple, against <1ms here -- this runs once per
-        # generate_scattered_waves call, not per chunk. Needed below so
-        # padding a chunk up to a bucket multiple can never exceed what the
-        # caller's max_batch/budget allows -- see the guard there.
-        if isinstance(max_batch, int):
-            site_ceiling = max_batch
-        else:
-            site_ceiling = max(
-                validate_chunks(
-                    shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
-                    chunks=(max_batch,) + (-1,) * len(waves.shape),
-                    max_elements=limit,
-                    dtype=waves.dtype,
-                    device=self.device,
-                )[0]
-            )
+        site_ceiling = self._get_site_ceiling(max_batch, waves, limit)
 
         start = 0
         for chunk in chunks:
