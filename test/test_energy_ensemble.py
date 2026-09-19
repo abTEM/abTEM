@@ -80,6 +80,56 @@ class TestPlaneWaveEnergyEnsemble:
         assert result.array.shape[0] == 3
 
 
+class TestEnergyEnsembleChunkSplitting:
+    """An energy ensemble split across dask chunks must keep its ensemble axis.
+
+    A chunk holding exactly one member reconstructs as a builder with a scalar
+    energy and no ensemble axis, so _calculate_array returns the bare base
+    array while map_blocks has been told to expect one axis per ensemble
+    dimension. Downstream, ArrayObject._apply_transform splits its blockwise
+    args positionally, so a block of the wrong ndim silently feeds the array's
+    own RealSpaceAxis to the transform's reconstruction chain.
+
+    The split only happens once a single wave exceeds the chunk-size budget --
+    at production grids, not at test grids -- so force it by shrinking the
+    budget rather than growing gpts.
+    """
+
+    @staticmethod
+    def _build_with_chunk_size(chunk_size):
+        with abtem.config.set({"dask.chunk-size": chunk_size}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            return pw.build(lazy=True)
+
+    def test_split_blocks_keep_ensemble_axis(self):
+        waves = self._build_with_chunk_size("4 kB")
+        array = waves.array
+        assert len(array.chunks[0]) > 1, "ensemble was not split; lower chunk-size"
+
+        for i in range(array.numblocks[0]):
+            block = array.blocks[i, 0, 0].compute()
+            assert block.ndim == array.ndim, (
+                f"block {i} has ndim {block.ndim} (shape {block.shape}), "
+                f"expected {array.ndim}"
+            )
+
+    def test_split_matches_unsplit(self):
+        split = self._build_with_chunk_size("4 kB")
+        whole = self._build_with_chunk_size("128 MB")
+
+        assert len(split.array.chunks[0]) > 1
+        assert len(whole.array.chunks[0]) == 1
+        assert np.array_equal(split.compute().array, whole.compute().array)
+
+    def test_multislice_over_split_ensemble(self):
+        atoms = ase.build.bulk("Si", cubic=True)
+        with abtem.config.set({"dask.chunk-size": "4 kB"}):
+            pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
+            assert len(pw.build(lazy=True).array.chunks[0]) > 1
+            result = pw.multislice(atoms).compute()
+        assert result.array.shape[0] == len(ENERGIES)
+
+
 class TestProbeEnergyEnsemble:
     def test_ensemble_shape(self):
         probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
@@ -496,6 +546,100 @@ class TestBlochWavesEnergyEnsemble:
                     dp_single.array[i, inactive], 0.0,
                     err_msg=f"Inactive beams non-zero at energy index {i}",
                 )
+
+    def test_diffraction_patterns_eager_matches_lazy(self, bw_multi, dp_multi):
+        """lazy=False takes a separate code path through the same _embed_beams/
+        stack helpers (used directly, not via da.stack/map_blocks) -- this is
+        the path BlochwaveEnsemble._run_calculate_diffraction_patterns actually
+        calls (it always computes eagerly per dask block), so a bug specific
+        to it doesn't show up through dp_multi/dp_single above, which only
+        exercise the lazy branch via .compute(). On CPU both branches use
+        numpy either way; the eager branch additionally needs to allocate its
+        zero-padding array on whatever device the per-energy result is
+        actually on, rather than assuming numpy, since it runs unconditionally
+        for every _run_calculate_diffraction_patterns block regardless of
+        device."""
+        eager = bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS, lazy=False)
+        assert isinstance(eager, IndexedDiffractionPatterns)
+        assert eager.array.shape == dp_multi.array.shape
+        np.testing.assert_array_equal(eager.array, dp_multi.array)
+
+
+BLOCH_ENSEMBLE_N_ROTATIONS = 4
+
+
+@pytest.mark.slow
+@pytest.mark.xdist_group("bloch_energy_ensemble")
+class TestBlochwaveEnsembleEnergyEnsemble:
+    """BlochWaves.rotate() with a rotation ensemble returns a BlochwaveEnsemble,
+    a different class from BlochWaves with its own calculate_diffraction_patterns.
+    Combined with a multi-energy ensemble, reciprocal_lattice_vectors -- which has
+    no energy dependence of its own -- needs an explicit size-1 placeholder axis
+    for energy, in the same position array has one, or the two disagree by one
+    axis the moment both ensembles are present together (rotation ensemble alone,
+    or energy ensemble alone as covered above, each stay one axis short of
+    triggering it)."""
+
+    @staticmethod
+    def _rotated_ensemble(n_rotations, energies):
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(atoms, energy=energies, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
+        angles = np.linspace(0.0, 10.0, n_rotations)
+        zero = np.zeros_like(angles)
+        all_angles = np.stack((zero, angles, -zero), axis=-1)
+        return bw.rotate("zxz", all_angles, degrees=True)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def rotated_multi_energy(cls):
+        """Shared rotation+energy ensemble (expensive: rebuilds the structure
+        factor once instead of once per test)."""
+        return cls._rotated_ensemble(BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES)
+
+    @pytest.fixture(scope="class")
+    def dp_multi(self, rotated_multi_energy):
+        """Cached multi-thickness diffraction patterns, shared by the tests
+        that only read the result rather than re-triggering the bug."""
+        return rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+
+    def test_diffraction_patterns_shape_with_thicknesses(self, dp_multi):
+        n_rot = BLOCH_ENSEMBLE_N_ROTATIONS
+        n_energies, n_thick = len(BLOCH_ENERGIES), len(BLOCH_THICKNESS)
+        assert dp_multi.array.shape[:-1] == (n_rot, n_energies, n_thick)
+        assert isinstance(dp_multi.ensemble_axes_metadata[1], EnergyAxis)
+        assert isinstance(dp_multi.ensemble_axes_metadata[2], ThicknessAxis)
+
+    def test_diffraction_patterns_shape_scalar_thickness(self, rotated_multi_energy):
+        result = rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS[0], lazy=False
+        )
+        n_rot, n_energies = BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_ENERGIES)
+        assert result.array.shape[:-1] == (n_rot, n_energies)
+
+    def test_getitem_after_multi_energy(self, dp_multi):
+        """__getitem__ zips items against reciprocal_lattice_vectors.shape
+        positionally, so a missing energy placeholder there mis-slices this
+        even where __init__'s broadcast check alone would not catch it."""
+        sub = dp_multi[1]
+        assert sub.array.shape == dp_multi.array.shape[1:]
+
+    def test_crop_after_multi_energy(self, dp_multi):
+        cropped = dp_multi.crop(k_max=BLOCH_G_MAX / 2)
+        assert cropped.array.shape[:-1] == dp_multi.array.shape[:-1]
+
+    def test_single_energy_rotation_ensemble_unchanged(self):
+        """No regression for the rotation-ensemble-only path (single energy)."""
+        rotated = self._rotated_ensemble(
+            BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES[0]
+        )
+        result = rotated.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+        assert result.array.shape[:-1] == (
+            BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_THICKNESS)
+        )
 
 
 # ---------------------------------------------------------------------------
