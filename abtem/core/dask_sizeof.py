@@ -2,9 +2,9 @@
 
 abTEM ships large arrays to dask by wrapping them in a small object-dtype
 ``ndarray`` -- see ``_wrap_with_array``/``shared_constant_arg`` in
-``abtem.core.ensemble``, a transport convention used at roughly fifty call
-sites across the package (potentials, transition potentials, waves,
-scans, detectors, frozen phonons, S-matrices, ...). ``dask.sizeof.sizeof``
+``abtem.core.ensemble``, a transport convention used at 32 call sites
+across the package (potentials, transition potentials, waves, scans,
+detectors, frozen phonons, S-matrices, ...). ``dask.sizeof.sizeof``
 drives distributed's spill, rebalance and transfer-cost decisions, but it
 has no registration for any of abTEM's classes -- they fall back to
 ``sys.getsizeof`` (tens of bytes regardless of payload) -- and it does not
@@ -51,12 +51,6 @@ import numpy as np
 from ase import Atoms
 from dask.sizeof import sizeof
 
-# Force dask's own lazy numpy registration to run now, and capture the
-# function it installs, so the override below can delegate to the exact
-# upstream implementation for every non-object dtype rather than
-# reimplementing its edge cases (e.g. the 0-in-strides broadcast view).
-_dask_sizeof_numpy_ndarray = sizeof.dispatch(np.ndarray)
-
 
 def _sizeof_object_ndarray(x: np.ndarray) -> int:
     """Sum ``sizeof`` of an object-dtype array's elements.
@@ -88,6 +82,39 @@ def _sizeof_ndarray(x: np.ndarray) -> int:
         return _sizeof_object_ndarray(x)
     return _dask_sizeof_numpy_ndarray(x)
 
+
+# Marks this function so a reload of this module (e.g. IPython's
+# `%autoreload 2`, which abTEM notebook users routinely have on) can
+# recognise it below if dask's dispatch table already holds it, rather
+# than re-capturing itself as "the original" non-object implementation.
+_sizeof_ndarray._abtem_object_dtype_override = True
+
+# Force dask's own lazy numpy registration to run (if it hasn't already),
+# and capture the function installed for np.ndarray, so the override
+# above can delegate to the exact upstream implementation for every
+# non-object dtype rather than reimplementing its edge cases (e.g. the
+# 0-in-strides broadcast view).
+#
+# On a *reload* of this module, dask's dispatch table already holds our
+# own _sizeof_ndarray from the previous execution -- reload() re-runs
+# this module's code in its existing namespace rather than a fresh one,
+# but it does not reset dask's separate, global dispatch registry.
+# Capturing that again here would make _sizeof_ndarray delegate to
+# itself, recursing until the stack overflows the moment anyone weighs a
+# non-object array. `_previously_captured` reads this module's own
+# last-known-good delegate -- still bound in the namespace reload() is
+# re-executing into, from before this line runs again -- and is reused
+# instead whenever the freshly-dispatched function turns out to be our
+# own wrapper.
+_previously_captured = globals().get("_dask_sizeof_numpy_ndarray")
+_dispatched = sizeof.dispatch(np.ndarray)
+if (
+    getattr(_dispatched, "_abtem_object_dtype_override", False)
+    and _previously_captured is not None
+):
+    _dask_sizeof_numpy_ndarray = _previously_captured
+else:
+    _dask_sizeof_numpy_ndarray = _dispatched
 
 sizeof.register(np.ndarray)(_sizeof_ndarray)
 

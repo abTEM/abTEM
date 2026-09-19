@@ -218,3 +218,37 @@ print(json.dumps({
     # which abTEM has no registration for.
     assert result["array_sizeof"] == result["wrapper_nbytes"] + result["element_sizeof_sum"]
     assert result["array_sizeof"] < 100 * 8  # far less than Foo's hidden payload
+
+
+def test_module_reload_does_not_recurse():
+    """importlib.reload of this module -- what IPython's `%autoreload 2`
+    does, which abTEM notebook users routinely have on -- used to make
+    _sizeof_ndarray delegate to itself. On reload, sizeof.dispatch(np.ndarray)
+    returns the wrapper this module installed the first time; capturing
+    that again as "the original non-object implementation" makes every
+    non-object array recurse into itself until the stack overflows
+    (unfixed: RecursionError the moment any ndarray is weighed after a
+    reload, not just abTEM's own types)."""
+    script = """
+import json
+import importlib
+import numpy as np
+from dask.sizeof import sizeof
+import abtem  # noqa: F401
+import abtem.core.dask_sizeof as m
+
+before = int(sizeof(np.zeros(10)))
+importlib.reload(m)
+after_one_reload = int(sizeof(np.zeros(10)))
+importlib.reload(m)
+after_two_reloads = int(sizeof(np.zeros(10)))
+print(json.dumps({
+    "before": before,
+    "after_one_reload": after_one_reload,
+    "after_two_reloads": after_two_reloads,
+}))
+"""
+    result = _run(script)
+    assert result["before"] == 80
+    assert result["after_one_reload"] == 80
+    assert result["after_two_reloads"] == 80
