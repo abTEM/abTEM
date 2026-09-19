@@ -498,14 +498,31 @@ class TestBlochWavesEnergyEnsemble:
         assert ew_multi.array.shape[1] == n_thick
 
     def test_inactive_beams_are_zero(self, bw_multi, dp_single):
-        """Beams inactive at a given energy must have zero intensity in the output."""
+        """Beams inactive at a given energy must have zero intensity in the output.
+
+        The `if inactive.any()` guard below would let this test pass
+        vacuously if BLOCH_ENERGIES ever stopped producing distinct
+        per-energy active-beam sets (e.g. too few/too-close energies for
+        this cell). The assertion after the loop turns that silent
+        degenerate case into a hard failure, rather than relying on a
+        one-off empirical check quoted only in a comment (see
+        BLOCH_ENERGIES above) staying true forever.
+        """
+        n_union = int(bw_multi._hkl_mask.sum())
         for i, sub in enumerate(bw_multi._energy_hkl_masks):
             inactive = ~sub  # positions active in union but NOT at energy i
-            if inactive.any():
-                np.testing.assert_array_equal(
-                    dp_single.array[i, inactive], 0.0,
-                    err_msg=f"Inactive beams non-zero at energy index {i}",
-                )
+            # A large fraction inactive at every energy is what makes this
+            # test meaningful; BLOCH_ENERGIES was last verified to give
+            # ~35-55% inactive beams per energy (out of a ~4200-beam union).
+            assert inactive.sum() > 0.1 * n_union, (
+                f"Energy index {i} has only {inactive.sum()}/{n_union} inactive "
+                "beams -- BLOCH_ENERGIES may no longer give distinct enough "
+                "per-energy active-beam sets for this test to be meaningful"
+            )
+            np.testing.assert_array_equal(
+                dp_single.array[i, inactive], 0.0,
+                err_msg=f"Inactive beams non-zero at energy index {i}",
+            )
 
 
 # ---------------------------------------------------------------------------
