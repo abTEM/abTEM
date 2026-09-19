@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
 
 import numpy as np
 
-from abtem.core.axes import AxisMetadata, LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis
+from abtem.core.axes import (
+    AxisMetadata,
+    EnergyAxis,
+    LinearAxis,
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+)
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
@@ -230,6 +236,13 @@ class _AbstractRadialDetector(BaseDetector):
     ):
         self._inner = inner
         self._outer = outer
+        # Whether `outer` was ever given explicitly (constructor or the
+        # setter below), as opposed to auto-matched from waves in
+        # `_match_waves`. `outer is None` alone cannot tell these apart once
+        # a value has been auto-matched, which is exactly what made
+        # `_match_waves` latch onto the first waves it ever saw and ignore
+        # every later one (see `_match_waves`'s own docstring).
+        self._outer_is_explicit = outer is not None
         self._rotation = rotation
         self._offset = offset
         super().__init__(to_cpu=to_cpu, url=url)
@@ -251,6 +264,7 @@ class _AbstractRadialDetector(BaseDetector):
     @outer.setter
     def outer(self, value: float):
         self._outer = value
+        self._outer_is_explicit = value is not None
 
     @property
     def rotation(self):
@@ -355,8 +369,42 @@ class _AbstractRadialDetector(BaseDetector):
         return measurement._eager_array
 
     def _match_waves(self, waves: WavesType) -> None:
-        if self.outer is None:
-            self._outer = min(waves.cutoff_angles)
+        """Auto-size ``outer`` from ``waves``, unless the user gave one.
+
+        Previously guarded by ``if self.outer is None``, which conflated
+        "the user never gave an outer" with "not matched yet": once matched,
+        this would latch onto whichever waves it saw *first* for the rest of
+        this detector's life, including a later, unrelated call with
+        different waves (e.g. this same detector instance reused for a
+        second scan at a different energy). Re-matching every call instead
+        makes each call self-consistent, at the cost of being a no-op for
+        the common case (repeated calls at one energy already agree).
+
+        A multi-member energy ensemble cannot be auto-sized at all: each
+        member has its own cutoff angle, so a single radial axis cannot fit
+        all of them (see the module docstring analogue: this is the
+        `FlexibleAnnularDetector` gotcha; unlike a single-value cutoff, the
+        two shortest-first / longest-first energy orders would otherwise
+        silently size the bins differently). Refuse it instead of picking
+        one member's cutoff (or lazy's own, different, convention) silently.
+        """
+        if self._outer_is_explicit:
+            return
+
+        if any(
+            isinstance(axis, EnergyAxis) and len(axis.values) > 1
+            for axis in waves.ensemble_axes_metadata
+        ):
+            raise RuntimeError(
+                f"{type(self).__name__} cannot auto-size its outer angle for "
+                "a multi-energy ensemble: each energy has its own cutoff "
+                "angle (aperture), so no single radial axis fits every "
+                "member. Pass an explicit outer= (a value valid for every "
+                "member), or run one energy at a time and combine the "
+                "results yourself."
+            )
+
+        self._outer = min(waves.cutoff_angles)
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
         """
@@ -598,6 +646,7 @@ class AnnularDetector(_AbstractRadialDetector):
     @outer.setter
     def outer(self, value: float):
         self._outer = value
+        self._outer_is_explicit = value is not None
 
     @property
     def offset(self) -> tuple[float, float]:

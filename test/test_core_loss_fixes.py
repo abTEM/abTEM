@@ -18,6 +18,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import (
     AtomicWaveFunction,
     RadialWavefunction,
+    TransitionPotential,
     TransitionPotentialArray,
     _asymptotic_amplitude,
     _continuum_radial_grid,
@@ -407,6 +408,306 @@ class TestMultisliceBuiltTransitionPotentialEnergy:
                 detectors=abtem.FlexibleAnnularDetector(), sites=atoms,
                 double_channel=False, lazy=False,
             )
+
+
+def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64, 64)):
+    """An unbuilt ``TransitionPotential`` with a synthetic (non-physical)
+    1s -> continuum-p transition. Building it exercises the real
+    `_calculate_form_factor` path (needs sympy for the Wigner-3j symbols),
+    unlike `_synthetic_transition_potential`'s already-built
+    `TransitionPotentialArray`, which never calls `build()` again -- exactly
+    the case where a genuinely per-member energy can (and, after the fix,
+    does) drive a fresh build.
+    """
+    r = np.linspace(1e-3, 20.0, 4000)
+    bound = RadialWavefunction(
+        n=1, l=0, energy=-188.0, radial_grid=r, radial_values=r * np.exp(-r)
+    )
+    excited = RadialWavefunction(
+        n=None, l=1, energy=15.0, radial_grid=r, radial_values=r * np.exp(-0.1 * r)
+    )
+    transitions = [
+        (AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=-1)),
+        (AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=1)),
+    ]
+    return TransitionPotential(
+        Z=5, transitions=transitions, extent=extent, gpts=gpts, energy=energy,
+        double_channel=False,
+    )
+
+
+class TestFlexibleAnnularDetectorEnergyEnsemble:
+    """``FlexibleAnnularDetector._match_waves`` (abtem/detectors.py) used to
+    mutate ``self._outer`` in place, guarded only by ``if self.outer is
+    None`` -- which conflates "the user never gave an outer" with "already
+    matched", so it latched onto whichever waves it saw *first* and silently
+    ignored every later one. Eager splits an energy ensemble into per-energy
+    members before detection, so it saw member 0 first; lazy sizes its
+    output array from the full, un-indexed ensemble up front (``Waves.
+    angular_sampling`` resolves that to ``max(axis.values)``), so it saw the
+    highest energy first. The two conventions disagreed, and eager's answer
+    even depended on the order the energies were given in.
+
+    A single radial axis cannot represent two different cutoff angles at
+    once, so the fix does not silently pick one convention (eager's,
+    lazy's, or a third) -- every one of those would just make the wrong
+    answer consistent instead of visible. It raises instead, identically
+    for eager and lazy and regardless of energy order, unless the caller
+    pins ``outer`` explicitly.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8),
+            pbc=True,
+        )
+
+    def _run(self, energy, detector, lazy):
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms  # _synthetic_transition_potential below is built for Z=14
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=potential,
+        )
+        tp = _synthetic_transition_potential(
+            potential.extent, potential.gpts,
+            n=2, seed=0,
+        )
+        # Keep the TP's baked energy matched to whatever this call's own
+        # (single, or first-of-an-ensemble) energy is: this class tests the
+        # *detector's* auto-sizing/latch behaviour in isolation, not defect
+        # B (a mismatched TP is TestTransitionPotentialArrayEnergyEnsemble's
+        # job below).
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp.accelerator._energy = float(base_energy)
+        probe = abtem.Probe(
+            semiangle_cutoff=32, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_auto_sizing_outer_is_refused_for_an_energy_ensemble(self, order, lazy):
+        with pytest.raises(RuntimeError, match="cannot auto-size its outer angle"):
+            self._run(list(order), abtem.FlexibleAnnularDetector(), lazy)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_a_single_element_energy_list_is_not_an_ensemble(self, lazy):
+        """A length-1 energy list is not a "multi-energy ensemble" -- it must
+        keep working exactly as a plain scalar energy does."""
+        result = self._run([100e3], abtem.FlexibleAnnularDetector(), lazy)
+        reference = self._run(100e3, abtem.FlexibleAnnularDetector(), lazy)
+        assert np.array_equal(result, reference)
+
+    def test_single_energy_is_unaffected(self):
+        """The ordinary, already-correct case: eager and lazy must still
+        agree exactly, with no raise."""
+        eager = self._run(100e3, abtem.FlexibleAnnularDetector(), lazy=False)
+        lazy = self._run(100e3, abtem.FlexibleAnnularDetector(), lazy=True)
+        assert np.array_equal(eager, lazy)
+
+    def test_an_explicit_outer_still_bypasses_auto_sizing(self):
+        """Pinning `outer` explicitly is the documented escape hatch from the
+        auto-sizing guard above -- it must still work (though, per
+        TestTransitionPotentialArrayEnergyEnsemble below, a *built*
+        TransitionPotentialArray then hits the other guard for defect B
+        instead: it still cannot serve two beam energies)."""
+        detector = abtem.FlexibleAnnularDetector(outer=60.0)
+        # Reused across two calls: also exercises that un-latching does not
+        # regress the ordinary case of reusing one detector instance.
+        first = self._run(100e3, detector, lazy=False)
+        second = self._run(150e3, detector, lazy=False)
+        assert detector.outer == 60.0
+        assert first.shape == second.shape
+
+
+class TestTransitionPotentialArrayEnergyEnsemble:
+    """Defect B: even with defect A's detector latch worked around (an
+    explicit ``outer=``), the ensemble members did not reproduce standalone
+    single-energy runs -- the whole ensemble was silently evaluated at the
+    *transition potential's* baked-in energy rather than each member's own.
+
+    Root cause: ``BaseTransitionPotential._task_local`` matches a private
+    accelerator view against the waves via ``Accelerator.match``, which read
+    ``other.accelerator.energy`` directly. For an indexed energy-ensemble
+    member that is ``None`` by design (the real value lives in
+    ``metadata["energy"]``, resolved by ``Waves._valid_energy`` /
+    ``resolve_energy`` -- see ``abtem/core/energy.py``), so ``match`` treated
+    a perfectly well-defined member as "no energy" and overwrote the *waves'*
+    accelerator with the transition potential's own energy, permanently and
+    in place. Every later read of that member's energy -- including the
+    ``check_match`` guard meant to catch exactly this class of mismatch --
+    then saw the transition potential's energy instead of the member's real
+    one, so the guard never fired.
+
+    A *built* ``TransitionPotentialArray`` cannot be fixed by resolving the
+    energy correctly, though: its form factors are baked into the array at
+    one physical energy, so one array genuinely cannot serve two beam
+    energies. Now that the resolution bug is fixed, ``check_match`` sees the
+    member's real energy and refuses the combination outright.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8),
+            pbc=True,
+        )
+
+    def _run(self, energy, tp, lazy, detector=None):
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms  # _synthetic_transition_potential below is built for Z=14
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=potential,
+        )
+        if detector is None:
+            detector = abtem.FlexibleAnnularDetector(outer=60.0)
+        probe = abtem.Probe(
+            semiangle_cutoff=32, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_a_built_array_is_refused_against_an_energy_ensemble(self, order, lazy):
+        """Bypassing defect A's guard with an explicit outer must not let a
+        built TransitionPotentialArray silently serve two beam energies."""
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        tp = _synthetic_transition_potential(potential.extent, potential.gpts, n=2)
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            self._run(list(order), tp, lazy)
+
+    def test_the_matched_built_array_is_still_unaffected(self):
+        """The already-correct case (single energy, matching TP energy) must
+        not regress: still no raise, eager still equals lazy."""
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        tp = _synthetic_transition_potential(potential.extent, potential.gpts, n=2)
+        eager = self._run(ENERGY, tp, lazy=False)
+        lazy = self._run(ENERGY, tp, lazy=True)
+        assert np.array_equal(eager, lazy)
+
+
+class TestUnbuiltTransitionPotentialEnergyEnsemble:
+    """The genuinely fixable half of defect B: an *unbuilt* TransitionPotential
+    can be rebuilt fresh per task (BaseTransitionPotential._task_local builds
+    it after matching -- abtem/inelastic/core_loss.py), so once each member's
+    real energy is resolved correctly it drives that member's own build, and
+    the ensemble result must reproduce a standalone single-energy run
+    exactly, for every energy and in either order.
+
+    Uses a 2-position CustomScan rather than GridScan: a GridScan combined
+    with an eager energy-ensemble split has a separate, pre-existing defect
+    (positions and the energy axis end up interleaved) that reproduces
+    identically on unfixed `dev` and is independent of the fix under test
+    here -- see the dev-env issue tracker. CustomScan with the same two
+    positions does not go through that path and isolates this test to
+    defect B alone.
+
+    The lazy case additionally hits a second, separate, pre-existing defect
+    of its own for this exact combination (CustomScan + an unbuilt,
+    multi-member energy ensemble): ``ValueError: too many values to unpack
+    (expected 2)`` from ``abtem/array.py`` while unpacking a potential
+    partition's blockwise args -- reproduces identically on unfixed `dev`,
+    unrelated to this fix, and matches the "related unconfirmed symptom"
+    the original issue file flagged but never pinned down. Marked xfail
+    below rather than silently skipped, so a future fix there is noticed
+    when it starts passing.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    def _run(self, energy, lazy):
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        scan = abtem.CustomScan([[0.0, 0.0], [1.0, 1.0]])
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp = _synthetic_unbuilt_transition_potential(
+            base_energy, extent=potential.extent, gpts=potential.gpts,
+        )
+        probe = abtem.Probe(
+            semiangle_cutoff=20, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy, max_batch=1,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize(
+        "lazy",
+        [
+            False,
+            pytest.param(
+                True,
+                marks=pytest.mark.xfail(
+                    reason=(
+                        "pre-existing, unrelated defect: CustomScan + an "
+                        "unbuilt multi-member energy ensemble raises "
+                        "ValueError('too many values to unpack (expected "
+                        "2)') from abtem/array.py while unpacking a "
+                        "potential partition's blockwise args, on both "
+                        "fixed and unfixed dev -- see this class's own "
+                        "docstring"
+                    ),
+                    strict=True,
+                ),
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run(e, lazy=False) for e in order}
+        # A scale-appropriate atol: these signals sit around 1e-13 - 1e-12
+        # (see the module docstring rule against relying on default
+        # tolerances for physical quantities far below them).
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run(list(order), lazy)
+        # CustomScan puts the scan-position axis before the energy axis
+        # (opposite of GridScan's leading energy axis), so the energy
+        # member is the *last* array axis here, not the first.
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[..., i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        # The two members must be genuinely different results, or this test
+        # would pass even with defect B fully unfixed.
+        assert not np.allclose(reference[order[0]], reference[order[1]])
 
 
 class TestPrismScanAxisSqueeze:
