@@ -114,8 +114,8 @@ def assert_scanned_measurement_as_expected(
 
         if detector.to_cpu:
             assert isinstance(measurement.array, np.ndarray)
-        elif waves.device == "gpu":
-            assert isinstance(measurement.array, cp.ndarray)
+        elif waves.device != "cpu":
+            assert_array_matches_device(measurement.array, waves.device)
 
 
 def _gpu_count() -> int:
@@ -134,8 +134,42 @@ def _gpu_count() -> int:
 # turns "hide the GPU" from a way to isolate GPU-specific behaviour into a way
 # to break the suite. `requires_multigpu` below already used _gpu_count(); only
 # this single-GPU gate was left keyed on the import.
+def _mps_is_usable() -> bool:
+    """Whether the Metal (MPS) backend is loaded and usable in this process."""
+    from abtem.core import backend
+
+    if backend.tp is None:
+        return False
+
+    from abtem.core._torch import is_available
+
+    return is_available()
+
+
+def _accelerator_device():
+    """The non-CPU device this machine actually has, or None.
+
+    CUDA wins where both are present. Its test is _gpu_count() rather than the
+    cupy import, for the reason given just above.
+    """
+    if _gpu_count() >= 1:
+        return "gpu"
+    if _mps_is_usable():
+        return "mps"
+    return None
+
+
+_ACCELERATOR = _accelerator_device()
+
+# The accelerator half of every ["cpu", gpu] device parametrization. It used to
+# be the literal "gpu" (CuPy/CUDA); it now resolves to whichever accelerator the
+# machine actually has, so the same tests exercise Metal on Apple silicon and
+# CUDA elsewhere. A test that needs the device string must compare against
+# `gpu.values[0]`, never the literal "gpu" -- or better, derive the array module
+# from `device` with `get_array_module`.
 gpu = pytest.param(
-    "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+    _ACCELERATOR or "gpu",
+    marks=pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
 )
 
 # The same gate as a standalone marker, for tests that are GPU-only rather than
@@ -159,6 +193,20 @@ except ImportError:
 requires_multigpu = pytest.mark.skipif(
     _gpu_count() < 2 or not _HAS_DASK_CUDA,
     reason="requires >=2 GPUs and dask-cuda",
+)
+
+
+# Skip marker for the Metal backend. Note that 'enable_mps' selects the library
+# load order and so has to be set before abTEM is imported -- setting it from
+# inside a test is too late, which is why this tests what actually loaded rather
+# than what the configuration says.
+requires_mps = pytest.mark.skipif(
+    not _mps_is_usable(),
+    reason=(
+        "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
+        "installed, and 'enable_mps' set before abTEM is imported "
+        "(e.g. ABTEM_ENABLE_MPS=true pytest ...)"
+    ),
 )
 
 

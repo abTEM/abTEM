@@ -2455,7 +2455,12 @@ class CrystalPotential(_PotentialBuilder):
         xp = get_array_module(self.device)
         _pool_array = potentials.array
         if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
+            # Through the PotentialArray, not the bare dask array: that is what
+            # selects the device-appropriate scheduler. Computing the raw array
+            # takes dask's default threaded scheduler, which drives a single
+            # CUDA or Metal context from several threads -- unsupported on
+            # both, and on Metal it corrupts PyTorch's shader cache and hangs.
+            _pool_array = potentials.compute().array
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)

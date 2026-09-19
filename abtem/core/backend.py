@@ -6,7 +6,7 @@ import logging
 import warnings
 from numbers import Number
 from types import ModuleType
-from typing import Union
+from typing import Any, Union
 
 import dask.array as da
 import numpy as np
@@ -62,6 +62,28 @@ except ImportError:
     pass
 
 
+# The Metal (MPS) array namespace and its array type, or None when the backend
+# is disabled. Read these through the module (``backend.tp``) rather than
+# binding them by value, so every caller sees the same object.
+#
+# The import is eager and gated on configuration rather than deferred to the
+# first use of the 'mps' device, because PyTorch has to be imported before
+# pyfftw: each ships its own copy of libomp.dylib, and in a process that loaded
+# pyfftw's first, ordinary torch tensor operations segfault. This module is
+# imported before abtem.core.fft (which imports pyfftw), so loading torch here
+# establishes the order that keeps both usable. The flip side is that
+# 'enable_mps' has to be set before abTEM is imported -- a later
+# abtem.config.set cannot retroactively fix the library load order.
+tp: Any = None
+TorchNDArray: Any = None
+
+if config.get("enable_mps", False):
+    from abtem.core import _torch
+
+    tp = _torch.torch_numpy
+    TorchNDArray = _torch.TorchNDArray
+
+
 ArrayModule = Union[ModuleType, str]
 
 logger = logging.getLogger(__name__)
@@ -73,6 +95,41 @@ def check_cupy_is_installed():
     """
     if cp is None:
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
+
+
+def check_mps_is_enabled():
+    """
+    Load the Metal (MPS) array namespace, raising if it is disabled or unusable.
+
+    Returns
+    -------
+    module
+        The Metal array namespace, as returned by ``get_array_module('mps')``.
+    """
+    if tp is None:
+        raise RuntimeError(
+            "The Metal (MPS) backend is experimental and disabled by default. "
+            "Set 'enable_mps' to true before importing abTEM -- it selects the "
+            "library load order and so cannot be turned on afterwards -- either "
+            "in ~/.config/abtem/abtem.yaml or with the environment variable "
+            "ABTEM_ENABLE_MPS=true (DASK_ENABLE_MPS on abTEM releases before "
+            "the configuration paths were fixed). It requires PyTorch "
+            "(https://pytorch.org) on macOS with Apple silicon."
+        )
+
+    from abtem.core import _torch
+
+    _torch._check_available()
+
+    if config.get("precision") != "float32":
+        raise RuntimeError(
+            "Metal (MPS) is a single-precision backend, but the configured "
+            f"precision is '{config.get('precision')}'. Set "
+            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
+            "'gpu' device for double precision."
+        )
+
+    return tp
 
 
 _cuda_cluster_client = None
@@ -351,6 +408,10 @@ def get_array_module(
             check_cupy_is_installed()
             return cp
 
+        if x.lower() in ("torch", "mps", "metal"):
+            check_mps_is_enabled()
+            return tp
+
     if isinstance(x, np.ndarray):
         return np
 
@@ -366,6 +427,9 @@ def get_array_module(
 
         if x is cp:
             return cp
+
+    if tp is not None and (isinstance(x, (TorchNDArray, tp.Tensor)) or x is tp):
+        return tp
 
     raise ValueError(f"array module specification {x} not recognized")
 
@@ -391,7 +455,12 @@ def device_name_from_array_module(xp: ArrayModule) -> str:
     if xp is cp:
         return "gpu"
 
-    raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
+    if tp is not None and xp is tp:
+        return "mps"
+
+    raise ValueError(
+        f"array module must be NumPy, CuPy or the Metal namespace, not {xp}"
+    )
 
 
 def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = None):
@@ -417,6 +486,11 @@ def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = N
 
     elif xp is cp:
         return cupyx.scipy  # type: ignore
+
+    elif tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.scipy
 
     else:
         raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
@@ -447,6 +521,11 @@ def get_ndimage_module(
     if xp is cp:
         return cupyx_ndimage  # type: ignore
 
+    if tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.ndimage
+
     raise RuntimeError("Invalid array module")
 
 
@@ -464,6 +543,18 @@ def asnumpy(array: np.ndarray | da.Array):
     numpy.ndarray
         The array converted to NumPy.
     """
+    if tp is not None:
+        if isinstance(array, (TorchNDArray, tp.Tensor)):
+            return tp.asnumpy(array)
+
+        # A lazy array whose chunks live on Metal still has to be brought
+        # across. Without this it falls to the cp-less short-circuit below and
+        # is handed back untouched -- still device-backed, so the caller's next
+        # reduction runs against Metal chunks rather than host memory, having
+        # asked for NumPy.
+        if isinstance(array, da.core.Array) and get_array_module(array) is tp:
+            return da.map_blocks(asnumpy, array)
+
     if cp is None:
         return array
 
@@ -506,10 +597,17 @@ def copy_to_device(
             device=device,
         )
 
+    if tp is not None and old_xp is tp:
+        array = tp.asnumpy(array)
+        old_xp = np
+
     if new_xp is np:
-        return cp.asnumpy(array)
+        return array if old_xp is np else cp.asnumpy(array)
 
     if new_xp is cp:
         return cp.asarray(array)
+
+    if tp is not None and new_xp is tp:
+        return tp.asarray(array)
 
     raise RuntimeError("Invalid device specified")

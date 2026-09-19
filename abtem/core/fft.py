@@ -11,7 +11,7 @@ import dask.array as da
 import numpy as np
 from threadpoolctl import threadpool_limits  # type: ignore
 
-from abtem.core import config
+from abtem.core import backend, config
 from abtem.core.backend import check_cupy_is_installed, get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
@@ -628,6 +628,9 @@ def _fft_dispatch(
             meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return getattr(backend.tp.fft, func_name)(x, **kwargs)
+
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
@@ -841,6 +844,9 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
             meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return _fft2_convolve(x, kernel, overwrite_x)
+
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
@@ -866,8 +872,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
     """
     xp = get_array_module(positions)
 
-    if cp is None or not isinstance(positions, cp.ndarray):
-        positions = np.array(positions)
+    positions = xp.asarray(positions)
 
     assert positions.shape[-1] == len(shape)
     dims = positions.shape[-1]
@@ -877,12 +882,12 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
     for i in range(dims):
         d = list(range(0, n)) + list(range(n, n + dims))
         del d[i + n]
-        expanded_positions = np.expand_dims(
+        expanded_positions = xp.expand_dims(
             positions[..., i], tuple(range(n, n + dims))
         )
 
         k[i] = complex_exponential(
-            -2 * np.pi * np.expand_dims(k[i], tuple(d)) * expanded_positions
+            -2 * np.pi * xp.expand_dims(k[i], tuple(d)) * expanded_positions
         )
 
     array = k[0]

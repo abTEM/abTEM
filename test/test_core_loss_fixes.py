@@ -15,6 +15,7 @@ import pytest
 import abtem
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import get_array_module
 from abtem.inelastic.core_loss import (
     AtomicWaveFunction,
     RadialWavefunction,
@@ -39,12 +40,7 @@ ENERGY = 100e3
 
 
 def _synthetic_transition_potential(extent, gpts, device="cpu", n=3, seed=0):
-    try:
-        import cupy as cp
-    except ImportError:
-        cp = None
-
-    xp = cp if device == "gpu" else np
+    xp = get_array_module(device)
     rng = np.random.default_rng(seed)
     array = (
         rng.standard_normal((n, *gpts)) + 1j * rng.standard_normal((n, *gpts))

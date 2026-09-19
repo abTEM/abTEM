@@ -30,7 +30,7 @@ from matplotlib.axes import Axes
 from numba import jit  # type: ignore
 
 from abtem.array import ArrayObject, _validate_array_items, stack
-from abtem.core import config
+from abtem.core import backend, config
 from abtem.core.axes import (
     AxisMetadata,
     LinearAxis,
@@ -359,8 +359,13 @@ def _radial_binning_device_arrays(
         True,
     )
 
-    if get_array_module(array) is np:
+    xp = get_array_module(array)
+
+    if xp is np:
         device_key = "cpu"
+    elif backend.tp is not None and xp is backend.tp:
+        # Metal exposes a single device, so its identity needs no index.
+        device_key = "mps"
     else:
         # Key on the device the array actually lives on -- read off the array
         # itself, not the current-device context, which can differ from it
@@ -388,6 +393,9 @@ def _radial_binning_device_arrays_cached(key, device_key):
         flat_indices.flags.writeable = False
         separators.flags.writeable = False
         return flat_indices, separators
+
+    if device_key == "mps":
+        return backend.tp.asarray(flat_indices), backend.tp.asarray(separators)
 
     # Allocate on the keyed device, whatever device is current.
     # (CuPy arrays cannot be flagged read-only; shared by convention.)
@@ -4314,6 +4322,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if xp is cp:
             sum_run_length_encoded_cuda(array, result, separators)
+
+        elif backend.tp is not None and xp is backend.tp:
+            from abtem.core._torch import sum_run_length_encoded
+
+            sum_run_length_encoded(array, result, separators)
 
         else:
             _sum_run_length_encoded(array, result, separators)

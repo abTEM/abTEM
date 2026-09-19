@@ -29,6 +29,7 @@ except ImportError:
 
 
 from abtem.array import ArrayObject
+from abtem.core import backend
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
@@ -1186,6 +1187,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         xp = get_array_module(like)
         if xp is np:
             device = "cpu"
+        elif backend.tp is not None and xp is backend.tp:
+            # Metal exposes a single device, so its identity needs no index --
+            # and a torch device carries neither an `id` nor a context to enter.
+            device = "mps"
         else:
             # One process can drive several GPUs (outside the dask-cuda
             # process-per-GPU layout); an array cached for one device must
@@ -1198,7 +1203,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if cache is not None and cache[0] == device:
             return cache[1]
 
-        if xp is np:
+        if xp is np or device == "mps":
             on_device = copy_to_device(self._local_potential, like)
         else:
             # Allocate on like's device, whatever device is current.
