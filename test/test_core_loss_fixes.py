@@ -866,6 +866,98 @@ class TestScanEnergyEnsembleAxisOrder:
         assert not np.allclose(reference[order[0]], reference[order[1]])
 
 
+class TestLazyEnsembleChunkReordering:
+    """The lazy graph's own chunk bookkeeping (``multi_output_blockwise`` in
+    ``abtem/array.py``) used to assume a detector's output ensemble axes
+    stay in the same relative order as the input waves' ensemble axes.
+    True for ``CustomScan`` (nothing is reordered) and, by numeric
+    coincidence, for a 2x2 ``GridScan`` with exactly 2 energies (both
+    ``AnnularDetector._out_ensemble_shape``'s buggy old order and its
+    correct one give ``(2, 2, 2)``) -- but false in general, since
+    ``AnnularDetector``/``SpectralSlitDetector`` move the scan axes to the
+    end of the ensemble (see ``TestGridScanEnergyEnsembleAxisOrder`` above),
+    which the lazy chunk declaration never accounted for. Surfaces as a
+    ``RuntimeError``/``IndexError`` from ``_check_axes_metadata`` or
+    ``multi_output_blockwise`` for any shape that breaks the coincidence: a
+    ``GridScan`` with other than 2 energies, or any scan with other than 2
+    ``ScanAxis`` entries (e.g. ``LineScan``'s single one).
+
+    Fixed via a new ``_out_ensemble_source`` hook (``abtem/transform.py``,
+    overridden in the two detectors) that reports the same reordering
+    ``_out_ensemble_shape`` already applies, so the lazy chunk bookkeeping in
+    ``apply_transform``/``multi_output_blockwise`` can reorder the matching
+    input chunks before declaring the output's chunk structure.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    def _run(self, scan_kind, energy, lazy):
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        if scan_kind == "grid":
+            scan = abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                potential=potential,
+            )
+        else:
+            scan = abtem.LineScan(
+                start=(0, 0), end=(1, 1), gpts=3, fractional=True,
+                potential=potential,
+            )
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp = _synthetic_unbuilt_transition_potential(
+            base_energy, extent=potential.extent, gpts=potential.gpts,
+        )
+        probe = abtem.Probe(
+            semiangle_cutoff=20, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 150e3, 200e3), (200e3, 100e3, 150e3)])
+    def test_gridscan_three_energies(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run("grid", e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run("grid", list(order), lazy)
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        assert len({tuple(np.round(reference[e], 12).ravel()) for e in order}) == 3
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_linescan_two_energies(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run("line", e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run("line", list(order), lazy)
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+
 class TestPrismScanAxisSqueeze:
     """The scan position axis was squeezed per dask block, not once at the end.
 

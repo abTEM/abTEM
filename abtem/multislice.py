@@ -1414,6 +1414,11 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         )
         return base_shape
 
+    def _out_ensemble_source(self, waves: Waves) -> tuple[tuple[int, ...], ...]:
+        return tuple(
+            detector._out_ensemble_source(waves)[0] for detector in self.detectors
+        )
+
     def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata], ...]:
         return tuple(
             detector._out_base_axes_metadata(waves)[0] for detector in self.detectors

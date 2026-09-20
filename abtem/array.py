@@ -150,6 +150,7 @@ def multi_output_blockwise(
     out_metas: tuple,
     drop_axes: tuple[tuple[int, ...], ...],
     new_shapes: tuple[tuple[int, ...], ...],
+    ensemble_sources: tuple[tuple[int, ...], ...] | None = None,
     **kwargs,
 ) -> tuple[da.core.Array, ...]:
     assert len(out_metas) == len(drop_axes)
@@ -201,8 +202,24 @@ def multi_output_blockwise(
         if not all(len(out_array.chunks[i]) == 1 for i in drop_axis):
             raise RuntimeError()
 
+        if ensemble_sources is None:
+            source_chunks = chunks
+        else:
+            # The declared output shape/metadata may reorder array's own
+            # ensemble axes (e.g. AnnularDetector moving scan axes to the
+            # end); reorder the matching chunks the same way before pairing
+            # them positionally against new_shape below.
+            order = ensemble_sources[i]
+            ensemble_start = new_ndim
+            ensemble_end = ensemble_start + len(order)
+            source_chunks = (
+                chunks[:ensemble_start]
+                + tuple(chunks[ensemble_start:ensemble_end][k] for k in order)
+                + chunks[ensemble_end:]
+            )
+
         drop_chunks = []
-        for j, (item, ns) in enumerate(zip(chunks, new_shape)):
+        for j, (item, ns) in enumerate(zip(source_chunks, new_shape)):
             if j not in drop_axis:
                 if sum(item) != ns:
                     assert len(item) == 1
@@ -1842,6 +1859,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 tuple(out_shape) for out_shape in transform._out_shape(self)
             )
 
+            ensemble_sources = transform._out_ensemble_source(self)
+
             new_arrays = multi_output_blockwise(
                 self._apply_transform,
                 array=self._lazy_array,
@@ -1851,6 +1870,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 drop_axes=drop_axes,
                 out_metas=out_metas,
                 new_shapes=new_shapes,
+                ensemble_sources=ensemble_sources,
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
