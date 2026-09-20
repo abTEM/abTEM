@@ -631,15 +631,18 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
     TestScanEnergyEnsembleAxisOrder below, which exercises GridScan and
     LineScan directly now that this is fixed.
 
-    The lazy case additionally hits a second, separate, pre-existing defect
-    of its own for this exact combination (CustomScan + an unbuilt,
-    multi-member energy ensemble): ``ValueError: too many values to unpack
+    The lazy case also covers a second, separate mechanism for this exact
+    combination: any waves ensemble spanning more than one dask block,
+    combined with a potential that has no ensemble of its own (no
+    FrozenPhonons), used to raise ``ValueError: too many values to unpack
     (expected 2)`` from ``abtem/array.py`` while unpacking a potential
-    partition's blockwise args -- reproduces identically on unfixed `dev`,
-    unrelated to this fix, and matches the "related unconfirmed symptom"
-    the original issue file flagged but never pinned down. Marked xfail
-    below rather than silently skipped, so a future fix there is noticed
-    when it starts passing.
+    partition's blockwise args -- reproduced for CustomScan and for
+    GridScan alike, unrelated to scan type. Fixed in
+    ``WavesBuilder._build_validated``/``_from_partitioned_args_func``
+    (``abtem/waves.py``): a per-block ensemble reconstruction was wrapped
+    at the wrong dimensionality, and the declared chunk shape handed to
+    ``_calculate_array`` didn't account for a block covering more than one
+    logical value per axis.
     """
 
     @staticmethod
@@ -673,27 +676,7 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             m = m.compute(progress_bar=False)
         return np.asarray(m.to_cpu().array)
 
-    @pytest.mark.parametrize(
-        "lazy",
-        [
-            False,
-            pytest.param(
-                True,
-                marks=pytest.mark.xfail(
-                    reason=(
-                        "pre-existing, unrelated defect: CustomScan + an "
-                        "unbuilt multi-member energy ensemble raises "
-                        "ValueError('too many values to unpack (expected "
-                        "2)') from abtem/array.py while unpacking a "
-                        "potential partition's blockwise args, on both "
-                        "fixed and unfixed dev -- see this class's own "
-                        "docstring"
-                    ),
-                    strict=True,
-                ),
-            ),
-        ],
-    )
+    @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
     def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
         pytest.importorskip("sympy")
@@ -713,6 +696,53 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             )
         # The two members must be genuinely different results, or this test
         # would pass even with defect B fully unfixed.
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_gridscan_multiblock_reproduces_its_own_standalone_run(self, order, lazy):
+        """The waves-ensemble-spans-more-than-one-dask-block mechanism this
+        class's own docstring describes is scan-independent -- confirmed
+        directly with a GridScan in place of CustomScan, same max_batch=1
+        trigger, same underlying fix."""
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=potential,
+        )
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+
+        def _run(energy, lazy):
+            base_energy = energy[0] if isinstance(energy, list) else energy
+            tp = _synthetic_unbuilt_transition_potential(
+                base_energy, extent=potential.extent, gpts=potential.gpts,
+            )
+            probe = abtem.Probe(
+                semiangle_cutoff=20, energy=energy, extent=potential.extent,
+                gpts=potential.gpts,
+            )
+            m = probe.transition_potential_scan(
+                scan=scan, potential=potential, detectors=detector,
+                transition_potentials=tp, double_channel=False, sites=sites,
+                threshold=1.0, lazy=lazy, max_batch=1,
+            )
+            if lazy:
+                m = m.compute(progress_bar=False)
+            return np.asarray(m.to_cpu().array)
+
+        reference = {e: _run(e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = _run(list(order), lazy)
+        # GridScan on unfixed dev (this branch, no PR #439) also stacks
+        # energy trailing -- same axis convention as CustomScan here.
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[..., i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
         assert not np.allclose(reference[order[0]], reference[order[1]])
 
 
