@@ -617,13 +617,19 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
     the ensemble result must reproduce a standalone single-energy run
     exactly, for every energy and in either order.
 
-    Uses a 2-position CustomScan rather than GridScan: a GridScan combined
-    with an eager energy-ensemble split has a separate, pre-existing defect
-    (positions and the energy axis end up interleaved) that reproduces
-    identically on unfixed `dev` and is independent of the fix under test
-    here -- see the dev-env issue tracker. CustomScan with the same two
-    positions does not go through that path and isolates this test to
-    defect B alone.
+    Uses a 2-position CustomScan rather than GridScan to isolate this test to
+    defect B alone. A separate, independent defect used to affect the
+    GridScan combination specifically: MultisliceTransform._calculate_new_
+    array's eager per-energy split (abtem/multislice.py) stacked each
+    member's result at the position the energy axis happened to occupy
+    within the *input* waves' own combined ensemble axes, rather than where
+    the *output* measurement's own axes_metadata says it belongs -- correct
+    by coincidence for CustomScan (whose single, non-2D PositionsAxis is
+    never reclassified as base shape, so energy's relative position is
+    unaffected) but not for GridScan (whose two ScanAxis entries get moved
+    into base shape, which the stacking axis did not account for). See
+    TestGridScanEnergyEnsembleAxisOrder below, which exercises GridScan
+    directly now that this is fixed.
 
     The lazy case additionally hits a second, separate, pre-existing defect
     of its own for this exact combination (CustomScan + an unbuilt,
@@ -707,6 +713,79 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             )
         # The two members must be genuinely different results, or this test
         # would pass even with defect B fully unfixed.
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+
+class TestGridScanEnergyEnsembleAxisOrder:
+    """A GridScan probe's energy-ensemble stack used to land on the wrong
+    axis of the result -- not scrambled values, a metadata/data mismatch.
+    See TestUnbuiltTransitionPotentialEnergyEnsemble's docstring for why
+    that class uses CustomScan instead and the mechanism this one guards.
+
+    Naively reading ensemble[0] as "energy member 0" gave neither standalone
+    single-energy run; ensemble[..., 0] (the array's actual axis, matching
+    the measurement's own ensemble_axes_metadata, which always reports
+    EnergyAxis leading here) did. Uses a >1-position GridScan specifically:
+    a single-position scan squeezes to no scan axes at all, which cannot
+    show a mismatch between two axes that both still exist.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    def _run(self, energy, lazy):
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=potential,
+        )
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp = _synthetic_unbuilt_transition_potential(
+            base_energy, extent=potential.extent, gpts=potential.gpts,
+        )
+        probe = abtem.Probe(
+            semiangle_cutoff=20, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run(e, lazy=False) for e in order}
+        # A scale-appropriate atol: see the module docstring rule against
+        # relying on default tolerances for physical quantities far below
+        # them.
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run(list(order), lazy)
+        # The energy axis leads here (opposite of CustomScan's trailing
+        # energy axis in TestUnbuiltTransitionPotentialEnergyEnsemble above)
+        # because GridScan's two ScanAxis entries get folded into base
+        # shape, leaving EnergyAxis as the only, and therefore first,
+        # remaining ensemble axis.
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        # The two members must be genuinely different results, or this test
+        # would pass even with the axis mismatch fully unfixed.
         assert not np.allclose(reference[order[0]], reference[order[1]])
 
 
