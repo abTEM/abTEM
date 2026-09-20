@@ -97,12 +97,12 @@ def _prescatter_shared_constants(arrays: list, client: Any) -> list:
     (``test/test_transition_potential_transport.py``), which this is designed
     not to break.
 
-    ``broadcast=False`` (the default), not ``True``: measured directly (this
-    fix's own session, a real 4-GPU Perlmutter dask-cuda cluster) that
-    ``broadcast=True`` -- waiting for every worker to confirm receipt before
-    the scatter call returns -- pulled forward and serialized each worker's
-    own first ``import abtem`` (~1.7 s/worker, needed just to unpickle a
-    ``TransitionPotentialArray``), adding several real seconds to every run.
+    ``broadcast=False`` (the default), not ``True``: on a real 4-GPU Perlmutter
+    dask-cuda cluster, ``broadcast=True`` -- waiting for every worker to
+    confirm receipt before the scatter call returns -- pulls forward and
+    serializes each worker's own first ``import abtem`` (~1.7 s/worker,
+    needed just to unpickle a ``TransitionPotentialArray``), adding several
+    real seconds to every run.
     ``broadcast=False`` returns as soon as one worker has the data; any other
     worker that later needs it fetches it from a peer via distributed's
     normal (always-on, not best-effort) dependency-fetch mechanism -- nothing
