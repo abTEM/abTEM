@@ -25,9 +25,19 @@ in a COPY of the graph. It must be a copy: mutating a wrapper's own stored
 client_loss (test_transition_potential_transport.py), which this file also
 re-verifies is unaffected by re-running it here at the unit level.
 
-broadcast=True because ensure_cuda_cluster (core/backend.py) pins one worker
-per visible GPU -- a small, fixed cluster where any worker can run a task
-needing this payload.
+Uses broadcast=False (the default), not True: measured directly on a real
+4-GPU Perlmutter dask-cuda cluster that broadcast=True's wait-for-every-
+worker-to-confirm serialized each worker's own first `import abtem` (~1.7 s/
+worker, needed just to unpickle a TransitionPotentialArray) in front of
+every run. Traded away deliberately: broadcast=False's placement on fewer
+workers means losing the (possibly sole) worker holding a memoized payload
+before another worker independently fetches a copy loses it permanently --
+scattered data has no lineage to recompute from, unlike a normal task
+result. test_losing_the_only_worker_with_broadcast_false_is_unrecoverable
+below documents this tradeoff directly, alongside
+test_broadcast_true_survives_losing_one_worker showing the same kill is
+harmless under broadcast=True -- kept only as a reference/contrast, not
+exercised by the shipped code path.
 """
 import gc
 import weakref
@@ -158,14 +168,90 @@ def test_non_weakrefable_object_still_scatters_without_crashing(cluster_client):
     assert new_arr.compute().item() == x
 
 
-def test_broadcast_places_data_on_every_worker(cluster_client):
+def test_scatter_places_data_on_at_least_one_worker(cluster_client):
     arr = shared_constant_arg(_payload(), lazy=True)
     [new_arr] = _prescatter_shared_constants([arr], cluster_client)
     future = next(iter(new_arr.__dask_graph__().values())).args[0]
 
     who_has = cluster_client.who_has(future)
     workers_holding_it = next(iter(who_has.values()))
-    assert len(workers_holding_it) == len(cluster_client.scheduler_info()["workers"])
+    assert len(workers_holding_it) >= 1
+
+
+def test_a_worker_without_the_data_fetches_it_from_a_peer(cluster_client):
+    """The actual justification for broadcast=False: a worker that doesn't
+    already have the scattered payload still gets it correctly when a task
+    needs it there, via distributed's normal (always-on) dependency fetch --
+    not something that can simply fail to happen."""
+    x = _payload()
+    arr = shared_constant_arg(x, lazy=True)
+    [new_arr] = _prescatter_shared_constants([arr], cluster_client)
+    future = next(iter(new_arr.__dask_graph__().values())).args[0]
+
+    who_has_initially = cluster_client.who_has(future)
+    initial_worker = next(iter(who_has_initially.values()))[0]
+    other_workers = [
+        w for w in cluster_client.scheduler_info()["workers"] if w != initial_worker
+    ]
+    assert other_workers, "test needs at least 2 workers"
+
+    # Force the task computing new_arr onto a worker that does NOT already
+    # have the data, to exercise the cross-worker fetch rather than the
+    # trivial same-worker case.
+    result = cluster_client.compute(
+        new_arr, workers=other_workers[0], allow_other_workers=False
+    ).result()
+    assert result.item() == x
+
+
+def _kill_worker_holding(client, address):
+    """Abruptly close the Nanny for the worker at `address` -- not a graceful
+    retire_workers(), which proactively migrates data away first and so
+    would trivially "survive" any worker loss regardless of broadcast,
+    proving nothing. This is meant to model an actual crash (a CUDA error,
+    an OOM kill): the process is just gone, nothing gets a chance to move
+    its data first."""
+    cluster = client.cluster
+    match = next(
+        key for key, w in cluster.workers.items()
+        if getattr(w, "worker_address", getattr(w, "address", None)) == address
+    )
+    cluster.sync(cluster.workers[match].close)
+
+
+def test_losing_the_only_worker_with_broadcast_false_is_unrecoverable(cluster_client):
+    """Documents the reliability tradeoff accepted by using broadcast=False:
+    scattered data has no lineage, so if the single worker holding a
+    memoized payload dies before another worker fetches its own copy, every
+    later reuse of that memo entry fails -- there is nothing left to
+    recompute from. Contrast with test_broadcast_true_survives_losing_one_
+    worker below, which is not what the shipped code does."""
+    x = _payload()
+    arr = shared_constant_arg(x, lazy=True)
+    [new_arr] = _prescatter_shared_constants([arr], cluster_client)
+    future = next(iter(new_arr.__dask_graph__().values())).args[0]
+
+    who_has = cluster_client.who_has(future)
+    sole_worker = next(iter(who_has.values()))[0]
+    _kill_worker_holding(cluster_client, sole_worker)
+
+    with pytest.raises(Exception):
+        new_arr.compute()
+
+
+def test_broadcast_true_survives_losing_one_worker(cluster_client):
+    """Reference/contrast only -- not the shipped code path (which always
+    calls scatter() with the default broadcast=False). Shows the same kind
+    of abrupt worker loss above is harmless when the payload was placed on
+    every worker instead of just one."""
+    x = _payload()
+    future = cluster_client.scatter([x], broadcast=True)[0]
+
+    who_has = cluster_client.who_has(future)
+    a_worker = next(iter(who_has.values()))[0]
+    _kill_worker_holding(cluster_client, a_worker)
+
+    assert future.result() == x
 
 
 def test_arrays_without_a_candidate_pass_through_unchanged(cluster_client):

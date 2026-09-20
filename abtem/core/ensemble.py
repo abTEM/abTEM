@@ -97,11 +97,31 @@ def _prescatter_shared_constants(arrays: list, client: Any) -> list:
     (``test/test_transition_potential_transport.py``), which this is designed
     not to break.
 
-    ``broadcast=True``: ``ensure_cuda_cluster`` (``abtem/core/backend.py``)
-    pins one worker per visible GPU, so the cluster is small and fixed; any
-    worker can end up running a task that needs this payload, and moving it to
-    a GPU-pinned worker that doesn't already have it (the ``broadcast=False``
-    default) costs a transfer later anyway.
+    ``broadcast=False`` (the default), not ``True``: measured directly (this
+    fix's own session, a real 4-GPU Perlmutter dask-cuda cluster) that
+    ``broadcast=True`` -- waiting for every worker to confirm receipt before
+    the scatter call returns -- pulled forward and serialized each worker's
+    own first ``import abtem`` (~1.7 s/worker, needed just to unpickle a
+    ``TransitionPotentialArray``), adding several real seconds to every run.
+    ``broadcast=False`` returns as soon as one worker has the data; any other
+    worker that later needs it fetches it from a peer via distributed's
+    normal (always-on, not best-effort) dependency-fetch mechanism -- nothing
+    fails or silently uses stale data either way, whichever worker ends up
+    running the task that needs it.
+
+    Traded away by this choice: a real, if narrow, reliability gap.
+    Scattered data has no lineage, so it cannot be recomputed if lost --
+    unlike a normal task result. Because scattering here is memoized (below)
+    and the same ``Future`` is reused for as long as the underlying object
+    stays alive, that Future can end up relied on across an entire long-
+    running job, not just one ``compute()`` call. Under ``broadcast=False``,
+    if the (possibly sole) worker holding the data dies before another
+    worker has independently fetched a copy, every later reuse of the memo
+    for that object fails outright, with no way to recompute it -- confirmed
+    directly: killing the one worker holding a ``broadcast=False`` scatter
+    breaks it, while the same kill under ``broadcast=True`` (data on every
+    worker) leaves it resolvable from a survivor. Accepted deliberately in
+    favour of avoiding the measured per-run cost above.
 
     Scattering is memoized on ``client`` via a weak reference to each scattered
     object, so the same live object -- e.g. one potential or transition
@@ -138,7 +158,10 @@ def _prescatter_shared_constants(arrays: list, client: Any) -> list:
         # list/tuple out into one Future per element instead of treating it
         # as a single object -- wrapping in a length-1 list forces the whole
         # of x, whatever its own type, to be scattered as one opaque payload.
-        future = client.scatter([x], broadcast=True)[0]
+        # broadcast=False (the default) -- see this function's own docstring
+        # for the measured cost of broadcast=True and the reliability
+        # tradeoff accepted by not using it.
+        future = client.scatter([x])[0]
         try:
             ref = weakref.ref(x, lambda _, memo=memo, key=key: memo.pop(key, None))
         except TypeError:
