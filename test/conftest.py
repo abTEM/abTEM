@@ -15,12 +15,17 @@ config.set({"diagnostics.progress_bar": False})
 # test/utils.py currently resolves to.
 _GPU_DEVICE = _gpu_param.values[0]
 
-# The `reason=` strings `requires_gpu`/`requires_multigpu` attach their
-# `skipif` marker with, imported rather than duplicated so a test carrying
-# either -- however it's applied: bare `@requires_gpu`, mixed with an
-# unrelated parametrize, or passed via a `pytest.param(..., marks=...)` --
-# is still recognized as GPU-touching even when it has no `device`
-# parametrization for the check below to inspect.
+# requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
+# alongside their skipif (see their definitions in test/utils.py) -- that
+# marker's mere presence is what the check below prefers, since it
+# survives a reword of the skipif's `reason=` text that a string match
+# would not.
+#
+# The reason-string check stays as a fallback, imported rather than
+# duplicated, for anything not going through those two helpers: a test
+# with its own hand-rolled `skipif(..., reason=...)` that happens to reuse
+# the same text carries no `gpu` marker at all, so without this fallback
+# it would silently fall out of the group.
 _GPU_SKIP_REASONS = {
     _requires_gpu.mark.kwargs.get("reason"),
     _requires_multigpu.mark.kwargs.get("reason"),
@@ -53,6 +58,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "multigpu: requires >=2 GPUs and dask-cuda; skipped otherwise",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gpu: applied by requires_gpu/requires_multigpu; a presence-only "
+        "marker for the GPU-worker-grouping hook below, not meant to be "
+        "applied directly",
     )
 
 
@@ -96,7 +107,10 @@ def pytest_collection_modifyitems(config, items):
             isinstance(v, str) and v == _GPU_DEVICE
             for v in callspec.params.values()
         )
-        is_gpu_marked = any(
+        # "gpu" is the dedicated marker requires_gpu/requires_multigpu both
+        # apply (see test/utils.py); the reason-string match is a fallback
+        # for anything not going through those two helpers.
+        is_gpu_marked = "gpu" in item.keywords or any(
             mark.name == "skipif" and mark.kwargs.get("reason") in _GPU_SKIP_REASONS
             for mark in item.iter_markers()
         )

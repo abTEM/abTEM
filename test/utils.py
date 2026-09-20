@@ -139,11 +139,43 @@ gpu = pytest.param(
     "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
 )
 
+
+class _GpuRequirement:
+    """A composite decorator: applies both the wrapped ``skipif`` and a
+    dedicated, condition-free ``pytest.mark.gpu`` alongside it.
+
+    ``conftest.py``'s GPU-worker-grouping hook prefers that marker's mere
+    presence over matching the skipif's ``reason=`` text, since the marker
+    survives a reword of that text where a string match would not. A
+    class (rather than a plain function with attributes bolted on) so
+    ``.marks``/``.mark`` below are properly typed, not dynamic attributes
+    mypy can't see.
+
+    Usable as a bare decorator (``@requires_gpu``) directly; ``.marks``
+    exists for the one place that needs actual ``Mark``-compatible objects
+    instead of a decorator -- ``pytest.param(..., marks=requires_gpu.marks)``
+    -- and ``.mark`` exposes the skipif's own ``Mark`` (reason text
+    included) for ``conftest.py``'s fallback check.
+    """
+
+    def __init__(self, skipif: "pytest.MarkDecorator"):
+        self._skipif = skipif
+        self.marks: tuple["pytest.MarkDecorator", "pytest.MarkDecorator"] = (
+            pytest.mark.gpu,
+            skipif,
+        )
+        self.mark = skipif.mark
+
+    def __call__(self, func):
+        func = self._skipif(func)
+        return pytest.mark.gpu(func)
+
+
 # The same gate as a standalone marker, for tests that are GPU-only rather than
 # parametrized over devices. Several files had hand-rolled `skipif(cp is None)`
 # or a bare `importorskip("cupy")`, both of which ask whether cupy is installed
 # rather than whether a device exists.
-requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+requires_gpu = _GpuRequirement(pytest.mark.skipif(_gpu_count() < 1, reason="no gpu"))
 
 
 # Shared `device`/`lazy` parametrize decorators. Every test file used to
@@ -166,9 +198,19 @@ except ImportError:
 # Skip marker for tests that genuinely need to distribute across GPUs: they
 # require both >=2 GPUs and dask-cuda (one worker process per GPU). Use together
 # with `pytest.mark.multigpu` so the suite can be selected with `-m multigpu`.
-requires_multigpu = pytest.mark.skipif(
-    _gpu_count() < 2 or not _HAS_DASK_CUDA,
-    reason="requires >=2 GPUs and dask-cuda",
+#
+# Also applies pytest.mark.gpu via the same _GpuRequirement as requires_gpu
+# above -- requires_multigpu tests already carry the separate `multigpu`
+# marker too (applied explicitly alongside this one wherever it's used),
+# which conftest.py's grouping hook already checks independently of
+# anything here; this is for symmetry with requires_gpu, so a
+# requires_multigpu-only test (if one is ever written without the
+# `multigpu` marker) is still caught.
+requires_multigpu = _GpuRequirement(
+    pytest.mark.skipif(
+        _gpu_count() < 2 or not _HAS_DASK_CUDA,
+        reason="requires >=2 GPUs and dask-cuda",
+    )
 )
 
 

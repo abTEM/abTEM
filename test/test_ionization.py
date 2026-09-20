@@ -39,7 +39,7 @@ from utils import devices, requires_gpu, synthetic_transition_potential  # noqa:
 # "cupy"); the abtem-level GPU dispatch tests use the standard device kwarg.
 xp_params = [
     "numpy",
-    pytest.param("cupy", marks=requires_gpu),
+    pytest.param("cupy", marks=requires_gpu.marks),
 ]
 
 
