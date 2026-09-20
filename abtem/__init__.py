@@ -39,6 +39,14 @@ from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope
 from abtem.visualize.visualizations import show_atoms
 from abtem.waves import PlaneWave, Probe, Waves
 
+# Registers dask.sizeof.sizeof for abTEM's large payload carriers (and
+# ase.Atoms). Import last: by this point every class it registers is
+# already loaded, and nothing above this line instantiates one of them,
+# so there is no risk of a sizeof() call reaching an unregistered type
+# before this module's registrations take effect (dask memoizes its
+# dispatch per type -- see abtem.core.dask_sizeof's own docstring).
+from abtem.core import dask_sizeof  # noqa: F401
+
 __all__ = [
     "__version__",
     "distributions",
