@@ -170,6 +170,49 @@ class TestPrecisionConfig:
     memory, whatever the configuration said.
     """
 
+    # The two tests below check the *runtime* half of the defect in this
+    # class's docstring: an array allocated at the configured precision and
+    # then promoted back to complex128 by dividing by a float64 numpy scalar
+    # (NEP 50). test_no_hardcoded_dtypes_remain cannot stand in for them --
+    # it greps the source for hardcoded dtype literals, and a promotion
+    # leaves none, so `array = array / np.prod(...)` in place of the
+    # in-place `/=` passes it while silently doubling every transition
+    # potential's memory. Verified: reintroducing exactly that division
+    # fails test_built_array_honours_precision and passes the grep test.
+
+    @requires_gpaw
+    @pytest.mark.parametrize(
+        "precision, expected",
+        [("float32", np.complex64), ("float64", np.complex128)],
+    )
+    def test_built_array_honours_precision(self, precision, expected):
+        from abtem.inelastic.core_loss import SubshellTransitions
+
+        with abtem.config.set({"precision": precision}):
+            potential = SubshellTransitions(14, 1, 0, epsilon=25.0)
+            built = potential.get_transition_potentials(
+                extent=6.0, gpts=64, energy=ENERGY
+            ).build()
+            assert built.array.dtype == expected
+
+    @requires_gpaw
+    def test_single_and_double_precision_agree(self):
+        from abtem.inelastic.core_loss import SubshellTransitions
+
+        values = {}
+        for precision in ("float32", "float64"):
+            with abtem.config.set({"precision": precision}):
+                built = SubshellTransitions(
+                    14, 1, 0, epsilon=25.0
+                ).get_transition_potentials(
+                    extent=10.0, gpts=128, energy=ENERGY
+                ).build()
+                values[precision] = float(
+                    np.abs(built.array).sum(dtype=np.float64)
+                )
+
+        assert values["float32"] == pytest.approx(values["float64"], rel=1e-5)
+
     def test_no_hardcoded_dtypes_remain(self):
         import re
         from pathlib import Path
