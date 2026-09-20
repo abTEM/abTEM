@@ -2184,11 +2184,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 chunks=ensemble_chunks
             )
 
+            ndims = len(self.ensemble_shape)
+
             def _combine_args(*args):
                 combined = args[0], args[1].item()
-                return _wrap_with_array(combined, 1)
+                return _wrap_with_array(combined, ndims)
 
-            ndims = len(self.ensemble_shape)
             blocks = da.blockwise(
                 _combine_args,
                 tuple_range(ndims),
