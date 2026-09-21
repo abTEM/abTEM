@@ -2088,15 +2088,25 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
                 # actually covers (adjust_chunks in ensemble_blocks can make
                 # those differ, e.g. one unsplit block covering every value
                 # of an axis) -- block.shape would be wrong whenever they do.
-                # Inserting/resizing size-1 axes via reshape never reorders
-                # data, so this is safe, and a real shape mismatch still
-                # raises here instead of silently reinterpreting wrong data.
+                # reshape on its own only guarantees equal total size, not
+                # equal non-1 dimensions in the same order -- e.g. (2, 3, 2)
+                # reshapes into (3, 2, 2) without error, silently remapping
+                # real data across axes. Only inserting or resizing size-1
+                # axes is actually safe here, so assert that explicitly:
+                # every non-1 dimension of the two shapes must already
+                # match, in order, before reshape is allowed to run.
                 result = calculate_array(block)
                 chunk_shape = tuple(
                     end - start for start, end in block_info[0]["array-location"]
                 )
                 expected_shape = chunk_shape + gpts
                 if result.shape != expected_shape:
+                    non1_result = tuple(d for d in result.shape if d != 1)
+                    non1_expected = tuple(d for d in expected_shape if d != 1)
+                    assert non1_result == non1_expected, (
+                        f"cannot safely reshape {result.shape} to "
+                        f"{expected_shape}: non-size-1 dimensions differ"
+                    )
                     result = result.reshape(expected_shape)
                 return result
 
