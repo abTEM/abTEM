@@ -612,9 +612,12 @@ class PhononParityAxis(OrdinalAxis):
     Used to separate one-phonon from multi-phonon scattering in energy-
     resolved phonon-loss simulations (see issue #373 and
     :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
-    ``parity_projection``). Always exactly length 2 (``("real", "twin")``),
-    on both the atoms/potential ensemble and the resulting exit-wave
-    ensemble. No static/equilibrium wave is needed alongside it: the
+    ``parity_projection``). Length 2 (``("real", "twin")``), or 3
+    (``("real", "twin", "static")``) when a rest displacement field is
+    sampled as well, the ``"static"`` member being the rest-displaced
+    structure without the bin displacement -- the per-realization
+    reference of the multi-phonon channel. Present on both the
+    atoms/potential ensemble and the resulting exit-wave ensemble. No static/equilibrium wave is needed alongside it: the
     one-phonon channel is the odd part of the exit wave and the multi-phonon
     channel is the variance of its even part over configurations (see
     ``phonon_loss_diffraction_patterns``).
@@ -622,6 +625,24 @@ class PhononParityAxis(OrdinalAxis):
 
     label: str = "phonon parity"
     values: tuple = ("real", "twin")
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class PhononRestParityAxis(OrdinalAxis):
+    """Ensemble axis distinguishing the two signs of the *rest* displacement
+    field, i.e. of all phonon modes outside the energy bin, added on top of a
+    bin snapshot (see
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``rest_snapshots``). Always exactly length 2 (``("plus", "minus")``).
+    Averaging the complex exit waves over this axis keeps only the part even
+    in the rest displacement: the Debye-Waller damping of the bin's
+    one-phonon amplitude by all other modes is retained, while the
+    mis-binned one-bin-phonon-plus-one-rest-phonon term, odd in the rest
+    displacement, cancels exactly.
+    """
+
+    label: str = "rest parity"
+    values: tuple = ("plus", "minus")
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

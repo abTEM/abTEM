@@ -191,3 +191,101 @@ def test_lazy_pipeline_matches_eager(equilibrium):
     np.testing.assert_allclose(
         dp_lazy.array.compute(), dp.array, atol=1e-6 * np.abs(dp.array).max(), rtol=0
     )
+
+
+def _rest_fields(equilibrium, n, scale, seed):
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        atoms = equilibrium.copy()
+        atoms.positions[:, :2] += rng.normal(scale=scale, size=(len(atoms), 2))
+        out.append(atoms)
+    return out
+
+
+def test_rest_parity_damps_one_phonon_channel(equilibrium):
+    """Adding the rest displacement with both signs must damp the one-phonon
+    channel by the Debye-Waller factor of the rest field, exp(-Q^2 sigma^2)
+    for an isotropic in-plane Gaussian of per-component sigma, at the
+    one-phonon peaks, and must not conserve the total weight (the lost
+    weight is a loss, not a redistribution)."""
+    n_configs, sigma = 16, 0.04
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=n_configs, scale=0.05)
+    rest = _rest_fields(equilibrium, n_configs, scale=sigma, seed=21)
+    energies = [0.02]
+
+    with abtem.config.set({"precision": "float64"}):
+        plain = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, energies,
+                 equilibrium_atoms=equilibrium, parity_projection=True),
+            max_angle="full",
+        )
+        damped = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, energies,
+                 equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest),
+            max_angle="full",
+        )
+
+    # four runs per snapshot: only the one-phonon channel comes back
+    assert damped.array.shape == plain.array.shape[1:]
+    assert damped.metadata["phonon_loss_component"] == "one"
+    one_plain, one_damped = plain.array[1, 0], damped.array[0]
+
+    ny, nx = one_plain.shape
+    ang = plain.angular_sampling  # mrad
+    wavelength = abtem.core.energy.energy2wavelength(100e3)
+    qy = (np.arange(ny) - ny // 2) * ang[0] * 1e-3 / wavelength * 2 * np.pi
+    qx = (np.arange(nx) - nx // 2) * ang[1] * 1e-3 / wavelength * 2 * np.pi
+    q2 = qy[:, None] ** 2 + qx[None, :] ** 2
+    dw = np.exp(-q2 * sigma**2)
+
+    # The intensity average over rest realizations captures the damping to
+    # second order in u_rest; the residual is the incoherent two-rest-phonon
+    # term, positive and of relative order (Q sigma)^4, so compare where it
+    # is small (Q^2 sigma^2 < 0.2) and allow for finite-sample noise. The
+    # tolerance was checked to be independent of sampling (0.1 to 0.025 A).
+    peaks = (one_plain > 0.1 * one_plain.max()) & (q2 * sigma**2 < 0.2)
+    assert peaks.sum() >= 10
+    ratio = one_damped[peaks] / one_plain[peaks]
+    np.testing.assert_allclose(ratio, dw[peaks], atol=0.08, rtol=0)  # per-pixel, sample noise
+    assert 0 < np.mean(ratio - dw[peaks]) < 0.04  # residual is a small positive bias
+    assert one_damped.sum() < 0.97 * one_plain.sum()
+
+
+def test_rest_parity_multi_channel_is_the_damped_bin_multi_channel(equilibrium):
+    """With rest fields the multi channel must be the bin's own two-phonon
+    scattering (damped by the rest field), not the two-rest-phonon
+    fluctuations, which are larger: the per-realization static reference
+    removes them. Check the multi/one weight ratio, which the damping
+    leaves nearly unchanged, against the bin-only run."""
+    n_configs, sigma = 12, 0.04
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=n_configs, scale=0.06)
+    rest = _rest_fields(equilibrium, n_configs, scale=sigma, seed=31)
+    with abtem.config.set({"precision": "float64"}):
+        plain = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True),
+            max_angle=60,
+        )
+        damped = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest, rest_static_reference=True),
+            max_angle=60,
+        )
+        one_only = phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest),
+            max_angle=60,
+        )
+    assert damped.array.shape[0] == 3  # six runs: all three channels
+    ratio_plain = plain.array[2, 0].sum() / plain.array[1, 0].sum()
+    ratio_damped = damped.array[2, 0].sum() / damped.array[1, 0].sum()
+    assert 0.7 < ratio_damped / ratio_plain < 1.3, (ratio_plain, ratio_damped)
+    # and the multi weight itself decreases with the damping, never grows
+    assert damped.array[2, 0].sum() < plain.array[2, 0].sum()
+    # the four-run one-phonon channel is the six-run one, bit for bit: the
+    # real/twin members and rest fields are the same structures
+    np.testing.assert_allclose(one_only.array, damped.array[1], rtol=0, atol=0)

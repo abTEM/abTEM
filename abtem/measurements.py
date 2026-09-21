@@ -6495,10 +6495,31 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     ``ensemble_mean=False`` the coherent/incoherent split is no longer the
     interesting choice.
     """
-    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+    from abtem.core.axes import (
+        EnergyLossAxis,
+        FrozenPhononsAxis,
+        OrdinalAxis,
+        PhononParityAxis,
+        PhononRestParityAxis,
+    )
     from abtem.core.utils import get_dtype
 
-    if temperature is not None:
+    rest_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononRestParityAxis)
+        ),
+        None,
+    )
+    # With rest fields but no static reference only the one-phonon channel
+    # is computed (see below); one-phonon Bose weights are right for it, so
+    # temperature unfolding is allowed in that case.
+    one_phonon_only = rest_axis_idx is not None and tuple(
+        exit_waves.ensemble_axes_metadata[parity_axis_idx].values
+    ) == ("real", "twin")
+
+    if temperature is not None and not one_phonon_only:
         raise ValueError(
             "temperature-based loss/gain unfolding is not available for a "
             "parity-projected ensemble. The unfolding splits the intensity "
@@ -6513,15 +6534,43 @@ def _phonon_loss_diffraction_patterns_parity_projection(
             "abtem.measurements.unfold_loss_gain(one, temperature) to it."
         )
 
+    # --- rest parity: keep only the part even in the rest displacement ---
+    # Averaging the complex waves over the ("plus", "minus") rest axis
+    # retains the Debye-Waller damping of the bin's one-phonon amplitude by
+    # all other modes (even orders in u_rest) and cancels the mis-binned
+    # one-bin-phonon-plus-one-rest-phonon term (odd in u_rest) exactly.
+    if rest_axis_idx is not None:
+        rest_axis = exit_waves.ensemble_axes_metadata[rest_axis_idx]
+        if tuple(rest_axis.values) != ("plus", "minus"):
+            raise ValueError(
+                "PhononRestParityAxis must have values ('plus', 'minus'), got "
+                f"{tuple(rest_axis.values)}."
+            )
+        summed = exit_waves.sum(axis=rest_axis_idx)
+        exit_waves = summed.__class__(
+            summed.array / 2, **summed._copy_kwargs(exclude=("array",))
+        )
+        parity_axis_idx = next(
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononParityAxis)
+        )
+
     parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
-    if tuple(parity_axis.values) != ("real", "twin"):
+    parity_values = tuple(parity_axis.values)
+    expected_values = (
+        (("real", "twin"), ("real", "twin", "static"))
+        if rest_axis_idx is not None
+        else (("real", "twin"),)
+    )
+    if parity_values not in expected_values:
         raise ValueError(
             "phonon_loss_diffraction_patterns requires a PhononParityAxis "
-            "with values ('real', 'twin'), got "
-            f"{tuple(parity_axis.values)}. Build the Potential from a "
-            "parity_projection=True EnergyResolvedAtomsEnsemble and run "
-            "multislice (with a WavesDetector, so the exit waves stay "
-            "complex) before calling this function."
+            f"with values in {expected_values}, got {parity_values}. Build "
+            "the Potential from a parity_projection=True "
+            "EnergyResolvedAtomsEnsemble and run multislice (with a "
+            "WavesDetector, so the exit waves stay complex) before calling "
+            "this function."
         )
 
     if not np.iscomplexobj(exit_waves.array):
@@ -6540,6 +6589,14 @@ def _phonon_loss_diffraction_patterns_parity_projection(
 
     waves_real = _select(0)
     waves_twin = _select(1)
+    # With rest fields, the "static" member is the rest-displaced structure
+    # without the bin displacement, per realization. Subtracting it from the
+    # even part cancels the two-rest-phonon fluctuations (order u_rest^4,
+    # usually larger than the bin's own two-phonon signal) that would
+    # otherwise dominate the multi-phonon channel. Without rest fields the
+    # reference is a constant and drops out of the variance, so none is
+    # needed.
+    waves_static = _select(2) if parity_values == ("real", "twin", "static") else None
 
     fp_axis_idx = None
     energy_axis_idx = None
@@ -6580,8 +6637,30 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     # otherwise coexist in memory with psi_even below.
     del psi_odd
 
+    remaining_axes = [
+        ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
+    ]
+
+    if one_phonon_only:
+        # Rest fields without the static reference: the multi-phonon channel
+        # would be dominated by two-rest-phonon fluctuations, so only the
+        # one-phonon channel is returned -- a plain DiffractionPatterns, as
+        # component="tds" returns, with no "Phonon order" axis.
+        if temperature is not None:
+            remaining_energy_axis_idx = next(
+                i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
+            )
+            I_one, remaining_axes = _unfold_loss_gain_array(
+                I_one, remaining_axes, remaining_energy_axis_idx, temperature
+            )
+        return _finalize_phonon_loss_result(
+            I_one, dp_one, remaining_axes, "one", block_direct
+        )
+
     # --- "multi": variance of psi_even = (real + twin) / 2, in complex128 ---
     psi_even = ((waves_real.array + waves_twin.array) / 2).astype(np.complex128)
+    if waves_static is not None:
+        psi_even = psi_even - waves_static.array.astype(np.complex128)
     waves_even = waves_real.__class__(psi_even, **wave_kwargs)
     # The intensities below are float64 by construction, but the lazy
     # diffraction-pattern path stamps them with the *configured* dtype as
@@ -6605,10 +6684,6 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     # Full real-space (uncropped), complex128-upcast grid -- twice the
     # working precision's byte size -- no longer needed once I_multi exists.
     del psi_even, waves_even
-
-    remaining_axes = [
-        ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
-    ]
 
     # --- "all" = one + multi, exact for the symmetric (+u, -u) set ---
     I_all = I_one + I_multi
@@ -6709,7 +6784,12 @@ def phonon_loss_diffraction_patterns(
         (issue #373). In that case ``component`` is ignored: ``"one"`` is
         the odd-in-displacement intensity, ``"multi"`` the variance of the
         even part, and ``"all"`` their sum, which equals the ordinary TDS
-        estimator over the full ``(+u, -u)`` set.
+        estimator over the full ``(+u, -u)`` set. If the ensemble also
+        carries a :class:`~abtem.core.axes.PhononRestParityAxis` (built with
+        ``rest_snapshots``), the exit waves are first averaged over it,
+        which keeps the Debye-Waller damping of the one-phonon channel by the
+        modes outside the bin and removes the mis-binned one-bin-phonon plus
+        one-rest-phonon term.
     """
     from abtem.core.axes import (
         EnergyLossAxis,
