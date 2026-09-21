@@ -22,6 +22,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Single source of truth for whether this run includes --runslow, so the
+# `tests` job's own command and `all-tests-passed`'s summary (below) can't
+# drift apart by editing one and forgetting the other. Skipped only for the
+# common case (a PR into dev), to keep that feedback loop fast; included for
+# PRs into main (release gate -- see the full OS matrix below), and for
+# every push/schedule/workflow_dispatch run (i.e. right after something
+# actually merges into dev or main, or on a manual run), so a slow-test
+# regression on dev surfaces within minutes of merge rather than only in the
+# weekly cron run.
+env:
+  RUNSLOW: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && 'true' || 'false' }}
+
 jobs:
   tests:
     name: ${{ matrix.os }} / python ${{ matrix.python-version }}
@@ -50,16 +62,7 @@ jobs:
         run: uv sync --group test
 
       - name: Run tests
-        # --runslow is skipped only for the common case (a PR into dev), to
-        # keep that feedback loop fast. It's included for PRs into main
-        # (release gate -- see the full OS matrix above), and for every
-        # push/schedule/workflow_dispatch run (i.e. right after something
-        # actually merges into dev or main), so a slow-test regression on
-        # dev surfaces within minutes of merge rather than only in the
-        # weekly cron run.
-        run: >-
-          uv run pytest test -n auto
-          ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && '--runslow' || '' }}
+        run: uv run pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
   # A single, stable check to require in branch protection. The `tests` job
   # above fans out into a differently-named check per matrix cell (e.g.
@@ -68,6 +71,14 @@ jobs:
   # x 4 Python versions for PRs into main) -- naming those individually as
   # required checks would need re-editing on every matrix change. This job
   # instead reduces the whole matrix to one pass/fail result.
+  #
+  # Its name is deliberately static regardless of RUNSLOW: a required-status-
+  # check name that changed per run would silently stop matching in branch
+  # protection. What DOES vary is reported in this job's own step summary
+  # (visible right on the check, no digging into the `tests` job's raw
+  # command needed) rather than baked into the name, so "All tests passed"
+  # never overclaims what it means for a given run -- most importantly for
+  # PRs into dev, where it does NOT mean the slow-marked tests ran at all.
   all-tests-passed:
     name: All tests passed
     needs: tests
@@ -79,4 +90,12 @@ jobs:
           if [ "${{ needs.tests.result }}" != "success" ]; then
             echo "One or more test matrix jobs did not succeed (result: ${{ needs.tests.result }})."
             exit 1
+          fi
+
+      - name: Report whether slow tests were included
+        run: |
+          if [ "${{ env.RUNSLOW }}" = "true" ]; then
+            echo "### :white_check_mark: Included \`--runslow\` -- slow-marked tests ran and passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### :fast_forward: Did NOT include \`--runslow\` -- slow-marked tests were skipped (fast PR-into-dev path). This check passing does not mean the slow test suite passed." >> "$GITHUB_STEP_SUMMARY"
           fi
