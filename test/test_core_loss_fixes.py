@@ -737,11 +737,12 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
         scale = max(np.abs(reference[e]).max() for e in order)
 
         ensemble = _run(list(order), lazy)
-        # GridScan on unfixed dev (this branch, no PR #439) also stacks
-        # energy trailing -- same axis convention as CustomScan here.
+        # Unlike CustomScan above, GridScan's two ScanAxis entries are moved
+        # to the end of AnnularDetector's declared ensemble order (see
+        # _out_ensemble_source), leaving energy as the sole leading axis.
         for i, e in enumerate(order):
             np.testing.assert_allclose(
-                ensemble[..., i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
         assert not np.allclose(reference[order[0]], reference[order[1]])
 

@@ -33,7 +33,7 @@ from abtem.finite_difference import LaplaceOperator
 from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.inelastic.core_loss import TransitionPotential, TransitionPotentialArray
 from abtem.inelastic.plasmons import _update_plasmon_axes
-from abtem.measurements import BaseMeasurements, _scan_axes
+from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
     PotentialArray,
@@ -1595,38 +1595,25 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
                 idx = (slice(None),) * energy_axis_idx + (j,)
                 member = waves.__class__(**waves.get_items(idx))
                 per_energy.append(self._calculate_new_array(member))
-            # Not energy_axis_idx: that locates the energy axis within
-            # *waves*' own combined ensemble axes (which may also hold e.g.
-            # scan axes, at whatever positions the caller's ensemble nests
-            # them in), but each per-energy `member`'s reduced result
-            # already has that axis stripped. The output detector's own
-            # _out_ensemble_axes_metadata (abtem/detectors.py) computes the
-            # real answer for where an axis like this ends up: it moves
-            # whichever axes _scan_axes() identifies (abtem/measurements.py
-            # -- the "main" 2D ScanAxis pair, if any) to the very end, ahead
-            # of _out_base_shape/_out_ensemble_shape folding them into the
-            # base/image shape, and leaves every other axis's *relative*
-            # order untouched. Energy is never itself a scan axis, so its
-            # position in the final result is exactly its rank among the
-            # non-scan axes that precede it in waves' own list -- which
-            # differs by scan type: a GridScan probe has two leading
-            # ScanAxis entries ahead of energy, both excluded by _scan_axes,
-            # so energy ends up first (rank 0); a CustomScan probe's single
-            # PositionsAxis is not a ScanAxis instance at all, so it is
-            # never excluded, and energy (which follows it) keeps rank 1.
-            # Mirroring that computation here, rather than assuming a fixed
-            # axis, is what keeps this in sync with detectors.py by
-            # construction instead of by coincidence.
-            scan_source = _scan_axes(waves)
-            new_energy_axis = sum(
-                1 for i in range(energy_axis_idx) if i not in scan_source
-            )
+            # Stack at energy_axis_idx itself, reinserting the axis exactly
+            # where indexing removed it -- member's own remaining axes are
+            # *waves*' own axes with energy_axis_idx dropped, in their
+            # original relative order, so this always reproduces waves' own
+            # (natural, undeclared) ensemble axis order, whatever detector
+            # or scan type is in play. A detector like AnnularDetector
+            # declares a *different* axis order in its own metadata (moving
+            # scan axes to the end -- see _out_ensemble_source in
+            # abtem/detectors.py); reordering to match that declared order
+            # is handled once, uniformly for both eager and lazy results, in
+            # ArrayObject.apply_transform (abtem/array.py) rather than here,
+            # so this function only ever needs to know its own axes, not any
+            # particular detector's output convention.
             if isinstance(per_energy[0], tuple):
                 return tuple(
-                    np.stack([r[k] for r in per_energy], axis=new_energy_axis)
+                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
                     for k in range(len(per_energy[0]))
                 )
-            return np.stack(per_energy, axis=new_energy_axis)
+            return np.stack(per_energy, axis=energy_axis_idx)
 
         measurements = self.multislice_func(
             waves=waves,
