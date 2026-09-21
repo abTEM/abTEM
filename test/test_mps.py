@@ -167,3 +167,52 @@ def test_stem_scan_matches_cpu(atoms):
         )
 
     assert np.allclose(*arrays, atol=1e-3 * np.abs(arrays[0]).max())
+
+
+def test_angle_and_round_take_their_second_argument_positionally():
+    # numpy.angle(z, deg) and numpy.round(a, decimals) both accept a second
+    # positional argument that torch either spells as a keyword or does not
+    # take at all; dask's own angle() passes deg positionally.
+    xp = get_array_module("mps")
+    rng = np.random.RandomState(3)
+
+    z = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype(np.complex64)
+    on_device = copy_to_device(z, "mps")
+
+    assert np.allclose(asnumpy(xp.angle(on_device)), np.angle(z), atol=1e-5)
+    assert np.allclose(asnumpy(xp.angle(on_device, True)), np.angle(z, True), atol=1e-3)
+
+    x = rng.randn(6).astype(np.float32)
+    assert np.allclose(asnumpy(xp.round(copy_to_device(x, "mps"), 2)), np.round(x, 2))
+
+
+def test_lazy_phase_matches_cpu():
+    arrays = []
+    for device in ("cpu", "mps"):
+        with abtem.config.set({"dask.lazy": True}):
+            probe = abtem.Probe(
+                energy=100e3, semiangle_cutoff=20, gpts=64, extent=10, device=device
+            )
+            arrays.append(asnumpy(probe.build().phase().compute().array))
+
+    # Compared as a wrapped difference: a probe's phase sits on the branch cut
+    # over much of the plane, where a float32 rounding either way flips the
+    # value between +pi and -pi.
+    difference = np.angle(np.exp(1j * (arrays[0] - arrays[1])))
+
+    assert np.abs(difference).max() < 1e-3
+
+
+@pytest.mark.parametrize("lazy_unit", [False, True])
+def test_crystal_potential_from_built_unit_matches_cpu(atoms, lazy_unit):
+    # A unit potential the caller built themselves is used as-is; built
+    # lazily, its array is a dask array rather than one of the device's own.
+    arrays = []
+    for device in ("cpu", "mps"):
+        with abtem.config.set({"dask.lazy": True}):
+            unit = abtem.Potential(atoms, gpts=64, device=device).build(lazy=lazy_unit)
+            crystal = abtem.CrystalPotential(unit, repetitions=(2, 2, 2))
+            waves = abtem.PlaneWave(energy=100e3, device=device).multislice(crystal)
+            arrays.append(asnumpy(waves.compute().array))
+
+    assert np.allclose(*arrays, atol=1e-3 * np.abs(arrays[0]).max())
