@@ -1,7 +1,7 @@
 """Tests for inelastic / core-loss simulation entry points.
 
 These guard against regressions in the public API that the core-loss tutorial
-depends on (see https://abtem.readthedocs.io/en/latest/user_guide/tutorials/core_loss.html).
+depends on (see https://abtem.github.io/doc/user_guide/tutorials/core_loss.html).
 The transition_potential_scan method was silently dropped in early 2025 and
 restored later; the smoke tests below ensure it stays wired up.
 
