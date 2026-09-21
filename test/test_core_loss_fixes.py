@@ -628,8 +628,8 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
     never reclassified as base shape, so energy's relative position is
     unaffected) but not for GridScan (whose two ScanAxis entries get moved
     into base shape, which the stacking axis did not account for). See
-    TestGridScanEnergyEnsembleAxisOrder below, which exercises GridScan
-    directly now that this is fixed.
+    TestScanEnergyEnsembleAxisOrder below, which exercises GridScan and
+    LineScan directly now that this is fixed.
 
     The lazy case additionally hits a second, separate, pre-existing defect
     of its own for this exact combination (CustomScan + an unbuilt,
@@ -716,18 +716,26 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
         assert not np.allclose(reference[order[0]], reference[order[1]])
 
 
-class TestGridScanEnergyEnsembleAxisOrder:
-    """A GridScan probe's energy-ensemble stack used to land on the wrong
-    axis of the result -- not scrambled values, a metadata/data mismatch.
-    See TestUnbuiltTransitionPotentialEnergyEnsemble's docstring for why
-    that class uses CustomScan instead and the mechanism this one guards.
+class TestScanEnergyEnsembleAxisOrder:
+    """A probe's energy-ensemble stack used to land on the wrong axis of the
+    result -- not scrambled values, a metadata/data mismatch. See
+    TestUnbuiltTransitionPotentialEnergyEnsemble's docstring for why that
+    class uses CustomScan instead and the mechanism this one guards.
 
     Naively reading ensemble[0] as "energy member 0" gave neither standalone
     single-energy run; ensemble[..., 0] (the array's actual axis, matching
     the measurement's own ensemble_axes_metadata, which always reports
-    EnergyAxis leading here) did. Uses a >1-position GridScan specifically:
-    a single-position scan squeezes to no scan axes at all, which cannot
-    show a mismatch between two axes that both still exist.
+    EnergyAxis leading here) did. Covers both GridScan (two ScanAxis entries
+    excluded by _scan_axes) and LineScan (one ScanAxis entry excluded):
+    the fix's own arithmetic, `sum(1 for i in range(energy_axis_idx) if i
+    not in scan_source)`, takes a different value for each -- 0 for
+    GridScan (both preceding axes excluded) vs 0 for LineScan too (its one
+    preceding axis is also excluded) -- but LineScan is the only shape here
+    that exercises _scan_axes actually excluding a *single* axis rather
+    than none (CustomScan's PositionsAxis) or both (GridScan). Uses a
+    >1-position scan for both: a single-position scan squeezes to no scan
+    axes at all, which cannot show a mismatch between two axes that both
+    still exist.
     """
 
     @staticmethod
@@ -737,15 +745,26 @@ class TestGridScanEnergyEnsembleAxisOrder:
             pbc=True,
         )
 
-    def _run(self, energy, lazy):
+    @staticmethod
+    def _scan(scan_kind, potential):
+        if scan_kind == "grid":
+            return abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                potential=potential,
+            )
+        elif scan_kind == "line":
+            return abtem.LineScan(
+                start=(0, 0), end=(1, 1), gpts=3, fractional=True,
+                potential=potential,
+            )
+        raise ValueError(scan_kind)
+
+    def _run(self, scan_kind, energy, lazy):
         pytest.importorskip("sympy")
         atoms = self._atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
         sites = atoms[atoms.numbers == 5]
-        scan = abtem.GridScan(
-            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
-            potential=potential,
-        )
+        scan = self._scan(scan_kind, potential)
         detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
         base_energy = energy[0] if isinstance(energy, list) else energy
         tp = _synthetic_unbuilt_transition_potential(
@@ -764,22 +783,50 @@ class TestGridScanEnergyEnsembleAxisOrder:
             m = m.compute(progress_bar=False)
         return np.asarray(m.to_cpu().array)
 
-    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "scan_kind, lazy",
+        [
+            ("grid", False),
+            ("grid", True),
+            ("line", False),
+            pytest.param(
+                "line", True,
+                marks=pytest.mark.xfail(
+                    reason=(
+                        "pre-existing, unrelated defect: LineScan + lazy "
+                        "raises IndexError('tuple index out of range') from "
+                        "multi_output_blockwise (abtem/array.py) while "
+                        "checking drop_axis -- consistent with "
+                        "_out_ensemble_shape (abtem/detectors.py) doing "
+                        "ensemble_shape[:-2] unconditionally, which "
+                        "over-strips when only one ScanAxis exists instead "
+                        "of the two it assumes. Reproduces identically with "
+                        "and without this PR's fix."
+                    ),
+                    strict=True,
+                ),
+            ),
+        ],
+    )
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
-    def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
+    def test_each_member_reproduces_its_own_standalone_run(
+        self, order, scan_kind, lazy
+    ):
         pytest.importorskip("sympy")
-        reference = {e: self._run(e, lazy=False) for e in order}
+        reference = {e: self._run(scan_kind, e, lazy=False) for e in order}
         # A scale-appropriate atol: see the module docstring rule against
         # relying on default tolerances for physical quantities far below
         # them.
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = self._run(list(order), lazy)
-        # The energy axis leads here (opposite of CustomScan's trailing
-        # energy axis in TestUnbuiltTransitionPotentialEnergyEnsemble above)
-        # because GridScan's two ScanAxis entries get folded into base
-        # shape, leaving EnergyAxis as the only, and therefore first,
-        # remaining ensemble axis.
+        ensemble = self._run(scan_kind, list(order), lazy)
+        # The energy axis leads for both scan types here (opposite of
+        # CustomScan's trailing energy axis in
+        # TestUnbuiltTransitionPotentialEnergyEnsemble above): _scan_axes
+        # excludes GridScan's two ScanAxis entries and LineScan's one,
+        # leaving EnergyAxis as the only, and therefore first, remaining
+        # ensemble axis in both cases -- unlike CustomScan's PositionsAxis,
+        # which _scan_axes never excludes at all.
         for i, e in enumerate(order):
             np.testing.assert_allclose(
                 ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
