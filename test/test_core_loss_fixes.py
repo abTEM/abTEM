@@ -820,23 +820,7 @@ class TestScanEnergyEnsembleAxisOrder:
             ("grid", False),
             ("grid", True),
             ("line", False),
-            pytest.param(
-                "line", True,
-                marks=pytest.mark.xfail(
-                    reason=(
-                        "pre-existing, unrelated defect: LineScan + lazy "
-                        "raises IndexError('tuple index out of range') from "
-                        "multi_output_blockwise (abtem/array.py) while "
-                        "checking drop_axis -- consistent with "
-                        "_out_ensemble_shape (abtem/detectors.py) doing "
-                        "ensemble_shape[:-2] unconditionally, which "
-                        "over-strips when only one ScanAxis exists instead "
-                        "of the two it assumes. Reproduces identically with "
-                        "and without this PR's fix."
-                    ),
-                    strict=True,
-                ),
-            ),
+            ("line", True),
         ],
     )
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
