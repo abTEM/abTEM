@@ -301,6 +301,40 @@ class TestClassicalStatistics:
         assert gain_cold[0] < 1e-40
         np.testing.assert_allclose(loss_cold[0], 0.1 / (2 * units.kB * 10.0))
 
+    def test_classical_mode_in_four_run_rest_parity(self):
+        """With rest fields and no static reference the one-phonon channel is
+        returned alone and may be unfolded; the classical weights must reach
+        that path too."""
+        from ase import units
+
+        from abtem.core.axes import PhononRestParityAxis
+
+        e_values = [0.0, 0.02, 0.05]
+        n_configs, gpts = 4, 16
+        rng = np.random.default_rng(3)
+        shape = (2, 2, len(e_values), n_configs, gpts, gpts)
+        members = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+        waves = Waves(
+            members, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        T = 300.0
+        quantum = phonon_loss_diffraction_patterns(waves, temperature=T, max_angle="full")
+        classical = phonon_loss_diffraction_patterns(
+            waves, temperature=T, snapshot_statistics="classical", max_angle="full"
+        )
+        x = np.array(e_values[1:]) / (2 * units.kB * T)
+        for k, f in enumerate(x / np.tanh(x)):
+            np.testing.assert_allclose(classical.array[3 + k], quantum.array[3 + k] * f, rtol=1e-5)
+            np.testing.assert_allclose(classical.array[1 - k], quantum.array[1 - k] * f, rtol=1e-5)
+
     def test_invalid_statistics_rejected(self):
         from abtem.measurements import _loss_gain_weights, unfold_loss_gain
 

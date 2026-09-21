@@ -6504,6 +6504,7 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     parity: str,
     block_direct: bool | float,
     temperature: Optional[float],
+    snapshot_statistics: str = "quantum",
 ) -> "DiffractionPatterns":
     """Separate one-phonon from multi-phonon scattering (issue #373) from
     ``exit_waves`` carrying a ``("real", "twin")``
@@ -6703,7 +6704,8 @@ def _phonon_loss_diffraction_patterns_parity_projection(
                 i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
             )
             I_one, remaining_axes = _unfold_loss_gain_array(
-                I_one, remaining_axes, remaining_energy_axis_idx, temperature
+                I_one, remaining_axes, remaining_energy_axis_idx, temperature,
+                snapshot_statistics,
             )
         return _finalize_phonon_loss_result(
             I_one, dp_one, remaining_axes, "one", block_direct
@@ -6816,11 +6818,12 @@ def phonon_loss_diffraction_patterns(
         signal is symmetric in loss/gain; only their *split* is a quantum
         effect). The zero-energy bin is unweighted. Default is None (no
         unfolding — the returned energies are the ones in ``exit_waves``).
-        Not accepted for a parity-projected ensemble (raises): the
-        one-phonon weights are wrong for the ``"multi"`` channel, whose
-        energy axis is the bin's mode energy rather than the energy
-        transfer. Select the ``"one"`` slot and apply
-        :func:`unfold_loss_gain` to it instead.
+        For a parity-projected ensemble it is accepted only when the result
+        is the one-phonon channel alone (rest fields without the static
+        reference); otherwise it raises, because the one-phonon weights are
+        wrong for the ``"multi"`` channel, whose energy axis is the bin's
+        mode energy rather than the energy transfer -- select the ``"one"``
+        slot and apply :func:`unfold_loss_gain` to it instead.
     snapshot_statistics : {"quantum", "classical"}
         How the snapshot amplitudes were sampled, used by the unfolding:
         ``"quantum"`` (default) for amplitudes drawn with the Bose-Einstein
@@ -6875,6 +6878,7 @@ def phonon_loss_diffraction_patterns(
                 parity=parity,
                 block_direct=block_direct,
                 temperature=temperature,
+                snapshot_statistics=snapshot_statistics,
             )
 
     # --- validate ensemble axes ---
