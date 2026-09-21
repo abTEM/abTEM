@@ -1,5 +1,13 @@
 """Main abTEM module."""
 
+# Runs its seeding as an import-time side effect (see the module docstring):
+# must be imported before abtem.distributions below, which is what first
+# reaches abtem.core.backend, which is what first imports numba. Kept as
+# its own statement rather than merged with the later `from abtem.core
+# import axes, config` below -- an isort-style merge would silently lose
+# this ordering requirement.
+from abtem.core import _numba_threads  # noqa: F401, I001
+
 from abtem import distributions, transfer
 from abtem._version import __version__
 from abtem.array import concatenate, from_zarr, stack

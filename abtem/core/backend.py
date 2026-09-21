@@ -67,6 +67,15 @@ except ImportError:
 def _cap_numba_threads_to_omp_num_threads() -> None:
     """Cap Numba's own thread pool to ``OMP_NUM_THREADS``, if set.
 
+    A fallback for the case where something already imported numba before
+    abtem: ``abtem.core._numba_threads``, imported as abtem's own first
+    statement, is the primary mechanism (seeds ``NUMBA_NUM_THREADS`` itself
+    before numba's first import, which applies process-wide -- see that
+    module's docstring for why this function's own approach, calling
+    ``numba.set_num_threads()`` after the fact, is not equivalent: it only
+    rebinds the *calling* thread's own active count, not a spawned worker
+    thread's, such as one of dask's threaded-scheduler tasks).
+
     Every ``@njit(parallel=True)`` kernel in this package (the CPU Laplacian
     stencil in ``finite_difference.py``, the magnetism kernels in
     ``magnetism/pauli.py``, the partitioned S-matrix kernel in
@@ -74,12 +83,7 @@ def _cap_numba_threads_to_omp_num_threads() -> None:
     pool. That pool defaults to the full visible CPU count and reads
     neither ``OMP_NUM_THREADS`` nor ``OPENBLAS_NUM_THREADS`` -- Numba's
     default "workqueue" threading layer (the fallback when neither TBB nor
-    OpenMP is available) is independent of both. A process that has already
-    set ``OMP_NUM_THREADS`` -- the convention already used everywhere else
-    in scientific Python for BLAS/OpenMP thread limits -- almost always
-    wants the same cap applied to Numba too, particularly to avoid
-    oversubscription when many such processes share one node (a
-    multi-worker test runner, several concurrent jobs). Skipped when
+    OpenMP is available) is independent of both. Skipped when
     ``NUMBA_NUM_THREADS`` is already set explicitly, so a deliberate,
     Numba-specific choice already made by the caller is never overridden.
     """
