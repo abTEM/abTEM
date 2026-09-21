@@ -2405,7 +2405,12 @@ class CrystalPotential(_PotentialBuilder):
         if not isinstance(pool_unit, PotentialArray):
             potentials = pool_unit.build(lazy=False)
         else:
-            potentials = pool_unit
+            # A unit the caller built themselves may still be lazy. The unit is
+            # consumed once per tile and per z-repetition, so it has to be a
+            # concrete array either way; leaving it lazy would both recompute
+            # it on every use and hand a dask array to the array namespace of
+            # whichever device it lives on.
+            potentials = pool_unit.compute() if pool_unit.is_lazy else pool_unit
 
         assert isinstance(potentials, PotentialArray)
 
@@ -2619,7 +2624,11 @@ class CrystalPotential(_PotentialBuilder):
         if not isinstance(self.potential_unit, PotentialArray):
             unit_built = self.potential_unit.build(lazy=False)
         else:
-            unit_built = self.potential_unit
+            unit_built = (
+                self.potential_unit.compute()
+                if self.potential_unit.is_lazy
+                else self.potential_unit
+            )
 
         unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         if unit_arr.ndim == 3:

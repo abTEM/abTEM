@@ -1176,6 +1176,35 @@ def roll(x, shift, axis=None):
 
 
 @_serialized
+def angle(z, deg=False):
+    """``numpy.angle``, whose second argument torch does not take at all.
+
+    ``numpy.angle(z, deg)`` accepts ``deg`` positionally, and dask's own
+    ``angle`` passes it that way, so the generic unary forwarder would hand
+    ``torch.angle`` an argument it has no parameter for.
+    """
+    tensor = _unwrap(z)
+    if not isinstance(tensor, torch.Tensor):
+        return np.angle(tensor, deg=deg)
+
+    radians = torch.angle(tensor)
+    return _wrap(torch.rad2deg(radians) if deg else radians)
+
+
+@_serialized
+def round(a, decimals=0, out=None):
+    """``numpy.round``, whose ``decimals`` is keyword-only to torch."""
+    if out is not None:
+        raise NotImplementedError("'out' is not supported on Metal")
+
+    tensor = _unwrap(a)
+    if not isinstance(tensor, torch.Tensor):
+        return np.round(tensor, decimals)
+
+    return _wrap(torch.round(tensor, decimals=decimals))
+
+
+@_serialized
 def eye(n, m=None, dtype=None):
     _check_available()
     torch_dtype = to_torch_dtype(dtype) if dtype is not None else None
@@ -1310,11 +1339,11 @@ class _TorchNumpyNamespace:
     floor = staticmethod(_elementwise("floor"))
     ceil = staticmethod(_elementwise("ceil"))
     isclose = staticmethod(isclose)
-    round = staticmethod(_elementwise("round"))
+    round = staticmethod(round)
     rint = staticmethod(_elementwise("round"))
     conjugate = staticmethod(_elementwise("conj"))
     conj = staticmethod(_elementwise("conj"))
-    angle = staticmethod(_elementwise("angle"))
+    angle = staticmethod(angle)
     real = staticmethod(_elementwise("real"))
     imag = staticmethod(_elementwise("imag"))
     clip = staticmethod(clip)
