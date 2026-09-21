@@ -8,50 +8,61 @@ from abtem.core._numba_threads import _seed_numba_num_threads_from_omp
 
 
 class TestSeedNumbaNumThreadsFromOmp:
-    """Unit tests for the seeding logic itself. Since it only writes to
-    ``os.environ`` (real thread-pool sizing happens later, at numba's own
-    first import), these call the function directly with monkeypatched
-    environment variables rather than spawning a subprocess -- that is
-    reserved for ``TestNumbaThreadsReachSpawnedWorkerThreads`` below, which
-    tests the property that actually depends on process/import order.
+    """Unit tests for the seeding logic itself. It writes to ``os.environ``
+    for real (real thread-pool sizing happens later, at numba's own first
+    import) -- ``os.environ`` is swapped for a disposable copy for the
+    duration of each test (not just the individual keys these tests care
+    about), so the function's real writes can never leak into the actual
+    process environment. That matters here specifically: numba re-validates
+    ``NUMBA_NUM_THREADS`` against its already-launched thread pool on every
+    new compilation (``config.reload_config()``, called from
+    ``numba/core/compiler.py``), so a leaked value from one of these tests
+    reaching a real numba compilation anywhere else in the same pytest
+    process raises ``RuntimeError: Cannot set NUMBA_NUM_THREADS to a
+    different value once the threads have been launched`` -- confirmed as
+    the actual cause of a real CI failure from an earlier version of these
+    tests that used ``monkeypatch.setenv``/``delenv`` on the real
+    environment instead.
     """
 
-    def test_sets_numba_num_threads_from_omp_num_threads(self, monkeypatch):
-        monkeypatch.setenv("OMP_NUM_THREADS", "3")
-        monkeypatch.delenv("NUMBA_NUM_THREADS", raising=False)
+    @pytest.fixture(autouse=True)
+    def _isolated_environ(self, monkeypatch):
+        monkeypatch.setattr(os, "environ", os.environ.copy())
+
+    def test_sets_numba_num_threads_from_omp_num_threads(self):
+        os.environ["OMP_NUM_THREADS"] = "3"
+        os.environ.pop("NUMBA_NUM_THREADS", None)
 
         _seed_numba_num_threads_from_omp()
 
         assert os.environ["NUMBA_NUM_THREADS"] == "3"
 
-    def test_does_not_override_an_explicit_numba_num_threads(self, monkeypatch):
-        monkeypatch.setenv("OMP_NUM_THREADS", "3")
-        monkeypatch.setenv("NUMBA_NUM_THREADS", "7")
+    def test_does_not_override_an_explicit_numba_num_threads(self):
+        os.environ["OMP_NUM_THREADS"] = "3"
+        os.environ["NUMBA_NUM_THREADS"] = "7"
 
         _seed_numba_num_threads_from_omp()
 
         assert os.environ["NUMBA_NUM_THREADS"] == "7"
 
-    def test_does_nothing_when_omp_num_threads_is_unset(self, monkeypatch):
-        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
-        monkeypatch.delenv("NUMBA_NUM_THREADS", raising=False)
+    def test_does_nothing_when_omp_num_threads_is_unset(self):
+        os.environ.pop("OMP_NUM_THREADS", None)
+        os.environ.pop("NUMBA_NUM_THREADS", None)
 
         _seed_numba_num_threads_from_omp()
 
         assert "NUMBA_NUM_THREADS" not in os.environ
 
     @pytest.mark.parametrize("bad_value", ["0", "-1", "not-a-number", ""])
-    def test_invalid_or_non_positive_omp_num_threads_is_a_no_op(
-        self, monkeypatch, bad_value
-    ):
-        monkeypatch.setenv("OMP_NUM_THREADS", bad_value)
-        monkeypatch.delenv("NUMBA_NUM_THREADS", raising=False)
+    def test_invalid_or_non_positive_omp_num_threads_is_a_no_op(self, bad_value):
+        os.environ["OMP_NUM_THREADS"] = bad_value
+        os.environ.pop("NUMBA_NUM_THREADS", None)
 
         _seed_numba_num_threads_from_omp()
 
         assert "NUMBA_NUM_THREADS" not in os.environ
 
-    def test_omp_num_threads_above_cpu_count_is_clamped(self, monkeypatch):
+    def test_omp_num_threads_above_cpu_count_is_clamped(self):
         """Numba's own import-time handling of NUMBA_NUM_THREADS is not
         bounds-checked against the visible core count, and an implausibly
         large value segfaults the process the moment a parallel kernel
@@ -59,8 +70,8 @@ class TestSeedNumbaNumThreadsFromOmp:
         would crash the test process too): NUMBA_NUM_THREADS=99999 dumps
         core on first kernel use on a 24-core box.
         """
-        monkeypatch.setenv("OMP_NUM_THREADS", "99999")
-        monkeypatch.delenv("NUMBA_NUM_THREADS", raising=False)
+        os.environ["OMP_NUM_THREADS"] = "99999"
+        os.environ.pop("NUMBA_NUM_THREADS", None)
 
         _seed_numba_num_threads_from_omp()
 
