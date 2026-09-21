@@ -716,7 +716,14 @@ def tensordot(a, b, axes=2):
 
 
 @_serialized
-def where(condition, x, y):
+def where(condition, x=None, y=None):
+    """``numpy.where``, including its one-argument ``nonzero`` spelling."""
+    if x is None and y is None:
+        return nonzero(condition)
+
+    if x is None or y is None:
+        raise ValueError("either both or neither of x and y should be given")
+
     return _wrap(torch.where(_unwrap(condition), _unwrap(x), _unwrap(y)))
 
 

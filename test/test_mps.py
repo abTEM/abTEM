@@ -216,3 +216,34 @@ def test_crystal_potential_from_built_unit_matches_cpu(atoms, lazy_unit):
             arrays.append(asnumpy(waves.compute().array))
 
     assert np.allclose(*arrays, atol=1e-3 * np.abs(arrays[0]).max())
+
+
+def test_where_without_x_and_y():
+    # numpy.where(condition) is numpy.nonzero(condition); torch.where's
+    # one-argument form is spelled the same way but the wrapper required all
+    # three. Reached from e.g. LineProfiles.width, via a sign-change search.
+    xp = get_array_module("mps")
+
+    array = copy_to_device(np.array([0.0, 1.0, 0.0, 2.0, 3.0], np.float32), "mps")
+    (indices,) = xp.where(array > 0.5)
+
+    assert np.array_equal(asnumpy(indices), np.array([1, 3, 4]))
+
+    with pytest.raises(ValueError, match="both or neither"):
+        xp.where(array > 0.5, array)
+
+
+def test_line_profile_width_matches_cpu():
+    widths = []
+    for device in ("cpu", "mps"):
+        probe = abtem.Probe(
+            energy=100e3, semiangle_cutoff=20, gpts=128, extent=20, device=device
+        )
+        profile = (
+            probe.build()
+            .intensity()
+            .interpolate_line_at_position(center=(10, 10), angle=0, extent=10)
+        )
+        widths.append(float(asnumpy(profile.width(height=0.5))))
+
+    assert widths[1] == pytest.approx(widths[0], rel=1e-4)
