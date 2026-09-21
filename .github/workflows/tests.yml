@@ -82,7 +82,15 @@ jobs:
     name: All tests passed
     needs: tests
     runs-on: ubuntu-latest
-    if: always() && env.RUNSLOW == 'true'
+    # Duplicates RUNSLOW's expression rather than reading env.RUNSLOW: the
+    # `env` context is not available in a job-level `if:` (only `github`,
+    # `needs`, `vars`, and `inputs` are) -- confirmed the hard way, this
+    # exact line failed the whole workflow to even start with "This run
+    # likely failed because of a workflow file issue" when it referenced
+    # env.RUNSLOW here. The `tests` job's step-level `run:` above can still
+    # use env.RUNSLOW directly; only this job-level `if:` needs the
+    # workaround.
+    if: always() && (github.event_name != 'pull_request' || github.base_ref == 'main')
     steps:
       - name: Check test matrix result
         run: |
