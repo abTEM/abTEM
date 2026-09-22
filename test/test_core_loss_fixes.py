@@ -617,23 +617,32 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
     the ensemble result must reproduce a standalone single-energy run
     exactly, for every energy and in either order.
 
-    Uses a 2-position CustomScan rather than GridScan: a GridScan combined
-    with an eager energy-ensemble split has a separate, pre-existing defect
-    (positions and the energy axis end up interleaved) that reproduces
-    identically on unfixed `dev` and is independent of the fix under test
-    here -- see the dev-env issue tracker. CustomScan with the same two
-    positions does not go through that path and isolates this test to
-    defect B alone.
+    Uses a 2-position CustomScan rather than GridScan to isolate this test to
+    defect B alone. A separate, independent defect used to affect the
+    GridScan combination specifically: MultisliceTransform._calculate_new_
+    array's eager per-energy split (abtem/multislice.py) stacked each
+    member's result at the position the energy axis happened to occupy
+    within the *input* waves' own combined ensemble axes, rather than where
+    the *output* measurement's own axes_metadata says it belongs -- correct
+    by coincidence for CustomScan (whose single, non-2D PositionsAxis is
+    never reclassified as base shape, so energy's relative position is
+    unaffected) but not for GridScan (whose two ScanAxis entries get moved
+    into base shape, which the stacking axis did not account for). See
+    TestScanEnergyEnsembleAxisOrder below, which exercises GridScan and
+    LineScan directly now that this is fixed.
 
-    The lazy case additionally hits a second, separate, pre-existing defect
-    of its own for this exact combination (CustomScan + an unbuilt,
-    multi-member energy ensemble): ``ValueError: too many values to unpack
+    The lazy case also covers a second, separate mechanism for this exact
+    combination: any waves ensemble spanning more than one dask block,
+    combined with a potential that has no ensemble of its own (no
+    FrozenPhonons), used to raise ``ValueError: too many values to unpack
     (expected 2)`` from ``abtem/array.py`` while unpacking a potential
-    partition's blockwise args -- reproduces identically on unfixed `dev`,
-    unrelated to this fix, and matches the "related unconfirmed symptom"
-    the original issue file flagged but never pinned down. Marked xfail
-    below rather than silently skipped, so a future fix there is noticed
-    when it starts passing.
+    partition's blockwise args -- reproduced for CustomScan and for
+    GridScan alike, unrelated to scan type. Fixed in
+    ``WavesBuilder._build_validated``/``_from_partitioned_args_func``
+    (``abtem/waves.py``): a per-block ensemble reconstruction was wrapped
+    at the wrong dimensionality, and the declared chunk shape handed to
+    ``_calculate_array`` didn't account for a block covering more than one
+    logical value per axis.
     """
 
     @staticmethod
@@ -667,27 +676,7 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             m = m.compute(progress_bar=False)
         return np.asarray(m.to_cpu().array)
 
-    @pytest.mark.parametrize(
-        "lazy",
-        [
-            False,
-            pytest.param(
-                True,
-                marks=pytest.mark.xfail(
-                    reason=(
-                        "pre-existing, unrelated defect: CustomScan + an "
-                        "unbuilt multi-member energy ensemble raises "
-                        "ValueError('too many values to unpack (expected "
-                        "2)') from abtem/array.py while unpacking a "
-                        "potential partition's blockwise args, on both "
-                        "fixed and unfixed dev -- see this class's own "
-                        "docstring"
-                    ),
-                    strict=True,
-                ),
-            ),
-        ],
-    )
+    @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
     def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
         pytest.importorskip("sympy")
@@ -707,6 +696,250 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             )
         # The two members must be genuinely different results, or this test
         # would pass even with defect B fully unfixed.
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_gridscan_multiblock_reproduces_its_own_standalone_run(self, order, lazy):
+        """The waves-ensemble-spans-more-than-one-dask-block mechanism this
+        class's own docstring describes is scan-independent -- confirmed
+        directly with a GridScan in place of CustomScan, same max_batch=1
+        trigger, same underlying fix."""
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+            potential=potential,
+        )
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+
+        def _run(energy, lazy):
+            base_energy = energy[0] if isinstance(energy, list) else energy
+            tp = _synthetic_unbuilt_transition_potential(
+                base_energy, extent=potential.extent, gpts=potential.gpts,
+            )
+            probe = abtem.Probe(
+                semiangle_cutoff=20, energy=energy, extent=potential.extent,
+                gpts=potential.gpts,
+            )
+            m = probe.transition_potential_scan(
+                scan=scan, potential=potential, detectors=detector,
+                transition_potentials=tp, double_channel=False, sites=sites,
+                threshold=1.0, lazy=lazy, max_batch=1,
+            )
+            if lazy:
+                m = m.compute(progress_bar=False)
+            return np.asarray(m.to_cpu().array)
+
+        reference = {e: _run(e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = _run(list(order), lazy)
+        # Unlike CustomScan above, GridScan's two ScanAxis entries are moved
+        # to the end of AnnularDetector's declared ensemble order (see
+        # _out_ensemble_source), leaving energy as the sole leading axis.
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+
+class TestScanEnergyEnsembleAxisOrder:
+    """A probe's energy-ensemble stack used to land on the wrong axis of the
+    result -- not scrambled values, a metadata/data mismatch. See
+    TestUnbuiltTransitionPotentialEnergyEnsemble's docstring for why that
+    class uses CustomScan instead and the mechanism this one guards.
+
+    Naively reading ensemble[0] as "energy member 0" gave neither standalone
+    single-energy run; ensemble[..., 0] (the array's actual axis, matching
+    the measurement's own ensemble_axes_metadata, which always reports
+    EnergyAxis leading here) did. Covers both GridScan (two ScanAxis entries
+    excluded by _scan_axes) and LineScan (one ScanAxis entry excluded):
+    the fix's own arithmetic, `sum(1 for i in range(energy_axis_idx) if i
+    not in scan_source)`, takes a different value for each -- 0 for
+    GridScan (both preceding axes excluded) vs 0 for LineScan too (its one
+    preceding axis is also excluded) -- but LineScan is the only shape here
+    that exercises _scan_axes actually excluding a *single* axis rather
+    than none (CustomScan's PositionsAxis) or both (GridScan). Uses a
+    >1-position scan for both: a single-position scan squeezes to no scan
+    axes at all, which cannot show a mismatch between two axes that both
+    still exist.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    @staticmethod
+    def _scan(scan_kind, potential):
+        if scan_kind == "grid":
+            return abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                potential=potential,
+            )
+        elif scan_kind == "line":
+            return abtem.LineScan(
+                start=(0, 0), end=(1, 1), gpts=3, fractional=True,
+                potential=potential,
+            )
+        raise ValueError(scan_kind)
+
+    def _run(self, scan_kind, energy, lazy):
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        scan = self._scan(scan_kind, potential)
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp = _synthetic_unbuilt_transition_potential(
+            base_energy, extent=potential.extent, gpts=potential.gpts,
+        )
+        probe = abtem.Probe(
+            semiangle_cutoff=20, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize(
+        "scan_kind, lazy",
+        [
+            ("grid", False),
+            ("grid", True),
+            ("line", False),
+            ("line", True),
+        ],
+    )
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_each_member_reproduces_its_own_standalone_run(
+        self, order, scan_kind, lazy
+    ):
+        pytest.importorskip("sympy")
+        reference = {e: self._run(scan_kind, e, lazy=False) for e in order}
+        # A scale-appropriate atol: see the module docstring rule against
+        # relying on default tolerances for physical quantities far below
+        # them.
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run(scan_kind, list(order), lazy)
+        # The energy axis leads for both scan types here (opposite of
+        # CustomScan's trailing energy axis in
+        # TestUnbuiltTransitionPotentialEnergyEnsemble above): _scan_axes
+        # excludes GridScan's two ScanAxis entries and LineScan's one,
+        # leaving EnergyAxis as the only, and therefore first, remaining
+        # ensemble axis in both cases -- unlike CustomScan's PositionsAxis,
+        # which _scan_axes never excludes at all.
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        # The two members must be genuinely different results, or this test
+        # would pass even with the axis mismatch fully unfixed.
+        assert not np.allclose(reference[order[0]], reference[order[1]])
+
+
+class TestLazyEnsembleChunkReordering:
+    """The lazy graph's own chunk bookkeeping (``multi_output_blockwise`` in
+    ``abtem/array.py``) used to assume a detector's output ensemble axes
+    stay in the same relative order as the input waves' ensemble axes.
+    True for ``CustomScan`` (nothing is reordered) and, by numeric
+    coincidence, for a 2x2 ``GridScan`` with exactly 2 energies (both
+    ``AnnularDetector._out_ensemble_shape``'s buggy old order and its
+    correct one give ``(2, 2, 2)``) -- but false in general, since
+    ``AnnularDetector``/``SpectralSlitDetector`` move the scan axes to the
+    end of the ensemble (see ``TestGridScanEnergyEnsembleAxisOrder`` above),
+    which the lazy chunk declaration never accounted for. Surfaces as a
+    ``RuntimeError``/``IndexError`` from ``_check_axes_metadata`` or
+    ``multi_output_blockwise`` for any shape that breaks the coincidence: a
+    ``GridScan`` with other than 2 energies, or any scan with other than 2
+    ``ScanAxis`` entries (e.g. ``LineScan``'s single one).
+
+    Fixed via a new ``_out_ensemble_source`` hook (``abtem/transform.py``,
+    overridden in the two detectors) that reports the same reordering
+    ``_out_ensemble_shape`` already applies, so the lazy chunk bookkeeping in
+    ``apply_transform``/``multi_output_blockwise`` can reorder the matching
+    input chunks before declaring the output's chunk structure.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    def _run(self, scan_kind, energy, lazy):
+        pytest.importorskip("sympy")
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        sites = atoms[atoms.numbers == 5]
+        if scan_kind == "grid":
+            scan = abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
+                potential=potential,
+            )
+        else:
+            scan = abtem.LineScan(
+                start=(0, 0), end=(1, 1), gpts=3, fractional=True,
+                potential=potential,
+            )
+        detector = abtem.AnnularDetector(inner=0.0, outer=30.0)
+        base_energy = energy[0] if isinstance(energy, list) else energy
+        tp = _synthetic_unbuilt_transition_potential(
+            base_energy, extent=potential.extent, gpts=potential.gpts,
+        )
+        probe = abtem.Probe(
+            semiangle_cutoff=20, energy=energy, extent=potential.extent,
+            gpts=potential.gpts,
+        )
+        m = probe.transition_potential_scan(
+            scan=scan, potential=potential, detectors=detector,
+            transition_potentials=tp, double_channel=False, sites=sites,
+            threshold=1.0, lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return np.asarray(m.to_cpu().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 150e3, 200e3), (200e3, 100e3, 150e3)])
+    def test_gridscan_three_energies(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run("grid", e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run("grid", list(order), lazy)
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
+        assert len({tuple(np.round(reference[e], 12).ravel()) for e in order}) == 3
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_linescan_two_energies(self, order, lazy):
+        pytest.importorskip("sympy")
+        reference = {e: self._run("line", e, lazy=False) for e in order}
+        scale = max(np.abs(reference[e]).max() for e in order)
+
+        ensemble = self._run("line", list(order), lazy)
+        for i, e in enumerate(order):
+            np.testing.assert_allclose(
+                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+            )
         assert not np.allclose(reference[order[0]], reference[order[1]])
 
 

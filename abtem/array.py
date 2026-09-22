@@ -141,6 +141,34 @@ def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     return arr
 
 
+def _to_natural_order(
+    shape: tuple[int, ...], order: tuple[int, ...]
+) -> tuple[int, ...]:
+    """Undo an `_out_ensemble_source`-style permutation on a declared shape,
+    recovering the size each of the first `len(order)` (ensemble) axes would
+    have in the array's own natural (undeclared) axis order. Any trailing
+    (base) axes beyond that span are untouched."""
+    ensemble_len = len(order)
+    inverse = [0] * ensemble_len
+    for k, p in enumerate(order):
+        inverse[p] = k
+    return (
+        tuple(shape[inverse[p]] for p in range(ensemble_len))
+        + shape[ensemble_len:]
+    )
+
+
+def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
+    """Physically permute an array's first `len(order)` (ensemble) axes into
+    the order `_out_ensemble_source` declares (e.g. AnnularDetector/
+    SpectralSlitDetector moving scan axes to the end), leaving any trailing
+    (base) axes untouched. Works identically for a numpy or dask array."""
+    if order == tuple(range(len(order))):
+        return array
+    trailing = tuple(range(len(order), array.ndim))
+    return array.transpose(*order, *trailing)
+
+
 def multi_output_blockwise(
     func: Callable,
     array: da.core.Array,
@@ -201,6 +229,11 @@ def multi_output_blockwise(
         if not all(len(out_array.chunks[i]) == 1 for i in drop_axis):
             raise RuntimeError()
 
+        # `new_shape` is in `array`'s own natural axis order here (the
+        # caller undoes any declared-output reordering before calling this
+        # function -- see apply_transform), matching `chunks`, `drop_axis`
+        # and out_array's own axes, none of which are ever reordered by
+        # da.blockwise above.
         drop_chunks = []
         for j, (item, ns) in enumerate(zip(chunks, new_shape)):
             if j not in drop_axis:
@@ -1838,8 +1871,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             array_object_partial = self._from_partitioned_args()
             transform_partial = transform._from_partitioned_args()
 
-            new_shapes = tuple(
+            declared_shapes = tuple(
                 tuple(out_shape) for out_shape in transform._out_shape(self)
+            )
+            ensemble_sources = transform._out_ensemble_source(self)
+
+            # multi_output_blockwise builds its dask graph directly from
+            # array's own (natural, undeclared) ensemble axis order --
+            # da.blockwise's out_ind there is never permuted relative to its
+            # own array_symbols, so nothing in that graph physically moves a
+            # block to a different axis position. Validate/build its chunks
+            # in that same natural order (undo ensemble_sources' declared
+            # reordering here) rather than the declared order, and apply the
+            # declared reordering once, uniformly, below -- identically for
+            # this lazy result and the eager one -- via an actual transpose.
+            natural_shapes = tuple(
+                _to_natural_order(shape, order)
+                for shape, order in zip(declared_shapes, ensemble_sources)
             )
 
             new_arrays = multi_output_blockwise(
@@ -1850,7 +1898,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 new_axes=new_axes,
                 drop_axes=drop_axes,
                 out_metas=out_metas,
-                new_shapes=new_shapes,
+                new_shapes=natural_shapes,
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
@@ -1859,6 +1907,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             new_arrays = transform._calculate_new_array(self)
             if not isinstance(new_arrays, tuple):
                 new_arrays = (new_arrays,)
+            ensemble_sources = transform._out_ensemble_source(self)
+
+        new_arrays = tuple(
+            _transpose_to_ensemble_source(array, order)
+            for array, order in zip(new_arrays, ensemble_sources)
+        )
 
         base_axes_metadatas = transform._out_base_axes_metadata(self)
         ensemble_axes_metadatas = transform._out_ensemble_axes_metadata(self)
@@ -2184,11 +2238,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 chunks=ensemble_chunks
             )
 
+            ndims = len(self.ensemble_shape)
+
             def _combine_args(*args):
                 combined = args[0], args[1].item()
-                return _wrap_with_array(combined, 1)
+                return _wrap_with_array(combined, ndims)
 
-            ndims = len(self.ensemble_shape)
             blocks = da.blockwise(
                 _combine_args,
                 tuple_range(ndims),
