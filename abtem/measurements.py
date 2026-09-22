@@ -6240,6 +6240,21 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 _SNAPSHOT_STATISTICS = ("quantum", "classical")
 
 
+def _validate_snapshot_statistics(snapshot_statistics: str) -> None:
+    """Check ``snapshot_statistics`` against the accepted names.
+
+    Called from the public entry points as well as from
+    :func:`_loss_gain_weights`, so that a misspelled name is rejected even
+    when no unfolding runs (``temperature=None``) and the argument would
+    otherwise be silently ignored.
+    """
+    if snapshot_statistics not in _SNAPSHOT_STATISTICS:
+        raise ValueError(
+            f"snapshot_statistics must be one of {_SNAPSHOT_STATISTICS}, got "
+            f"{snapshot_statistics!r}."
+        )
+
+
 def _loss_gain_weights(
     e_values: np.ndarray, temperature: float, snapshot_statistics: str
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -6269,11 +6284,7 @@ def _loss_gain_weights(
     """
     from ase import units
 
-    if snapshot_statistics not in _SNAPSHOT_STATISTICS:
-        raise ValueError(
-            f"snapshot_statistics must be one of {_SNAPSHOT_STATISTICS}, got "
-            f"{snapshot_statistics!r}."
-        )
+    _validate_snapshot_statistics(snapshot_statistics)
 
     x = e_values / (2.0 * units.kB * temperature)
     n_occ = 1.0 / np.expm1(2.0 * x)
@@ -6422,6 +6433,10 @@ def unfold_loss_gain(
         (``-E_max, ..., 0, ..., +E_max``).
     """
     from abtem.core.axes import EnergyLossAxis
+
+    # up front, so a misspelled name is reported as such rather than behind
+    # whichever validation of the energies happens to fail first
+    _validate_snapshot_statistics(snapshot_statistics)
 
     if isinstance(measurement, MomentumResolvedSpectrum):
         # the energy is the last *base* axis here, not an ensemble axis
@@ -6665,7 +6680,13 @@ def _phonon_loss_diffraction_patterns_parity_projection(
         )
 
     N = waves_real.shape[fp_axis_idx]
-    if N < 2:
+    # Only the multi-phonon channel is a variance across configurations; the
+    # one-phonon channel is a plain mean of |FT psi_odd|^2 and is well
+    # defined for a single configuration. So this is required except in the
+    # one-phonon-only mode (rest fields without the static reference), which
+    # never forms the variance -- mirroring how the non-parity path below
+    # scopes the same guard to component in ("tds", "all").
+    if N < 2 and not one_phonon_only:
         raise ValueError(
             "parity projection requires at least 2 frozen-phonon "
             f"configurations per energy, got N={N}. The multi-phonon channel "
@@ -6868,6 +6889,11 @@ def phonon_loss_diffraction_patterns(
     valid_components = ("tds", "coherent", "incoherent", "all")
     if component not in valid_components:
         raise ValueError(f"component must be one of {valid_components}")
+
+    # Likewise unconditional: `snapshot_statistics` is only consumed by the
+    # unfolding, so with `temperature=None` a typo would otherwise be
+    # accepted and silently ignored.
+    _validate_snapshot_statistics(snapshot_statistics)
 
     for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
         if isinstance(ax, PhononParityAxis):

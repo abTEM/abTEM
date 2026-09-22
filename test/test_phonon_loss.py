@@ -349,6 +349,11 @@ class TestClassicalStatistics:
         with pytest.raises(ValueError, match="snapshot_statistics"):
             unfold_loss_gain(dp, 300.0, snapshot_statistics="md")
 
+        # also without temperature: the argument is only consumed by the
+        # unfolding, so an unvalidated typo would be silently ignored
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            phonon_loss_diffraction_patterns(waves, snapshot_statistics="clasical")
+
     def test_classical_mode_threads_through_both_entry_points(self):
         from ase import units
 

@@ -289,3 +289,41 @@ def test_rest_parity_multi_channel_is_the_damped_bin_multi_channel(equilibrium):
     # the four-run one-phonon channel is the six-run one, bit for bit: the
     # real/twin members and rest fields are the same structures
     np.testing.assert_allclose(one_only.array, damped.array[1], rtol=0, atol=0)
+
+
+def test_one_phonon_only_mode_accepts_a_single_configuration(equilibrium):
+    """The four-run rest-parity mode returns the one-phonon channel alone,
+    mean_j |FT psi_odd_j|^2, which is a plain mean and not a variance across
+    configurations -- so a single configuration per energy is well defined
+    and must not be rejected. Only the multi-phonon channel needs N >= 2,
+    and that channel is not computed here."""
+    snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=1)
+    rest = _rest_fields(equilibrium, 1, scale=0.04, seed=7)
+
+    one_only = phonon_loss_diffraction_patterns(
+        _run(equilibrium, snapshots, [0.02],
+             equilibrium_atoms=equilibrium, parity_projection=True,
+             rest_snapshots=rest),
+        max_angle=60,
+    )
+    assert one_only.metadata["phonon_loss_component"] == "one"
+    assert np.all(np.isfinite(one_only.array))
+    assert one_only.array.sum() > 0  # a real signal, not an empty result
+
+    # the guard still applies where the variance *is* formed: the same
+    # ensemble plus the static reference computes all three channels
+    with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
+        phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True,
+                 rest_snapshots=rest, rest_static_reference=True),
+            max_angle=60,
+        )
+
+    # and without rest fields, where all three channels are always computed
+    with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
+        phonon_loss_diffraction_patterns(
+            _run(equilibrium, snapshots, [0.02],
+                 equilibrium_atoms=equilibrium, parity_projection=True),
+            max_angle=60,
+        )
