@@ -159,6 +159,20 @@ class ArrayObjectTransform(
         """
         return (array_object.base_shape,)
 
+    def _out_ensemble_source(
+        self, array_object: ArrayObjectType
+    ) -> tuple[tuple[int, ...], ...]:
+        """
+        For each output, maps `array_object`'s own ensemble axes, as they
+        appear in this transform's output ensemble shape/metadata, back to
+        their position in `array_object.ensemble_shape`. Identity unless a
+        transform reorders `array_object`'s ensemble axes (see
+        `AnnularDetector`/`SpectralSlitDetector`, which move the scan axes
+        to the end); used to keep dask chunk bookkeeping in the same axis
+        order as the declared output shape.
+        """
+        return (tuple(range(len(array_object.ensemble_shape))),)
+
     def _out_shape(self, array_object: ArrayObjectType) -> tuple[tuple[int, ...], ...]:
         ensemble_shapes = self._out_ensemble_shape(array_object)
 

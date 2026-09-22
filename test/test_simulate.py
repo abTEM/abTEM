@@ -7,7 +7,7 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from hypothesis import given
-from utils import gpu
+from utils import devices, lazy_params, to_host_array
 
 from abtem import AnnularDetector, PixelatedDetector, PlaneWave
 from abtem.core.chunks import chunk_ranges, validate_chunks
@@ -17,17 +17,10 @@ from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhon
 from abtem.scan import CustomScan
 
 
-def to_numpy(array):
-    """Convert array to numpy, handling both CPU and GPU arrays."""
-    if hasattr(array, "get"):  # CuPy array
-        return np.asarray(array.get())
-    return np.asarray(array)
-
-
 # @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True], ids=["not_lazy"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
     "waves_builder",
@@ -50,7 +43,7 @@ def test_multislice_with_frozen_phonons(
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
     "waves_builder",
@@ -78,7 +71,7 @@ def test_multislice_detect_with_frozen_phonons(
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
     "waves_builder",
@@ -105,7 +98,7 @@ def test_s_matrix_multislice_detect_with_frozen_phonons(
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize(
     "waves_builder",
     [
@@ -126,8 +119,8 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 
 @pytest.mark.slow
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("frozen_phonons", [True, False])
 @pytest.mark.parametrize(
     "detector",
@@ -237,7 +230,7 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
 # #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan=scan)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 def test_frozen_phonon_lazy_vs_eager(device, ensemble_mean):
     atoms = Atoms("Si", positions=[(0, 0, 1)], cell=(5, 5, 2), pbc=True)
@@ -330,7 +323,7 @@ class _TwoAxisFrozenPhonons(BaseFrozenPhonons):
         return self._from_partition_args_func
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
     """Regression test: `Waves.multislice(potential, lazy=False)` must match
     `lazy=True` (and an independent single-member reference) when the
@@ -358,10 +351,10 @@ def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
             trajectory[index], lazy=False
         )
 
-        reference_array = to_numpy(reference.array)
+        reference_array = to_host_array(reference.array)
         np.testing.assert_allclose(
-            to_numpy(result_eager.array[index]), reference_array, rtol=1e-5, atol=1e-7
+            to_host_array(result_eager.array[index]), reference_array, rtol=1e-5, atol=1e-7
         )
         np.testing.assert_allclose(
-            to_numpy(result_lazy.array[index]), reference_array, rtol=1e-5, atol=1e-7
+            to_host_array(result_lazy.array[index]), reference_array, rtol=1e-5, atol=1e-7
         )

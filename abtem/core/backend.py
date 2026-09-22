@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import warnings
 from numbers import Number
 from types import ModuleType
 from typing import Union
 
 import dask.array as da
+import numba  # type: ignore
 import numpy as np
 import scipy  # type: ignore
 import scipy.ndimage  # type: ignore
@@ -39,8 +41,74 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    assert cupyx is None
+    # same reasoning as the cupyx.scipy.signal guard below: this can fail even
+    # though cupyx itself imported, if the CUDA/ROCm libraries it eagerly
+    # pulls in aren't on the loader path. GPU code that needs cupyx_ndimage
+    # then fails at use time instead of blocking the abtem import.
     cupyx_ndimage = None
+
+
+try:
+    # cupyx.scipy exposes submodules lazily; signal must be imported explicitly
+    # before ``get_scipy_module(...).signal`` can resolve it (the import emits a
+    # FutureWarning about the experimental cupyx.jit interface it uses
+    # internally)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import cupyx.scipy.signal  # type: ignore  # noqa: F401
+except ImportError:
+    # this can fail even though cupyx itself imported: cupyx.scipy.signal
+    # eagerly imports cuBLAS-backed submodules, so an environment without the
+    # CUDA/ROCm libraries on the loader path fails here. GPU filters that need
+    # scipy.signal then fail at use time instead of blocking the abtem import.
+    pass
+
+
+def _cap_numba_threads_to_omp_num_threads() -> None:
+    """Cap Numba's own thread pool to ``OMP_NUM_THREADS``, if set.
+
+    A fallback for the case where something already imported numba before
+    abtem: ``abtem.core._numba_threads``, imported as abtem's own first
+    statement, is the primary mechanism (seeds ``NUMBA_NUM_THREADS`` itself
+    before numba's first import, which applies process-wide -- see that
+    module's docstring for why this function's own approach, calling
+    ``numba.set_num_threads()`` after the fact, is not equivalent: it only
+    rebinds the *calling* thread's own active count, not a spawned worker
+    thread's, such as one of dask's threaded-scheduler tasks).
+
+    Every ``@njit(parallel=True)`` kernel in this package (the CPU Laplacian
+    stencil in ``finite_difference.py``, the magnetism kernels in
+    ``magnetism/pauli.py``, the partitioned S-matrix kernel in
+    ``prism/_partitioned_s_matrix.py``) uses Numba's own internal thread
+    pool. That pool defaults to the full visible CPU count and reads
+    neither ``OMP_NUM_THREADS`` nor ``OPENBLAS_NUM_THREADS`` -- Numba's
+    default "workqueue" threading layer (the fallback when neither TBB nor
+    OpenMP is available) is independent of both. Skipped when
+    ``NUMBA_NUM_THREADS`` is already set explicitly, so a deliberate,
+    Numba-specific choice already made by the caller is never overridden.
+    """
+    if "NUMBA_NUM_THREADS" in os.environ:
+        return
+
+    omp_num_threads = os.environ.get("OMP_NUM_THREADS")
+    if omp_num_threads is None:
+        return
+
+    try:
+        n = int(omp_num_threads)
+    except ValueError:
+        return
+
+    if n > 0:
+        # set_num_threads raises ValueError above Numba's own launch-time
+        # ceiling (numba.config.NUMBA_NUM_THREADS, itself derived from the
+        # visible CPU count unless NUMBA_NUM_THREADS constrained it at
+        # process start) -- clamp rather than let a larger OMP_NUM_THREADS
+        # crash the import.
+        numba.set_num_threads(min(n, numba.config.NUMBA_NUM_THREADS))
+
+
+_cap_numba_threads_to_omp_num_threads()
 
 
 ArrayModule = Union[ModuleType, str]

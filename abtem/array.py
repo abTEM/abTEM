@@ -141,6 +141,34 @@ def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     return arr
 
 
+def _to_natural_order(
+    shape: tuple[int, ...], order: tuple[int, ...]
+) -> tuple[int, ...]:
+    """Undo an `_out_ensemble_source`-style permutation on a declared shape,
+    recovering the size each of the first `len(order)` (ensemble) axes would
+    have in the array's own natural (undeclared) axis order. Any trailing
+    (base) axes beyond that span are untouched."""
+    ensemble_len = len(order)
+    inverse = [0] * ensemble_len
+    for k, p in enumerate(order):
+        inverse[p] = k
+    return (
+        tuple(shape[inverse[p]] for p in range(ensemble_len))
+        + shape[ensemble_len:]
+    )
+
+
+def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
+    """Physically permute an array's first `len(order)` (ensemble) axes into
+    the order `_out_ensemble_source` declares (e.g. AnnularDetector/
+    SpectralSlitDetector moving scan axes to the end), leaving any trailing
+    (base) axes untouched. Works identically for a numpy or dask array."""
+    if order == tuple(range(len(order))):
+        return array
+    trailing = tuple(range(len(order), array.ndim))
+    return array.transpose(*order, *trailing)
+
+
 def multi_output_blockwise(
     func: Callable,
     array: da.core.Array,
@@ -201,6 +229,11 @@ def multi_output_blockwise(
         if not all(len(out_array.chunks[i]) == 1 for i in drop_axis):
             raise RuntimeError()
 
+        # `new_shape` is in `array`'s own natural axis order here (the
+        # caller undoes any declared-output reordering before calling this
+        # function -- see apply_transform), matching `chunks`, `drop_axis`
+        # and out_array's own axes, none of which are ever reordered by
+        # da.blockwise above.
         drop_chunks = []
         for j, (item, ns) in enumerate(zip(chunks, new_shape)):
             if j not in drop_axis:
@@ -1475,7 +1508,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             axis = normalize_axes(axis, self.shape)
 
-        shape = self.shape[: -len(self.base_shape)]
+        # Not `self.shape[: -len(self.base_shape)]`: Python has no negative
+        # zero, so for a base-less object (base_shape == ()) that slice is
+        # `[:0]`, always empty, rather than `[:len(self.shape)]`.
+        n_ensemble_dims = len(self.shape) - len(self.base_shape)
+        shape = self.shape[:n_ensemble_dims]
 
         squeezed = tuple(
             np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0]
@@ -1698,14 +1735,20 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(self.array, da.core.Array):
             return False
 
-        base_chunks = self.array.chunks[-len(self.base_shape) :]
+        # Not `chunks[-len(self.base_shape):]`: the same -0 problem, mirrored --
+        # for a base-less object that slice is `[0:]`, everything, rather than
+        # `[len(chunks):]`, nothing.
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        base_chunks = self.array.chunks[n_ensemble_dims:]
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
         """Rechunk to remove chunks across the base dimensions."""
         if not self._has_base_chunks:
             return self
-        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
+        # See the comment in _has_base_chunks: -0 is 0, not "the end".
+        n_ensemble_dims = len(self.array.chunks) - len(self.base_shape)
+        chunks = self.array.chunks[:n_ensemble_dims] + (-1,) * len(
             self.base_shape
         )
         return self.rechunk(chunks)
@@ -1721,7 +1764,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axes = unpack_blockwise_args(args)
 
         array_axes = axes[: len(array.shape)]
-        ensemble_axes = array_axes[:-base_ndims]
+        # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
+        # comment in ArrayObject.squeeze for a base-less array_object.
+        n_ensemble_axes = len(array_axes) - base_ndims
+        ensemble_axes = array_axes[:n_ensemble_axes]
         transform_axes = axes[len(array.shape) :]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
@@ -1825,8 +1871,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             array_object_partial = self._from_partitioned_args()
             transform_partial = transform._from_partitioned_args()
 
-            new_shapes = tuple(
+            declared_shapes = tuple(
                 tuple(out_shape) for out_shape in transform._out_shape(self)
+            )
+            ensemble_sources = transform._out_ensemble_source(self)
+
+            # multi_output_blockwise builds its dask graph directly from
+            # array's own (natural, undeclared) ensemble axis order --
+            # da.blockwise's out_ind there is never permuted relative to its
+            # own array_symbols, so nothing in that graph physically moves a
+            # block to a different axis position. Validate/build its chunks
+            # in that same natural order (undo ensemble_sources' declared
+            # reordering here) rather than the declared order, and apply the
+            # declared reordering once, uniformly, below -- identically for
+            # this lazy result and the eager one -- via an actual transpose.
+            natural_shapes = tuple(
+                _to_natural_order(shape, order)
+                for shape, order in zip(declared_shapes, ensemble_sources)
             )
 
             new_arrays = multi_output_blockwise(
@@ -1837,7 +1898,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 new_axes=new_axes,
                 drop_axes=drop_axes,
                 out_metas=out_metas,
-                new_shapes=new_shapes,
+                new_shapes=natural_shapes,
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
@@ -1846,6 +1907,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             new_arrays = transform._calculate_new_array(self)
             if not isinstance(new_arrays, tuple):
                 new_arrays = (new_arrays,)
+            ensemble_sources = transform._out_ensemble_source(self)
+
+        new_arrays = tuple(
+            _transpose_to_ensemble_source(array, order)
+            for array, order in zip(new_arrays, ensemble_sources)
+        )
 
         base_axes_metadatas = transform._out_base_axes_metadata(self)
         ensemble_axes_metadatas = transform._out_ensemble_axes_metadata(self)
@@ -1953,7 +2020,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             self.ensemble_shape,
         )
 
-        xp = get_array_module(self.device)
+        # Not self.device: a detector's to_cpu=True (the default) moves a
+        # measurement's array to numpy without updating the object's own
+        # device label, so self.device can say "gpu" while self.array is
+        # already a plain ndarray. get_array_module(self.array) reads the
+        # real backing type instead of that possibly-stale label -- the same
+        # fix as _stack below, and the pattern every other get_array_module
+        # call in this file already uses.
+        xp = get_array_module(self.array)
 
         axes_base_indices = tuple_range(
             offset=len(self.ensemble_shape), length=len(self.base_shape)
@@ -2083,7 +2157,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis_metadata: AxisMetadata,
         axis: int,
     ) -> Self:
-        xp = get_array_module(array_objects[0].device)
+        # Not array_objects[0].device: a detector's to_cpu=True (the
+        # default) moves a measurement's array to numpy without updating
+        # the object's own device label, so .device can say "gpu" while
+        # .array is already a plain ndarray. Only used below in the eager
+        # (xp.stack) branch -- the lazy (da.stack) branch below doesn't
+        # need to know the concrete backing type -- but get_array_module
+        # already handles a dask array via its _meta, so resolving it from
+        # the real array here rather than the label is safe either way.
+        xp = get_array_module(array_objects[0].array)
 
         if any(array.is_lazy for array in array_objects):
             array = da.stack(
@@ -2136,7 +2218,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         if chunks is None and self.is_lazy:
-            chunks = self._lazy_array.chunks[: -len(self.base_shape)]
+            # See the comment in ArrayObject.squeeze: -0 is 0, not "the end".
+            n_ensemble_dims = len(self._lazy_array.chunks) - len(self.base_shape)
+            chunks = self._lazy_array.chunks[:n_ensemble_dims]
         elif chunks is None:
             chunks = (1,) * len(self.ensemble_shape)
 
@@ -2154,11 +2238,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 chunks=ensemble_chunks
             )
 
+            ndims = len(self.ensemble_shape)
+
             def _combine_args(*args):
                 combined = args[0], args[1].item()
-                return _wrap_with_array(combined, 1)
+                return _wrap_with_array(combined, ndims)
 
-            ndims = len(self.ensemble_shape)
             blocks = da.blockwise(
                 _combine_args,
                 tuple_range(ndims),

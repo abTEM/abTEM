@@ -250,31 +250,108 @@ def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
     return fftw_object
 
 
+def _fftw_plan_config() -> tuple:
+    """
+    The configuration ``_new_fftw_object`` bakes into a plan.
+
+    Part of the plan cache key. abTEM's config is meant to be changed at runtime
+    inside a ``config.set`` block, and every call re-read these before the plans
+    were cached, so a plan built under one configuration must not be reused
+    under another -- a user who asks for more threads would otherwise keep
+    getting plans made for the old count.
+    """
+    return (
+        config.get("fftw.threads"),
+        config.get("fftw.planning_effort"),
+        config.get("fftw.planning_timelimit"),
+    )
+
+
 class CachedFFTWConvolution:
+    """
+    Convolve an array with a kernel, reusing the pyfftw plan pair across calls.
+
+    Creating a plan costs a noticeable fraction of executing one -- it also
+    allocates and zeroes a scratch array the size of the input -- so the pair is
+    kept between calls rather than rebuilt on each one.
+
+    A plan is tied to one buffer *layout*: ``update_arrays`` rejects an array
+    whose dtype, shape or strides differ from the array the plan was made for,
+    so those make up the cache key, together with the configuration the plan was
+    built under. It is equally tied to one specific *buffer*, which on a cache
+    hit is the previous call's array, so the cached plans are re-pointed at the
+    current array on every call and not only when they are built.
+
+    The plans are deliberately built with the same flags every time, never flags
+    derived from the buffer being transformed. An ``FFTW_UNALIGNED`` plan
+    selects different codelets and so returns slightly different numbers (~1e-7
+    relative, the order of float32 epsilon) than an aligned one. Since malloc
+    only guarantees 16-byte alignment while FFTW's ``simd_alignment`` is 32 on
+    x86, choosing the flag from the incoming array would make the result depend
+    on where the buffer happened to land -- two runs differing only in chunking
+    would then disagree. A buffer the plan will not accept is aligned by copying
+    instead, which changes no arithmetic.
+
+    The cache is thread-local. Dask's threaded scheduler can drive a single
+    shared propagator from several worker threads at once, and because a plan
+    points at exactly one buffer, sharing one pair between threads would make
+    concurrent calls transform each other's arrays.
+    """
+
     def __init__(self):
-        self._fftw_objects = None
-        self._shape = None
+        self._local = threading.local()
+
+    def __getstate__(self) -> dict:
+        # threading.local is not picklable, and a plan cache built on one
+        # process/thread is not valid on another -- drop it rather than the
+        # object as a whole failing to pickle. FresnelPropagator's documented
+        # `propagator=` reuse argument invites sending an unused instance to
+        # a dask.distributed worker before it has cached anything.
+        state = self.__dict__.copy()
+        del state["_local"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._local = threading.local()
+
+    def _get_fftw_objects(self, array: np.ndarray) -> dict[str, "pyfftw.FFTW"]:
+        key = (array.shape, array.dtype, array.strides, _fftw_plan_config())
+
+        cached = getattr(self._local, "cached", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        fftw_objects = {
+            name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
+        }
+        self._local.cached = (key, fftw_objects)
+        return fftw_objects
 
     def __call__(
         self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool
     ) -> np.ndarray:
-        if array.shape != self._shape:
-            self._fftw_objects = None
-
-        if self._fftw_objects is None:
-            fftw_objects = {
-                name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
-            }
-            self._fftw_objects = fftw_objects
-
         if not overwrite_x:
             array = array.copy()
-            self._fftw_objects["fft2"].update_arrays(array, array)
-            self._fftw_objects["ifft2"].update_arrays(array, array)
 
-        array = self._fftw_objects["fft2"]()
+        fftw_objects = self._get_fftw_objects(array)
+
+        try:
+            # A cache hit returns plans still bound to an earlier call's buffer,
+            # so they must be re-pointed even though nothing was rebuilt.
+            for fftw_object in fftw_objects.values():
+                fftw_object.update_arrays(array, array)
+        except ValueError:
+            # The plan demands more alignment than this buffer has. Align the
+            # buffer rather than re-planning for it: a copy preserves the
+            # arithmetic, a differently aligned plan would not.
+            array = pyfftw.byte_align(array)
+            for fftw_object in fftw_objects.values():
+                fftw_object.update_arrays(array, array)
+
+        array = fftw_objects["fft2"]()
         array *= kernel
-        array = self._fftw_objects["ifft2"]()
+        array = fftw_objects["ifft2"]()
         return array
 
 
@@ -366,8 +443,36 @@ U = TypeVar("U", np.ndarray, da.core.Array)
 
 # Cache the parsed cuFFT cache limit + the config value it was derived from.
 # Revalidated on every GPU FFT dispatch without reparsing when the config is
-# unchanged (the common case in a hot loop).
-_CUFFT_CACHE_STATE: tuple[object, int] | None = None
+# unchanged (the common case in a hot loop). CuPy's plan cache is per thread
+# (and per device), so the applied state must be thread-local as well: a
+# process-global slot would configure only the first dispatching thread and
+# leave every other dask worker thread's cache at CuPy's defaults.
+_CUFFT_CACHE_STATE = threading.local()
+
+
+def _reset_cufft_cache_state():
+    """Forget the applied plan-cache state for the calling thread (tests)."""
+    for attr in ("token", "limit"):
+        try:
+            delattr(_CUFFT_CACHE_STATE, attr)
+        except AttributeError:
+            pass
+
+
+def _parse_cufft_cache_entries() -> int:
+    """The configured plan-cache entry count, or 0 to leave the count alone.
+
+    Invalid values must not raise: this runs ahead of every GPU FFT, and an
+    exception here (e.g. ``int(None)``) would fail every dispatch. null and
+    non-positive values mean "do not touch the entry count", mirroring how a
+    user opts out of the sibling ``fft-cache-size`` bound.
+    """
+    raw = config.get("cupy.fft-cache-entries", 64)
+    try:
+        entries = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return entries if entries > 0 else 0
 
 
 def _configure_cufft_cache():
@@ -397,13 +502,14 @@ def _configure_cufft_cache():
     of successive computations. The limit is a ceiling, not a reservation —
     unused headroom costs no memory.
     """
-    global _CUFFT_CACHE_STATE
     raw = config.get("cupy.fft-cache-size", "auto")
 
     # The plan cache and the resolved "auto" limit are per device, so the
     # applied state is keyed on the current device as well as the raw value.
     device = cp.cuda.Device()
-    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == (raw, device.id):
+    entries = _parse_cufft_cache_entries()
+    applied = getattr(_CUFFT_CACHE_STATE, "token", None)
+    if applied is not None and applied == (raw, entries, device.id):
         return
 
     if raw is None:
@@ -419,19 +525,32 @@ def _configure_cufft_cache():
     cache = cp.fft.config.get_plan_cache()
     if limit == 0:
         cache.set_size(0)       # disable caching entirely
-    elif limit > 0:
-        if cache.get_size() == 0:
-            cache.set_size(16)  # re-enable a previously disabled cache
-        cache.set_memsize(limit)
     else:
-        # Explicitly restore "unlimited": an earlier bound (e.g. from the
-        # "auto" default) must be undoable at runtime -- the oversized-plan
-        # warning recommends exactly this.
-        if cache.get_size() == 0:
-            cache.set_size(16)
-        cache.set_memsize(-1)
+        # CuPy keeps at most 16 plans by default. Workloads whose batch
+        # dimension varies pass that within a few chunks and then rebuild
+        # plans continuously: profiling a core-loss scan, whose scattering
+        # batches follow the number of sites passing the threshold, put 30 %
+        # of the runtime in _get_cufft_plan_nd, and raising the limit made
+        # the same scan 18 % faster with identical results.
+        #
+        # Raise, never lower: a cache someone tuned larger through CuPy's own
+        # API keeps its size (the old code likewise never overrode a live
+        # cache, only re-enabled a disabled one). This also re-enables a
+        # disabled cache, whose size is 0.
+        if entries and cache.get_size() < entries:
+            cache.set_size(entries)
+        elif not entries and cache.get_size() == 0:
+            cache.set_size(16)  # re-enable a previously disabled cache
+        if limit > 0:
+            cache.set_memsize(limit)
+        else:
+            # Explicitly restore "unlimited": an earlier bound (e.g. from the
+            # "auto" default) must be undoable at runtime -- the
+            # oversized-plan warning recommends exactly this.
+            cache.set_memsize(-1)
 
-    _CUFFT_CACHE_STATE = ((raw, device.id), limit)
+    _CUFFT_CACHE_STATE.token = (raw, entries, device.id)
+    _CUFFT_CACHE_STATE.limit = limit
 
 
 _warned_plan_cache_bypass = False
@@ -912,7 +1031,12 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[: -len(new_shape)] + new_shape
+        # Not `array.shape[: -len(new_shape)]`: -0 is 0, not "the end", so
+        # for `new_shape == ()` that slice was `[:0]`, always empty, rather
+        # than `[:len(array.shape)]` -- every dimension is a batch
+        # dimension when none are being resized.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        new_shape = array.shape[:n_batch_dims] + new_shape
 
     # Build per-dimension slice-pair lists.  Dimensions with equal in/out size
     # (e.g. batch dims) take a single full-slice pair; the rest contribute 1–2
@@ -965,7 +1089,11 @@ def fft_interpolate(
     numpy.ndarray
         Interpolated array.
     """
-    old_size = np.prod(array.shape[-len(new_shape) :])
+    # Not `array.shape[-len(new_shape):]`: the same -0 problem, mirrored --
+    # for `new_shape == ()` that slice was `[0:]`, everything, rather than
+    # `[len(array.shape):]`, nothing (no axes are being resized).
+    n_batch_dims = len(array.shape) - len(new_shape)
+    old_size = np.prod(array.shape[n_batch_dims:])
 
     is_complex = np.iscomplexobj(array)
 
@@ -989,7 +1117,9 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
+        # See the comment above old_size: same -0 fix, same reasoning.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        array *= np.prod(array.shape[n_batch_dims:]) / old_size
     elif normalization in ("amplitude", "intensity"):
         pass
     else:
