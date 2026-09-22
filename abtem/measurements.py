@@ -7041,6 +7041,44 @@ def unfold_loss_gain(
     )
 
 
+def _find_fp_and_energy_axes(
+    axes_metadata: list,
+) -> tuple[Optional[int], Optional[int]]:
+    """Locate the ``FrozenPhononsAxis`` and ``EnergyLossAxis`` in
+    ``axes_metadata``, returning ``None`` for either that is absent.
+
+    Lookup only: the two phonon-loss entry points report a missing axis
+    differently -- the non-parity path names each axis separately and can
+    suggest ``ensemble_mean=False``, the parity path reports both together
+    and relative to the parity axis -- so raising is left to the caller and
+    only the scan itself is shared.
+    """
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
+
+    fp_axis_idx = None
+    energy_axis_idx = None
+    for i, ax in enumerate(axes_metadata):
+        if isinstance(ax, FrozenPhononsAxis):
+            fp_axis_idx = i
+        if isinstance(ax, EnergyLossAxis):
+            energy_axis_idx = i
+    return fp_axis_idx, energy_axis_idx
+
+
+def _require_complex_waves(exit_waves) -> None:
+    """Refuse exit waves that hold intensities rather than wave functions.
+
+    Every phonon-loss channel is built from complex amplitudes -- the parity
+    combinations and the coherent/incoherent split alike -- so intensities
+    would silently produce a meaningless result rather than fail.
+    """
+    if not np.iscomplexobj(exit_waves.array):
+        raise ValueError(
+            "exit_waves must contain complex wave functions (not intensities). "
+            "Pass the Waves object directly, not DiffractionPatterns."
+        )
+
+
 def _finalize_phonon_loss_result(
     result_array,
     reference_dp: "DiffractionPatterns",
@@ -7129,7 +7167,6 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     """
     from abtem.core.axes import (
         EnergyLossAxis,
-        FrozenPhononsAxis,
         OrdinalAxis,
         PhononParityAxis,
         PhononRestParityAxis,
@@ -7205,11 +7242,7 @@ def _phonon_loss_diffraction_patterns_parity_projection(
             "this function."
         )
 
-    if not np.iscomplexobj(exit_waves.array):
-        raise ValueError(
-            "exit_waves must contain complex wave functions (not intensities). "
-            "Pass the Waves object directly, not DiffractionPatterns."
-        )
+    _require_complex_waves(exit_waves)
 
     n_axes = len(exit_waves.ensemble_axes_metadata)
 
@@ -7230,13 +7263,9 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     # needed.
     waves_static = _select(2) if parity_values == ("real", "twin", "static") else None
 
-    fp_axis_idx = None
-    energy_axis_idx = None
-    for i, ax in enumerate(waves_real.ensemble_axes_metadata):
-        if isinstance(ax, FrozenPhononsAxis):
-            fp_axis_idx = i
-        if isinstance(ax, EnergyLossAxis):
-            energy_axis_idx = i
+    fp_axis_idx, energy_axis_idx = _find_fp_and_energy_axes(
+        waves_real.ensemble_axes_metadata
+    )
     if fp_axis_idx is None or energy_axis_idx is None:
         raise ValueError(
             "exit_waves must have both a FrozenPhononsAxis and an "
@@ -7441,7 +7470,6 @@ def phonon_loss_diffraction_patterns(
     """
     from abtem.core.axes import (
         EnergyLossAxis,
-        FrozenPhononsAxis,
         OrdinalAxis,
         PhononParityAxis,
     )
@@ -7472,13 +7500,9 @@ def phonon_loss_diffraction_patterns(
             )
 
     # --- validate ensemble axes ---
-    fp_axis_idx = None
-    energy_axis_idx = None
-    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
-        if isinstance(ax, FrozenPhononsAxis):
-            fp_axis_idx = i
-        if isinstance(ax, EnergyLossAxis):
-            energy_axis_idx = i
+    fp_axis_idx, energy_axis_idx = _find_fp_and_energy_axes(
+        exit_waves.ensemble_axes_metadata
+    )
 
     if fp_axis_idx is None:
         raise ValueError(
@@ -7490,11 +7514,7 @@ def phonon_loss_diffraction_patterns(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    if not np.iscomplexobj(exit_waves.array):
-        raise ValueError(
-            "exit_waves must contain complex wave functions (not intensities). "
-            "Pass the Waves object directly, not DiffractionPatterns."
-        )
+    _require_complex_waves(exit_waves)
 
     # --- number of frozen-phonon configurations ---
     N = exit_waves.shape[fp_axis_idx]
