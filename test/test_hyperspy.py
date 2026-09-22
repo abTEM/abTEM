@@ -5,7 +5,7 @@ import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
 from hypothesis import given
-from utils import gpu
+from utils import devices, lazy_params
 
 try:
     import hyperspy
@@ -14,8 +14,8 @@ except ImportError:
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize(
     "measurement",
     [

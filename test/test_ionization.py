@@ -32,32 +32,14 @@ try:
 except ImportError:
     pass
 
-from utils import gpu, requires_gpu  # noqa: E402  -- device-gated markers
-
-
-def _make_synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=2, seed=0):
-    # Shared helper for the PRISM-EELS tests below, which build their own
-    # atoms/potentials inline rather than through the si_atoms fixture.
-    rng = np.random.default_rng(seed)
-    array = (
-        rng.standard_normal((n_transitions, *gpts))
-        + 1j * rng.standard_normal((n_transitions, *gpts))
-    ).astype(np.complex64)
-    return TransitionPotentialArray(
-        Z=Z,
-        array=array,
-        energy=energy,
-        extent=extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
-        metadata={"Z": Z, "n": 1, "l": 0},
-    )
+from utils import devices, requires_gpu, synthetic_transition_potential  # noqa: E402  -- device-gated markers
 
 
 # For fast_roll we parametrise over a backend *module* string ("numpy" /
 # "cupy"); the abtem-level GPU dispatch tests use the standard device kwarg.
 xp_params = [
     "numpy",
-    pytest.param("cupy", marks=requires_gpu),
+    pytest.param("cupy", marks=requires_gpu.marks),
 ]
 
 
@@ -119,27 +101,6 @@ def _make_si_potential(atoms, device):
     return abtem.Potential(atoms, gpts=32, slice_thickness=2.7, device=device)
 
 
-def _make_si_transition_potential(potential, device):
-    # Synthetic transition potential: skips numerov / GPAW so the wiring is
-    # exercised without depending on the heavy DFT setup the tutorial uses.
-    n_transitions = 2
-    rng = np.random.default_rng(0)
-    array = (
-        rng.standard_normal((n_transitions, *potential.gpts))
-        + 1j * rng.standard_normal((n_transitions, *potential.gpts))
-    ).astype(np.complex64)
-    if device == "gpu":
-        array = cp.asarray(array)
-    return TransitionPotentialArray(
-        Z=14,
-        array=array,
-        energy=100e3,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
-
-
 def _make_probe(potential, device):
     p = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
     p.grid.match(potential)
@@ -152,12 +113,15 @@ def test_transition_potential_scan_is_defined_on_probe():
     assert callable(Probe.transition_potential_scan)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_builds_lazy_graph(si_atoms, device):
     """Wiring smoke test: lazy call returns a measurements object without raising,
     on both CPU and GPU backends."""
     potential = _make_si_potential(si_atoms, device)
-    tp = _make_si_transition_potential(potential, device)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=2, energy=100e3, device=device,
+    )
     probe = _make_probe(potential, device)
     detector = abtem.AnnularDetector(inner=0, outer=40)
     result = probe.transition_potential_scan(
@@ -171,12 +135,15 @@ def test_transition_potential_scan_builds_lazy_graph(si_atoms, device):
     assert hasattr(result, "compute")
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_forwards_inelastic_kwargs(si_atoms, device):
     """double_channel / threshold must flow through to
     transition_potential_multislice_and_detect via **multislice_func_kwargs."""
     potential = _make_si_potential(si_atoms, device)
-    tp = _make_si_transition_potential(potential, device)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=2, energy=100e3, device=device,
+    )
     probe = _make_probe(potential, device)
     detector = abtem.AnnularDetector(inner=0, outer=40)
     result = probe.transition_potential_scan(
@@ -191,11 +158,14 @@ def test_transition_potential_scan_forwards_inelastic_kwargs(si_atoms, device):
     assert result is not None
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_accepts_grid_scan(si_atoms, device):
     """The tutorial uses GridScan + sites=... for the EELS-map calls."""
     potential = _make_si_potential(si_atoms, device)
-    tp = _make_si_transition_potential(potential, device)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=2, energy=100e3, device=device,
+    )
     probe = _make_probe(potential, device)
     detector = abtem.FlexibleAnnularDetector()
     scan = abtem.GridScan(
@@ -213,7 +183,7 @@ def test_transition_potential_scan_accepts_grid_scan(si_atoms, device):
     assert result is not None
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
     si_atoms, device
 ):
@@ -230,7 +200,10 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
     used.
     """
     potential = _make_si_potential(si_atoms, device)
-    tp = _make_si_transition_potential(potential, device)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=2, energy=100e3, device=device,
+    )
     probe = _make_probe(potential, device)
     detector = abtem.FlexibleAnnularDetector()
     scan = abtem.GridScan(
@@ -265,7 +238,7 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_crystal_potential_matches_manual_tile(device):
     """Auto-extracted sites from a CrystalPotential must produce the same
     result as a regular Potential built from a manually-tiled supercell.
@@ -337,7 +310,7 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
 
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     """SMatrix.transition_potential_scan at interpolation=(1,1) reproduces
     Probe.transition_potential_scan on a small Si cell."""
@@ -353,7 +326,9 @@ def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -395,7 +370,7 @@ def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("double_channel", [False, True])
 def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_channel):
     """The beam-basis reduction (GitHub issue abTEM/abTEM#293) at
@@ -418,7 +393,9 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
@@ -463,7 +440,7 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
     np.testing.assert_allclose(arr_beam_basis, arr_multislice, rtol=1e-4, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     """Double-channel PRISM-EELS at interpolation=(1,1) reproduces
     Probe.transition_potential_scan with double_channel=True."""
@@ -478,7 +455,9 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -518,7 +497,7 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output(device):
     """Stage-2 ``interpolation > 1`` runs through the cropping pattern from
     SMatrixArray._reduce_to_waves (s_matrix.py:996-1033) and yields a
@@ -536,7 +515,9 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output(dev
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (64, 64), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(64, 64), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.PixelatedDetector(max_angle=30, to_cpu=True)
 
@@ -580,7 +561,7 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output(dev
     assert np.abs(arr_2).max() > 0
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_eels_interp_2_accuracy_vs_multislice(device):
     """Stage 3b: the total integrated EELS signal at interp=2 should be
     within ~10% of the multislice reference (Brown et al. Sec. IV B).
@@ -663,7 +644,7 @@ def test_prism_eels_interp_2_accuracy_vs_multislice(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_eels_inelastic_crop_window(device):
     """The ``inelastic_crop`` knob (Brown et al. Sec. IV B) decouples the
     transition-potential scatter window from the interpolation factor.
@@ -758,7 +739,7 @@ def test_prism_eels_inelastic_crop_window(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("double_channel", [False, True])
 def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     """PRISM-EELS with exit_planes produces the same thickness-series as
@@ -777,7 +758,9 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -814,7 +797,7 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 def test_prism_eels_frozen_phonons_match_multislice(ensemble_mean, device):
     """PRISM-EELS with frozen phonons matches multislice-EELS at interp=1."""
@@ -834,7 +817,9 @@ def test_prism_eels_frozen_phonons_match_multislice(ensemble_mean, device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
@@ -879,7 +864,7 @@ def test_prism_eels_frozen_phonons_match_multislice(ensemble_mean, device):
     np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_eels_lazy_matches_eager(device):
     """PRISM-EELS with lazy=True produces the same result as lazy=False."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
@@ -893,7 +878,9 @@ def test_prism_eels_lazy_matches_eager(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    tp = synthetic_transition_potential(
+        Z=14, gpts=(32, 32), extent=potential.extent, energy=energy, n_transitions=2,
+    )
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
@@ -926,7 +913,7 @@ def test_prism_eels_lazy_matches_eager(device):
     np.testing.assert_allclose(arr_lazy, arr_eager, rtol=1e-5, atol=0)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_transition_potential_scan_crystal_double_channel_matches_manual(device):
     """Double-channel + CrystalPotential is the intersection that triggers the
     TransmissionFunction dedup in transition_potential_multislice_and_detect
@@ -1018,6 +1005,7 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
 
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.slow
 def test_subshell_transitions_real_gpaw_pipeline():
     """End-to-end regression test using GPAW's real atomic all-electron
     solvers (``gpaw.atom.all_electron.AllElectron`` and
@@ -1062,6 +1050,7 @@ def test_subshell_transitions_real_gpaw_pipeline():
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
+@pytest.mark.slow
 def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
     """Regression test for a (2*l+1) orbital-degeneracy double-count.
 
@@ -1117,7 +1106,9 @@ def _probe_waves(gpts=(32, 32), extent=(8.0, 8.0)):
 def test_filter_sites_aligns_mask_with_mixed_element_atoms():
     """An Atoms input is subset to the transition element by validate_sites;
     the survival mask must index that subset, not the original object."""
-    tp = _make_synthetic_tp(5, (32, 32), (8.0, 8.0))
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2,
+    )
     waves = _probe_waves()
     atoms = ase.Atoms(
         "BN", positions=[(4.0, 4.0, 0.0), (1.0, 1.0, 0.0)], cell=(8, 8, 4)
@@ -1135,7 +1126,9 @@ def test_local_potential_device_cache_survives_use_but_not_pickle():
     dask task graphs."""
     import pickle
 
-    tp = _make_synthetic_tp(5, (32, 32), (8.0, 8.0))
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2,
+    )
     waves = _probe_waves()
     tp.filter_sites(waves, np.array([[4.0, 4.0]]), threshold=1e-12)
     assert tp._local_potential_device_cache is not None
@@ -1151,7 +1144,9 @@ def test_local_potential_device_cache_survives_use_but_not_pickle():
 def test_local_potential_device_cache_keys_on_the_arrays_device():
     """The cache key must carry the concrete GPU id, read off the array
     itself -- never a bare 'gpu' bucket that could alias devices."""
-    tp = _make_synthetic_tp(5, (32, 32), (8.0, 8.0))
+    tp = synthetic_transition_potential(
+        Z=5, gpts=(32, 32), extent=(8.0, 8.0), n_transitions=2,
+    )
     like = cp.zeros((32, 32), dtype=cp.complex64)
 
     on_device = tp._local_potential_on_device(like)

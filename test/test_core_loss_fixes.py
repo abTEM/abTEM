@@ -29,7 +29,7 @@ try:
 except ImportError:
     pass
 
-from utils import gpu  # noqa: E402
+from utils import devices, synthetic_transition_potential  # noqa: E402
 
 requires_gpaw = pytest.mark.skipif(
     "gpaw" not in sys.modules, reason="requires gpaw"
@@ -38,24 +38,9 @@ requires_gpaw = pytest.mark.skipif(
 ENERGY = 100e3
 
 
-def _synthetic_transition_potential(extent, gpts, device="cpu", n=3, seed=0):
-    try:
-        import cupy as cp
-    except ImportError:
-        cp = None
-
-    xp = cp if device == "gpu" else np
-    rng = np.random.default_rng(seed)
-    array = (
-        rng.standard_normal((n, *gpts)) + 1j * rng.standard_normal((n, *gpts))
-    ).astype(np.complex64)
-    return TransitionPotentialArray(
-        Z=14,
-        array=xp.asarray(array),
-        energy=ENERGY,
-        extent=extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n)))],
-        metadata={"Z": 14, "n": 1, "l": 0},
+def _si2_atoms():
+    return ase.Atoms(
+        "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)], cell=(8, 8, 8), pbc=True,
     )
 
 
@@ -185,6 +170,16 @@ class TestPrecisionConfig:
     memory, whatever the configuration said.
     """
 
+    # The two tests below check the *runtime* half of the defect in this
+    # class's docstring: an array allocated at the configured precision and
+    # then promoted back to complex128 by dividing by a float64 numpy scalar
+    # (NEP 50). test_no_hardcoded_dtypes_remain cannot stand in for them --
+    # it greps the source for hardcoded dtype literals, and a promotion
+    # leaves none, so `array = array / np.prod(...)` in place of the
+    # in-place `/=` passes it while silently doubling every transition
+    # potential's memory. Verified: reintroducing exactly that division
+    # fails test_built_array_honours_precision and passes the grep test.
+
     @requires_gpaw
     @pytest.mark.parametrize(
         "precision, expected",
@@ -246,7 +241,7 @@ def test_dead_set_threshold_is_gone():
     assert not hasattr(TransitionPotentialArray, "set_threshold")
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_entrance_exit_plane_carries_no_core_loss_signal(device):
     """At t = 0 nothing has been traversed, so the core-loss signal is zero.
 
@@ -264,8 +259,9 @@ def test_entrance_exit_plane_carries_no_core_loss_signal(device):
 
     got = probe.transition_potential_scan(
         potential=potential,
-        transition_potentials=_synthetic_transition_potential(
-            potential.extent, potential.gpts, device=device
+        transition_potentials=synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent, n_transitions=3,
+            device=device,
         ),
         scan=np.array([[0.0, 0.0]]),
         detectors=abtem.AnnularDetector(inner=0.0, outer=None),
@@ -300,15 +296,8 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
     the match is what destroys the evidence.
     """
 
-    @staticmethod
-    def _atoms():
-        return ase.Atoms(
-            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8), pbc=True,
-        )
-
     def _s_matrix(self, gpts):
-        potential = abtem.Potential(self._atoms(), gpts=gpts, slice_thickness=4.0)
+        potential = abtem.Potential(_si2_atoms(), gpts=gpts, slice_thickness=4.0)
         return abtem.SMatrix(
             potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
         )
@@ -319,19 +308,23 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
             scan=abtem.GridScan(start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
                                 potential=s_matrix.potential),
             detectors=abtem.FlexibleAnnularDetector(),
-            sites=self._atoms(), lazy=False, **kwargs,
+            sites=_si2_atoms(), lazy=False, **kwargs,
         )
 
     def test_a_built_potential_on_the_wrong_grid_is_refused(self):
         s_matrix = self._s_matrix((64, 64))
-        mismatched = _synthetic_transition_potential((8.0, 8.0), (32, 32), n=2)
+        mismatched = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(32, 32), n_transitions=2
+        )
         with pytest.raises(RuntimeError, match="Inconsistent grid"):
             self._scan(s_matrix, mismatched)
 
     def test_a_built_potential_on_the_right_grid_still_runs(self):
         """The guard must not fire on the case it is meant to allow."""
         s_matrix = self._s_matrix((64, 64))
-        matched = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        matched = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(64, 64), n_transitions=2
+        )
         measurement = self._scan(s_matrix, matched)
         assert measurement.shape[:2] == (2, 2)
 
@@ -339,7 +332,9 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
         """check_match compares extent as well as gpts, and an extent mismatch
         is the same class of error -- the array cannot be re-gridded either."""
         s_matrix = self._s_matrix((64, 64))
-        wrong_extent = _synthetic_transition_potential((6.0, 6.0), (64, 64), n=2)
+        wrong_extent = synthetic_transition_potential(
+            extent=(6.0, 6.0), gpts=(64, 64), n_transitions=2
+        )
         with pytest.raises(RuntimeError, match="Inconsistent grid"):
             self._scan(s_matrix, wrong_extent)
 
@@ -353,7 +348,9 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
         stay computed at the old one, and the scan completes with a plausible
         but wrong result."""
         s_matrix = self._s_matrix((64, 64))
-        wrong_energy = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        wrong_energy = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(64, 64), n_transitions=2
+        )
         wrong_energy.accelerator._energy = 2 * ENERGY
         with pytest.raises(RuntimeError, match="Inconsistent energies"):
             self._scan(s_matrix, wrong_energy)
@@ -384,20 +381,15 @@ class TestMultisliceBuiltTransitionPotentialEnergy:
     form factors stay computed at the old one.
     """
 
-    @staticmethod
-    def _atoms():
-        return ase.Atoms(
-            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8), pbc=True,
-        )
-
     def test_a_mismatched_energy_is_refused_too(self):
-        atoms = self._atoms()
+        atoms = _si2_atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=4.0)
         probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
         probe.grid.match(potential)
 
-        wrong_energy = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        wrong_energy = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(64, 64), n_transitions=2
+        )
         wrong_energy.accelerator._energy = 2 * ENERGY
 
         with pytest.raises(RuntimeError, match="Inconsistent energies"):
@@ -414,7 +406,7 @@ def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64,
     """An unbuilt ``TransitionPotential`` with a synthetic (non-physical)
     1s -> continuum-p transition. Building it exercises the real
     `_calculate_form_factor` path (needs sympy for the Wigner-3j symbols),
-    unlike `_synthetic_transition_potential`'s already-built
+    unlike `synthetic_transition_potential`'s already-built
     `TransitionPotentialArray`, which never calls `build()` again -- exactly
     the case where a genuinely per-member energy can (and, after the fix,
     does) drive a fresh build.
@@ -466,14 +458,14 @@ class TestFlexibleAnnularDetectorEnergyEnsemble:
     def _run(self, energy, detector, lazy):
         atoms = self._atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
-        sites = atoms  # _synthetic_transition_potential below is built for Z=14
+        sites = atoms  # synthetic_transition_potential below is built for Z=14
         scan = abtem.GridScan(
             start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
             potential=potential,
         )
-        tp = _synthetic_transition_potential(
-            potential.extent, potential.gpts,
-            n=2, seed=0,
+        tp = synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent,
+            n_transitions=2, seed=0,
         )
         # Keep the TP's baked energy matched to whatever this call's own
         # (single, or first-of-an-ensemble) energy is: this class tests the
@@ -567,7 +559,7 @@ class TestTransitionPotentialArrayEnergyEnsemble:
     def _run(self, energy, tp, lazy, detector=None):
         atoms = self._atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
-        sites = atoms  # _synthetic_transition_potential below is built for Z=14
+        sites = atoms  # synthetic_transition_potential below is built for Z=14
         scan = abtem.GridScan(
             start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True,
             potential=potential,
@@ -594,7 +586,9 @@ class TestTransitionPotentialArrayEnergyEnsemble:
         built TransitionPotentialArray silently serve two beam energies."""
         atoms = self._atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
-        tp = _synthetic_transition_potential(potential.extent, potential.gpts, n=2)
+        tp = synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent, n_transitions=2
+        )
         with pytest.raises(RuntimeError, match="Inconsistent energies"):
             self._run(list(order), tp, lazy)
 
@@ -603,7 +597,9 @@ class TestTransitionPotentialArrayEnergyEnsemble:
         not regress: still no raise, eager still equals lazy."""
         atoms = self._atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
-        tp = _synthetic_transition_potential(potential.extent, potential.gpts, n=2)
+        tp = synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent, n_transitions=2
+        )
         eager = self._run(ENERGY, tp, lazy=False)
         lazy = self._run(ENERGY, tp, lazy=True)
         assert np.array_equal(eager, lazy)
@@ -970,15 +966,8 @@ class TestPrismScanAxisSqueeze:
     The oracle throughout is the multislice path, which gets every case right.
     """
 
-    @staticmethod
-    def _atoms():
-        return ase.Atoms(
-            "Si2", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8), pbc=True,
-        )
-
     def _potential(self, ensemble):
-        atoms = self._atoms()
+        atoms = _si2_atoms()
         if ensemble:
             atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.0, seed=1)
         return abtem.Potential(atoms, gpts=(32, 32), slice_thickness=4.0)
@@ -989,11 +978,11 @@ class TestPrismScanAxisSqueeze:
             potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
         )
         return s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             scan=scan, detectors=abtem.FlexibleAnnularDetector(),
-            sites=self._atoms(), lazy=lazy,
+            sites=_si2_atoms(), lazy=lazy,
         )
 
     def _multislice(self, scan, ensemble, lazy):
@@ -1002,11 +991,11 @@ class TestPrismScanAxisSqueeze:
         probe.grid.match(potential)
         return probe.transition_potential_scan(
             scan=scan, potential=potential,
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             detectors=abtem.FlexibleAnnularDetector(),
-            sites=self._atoms(), lazy=lazy,
+            sites=_si2_atoms(), lazy=lazy,
         )
 
     @staticmethod
@@ -1108,8 +1097,8 @@ class TestMultipleDetectorsInOnePass:
     def _run(self, detectors, transition_potentials=None):
         atoms, potential, probe = self._setup()
         if transition_potentials is None:
-            transition_potentials = _synthetic_transition_potential(
-                potential.extent, potential.gpts
+            transition_potentials = synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=3
             )
         return probe.transition_potential_scan(
             potential=potential,
@@ -1153,8 +1142,9 @@ class TestMultipleDetectorsInOnePass:
     def test_multiple_detectors_with_multiple_edges(self):
         atoms, potential, _ = self._setup()
         potentials = [
-            _synthetic_transition_potential(
-                potential.extent, potential.gpts, seed=seed
+            synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=3,
+                seed=seed,
             )
             for seed in (0, 1)
         ]
@@ -1209,8 +1199,8 @@ def test_detectors_elastic_is_refused_rather_than_ignored(lazy):
     with pytest.raises(NotImplementedError, match="detectors_elastic"):
         probe.transition_potential_scan(
             potential=potential,
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=3
             ),
             scan=np.array([[0.0, 0.0]]),
             detectors=abtem.FlexibleAnnularDetector(),
@@ -1236,8 +1226,8 @@ def test_detectors_elastic_guard_has_no_false_positives(lazy, kwargs):
 
     measurement = probe.transition_potential_scan(
         potential=potential,
-        transition_potentials=_synthetic_transition_potential(
-            potential.extent, potential.gpts
+        transition_potentials=synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent, n_transitions=3
         ),
         scan=np.array([[0.0, 0.0]]),
         detectors=abtem.FlexibleAnnularDetector(),
@@ -1272,7 +1262,9 @@ def test_transition_potentials_are_wrapped_by_the_live_isinstance_check():
     assert not hasattr(core_loss, "_validate_transition_potentials")
 
     atoms, potential, probe = _detectors_elastic_setup()
-    single = _synthetic_transition_potential(potential.extent, potential.gpts)
+    single = synthetic_transition_potential(
+        gpts=potential.gpts, extent=potential.extent, n_transitions=3
+    )
 
     from_single = probe.transition_potential_scan(
         potential=potential, transition_potentials=single,
@@ -1338,8 +1330,8 @@ class TestPotentialEnsembleAccumulation:
             scan=scan,
             potential=potential,
             detectors=abtem.FlexibleAnnularDetector(),
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             double_channel=double_channel,
             sites=sites,
@@ -1448,12 +1440,7 @@ class TestPrismPotentialEnsembleAccumulation:
 
     @staticmethod
     def _setup(num_configs=None, exit_planes=None):
-        atoms = ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8),
-            pbc=True,
-        )
+        atoms = _si2_atoms()
         ensemble = (
             atoms
             if num_configs is None
@@ -1474,8 +1461,8 @@ class TestPrismPotentialEnsembleAccumulation:
             start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
         )
         measurement = s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             scan=scan,
             detectors=abtem.FlexibleAnnularDetector(),
@@ -1591,8 +1578,8 @@ def test_prism_driver_refuses_a_multi_configuration_potential():
     with pytest.raises(NotImplementedError, match="one potential"):
         prism_transition_potential_scan(
             s_matrix,
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             scan=scan,
             detectors=[abtem.FlexibleAnnularDetector()],
@@ -1640,8 +1627,10 @@ class TestPrismEelsReductionChunking:
     @staticmethod
     def _run(atoms, s_matrix, scan, double_channel=False):
         measurement = s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                s_matrix.potential.extent, s_matrix.potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=s_matrix.potential.gpts,
+                extent=s_matrix.potential.extent,
+                n_transitions=2,
             ),
             scan=scan,
             detectors=abtem.FlexibleAnnularDetector(),
@@ -1958,17 +1947,8 @@ class TestPrismLazyExitPlanes:
     the two computed their bookkeeping separately, which is how they diverged.
     """
 
-    @staticmethod
-    def _atoms():
-        return ase.Atoms(
-            "Si2",
-            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
-            cell=(8, 8, 8),
-            pbc=True,
-        )
-
     def _run(self, potential, lazy, double_channel=False):
-        atoms = self._atoms()
+        atoms = _si2_atoms()
         s_matrix = abtem.SMatrix(
             potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
         )
@@ -1976,8 +1956,8 @@ class TestPrismLazyExitPlanes:
             start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
         )
         measurement = s_matrix.transition_potential_scan(
-            transition_potentials=_synthetic_transition_potential(
-                potential.extent, potential.gpts, n=2
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
             ),
             scan=scan,
             detectors=abtem.FlexibleAnnularDetector(),
@@ -1998,7 +1978,7 @@ class TestPrismLazyExitPlanes:
         return measurement
 
     def _potential(self, num_configs=None, exit_planes=None, ensemble_mean=True):
-        atoms = self._atoms()
+        atoms = _si2_atoms()
         ensemble = (
             atoms
             if num_configs is None
