@@ -7,6 +7,7 @@ import pytest
 from hypothesis import assume
 
 from abtem.core.backend import asnumpy, cp, get_array_module
+from abtem.core.testing import array_is_close  # noqa: F401
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.potentials.iam import Potential
 from abtem.waves import Waves
@@ -36,48 +37,8 @@ def ensure_is_tuple(x, length: int = 1):
     return x
 
 
-def array_is_close(
-    a1,
-    a2,
-    rel_tol=None,
-    abs_tol=None,
-    check_above_abs=0.0,
-    check_above_rel=0.0,
-    mask=None,
-):
-    """Whether ``a1`` is within ``rel_tol`` (relative to ``a2``) and/or
-    ``abs_tol`` of ``a2``. The caller must assert the result.
-
-    At least one tolerance is required. Both used to default to ``inf``,
-    which disables the check it controls, so a call with neither returned
-    True whatever the arrays held.
-    """
-    if rel_tol is None and abs_tol is None:
-        raise TypeError("array_is_close requires rel_tol and/or abs_tol")
-    if rel_tol is None:
-        rel_tol = np.inf
-    if abs_tol is None:
-        abs_tol = np.inf
-
-    if mask is not None:
-        a1 = a1[mask]
-        a2 = a2[mask]
-
-    if rel_tol < np.inf:
-        element_is_checked = (a2 > check_above_abs) * (
-            a2 > (a2.max() * check_above_rel)
-        )
-        rel_error = (a1[element_is_checked] - a2[element_is_checked]) / a2[
-            element_is_checked
-        ]
-        if np.any(np.abs(rel_error) > rel_tol):
-            return False
-
-    if abs_tol < np.inf:
-        if np.any(np.abs(a1 - a2) > abs_tol):
-            return False
-
-    return True
+# array_is_close lives in abtem.core.testing so the benchmark harness can share it;
+# re-exported here so existing tests keep importing it from utils.
 
 
 def assume_valid_probe_and_detectors(probe, detectors):
