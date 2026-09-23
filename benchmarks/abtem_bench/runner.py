@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from abtem_bench import presets, registry, store
+from abtem_bench import prepare, presets, registry, store
 
 HARNESS_DIR = Path(__file__).resolve().parents[1]  # .../benchmarks
 MEM_FLOOR_BYTES = 8 * 1024**3
@@ -36,9 +37,12 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def find_repo(start: Path | None = None) -> Path:
-    """The abTEM checkout that contains this harness."""
-    start = start or HARNESS_DIR
-    return Path(_git(start, "rev-parse", "--show-toplevel"))
+    """The abTEM checkout that contains this harness (no git needed)."""
+    return prepare.repo_root(start or HARNESS_DIR)
+
+
+def _git_available() -> bool:
+    return shutil.which("git") is not None
 
 
 @dataclass
@@ -50,19 +54,34 @@ class Ref:
 
 
 def resolve_ref(repo: Path, ref: str) -> tuple[str, str]:
-    sha = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
-    try:
-        describe = _git(repo, "describe", "--tags", "--always", sha)
-    except subprocess.CalledProcessError:
-        describe = sha[:12]
-    return sha, describe
+    """Resolve ``ref`` with git, or from the index written by ``prepare``."""
+    if _git_available():
+        sha = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        try:
+            describe = _git(repo, "describe", "--tags", "--always", sha)
+        except subprocess.CalledProcessError:
+            describe = sha[:12]
+        return sha, describe
+    entry = prepare.load_index(repo).get(ref)
+    if entry is None:
+        raise RuntimeError(
+            f"git is not available and {ref!r} is not in "
+            f"{prepare.bench_dir(repo) / prepare.INDEX_NAME}; run "
+            f"'python3 -P -m abtem_bench.prepare --ref {ref}' on a machine with git"
+        )
+    return entry["sha"], entry["describe"]
 
 
 def ensure_worktree(repo: Path, sha: str) -> Path:
     """A detached worktree of ``sha`` under ``.worktrees/bench/<sha>``."""
-    path = repo / ".worktrees" / "bench" / sha
+    path = prepare.bench_dir(repo) / sha
     if (path / "abtem" / "__init__.py").exists():
         return path
+    if not _git_available():
+        raise RuntimeError(
+            f"git is not available and no prepared worktree exists at {path}; run "
+            "'python3 -P -m abtem_bench.prepare --ref <ref>' on a machine with git"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():  # stale registration without files
         subprocess.run(["git", "-C", str(repo), "worktree", "prune"], check=False)
