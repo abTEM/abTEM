@@ -1,0 +1,55 @@
+# Accepted result changes.
+#
+# A DRIFT verdict (candidate differs from the reference beyond the case's
+# tolerance) fails `abtem-bench compare --fail-on drift` unless an entry here
+# matches it. Add the entry in the same pull request as the change that causes
+# the drift; the report renders every matched entry as the changelog table, and
+# reports entries that no longer match anything as stale.
+#
+# Fields
+#   case    glob over case ids, e.g. "hrtem.exitwave*" or "stem.*@quick/cpu";
+#           the name part must match at least one registered case
+#   since   the reference tag or ref the acceptance applies against
+#   reason  one line, present tense, states what changed and why it is right
+#   pr      pull request number that introduced the change
+#
+# [[accepted]]
+# case = "hrtem.exitwave*"
+# since = "v1.0.10"
+# reason = "Exact Fresnel propagator is the default (#298); order-1 phase error removed."
+# pr = 298
+
+# The exact Fresnel propagator (#298) is the default since 2026-07-07; every
+# multislice case's default variant moves against v1.0.10 (order 1 there). The
+# [order1] variants hold the propagator fixed and are deliberately NOT accepted
+# here: their residual drift against v1.0.10 is attributed separately.
+
+[[accepted]]
+case = "hrtem.exitwave@*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
+pr = 298
+
+[[accepted]]
+case = "diffraction.cbed@*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
+pr = 298
+
+[[accepted]]
+case = "stem.multidetector@*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
+pr = 298
+
+[[accepted]]
+case = "stem.multidetector[eager]@*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
+pr = 298
+
+[[accepted]]
+case = "stem.multidetector[auto]@*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
+pr = 298
