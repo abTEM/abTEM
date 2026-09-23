@@ -22,6 +22,15 @@ python -P -m abtem_bench capture --ref dev --tier quick --device cpu --preset ac
 python -P -m abtem_bench compare .bench-out/v1.0.10 .bench-out/dev --noise .bench-out/selfcheck --md report.md --fail-on drift,shape
 ```
 
+On a machine whose runtime has no `git` (a container image that only carries Python), resolve the refs first where git exists, then run inside:
+
+```
+python3 -P -m abtem_bench.prepare --ref origin/dev --ref v1.0.10   # host: creates .worktrees/bench/<sha> and index.json
+python -P -m abtem_bench capture --ref origin/dev ...              # container: resolves the label from the index
+```
+
+`prepare` needs only the standard library. Without git and without a prepared index, the runner stops with a message naming the ref to prepare.
+
 `uv pip install -e benchmarks` (in a throwaway environment) installs the `abtem-bench` console script instead. The `-P` flag matters when running from a checkout: without it the current directory shadows `PYTHONPATH`.
 
 Case ids are `name[variant]@tier/device`; `--only` takes globs on ids or names. Tiers are `quick` (seconds per case, the CI tier), `standard` (minutes) and `large` (GPU stress sizes).
