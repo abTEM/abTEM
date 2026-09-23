@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from abtem_bench import compare as cmp
-from abtem_bench import presets, registry, runner, store
+from abtem_bench import prepare, presets, registry, runner, store
 
 
 def _devices(text: str) -> list[str]:
@@ -193,6 +193,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--rounds", type=int, default=1)
     _add_selection(s)
     s.set_defaults(func=cmd_self_check)
+
+    s = sub.add_parser(
+        "prepare",
+        help="resolve refs and create their worktrees (needs git; run on the host)",
+    )
+    s.add_argument("--ref", action="append", required=True)
+    s.set_defaults(
+        func=lambda a: prepare.main([x for r in a.ref for x in ("--ref", r)])
+    )
 
     s = sub.add_parser(
         "compare", help="compare a candidate bundle against a reference bundle"
