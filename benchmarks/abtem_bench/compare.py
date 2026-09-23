@@ -150,6 +150,18 @@ def output_stats(
     return s
 
 
+def _error_note(record: dict[str, Any]) -> str:
+    """One line naming a failed record's exception, for the report."""
+    if record.get("status") == store.STATUS_OK:
+        return ""
+    summary = record.get("error_summary")
+    if summary:
+        return str(summary)
+    err = (record.get("error") or "").strip()
+    lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+    return (lines[-1] if lines else "")[:300]
+
+
 def _axes_equal(a: list, b: list) -> bool:
     if len(a) != len(b):
         return False
@@ -314,7 +326,7 @@ def compare(
                     ref_id,
                     cand_id,
                     bad,
-                    note=(rc.get("error") or rr.get("error") or "")[:200],
+                    note=_error_note(rc) or _error_note(rr),
                     kind=kind,
                 )
             )
