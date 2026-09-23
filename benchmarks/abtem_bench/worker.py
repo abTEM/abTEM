@@ -39,6 +39,12 @@ def _identify(expected_root: str | None) -> dict[str, Any]:
     return info
 
 
+def _last_line(text: str) -> str:
+    """The last non-empty line of a traceback: the exception itself."""
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    return lines[-1][:300] if lines else ""
+
+
 def _materialize(result: Any) -> Any:
     """Compute lazy results so outputs are concrete arrays."""
     if isinstance(result, dict):
@@ -176,11 +182,13 @@ def run(args: argparse.Namespace) -> int:
     except MemoryError:
         record["status"] = store.STATUS_OOM
         record["error"] = traceback.format_exc()
+        record["error_summary"] = _last_line(record["error"])
         bundle.write_case(args.case_id, record)
         return 3
     except Exception:  # noqa: BLE001 -- the record is the error report
         record["status"] = store.STATUS_ERROR
         record["error"] = traceback.format_exc()
+        record["error_summary"] = _last_line(record["error"])
         bundle.write_case(args.case_id, record)
         print(record["error"], file=sys.stderr)
         return 1
