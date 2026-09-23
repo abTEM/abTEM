@@ -20,3 +20,7 @@ uv.lock
 
 # tools/gpu/run_gpu_tests.sh in-place mode logs
 .gpu-test-logs/
+
+# abtem_bench: per-ref worktrees and local result bundles
+.worktrees/
+.bench-out/

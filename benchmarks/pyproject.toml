@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abtem-bench"
+description = "Regression benchmark harness for abTEM: results, speed and memory across commits"
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    "numpy >= 2.0.0",
+    "tabulate",
+]
+
+[project.scripts]
+abtem-bench = "abtem_bench.cli:main"
+
+[tool.setuptools]
+packages = ["abtem_bench", "cases"]
+
+[tool.setuptools.dynamic]
+version = {attr = "abtem_bench.__version__"}
