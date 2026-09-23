@@ -23,3 +23,7 @@ uv.lock
 
 # benchmark outputs
 benchmarks/results/
+
+# abtem_bench: per-ref worktrees and local result bundles
+.worktrees/
+.bench-out/
