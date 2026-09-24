@@ -298,6 +298,7 @@ def compare(
     speed_threshold: float = 0.10,
     memory_threshold: float = 0.05,
     allow_case_mismatch: bool = False,
+    min_time: float = 0.5,
 ) -> Report:
     man_r, man_c = reference.read_manifest(), candidate.read_manifest()
     hash_match = man_r.get("case_hash") == man_c.get("case_hash")
@@ -370,7 +371,11 @@ def compare(
         if tr and tc:
             row.time_ref, row.time_cand, row.time_ratio = tr, tc, tc / tr
             floor = noise.get(cand_id, {}).get("speed", 0.0)
-            if flag_ok and abs(row.time_ratio - 1.0) > max(speed_threshold, 3 * floor):
+            beyond = abs(row.time_ratio - 1.0) > max(speed_threshold, 3 * floor)
+            if beyond and min(tr, tc) < min_time:
+                # sub-second runs are launch-overhead noise; say so, don't flag
+                row.flags.append("short")
+            elif flag_ok and beyond:
                 row.flags.append("speed")
         cr, cc = rr["timings"].get("cold"), rc["timings"].get("cold")
         if cr and cc:
@@ -398,7 +403,11 @@ def compare(
         stale_accepted=stale,
         case_hash_match=hash_match,
         fingerprint_match=fp_match,
-        thresholds={"speed": speed_threshold, "memory": memory_threshold},
+        thresholds={
+            "speed": speed_threshold,
+            "memory": memory_threshold,
+            "min_time": min_time,
+        },
         noise=noise,
     )
 
@@ -467,7 +476,8 @@ def to_markdown(report: Report) -> str:
         "(worst output); `time` = candidate/reference warm median with the two "
         "medians in seconds; `cold` = candidate/reference first-call time; "
         "`rss` = candidate/reference peak resident memory of the worker "
-        "process; flags mark ratios beyond threshold."
+        "process; flags mark ratios beyond threshold (`short`: a time ratio beyond "
+        "threshold on a run too short to judge, below the minimum duration)."
     )
     lines.append("")
     lines.append(
