@@ -622,6 +622,27 @@ class ChargeDensityPotential(_PotentialBuilder):
         physical electrostatic reference and differs slice-to-slice, and from other
         potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
         is False.
+    valence_electrons : dict, optional
+        Valence electrons per chemical symbol, as the pseudopotential that produced
+        `charge_density` defines them. The core electrons this class subtracts are
+        `Z` minus this. If not given, each species' conventional frozen core is
+        assumed (see :func:`.conventional_core_electrons`), which is wrong for
+        pseudopotentials keeping semicore states in the valence -- VASP's `Sr_sv` and
+        `Ti_sv` have 10 valence electrons each, not 2 and 4. The count is checked
+        against `charge_density`'s own integrated electron count either way, and the
+        correction is skipped with a warning if they disagree.
+
+        For heavy elements, prefer a pseudopotential with a **smaller frozen core**.
+        The core is modelled analytically (Slater-screened hydrogenic orbitals), and
+        that model is weakest for the outermost, most diffuse core shells -- which are
+        also the ones reaching furthest into the bonding region. Choosing a setup that
+        keeps those shells in the valence hands them to the DFT calculation instead.
+        For MoS2 against a converged :class:`.GPAWPotential` reference, molybdenum's
+        projected potential is 7.3% high with VASP's default `Mo` (6 valence
+        electrons, so 36 to model) and 2.2% high with 14 valence electrons (28 to
+        model) -- whole-map agreement improves from 1.05% to 0.20% RMS of peak.
+        VASP offers `Mo_pv` and `Mo_sv` for this; GPAW's default Mo setup already
+        uses 14.
     """
 
     def __init__(
