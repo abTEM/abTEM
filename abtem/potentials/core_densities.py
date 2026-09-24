@@ -11,6 +11,16 @@ The core is modelled with Slater-screened hydrogenic orbitals. Core electrons ar
 tightly bound and very nearly transferable between chemical environments, so an
 analytic atomic model is a good approximation for them in a way it would not be for
 the valence density (which the caller supplies from a real calculation).
+
+The model is least accurate for the outermost core shells -- the most diffuse, least
+core-like ones, which also reach furthest into the bonding region -- and so degrades
+with atomic number and with how much of the atom the frozen core covers. Slater's
+rules are also non-relativistic, while a heavy element's inner shells contract
+relativistically. Where accuracy matters for a heavy element, the remedy is not a
+better model but a smaller frozen core: a pseudopotential keeping the semicore states
+in the valence hands those shells to the DFT calculation. For molybdenum in MoS2,
+modelling 36 core electrons leaves its projected potential 7.3% high against a
+converged GPAW reference, against 2.2% when only 28 are modelled.
 """
 from __future__ import annotations
 
