@@ -6809,31 +6809,43 @@ _SNAPSHOT_STATISTICS = ("quantum", "classical")
 _PHONON_ORDER_LABEL = "Phonon order"
 
 
-def _refuse_unfolding_stacked_channels(axes_metadata: list) -> None:
-    """Refuse loss/gain unfolding of a whole parity-projected stack.
+def _select_one_phonon_channel(measurement):
+    """Select the one-phonon channel of a parity-projected stack, or return
+    ``measurement`` unchanged when it carries no such stack.
 
-    ``phonon_loss_diffraction_patterns`` already refuses ``temperature`` for
-    a parity-projected ensemble, but the same physics error is reachable by
-    unfolding its stacked result directly: the one-phonon Bose weights would
-    be applied to the ``"all"`` and ``"multi"`` channels too, whose energy
-    axis is the bin's mode energy rather than the energy transfer. Selecting
-    a single channel drops this axis, so the legitimate call on the ``"one"``
-    slot is unaffected.
+    Loss/gain unfolding is meaningful for the one-phonon channel alone: the
+    ``"multi"`` channel's energy axis is the bin's mode energy rather than
+    the energy transfer -- its same-mode two-phonon processes sit at ``+2E``,
+    ``0`` and ``-2E``, none at ``+/-E`` -- and ``"all"`` contains it. Since
+    ``"one"`` is therefore the only channel the weights *can* apply to, the
+    selection is unambiguous and is made here rather than pushed onto the
+    caller, which would otherwise have to index the axis by hand to unfold
+    a stack it is holding for every other purpose.
+
+    The returned measurement no longer carries the
+    :data:`_PHONON_ORDER_LABEL` axis, and its ``phonon_loss_component``
+    metadata records which channel it is.
     """
-    for ax in axes_metadata:
-        if getattr(ax, "label", None) == _PHONON_ORDER_LABEL:
-            values = tuple(getattr(ax, "values", ()))
+    axes_metadata = measurement.ensemble_axes_metadata
+    for i, ax in enumerate(axes_metadata):
+        if getattr(ax, "label", None) != _PHONON_ORDER_LABEL:
+            continue
+        values = tuple(getattr(ax, "values", ()))
+        if "one" not in values:
             raise ValueError(
-                "unfold_loss_gain cannot be applied to a whole "
-                f"{_PHONON_ORDER_LABEL!r} stack {values}: the one-phonon "
-                "Bose weights are meaningful only for the 'one' channel. "
-                "The 'multi' channel's energy axis is the bin's mode energy, "
-                "not the energy transfer -- its same-mode two-phonon "
-                "processes sit at +2E, 0 and -2E, none at +/-E -- and 'all' "
-                "contains it. Select the one-phonon channel first, e.g. "
-                "unfold_loss_gain(dp[list(dp.ensemble_axes_metadata[0]"
-                ".values).index('one')], temperature)."
+                f"the {_PHONON_ORDER_LABEL!r} axis has values {values}, with "
+                "no 'one' channel to unfold. Loss/gain unfolding applies to "
+                "the one-phonon channel only."
             )
+        selected = measurement[
+            tuple(
+                values.index("one") if j == i else slice(None)
+                for j in range(len(axes_metadata))
+            )
+        ]
+        selected.metadata["phonon_loss_component"] = "one"
+        return selected
+    return measurement
 
 
 def _validate_snapshot_statistics(snapshot_statistics: str) -> None:
@@ -6997,10 +7009,17 @@ def unfold_loss_gain(
     ``n/(2n+1)`` for gain, which sum to 1 so the total spectral weight per
     energy magnitude is preserved. The zero-energy bin is passed through
     unweighted. This is what ``phonon_loss_diffraction_patterns(...,
-    temperature=...)`` does internally for ``component="tds"``; it is
-    exposed here so that a single channel of a parity-projected result --
-    the ``"one"`` slot, for which one-phonon weights are the right ones --
-    can be unfolded deliberately.
+    temperature=...)`` does internally for ``component="tds"``.
+
+    Given a parity-projected result -- one still carrying the
+    ``"Phonon order"`` axis ``("all", "one", "multi")``, whether a
+    :class:`DiffractionPatterns` or a :class:`MomentumResolvedSpectrum`
+    built from one -- the one-phonon channel is selected automatically and
+    the returned measurement no longer carries that axis. One-phonon Bose
+    weights are meaningful for that channel alone, so there is nothing to
+    choose: ``"multi"``'s energy axis is the bin's mode energy rather than
+    the energy transfer, and ``"all"`` contains it. Passing the ``"one"``
+    slot explicitly gives the same result.
 
     Parameters
     ----------
@@ -7033,8 +7052,9 @@ def unfold_loss_gain(
     # up front, so a misspelled name is reported as such rather than behind
     # whichever validation of the energies happens to fail first
     _validate_snapshot_statistics(snapshot_statistics)
-    # before either branch: the stacked channels survive into the spectrum
-    _refuse_unfolding_stacked_channels(measurement.ensemble_axes_metadata)
+    # before either branch: the stacked channels survive into the spectrum,
+    # and only the one-phonon one can be unfolded
+    measurement = _select_one_phonon_channel(measurement)
 
     if isinstance(measurement, MomentumResolvedSpectrum):
         # the energy is the last *base* axis here, not an ensemble axis

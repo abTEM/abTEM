@@ -523,33 +523,40 @@ class TestParityProjection:
         with pytest.raises(ValueError, match="unfold_loss_gain"):
             phonon_loss_diffraction_patterns(waves, temperature=300.0)
 
-    def test_unfold_loss_gain_refuses_the_whole_stack(self):
-        """phonon_loss_diffraction_patterns refuses temperature= for a
-        parity-projected ensemble, but the same physics error is reachable by
-        unfolding its stacked result directly -- the one-phonon Bose weights
-        would hit 'all' and 'multi' too. Both the patterns and the spectrum
-        carry the "Phonon order" axis, so both must refuse."""
+    def test_unfold_loss_gain_selects_the_one_phonon_channel_of_a_stack(self):
+        """One-phonon Bose weights apply to the 'one' channel alone, so
+        unfolding a whole "Phonon order" stack has only one possible meaning
+        and picks that channel itself rather than making the caller index the
+        axis by hand. The stack survives into the spectrum, so both forms
+        must do it, and both must equal passing the 'one' slot explicitly."""
         from abtem.detectors import SpectralSlitDetector
         from abtem.measurements import momentum_resolved_spectrum, unfold_loss_gain
 
         e_values = [0.0, 0.02, 0.05]
         waves = _make_parity_exit_waves(e_values, n_configs=6)
         dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
-
-        with pytest.raises(ValueError, match="Phonon order"):
-            unfold_loss_gain(dp, 300.0)
-
-        detector = SpectralSlitDetector(width=4.0, q_min=0.0, q_max=20.0)
-        with pytest.raises(ValueError, match="Phonon order"):
-            unfold_loss_gain(momentum_resolved_spectrum(dp, detector), 300.0)
-
-        # selecting a channel drops the axis, so the legitimate calls stand
         order = list(dp.ensemble_axes_metadata[0].values)
         one = dp[order.index("one")]
-        assert unfold_loss_gain(one, 300.0).array.shape[0] == 5
-        assert unfold_loss_gain(
+
+        auto = unfold_loss_gain(dp, 300.0)
+        manual = unfold_loss_gain(one, 300.0)
+        np.testing.assert_array_equal(auto.array, manual.array)
+        assert auto.metadata["phonon_loss_component"] == "one"
+        # the stacking axis is consumed, not carried through
+        assert not any(
+            getattr(ax, "label", None) == "Phonon order"
+            for ax in auto.ensemble_axes_metadata
+        )
+        assert auto.array.shape[0] == 5  # signed energies, no channel axis
+
+        # and the same through a MomentumResolvedSpectrum
+        detector = SpectralSlitDetector(width=4.0, q_min=0.0, q_max=20.0)
+        auto_spec = unfold_loss_gain(momentum_resolved_spectrum(dp, detector), 300.0)
+        manual_spec = unfold_loss_gain(
             momentum_resolved_spectrum(one, detector), 300.0
-        ).array.shape[-1] == 5
+        )
+        np.testing.assert_array_equal(auto_spec.array, manual_spec.array)
+        assert auto_spec.array.shape[-1] == 5
 
     def test_unfold_loss_gain_on_one_slot_matches_internal_unfolding(self):
         from abtem.measurements import unfold_loss_gain
