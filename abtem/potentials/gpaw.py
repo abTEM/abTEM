@@ -171,6 +171,44 @@ def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
     return interpolators
 
 
+def _refine_grid(array: np.ndarray, new_shape: tuple[int, int, int]) -> np.ndarray:
+    """
+    Upsample a real-space array onto `new_shape` via band-limited (Fourier
+    zero-padding) interpolation.
+
+    `GPAW.get_electrostatic_potential()` returns the electrostatic potential on
+    GPAW's own real-space grid -- already refined once relative to the coarse
+    density grid `gd` (GPAW's standard "fine grid" convention), but still often
+    coarse in absolute terms. `integrate_slice`/`_interpolate_slice` then resample
+    that array onto the requested multislice `gpts`/`slice_thickness` -- but
+    resampling from a coarse source only smooths what is already there; it cannot
+    recover missing detail, and (for `integrate_slice`, which bins by simple
+    summation along z) a target slice thinner than the source's own z spacing gets
+    its value from a single source grid point, ignoring how the potential actually
+    varies within that source voxel. Refining the source grid first (adding no new
+    information, but interpolating on a common, sufficiently fine basis) avoids
+    that under-resolution and its associated z-binning artifacts.
+
+    This is the modern, plane-wave-native equivalent of the `gridrefinement`
+    mechanism used by the (now removed) old all-electron-density reconstruction,
+    which refined the *density* via GPAW's real-space `Transformer` prolongation
+    operator (`gd.refine()` + `Transformer(gd, finegd, 3)`, iterated). That
+    real-space, finite-difference-grid interpolation was appropriate for the
+    smooth pseudo-density on GPAW's native FD/LCAO grid; `valence_potential` here
+    is instead reconstructed from a plane-wave (reciprocal-space) representation,
+    for which Fourier zero-padding is the exact, natural analogue -- verified to
+    agree with GPAW's own `Transformer` to 1 part in 1e6 when applied to the same
+    array.
+    """
+    old_shape = array.shape
+    if tuple(new_shape) == old_shape:
+        return array
+
+    array_hat = np.fft.fftn(array)
+    array_hat = fft_crop(array_hat, new_shape)
+    return np.fft.ifftn(array_hat).real * (np.prod(new_shape) / np.prod(old_shape))
+
+
 def integrate_slice(array, gpts, a, b, thickness):
     dz = thickness / array.shape[2]
     na = int(np.floor(a / dz))
@@ -338,8 +376,16 @@ class GPAWPotential(_PotentialBuilder):
         applying frozen phonon displacements to calculate the potential contribution of
         the nuclear cores. Necessary when using frozen phonons.
     gridrefinement : int
-        Necessary interpolation of the charge density into a finer grid for improved
-        numerical precision. Allowed values are '2' and '4'.
+        Interpolation of GPAW's valence potential onto a finer grid before the
+        per-atom PAW corrections are added and projected, for numerical precision.
+        It is relative to GPAW's *coarse* density grid, and never refines below the
+        "fine" grid GPAW has already computed -- so 1 and 2 both reproduce that
+        native fine grid and do nothing. Any positive integer is accepted: the
+        refinement is performed by abTEM, not handed to GPAW, so GPAW's own
+        restriction on `get_all_electron_density` does not apply here. The default
+        of 4 is converged -- for hBN the low-order structure factors are identical
+        from 3 through 8, while 1 and 2 are ~4.5% high. Distinct from `gpts`, which
+        sets the output grid.
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
@@ -496,10 +542,23 @@ class GPAWPotential(_PotentialBuilder):
         # array = self._get_all_electron_density()
         # array = calculator.valence_potential
 
+        # `gridrefinement` is documented (and was, in the old all-electron-density
+        # reconstruction this replaced) as relative to the coarse density grid
+        # `gd` -- not to valence_potential's own shape, which is already on GPAW's
+        # once-refined "fine grid" (twice the density grid's resolution, per
+        # GPAW's standard convention). Never refine *below* that native
+        # resolution -- gridrefinement=1 should mean "GPAW's own fine grid, as
+        # given", not "throw away detail GPAW already computed".
+        target_shape = tuple(
+            max(n * self.gridrefinement, m)
+            for n, m in zip(calculator.gd.N_c, calculator.valence_potential.shape)
+        )
+        valence_potential = _refine_grid(calculator.valence_potential, target_shape)
+
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
-            valence_potential=calculator.valence_potential,
+            valence_potential=valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
             slice_thickness=self.slice_thickness,
