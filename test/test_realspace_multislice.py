@@ -653,13 +653,13 @@ def test_realspace_multislice_non_orthogonal():
     pot = abtem.Potential(atoms, gpts=(144, 144), slice_thickness=st)
     assert not pot.grid.is_orthogonal
 
-    fourier = to_numpy(
+    fourier = to_host_array(
         abtem.PlaneWave(energy=100e3)
         .multislice(pot, algorithm=FourierMultislice())
         .compute()
         .array
     )
-    realspace = to_numpy(
+    realspace = to_host_array(
         abtem.PlaneWave(energy=100e3)
         .multislice(pot, algorithm=RealSpaceMultislice())
         .compute()
