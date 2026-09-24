@@ -660,3 +660,28 @@ def test_rest_snapshots_rejected_with_different_cell(equilibrium):
             snapshots, [0.02], equilibrium_atoms=equilibrium,
             parity_projection=True, rest_snapshots=rest,
         )
+
+
+def test_max_displacement_error_tells_flexural_from_mis_ordering():
+    """A mis-ordering scatters atoms in every direction; a 2D material's
+    flexural branch displaces them almost purely out of plane, and does so
+    legitimately (its amplitude grows with supercell size, so a large
+    sheet's lowest energy bins reach an Angstrom on their own). The error
+    has to say which it is looking at, or it sends the reader after a bug
+    that is not there."""
+    from ase.build import graphene
+
+    from abtem.inelastic.phonons import _validate_parity_snapshot
+
+    equilibrium = graphene(a=2.46, size=(4, 4, 1), vacuum=6.0)
+
+    rippled = equilibrium.copy()
+    rippled.positions[:, 2] += np.linspace(-1.4, 1.4, len(equilibrium))
+    with pytest.raises(ValueError, match="almost entirely out of plane"):
+        _validate_parity_snapshot(rippled, equilibrium, 1.0, (0, 0))
+
+    rng = np.random.default_rng(0)
+    scrambled = equilibrium.copy()
+    scrambled.positions = scrambled.positions[rng.permutation(len(equilibrium))]
+    with pytest.raises(ValueError, match="ordered differently"):
+        _validate_parity_snapshot(scrambled, equilibrium, 1.0, (0, 0))

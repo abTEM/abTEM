@@ -696,14 +696,37 @@ def _validate_parity_snapshot(
     largest = np.linalg.norm(displacement, axis=1)
     worst = int(np.argmax(largest))
     if largest[worst] > max_displacement:
+        # A mis-ordering scatters atoms in every direction, while a 2D
+        # material's flexural (ZA) branch displaces them almost purely out
+        # of plane -- its omega ~ q^2 makes the longest-wavelength
+        # amplitudes diverge with supercell size, so a large sheet's
+        # lowest energy bins are genuinely ripple, not a bug. The two are
+        # told apart by how the displacement is distributed, so say which
+        # this one looks like rather than guessing at the cause.
+        out_of_plane = np.abs(displacement[:, 2])
+        in_plane = np.linalg.norm(displacement[:, :2], axis=1)
+        flexural = out_of_plane.max() > 5 * max(in_plane.max(), 1e-12)
+        if flexural:
+            diagnosis = (
+                "The displacement is almost entirely out of plane "
+                f"(largest |u_z| {out_of_plane.max():.3f} Å vs in-plane "
+                f"{in_plane.max():.3f} Å), which on a 2D material is the "
+                "flexural branch rather than a mis-ordering: its amplitude "
+                "grows with supercell size, so a large sheet's lowest "
+                "energy bins reach this legitimately. Raise "
+                "max_displacement if so."
+            )
+        else:
+            diagnosis = (
+                "This usually means the snapshot and equilibrium_atoms are "
+                "ordered differently (or equilibrium_atoms is not the "
+                "structure the snapshots were displaced from)."
+            )
         raise ValueError(
             f"atom {worst} of snapshot {index} is displaced by "
             f"{largest[worst]:.3f} Å from equilibrium_atoms, more than "
-            f"max_displacement={max_displacement} Å. This usually means the "
-            "snapshot and equilibrium_atoms are ordered differently (or "
-            "equilibrium_atoms is not the structure the snapshots were "
-            "displaced from). Pass max_displacement=None to disable the "
-            "check if the displacement is genuine."
+            f"max_displacement={max_displacement} Å. {diagnosis} Pass "
+            "max_displacement=None to disable the check entirely."
         )
 
 
