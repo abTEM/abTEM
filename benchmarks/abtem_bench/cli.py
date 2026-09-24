@@ -143,6 +143,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         speed_threshold=args.speed_threshold,
         memory_threshold=args.memory_threshold,
         allow_case_mismatch=args.allow_case_mismatch,
+        min_time=args.min_time,
     )
     md = cmp.to_markdown(report)
     if args.md:
@@ -217,6 +218,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--speed-threshold", type=float, default=0.10)
     s.add_argument("--memory-threshold", type=float, default=0.05)
+    s.add_argument(
+        "--min-time",
+        type=float,
+        default=0.5,
+        help="seconds; a speed ratio beyond threshold on a shorter run is marked "
+        "'short' instead of flagged",
+    )
     s.add_argument("--allow-case-mismatch", action="store_true")
     s.add_argument("--md", help="write the Markdown report here")
     s.add_argument("--json", help="write the JSON report here")

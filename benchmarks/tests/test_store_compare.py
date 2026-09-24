@@ -107,6 +107,15 @@ def test_compare_verdicts(tmp_path, registry_with_demo):
         1.5
     )
 
+    # a large ratio on a sub-second run is marked short, not flagged as speed
+    brief_ref = _bundle(
+        tmp_path, "bref", {cid: (_record(median=0.09), {"out": (ref_arr, [], {})})}
+    )
+    brief = cmp.compare(
+        brief_ref, cand("c7", ref_arr.copy(), median=0.13), registry_with_demo
+    )
+    assert brief.rows[0].flags == ["short"] and brief.failures(["speed"]) == []
+
     fat = cmp.compare(
         ref, cand("c6", ref_arr.copy(), rss=120 * 1024**2), registry_with_demo
     )
