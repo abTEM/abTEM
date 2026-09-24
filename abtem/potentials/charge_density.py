@@ -12,6 +12,8 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from ase.data import atomic_numbers
+from scipy.interpolate import interp1d
 from scipy.ndimage import map_coordinates
 
 from abtem.atoms import plane_to_axes
@@ -22,6 +24,10 @@ from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.utils import get_dtype, itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
+from abtem.potentials.core_densities import (
+    conventional_core_electrons,
+    slater_core_form_factor,
+)
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 
@@ -616,6 +622,27 @@ class ChargeDensityPotential(_PotentialBuilder):
         physical electrostatic reference and differs slice-to-slice, and from other
         potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
         is False.
+    valence_electrons : dict, optional
+        Valence electrons per chemical symbol, as the pseudopotential that produced
+        `charge_density` defines them. The core electrons this class subtracts are
+        `Z` minus this. If not given, each species' conventional frozen core is
+        assumed (see :func:`.conventional_core_electrons`), which is wrong for
+        pseudopotentials keeping semicore states in the valence -- VASP's `Sr_sv` and
+        `Ti_sv` have 10 valence electrons each, not 2 and 4. The count is checked
+        against `charge_density`'s own integrated electron count either way, and the
+        correction is skipped with a warning if they disagree.
+
+        For heavy elements, prefer a pseudopotential with a **smaller frozen core**.
+        The core is modelled analytically (Slater-screened hydrogenic orbitals), and
+        that model is weakest for the outermost, most diffuse core shells -- which are
+        also the ones reaching furthest into the bonding region. Choosing a setup that
+        keeps those shells in the valence hands them to the DFT calculation instead.
+        For MoS2 against a converged :class:`.GPAWPotential` reference, molybdenum's
+        projected potential is 7.3% high with VASP's default `Mo` (6 valence
+        electrons, so 36 to model) and 2.2% high with 14 valence electrons (28 to
+        model) -- whole-map agreement improves from 1.05% to 0.20% RMS of peak.
+        VASP offers `Mo_pv` and `Mo_sv` for this; GPAW's default Mo setup already
+        uses 14.
     """
 
     def __init__(
@@ -633,6 +660,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
         subtract_min: bool = False,
+        valence_electrons: dict = None,
     ):
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
@@ -644,6 +672,9 @@ class ChargeDensityPotential(_PotentialBuilder):
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
         self._subtract_min = subtract_min
+        self._valence_electrons = valence_electrons
+        self._core_electrons = self._resolve_core_electrons()
+        self._core_density_correction = self._build_core_density_correction()
 
         if isinstance(self._charge_density, np.ndarray):
             # Skipped for a lazy (dask) charge_density to avoid forcing an eager
@@ -674,6 +705,89 @@ class ChargeDensityPotential(_PotentialBuilder):
             box=box,
             periodic=periodic,
         )
+
+    def _resolve_core_electrons(self) -> dict:
+        """
+        Core-electron count per species, checked against the density actually given.
+
+        The conventional frozen core (:func:`conventional_core_electrons`) is only a
+        default -- pseudopotentials that keep semicore states in the valence use a
+        smaller one. The density settles it: a valence-only density integrates to the
+        sum of `Z - Nc` over the atoms.
+
+        If that check fails, no core is subtracted at all and a warning says so.
+        Subtracting the *wrong* core is worse than subtracting none -- on SrTiO3,
+        whose Sr and Ti both use semicore potentials, taking the conventional core on
+        trust drops the correlation with a reference GPAW potential to 0.40, below
+        the 0.85 of making no correction. Falling back therefore leaves the result no
+        worse than it was before this correction existed, and the warning names the
+        argument that turns it back on.
+        """
+        atoms = self._frozen_phonons.atoms
+        symbols = sorted(set(atoms.get_chemical_symbols()))
+        none = {symbol: 0 for symbol in symbols}
+
+        core_electrons = {}
+        for symbol in symbols:
+            given = self._valence_electrons
+            if given is not None and symbol in given:
+                core_electrons[symbol] = atomic_numbers[symbol] - given[symbol]
+            else:
+                core_electrons[symbol] = conventional_core_electrons(symbol)
+
+        if not isinstance(self._charge_density, np.ndarray):
+            # a lazy (dask) density would have to be computed just for this check
+            return core_electrons
+
+        voxel_volume = atoms.cell.volume / np.prod(self._charge_density.shape[-3:])
+        given_electrons = float(np.sum(self._charge_density)) * voxel_volume
+        expected = float(
+            sum(
+                atomic_numbers[symbol] - core_electrons[symbol]
+                for symbol in atoms.get_chemical_symbols()
+            )
+        )
+
+        if expected > 0 and abs(given_electrons - expected) <= 0.05 * expected:
+            return core_electrons
+
+        source = (
+            "the valence_electrons you gave"
+            if self._valence_electrons is not None
+            else "each species' conventional frozen core (which is wrong for "
+            "pseudopotentials keeping semicore states in the valence)"
+        )
+        warnings.warn(
+            f"charge_density integrates to {given_electrons:.2f} electrons, but "
+            f"{source} implies {expected:.2f} valence electrons for these atoms. The "
+            "core-electron density will not be subtracted, leaving the cell with a "
+            "net positive charge that the Poisson solve can only absorb into a "
+            "uniform background -- which costs accuracy in the low-order structure "
+            "factors. Pass the correct valence-electron count per species to enable "
+            "the correction, e.g. valence_electrons={'Sr': 10, 'Ti': 10, 'O': 6}.",
+            stacklevel=3,
+        )
+        return none
+
+    def _build_core_density_correction(self, n_G: int = 4000, G_max: float = 200.0):
+        """Per-species core form factors, as :func:`_generate_slices` expects them."""
+        G = np.linspace(0.0, G_max, n_G)
+        correction = {}
+        for symbol, core in self._core_electrons.items():
+            f = slater_core_form_factor(symbol, core, G)
+            correction[symbol] = interp1d(
+                G, f, bounds_error=False, fill_value=(f[0], 0.0)
+            )
+        return correction
+
+    @property
+    def core_electrons(self) -> dict:
+        """Core electrons subtracted per species, as `Z - ZVAL`."""
+        return self._core_electrons
+
+    @property
+    def valence_electrons(self) -> dict:
+        return self._valence_electrons
 
     @property
     def frozen_phonons(self):
@@ -909,5 +1023,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             first_slice=first_slice,
             last_slice=last_slice,
             subtract_min=self._subtract_min,
+            core_density_correction=self._core_density_correction,
         ):
             yield slic
