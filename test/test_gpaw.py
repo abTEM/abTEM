@@ -204,7 +204,13 @@ def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
 
     gpaw_potential_from_disk = GPAWPotential(path, gpts=(32, 32))
     gpaw_potential_from_disk = gpaw_potential_from_disk.build().compute()
-    assert gpaw_potential_from_disk == gpaw_potential
+    _live = np.asarray(gpaw_potential.array)
+    _disk = np.asarray(gpaw_potential_from_disk.array)
+    assert gpaw_potential_from_disk == gpaw_potential, (
+        "potential built from a live calculator differs from one built from the same "
+        f"calculator written to disk: max |diff| = {np.abs(_disk - _live).max():.3e}, "
+        f"{int((_disk != _live).sum())}/{_live.size} elements differ"
+    )
 
     gpaw_potential_from_disk_with_fp = GPAWPotential([path] * 2, gpts=(32, 32))
     gpaw_potential_from_disk_with_fp = (
@@ -212,9 +218,12 @@ def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
     )
 
     assert gpaw_potential_from_disk_with_fp.ensemble_shape == (2,)
-    assert np.all(
-        gpaw_potential_from_disk_with_fp.array[0]
-        == gpaw_potential_from_disk_with_fp.array[1]
+    _first = np.asarray(gpaw_potential_from_disk_with_fp.array[0])
+    _second = np.asarray(gpaw_potential_from_disk_with_fp.array[1])
+    assert np.all(_first == _second), (
+        "two ensemble configurations built from the SAME file differ: max |diff| = "
+        f"{np.abs(_first - _second).max():.3e}, "
+        f"{int((_first != _second).sum())}/{_first.size} elements differ"
     )
 
 
