@@ -6803,6 +6803,38 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
 _SNAPSHOT_STATISTICS = ("quantum", "classical")
 
+#: Label of the axis stacking the parity-projected phonon-loss channels.
+#: Its presence is what marks a measurement as still holding all three
+#: channels, rather than one selected from them.
+_PHONON_ORDER_LABEL = "Phonon order"
+
+
+def _refuse_unfolding_stacked_channels(axes_metadata: list) -> None:
+    """Refuse loss/gain unfolding of a whole parity-projected stack.
+
+    ``phonon_loss_diffraction_patterns`` already refuses ``temperature`` for
+    a parity-projected ensemble, but the same physics error is reachable by
+    unfolding its stacked result directly: the one-phonon Bose weights would
+    be applied to the ``"all"`` and ``"multi"`` channels too, whose energy
+    axis is the bin's mode energy rather than the energy transfer. Selecting
+    a single channel drops this axis, so the legitimate call on the ``"one"``
+    slot is unaffected.
+    """
+    for ax in axes_metadata:
+        if getattr(ax, "label", None) == _PHONON_ORDER_LABEL:
+            values = tuple(getattr(ax, "values", ()))
+            raise ValueError(
+                "unfold_loss_gain cannot be applied to a whole "
+                f"{_PHONON_ORDER_LABEL!r} stack {values}: the one-phonon "
+                "Bose weights are meaningful only for the 'one' channel. "
+                "The 'multi' channel's energy axis is the bin's mode energy, "
+                "not the energy transfer -- its same-mode two-phonon "
+                "processes sit at +2E, 0 and -2E, none at +/-E -- and 'all' "
+                "contains it. Select the one-phonon channel first, e.g. "
+                "unfold_loss_gain(dp[list(dp.ensemble_axes_metadata[0]"
+                ".values).index('one')], temperature)."
+            )
+
 
 def _validate_snapshot_statistics(snapshot_statistics: str) -> None:
     """Check ``snapshot_statistics`` against the accepted names.
@@ -7001,6 +7033,8 @@ def unfold_loss_gain(
     # up front, so a misspelled name is reported as such rather than behind
     # whichever validation of the energies happens to fail first
     _validate_snapshot_statistics(snapshot_statistics)
+    # before either branch: the stacked channels survive into the spectrum
+    _refuse_unfolding_stacked_channels(measurement.ensemble_axes_metadata)
 
     if isinstance(measurement, MomentumResolvedSpectrum):
         # the energy is the last *base* axis here, not an ensemble axis
@@ -7361,7 +7395,7 @@ def _phonon_loss_diffraction_patterns_parity_projection(
     result_array = stack_fn([I_all, I_one, I_multi], axis=0)
 
     phonon_order_axis = OrdinalAxis(
-        label="Phonon order", values=("all", "one", "multi")
+        label=_PHONON_ORDER_LABEL, values=("all", "one", "multi")
     )
     remaining_axes = [phonon_order_axis] + remaining_axes
 
