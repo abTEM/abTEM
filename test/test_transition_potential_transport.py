@@ -1,5 +1,6 @@
 """Transition potentials travel as single graph nodes, not per-task copies."""
 
+import ase
 import cloudpickle
 import numpy as np
 import pytest
@@ -8,6 +9,12 @@ import abtem
 from abtem.core import config
 
 from utils import synthetic_transition_potential
+
+
+def _bn_atoms():
+    return ase.Atoms(
+        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -26,11 +33,7 @@ def _synthetic_tp(gpts=(64, 64), extent=(8.0, 8.0), energy=60e3, n_transitions=4
 
 
 def _setup(gpts=(64, 64)):
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2.0)
     # Matched to the probe: a built TransitionPotentialArray whose energy
     # disagrees with the waves is refused outright by the driver's guard
@@ -56,6 +59,148 @@ def _scan(probe, potential, tp, scan, sites, lazy=True, threshold=1.0, **kwargs)
         transition_potentials=tp, double_channel=False, sites=sites,
         max_batch=2, threshold=threshold, lazy=lazy, **kwargs,
     )
+
+
+class TestDelayedTransitionPotentialMemo:
+    """`dask.delayed(tp, pure=True)` tokenizes the whole payload via a
+    content hash (~0.4 ms/MB); a sweep calling `transition_potential_scan`
+    many times against the same live object used to pay that on every call.
+    `_as_pure_delayed()` memoizes it on the object itself."""
+
+    def test_repeated_calls_return_the_same_delayed_object(self):
+        tp = _synthetic_tp()
+        first = tp._as_pure_delayed()
+        second = tp._as_pure_delayed()
+        assert first is second
+
+    def test_distinct_objects_get_distinct_delayed_nodes(self):
+        a = _synthetic_tp(seed=0)
+        b = _synthetic_tp(seed=1)
+        assert a._as_pure_delayed() is not b._as_pure_delayed()
+
+    def test_memoized_call_skips_the_content_hash(self, monkeypatch):
+        import dask
+
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()  # first call: real tokenize
+
+        calls = []
+        real_delayed = dask.delayed
+        monkeypatch.setattr(
+            dask, "delayed", lambda *a, **k: calls.append((a, k)) or real_delayed(*a, **k)
+        )
+        tp._as_pure_delayed()
+        tp._as_pure_delayed()
+        assert calls == []  # memo hit both times, dask.delayed never called again
+
+    def test_prism_scan_gives_the_same_result_called_twice(self):
+        """Reusing the memoized node across two separate graph builds must
+        not change the computed result -- pure=True already guarantees the
+        same content tokenizes to the same key regardless of memoization,
+        but this checks the actual observable behaviour at the call site
+        the fix touches (abtem/prism/s_matrix.py), not just the token."""
+        potential, tp, _, scan, sites = _setup()
+        tp = _synthetic_tp(gpts=potential.gpts, extent=potential.extent)
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=60e3, semiangle_cutoff=32, interpolation=1
+        )
+
+        def run():
+            m = s_matrix.transition_potential_scan(
+                transition_potentials=tp, scan=scan,
+                detectors=abtem.FlexibleAnnularDetector(), sites=sites,
+                double_channel=False, lazy=True,
+            ).compute(progress_bar=False)
+            return np.asarray(m.to_cpu().array)
+
+        first = run()
+        second = run()  # tp._delayed_pure_node is already populated here
+        assert np.array_equal(first, second)
+
+    def test_pickling_drops_the_memoized_node(self):
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()
+        assert tp._delayed_pure_node is not None
+
+        restored = cloudpickle.loads(cloudpickle.dumps(tp))
+        assert restored._delayed_pure_node is None
+        # a fresh call still works and produces an equivalent result
+        assert np.array_equal(
+            restored._as_pure_delayed().compute().array, tp.array
+        )
+
+    def test_equal_objects_compare_equal_regardless_of_memo_state(self):
+        a = _synthetic_tp(seed=7)
+        b = _synthetic_tp(seed=7)
+        a._as_pure_delayed()  # only a's memo is populated
+        assert a == b
+
+    def test_task_local_copy_of_a_bare_transition_potential_still_shares_state(self):
+        """Regression guard for adding __getstate__ to the shared
+        BaseTransitionPotential base: TransitionPotential (unbuilt, no
+        __copy__ of its own, so copy.copy goes through __getstate__) must
+        still get a _task_local() copy that shares everything except the
+        one thing __getstate__ deliberately resets."""
+        from abtem.inelastic.core_loss import TransitionPotential
+
+        transitions = ["marker"]
+        tp = TransitionPotential(
+            Z=5, transitions=transitions, extent=(8.0, 8.0), gpts=(32, 32), energy=100e3
+        )
+        tp._as_pure_delayed()
+        view = tp._task_local()
+
+        assert view is not tp
+        # _grid/_accelerator are deliberately privatized by _task_local, but
+        # everything else -- untouched by this fix -- stays shared by
+        # reference, per its docstring ("everything else stays shared").
+        assert view._grid is not tp._grid
+        assert view._transitions is tp._transitions
+        # __getstate__ resets this on any copy (pickling or copy.copy alike),
+        # since it wraps tp itself -- see _as_pure_delayed's docstring.
+        assert view._delayed_pure_node is None
+        assert tp._delayed_pure_node is not None  # the original's memo is untouched
+
+    def test_task_local_copy_of_an_array_transition_potential_shares_the_memo(self):
+        """Counterpart to the bare-TransitionPotential test above:
+        TransitionPotentialArray.__copy__ shares __dict__ by reference
+        instead of routing through __getstate__ (see that method's own
+        comment), so a _task_local() view of an array TP does NOT get
+        _delayed_pure_node blanked -- it shares the same Delayed object.
+        Harmless today because _as_pure_delayed is never called on such a
+        view and pickling still blanks the memo via __getstate__ before the
+        view reaches a worker; this test pins that behaviour down so a
+        future change either preserves it or updates the documented
+        invariant in _task_local's docstring alongside it."""
+        tp = _synthetic_tp()
+        tp._as_pure_delayed()
+        view = tp._task_local()
+
+        assert view is not tp
+        assert view._delayed_pure_node is tp._delayed_pure_node
+
+    def test_memo_key_goes_stale_under_in_place_mutation(self):
+        """Pins down the residual hazard _as_pure_delayed's docstring now
+        documents: the memo is identity-keyed and so survives rebinding,
+        but the underlying dask.delayed(..., pure=True) key is a content
+        hash frozen at first call. Mutating the payload buffer in place
+        after that leaves the memoized key describing stale content even
+        though the node still wraps a live (now-mutated) `self` -- the same
+        hazard a cached content hash would have. Nothing under abtem/
+        mutates a transition potential's array in place today, so this is
+        latent, not a defect to fix; the test exists so the invariant stays
+        verified rather than merely asserted in prose."""
+        import dask
+
+        tp = _synthetic_tp()
+        stale_key = tp._as_pure_delayed().key
+
+        tp.array[0, 0, 0] += 1.0
+        memoized_key = tp._as_pure_delayed().key
+        fresh_key = dask.delayed(tp, pure=True).key
+
+        assert memoized_key == stale_key
+        assert memoized_key != fresh_key
 
 
 def test_graph_carries_the_transition_potential_once():
@@ -124,7 +269,15 @@ def test_graph_computes_on_a_distributed_cluster_and_survives_client_loss():
 
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1,
-        dashboard_address=None,
+        # dashboard_address=None does NOT pick a random port -- Scheduler's
+        # start_http_server does `dashboard_address or default_port`, so
+        # None falls through to the hardcoded default (8787). Two of these
+        # running concurrently (e.g. under pytest-xdist -n auto) then race
+        # for that one port; the loser gets a UserWarning promoted to a hard
+        # failure by this repo's filterwarnings=["error", ...]. ":0" is the
+        # actual "pick an ephemeral port" spelling, already used correctly
+        # by every LocalCluster(...) call in test_multigpu_logic.py.
+        dashboard_address=":0",
     ) as cluster, distributed.Client(cluster):
         on_cluster = np.asarray(
             lazy.copy().compute(progress_bar=False).to_cpu().array
@@ -250,11 +403,7 @@ def test_prism_threaded_and_synchronous_schedulers_refuse_a_mismatch_alike():
     that only some threads see, or that corrupts partial state before
     raising, would be worse than no guard at all.
     """
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     phonons = abtem.FrozenPhonons(atoms, num_configs=4, sigmas=0.05, seed=11)
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
     # Energy differs from the S-matrix: every task's guard must fire.
@@ -285,11 +434,7 @@ def test_prism_graph_carries_the_transition_potential_once():
     """The PRISM path's transport needs its own assertion: without the
     delayed wrapper dask would embed one copy per ensemble block, and the
     result-only tests above would not notice."""
-    import ase
-
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     phonons = abtem.FrozenPhonons(atoms, num_configs=6, sigmas=0.05, seed=3)
     potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
     tp = _synthetic_tp(extent=potential.extent, energy=80e3)
@@ -318,15 +463,12 @@ def test_reconstructor_without_its_graph_node_args_fails_clearly():
     """Calling the partial from _from_partitioned_args with only the
     potential's args used to die inside the potential's own reconstructor,
     naming a function the caller never invoked."""
-    import ase
-
     from abtem.multislice import (
         MultisliceTransform,
         transition_potential_multislice_and_detect,
     )
 
-    atoms = ase.Atoms("BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
-                      cell=(8, 8, 4), pbc=True)
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
     tp = _synthetic_tp(extent=potential.extent, energy=80e3)
     transform = MultisliceTransform(
@@ -356,8 +498,6 @@ def test_prism_matches_the_grid_before_building():
     unbuilt transition potential that multislice accepts. Uses a stub rather
     than real `SubshellTransitions` so it runs without GPAW.
     """
-    import ase
-
     from abtem.inelastic.core_loss import TransitionPotential
 
     class _RecordingTransitionPotential(TransitionPotential):
@@ -378,9 +518,7 @@ def test_prism_matches_the_grid_before_building():
             assert self.gpts is not None, "build() called before the grid was matched"
             return _synthetic_tp(gpts=self.gpts, extent=self.extent, energy=self.energy)
 
-    atoms = ase.Atoms(
-        "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4), pbc=True
-    )
+    atoms = _bn_atoms()
     potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
     scan = abtem.GridScan(
         start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential

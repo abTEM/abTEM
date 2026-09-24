@@ -276,17 +276,17 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def integrate_on_grid(
         self,
-        positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
+        atoms: Atoms,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
         cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
-        Integrate radial potential between two limits at the given 2D positions on a
-        grid. The integration limits are only used when the integration method is
+        Integrate radial potential between two limits at the given atomic positions on
+        a grid. The integration limits are only used when the integration method is
         finite.
 
         ``cell`` is an optional 2x2 real-space cell (rows are the in-plane lattice
@@ -294,16 +294,14 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        positions : numpy.ndarray
-            2D array of xy-positions of the centers of each radial function [Å].
-        a : numpy.ndarray
-            Lower integration limit of the pr
-            ojection integrals along z for each position [Å]. The limit is given
-            relative to the center of the radial function.
-        b : numpy.ndarray
-            Upper integration limit of the projection integrals along z for each
-            position [Å]. The limit is given relative to the center of the radial
-            function.
+        atoms : ase.Atoms
+            The atoms whose radial functions are integrated onto the grid.
+        a : float
+            Lower integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
+        b : float
+            Upper integration limit of the projection integrals along z [Å]. The limit
+            is given relative to the center of the radial function.
         gpts : two int
             Number of grid points in `x` and `y` describing each slice of the potential.
         sampling : two float
@@ -720,8 +718,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -997,8 +995,8 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",

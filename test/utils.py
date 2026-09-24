@@ -1,11 +1,12 @@
 from typing import Iterable
 
+import ase.build
 import dask.array as da
 import numpy as np
 import pytest
 from hypothesis import assume
 
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.potentials.iam import Potential
 from abtem.waves import Waves
@@ -138,11 +139,52 @@ gpu = pytest.param(
     "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
 )
 
+
+class _GpuRequirement:
+    """A composite decorator: applies both the wrapped ``skipif`` and a
+    dedicated, condition-free ``pytest.mark.gpu`` alongside it.
+
+    ``conftest.py``'s GPU-worker-grouping hook prefers that marker's mere
+    presence over matching the skipif's ``reason=`` text, since the marker
+    survives a reword of that text where a string match would not. A
+    class (rather than a plain function with attributes bolted on) so
+    ``.marks``/``.mark`` below are properly typed, not dynamic attributes
+    mypy can't see.
+
+    Usable as a bare decorator (``@requires_gpu``) directly; ``.marks``
+    exists for the one place that needs actual ``Mark``-compatible objects
+    instead of a decorator -- ``pytest.param(..., marks=requires_gpu.marks)``
+    -- and ``.mark`` exposes the skipif's own ``Mark`` (reason text
+    included) for ``conftest.py``'s fallback check.
+    """
+
+    def __init__(self, skipif: "pytest.MarkDecorator"):
+        self._skipif = skipif
+        self.marks: tuple["pytest.MarkDecorator", "pytest.MarkDecorator"] = (
+            pytest.mark.gpu,
+            skipif,
+        )
+        self.mark = skipif.mark
+
+    def __call__(self, func):
+        func = self._skipif(func)
+        return pytest.mark.gpu(func)
+
+
 # The same gate as a standalone marker, for tests that are GPU-only rather than
 # parametrized over devices. Several files had hand-rolled `skipif(cp is None)`
 # or a bare `importorskip("cupy")`, both of which ask whether cupy is installed
 # rather than whether a device exists.
-requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+requires_gpu = _GpuRequirement(pytest.mark.skipif(_gpu_count() < 1, reason="no gpu"))
+
+
+# Shared `device`/`lazy` parametrize decorators. Every test file used to
+# spell `@pytest.mark.parametrize("device", ["cpu", gpu])` (or the
+# argument-order-flipped `[gpu, "cpu"]`) inline; that copy-paste had drifted
+# into two orderings with no functional difference. Use these two decorators
+# instead so the order/spelling is uniform everywhere.
+devices = pytest.mark.parametrize("device", [gpu, "cpu"])
+lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
 
 try:
@@ -156,9 +198,19 @@ except ImportError:
 # Skip marker for tests that genuinely need to distribute across GPUs: they
 # require both >=2 GPUs and dask-cuda (one worker process per GPU). Use together
 # with `pytest.mark.multigpu` so the suite can be selected with `-m multigpu`.
-requires_multigpu = pytest.mark.skipif(
-    _gpu_count() < 2 or not _HAS_DASK_CUDA,
-    reason="requires >=2 GPUs and dask-cuda",
+#
+# Also applies pytest.mark.gpu via the same _GpuRequirement as requires_gpu
+# above -- requires_multigpu tests already carry the separate `multigpu`
+# marker too (applied explicitly alongside this one wherever it's used),
+# which conftest.py's grouping hook already checks independently of
+# anything here; this is for symmetry with requires_gpu, so a
+# requires_multigpu-only test (if one is ever written without the
+# `multigpu` marker) is still caught.
+requires_multigpu = _GpuRequirement(
+    pytest.mark.skipif(
+        _gpu_count() < 2 or not _HAS_DASK_CUDA,
+        reason="requires >=2 GPUs and dask-cuda",
+    )
 )
 
 
@@ -169,6 +221,7 @@ def synthetic_transition_potential(
     energy: float | None = 100e3,
     n_transitions: int = 2,
     seed: int = 0,
+    device: str = "cpu",
 ):
     """A seeded ``TransitionPotentialArray`` with a synthetic payload.
 
@@ -180,11 +233,14 @@ def synthetic_transition_potential(
     from abtem.core.axes import OrdinalAxis
     from abtem.inelastic.core_loss import TransitionPotentialArray
 
+    xp = cp if device == "gpu" else np
     rng = np.random.default_rng(seed)
-    array = (
-        rng.standard_normal((n_transitions, *gpts))
-        + 1j * rng.standard_normal((n_transitions, *gpts))
-    ).astype(np.complex64)
+    array = xp.asarray(
+        (
+            rng.standard_normal((n_transitions, *gpts))
+            + 1j * rng.standard_normal((n_transitions, *gpts))
+        ).astype(np.complex64)
+    )
     return TransitionPotentialArray(
         Z=Z,
         array=array,
@@ -193,3 +249,32 @@ def synthetic_transition_potential(
         ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
         metadata={"Z": Z, "n": 1, "l": 0},
     )
+
+
+def to_host_array(measurement):
+    """The array of a measurement, wave function, or bare array, on the host.
+
+    Detectors return host arrays by default, but reductions to wave functions
+    and their derived measurements may stay on the device (and can be dask-
+    or cupy-backed), so cross-device/laziness comparisons should go through
+    this rather than each test reimplementing the unwrap-then-convert dance.
+    """
+    array = measurement.array if hasattr(measurement, "array") else measurement
+    if isinstance(array, da.core.Array):
+        array = array.compute()
+    return asnumpy(array)
+
+
+def si_cubic_atoms():
+    """A cubic-conventional-cell Si ``Atoms`` (diamond structure)."""
+    return ase.build.bulk("Si", cubic=True)
+
+
+def si_diamond_atoms():
+    """The same cubic-conventional-cell diamond Si, built explicitly.
+
+    Equivalent to :func:`si_cubic_atoms`; kept as a separate name for tests
+    that spell out ``crystalstructure="diamond", a=5.43`` explicitly rather
+    than relying on ASE's default lattice constant for Si.
+    """
+    return ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)

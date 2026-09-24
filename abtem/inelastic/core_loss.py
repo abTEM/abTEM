@@ -9,6 +9,7 @@ from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
 from typing import TYPE_CHECKING, Self
 
+import dask
 import numpy as np
 from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
@@ -33,7 +34,7 @@ from abtem.core.backend import (
     copy_to_device,
     get_array_module,
 )
-from abtem.core.chunks import estimate_scan_batch_size, validate_chunks
+from abtem.core.chunks import _ceil_to_multiple, estimate_scan_batch_size, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -280,6 +281,29 @@ _CONTINUUM_CENTRIFUGAL_TOLERANCE = 0.02
 
 # Fraction of the grid, measured from the outer edge, used to read the amplitude.
 _ASYMPTOTIC_REGION_FRACTION = 0.25
+
+# generate_scattered_waves pads each site chunk up to a multiple of this before
+# scattering, so the ifft2 batch shape depends on the bucket rather than on
+# the data-dependent surviving-site count. 8 measured at ~10 % average
+# padding slack with 32 distinct shapes for a 256-site max_batch, comfortably
+# inside the cuFFT plan cache #378 sized to 64 entries; a smaller multiple
+# pads less but lets more distinct shapes through, a larger one the reverse.
+# That 10 % figure only holds once a chunk is comfortably above the bucket
+# size -- see generate_scattered_waves's site_ceiling, which caps how far a
+# small, memory-budget-limited chunk is allowed to pad.
+_SCATTER_BATCH_BUCKET = 8
+
+# Sentinel axis length used to probe validate_chunks for the real per-chunk
+# site ceiling max_batch/the VRAM budget allows, far larger than any
+# max_elements-derived chunk size on any real device -- 2**24 sites is
+# already a multi-hundred-GB chunk at any real gpts/dtype. The probe's cost
+# does not scale with this constant the way it first looked like it did (a
+# quarter-million-entry chunk tuple at a 10**9 sentinel was not the
+# bottleneck -- shrinking it to 2**24's ~1000-entry tuple barely moved the
+# measured cost), so this is sized for correctness margin, not performance;
+# see _get_site_ceiling for how the actual per-call cost is avoided
+# (memoization, not sentinel tuning).
+_SCATTER_BATCH_CEILING_PROBE_SITES = 2**24
 
 
 def _continuum_radial_grid(ef: float, lprime: int) -> np.ndarray:
@@ -594,7 +618,59 @@ class BaseTransitionPotential(
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._double_channel = double_channel
+        # Memo for _as_pure_delayed, keyed by nothing but object identity --
+        # see that method.
+        self._delayed_pure_node = None
         super().__init__(**kwargs)
+
+    def _as_pure_delayed(self):
+        """A ``dask.delayed(self, pure=True)`` wrapper, memoized on this object.
+
+        Computing this tokenizes the whole payload via a content hash (dask's
+        ``_normalize_pickle`` fallback for objects with no
+        ``__dask_tokenize__``), which costs ~0.4 ms per MB of the underlying
+        array. Building the same scan graph many times against the same live
+        object -- a frozen-phonon or energy sweep reusing one transition
+        potential -- currently pays that cost on every call; memoizing here
+        means it pays it once.
+
+        Identity-keyed rather than content-keyed: an id()-based token would
+        be unsafe on its own (ids are reused after garbage collection, and
+        using one to build a token breaks determinism across processes), but
+        caching the ``Delayed`` as an attribute of the object it wraps
+        sidesteps that -- there is exactly one per live object, and it is
+        dropped before this object is ever pickled (see ``__getstate__``), so
+        a stale copy can never outlive the object it was built from.
+
+        This memo is only valid while the wrapped object's payload is not
+        mutated in place after the first call. The cached ``Delayed``'s dask
+        *key* is frozen from the content tokenized at that first call, but
+        the node still wraps a live reference to ``self``; an in-place edit
+        to ``self.array`` (or to any other state dask would tokenize) leaves
+        the key describing stale content while the node computes against
+        whatever ``self`` currently holds -- the same staleness hazard a
+        cached content hash would have, just moved one level up rather than
+        eliminated. Nothing under ``abtem/`` mutates a transition potential's
+        payload in place after handing it to ``transition_potential_scan``
+        today, so the risk is latent rather than live; a caller that does
+        would need to build its own fresh ``dask.delayed`` instead of going
+        through this memo.
+        """
+        if self._delayed_pure_node is None:
+            self._delayed_pure_node = dask.delayed(self, pure=True)
+        return self._delayed_pure_node
+
+    def __getstate__(self):
+        # The memoized node wraps self -- pickling it verbatim alongside self
+        # would embed a self-referential graph node inside the pickle, which
+        # at best doubles the payload for no benefit (the memo is a
+        # per-process, per-object convenience, not part of this object's
+        # identity) and at worst is exactly the kind of thing that made this
+        # object expensive to tokenize in the first place. Recomputed fresh
+        # wherever it is next needed.
+        state = self.__dict__.copy()
+        state["_delayed_pure_node"] = None
+        return state
 
     def _task_local(self, match_to=None):
         """A private view of this transition potential for one task.
@@ -616,8 +692,16 @@ class BaseTransitionPotential(
         derived state; a caller that skips it must not mutate the result.
         The payload buffer itself is only ever read (the transforms
         allocate rather than overwrite their input). Note that
-        ``copy.copy`` honours ``__getstate__``, so a subclass that blanks an
-        attribute there gets it blanked in this view as well.
+        ``copy.copy`` honours ``__getstate__`` by default, so a subclass
+        that blanks an attribute there gets it blanked in this view as
+        well -- except ``TransitionPotentialArray``, which defines its own
+        ``__copy__`` that shares ``__dict__`` by reference instead (see that
+        method), so a ``_task_local`` view of an array transition potential
+        shares ``_delayed_pure_node`` with its source rather than getting it
+        blanked. That is inert today: ``_as_pure_delayed`` is only ever
+        called on the object handed directly to a scan method, never on a
+        ``_task_local``/``copy_to_device`` view, and pickling any view still
+        blanks the memo via ``__getstate__`` before it reaches a worker.
 
         Parameters
         ----------
@@ -923,11 +1007,24 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
     # _local_potential_device_cache and _device_array_cache are derived state:
     # populated lazily from the array already compared and the requesting
-    # device. __getstate__ already drops them for pickling, for the same
-    # reason -- they are a per-process convenience, not part of the object's
+    # device. _delayed_pure_node is also derived (a memoized graph node, see
+    # _as_pure_delayed) and additionally would compare via Delayed.__eq__,
+    # which builds another lazy value rather than a bool -- exactly the
+    # "deferred content is guessed equal" trap fixed elsewhere in
+    # safe_equality, so it must be excluded rather than merely reset.
+    # __getstate__ already drops all three for pickling, for the same reason
+    # -- they are a per-process convenience, not part of the object's
     # identity. Same pattern as Potential._sliced_atoms in
-    # abtem/potentials/iam.py.
-    _eq_exclude = ("_local_potential_device_cache", "_device_array_cache")
+    # abtem/potentials/iam.py. _site_ceiling_cache is the same kind of
+    # derived state, but its values are small ints, not device-resident
+    # arrays -- safe to pickle, so __getstate__ does not reset it (see
+    # _get_site_ceiling).
+    _eq_exclude = (
+        "_local_potential_device_cache",
+        "_device_array_cache",
+        "_delayed_pure_node",
+        "_site_ceiling_cache",
+    )
 
     def __init__(
         self,
@@ -952,6 +1049,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._local_potential_device_cache = None
+        # Memo for _get_site_ceiling, keyed by (max_batch, waves.shape,
+        # dtype, device) -- see that method.
+        self._site_ceiling_cache: dict = {}
         # Memo for copy_to_device, keyed by target device -- see that method.
         # Set here, on the object every _task_local view is shallow-copied
         # from, so copy.copy's shared dict reference is what makes every
@@ -1182,12 +1282,17 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return new
 
     def __getstate__(self):
-        # Both device caches are a per-process convenience and may hold cupy
-        # arrays; letting them ride through pickle would bloat every dask
-        # task carrying this object and break unpickling on CPU-only workers.
+        # All three caches are a per-process convenience and must not ride
+        # through pickle: the two device caches may hold cupy arrays and
+        # would bloat every dask task carrying this object (and break
+        # unpickling on CPU-only workers); _delayed_pure_node wraps self, so
+        # pickling it verbatim would embed a self-referential graph node
+        # inside the pickle. This overrides BaseTransitionPotential's own
+        # __getstate__ rather than calling it, so its reset is repeated here.
         state = self.__dict__.copy()
         state["_local_potential_device_cache"] = None
         state["_device_array_cache"] = {}
+        state["_delayed_pure_node"] = None
         return state
 
     def filter_sites(self, waves, sites, threshold):
@@ -1335,6 +1440,48 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
         return waves.__class__(**d)
 
+    def _get_site_ceiling(self, max_batch, waves: Waves, limit) -> int:
+        """The real per-chunk site ceiling max_batch/the VRAM budget allows,
+        independent of how many sites the calling generate_scattered_waves
+        invocation happens to have -- see the padding block there for why
+        this matters.
+
+        Memoized on this object: generate_scattered_waves runs once per
+        potential slice in the multislice driver against the same waves
+        shape throughout one scan (see multislice.py's per-slice loop
+        calling it on the same transition_potential), so recomputing this
+        via validate_chunks on every call is pure waste. Measured inside a
+        real driver loop -- not an isolated call to validate_chunks alone,
+        which understated it -- the unmemoized probe cost ~3-6 ms/call
+        against ~0.3 ms/call for an explicit int max_batch (which never
+        probes at all, see below): a ~10x regression on the "auto" path
+        that the sentinel-size tuning alone did not fix, since the cost
+        scales with validate_chunks's internal handling of the sentinel
+        axis length, not with the returned tuple's size.
+
+        When max_batch is an explicit int, chunks[0] in the caller already
+        *is* the ceiling -- validate_chunks tiles it verbatim regardless of
+        max_elements -- so this returns immediately without touching the
+        cache or calling validate_chunks again.
+        """
+        if isinstance(max_batch, int):
+            return max_batch
+
+        key = (max_batch, waves.shape, waves.dtype, self.device)
+        cached = self._site_ceiling_cache.get(key)
+        if cached is None:
+            cached = max(
+                validate_chunks(
+                    shape=(_SCATTER_BATCH_CEILING_PROBE_SITES,) + waves.shape,
+                    chunks=(max_batch,) + (-1,) * len(waves.shape),
+                    max_elements=limit,
+                    dtype=waves.dtype,
+                    device=self.device,
+                )[0]
+            )
+            self._site_ceiling_cache[key] = cached
+        return cached
+
     def generate_scattered_waves(
         self,
         waves: Waves,
@@ -1377,6 +1524,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             device=self.device,
         )[0]
 
+        site_ceiling = self._get_site_ceiling(max_batch, waves, limit)
+
         start = 0
         for chunk in chunks:
             end = start + chunk
@@ -1386,8 +1535,35 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             sites_chunk = sites[start:end]
             start = end
 
+            # Pad the batch scatter() actually runs to a bucketed size, so
+            # the ifft2 batch shape (n_padded * len(self)) depends on the
+            # bucket rather than on the data-dependent surviving-site count.
+            # Any real position works as padding -- sliced away below before
+            # anything downstream sees it -- so the last site in the chunk is
+            # repeated rather than fabricating a new one.
+            #
+            # Capped at site_ceiling: `chunk` was already sized by
+            # validate_chunks against a VRAM target (max_elements=limit
+            # above), and rounding it UP to a full bucket can multiply its
+            # memory footprint by up to _SCATTER_BATCH_BUCKET -- exactly the
+            # allocation the budget exists to bound, worst on memory-tight,
+            # small-max_batch runs. site_ceiling >= n_real always (chunk
+            # never exceeds it by construction), so the cap never truncates
+            # real sites -- only how far padding is allowed to go.
+            n_real = len(sites_chunk)
+            n_padded = min(
+                _ceil_to_multiple(n_real, _SCATTER_BATCH_BUCKET), site_ceiling
+            )
+            if n_padded > n_real:
+                pad = np.repeat(sites_chunk[-1:], n_padded - n_real, axis=0)
+                scatter_sites = np.concatenate([sites_chunk, pad], axis=0)
+            else:
+                scatter_sites = sites_chunk
+
             # threshold is None here: the sites were filtered above.
-            scattered_waves = self.scatter(waves, sites_chunk, threshold=threshold)
+            scattered_waves = self.scatter(waves, scatter_sites, threshold=threshold)
+            if n_padded > n_real:
+                scattered_waves = scattered_waves[: n_real * len(self)]
             yield sites_chunk, scattered_waves
 
     def to_images(self):

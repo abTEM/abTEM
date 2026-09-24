@@ -1970,6 +1970,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         *args,
         partials: dict[str, Callable],
         arg_splits,
+        ndims: int,
         **kwargs,
     ) -> np.ndarray:
         args = unpack_blockwise_args(args)
@@ -1982,7 +1983,14 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         new_probe = cls(
             **kwargs,
         )
-        wrapped_new_probe = _wrap_with_array(new_probe)
+        # Not _wrap_with_array(new_probe) (ndims=None default -> len(new_probe.
+        # ensemble_shape)): a reconstructed sub-ensemble can keep non-trivial
+        # structure even for a single block -- a GridScan position stays a
+        # (1, 1) grid, not a squeezed (), unlike a scalar energy value -- so
+        # new_probe.ensemble_shape does not reliably reflect "one block along
+        # each of the combined ensemble axes this call fills". Use the fixed,
+        # combined axis count instead, matching ensemble_blocks's own out_ind.
+        wrapped_new_probe = _wrap_with_array(new_probe, ndims)
         return wrapped_new_probe
 
     def _from_partitioned_args(self, *args, **kwargs):
@@ -1991,11 +1999,13 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
             for name, ensemble in self._ensembles.items()
         }
 
+        ndims = len(self.ensemble_shape)
         kwargs = self._copy_kwargs(exclude=tuple(self._ensembles.keys()))
         return partial(
             self._from_partitioned_args_func,
             partials=partials,
             arg_splits=self._arg_splits(),
+            ndims=ndims,
             **kwargs,
         )
 
@@ -2069,12 +2079,58 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
             xp = get_array_module(self.device)
 
+            calculate_array = self._calculate_array
+            gpts = self.gpts
+            assert gpts is not None
+
+            def _calculate_array_block(
+                block: np.ndarray, block_info=None
+            ) -> np.ndarray:
+                # _calculate_array's per-block result can omit a size-1
+                # placeholder axis for an ensemble member that is already
+                # fully resolved to a scalar within this block (e.g. one
+                # energy value out of several, each its own chunk) -- it
+                # only has to be aware of the axes it itself iterates over.
+                # da.map_blocks still declares that axis as part of this
+                # block's own *logical* chunk shape (from `blocks.chunks`),
+                # so reshape here rather than require every _calculate_array
+                # override to track it. Read the declared chunk shape from
+                # block_info rather than block.shape: `blocks` is an
+                # object-dtype array whose per-task wrapping (_wrap_with_
+                # array) always produces a raw (1,)*ndims array regardless
+                # of how many logical ensemble values that one task's chunk
+                # actually covers (adjust_chunks in ensemble_blocks can make
+                # those differ, e.g. one unsplit block covering every value
+                # of an axis) -- block.shape would be wrong whenever they do.
+                # reshape on its own only guarantees equal total size, not
+                # equal non-1 dimensions in the same order -- e.g. (2, 3, 2)
+                # reshapes into (3, 2, 2) without error, silently remapping
+                # real data across axes. Only inserting or resizing size-1
+                # axes is actually safe here, so assert that explicitly:
+                # every non-1 dimension of the two shapes must already
+                # match, in order, before reshape is allowed to run.
+                result = calculate_array(block)
+                chunk_shape = tuple(
+                    end - start for start, end in block_info[0]["array-location"]
+                )
+                expected_shape = chunk_shape + gpts
+                if result.shape != expected_shape:
+                    non1_result = tuple(d for d in result.shape if d != 1)
+                    non1_expected = tuple(d for d in expected_shape if d != 1)
+                    assert non1_result == non1_expected, (
+                        f"cannot safely reshape {result.shape} to "
+                        f"{expected_shape}: non-size-1 dimensions differ"
+                    )
+                    result = result.reshape(expected_shape)
+                return result
+
             array = da.map_blocks(
-                self._calculate_array,
+                _calculate_array_block,
                 blocks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
                 new_axis=tuple_range(length=2, offset=len(self.ensemble_shape)),
                 chunks=blocks.chunks + self.gpts,
+                block_info=True,
             )
 
         else:

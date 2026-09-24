@@ -191,7 +191,7 @@ def _no_client(*args, **kwargs):
     raise ValueError("no global client")
 
 
-def _build_lazy_gpu():
+def _build_lazy_probe():
     return abtem.Probe(energy=100e3, semiangle_cutoff=20, gpts=32, extent=5).build(lazy=True)
 
 
@@ -209,7 +209,7 @@ def test_gpu_no_client_forces_synchronous(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": False}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert captured.get("scheduler") == "synchronous"
     # the removed dead kwargs must not reappear
     assert "num_workers" not in captured and "threads_per_worker" not in captured
@@ -231,7 +231,7 @@ def test_multigpu_config_starts_cluster(monkeypatch):
     monkeypatch.setattr(abtem.array.dask, "compute", lambda *a, **k: ([None],))
 
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert started == [1]
 
 
@@ -252,7 +252,7 @@ def test_single_gpu_multigpu_config_no_cluster(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False)
+        _build_lazy_probe().compute(progress_bar=False)
     assert started == []  # only one GPU -> no cluster
     assert captured.get("scheduler") == "synchronous"
 
@@ -274,7 +274,7 @@ def test_explicit_scheduler_skips_cluster(monkeypatch):
 
     monkeypatch.setattr(abtem.array.dask, "compute", fake_compute)
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
-        _build_lazy_gpu().compute(progress_bar=False, scheduler="synchronous")
+        _build_lazy_probe().compute(progress_bar=False, scheduler="synchronous")
     assert started == []  # user asked for a scheduler -> no cluster spun up
     assert captured.get("scheduler") == "synchronous"
 
@@ -401,12 +401,6 @@ def test_get_cuda_cluster_client_none_when_absent_or_dead(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def _build_lazy_cpu():
-    return abtem.Probe(energy=100e3, semiangle_cutoff=20, gpts=32, extent=5).build(
-        lazy=True
-    )
-
-
 @pytest.mark.filterwarnings("ignore")
 def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
     import distributed
@@ -426,7 +420,7 @@ def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
     fake_cp.cuda.runtime.getDeviceCount.return_value = 2
     monkeypatch.setattr(abtem.array, "cp", fake_cp)
 
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     with abtem.config.set({"device": "gpu", "dask.multi-gpu": True}):
         waves.to_zarr(str(tmp_path / "waves.zarr"), progress_bar=False)
     assert started == [1]
@@ -434,7 +428,7 @@ def test_to_zarr_starts_cluster_when_multigpu(monkeypatch, tmp_path):
 
 
 def test_to_zarr_roundtrip_cpu(tmp_path):
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     url = str(tmp_path / "waves.zarr")
     waves.to_zarr(url, progress_bar=False)
     loaded = abtem.from_zarr(url)
@@ -448,7 +442,7 @@ def test_to_zarr_roundtrip_cpu(tmp_path):
 def test_to_zarr_compute_false_returns_delayed(tmp_path):
     from dask.delayed import Delayed
 
-    waves = _build_lazy_cpu()
+    waves = _build_lazy_probe()
     delayed = waves.to_zarr(str(tmp_path / "waves.zarr"), compute=False)
     assert isinstance(delayed, Delayed)
     delayed.compute()

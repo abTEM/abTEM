@@ -3,14 +3,36 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import assert_array_matches_device, gpu, requires_gpu
+from utils import assert_array_matches_device, devices, requires_gpu, to_host_array
 
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 
+
+def _aberrated_ctf():
+    """An aberrated CTF used to regression-test two bugs in the reduction
+    coefficients: the normalization used the complex square instead of the
+    absolute square, and the azimuthal angle convention must match
+    polar_spatial_frequencies, ie. arctan2(ky, kx). The real-space intensity
+    of an aberrated probe is sensitive to both; the vacuum diffraction
+    intensity is sensitive to neither.
+    """
+    from abtem import CTF
+
+    return CTF(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=50,
+        astigmatism=40,
+        astigmatism_angle=0.5236,
+        coma=3e3,
+        coma_angle=1.0,
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_prism_matches_probe(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device))
 
@@ -34,7 +56,7 @@ def test_prism_matches_probe(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_matches_probe_with_interpolation(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device, max_interpolation=3))
 
@@ -55,7 +77,7 @@ def test_prism_matches_probe_with_interpolation(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_matches_probe_with_multislice(data, lazy, device):
     potential = data.draw(abtem_st.potential(device=device))
     s_matrix = data.draw(
@@ -85,7 +107,7 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 # @pytest.mark.parametrize('interpolation', [True, False])
 @pytest.mark.parametrize(
     "detector",
@@ -130,7 +152,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
 @pytest.mark.parametrize(
     "downsample", [True, False], ids=["downsample", "no_downsample"]
 )
-@pytest.mark.parametrize("device", [gpu, "cpu"], ids=["gpu", "cpu"])
+@devices
 @pytest.mark.parametrize(
     "interpolation", [False, True], ids=["no_interpolation", "interpolation"]
 )
@@ -212,7 +234,7 @@ def test_s_matrix_store_on_host(data, lazy):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize(
     "detector",
     [
@@ -224,6 +246,10 @@ def test_s_matrix_store_on_host(data, lazy):
     ],
 )
 def test_prism_scan_match_probe_scan(data, detector, lazy, device):
+    # unlike test_s_matrix_matches_probe_no_interpolation, the scan here is
+    # matched to the probe explicitly (GridScan.match_probe) rather than left
+    # for s_matrix.scan()/probe.scan() to match on their own -- this pins that
+    # the explicit match_probe workflow agrees between the two reduction paths
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
     s_matrix = data.draw(
         abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
@@ -235,16 +261,20 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
 
     scan = GridScan()
     scan.match_probe(probe)
+    assume(
+        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
+        or isinstance(detector, WavesDetector)
+    )
 
     prism_measurement = s_matrix.scan(
         scan=scan, detectors=detector, lazy=lazy
-    ).compute()
+    ).to_cpu()
     probe_measurement = probe.scan(
         potential=potential, scan=scan, detectors=detector, lazy=lazy
-    ).compute()
+    ).to_cpu()
 
-    # assert prism_measurement.shape == probe_measurement.shape
-    # assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
+    assert prism_measurement.shape == probe_measurement.shape
+    assert prism_measurement == probe_measurement
 
 
 def _hexagonal_carbon(reps, a=3.0, cz=2.0, angle=60.0):
@@ -409,23 +439,11 @@ def test_prism_non_orthogonal_matches_multislice_haadf():
 
 
 def test_prism_aberrated_ctf_matches_probe():
-    # regression test for two bugs in the reduction coefficients: the
-    # normalization used the complex square instead of the absolute square, and
-    # the azimuthal angle convention must match polar_spatial_frequencies,
-    # ie. arctan2(ky, kx). the real-space intensity of an aberrated probe is
-    # sensitive to both; the vacuum diffraction intensity is sensitive to
-    # neither.
-    from abtem import CTF, Probe, SMatrix
+    # regression test for two bugs in the reduction coefficients: see
+    # _aberrated_ctf's docstring.
+    from abtem import Probe, SMatrix
 
-    ctf = CTF(
-        energy=100e3,
-        semiangle_cutoff=20,
-        defocus=50,
-        astigmatism=40,
-        astigmatism_angle=0.5236,
-        coma=3e3,
-        coma_angle=1.0,
-    )
+    ctf = _aberrated_ctf()
 
     probe = Probe._from_ctf(extent=20, gpts=128, ctf=ctf, energy=100e3)
     probe_intensity = probe.build(lazy=False).intensity().array
@@ -514,7 +532,7 @@ class TestWrappedCrop2D:
         with pytest.raises(RuntimeError, match="exceeds the period"):
             wrapped_slices(0, 25, 24)
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_matches_on_device(self, device):
         from abtem.core.backend import copy_to_device
         from abtem.prism.utils import wrapped_crop_2d
@@ -525,6 +543,6 @@ class TestWrappedCrop2D:
             got = wrapped_crop_2d(copy_to_device(array, device), corner, (11, 11))
             assert_array_matches_device(got, device)
             assert np.allclose(
-                np.asarray(copy_to_device(got, "cpu")),
+                to_host_array(copy_to_device(got, "cpu")),
                 self._reference(array, corner, (11, 11)),
             )

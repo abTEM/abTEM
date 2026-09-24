@@ -4804,8 +4804,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _com(array: np.ndarray, gx: np.ndarray, gy: np.ndarray):
-        com_x = (array * gx).sum(axis=(-2, -1))
-        com_y = (array * gy).sum(axis=(-2, -1))
+        # `gx`/`gy` arrive already broadcast to 2D from `_com_grids`, on both the
+        # skew and orthogonal branches, so they are used directly rather than
+        # re-broadcast from 1D. The normalisation by total intensity is dev's --
+        # the centre of mass is an intensity-weighted mean, not a weighted sum.
+        total_intensity = array.sum(axis=(-2, -1))
+        com_x = (array * gx).sum(axis=(-2, -1)) / total_intensity
+        com_y = (array * gy).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
         return com
 
