@@ -26,7 +26,7 @@ from abtem.core.ensemble import (
     unpack_blockwise_args,
 )
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
-from abtem.core.grid import spatial_frequencies
+from abtem.core.grid import Grid, spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator
@@ -50,8 +50,7 @@ if TYPE_CHECKING:
 
 def _fresnel_propagator_array(
     thickness: float,
-    gpts: tuple[int, int],
-    sampling: tuple[float, float],
+    grid: Grid,
     energy: float,
     device: str,
     order: Literal[1, 2, "exact"] = "exact",
@@ -60,9 +59,18 @@ def _fresnel_propagator_array(
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
 
-    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
-    kx, ky = kx[:, None], ky[None]
-    k2 = kx**2 + ky**2
+    if not grid.is_orthogonal:
+        # Non-orthogonal (skewed) grid: the free-space propagator is still diagonal in
+        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell. Every
+        # order below depends only on k2 (not on kx, ky separately) -- including the
+        # order-2 term, which is |k|^4 since the cross-term fix in #302 -- so they all
+        # generalise to a skewed grid unchanged once k2 uses the correct metric.
+        k2 = grid.k_squared(xp)
+    else:
+        # Orthogonal grid: keep the separable form (bit-identical to the previous code).
+        kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
+        kx, ky = kx[:, None], ky[None]
+        k2 = kx**2 + ky**2
 
     # Split into propagating and evanescent waves
     x = wavelength**2 * k2
@@ -109,9 +117,10 @@ def _fresnel_propagator_array(
         phase_error = (2.0 * np.pi * thickness / wavelength) * xp.abs(exact - approx)
 
         aperture = antialias_aperture(
-            gpts,
-            sampling,
+            grid._valid_gpts,
+            grid._valid_sampling,
             get_array_module(device),
+            cell=grid.cell,
         )[propagating]
 
         max_phase_error = float((phase_error * aperture).max())
@@ -199,6 +208,7 @@ class FresnelPropagator:
             waves.base_tilt,
             waves._valid_energy,
             waves.device,
+            getattr(waves.grid, "_cell", None),  # skew cell (hashable tuple or None)
         )
 
         tilt_axes_metadata = _get_tilt_axes(waves)
@@ -221,8 +231,7 @@ class FresnelPropagator:
     ) -> np.ndarray:
         array = _fresnel_propagator_array(
             thickness=thickness,
-            gpts=waves._valid_gpts,
-            sampling=waves._valid_sampling,
+            grid=waves.grid,
             energy=waves._valid_energy,
             device=waves.device,
             order=order,
@@ -232,6 +241,7 @@ class FresnelPropagator:
             waves._valid_gpts,
             waves._valid_sampling,
             get_array_module(waves.device),
+            cell=waves.grid.cell,
         )
 
         if waves.base_tilt != (0.0, 0.0):
