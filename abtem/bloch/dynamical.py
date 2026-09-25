@@ -40,7 +40,7 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -983,7 +983,10 @@ def calculate_dynamical_scattering(
     if not thicknesses.shape:
         array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
     else:
-        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+        # C's own dtype, not a hard-coded complex128: Metal has no double
+        # precision, and on the host C is complex128 already, so nothing
+        # changes there.
+        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=C.dtype)
         for i, thickness in enumerate(thicknesses):
             array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
@@ -1009,8 +1012,14 @@ def expm(A: np.ndarray) -> np.ndarray:
 
     if xp == cp:
         return expm_cupy(A)
-    else:
+    elif xp is np:
         return expm_scipy(A)
+    else:
+        # Metal: exponentiate on the host and hand the result back. torch's own
+        # matrix_exp runs on the device but is an order of magnitude less
+        # accurate than scipy's at the same single precision (about 2e-6
+        # against 1.5e-7 relative, for a 97-beam structure matrix).
+        return xp.asarray(expm_scipy(asnumpy(A)))
 
 
 def calculate_scattering_matrix(

@@ -9,6 +9,11 @@ Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
 """
 
+import os
+import subprocess
+import sys
+import textwrap
+
 import numpy as np
 import pytest
 from ase.build import bulk
@@ -247,3 +252,119 @@ def test_line_profile_width_matches_cpu():
         widths.append(float(asnumpy(profile.width(height=0.5))))
 
     assert widths[1] == pytest.approx(widths[0], rel=1e-4)
+
+
+@pytest.mark.parametrize(
+    "dtypes",
+    [(np.complex64, np.float32), (np.float32, np.bool_), (np.float32, np.int64)],
+    ids=["complex-float", "float-bool", "float-int"],
+)
+def test_contractions_promote_mixed_dtypes(dtypes):
+    # torch's elementwise operators promote the way NumPy's do, but its
+    # contractions refuse mismatched operands outright.
+    xp = get_array_module("mps")
+    rng = np.random.RandomState(4)
+    a = rng.randn(3, 4) + (1j * rng.randn(3, 4) if dtypes[0] is np.complex64 else 0)
+    a = a.astype(dtypes[0])
+    b = (rng.randn(4, 5) > 0).astype(dtypes[1])
+    a_dev, b_dev = copy_to_device(a, "mps"), copy_to_device(b, "mps")
+
+    expected = a @ b
+    results = {
+        "@": a_dev @ b_dev,
+        "host @ device": a @ b_dev,
+        "np.matmul": np.matmul(a_dev, b_dev),
+        "xp.matmul": xp.matmul(a_dev, b_dev),
+        "xp.dot": xp.dot(a_dev, b_dev),
+        "xp.tensordot": xp.tensordot(a_dev, b_dev, axes=([1], [0])),
+        "xp.einsum": xp.einsum("ij,jk->ik", a_dev, b_dev),
+    }
+    for name, result in results.items():
+        assert np.allclose(asnumpy(result), expected, atol=1e-5), name
+
+
+def test_diag_and_fill_diagonal_match_numpy():
+    xp = get_array_module("mps")
+    matrix = np.arange(16, dtype=np.float32).reshape(4, 4)
+    values = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
+
+    on_device = copy_to_device(matrix, "mps")
+    assert np.array_equal(asnumpy(xp.diag(on_device)), np.diag(matrix))
+    assert np.array_equal(asnumpy(np.diag(on_device)), np.diag(matrix))
+    assert np.array_equal(asnumpy(xp.diag(xp.asarray(values))), np.diag(values))
+
+    expected = matrix.copy()
+    np.fill_diagonal(expected, values)
+    xp.fill_diagonal(on_device, xp.asarray(values))
+    assert np.array_equal(asnumpy(on_device), expected)
+
+    np.fill_diagonal(expected, 0.0)
+    np.fill_diagonal(on_device, 0.0)
+    assert np.array_equal(asnumpy(on_device), expected)
+
+
+def test_materializing_a_lazy_array_does_not_deadlock():
+    # Every Metal operation holds _TORCH_LOCK. Materializing a lazy array whose
+    # graph has Metal work of its own used to hand that graph to dask's
+    # threaded scheduler from inside the lock, where the workers waited for
+    # the lock forever. Run in a subprocess: a deadlock in this process would
+    # leave the lock held, and hang every Metal test after this one too.
+    script = textwrap.dedent(
+        """
+        import dask.array as da
+        import numpy as np
+        import abtem
+        from abtem.core.backend import copy_to_device, get_array_module
+
+        xp = get_array_module("mps")
+        on_device = copy_to_device(np.ones((4, 8, 8), np.float32), "mps")
+        lazy = da.from_array(on_device, chunks=(1, 8, 8)).map_blocks(
+            xp.exp, meta=np.array((), np.float32)
+        )
+        assert xp.asarray(lazy).shape == (4, 8, 8)
+        assert np.allclose(xp.asnumpy(lazy), np.e)
+        """
+    )
+    environment = dict(os.environ, ABTEM_ENABLE_MPS="true")
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("materializing a lazy Metal array deadlocked")
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_per_object_device_keeps_the_metal_scheduler(atoms, monkeypatch):
+    # With the device given per object and the global one left at 'cpu', a
+    # detector's host-resident result was labelled 'cpu', so its computation --
+    # still full of Metal work -- went to dask's threaded scheduler.
+    import abtem.array
+
+    chosen = []
+    resolve = abtem.array._resolve_mps_scheduler
+
+    def spy(kwargs):
+        kwargs = resolve(kwargs)
+        chosen.append(kwargs.get("scheduler"))
+        return kwargs
+
+    monkeypatch.setattr(abtem.array, "_resolve_mps_scheduler", spy)
+
+    with abtem.config.set({"device": "cpu", "dask.lazy": True}):
+        potential = abtem.Potential(atoms, gpts=128, device="mps")
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device="mps")
+        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
+        result = probe.scan(
+            potential, scan=scan, detectors=abtem.AnnularDetector(50, 150)
+        )
+
+        assert result.device == "mps"
+        result.compute()
+
+    assert chosen == ["synchronous"]

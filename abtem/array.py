@@ -1995,14 +1995,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
-            # When the source was on GPU but the output is CPU-resident
-            # Record the computation device on the output so _compute()
-            # selects the synchronous scheduler for GPU work.  Check
+            # When the source was on an accelerator but the output is
+            # CPU-resident, record the computation device on the output so
+            # _compute() selects the synchronous scheduler for the device work
+            # still in its graph -- CuPy and Metal both need it.  Check
             # self.device (which honours _device on lazy arrays) rather
             # than inspecting the dask-array module, which always returns
             # numpy for a not-yet-computed lazy array.
-            if self.device == "gpu":
-                output._device = "gpu"
+            if self.device in ("gpu", "mps"):
+                output._device = self.device
             outputs.append(output)
 
         if len(outputs) > 1:

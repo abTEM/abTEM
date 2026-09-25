@@ -484,6 +484,7 @@ class TorchNDArray:
             value = value.to(self._tensor.dtype)
         self._tensor[_unwrap_key(key)] = value
 
+    @_serialized
     def __repr__(self) -> str:
         return f"TorchNDArray({self._tensor!r})"
 
@@ -520,10 +521,20 @@ class TorchNDArray:
     __rpow__ = _forward("__rpow__")
     __mod__ = _forward("__mod__")
     __rmod__ = _forward("__rmod__")
-    __matmul__ = _forward("__matmul__")
+
+    def __matmul__(self, other):
+        if isinstance(other, da.core.Array):
+            # Join the graph rather than force it, as _forward does.
+            return da.from_array(self, chunks=-1) @ other
+        return matmul(self, other)
+
     # numpy's ndarray.__matmul__ defers to us (see __array_priority__), so the
     # reflected form is what actually runs for `host_array @ device_array`.
-    __rmatmul__ = _forward("__rmatmul__")
+    def __rmatmul__(self, other):
+        if isinstance(other, da.core.Array):
+            return other @ da.from_array(self, chunks=-1)
+        return matmul(other, self)
+
     __neg__ = _forward("__neg__")
     __abs__ = _forward("__abs__")
     __and__ = _forward("__and__")
@@ -563,10 +574,28 @@ class TorchNDArray:
         return self
 
 
+def _compute_here(array):
+    """Compute a dask array on the calling thread.
+
+    Everything in this module runs under ``_TORCH_LOCK``, and a lazy array's
+    graph may hold Metal work of its own. Handed to dask's default threaded
+    scheduler, that work would wait on worker threads for the lock this thread
+    keeps until they finish -- a deadlock, not an error. The synchronous
+    scheduler runs the graph right here, where the lock is re-entrant.
+    """
+    return array.compute(scheduler="synchronous")
+
+
 @_serialized
 def asarray(data, dtype=None):
     """Copy ``data`` onto the Metal device as a :class:`TorchNDArray`."""
     _check_available()
+
+    if isinstance(data, da.core.Array):
+        # Not np.asarray: that computes on the threaded scheduler (see
+        # _compute_here), and would also bring device chunks back to the host
+        # only to upload them again.
+        return asarray(_compute_here(data), dtype=dtype)
 
     if isinstance(data, TorchNDArray):
         return data.astype(dtype, copy=False) if dtype is not None else data
@@ -617,6 +646,8 @@ def array(data, dtype=None):
 @_serialized
 def asnumpy(x):
     """Copy a device array back to the host as a NumPy array."""
+    if isinstance(x, da.core.Array):
+        x = _compute_here(x)
     if isinstance(x, TorchNDArray):
         x = x.tensor
     if torch is not None and isinstance(x, torch.Tensor):
@@ -686,6 +717,39 @@ def _reduction(name: str):
     return _serialized(func)
 
 
+def _common_dtype(*tensors):
+    """Cast the operands of a contraction to their common dtype, as NumPy does.
+
+    torch's elementwise operators promote mixed dtypes the way NumPy's do, but
+    its contractions -- matmul, tensordot, einsum -- refuse them outright,
+    even complex against real or float against bool. abTEM contracts such
+    pairs routinely: a complex phase against real Miller indices, a float
+    diffraction pattern against a detector mask.
+    """
+    dtype = functools.reduce(torch.promote_types, (t.dtype for t in tensors))
+    return tuple(t if t.dtype == dtype else t.to(dtype) for t in tensors)
+
+
+@_serialized
+def matmul(a, b, **kwargs):
+    """``numpy.matmul``, promoting mixed operand dtypes first."""
+    a_tensor, b_tensor = _common_dtype(_unwrap(asarray(a)), _unwrap(asarray(b)))
+    return _wrap(torch.matmul(a_tensor, b_tensor, **_torch_kwargs(kwargs)))
+
+
+@_serialized
+def dot(a, b):
+    """``numpy.dot``: matmul up to two dimensions, a tensordot beyond."""
+    a_tensor, b_tensor = _common_dtype(_unwrap(asarray(a)), _unwrap(asarray(b)))
+    if a_tensor.ndim == 0 or b_tensor.ndim == 0:
+        return _wrap(a_tensor * b_tensor)
+    if a_tensor.ndim <= 2 and b_tensor.ndim <= 2:
+        return _wrap(torch.matmul(a_tensor, b_tensor))
+    # N-D: the last axis of a against the second-to-last of b, which is not
+    # what matmul does with leading dimensions.
+    return _wrap(torch.tensordot(a_tensor, b_tensor, dims=([-1], [-2])))
+
+
 @_serialized
 def tensordot(a, b, axes=2):
     """``numpy.tensordot``, whose ``axes`` torch spells ``dims``.
@@ -695,8 +759,7 @@ def tensordot(a, b, axes=2):
     handles implicitly and torch refuses. The axis pair is also normalized to
     lists of non-negative ints, the only spelling torch's overload accepts.
     """
-    a_tensor = _unwrap(asarray(a))
-    b_tensor = _unwrap(asarray(b))
+    a_tensor, b_tensor = _common_dtype(_unwrap(asarray(a)), _unwrap(asarray(b)))
 
     def _axis_list(axis, ndim):
         # NumPy accepts either a single axis or a sequence on each side.
@@ -812,6 +875,7 @@ def fftfreq(n: int, d: float = 1.0, dtype=None):
     return TorchNDArray(torch.fft.fftfreq(n, d=d, dtype=torch_dtype, device=DEVICE))
 
 
+@_serialized
 def synchronize() -> None:
     """Block until all queued Metal work has completed (for timing)."""
     if torch is not None and torch.backends.mps.is_available():
@@ -1081,7 +1145,8 @@ def nonzero(x):
 
 @_serialized
 def einsum(subscripts, *operands, **kwargs):
-    return _wrap(torch.einsum(subscripts, *[_unwrap(asarray(o)) for o in operands]))
+    tensors = _common_dtype(*(_unwrap(asarray(o)) for o in operands))
+    return _wrap(torch.einsum(subscripts, *tensors))
 
 
 def _host_ndimage_func(name: str):
@@ -1161,6 +1226,7 @@ def _boolean_reduction(name: str):
     return _serialized(func)
 
 
+@_serialized
 def isclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False):
     """``numpy.isclose``, elementwise, on the device."""
     return _wrap(
@@ -1184,6 +1250,7 @@ def iscomplexobj(x) -> bool:
     return np.iscomplexobj(tensor)
 
 
+@_serialized
 def roll(x, shift, axis=None):
     """``numpy.roll``, whose ``shift``/``axis`` torch spells ``shifts``/``dims``."""
     return _wrap(torch.roll(_unwrap(x), shifts=shift, dims=axis))
@@ -1216,6 +1283,30 @@ def round(a, decimals=0, out=None):
         return np.round(tensor, decimals)
 
     return _wrap(torch.round(tensor, decimals=decimals))
+
+
+@_serialized
+def diag(v, k=0):
+    """``numpy.diag``: a 1-D array's diagonal matrix, or a 2-D array's diagonal."""
+    return _wrap(torch.diag(_unwrap(asarray(v)), diagonal=k))
+
+
+@_serialized
+def fill_diagonal(a, val, wrap=False):
+    """``numpy.fill_diagonal``, in place, for a 2-D array.
+
+    NumPy also accepts an N-D array with every dimension equal, and ``wrap``
+    for a tall matrix; abTEM uses neither, so both are refused rather than
+    approximated.
+    """
+    tensor = _unwrap(a)
+    if tensor.ndim != 2 or wrap:
+        raise NotImplementedError(
+            "fill_diagonal on Metal (MPS) supports only a 2-D array, without wrap"
+        )
+    diagonal = tensor.diagonal()  # a view, so copying into it writes through
+    values = _unwrap(asarray(val)).to(tensor.dtype)
+    diagonal.copy_(values.broadcast_to(diagonal.shape))
 
 
 @_serialized
@@ -1378,6 +1469,10 @@ class _TorchNumpyNamespace:
     min = staticmethod(_reduction("amin"))
     max = staticmethod(_reduction("amax"))
     tensordot = staticmethod(tensordot)
+    matmul = staticmethod(matmul)
+    dot = staticmethod(dot)
+    diag = staticmethod(diag)
+    fill_diagonal = staticmethod(fill_diagonal)
 
     # dtypes, mirroring numpy's names so ``xp.int32`` and friends keep working
     float32 = np.float32
@@ -1419,6 +1514,9 @@ _ARRAY_FUNCTIONS.update(
         np.pad: pad,
         np.diff: diff,
         np.tensordot: tensordot,
+        np.diag: diag,
+        np.dot: dot,
+        np.fill_diagonal: fill_diagonal,
         np.where: where,
         np.clip: clip,
         np.zeros_like: zeros_like,
@@ -1453,7 +1551,7 @@ _ARRAY_FUNCTIONS.update(
 # mixed-type arithmetic does.
 _ARRAY_UFUNCS.update(
     {
-        np.matmul: _binary_ufunc("matmul"),
+        np.matmul: matmul,
         np.multiply: _binary_ufunc("multiply"),
         np.add: _binary_ufunc("add"),
         np.subtract: _binary_ufunc("subtract"),
