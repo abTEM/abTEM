@@ -336,6 +336,116 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert result is not None
 
 
+class TestEnergyEnsembleSpotIndexing:
+    """index_diffraction_spots on an un-indexed energy ensemble must index each
+    member with its own energy -- filtering and overlapping-spot assignment
+    both depend on it -- not with one energy for the whole ensemble (it used
+    to take _get_energy()'s fallback, the maximum, for every member)."""
+
+    ENERGIES = (80e3, 300e3)
+    ROTATIONS = (0.0, 10.0, 20.0)
+
+    @staticmethod
+    def _cell():
+        from ase.build import bulk
+
+        return bulk("Si", cubic=True).cell
+
+    def _orientation_matrices(self):
+        from scipy.spatial.transform import Rotation
+
+        # (N, 1) angles for a single-axis sequence: newer SciPy rejects (N,)
+        angles = np.asarray(self.ROTATIONS)[:, None]
+        return Rotation.from_euler("x", angles, degrees=True).as_matrix()
+
+    def _patterns(self, chunks=None):
+        from abtem.core.axes import NonLinearAxis
+        from abtem.measurements import DiffractionPatterns
+
+        # indexing only reads the pattern array and the geometry, so random
+        # patterns exercise it fully
+        array = np.random.default_rng(0).random(
+            (len(self.ROTATIONS), len(self.ENERGIES), 97, 97)
+        )
+        if chunks is not None:
+            import dask.array as da
+
+            array = da.from_array(array, chunks=chunks + (97, 97))
+        return DiffractionPatterns(
+            array,
+            sampling=(0.1, 0.1),
+            fftshift=True,
+            ensemble_axes_metadata=[
+                NonLinearAxis(label="x_rotation", units="deg", values=self.ROTATIONS),
+                EnergyAxis(values=self.ENERGIES),
+            ],
+        )
+
+    @staticmethod
+    def _assert_member_matches(ensemble, member, single):
+        hkl = [tuple(h) for h in ensemble.miller_indices]
+        idx = [hkl.index(tuple(h)) for h in single.miller_indices]
+        others = np.setdiff1d(np.arange(len(hkl)), idx)
+        values = np.asarray(ensemble.array)[:, member]
+        np.testing.assert_array_equal(values[..., idx], np.asarray(single.array))
+        assert np.all(values[..., others] == 0)
+
+    # a rotation series is only indexable lazily, one orientation per block
+    @pytest.mark.parametrize("energy_chunk", [1, 2])
+    def test_lazy_rotation_series_matches_single_energy(self, energy_chunk):
+        dp = self._patterns(chunks=(1, energy_chunk))
+        om = self._orientation_matrices()
+        ensemble = dp.index_diffraction_spots(
+            cell=self._cell(), orientation_matrices=om[:, None], centering="F"
+        ).compute()
+        for j in range(len(self.ENERGIES)):
+            single = (
+                dp[:, j]
+                .index_diffraction_spots(
+                    cell=self._cell(), orientation_matrices=om, centering="F"
+                )
+                .compute()
+            )
+            self._assert_member_matches(ensemble, j, single)
+
+    def test_eager_matches_single_energy(self):
+        dp = self._patterns()[1]
+        om = self._orientation_matrices()[1]
+        ensemble = dp.index_diffraction_spots(
+            cell=self._cell(), orientation_matrices=om, centering="F"
+        )
+        for j in range(len(self.ENERGIES)):
+            single = dp[j].index_diffraction_spots(
+                cell=self._cell(), orientation_matrices=om, centering="F"
+            )
+            np.testing.assert_array_equal(
+                np.asarray(ensemble.array)[j][
+                    [
+                        [tuple(h) for h in ensemble.miller_indices].index(tuple(h))
+                        for h in single.miller_indices
+                    ]
+                ],
+                single.array,
+            )
+
+    def test_highest_energy_is_not_used_for_every_member(self):
+        """The regression: the lowest-energy member indexed as the highest
+        energy (the old behaviour) differs from indexing it correctly."""
+        dp = self._patterns()[1]
+        om = self._orientation_matrices()[1]
+        lowest = dp[0]
+        correct = lowest.index_diffraction_spots(
+            cell=self._cell(), orientation_matrices=om, centering="F"
+        )
+        as_highest = lowest.index_diffraction_spots(
+            cell=self._cell(),
+            orientation_matrices=om,
+            centering="F",
+            energy=max(self.ENERGIES),
+        )
+        assert len(correct.miller_indices) != len(as_highest.miller_indices)
+
+
 class TestCTFEnergyEnsemble:
     """Regression tests for CTF / Aperture with energy-ensemble Probe."""
 
