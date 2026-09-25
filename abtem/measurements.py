@@ -625,37 +625,35 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def real(self) -> Self:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
-        self.metadata["label"] = "real"
-        self.metadata["units"] = "arb. unit"
-        return self._apply_element_wise_func(get_array_module(self.array).real)
+        return self._apply_element_wise_func(
+            get_array_module(self.array).real, label="real", units="arb. unit"
+        )
 
     def imag(self) -> Self:
         """Returns the imaginary part of a complex-valued measurement."""
         self._check_is_complex()
-        self.metadata["label"] = "imaginary"
-        self.metadata["units"] = "arb. unit"
-        return self._apply_element_wise_func(get_array_module(self.array).imag)
+        return self._apply_element_wise_func(
+            get_array_module(self.array).imag, label="imaginary", units="arb. unit"
+        )
 
     def phase(self) -> Self:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
-        self.metadata["label"] = "phase"
-        self.metadata["units"] = "rad."
-        return self._apply_element_wise_func(get_array_module(self.array).angle)
+        return self._apply_element_wise_func(
+            get_array_module(self.array).angle, label="phase", units="rad."
+        )
 
     def abs(self) -> Self:
         """Calculates the absolute value of a complex-valued measurement."""
         # self._check_is_complex()
-        self.metadata["label"] = "amplitude"
-        self.metadata["units"] = "arb. unit"
-        return self._apply_element_wise_func(get_array_module(self.array).abs)
+        return self._apply_element_wise_func(
+            get_array_module(self.array).abs, label="amplitude", units="arb. unit"
+        )
 
     def intensity(self) -> Self:
         """Calculates the squared norm of a complex-valued measurement."""
         self._check_is_complex()
-        self.metadata["label"] = "intensity"
-        self.metadata["units"] = "arb. unit"
-        return self._apply_element_wise_func(abs2)
+        return self._apply_element_wise_func(abs2, label="intensity", units="arb. unit")
 
     def relative_difference(
         self, other: BaseMeasurements, min_relative_tol: float = 0.0
@@ -746,9 +744,23 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         return self.mean(axis=axis)
 
-    def _apply_element_wise_func(self, func: Callable) -> Self:
+    def _apply_element_wise_func(self, func: Callable, label: str, units: str) -> Self:
+        """Apply an element-wise array function, returning a new measurement with the
+        given label and units. The measurement itself is not modified."""
         d = self._copy_kwargs(exclude=("array",))
-        d["array"] = func(self.array)
+        d["metadata"] = {**d["metadata"], "label": label, "units": units}
+
+        if self.is_lazy:
+            # Applied per block: CuPy functions reject a dask array, unlike NumPy's,
+            # which dispatch to dask. The output meta is evaluated on the input's
+            # zero-size meta, so it stays a CuPy array for CuPy chunks; left to
+            # dask, the dtype would be inferred from a NumPy dummy, which CuPy
+            # functions also reject.
+            meta = func(da.utils.meta_from_array(self.array))
+            d["array"] = self.array.map_blocks(func, meta=meta)
+        else:
+            d["array"] = func(self.array)
+
         return self.__class__(**d)
 
     @property
