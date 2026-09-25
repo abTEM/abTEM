@@ -20,6 +20,19 @@ def _plane_positions(x_planes, y_planes):
     return positions
 
 
+def _rutile():
+    # Rutile (TiO2) has no exactly commensurate grid, which both the
+    # translation-invariance and the fallback-overshoot tests rely on.
+    from ase.spacegroup import crystal
+
+    return crystal(
+        ["Ti", "O"],
+        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
+        spacegroup=136,
+        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
+    )
+
+
 def test_commensurate_and_fast():
     # 4 periods in x, 5 in y — both fast-compatible.
     extent = (10.0, 10.0)
@@ -158,7 +171,11 @@ def test_incommensurate_fallback_scales_to_large_supercells():
     base = np.sort(np.random.RandomState(0).uniform(0, cell, 12))
     planes = np.concatenate([base + i * cell for i in range(200)])
     extent = 200 * cell
-    positions = _plane_positions(planes, planes)
+    # Pair the planes up rather than taking their outer product: the 2400 x
+    # 2400 grid of _plane_positions is 5.8M atoms, and sorting those (not the
+    # period search this test targets) then dominates the timing -- ~0.3 s
+    # locally, enough to push a slow CI runner past the bound below.
+    positions = np.stack([planes, planes, np.zeros_like(planes)], axis=1)
 
     start = time.perf_counter()
     gpts = commensurate_gpts((extent, extent), positions, target_sampling=0.05)
@@ -192,14 +209,7 @@ def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
     # scoring has to preserve. (The regression guard for the periodic-wrap bug
     # itself is test_plane_set_invariance_sees_across_the_periodic_wrap; this
     # is the end-to-end property that bug was one way of breaking.)
-    from ase.spacegroup import crystal
-
-    rutile = crystal(
-        ["Ti", "O"],
-        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
-        spacegroup=136,
-        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
-    )
+    rutile = _rutile()
 
     for plane in ("xy", "xz", "yz"):
         reference = Potential(rutile, sampling="auto", plane=plane).gpts
@@ -303,14 +313,7 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
     # alignment -- but only inside the documented window. Scoring the
     # candidate that terminates the search let a size 17 % above the target
     # (38 % more pixels) win from outside it.
-    from ase.spacegroup import crystal
-
-    rutile = crystal(
-        ["Ti", "O"],
-        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
-        spacegroup=136,
-        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
-    ) * (6, 6, 1)
+    rutile = _rutile() * (6, 6, 1)
 
     potential = Potential(rutile, sampling="auto")
 

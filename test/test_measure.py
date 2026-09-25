@@ -8,7 +8,7 @@ import pytest
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, ensure_is_tuple, gpu, requires_gpu
+from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, requires_gpu
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
@@ -70,8 +70,8 @@ def test_scanned_measurement_type():
 @settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["__add__", "__sub__", "__mul__", "__truediv__"])
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize(
     "measurement",
     [
@@ -90,7 +90,7 @@ def test_add_subtract(data, measurement, method, lazy, device):
 @settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize(
     "measurement",
     [
@@ -108,7 +108,7 @@ def test_inplace_add_subtract(data, measurement, method, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["sum", "mean", "std"])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 @pytest.mark.parametrize(
     "measurement",
     [
@@ -151,8 +151,8 @@ def gpts_or_sampling(draw):
 
 
 @given(data=st.data(), gpts_or_sampling=gpts_or_sampling())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("method", ["spline", "fft"])
 def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
@@ -174,8 +174,8 @@ def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
         st.integers(min_value=1, max_value=3), st.integers(min_value=1, max_value=3)
     ),
 )
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_tile_images(data, tile, lazy, device):
     measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
     tiled = measurement.tile(tile)
@@ -207,8 +207,8 @@ def sigma(draw, max_value=5.0):
 
 
 @given(data=st.data(), sigma=sigma())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_gaussian_filter_images(data, sigma, lazy, device):
     if lazy is True and device == gpu.values[0]:
         return
@@ -229,8 +229,8 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
 
 
 @given(data=st.data(), sigma=sigma())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_lorentzian_filter_images(data, sigma, lazy, device):
     if lazy is True and device == gpu.values[0]:
         return
@@ -251,8 +251,8 @@ def test_lorentzian_filter_images(data, sigma, lazy, device):
 
 
 @given(data=st.data(), sigma=sigma())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_voigtian_filter_images(data, sigma, lazy, device):
     if lazy is True and device == gpu.values[0]:
         return
@@ -273,10 +273,16 @@ def test_voigtian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
+def _delta_probe_image(gpts=64, lazy=False):
+    """A throwaway probe-intensity image for the filter tests below -- only
+    a non-trivial 2D image is needed, not any particular physics."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=gpts)
+    return wave.build((0, 0), lazy=lazy).intensity()
+
+
 def test_lorentzian_filter_changes_image():
     """Lorentzian filter with a non-trivial HWHM should change the image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     filtered = images.lorentzian_filter(0.5)
     assert not np.allclose(filtered.array, images.array)
 
@@ -357,16 +363,14 @@ def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwarg
 
 def test_voigtian_filter_changes_image():
     """Voigtian filter with non-trivial parameters should change the image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     filtered = images.voigtian_filter(0.3, 0.3)
     assert not np.allclose(filtered.array, images.array)
 
 
 def test_voigtian_filter_pure_gaussian_limit():
     """voigtian_filter with lorentzian_gamma=0 must equal gaussian_filter."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     sigma = 0.4
     gauss = images.gaussian_filter(sigma)
     voigt = images.voigtian_filter(sigma, 0.0)
@@ -375,8 +379,7 @@ def test_voigtian_filter_pure_gaussian_limit():
 
 def test_voigtian_filter_pure_lorentzian_limit():
     """voigtian_filter with gaussian_sigma=0 must equal lorentzian_filter."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     hw = 0.4
     lor = images.lorentzian_filter(hw)
     voigt = images.voigtian_filter(0.0, hw)
@@ -385,16 +388,14 @@ def test_voigtian_filter_pure_lorentzian_limit():
 
 def test_pseudo_voigtian_filter_changes_image():
     """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
     assert not np.allclose(filtered.array, images.array)
 
 
 def test_pseudo_voigtian_filter_pure_gaussian_limit():
     """pseudo_voigtian_filter with eta=0 must equal gaussian_filter."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     sigma = 0.4
     gauss = images.gaussian_filter(sigma)
     pv = images.pseudo_voigtian_filter(sigma, 1.0, eta=0.0)
@@ -403,8 +404,7 @@ def test_pseudo_voigtian_filter_pure_gaussian_limit():
 
 def test_pseudo_voigtian_filter_pure_lorentzian_limit():
     """pseudo_voigtian_filter with eta=1 must equal lorentzian_filter."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image()
     hw = 0.4
     lor = images.lorentzian_filter(hw)
     pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
@@ -611,8 +611,7 @@ def test_dtype_preserving_operations_keep_complex():
 
 def test_filter_boundary_modes():
     """All four filter methods accept all three boundary modes without error."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
-    images = wave.build((0, 0), lazy=False).intensity()
+    images = _delta_probe_image(gpts=32)
     for boundary in ("periodic", "reflect", "constant"):
         images.gaussian_filter(0.3, boundary=boundary).array
         images.lorentzian_filter(0.3, boundary=boundary).array
@@ -622,7 +621,7 @@ def test_filter_boundary_modes():
 
 @requires_gpu
 @pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
-@pytest.mark.parametrize("lazy", [False, True])
+@lazy_params
 @pytest.mark.parametrize("complex_input", [False, True])
 def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy, complex_input):
     """gaussian_filter (and, through it, voigtian_filter/pseudo_voigtian_filter) uses
@@ -678,7 +677,7 @@ def test_gaussian_family_filters_match_cpu_and_gpu(boundary, lazy, complex_input
 
 
 @requires_gpu
-@pytest.mark.parametrize("lazy", [False, True])
+@lazy_params
 def test_gaussian_source_size_matches_cpu_and_gpu(lazy):
     """gaussian_source_size hits the same GPU-only FFT code path as
     Images.gaussian_filter, but convolves along the (non-trailing) scan axes
@@ -713,24 +712,21 @@ def test_gaussian_source_size_matches_cpu_and_gpu(lazy):
 
 def test_lorentzian_filter_lazy():
     """Lorentzian filter works on a lazy (dask-backed) image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
-    images = wave.build((0, 0), lazy=True).intensity()
+    images = _delta_probe_image(gpts=32, lazy=True)
     filtered = images.lorentzian_filter(0.5)
     assert np.isfinite(filtered.array.compute()).all()
 
 
 def test_voigtian_filter_lazy():
     """Voigtian filter works on a lazy (dask-backed) image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
-    images = wave.build((0, 0), lazy=True).intensity()
+    images = _delta_probe_image(gpts=32, lazy=True)
     filtered = images.voigtian_filter(0.3, 0.3)
     assert np.isfinite(filtered.array.compute()).all()
 
 
 def test_pseudo_voigtian_filter_lazy():
     """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
-    images = wave.build((0, 0), lazy=True).intensity()
+    images = _delta_probe_image(gpts=32, lazy=True)
     filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
     assert np.isfinite(filtered.array.compute()).all()
 
@@ -744,8 +740,8 @@ def test_pseudo_voigtian_filter_lazy():
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_images_interpolate_line(data, lazy, device):
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
     image = wave.build((0, 0), lazy=lazy).intensity()
@@ -827,8 +823,8 @@ def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
 @given(
     data=st.data(), dose_per_area=abtem_st.sensible_floats(min_value=1e8, max_value=1e9)
 )
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("measurement", [abtem_st.images])
 def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
     measurement = data.draw(
@@ -860,7 +856,7 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_diffraction_patterns_polar_binning(data, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(lazy=lazy, device=device, min_base_side=16)
@@ -912,8 +908,8 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(
@@ -927,9 +923,33 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement.center_of_mass().compute()
 
 
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("captured_fraction", [1.0, 0.5, 0.1])
+def test_diffraction_patterns_center_of_mass_is_normalized(device, captured_fraction):
+    # A center of mass is a normalized (intensity-weighted average) quantity, so
+    # scaling the total intensity of a diffraction pattern must not change the
+    # computed center of mass. This did not hold before the sum was normalized by
+    # the total captured intensity: https://github.com/abTEM/abTEM/discussions/402
+    gpts = 33
+    sampling = 0.4436
+    shift = (-10, 10)
+
+    y, x = np.mgrid[0:gpts, 0:gpts]
+    disk = np.exp(-((y - gpts // 2) ** 2 + (x - gpts // 2) ** 2) / (2 * 3.0**2))
+    disk = np.roll(disk, shift, axis=(0, 1))
+    disk = copy_to_device((disk / disk.sum() * captured_fraction).astype(np.float32), device)
+
+    measurement = DiffractionPatterns(disk, sampling=sampling, fftshift=True)
+
+    com = measurement.center_of_mass(units="1/Å").array
+
+    expected = (shift[0] * sampling) + 1.0j * (shift[1] * sampling)
+    assert abs(com - expected) < 0.1 * abs(expected)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
 def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(
@@ -941,21 +961,8 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
-    measurement = data.draw(
-        abtem_st.diffraction_patterns(
-            lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
-        )
-    )
-    assume(len(_scan_sampling(measurement)) > 1)
-    measurement.integrated_center_of_mass().compute()
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_diffraction_patterns_bandlimit(data, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(lazy=lazy, device=device, min_base_side=16)
@@ -970,8 +977,8 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
 
 @settings(deadline=None, max_examples=10)
 @given(data=st.data(), sigma=_sigma_strategy(max_value=2.0))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
     measurement = data.draw(
         abtem_st.diffraction_patterns(
@@ -984,8 +991,8 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
 
 @settings(suppress_health_check=(HealthCheck.data_too_large,))
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_polar_measurements_integrate(data, lazy, device):
     measurement = data.draw(abtem_st.polar_measurements(lazy=lazy, device=device))
     assume(len(_scan_shape(measurement)) > 0)
@@ -1027,22 +1034,22 @@ def test_polar_measurements_integrate(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_line_profiles_interpolate(data, lazy, device):
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
     measurement.interpolate().compute()
 
 
 @given(data=st.data(), reps=st.integers(min_value=1, max_value=3))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_line_profiles_tile(data, reps, lazy, device):
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
     measurement.tile(reps).compute()
 
 
-@pytest.mark.parametrize("lazy", [True, False])
+@lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
     atoms = ase.build.bulk("Si", cubic=True)
     images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
@@ -1057,7 +1064,7 @@ def test_line_profiles_interpolate_comparison(lazy):
     )
 
 
-@pytest.mark.parametrize("lazy", [True, False])
+@lazy_params
 def test_interpolate_periodic_spline_and_fft(lazy):
     atoms = ase.build.bulk("Si", cubic=True)
     images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
@@ -1125,65 +1132,74 @@ def test_integrate_disc(gpts, radius, sampling, position):
 # Images — crop, complex accessors, abs, scan_noise, normalize_ensemble
 # ---------------------------------------------------------------------------
 
-def _make_images(shape=(32, 32), sampling=(0.1, 0.1), complex_=False):
-    arr = np.random.default_rng(0).random(shape)
-    if complex_:
-        arr = arr + 1j * np.random.default_rng(1).random(shape)
+def make_images(shape=(32, 32), sampling=(0.1, 0.1), value=None, complex_=False):
+    """Build a bare ``Images`` object for tests that only need *some* image.
+
+    ``value`` fills the array with a constant (as several noise/transform
+    tests need); otherwise a reproducible random array is used, optionally
+    complex-valued.
+    """
+    if value is not None:
+        arr = np.full(shape, value, dtype=float)
+    else:
+        arr = np.random.default_rng(0).random(shape)
+        if complex_:
+            arr = arr + 1j * np.random.default_rng(1).random(shape)
     return Images(arr, sampling=sampling)
 
 
 class TestImagesCrop:
     def test_crop_reduces_extent(self):
-        imgs = _make_images((32, 32), (0.1, 0.1))
+        imgs = make_images((32, 32), (0.1, 0.1))
         cropped = imgs.crop((1.5, 1.5))
         assert cropped.extent[0] <= imgs.extent[0]
         assert cropped.extent[1] <= imgs.extent[1]
 
     def test_crop_centered(self):
-        imgs = _make_images((32, 32), (0.1, 0.1))
+        imgs = make_images((32, 32), (0.1, 0.1))
         cropped = imgs.crop((1.0, 1.0), centered=True)
         assert cropped.base_shape[0] <= imgs.base_shape[0]
 
     def test_crop_too_large_raises(self):
-        imgs = _make_images((32, 32), (0.1, 0.1))
+        imgs = make_images((32, 32), (0.1, 0.1))
         with pytest.raises(ValueError, match="smaller"):
             imgs.crop((999.0, 999.0))
 
     def test_crop_centered_with_offset_raises(self):
-        imgs = _make_images((32, 32), (0.1, 0.1))
+        imgs = make_images((32, 32), (0.1, 0.1))
         with pytest.raises(ValueError):
             imgs.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
 
     def test_crop_with_offset(self):
-        imgs = _make_images((32, 32), (0.1, 0.1))
+        imgs = make_images((32, 32), (0.1, 0.1))
         cropped = imgs.crop((1.0, 1.0), offset=(0.5, 0.5))
         assert cropped.base_shape[0] <= imgs.base_shape[0]
 
 
 class TestImagesComplexAccessors:
     def test_real(self):
-        imgs = _make_images(complex_=True)
+        imgs = make_images(complex_=True)
         real = imgs.real()
         assert not np.iscomplexobj(real.array)
         assert np.allclose(real.array, imgs.array.real)
 
     def test_imag(self):
-        imgs = _make_images(complex_=True)
+        imgs = make_images(complex_=True)
         imag = imgs.imag()
         assert np.allclose(imag.array, imgs.array.imag)
 
     def test_phase(self):
-        imgs = _make_images(complex_=True)
+        imgs = make_images(complex_=True)
         phase = imgs.phase()
         assert np.all(np.abs(phase.array) <= np.pi + 1e-10)
 
     def test_abs(self):
-        imgs = _make_images(complex_=True)
+        imgs = make_images(complex_=True)
         ab = imgs.abs()
         assert np.all(ab.array >= 0)
 
     def test_real_on_real_raises(self):
-        imgs = _make_images(complex_=False)
+        imgs = make_images(complex_=False)
         with pytest.raises(RuntimeError):
             imgs.real()
 
@@ -1201,7 +1217,7 @@ class TestImagesNormalizeEnsemble:
 
 class TestImagesScanNoise:
     def test_scan_noise_returns_images(self):
-        imgs = _make_images((16, 16))
+        imgs = make_images((16, 16))
         result = imgs.scan_noise(
             rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
             num_components=5
@@ -1209,19 +1225,19 @@ class TestImagesScanNoise:
         assert isinstance(result, Images)
 
     def test_scan_noise_shape_preserved(self):
-        imgs = _make_images((16, 16))
+        imgs = make_images((16, 16))
         result = imgs.scan_noise(1.0, 1e-6, 1e-4, num_components=5).compute()
         assert result.base_shape == imgs.base_shape
 
 
 class TestImagesRelativeDifference:
     def test_zero_difference(self):
-        imgs = _make_images()
+        imgs = make_images()
         diff = imgs.relative_difference(imgs.copy())
         assert np.allclose(diff.array[np.isfinite(diff.array)], 0.0, atol=1e-10)
 
     def test_wrong_type_raises(self):
-        imgs = _make_images()
+        imgs = make_images()
         dp = DiffractionPatterns(
             np.ones((8, 8)), sampling=0.1, metadata={"energy": 100e3}
         )
@@ -1233,12 +1249,13 @@ class TestImagesRelativeDifference:
 # DiffractionPatterns — integrate_radial, crop, poisson_noise with samples
 # ---------------------------------------------------------------------------
 
-class TestDiffractionPatternsIntegrateRadial:
-    def _dp(self, shape=(32, 32)):
-        return DiffractionPatterns(
-            np.ones(shape), sampling=0.05, metadata={"energy": 100e3}
-        )
+def _dp(shape=(32, 32), fill=1.0):
+    return DiffractionPatterns(
+        np.full(shape, fill), sampling=0.05, metadata={"energy": 100e3}
+    )
 
+
+class TestDiffractionPatternsIntegrateRadial:
     def test_returns_images_with_scan_axes(self):
         arr = np.ones((4, 4, 16, 16))
         dp = DiffractionPatterns(
@@ -1250,12 +1267,12 @@ class TestDiffractionPatternsIntegrateRadial:
         assert isinstance(result, Images)
 
     def test_inner_equals_outer_zero_result(self):
-        dp = self._dp()
+        dp = _dp()
         result = dp.integrate_radial(inner=5, outer=5)
         assert np.all(result.array == 0.0)
 
     def test_larger_outer_gives_larger_sum(self):
-        dp = self._dp()
+        dp = _dp()
         r1 = dp.integrate_radial(0, 5)
         r2 = dp.integrate_radial(0, 10)
         assert r2.array.sum() >= r1.array.sum()
@@ -1263,9 +1280,7 @@ class TestDiffractionPatternsIntegrateRadial:
 
 class TestDiffractionPatternsCrop:
     def test_crop_reduces_max_angle(self):
-        dp = DiffractionPatterns(
-            np.ones((64, 64)), sampling=0.05, metadata={"energy": 100e3}
-        )
+        dp = _dp((64, 64))
         max_before = min(dp.max_angles)
         cropped = dp.crop(max_angle=max_before / 2)
         assert min(cropped.max_angles) <= min(dp.max_angles)
@@ -1273,16 +1288,12 @@ class TestDiffractionPatternsCrop:
 
 class TestDiffractionPatternsPoisson:
     def test_poisson_with_samples(self):
-        dp = DiffractionPatterns(
-            np.ones((16, 16)) * 100, sampling=0.05, metadata={"energy": 100e3}
-        )
+        dp = _dp((16, 16), fill=100.0)
         noisy = dp.poisson_noise(total_dose=1e6, samples=4).compute()
         assert noisy.shape[0] == 4
 
     def test_poisson_nonnegative(self):
-        dp = DiffractionPatterns(
-            np.ones((16, 16)) * 50, sampling=0.05, metadata={"energy": 100e3}
-        )
+        dp = _dp((16, 16), fill=50.0)
         noisy = dp.poisson_noise(total_dose=1e5).compute()
         assert np.all(noisy.array >= 0)
 

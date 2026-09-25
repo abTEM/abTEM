@@ -7,6 +7,7 @@ from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
     assert_array_matches_laziness,
+    devices,
     gpu,
 )
 
@@ -33,7 +34,7 @@ from utils import (
 @pytest.mark.parametrize(
     "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
 )
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 @pytest.mark.parametrize("lazy", [False, True])
 @given(data=st.data())
 def test_can_build(data, waves_builder, device, lazy):
@@ -59,7 +60,7 @@ def test_can_build(data, waves_builder, device, lazy):
 @pytest.mark.parametrize(
     "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
 )
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("lazy", [True, False])
 def test_can_compute(data, waves_builder, device, lazy):
     waves_builder = data.draw(waves_builder(device=device))
@@ -85,7 +86,7 @@ def test_can_compute(data, waves_builder, device, lazy):
     ],
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_can_multislice(data, potential, waves_builder, lazy, device):
     waves_builder = data.draw(waves_builder(device=device))
     waves_builder.grid.match(potential)
@@ -273,7 +274,7 @@ def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
     ],
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_apply_transform(data, transform, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     transform = data.draw(transform())
@@ -284,7 +285,7 @@ def test_apply_transform(data, transform, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_intensity(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     images = waves.intensity()
@@ -294,7 +295,7 @@ def test_intensity(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_images(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     images = waves.to_images()
@@ -310,7 +311,7 @@ def test_images(data, lazy, device):
     normalization=st.sampled_from(["intensity", "values"]),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_downsample(data, max_angle, normalization, lazy, device):
     probe = data.draw(abtem_st.probe(device=device, allow_distribution=False))
     waves = probe.build(lazy=lazy)
@@ -359,7 +360,7 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     ),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
 
@@ -379,7 +380,7 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     renormalize=st.booleans(),
 )
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
@@ -514,19 +515,27 @@ def test_window_none_only_crops():
 
 
 @pytest.fixture
-def exit_plane_waves():
-    """Create Waves with a ThicknessAxis for depth_profile tests."""
+def exit_plane_waves(request):
+    """Create Waves with a ThicknessAxis for depth_profile tests.
+
+    Indirectly parametrized over ``device`` (see the consuming tests below)
+    so that a "gpu" run actually builds on the GPU instead of silently
+    reusing the CPU build -- following the pattern ``test_system`` uses in
+    test_realspace_multislice.py.
+    """
     import abtem
     import ase
+
+    device = getattr(request, "param", "cpu")
 
     silicon = ase.build.bulk("Si", cubic=True)
     atoms = silicon * (2, 2, 5)
     atoms.center(axis=2)
 
     potential = abtem.Potential(
-        atoms, slice_thickness=2.0, gpts=(32, 32), exit_planes=1
+        atoms, slice_thickness=2.0, gpts=(32, 32), exit_planes=1, device=device
     )
-    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10)
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10, device=device)
     probe.match_grid(potential)
 
     pos = atoms.positions[0][:2]
@@ -534,24 +543,24 @@ def exit_plane_waves():
     return probe.multislice(potential, scan).compute()
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_shape(exit_plane_waves, device):
+@pytest.mark.parametrize("exit_plane_waves", [gpu, "cpu"], indirect=True)
+def test_depth_profile_shape(exit_plane_waves):
     profile = exit_plane_waves.depth_profile()
     n_z = exit_plane_waves.shape[0]
     n_x = exit_plane_waves.shape[-1]
     assert profile.shape == (1, n_x, n_z)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_projection_axis_x(exit_plane_waves, device):
+@pytest.mark.parametrize("exit_plane_waves", [gpu, "cpu"], indirect=True)
+def test_depth_profile_projection_axis_x(exit_plane_waves):
     profile = exit_plane_waves.depth_profile(projection_axis="x")
     n_z = exit_plane_waves.shape[0]
     n_y = exit_plane_waves.shape[-2]
     assert profile.shape == (1, n_y, n_z)
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_depth_profile_sampling(exit_plane_waves, device):
+@pytest.mark.parametrize("exit_plane_waves", [gpu, "cpu"], indirect=True)
+def test_depth_profile_sampling(exit_plane_waves):
     from abtem.core.axes import ThicknessAxis
 
     profile = exit_plane_waves.depth_profile()

@@ -7,12 +7,13 @@ import abtem
 from abtem.integrals import (
     _MAX_CACHE_ENTRIES,
     _MAX_SCATTERING_FACTOR_ENTRIES,
+    FieldIntegrator,
     GaussianProjectionIntegrals,
     QuadratureProjectionIntegrals,
     ScatteringFactorProjectionIntegrals,
     _DeviceArrayCache,
 )
-from utils import assert_array_matches_device, gpu
+from utils import assert_array_matches_device, devices, si_cubic_atoms
 
 # from abtem.integrals import GaussianProjectionIntegrals
 from abtem.parametrizations import (
@@ -171,6 +172,66 @@ def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
 #     assert np.allclose(quadrature_potential[0, :gpts[1] // 2], gaussian_potential[0, :gpts[1] // 2], atol=2)
 
 
+class TestFieldIntegratorSignature:
+    """``FieldIntegrator.integrate_on_grid``'s abstract signature must name the
+    argument every concrete implementation actually takes, since it is the
+    interface a custom integrator is written against."""
+
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+            QuadratureProjectionIntegrals,
+        ],
+        ids=["gaussian", "scattering_factor", "quadrature"],
+    )
+    def test_first_parameter_name_matches_the_base_class(self, cls):
+        import inspect
+
+        # index 1, not 0 -- index 0 is `self` on both the abstract and concrete
+        # unbound methods.
+        base_param = list(
+            inspect.signature(FieldIntegrator.integrate_on_grid).parameters
+        )[1]
+        concrete_param = list(inspect.signature(cls.integrate_on_grid).parameters)[1]
+        assert base_param == concrete_param == "atoms"
+
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+            QuadratureProjectionIntegrals,
+        ],
+        ids=["gaussian", "scattering_factor", "quadrature"],
+    )
+    def test_a_b_annotations_match_the_base_class(self, cls):
+        """Comparing only parameter *names* (the test above) missed a
+        companion defect: the base and two of the three concrete
+        implementations annotated `a`/`b` as `np.ndarray` while the only
+        caller (iam.py) always passes scalar floats
+        (`sliced_atoms.slice_limits[slice_idx][0]`/`[1]`) and
+        `QuadratureProjectionIntegrals` alone annotated them correctly.
+        Comparing the full parameter objects (annotations included) catches
+        that class of drift too.
+        """
+        import inspect
+
+        # `from __future__ import annotations` in abtem/integrals.py means
+        # these come back as strings ("float"), not the builtin type.
+        base_params = inspect.signature(
+            FieldIntegrator.integrate_on_grid
+        ).parameters
+        concrete_params = inspect.signature(cls.integrate_on_grid).parameters
+        for name in ("a", "b"):
+            assert (
+                base_params[name].annotation
+                == concrete_params[name].annotation
+                == "float"
+            )
+
+
 class TestScatteringFactorCacheKey:
     """``get_scattering_factor`` cached on the chemical symbol alone.
 
@@ -181,12 +242,6 @@ class TestScatteringFactorCacheKey:
     is a documented ``Potential`` parameter, so sharing one is ordinary use.
     """
 
-    @staticmethod
-    def _atoms():
-        import ase.build
-
-        return ase.build.bulk("Si", cubic=True)
-
     def test_second_grid_is_not_served_the_first_grids_array(self):
         integrator = ScatteringFactorProjectionIntegrals()
         for gpts, sampling in (((64, 64), (0.125, 0.125)), ((128, 128), (0.0625,) * 2)):
@@ -194,7 +249,7 @@ class TestScatteringFactorCacheKey:
             assert array.shape == gpts
 
     def test_potentials_on_two_grids_may_share_an_integrator(self):
-        atoms = self._atoms()
+        atoms = si_cubic_atoms()
         shared = ScatteringFactorProjectionIntegrals()
         for gpts in ((64, 64), (128, 128)):
             got = abtem.Potential(
@@ -208,7 +263,7 @@ class TestScatteringFactorCacheKey:
             ).build(lazy=False)
             assert np.array_equal(got.array, reference.array)
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_array_lands_on_the_requested_device(self, device):
         integrator = ScatteringFactorProjectionIntegrals()
         # Warm the cache on the cpu first: the array served for ``device``
@@ -217,9 +272,9 @@ class TestScatteringFactorCacheKey:
         array = integrator.get_scattering_factor("Si", (64, 64), (0.125, 0.125), device)
         assert_array_matches_device(array, device)
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_potential_may_share_an_integrator_across_devices(self, device):
-        atoms = self._atoms()
+        atoms = si_cubic_atoms()
         shared = ScatteringFactorProjectionIntegrals()
         abtem.Potential(
             atoms, gpts=(64, 64), slice_thickness=1.0, integrator=shared, device="cpu"
@@ -281,6 +336,7 @@ class TestScatteringFactorCacheKey:
             "touched entry is never evicted, so once is the only right answer"
         )
 
+    @pytest.mark.slow
     def test_concurrent_access_does_not_race(self):
         """Hand-rolled dict eviction raced: two threads evicting the same key
         gave KeyError, and iteration could see the dict resized underneath."""
@@ -773,6 +829,7 @@ class TestIntegratorCaches:
         assert clone._tables is not used._tables
         assert len(clone._tables) == 0
 
+    @pytest.mark.slow
     def test_concurrent_access_serves_correct_values(self):
         """Not just "nothing raised": check what the cache hands back."""
         import sys
@@ -823,23 +880,17 @@ class TestGaussianProjectionIntegralsUsable:
     `fourier_space` flag it never read, and it could not run on GPU at all.
     """
 
-    @staticmethod
-    def _atoms():
-        import ase.build
-
-        return ase.build.bulk("Si", cubic=True)
-
     def _build(self, integrator, device="cpu", gpts=(128, 128)):
         return np.asarray(
             abtem.core.backend.asnumpy(
                 abtem.Potential(
-                    self._atoms(), gpts=gpts, slice_thickness=1.0,
+                    si_cubic_atoms(), gpts=gpts, slice_thickness=1.0,
                     integrator=integrator, device=device,
                 ).build(lazy=False).array
             )
         )
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     def test_builds_on_both_devices_and_they_agree(self, device):
         """It failed on GPU with TypeError: Unsupported type numpy.ndarray."""
         if device == "cpu":
@@ -1196,7 +1247,7 @@ class TestGaussianProjectionIntegralsUsable:
 
         with pytest.raises(TypeError):
             integrator.integrate_on_grid(
-                self._atoms(),
+                si_cubic_atoms(),
                 a=0.0,
                 b=1.0,
                 gpts=(32, 32),

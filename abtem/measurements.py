@@ -4567,8 +4567,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _com(array: np.ndarray, x: np.ndarray, y: np.ndarray):
-        com_x = (array * x[:, None]).sum(axis=(-2, -1))
-        com_y = (array * y[None]).sum(axis=(-2, -1))
+        total_intensity = array.sum(axis=(-2, -1))
+        com_x = (array * x[:, None]).sum(axis=(-2, -1)) / total_intensity
+        com_y = (array * y[None]).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
         return com
 
