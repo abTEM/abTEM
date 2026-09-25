@@ -338,3 +338,67 @@ def test_exact_bloch_waves_pair_with_exact_multislice():
 
     assert r_factor(ms[1], bw[True]) < 0.7 * r_factor(ms[1], bw["exact"])
     assert r_factor(ms["exact"], bw["exact"]) < 0.9 * r_factor(ms["exact"], bw[True])
+
+
+@pytest.fixture
+def float64():
+    with abtem.config.set({"precision": "float64"}):
+        yield
+
+
+def _tilted_si_bloch_waves(use_wave_eq):
+    # beam || [018] of cubic Si, 7.1 degrees from [001]: g_z != 0 for most beams,
+    # so the (1 + g_z / K) metric of the standard form matters
+    atoms = bulk("Si", cubic=True)
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="F"
+    )
+    return BlochWaves(
+        structure_factor=structure_factor,
+        energy=100e3,
+        sg_max=0.5,
+        use_wave_eq=use_wave_eq,
+        orientation_matrix=orientation_matrix,
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_eigendecomposition_matches_scattering_matrix_when_tilted(use_wave_eq):
+    # Both solution paths must map the symmetrized eigenproblem back to beam
+    # amplitudes with the same metric (they used not to, off zone axis).
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    thickness = 300.0
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [thickness], return_complex=True, lazy=False
+        ).array
+    )[0]
+    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
+    S = np.asarray(bloch_waves.calculate_scattering_matrix(thickness))
+    np.testing.assert_allclose(psi, S[:, direct_beam], atol=1e-10)
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
+    # The wave-equation forms, like multislice, are unitary: sum |psi_g|^2 = 1.
+    # The standard form conserves the current along z instead:
+    # sum (1 + g_z / K) |psi_g|^2 = 1.
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [100.0, 300.0, 600.0], return_complex=True, lazy=False
+        ).array
+    )
+    if use_wave_eq:
+        weights = 1.0
+    else:
+        weights = 1 + bloch_waves.g_vec[:, 2] * energy2wavelength(bloch_waves.energy)
+    np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
+    if not use_wave_eq:
+        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
