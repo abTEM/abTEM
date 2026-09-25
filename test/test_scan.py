@@ -4,13 +4,17 @@ import strategies as abtem_st
 from ase.build import bulk
 from hypothesis import given
 from hypothesis import strategies as st
-from utils import gpu
+from utils import devices
 
 from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials.iam import Potential
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.waves import Probe
+
+
+def _probe():
+    return Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
 
 
 @given(
@@ -64,7 +68,7 @@ def test_custom_scan_probe_build_shape():
     correct length in the ensemble."""
     positions = np.array([[0.5, 0.5], [1.0, 1.0], [1.5, 1.5], [2.0, 2.0]])
     scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
+    probe = _probe()
     waves = probe.build(scan, lazy=False)
     assert waves.ensemble_shape == (4,)
     assert isinstance(waves.ensemble_axes_metadata[0], PositionsAxis)
@@ -77,7 +81,7 @@ def test_custom_scan_annular_detector_shape(n_positions):
     rng = np.random.default_rng(42)
     positions = rng.uniform(0.5, 4.5, size=(n_positions, 2))
     scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
+    probe = _probe()
     waves = probe.build(scan, lazy=False)
     detector = AnnularDetector(inner=5, outer=20)
     measurement = detector.detect(waves)
@@ -97,7 +101,7 @@ def test_custom_scan_detector_ensemble_shape(detector_cls, kwargs):
     and produce measurements whose ensemble shape matches the scan shape."""
     positions = np.array([[0.5, 0.5], [1.5, 1.5], [2.5, 2.5]])
     scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
+    probe = _probe()
     waves = probe.build(scan, lazy=False)
     detector = detector_cls(**kwargs)
     measurement = detector.detect(waves)
@@ -126,7 +130,7 @@ def test_single_point_grid_scan_partition_round_trip(endpoint):
     assert np.allclose(block_scan.get_positions().ravel(), (1.0, 1.0))
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("endpoint", [True, False])
 def test_single_point_grid_scan_lazy(device, endpoint):
     """Regression test: building the wave functions of a one-point GridScan lazily used

@@ -250,31 +250,108 @@ def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
     return fftw_object
 
 
+def _fftw_plan_config() -> tuple:
+    """
+    The configuration ``_new_fftw_object`` bakes into a plan.
+
+    Part of the plan cache key. abTEM's config is meant to be changed at runtime
+    inside a ``config.set`` block, and every call re-read these before the plans
+    were cached, so a plan built under one configuration must not be reused
+    under another -- a user who asks for more threads would otherwise keep
+    getting plans made for the old count.
+    """
+    return (
+        config.get("fftw.threads"),
+        config.get("fftw.planning_effort"),
+        config.get("fftw.planning_timelimit"),
+    )
+
+
 class CachedFFTWConvolution:
+    """
+    Convolve an array with a kernel, reusing the pyfftw plan pair across calls.
+
+    Creating a plan costs a noticeable fraction of executing one -- it also
+    allocates and zeroes a scratch array the size of the input -- so the pair is
+    kept between calls rather than rebuilt on each one.
+
+    A plan is tied to one buffer *layout*: ``update_arrays`` rejects an array
+    whose dtype, shape or strides differ from the array the plan was made for,
+    so those make up the cache key, together with the configuration the plan was
+    built under. It is equally tied to one specific *buffer*, which on a cache
+    hit is the previous call's array, so the cached plans are re-pointed at the
+    current array on every call and not only when they are built.
+
+    The plans are deliberately built with the same flags every time, never flags
+    derived from the buffer being transformed. An ``FFTW_UNALIGNED`` plan
+    selects different codelets and so returns slightly different numbers (~1e-7
+    relative, the order of float32 epsilon) than an aligned one. Since malloc
+    only guarantees 16-byte alignment while FFTW's ``simd_alignment`` is 32 on
+    x86, choosing the flag from the incoming array would make the result depend
+    on where the buffer happened to land -- two runs differing only in chunking
+    would then disagree. A buffer the plan will not accept is aligned by copying
+    instead, which changes no arithmetic.
+
+    The cache is thread-local. Dask's threaded scheduler can drive a single
+    shared propagator from several worker threads at once, and because a plan
+    points at exactly one buffer, sharing one pair between threads would make
+    concurrent calls transform each other's arrays.
+    """
+
     def __init__(self):
-        self._fftw_objects = None
-        self._shape = None
+        self._local = threading.local()
+
+    def __getstate__(self) -> dict:
+        # threading.local is not picklable, and a plan cache built on one
+        # process/thread is not valid on another -- drop it rather than the
+        # object as a whole failing to pickle. FresnelPropagator's documented
+        # `propagator=` reuse argument invites sending an unused instance to
+        # a dask.distributed worker before it has cached anything.
+        state = self.__dict__.copy()
+        del state["_local"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._local = threading.local()
+
+    def _get_fftw_objects(self, array: np.ndarray) -> dict[str, "pyfftw.FFTW"]:
+        key = (array.shape, array.dtype, array.strides, _fftw_plan_config())
+
+        cached = getattr(self._local, "cached", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        fftw_objects = {
+            name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
+        }
+        self._local.cached = (key, fftw_objects)
+        return fftw_objects
 
     def __call__(
         self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool
     ) -> np.ndarray:
-        if array.shape != self._shape:
-            self._fftw_objects = None
-
-        if self._fftw_objects is None:
-            fftw_objects = {
-                name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
-            }
-            self._fftw_objects = fftw_objects
-
         if not overwrite_x:
             array = array.copy()
-            self._fftw_objects["fft2"].update_arrays(array, array)
-            self._fftw_objects["ifft2"].update_arrays(array, array)
 
-        array = self._fftw_objects["fft2"]()
+        fftw_objects = self._get_fftw_objects(array)
+
+        try:
+            # A cache hit returns plans still bound to an earlier call's buffer,
+            # so they must be re-pointed even though nothing was rebuilt.
+            for fftw_object in fftw_objects.values():
+                fftw_object.update_arrays(array, array)
+        except ValueError:
+            # The plan demands more alignment than this buffer has. Align the
+            # buffer rather than re-planning for it: a copy preserves the
+            # arithmetic, a differently aligned plan would not.
+            array = pyfftw.byte_align(array)
+            for fftw_object in fftw_objects.values():
+                fftw_object.update_arrays(array, array)
+
+        array = fftw_objects["fft2"]()
         array *= kernel
-        array = self._fftw_objects["ifft2"]()
+        array = fftw_objects["ifft2"]()
         return array
 
 
@@ -959,7 +1036,12 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[: -len(new_shape)] + new_shape
+        # Not `array.shape[: -len(new_shape)]`: -0 is 0, not "the end", so
+        # for `new_shape == ()` that slice was `[:0]`, always empty, rather
+        # than `[:len(array.shape)]` -- every dimension is a batch
+        # dimension when none are being resized.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        new_shape = array.shape[:n_batch_dims] + new_shape
 
     # Build per-dimension slice-pair lists.  Dimensions with equal in/out size
     # (e.g. batch dims) take a single full-slice pair; the rest contribute 1–2
@@ -1012,7 +1094,11 @@ def fft_interpolate(
     numpy.ndarray
         Interpolated array.
     """
-    old_size = np.prod(array.shape[-len(new_shape) :])
+    # Not `array.shape[-len(new_shape):]`: the same -0 problem, mirrored --
+    # for `new_shape == ()` that slice was `[0:]`, everything, rather than
+    # `[len(array.shape):]`, nothing (no axes are being resized).
+    n_batch_dims = len(array.shape) - len(new_shape)
+    old_size = np.prod(array.shape[n_batch_dims:])
 
     is_complex = np.iscomplexobj(array)
 
@@ -1036,7 +1122,9 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
+        # See the comment above old_size: same -0 fix, same reasoning.
+        n_batch_dims = len(array.shape) - len(new_shape)
+        array *= np.prod(array.shape[n_batch_dims:]) / old_size
     elif normalization in ("amplitude", "intensity"):
         pass
     else:

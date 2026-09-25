@@ -869,6 +869,8 @@ _fft = SimpleNamespace(
     ifft2=_fft_func("ifft2"),
     fftn=_fft_func("fftn"),
     ifftn=_fft_func("ifftn"),
+    rfftn=_fft_func("rfftn"),
+    irfftn=_fft_func("irfftn"),
     fft=_fft_func("fft"),
     ifft=_fft_func("ifft"),
     fftshift=_fft_shift_func("fftshift"),
@@ -1174,7 +1176,12 @@ def isclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False):
 
 def iscomplexobj(x) -> bool:
     """``numpy.iscomplexobj`` -- a dtype question, answered without the device."""
-    return _unwrap(x).is_complex()
+    tensor = _unwrap(x)
+    if isinstance(tensor, torch.Tensor):
+        return tensor.is_complex()
+    # Reached through the namespace (xp.iscomplexobj) rather than through the
+    # dispatch protocol, where the argument need not be on the device at all.
+    return np.iscomplexobj(tensor)
 
 
 def roll(x, shift, axis=None):
@@ -1346,6 +1353,7 @@ class _TorchNumpyNamespace:
     floor = staticmethod(_elementwise("floor"))
     ceil = staticmethod(_elementwise("ceil"))
     isclose = staticmethod(isclose)
+    iscomplexobj = staticmethod(iscomplexobj)
     round = staticmethod(round)
     rint = staticmethod(_elementwise("round"))
     conjugate = staticmethod(_elementwise("conj"))

@@ -1234,6 +1234,16 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         If 'finite' the 3D potential is numerically integrated between the slice
         boundaries. If 'infinite' (default), the infinite potential projection of each
         atom will be assigned to a single slice.
+
+        On GPU, ``projection='finite'`` is not bit-reproducible: its radial
+        interpolation kernel accumulates overlapping atoms' contributions with
+        an atomic add, whose order (and therefore float32 rounding) varies
+        from run to run (deviation ~1e-7 relative). ``projection='infinite'``
+        has no such accumulation and is deterministic on both CPU and GPU, as
+        is ``'finite'`` on CPU. Compare finite-projection GPU results with a
+        relative tolerance of at least 1e-6 rather than exact equality, and
+        build on CPU (or use ``'infinite'``) where bit-for-bit reproducibility
+        matters.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the

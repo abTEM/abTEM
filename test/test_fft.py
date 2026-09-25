@@ -1,11 +1,15 @@
 """Tests for FFT helpers, in particular fast-radix transform-size handling."""
 
+import threading
 import warnings
 
+import numpy as np
 import pytest
 
 from utils import requires_gpu
 
+from abtem.core import config
+from abtem.core import fft as abtem_fft
 from abtem.core.fft import (
     _warn_slow_fft_size,
     _warned_slow_fft_shapes,
@@ -351,3 +355,303 @@ def test_plan_cache_entry_limit():
         # Reapply the process configuration whatever happened above.
         abtem_fft._reset_cufft_cache_state()
         abtem_fft._configure_cufft_cache()
+
+
+pyfftw = abtem_fft.pyfftw
+requires_pyfftw = pytest.mark.skipif(
+    pyfftw is None, reason="CachedFFTWConvolution needs pyfftw"
+)
+
+
+def _convolution_reference(array, kernel):
+    """The convolution ``CachedFFTWConvolution`` computes, via numpy."""
+    return np.fft.ifft2(np.fft.fft2(array.astype(np.complex128)) * kernel)
+
+
+def _random_convolution_inputs(rng, batch=3, gpts=32, dtype=np.complex64):
+    real = np.dtype(dtype).type(0).real.dtype
+    array = (
+        rng.random((batch, gpts, gpts), dtype=real)
+        + 1j * rng.random((batch, gpts, gpts), dtype=real)
+    ).astype(dtype)
+    kernel = (
+        rng.random((gpts, gpts), dtype=real)
+        + 1j * rng.random((gpts, gpts), dtype=real)
+    ).astype(dtype)
+    return array, kernel
+
+
+@pytest.fixture
+def count_fftw_plans(monkeypatch):
+    """Count the pyfftw plans built while the fixture is active."""
+    built = []
+    original = abtem_fft._new_fftw_object
+
+    def counted(array, name, flags=()):
+        built.append(name)
+        return original(array, name, flags=flags)
+
+    monkeypatch.setattr(abtem_fft, "_new_fftw_object", counted)
+    return built
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_reuses_plans(count_fftw_plans):
+    # The plan pair must be built once and then reused. Regression test: the
+    # shape was compared against an attribute that was never assigned, so every
+    # call rebuilt both plans (and zeroed a scratch array the size of the input).
+    rng = np.random.default_rng(0)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    for _ in range(4):
+        array, kernel = _random_convolution_inputs(rng)
+        convolution(array.copy(), kernel, True)
+
+    assert len(count_fftw_plans) == 2
+
+
+@pytest.mark.parametrize("overwrite_x", [True, False])
+@requires_pyfftw
+def test_cached_fftw_convolution_correct_on_a_cache_hit(overwrite_x):
+    # A cached plan still points at the previous call's buffer, so a hit is only
+    # correct if the plans are re-pointed at the current array every call.
+    #
+    # Note: this also passes unmodified against the pre-fix code, since
+    # "rebuild from scratch on every call" trivially satisfies "plan matches
+    # the current buffer" -- there is no cache there to get wrong. It still
+    # guards a real invariant of the fixed implementation.
+    rng = np.random.default_rng(1)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    for _ in range(4):
+        array, kernel = _random_convolution_inputs(rng)
+        source = array.copy()
+
+        result = convolution(source, kernel, overwrite_x)
+
+        expected = _convolution_reference(array, kernel)
+        assert np.allclose(result, expected, atol=1e-6)
+        if not overwrite_x:
+            assert np.array_equal(source, array)
+
+
+@pytest.mark.parametrize("changed", ["shape", "dtype"])
+@requires_pyfftw
+def test_cached_fftw_convolution_replans_on_layout_change(changed, count_fftw_plans):
+    # A plan is tied to the dtype, shape and strides it was made for --
+    # ``update_arrays`` raises otherwise -- so each must invalidate the cache.
+    #
+    # Note: this also passes unmodified against the pre-fix code, since a
+    # shape/dtype change there triggers a rebuild anyway (every call does).
+    # It still guards a real invariant of the fixed implementation.
+    rng = np.random.default_rng(2)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    array, kernel = _random_convolution_inputs(rng)
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 2
+
+    if changed == "shape":
+        array, kernel = _random_convolution_inputs(rng, gpts=64)
+    else:
+        array, kernel = _random_convolution_inputs(rng, dtype=np.complex128)
+
+    result = convolution(array.copy(), kernel, True)
+
+    assert len(count_fftw_plans) == 4
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_thread_safe():
+    # A plan points at exactly one buffer, so threads sharing a plan pair would
+    # transform each other's arrays. Each thread must get its own pair.
+    convolution = abtem_fft.CachedFFTWConvolution()
+    failures = []
+
+    def worker(seed):
+        rng = np.random.default_rng(seed)
+        array, kernel = _random_convolution_inputs(rng, gpts=64)
+        expected = _convolution_reference(array, kernel)
+        for _ in range(25):
+            result = convolution(array.copy(), kernel, True)
+            if not np.allclose(result, expected, atol=1e-6):
+                failures.append(seed)
+
+    threads = [threading.Thread(target=worker, args=(seed,)) for seed in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not failures
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_result_is_independent_of_buffer_alignment():
+    """The numbers must not depend on where the input buffer happens to land.
+
+    Regression test: keying the plan flags off the input's alignment made the
+    convolution pick ``FFTW_UNALIGNED`` codelets for some buffers and aligned
+    ones for others. Those differ by ~1e-7 relative, so two runs that differed
+    only in how arrays had been allocated -- e.g. the same multislice with a
+    different potential chunk size -- stopped agreeing.
+    """
+    rng = np.random.default_rng(3)
+    array, kernel = _random_convolution_inputs(rng, gpts=64)
+
+    # a buffer deliberately offset inside a larger allocation: still contiguous
+    # and still C-ordered, but not necessarily aligned for SIMD
+    spare = np.empty(array.size + 1, dtype=array.dtype)
+    offset = spare[1:].reshape(array.shape)
+    offset[...] = array
+    assert offset.strides == array.strides
+
+    convolution = abtem_fft.CachedFFTWConvolution()
+    aligned_result = convolution(array.copy(), kernel, True)
+    offset_result = convolution(offset, kernel, True)
+
+    assert np.array_equal(aligned_result, offset_result), (
+        "convolution result depends on input buffer alignment"
+    )
+
+
+@requires_pyfftw
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"fftw.threads": 4},
+        {"fftw.planning_effort": "FFTW_ESTIMATE"},
+        {"fftw.planning_timelimit": 5},
+    ],
+    ids=["threads", "planning_effort", "planning_timelimit"],
+)
+def test_cached_fftw_convolution_respects_config_changes(setting, count_fftw_plans):
+    """Caching must not pin the plans to the configuration of the first call.
+
+    Every call re-read these settings before the plans were cached, so a
+    ``config.set`` block took effect immediately. A plan built under the old
+    configuration must not outlive it -- a user asking for more threads would
+    otherwise keep getting plans made for the old count.
+    """
+    rng = np.random.default_rng(4)
+    array, kernel = _random_convolution_inputs(rng)
+    convolution = abtem_fft.CachedFFTWConvolution()
+
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 2
+
+    with config.set(setting):
+        convolution(array.copy(), kernel, True)
+        assert len(count_fftw_plans) == 4, f"{setting} ignored by the plan cache"
+        # ...and the plans built under it are themselves reused
+        convolution(array.copy(), kernel, True)
+        assert len(count_fftw_plans) == 4
+
+    # leaving the block restores the original configuration's plans
+    convolution(array.copy(), kernel, True)
+    assert len(count_fftw_plans) == 6
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_picklable_before_first_use():
+    # threading.local is not picklable, so storing the cache in one made every
+    # instance unpicklable -- including one that has never built a plan.
+    # FresnelPropagator's documented `propagator=` reuse argument invites
+    # sending exactly such an unused instance to a dask.distributed worker.
+    cloudpickle = pytest.importorskip("cloudpickle")
+
+    convolution = abtem_fft.CachedFFTWConvolution()
+    restored = cloudpickle.loads(cloudpickle.dumps(convolution))
+
+    rng = np.random.default_rng(5)
+    array, kernel = _random_convolution_inputs(rng)
+    result = restored(array.copy(), kernel, True)
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)
+
+
+@requires_pyfftw
+def test_cached_fftw_convolution_is_picklable_after_use():
+    # A plan cache built in one process/thread is not valid in another, so a
+    # restored instance must drop it and transparently rebuild rather than
+    # shipping a stale cache across the pickle boundary.
+    cloudpickle = pytest.importorskip("cloudpickle")
+
+    rng = np.random.default_rng(6)
+    array, kernel = _random_convolution_inputs(rng)
+    convolution = abtem_fft.CachedFFTWConvolution()
+    convolution(array.copy(), kernel, True)
+
+    restored = cloudpickle.loads(cloudpickle.dumps(convolution))
+    assert not hasattr(restored, "_local") or not hasattr(
+        restored._local, "cached"
+    )
+
+    result = restored(array.copy(), kernel, True)
+    assert np.allclose(result, _convolution_reference(array, kernel), atol=1e-6)
+
+
+class TestFftCropInterpolateEmptyNewShape:
+    """`fft_crop`/`fft_interpolate` sliced off the batch dimensions with
+    `array.shape[: -len(new_shape)]` / `array.shape[-len(new_shape) :]`, the
+    same -0 bug as abtem/array.py's base-less ArrayObject sites: for
+    `new_shape == ()` (every dimension is a batch dimension, none are being
+    resized), `-len(new_shape)` is `-0`, which collapses to the wrong end.
+
+    Reachable from public API: `WavesDetector(gpts=())` builds `new_shape =
+    waves.shape[:-2] + gpts`, which is `()` for a plain 2D `Waves` with no
+    ensemble axes, since `gpts` itself contributes nothing. Before the fix
+    this crashed inside `fft_crop` with an opaque
+    `TypeError: only length-1 arrays can be converted to Python scalars`,
+    three frames below the `gpts=()` that caused it.
+    """
+
+    @staticmethod
+    def _array():
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        return (
+            rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
+        ).astype(complex)
+
+    def test_fft_crop_with_empty_new_shape_is_a_no_op(self):
+        import numpy as np
+
+        from abtem.core.fft import fft_crop
+
+        array = self._array()
+        assert np.array_equal(fft_crop(array, ()), array)
+
+    def test_fft_interpolate_with_empty_new_shape_is_a_no_op(self):
+        import numpy as np
+
+        from abtem.core.fft import fft_interpolate
+
+        array = self._array()
+        out = fft_interpolate(array, ())
+        assert out.shape == array.shape
+        assert np.allclose(out, array)
+
+    def test_wavesdetector_empty_gpts_matches_none(self):
+        """The end-to-end case: `gpts=()` is falsy but `is not None`, so it
+        reaches `_calculate_new_array`'s `if self._gpts is not None:` guard
+        and used to crash there. It now degenerates to the same no-resample
+        behaviour as the documented `gpts=None` default, rather than either
+        crashing or silently returning something else."""
+        import numpy as np
+
+        import abtem
+        from abtem.waves import Waves
+
+        with abtem.config.set({"fft": "numpy"}):
+            array = self._array().astype("complex64")
+            waves = Waves(array, energy=100e3, extent=(10, 10))
+
+            none_out = abtem.WavesDetector(gpts=None).detect(waves)
+            empty_out = abtem.WavesDetector(gpts=()).detect(waves)
+
+        assert np.array_equal(
+            np.asarray(none_out.array), np.asarray(empty_out.array)
+        )
+        assert np.array_equal(np.asarray(empty_out.array), array)
