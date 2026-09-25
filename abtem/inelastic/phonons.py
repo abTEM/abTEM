@@ -293,16 +293,24 @@ class FrozenPhonons(BaseFrozenPhonons):
         using the ASE standard. If list or array, a displacement standard deviation
         should be provided for each atom.
 
-        Anistropic displacements may be given by providing a standard deviation for each
-        principal direction. This may be a tuple of three numbers for identical
-        displacements for all atoms. A dict of tuples of three numbers to specify
-        displacements for each species. A list or array with three numbers for each
-        atom.
+        The standard deviation applies to each displaced direction separately: every
+        direction in `directions` receives an independent Gaussian displacement with
+        standard deviation sigma, so sigma squared is the mean-square displacement
+        along one direction (the isotropic displacement parameter U_iso), not the
+        total mean-square displacement, which is 3 sigma squared for the default
+        `directions`.
+
+        Anisotropic displacements may be given by providing a standard deviation for
+        each Cartesian direction (`x`, `y`, `z`). This may be a tuple of three numbers
+        for identical displacements for all atoms. A dict of tuples of three numbers to
+        specify displacements for each species. A list or array with three numbers for
+        each atom.
 
     directions : str, optional
-        The displacement directions of the atoms as a string; for example 'xy' (default)
-        for displacement in the `x`- and `y`-direction (i.e. perpendicular to the
-        propagation direction).
+        The Cartesian directions in which the atoms are displaced, as a string of one or
+        more of 'x', 'y' and 'z'. The default, 'xyz', displaces the atoms in all three
+        directions, including along the propagation direction; 'xy' restricts the
+        displacements to the plane perpendicular to the propagation direction.
     ensemble_mean : bool, optional
         If True (default), the mean of the ensemble of results from a multislice
         simulation is calculated, otherwise, the result of every frozen phonon
