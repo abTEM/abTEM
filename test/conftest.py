@@ -10,9 +10,9 @@ from utils import requires_multigpu as _requires_multigpu
 
 config.set({"diagnostics.progress_bar": False})
 
-# The literal device string that actually exercises an accelerator (e.g.
-# "gpu", or "mps" once abTEM/abTEM#414 lands) -- whatever `gpu` in
-# test/utils.py currently resolves to.
+# The literal device string that actually exercises an accelerator -- "gpu"
+# with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
+# currently resolves to.
 _GPU_DEVICE = _gpu_param.values[0]
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
@@ -67,6 +67,27 @@ def pytest_configure(config):
     )
 
 
+# Metal is a single-precision backend -- torch refuses a float64 tensor on the
+# MPS device outright -- so a test parametrized on both the 'mps' device and
+# double precision is asking for something the hardware cannot do. Skipping is
+# the honest outcome; letting it fail would bury real Metal regressions under
+# noise that no amount of backend work can clear.
+_DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+
+
+def _is_double_precision_on_metal(item) -> bool:
+    callspec = getattr(item, "callspec", None)
+    if callspec is None:
+        return False
+
+    # Only string parameters are of interest, and restricting to them also
+    # keeps unhashable ones (arrays, Atoms) away from the set membership test.
+    values = [value for value in callspec.params.values() if isinstance(value, str)]
+    return "mps" in values and any(
+        value in _DOUBLE_PRECISION_PARAMS for value in values
+    )
+
+
 # tryfirst=True is required, not stylistic: pytest-xdist's own
 # pytest_collection_modifyitems (xdist/remote.py) reads each item's
 # xdist_group marker to build the nodeid suffix its scheduler groups on.
@@ -74,8 +95,8 @@ def pytest_configure(config):
 # grouping silently never happens for any test.
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """Skip slow tests by default, and confine every GPU-touching test to a
-    single pytest-xdist worker.
+    """Skip slow and impossible tests, and confine every GPU-touching test to
+    a single pytest-xdist worker.
 
     ``-n auto`` sizes the worker pool from the CPU core count, with no idea
     that a "device" parametrization means real VRAM. Each worker that lands a
@@ -96,11 +117,17 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+    skip_metal_double = pytest.mark.skip(
+        reason="Metal (MPS) is single precision; float64 cannot run on this device"
+    )
     runslow = config.getoption("--runslow")
 
     for item in items:
         if not runslow and "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+        if _is_double_precision_on_metal(item):
+            item.add_marker(skip_metal_double)
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(

@@ -337,6 +337,46 @@ def _laplace_operator_stencil(
 
         return out
 
+    def _laplace_stencil_mps(a):
+        """The same stencil on Metal, as shifted slices rather than a kernel.
+
+        The sum is separable -- each output is the coefficients applied along
+        the row and along the column -- so the whole of it is 2 * (2n + 1)
+        strided adds over the interior, which Metal runs as well as a bespoke
+        kernel would. That avoids writing and compiling Metal Shading Language
+        for an operation torch already expresses.
+
+        Only the interior is written, exactly as the CPU and CUDA stencils do:
+        the caller pads by n + 1 beforehand and crops afterwards, so the band
+        left at zero here never survives into the result.
+        """
+        xp = get_array_module(a)
+
+        if a.dtype not in (np.complex64, np.complex128):
+            raise TypeError(
+                "the GPU Laplacian stencil requires a complex64 or complex128 "
+                f"array, got {a.dtype}"
+            )
+
+        _, height, width = a.shape
+        out = xp.zeros_like(a)
+
+        if height <= 2 * n or width <= 2 * n:
+            return out
+
+        rows = slice(n, height - n)
+        columns = slice(n, width - n)
+
+        total = out[:, rows, columns]
+        for k in range(-n, n + 1):
+            # c is rolled for the CPU stencil's negative indexing; keep it
+            coefficient = complex(c[k])
+            total = total + coefficient * a[:, n + k : height - n + k, columns]
+            total = total + coefficient * a[:, rows, n + k : width - n + k]
+
+        out[:, rows, columns] = total
+        return out
+
     def _laplace_stencil(a):
         # Store original shape and reshape to 3D
         original_shape = a.shape
@@ -352,6 +392,8 @@ def _laplace_operator_stencil(
             result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
             result = _laplace_stencil_gpu(a)
+        elif device == "mps":
+            result = _laplace_stencil_mps(a)
         else:
             raise ValueError(f"Unsupported device: {device}")
 

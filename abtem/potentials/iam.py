@@ -2415,7 +2415,12 @@ class CrystalPotential(_PotentialBuilder):
         if not isinstance(pool_unit, PotentialArray):
             potentials = pool_unit.build(lazy=False)
         else:
-            potentials = pool_unit
+            # A unit the caller built themselves may still be lazy. The unit is
+            # consumed once per tile and per z-repetition, so it has to be a
+            # concrete array either way; leaving it lazy would both recompute
+            # it on every use and hand a dask array to the array namespace of
+            # whichever device it lives on.
+            potentials = pool_unit.compute() if pool_unit.is_lazy else pool_unit
 
         assert isinstance(potentials, PotentialArray)
 
@@ -2455,7 +2460,12 @@ class CrystalPotential(_PotentialBuilder):
         xp = get_array_module(self.device)
         _pool_array = potentials.array
         if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
+            # Through the PotentialArray, not the bare dask array: that is what
+            # selects the device-appropriate scheduler. Computing the raw array
+            # takes dask's default threaded scheduler, which drives a single
+            # CUDA or Metal context from several threads -- unsupported on
+            # both, and on Metal it corrupts PyTorch's shader cache and hangs.
+            _pool_array = potentials.compute().array
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
@@ -2624,7 +2634,11 @@ class CrystalPotential(_PotentialBuilder):
         if not isinstance(self.potential_unit, PotentialArray):
             unit_built = self.potential_unit.build(lazy=False)
         else:
-            unit_built = self.potential_unit
+            unit_built = (
+                self.potential_unit.compute()
+                if self.potential_unit.is_lazy
+                else self.potential_unit
+            )
 
         unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         if unit_arr.ndim == 3:

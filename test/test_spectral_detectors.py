@@ -2,9 +2,11 @@
 
 import numpy as np
 import pytest
+from utils import gpu
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy
 from abtem.detectors import (
     SpectralAnnularDetector,
     SpectralSlitDetector,
@@ -621,3 +623,30 @@ def test_show_handles_gpu_resident_array():
 
     spec = MomentumResolvedSpectrum(array, q_values=q_values, e_values=e_values)
     fig, ax = spec.show()  # must not raise
+
+
+# ---- On an accelerator -------------------------------------------------------
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "detector",
+    [
+        SpectralAnnularDetector(outer=2.0, q_max=15.0),
+        SpectralSlitDetector(width=2.0, q_min=0.0, q_max=15.0, angle=0.0),
+    ],
+    ids=["annular", "slit"],
+)
+@pytest.mark.parametrize("device", [gpu])
+def test_momentum_resolved_spectrum_matches_cpu(device, detector, lazy):
+    """Diffraction patterns kept on the device (a detector with to_cpu=False)
+    are contracted against detector masks there, so the contraction has to
+    cope with the two differing in dtype, as NumPy's does."""
+    dp = _make_dp(gpts=64, sampling=0.5, lazy=lazy)
+
+    reference = momentum_resolved_spectrum(dp, detector).compute()
+    result = momentum_resolved_spectrum(dp.copy_to_device(device), detector).compute()
+
+    np.testing.assert_allclose(
+        asnumpy(result.array), asnumpy(reference.array), rtol=1e-5, atol=1e-6
+    )

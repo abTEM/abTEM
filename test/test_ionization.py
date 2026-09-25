@@ -19,6 +19,7 @@ import pytest
 
 import abtem
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import get_array_module
 from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll
 from abtem.waves import Probe
 
@@ -227,15 +228,24 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
         max_batch=1, lazy=True,
     ).compute()
 
-    if device == "gpu":
+    if device != "cpu":
         chunked_auto_sites = chunked_auto_sites.to_cpu()
         chunked_explicit_sites = chunked_explicit_sites.to_cpu()
         unchunked = unchunked.to_cpu()
 
-    np.testing.assert_array_equal(chunked_auto_sites.array, unchunked.array)
-    np.testing.assert_array_equal(
-        chunked_auto_sites.array, chunked_explicit_sites.array
-    )
+    # On the CPU the chunked and unchunked paths issue the same operations in
+    # the same order, so bit-identity is a real guarantee worth asserting. An
+    # accelerator is free to reassociate the accumulation behind a batch, which
+    # moves the last ULP without saying anything about the chunking logic this
+    # test is about -- compare at the precision the device actually offers.
+    if device == "cpu":
+        assert_equal = np.testing.assert_array_equal
+    else:
+        def assert_equal(actual, desired):
+            np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
+
+    assert_equal(chunked_auto_sites.array, unchunked.array)
+    assert_equal(chunked_auto_sites.array, chunked_explicit_sites.array)
 
 
 @devices
@@ -250,10 +260,7 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
     ValueError because CrystalPotential exposes neither ``get_sliced_atoms``
     nor ``atoms``. This test guards both correctness and the auto-extraction.
     """
-    if device == "gpu":
-        xp = cp
-    else:
-        xp = np
+    xp = get_array_module(device)
 
     unit_atoms = ase.build.bulk("Si", cubic=True)  # 5.43 Å cubic
     reps = (2, 2, 3)
@@ -922,10 +929,7 @@ def test_transition_potential_scan_crystal_double_channel_matches_manual(device)
     deduplicated cache still produces results numerically equivalent to the
     manually-tiled Potential path.
     """
-    if device == "gpu":
-        xp = cp
-    else:
-        xp = np
+    xp = get_array_module(device)
 
     unit_atoms = ase.build.bulk("Si", cubic=True)
     reps = (2, 2, 3)

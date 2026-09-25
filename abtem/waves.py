@@ -758,7 +758,14 @@ class Waves(BaseWaves, ArrayObject):
         kwargs["array"] = array
 
         if renormalize:
-            kwargs["array"] /= xp.asarray(np.prod(repetitions))
+            # A Python scalar, not a NumPy one and not a 0-d array: under NEP 50
+            # both of those take part in promotion, so dividing a complex64 wave
+            # by them returns complex128 -- silently doubling the precision and
+            # the memory of the result, against the configured precision. A
+            # Python int leaves the dtype alone. It also keeps the divisor off
+            # the device, which is what let a dask array and a Metal array meet
+            # here as operands neither of them could accept.
+            kwargs["array"] /= int(np.prod(repetitions))
 
         return self.__class__(**kwargs)
 
