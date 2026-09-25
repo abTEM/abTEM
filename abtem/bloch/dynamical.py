@@ -10,6 +10,7 @@ from typing import (
     Any,
     Callable,
     Iterable,
+    Literal,
     Optional,
     Sequence,
     SupportsFloat,
@@ -865,7 +866,7 @@ def calculate_structure_matrix(
     cell: Cell | np.ndarray,
     energy: float,
     gpts: tuple[int, int, int],
-    use_wave_eq: bool = False,
+    use_wave_eq: bool | Literal["exact"] = False,
 ) -> np.ndarray:
     """Calculate the structure matrix for a given set of reciprocal space vectors.
 
@@ -885,9 +886,13 @@ def calculate_structure_matrix(
         The energy of the electrons [eV].
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
-    use_wave_eq : bool
-        If True, the Bloch wave equation derived from the wave equation is used.
-        Otherwise standard Bloch wave is used.
+    use_wave_eq : bool or 'exact'
+        If True, the Bloch wave equation derived from the paraxial wave equation is
+        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
+        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
+        (converging to it needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
+        is used. See :func:`abtem.bloch.utils.excitation_errors`.
 
     Returns
     -------
@@ -1252,9 +1257,13 @@ class BlochWaves:
         Lattice centering.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
-    use_wave_eq : bool
-        If True, the Bloch wave equation derived from the wave equation is used.
-        Otherwise standard Bloch wave is used.
+    use_wave_eq : bool or 'exact'
+        If True, the Bloch wave equation derived from the paraxial wave equation is
+        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
+        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
+        (converging to it needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
+        is used. See :func:`abtem.bloch.utils.excitation_errors`.
     """
 
     def __init__(
@@ -1266,7 +1275,7 @@ class BlochWaves:
         orientation_matrix: Optional[np.ndarray] = None,
         centering: str = "auto",
         device: Optional[str] = None,
-        use_wave_eq: bool = False,
+        use_wave_eq: bool | Literal["exact"] = False,
     ):
         if isinstance(structure_factor, Atoms):
             if g_max is None:
@@ -1378,7 +1387,7 @@ class BlochWaves:
         return np.linalg.norm(self.g_vec, axis=1)
 
     @property
-    def use_wave_eq(self) -> bool:
+    def use_wave_eq(self) -> bool | Literal["exact"]:
         return self._use_wave_eq
 
     @property
@@ -1975,7 +1984,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: float,
         centering: str = "P",
         device: Optional[str] = None,
-        use_wave_eq: bool = False,
+        use_wave_eq: bool | Literal["exact"] = False,
         use_degrees: bool = False,
     ):
         axes = args[::2]
@@ -2114,7 +2123,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return self._g_max
 
     @property
-    def use_wave_eq(self) -> bool:
+    def use_wave_eq(self) -> bool | Literal["exact"]:
         return self._use_wave_eq
 
     @property
