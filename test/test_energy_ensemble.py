@@ -404,7 +404,9 @@ class TestEnergyEnsembleSpotIndexing:
     def _orientation_matrices(self):
         from scipy.spatial.transform import Rotation
 
-        return Rotation.from_euler("x", self.ROTATIONS, degrees=True).as_matrix()
+        # (N, 1) angles for a single-axis sequence: newer SciPy rejects (N,)
+        angles = np.asarray(self.ROTATIONS)[:, None]
+        return Rotation.from_euler("x", angles, degrees=True).as_matrix()
 
     def _patterns(self, chunks=None):
         from abtem.core.axes import NonLinearAxis
