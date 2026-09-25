@@ -344,6 +344,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         self._sigmas = validate_sigmas(atoms, sigmas)[0]
         self._directions = directions
+        self._axes  # raises on an invalid direction now rather than when displacing
         self._atoms = atoms
         self._seed = validate_seeds(seed, num_seeds=num_configs)
 
@@ -403,7 +404,9 @@ class FrozenPhonons(BaseFrozenPhonons):
             elif direction == "z":
                 axes += [2]
             else:
-                raise RuntimeError(f"Directions must be 'x', 'y' or 'z', not {axes}.")
+                raise RuntimeError(
+                    f"Directions must be 'x', 'y' or 'z', not {direction!r}."
+                )
         return axes
 
     def randomize(self, atoms: Atoms) -> Atoms:
