@@ -269,19 +269,21 @@ def _silicon_bloch_waves(device):
     )
 
 
-# The host reference is double precision whatever the 'precision' setting says:
-# the structure matrix comes out complex128 even at float32. An accelerator may
-# well be single precision -- Metal always is -- so the tolerances allow for
+# Bloch waves honor the 'precision' setting, so the host reference is pinned to
+# double precision here: the tests then measure the accelerator's error against
+# an accurate result, not against a second single-precision one. An accelerator
+# may well be single precision -- Metal always is -- so the tolerances allow for
 # float32 against float64, not merely for a different order of operations.
 @pytest.mark.parametrize("device", [gpu])
 def test_bloch_wave_diffraction_patterns_match_cpu(device):
     thicknesses = [50.0, 200.0, 1000.0]
-    reference = asnumpy(
-        _silicon_bloch_waves("cpu")
-        .calculate_diffraction_patterns(thicknesses=thicknesses)
-        .compute()
-        .array
-    )
+    with abtem.config.set({"precision": "float64"}):
+        reference = asnumpy(
+            _silicon_bloch_waves("cpu")
+            .calculate_diffraction_patterns(thicknesses=thicknesses)
+            .compute()
+            .array
+        )
     result = asnumpy(
         _silicon_bloch_waves(device)
         .calculate_diffraction_patterns(thicknesses=thicknesses)
@@ -295,7 +297,81 @@ def test_bloch_wave_diffraction_patterns_match_cpu(device):
 
 @pytest.mark.parametrize("device", [gpu])
 def test_bloch_wave_scattering_matrix_matches_cpu(device):
-    reference = asnumpy(_silicon_bloch_waves("cpu").calculate_scattering_matrix(50.0))
+    with abtem.config.set({"precision": "float64"}):
+        reference = asnumpy(
+            _silicon_bloch_waves("cpu").calculate_scattering_matrix(50.0)
+        )
     result = asnumpy(_silicon_bloch_waves(device).calculate_scattering_matrix(50.0))
 
     np.testing.assert_allclose(result, reference, atol=3e-5 * np.abs(reference).max())
+
+
+# Every lazy Bloch-wave array must declare the dtype its blocks actually
+# compute, and both must follow the 'precision' setting. NumPy float64 scalars
+# and host arrays (the cell volume, the M matrix, the excitation errors, the
+# thicknesses) used to widen a float32 calculation to complex128 on the host,
+# leaving a float32 meta over float64 data.
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bloch_wave_dtypes_follow_precision(device, precision):
+    real = np.dtype(precision)
+    complex_ = np.result_type(real, np.complex64)
+    with abtem.config.set({"precision": precision}):
+        bloch_waves = _silicon_bloch_waves(device)
+        structure_factor = bloch_waves.structure_factor
+        calculations = {
+            "structure factors": (
+                lambda lazy: structure_factor.build(lazy=lazy).array,
+                complex_,
+            ),
+            "structure matrix": (
+                lambda lazy: bloch_waves.calculate_structure_matrix(lazy=lazy),
+                complex_,
+            ),
+            "intensities": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(
+                        [50.0, 1000.0], lazy=lazy
+                    ).array
+                ),
+                real,
+            ),
+            "intensities, scalar thickness": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(50.0, lazy=lazy).array
+                ),
+                real,
+            ),
+            "amplitudes": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(
+                        [50.0], return_complex=True, lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+            "exit waves": (
+                lambda lazy: (
+                    bloch_waves.calculate_exit_waves(
+                        [50.0, 1000.0], gpts=(16, 16), lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+            "exit waves, scalar thickness": (
+                lambda lazy: (
+                    bloch_waves.calculate_exit_waves(
+                        50.0, gpts=(16, 16), lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+        }
+
+        for name, (calculate, expected) in calculations.items():
+            lazy_array = calculate(True)
+            assert lazy_array.dtype == expected, f"{name}: declared meta"
+            assert lazy_array.compute().dtype == expected, f"{name}: computed"
+            assert calculate(False).dtype == expected, f"{name}: eager"
+
+        assert bloch_waves.calculate_scattering_matrix(50.0).dtype == complex_
