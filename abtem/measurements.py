@@ -4937,6 +4937,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             else:
                 radius = max(self.angular_sampling) * 1.0001
 
+        if not radius >= 0.0:
+            # a negative radius would block nothing
+            raise ValueError(
+                f"The direct-beam radius must be non-negative, got {radius!r}."
+            )
+
         if "semiangle_cutoff" in self.metadata.keys() and margin is None:
             margin = True
 

@@ -319,6 +319,18 @@ def _common_kwargs(a, b):
     return set(a_kwargs).intersection(b_kwargs)
 
 
+def _validate_prism_semiangle_cutoff(semiangle_cutoff: float) -> None:
+    # The plane-wave expansion keeps wave vectors strictly inside the cutoff, so a
+    # cutoff of zero would leave none, and a negative one is meaningless.
+    if not semiangle_cutoff > 0.0:
+        raise ValueError(
+            "PRISM requires a positive 'semiangle_cutoff', got "
+            f"{semiangle_cutoff!r}. For a parallel beam (a semiangle cutoff of "
+            "0), use Probe(semiangle_cutoff=0) or PlaneWave with multislice "
+            "instead."
+        )
+
+
 def _pack_wave_vectors(wave_vectors):
     return tuple(
         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
@@ -899,6 +911,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             metadata=metadata,
         )
 
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
@@ -1613,6 +1626,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._interpolation = interpolation
         self._window_gpts = tuple(window_gpts)
@@ -3724,15 +3738,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         device: str = None,
         store_on_host: bool = False,
     ):
-        if not semiangle_cutoff > 0.0:
-            # the plane-wave expansion keeps wave vectors strictly inside the cutoff,
-            # so a cutoff of zero would leave none
-            raise ValueError(
-                "PRISM requires a positive 'semiangle_cutoff', got "
-                f"{semiangle_cutoff!r}. For a parallel beam (a semiangle cutoff of "
-                "0), use Probe(semiangle_cutoff=0) or PlaneWave with multislice "
-                "instead."
-            )
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
 
         if downsample is True:
             downsample = "cutoff"

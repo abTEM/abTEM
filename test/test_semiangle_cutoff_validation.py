@@ -1,15 +1,21 @@
-"""Aperture cutoffs that describe no aperture are rejected where they are set.
+"""Semiangle cutoffs that describe no aperture are rejected where they are set.
 
 A negative semiangle cutoff is never meaningful. A zero one is a parallel beam for an
 Aperture or CTF (the zero-angle pixel stays open), but leaves nothing open in a
 Bullseye, Vortex, AnnularAperture or Zernike aperture, whose probe then normalizes to
-NaN, and turns a RadialPhasePlate into a no-op.
+NaN, and turns a RadialPhasePlate into a no-op. PRISM's scattering matrices need a
+positive cutoff, and a direct-beam radius read from metadata must not be negative.
 """
 
+import inspect
+
+import ase.build
 import numpy as np
 import pytest
 
 import abtem
+from abtem.measurements import DiffractionPatterns
+from abtem.prism.s_matrix import CompressedSMatrixArray, SMatrixArray
 from abtem.transfer import (
     CTF,
     AnnularAperture,
@@ -114,3 +120,56 @@ def test_annular_aperture_rejects_an_empty_annulus(inner_cutoff, match):
 def test_zernike_rejects_a_negative_center_hole():
     with pytest.raises(ValueError, match="center_hole_cutoff must be non-negative"):
         Zernike(-1.0, np.pi / 2, semiangle_cutoff=30.0)
+
+
+@pytest.fixture(scope="module")
+def potential():
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    return abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+
+
+def _with_cutoff(obj, cls, semiangle_cutoff):
+    """The constructor arguments of `obj`, with another semiangle cutoff."""
+    kwargs = {}
+    for name in inspect.signature(cls).parameters:
+        attribute = name if hasattr(obj, name) else f"_{name}"
+        kwargs[name] = getattr(obj, attribute)
+    kwargs["semiangle_cutoff"] = semiangle_cutoff
+    return kwargs
+
+
+@pytest.mark.parametrize("semiangle_cutoff", [0.0, -5.0])
+def test_s_matrix_arrays_reject_a_non_positive_cutoff(potential, semiangle_cutoff):
+    s_matrix = abtem.SMatrix(potential=potential, energy=ENERGY, semiangle_cutoff=20)
+    array = s_matrix.build(lazy=False)
+    compressed = abtem.SMatrix(
+        potential=potential,
+        energy=ENERGY,
+        semiangle_cutoff=20,
+        interpolation=(2, 2),
+        upsample=True,
+    ).build(lazy=False)
+    assert isinstance(array, SMatrixArray)
+    assert isinstance(compressed, CompressedSMatrixArray)
+
+    for obj, cls in ((array, SMatrixArray), (compressed, CompressedSMatrixArray)):
+        with pytest.raises(ValueError, match="positive 'semiangle_cutoff'"):
+            cls(**_with_cutoff(obj, cls, semiangle_cutoff))
+
+        # the same arguments with a positive cutoff construct
+        cls(**_with_cutoff(obj, cls, 20.0))
+
+
+def test_block_direct_rejects_a_negative_radius():
+    patterns = DiffractionPatterns(
+        np.ones((32, 32), dtype=np.float32),
+        sampling=0.1,
+        fftshift=True,
+        metadata={"energy": ENERGY, "semiangle_cutoff": -5.0},
+    )
+
+    with pytest.raises(ValueError, match="radius must be non-negative"):
+        patterns.block_direct()
+
+    with pytest.raises(ValueError, match="radius must be non-negative"):
+        patterns.block_direct(radius=-1.0)
