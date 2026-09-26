@@ -194,6 +194,22 @@ def test_crystal_potential_tiles_a_lazily_built_unit(rejects_dask):
     np.testing.assert_array_equal(exit_waves.array, expected)
 
 
+
+def test_crystal_potential_generates_eager_slices_from_a_lazily_built_unit():
+    """Tiling a lazy unit yields dask-backed slices, which an eager consumer such as
+    build(lazy=False) cannot place into a CuPy array."""
+    lazy = _crystal_potential(lazy_unit=True)
+    eager = _crystal_potential(lazy_unit=False)
+
+    slices = list(lazy.generate_slices())
+
+    assert slices and not any(isinstance(s.array, da.Array) for s in slices)
+    # the unit is materialised internally, not computed in place
+    assert lazy.potential_unit.is_lazy
+    np.testing.assert_array_equal(
+        lazy.build(lazy=False).array, eager.build(lazy=False).array
+    )
+
 def test_concatenate_eager_then_lazy():
     images = Images(
         np.arange(2 * 8 * 8, dtype=np.float32).reshape(2, 8, 8),
@@ -272,6 +288,33 @@ class TestLazyCuPy:
         exit_waves = waves.multislice(lazy_unit)
 
         np.testing.assert_array_equal(_to_numpy(exit_waves.array), expected)
+
+    def test_crystal_potential_build_with_a_lazily_built_unit(self):
+        expected = _to_numpy(
+            _crystal_potential(device="gpu", lazy_unit=False).build(lazy=False).array
+        )
+
+        built = _crystal_potential(device="gpu", lazy_unit=True).build(lazy=False)
+
+        np.testing.assert_array_equal(_to_numpy(built.array), expected)
+
+    def test_blocked_scan_of_a_crystal_potential_with_a_lazily_built_unit(self):
+        """A scan split into several blocks builds the potential through
+        generate_slices rather than generate_chunked_slices."""
+
+        def haadf(lazy_unit):
+            probe = abtem.Probe(energy=60e3, semiangle_cutoff=20, device="gpu")
+            scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), sampling=0.3)
+            detector = abtem.AnnularDetector(inner=40, outer=100)
+            potential = _crystal_potential(device="gpu", lazy_unit=lazy_unit)
+            measurement = probe.scan(
+                potential, scan=scan, detectors=detector, max_batch=10
+            )
+            return _to_numpy(measurement.compute().array)
+
+        np.testing.assert_allclose(
+            haadf(lazy_unit=True), haadf(lazy_unit=False), rtol=1e-6, atol=0
+        )
 
     def test_concatenate_eager_then_lazy(self):
         import cupy as cp

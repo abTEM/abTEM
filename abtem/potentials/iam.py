@@ -2422,6 +2422,18 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy.
+        if potentials.is_lazy:
+            potentials = potentials.__class__(
+                potentials.array.compute(),
+                **potentials._copy_kwargs(exclude=("array",)),
+            )
+
         rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
@@ -2448,14 +2460,9 @@ class CrystalPotential(_PotentialBuilder):
         n_configs = potentials.shape[0]
 
         # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
-        # per-tile access into the pool, so materialise the (small unit-cell)
-        # pool array once. A lazily-built PotentialArray unit carries a dask
-        # array here; compute it so per-tile fancy indexing works and stays on
-        # the target device.
+        # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
-        if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
