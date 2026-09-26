@@ -25,7 +25,7 @@ import abtem.waves
 from abtem.core import backend
 from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray
-from abtem.measurements import DiffractionPatterns, Images
+from abtem.measurements import DiffractionPatterns, Images, periodic_crop
 
 ELEMENT_WISE = ("abs", "real", "imag", "phase", "intensity")
 LABELS = {
@@ -299,6 +299,127 @@ def test_transition_potential_methods_accept_lazy_waves(rejects_dask):
     # the caller's waves are not computed in place
     assert waves.is_lazy
 
+
+def _image_ensemble(xp=np, lazy=False):
+    rng = np.random.default_rng(1)
+    array = xp.asarray(rng.random((3, 40, 30)).astype(np.float32))
+    if lazy:
+        array = da.from_array(array, chunks=(1, 40, 30))
+    return Images(
+        array,
+        sampling=(0.1, 0.12),
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+
+
+@pytest.mark.parametrize("corner", [(-3, 25), (35, -4), (38, 27)])
+def test_periodic_crop_across_the_border(corner):
+    array = _image_ensemble().array
+    shape = (10, 9)
+    x = np.arange(corner[0], corner[0] + shape[0]) % array.shape[-2]
+    y = np.arange(corner[1], corner[1] + shape[1]) % array.shape[-1]
+    x, y = np.meshgrid(x, y, indexing="ij")
+    expected = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + shape)
+
+    eager = periodic_crop(array, corner, shape)
+    lazy = periodic_crop(da.from_array(array, chunks=(1, 40, 30)), corner, shape)
+
+    np.testing.assert_array_equal(eager, expected)
+    np.testing.assert_array_equal(lazy.compute(), expected)
+
+
+@pytest.mark.parametrize("position", [(2.0, 1.8), (0.1, 3.5), (3.95, 0.05)])
+def test_integrate_disc_of_lazy_images(position):
+    expected = np.asarray(_image_ensemble().integrate_disc(position, 0.5))
+
+    result = _image_ensemble(lazy=True).integrate_disc(position, 0.5)
+
+    assert isinstance(result, da.Array)
+    # a lazy reduction sums in a different order
+    np.testing.assert_allclose(result.compute(), expected, rtol=1e-12, atol=0)
+
+
+def test_integrate_disc_raise_checks_the_image_axes_of_an_ensemble():
+    images = _image_ensemble()
+    inside = abtem.measurements.integrate_disc(images, (2.0, 1.8), 0.5, border="raise")
+
+    np.testing.assert_array_equal(inside, images.integrate_disc((2.0, 1.8), 0.5))
+    with pytest.raises(RuntimeError, match="outside the image"):
+        abtem.measurements.integrate_disc(images, (0.1, 3.5), 0.5, border="raise")
+
+
+def _polar_measurement():
+    polar = _scan(abtem.SegmentedDetector(10, 50, 2, 4))
+    return polar.compute()
+
+
+def test_polar_to_diffraction_patterns_of_eager_measurements_is_unchanged():
+    polar = _polar_measurement()
+    regions = abtem.detectors._polar_detector_bins(
+        gpts=(48, 48),
+        sampling=tuple(
+            (1 + 0.1) * polar.outer_angle / 48 * 2 for _ in range(2)
+        ),
+        inner=polar.radial_offset,
+        outer=polar.outer_angle,
+        nbins_radial=polar.base_shape[0],
+        nbins_azimuthal=polar.base_shape[1],
+        fftshift=True,
+        rotation=polar.azimuthal_offset,
+        offset=(0.0, 0.0),
+        return_indices=False,
+    )
+    expected = np.zeros(polar.ensemble_shape + regions.shape, dtype=np.float32)
+    for label in range(regions.max() + 1):
+        radial, azimuthal = np.unravel_index(label, polar.base_shape)
+        expected[..., regions == label] = polar.array[..., radial, azimuthal][..., None]
+    expected[..., regions < 0] = np.nan
+
+    patterns = polar.to_diffraction_patterns(48)
+
+    assert patterns.array.dtype == np.float32
+    np.testing.assert_array_equal(patterns.array, expected)
+
+
+def test_polar_to_diffraction_patterns_stays_lazy_and_runs_the_graph_once():
+    polar = _polar_measurement()
+    expected = polar.to_diffraction_patterns(48).array
+    evaluations = []
+
+    def count(block):
+        evaluations.append(1)
+        return block
+
+    lazy = polar.copy()
+    chunks = (5,) + (-1,) * (polar.array.ndim - 1)
+    lazy._array = da.from_array(polar.array, chunks=chunks).map_blocks(count)
+    evaluations.clear()  # map_blocks itself calls count once, on the meta
+
+    patterns = lazy.to_diffraction_patterns(48)
+
+    assert patterns.is_lazy
+    np.testing.assert_array_equal(patterns.compute().array, expected)
+    assert len(evaluations) == lazy.array.numblocks[0]
+
+
+def test_multi_energy_s_matrix_build_honours_lazy_false():
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    potential = abtem.Potential(atoms, sampling=0.2, slice_thickness=2)
+
+    def build(lazy):
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=[60e3, 80e3], semiangle_cutoff=10
+        )
+        return s_matrix.build(lazy=lazy)
+
+    eager = build(lazy=False)
+    lazy = build(lazy=True).compute()
+
+    assert not eager.is_lazy
+    # the build is not bit-reproducible from run to run
+    scale = np.abs(lazy.array).max()
+    np.testing.assert_allclose(eager.array, lazy.array, rtol=0, atol=1e-5 * scale)
+
 def test_concatenate_eager_then_lazy():
     images = Images(
         np.arange(2 * 8 * 8, dtype=np.float32).reshape(2, 8, 8),
@@ -453,6 +574,57 @@ class TestLazyCuPy:
             expected_scattered,
             rtol=1e-5,
             atol=1e-6,
+        )
+
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    def test_integrate_disc(self, lazy):
+        import cupy as cp
+
+        expected = np.asarray(_image_ensemble().integrate_disc((0.1, 3.5), 0.5))
+
+        result = _image_ensemble(xp=cp, lazy=lazy).integrate_disc((0.1, 3.5), 0.5)
+
+        np.testing.assert_allclose(_to_numpy(result), expected, rtol=1e-6)
+
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    def test_polar_to_diffraction_patterns(self, lazy):
+        detector = abtem.SegmentedDetector(10, 50, 2, 4, to_cpu=False)
+        polar = _scan(detector, "gpu")
+        if not lazy:
+            polar = polar.compute()
+        expected = _polar_measurement().to_diffraction_patterns(48).array
+
+        patterns = polar.to_diffraction_patterns(48)
+
+        assert patterns.is_lazy == lazy
+        np.testing.assert_allclose(
+            _to_numpy(patterns.array), expected, rtol=1e-5, atol=1e-7, equal_nan=True
+        )
+
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    def test_multi_energy_s_matrix_build(self, lazy):
+        atoms = ase.build.mx2("WSe2", vacuum=2)
+
+        def build(device, lazy):
+            potential = abtem.Potential(
+                atoms, sampling=0.2, slice_thickness=2, device=device
+            )
+            s_matrix = abtem.SMatrix(
+                potential=potential,
+                energy=[60e3, 80e3],
+                semiangle_cutoff=10,
+                device=device,
+            )
+            return s_matrix.build(lazy=lazy)
+
+        expected = build("cpu", lazy=False).array
+
+        built = build("gpu", lazy=lazy)
+
+        assert built.is_lazy == lazy
+        scale = np.abs(expected).max()
+        np.testing.assert_allclose(
+            _to_numpy(built.array), expected, rtol=0, atol=1e-5 * scale
         )
 
     def test_concatenate_eager_then_lazy(self):

@@ -4773,7 +4773,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             def _embed_wave_vectors(arr, indices, n_union):
                 """Embed arr (n_wv, ...) into (n_union, ...) at the given indices."""
-                out = np.zeros((n_union,) + arr.shape[1:], dtype=arr.dtype)
+                # arr's own module: a NumPy array cannot take a CuPy block
+                out = get_array_module(arr).zeros(
+                    (n_union,) + arr.shape[1:], dtype=arr.dtype
+                )
                 out[indices] = arr
                 return out
 
@@ -4798,6 +4801,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                             _embed_wave_vectors,
                             dtype=array.dtype,
                             chunks=new_chunks,
+                            meta=get_array_module(array).array((), dtype=array.dtype),
                             indices=indices,
                             n_union=n_union,
                         )
@@ -4805,7 +4809,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                         embedded = _embed_wave_vectors(r.array, indices, n_union)
                     embedded_arrays.append(embedded)
 
-            stacked_array = da.stack(embedded_arrays, axis=0)
+            if lazy:
+                stacked_array = da.stack(embedded_arrays, axis=0)
+            else:
+                xp = get_array_module(embedded_arrays[0])
+                stacked_array = xp.stack(embedded_arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in self._energies))
             return SMatrixArray(
                 array=stacked_array,

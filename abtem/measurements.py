@@ -892,11 +892,12 @@ def periodic_crop(
         ]
         return array
 
-    x = xp.arange(corner[0], corner[0] + new_shape[0], dtype=xp.int64) % array.shape[-2]
-    y = xp.arange(corner[1], corner[1] + new_shape[1], dtype=xp.int64) % array.shape[-1]
-
-    x, y = xp.meshgrid(x, y, indexing="ij")
-    array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
+    # Gather one axis at a time: dask supports an integer array on only one axis
+    # per indexing operation, and indexes with host arrays.
+    index_xp = np if isinstance(array, da.Array) else xp
+    x = index_xp.arange(corner[0], corner[0] + new_shape[0], dtype=np.int64)
+    y = index_xp.arange(corner[1], corner[1] + new_shape[1], dtype=np.int64)
+    array = array[..., x % array.shape[-2], :][..., y % array.shape[-1]]
     return array
 
 
@@ -964,8 +965,8 @@ def integrate_disc(
     elif border == "raise":
         if (
             (np.any(np.array(corner) < 0))
-            | (corner[0] + integration_shape[0] > measurement.array.shape[0])
-            | (corner[1] + integration_shape[1] > measurement.array.shape[1])
+            | (corner[0] + integration_shape[0] > measurement.array.shape[-2])
+            | (corner[1] + integration_shape[1] > measurement.array.shape[-1])
         ):
             raise RuntimeError("The integration region is outside the image.")
 
@@ -997,6 +998,8 @@ def integrate_disc(
     mean_sampling = (x_axis.sampling + y_axis.sampling) / 2
 
     mask = 1 - np.clip((r - radius) / mean_sampling, 0, 1)
+    # on the crop's device: a CuPy crop cannot be multiplied by a NumPy mask
+    mask = get_array_module(cropped).asarray(mask)
 
     if return_mean:
         return (cropped * mask).sum((-2, -1)) / mask.sum((-2, -1))
@@ -4964,6 +4967,21 @@ def _complex_from_real_and_imag(real, imag):
     return array
 
 
+def _polar_bins_to_grid(array, regions):
+    """Place polar-bin values (..., nbins_radial, nbins_azimuthal) on a regular grid.
+
+    ``regions`` labels each grid pixel with its flat bin index (radial major, as
+    from ``_polar_detector_bins``), or a negative value outside every bin, which
+    becomes NaN. Gathers with the array's own module, so it works for NumPy and
+    CuPy, and per block of a dask array.
+    """
+    xp = get_array_module(array)
+    flat = array.reshape(array.shape[:-2] + (-1,))
+    labels = xp.asarray(regions)
+    gathered = flat[..., xp.maximum(labels, 0)].astype(np.float32)
+    return xp.where(labels < 0, np.float32(np.nan), gathered)
+
+
 class PolarMeasurements(BaseMeasurements):
     """
     Class describing polar measurements with a specified number of radial and azimuthal
@@ -5451,13 +5469,19 @@ class PolarMeasurements(BaseMeasurements):
             return_indices=False,
         )
 
-        new_array = np.zeros(self.ensemble_shape + regions.shape, dtype=np.float32)
-        for i, indices in enumerate(label_to_index(regions)):
-            x, y = np.unravel_index(indices, regions.shape)
-            radial, azimuthal = np.unravel_index(i, (nbins_radial, nbins_azimuthal))
-            new_array[..., x, y] = self.array[..., radial, azimuthal][..., None]
-
-        new_array[..., regions < 0] = np.nan
+        if self.is_lazy:
+            # per block, over whole polar bins, so the graph runs once and the
+            # result stays lazy
+            array = self.array.rechunk(self.array.chunks[:-2] + (-1, -1))
+            xp = get_array_module(array)
+            new_array = array.map_blocks(
+                _polar_bins_to_grid,
+                regions=regions,
+                chunks=array.chunks[:-2] + ((regions.shape[0],), (regions.shape[1],)),
+                meta=xp.array((), dtype=np.float32),
+            )
+        else:
+            new_array = _polar_bins_to_grid(self.array, regions)
 
         wavelength = energy2wavelength(self._get_energy())
         sampling = (
