@@ -1567,7 +1567,9 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        # eagerly: a lazy structure matrix is a dask array, which xp.asarray
+        # below would compute through NumPy -- refused for CuPy blocks on GPU
+        A = self.calculate_structure_matrix(lazy=False)
         hkl = self.hkl
         cell = self.cell
 
