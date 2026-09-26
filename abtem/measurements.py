@@ -3685,7 +3685,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             else:
                 tiling += (1,)
 
-        array = xp.tile(self.array, tiling)
+        if self.is_lazy:
+            array = da.tile(self.array, tiling)
+        else:
+            array = xp.tile(self.array, tiling)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -4932,6 +4935,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.bandlimit(radius, outer=np.inf)
 
 
+def _complex_from_real_and_imag(real, imag):
+    xp = get_array_module(real)
+    array = xp.zeros_like(real, dtype=get_dtype(complex=True))
+    array.real = real
+    array.imag = imag
+    return array
+
+
 class PolarMeasurements(BaseMeasurements):
     """
     Class describing polar measurements with a specified number of radial and azimuthal
@@ -5486,12 +5497,21 @@ class PolarMeasurements(BaseMeasurements):
             )
             return stacked
 
-        xp = get_array_module(self.array)
-
-        array = xp.zeros_like(xp.array(differential_1.array), dtype=get_dtype(complex=True))
-
-        array.real = differential_1.array
-        array.imag = differential_2.array
+        if differential_1.is_lazy:
+            array = da.map_blocks(
+                _complex_from_real_and_imag,
+                differential_1.array,
+                differential_2.array,
+                dtype=get_dtype(complex=True),
+                meta=_complex_from_real_and_imag(
+                    da.utils.meta_from_array(differential_1.array),
+                    da.utils.meta_from_array(differential_2.array),
+                ),
+            )
+        else:
+            array = _complex_from_real_and_imag(
+                differential_1.array, differential_2.array
+            )
 
         return Images(array, **differential_1._copy_kwargs(exclude=("array",)))
 
@@ -5509,7 +5529,10 @@ class PolarMeasurements(BaseMeasurements):
 
         xp = get_array_module(self.array)
 
-        array = xp.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        if self.is_lazy:
+            array = da.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        else:
+            array = xp.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()

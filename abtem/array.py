@@ -2566,7 +2566,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
 
     xp = get_array_module(arrays[0].array)
 
-    if arrays[0].is_lazy:
+    if any(has_array.is_lazy for has_array in arrays):
         array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
         array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)

@@ -2627,6 +2627,11 @@ class CrystalPotential(_PotentialBuilder):
             unit_built = self.potential_unit
 
         unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array here, which the device's tile below does not
+        # accept for CuPy. The unit cell is small; materialise it once.
+        if hasattr(unit_arr, "compute"):
+            unit_arr = unit_arr.compute()
         if unit_arr.ndim == 3:
             unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
 
