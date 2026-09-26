@@ -163,10 +163,12 @@ class BaseTransferFunction(
         Parameters
         ----------
         max_angle : float, optional
-            The maximum diffraction angle in radians. If not provided, the maximum angle
-            will be determined based on the `self._max_semiangle_cutoff` attribute of
-            the instance. If neither `max_angle` nor `self._max_semiangle_cutoff` is
-            available, a `RuntimeError` will be raised.
+            The maximum diffraction angle [mrad]. If not provided, the maximum angle
+            is the semiangle cutoff of the instance (`self._max_semiangle_cutoff`),
+            or 50 mrad if that cutoff is infinite (no aperture). A zero cutoff (a
+            parallel beam) raises a `ValueError`, and so `max_angle` must be given.
+            If neither `max_angle` nor `self._max_semiangle_cutoff` is available, a
+            `RuntimeError` will be raised.
         gpts : int | tuple[int, int], optional
             The number of grid points in reciprocal space for performing Fourier
             Transform. If not provided, a default value of 128 will be used.
@@ -270,7 +272,8 @@ class BaseAperture(BaseTransferFunction):
     @property
     def nyquist_sampling(self) -> float:
         """Nyquist sampling corresponding to the semiangle cutoff of the
-        aperture [Å]."""
+        aperture [Å]. Raises a ValueError for a zero semiangle cutoff (a parallel
+        beam)."""
         _raise_if_parallel_beam(self._max_semiangle_cutoff, "The Nyquist sampling")
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
@@ -1975,8 +1978,9 @@ class CTF(_HasAberrations, BaseAperture):
             Number of grid points along the line profiles.
         max_angle : float
             The maximum scattering angle included in the radial line profiles [mrad].
-            The default is 1.5 times the semiangle cutoff or 50 mrad if no semiangle
-            cutoff is set.
+            The default is 1.6 times the semiangle cutoff or 50 mrad if no semiangle
+            cutoff is set. A zero semiangle cutoff (a parallel beam) raises a
+            `ValueError`, and so `max_angle` must be given.
         phi : float
             The azimuthal angle of the radial line profiles [rad]. Default is 0.
 
@@ -2072,6 +2076,17 @@ def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
         Semiangle cutoff [mrad].
     energy: float
         Electron energy [eV].
+
+    Returns
+    -------
+    float
+        The Nyquist sampling [Å].
+
+    Raises
+    ------
+    ValueError
+        For a zero semiangle cutoff (a parallel beam), whose Nyquist sampling is not
+        defined.
     """
     _raise_if_parallel_beam(semiangle_cutoff, "The Nyquist sampling")
     wavelength = energy2wavelength(energy)

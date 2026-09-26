@@ -448,9 +448,9 @@ class LineScan(BaseScan):
     gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
+        Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
         If not provided the sampling will match the Nyquist sampling of the Probe
-        in a multislice simulation.
+        in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included.
         Default is True.
@@ -849,9 +849,9 @@ class GridScan(HasGrid2DMixin, BaseScan):
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one
         of gpts or sampling.
     sampling : two float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
-        If not provided the sampling will match the Nyquist sampling of the  Probe
-        in a multislice simulation.
+        Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
+        If not provided the sampling will match the Nyquist sampling of the Probe
+        in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included.
         Default is False.

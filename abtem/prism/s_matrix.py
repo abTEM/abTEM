@@ -3583,7 +3583,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     Parameters
     ----------
     semiangle_cutoff : float
-        The radial cutoff of the plane-wave expansion [mrad].
+        The radial cutoff of the plane-wave expansion [mrad]. Must be positive;
+        for a parallel beam (a cutoff of 0) use Probe or PlaneWave multislice.
     energy : float or list of float
         Electron energy [eV]. A single float runs a standard single-energy
         calculation. A list or array of floats builds the scattering matrix

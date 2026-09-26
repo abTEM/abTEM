@@ -4908,7 +4908,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         radius : float, optional
             The radius of the zeroth-order reflection to block [mrad]. If not given this
-            will be inferred from the metadata, if available.
+            will be inferred from the metadata, if available. A zero `semiangle_cutoff`
+            in the metadata (a parallel beam) raises a `ValueError`; pass
+            `radius=0, margin=False` to block only the zero-angle pixel.
         margin : bool, optional
             If True adds a margin to the blocking radius to fully block soft apertures.
             Margin is true by default for diffraction patterns with `semiangle_cutoff`
