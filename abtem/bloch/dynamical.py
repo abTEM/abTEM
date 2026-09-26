@@ -40,7 +40,13 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    cp,
+    device_name_from_array_module,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -67,6 +73,51 @@ from abtem.waves import Waves
 
 if TYPE_CHECKING:
     pass
+
+
+class BlochWavePrecisionWarning(UserWarning):
+    """Bloch waves are being computed in single precision.
+
+    Filter it with ``warnings.filterwarnings("ignore",
+    category=BlochWavePrecisionWarning)`` once a float32 result has been checked
+    against a float64 one.
+    """
+
+
+# Messages already shown in this process. Python's own once-per-location
+# registry cannot do this job: it is invalidated whenever the warning filters
+# change, which abTEM (catch_warnings in ArrayObject) and dask do on every
+# call, so the warning would repeat for every call, energy, orientation and
+# dask block.
+_issued_precision_warnings: set[str] = set()
+
+
+def _warn_if_single_precision(device: str) -> None:
+    # The eigendecomposition and the propagation phases carry an absolute error
+    # of roughly 1e-7 to 1e-5 of the strongest beam in float32, growing with
+    # thickness and beam count: negligible for the strong beams, but a weak
+    # reflection can be off by a large fraction of itself.
+    if np.dtype(get_dtype()) != np.float32:
+        return
+
+    if device_name_from_array_module(get_array_module(device)) == "mps":
+        reason = "the Metal (MPS) device supports single precision only"
+        check = "the 'cpu' or 'gpu' device with precision 'float64'"
+    else:
+        reason = "the 'precision' setting is 'float32'"
+        check = "precision 'float64'"
+
+    message = (
+        f"Bloch waves are computed in single precision because {reason}. Weak "
+        "diffraction intensities may be inaccurate, increasingly so for thick "
+        f"samples and many beams; check the result against {check}, e.g. with "
+        "abtem.config.set({'precision': 'float64'})."
+    )
+    if message in _issued_precision_warnings:
+        return
+
+    _issued_precision_warnings.add(message)
+    warnings.warn(message, BlochWavePrecisionWarning, stacklevel=3)
 
 
 def calculate_scattering_factors(
@@ -1541,6 +1592,7 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
+        _warn_if_single_precision(self._device)
         A = self.calculate_structure_matrix()
         hkl = self.hkl
         cell = self.cell
@@ -1557,6 +1609,7 @@ class BlochWaves:
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
         assert isinstance(thicknesses, np.ndarray)
+        _warn_if_single_precision(self._device)
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -2346,6 +2399,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -2577,6 +2631,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 )
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:

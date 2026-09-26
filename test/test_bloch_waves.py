@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 import strategies as abtem_st
@@ -9,7 +11,7 @@ from utils import gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
-from abtem.bloch import BlochWaves, StructureFactor
+from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
 from abtem.bloch.dynamical import calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
@@ -375,3 +377,44 @@ def test_bloch_wave_dtypes_follow_precision(device, precision):
             assert calculate(False).dtype == expected, f"{name}: eager"
 
         assert bloch_waves.calculate_scattering_matrix(50.0).dtype == complex_
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bloch_waves_warn_in_single_precision(device, precision, monkeypatch):
+    with abtem.config.set({"precision": precision}):
+        bloch_waves = _silicon_bloch_waves(device)
+        calculations = [
+            lambda: bloch_waves.calculate_diffraction_patterns([50.0]).compute(),
+            lambda: bloch_waves.calculate_exit_waves(50.0, gpts=(16, 16)).compute(),
+            lambda: bloch_waves.calculate_scattering_matrix(50.0),
+        ]
+
+        for calculate in calculations:
+            # The warning is shown once per process; forget earlier ones.
+            monkeypatch.setattr(
+                abtem.bloch.dynamical, "_issued_precision_warnings", set()
+            )
+            if precision == "float32":
+                # Metal has no double precision to switch to, so the advice
+                # there is to check on another device.
+                check = "'cpu' or 'gpu' device" if device == "mps" else "precision"
+                with pytest.warns(BlochWavePrecisionWarning, match=check):
+                    calculate()
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", BlochWavePrecisionWarning)
+                    calculate()
+
+
+def test_bloch_wave_precision_warning_is_shown_once():
+    with abtem.config.set({"precision": "float32"}):
+        bloch_waves = _silicon_bloch_waves("cpu")
+        abtem.bloch.dynamical._issued_precision_warnings.clear()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for thickness in (50.0, [50.0, 100.0]):
+                bloch_waves.calculate_diffraction_patterns(thickness).compute()
+            bloch_waves.calculate_scattering_matrix(50.0)
+
+    assert [w.category for w in caught].count(BlochWavePrecisionWarning) == 1
