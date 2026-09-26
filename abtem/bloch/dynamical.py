@@ -1206,7 +1206,9 @@ def validate_rotations(
 
 
 def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
-    if isinstance(rotations, Iterable):
+    if isinstance(rotations, BaseDistribution):
+        ensemble = True
+    elif isinstance(rotations, Iterable):
         rotations = np.array(rotations)
         if rotations.ndim == 1 and len(axes) > 1:
             assert len(axes) == len(rotations)
@@ -1966,10 +1968,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             validate_distribution(rotation) for rotation in rotations
         )
 
-        if not is_base_distribution_tuple(validated_rotations):
+        if not all(
+            isinstance(rotation, (BaseDistribution, Number))
+            for rotation in validated_rotations
+        ):
             raise ValueError(
-                "The rotations must be given as a tuple of BaseDistribution or sequence"
-                "of angles"
+                "The rotations must be given as a tuple of BaseDistribution, sequence "
+                "of angles or single angles"
             )
 
         self._rotations = validated_rotations
@@ -2015,12 +2020,17 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
             if hasattr(rotation, "values"):
+                # SciPy >= 1.18 requires an explicit (N, len(axes)) shape, even for
+                # a single-axis sequence.
+                values = np.asarray(rotation.values, dtype=float).reshape(-1, len(axes))
                 R = Rotation.from_euler(
-                    axes, rotation.values, degrees=self._use_degrees
+                    axes, values, degrees=self._use_degrees
                 ).as_matrix()
                 R = R[(slice(None),) + (None,) * (orientation_matrices.ndim - 2)]
             else:
-                R = Rotation.from_euler(axes, rotation).as_matrix()
+                R = Rotation.from_euler(
+                    axes, rotation, degrees=self._use_degrees
+                ).as_matrix()
 
             orientation_matrices = orientation_matrices @ R
 
@@ -2116,7 +2126,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
-        return tuple(len(self._ensemble_rotations[i]) for i in self._ensemble_args)
+        return tuple(len(rotation) for rotation in self._ensemble_rotations)
 
     def _partition_args(
         self,
@@ -2126,8 +2136,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         assert chunks is not None
         chunks = validate_chunks(self.ensemble_shape, chunks)
         blocks = tuple(
-            self._ensemble_rotations[i].divide(n, lazy=lazy)
-            for i, n in zip(self._ensemble_args, chunks)
+            rotation.divide(n, lazy=lazy)
+            for rotation, n in zip(self._ensemble_rotations, chunks)
         )
         return blocks
 
@@ -2228,7 +2238,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 lazy=False,
             )
 
-            array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
+            array[i][..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
             pbar_obj.update_if_exists(1)
 
