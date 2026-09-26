@@ -434,6 +434,31 @@ def test_eager_multislice_leaves_a_lazy_potential_lazy():
     assert potential.is_lazy
     np.testing.assert_array_equal(exit_waves.array, expected)
 
+
+def test_compressed_s_matrix_array_round_trips_through_its_kwargs():
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=60e3,
+        semiangle_cutoff=20,
+        interpolation=(2, 2),
+        upsample=True,
+    )
+    compressed = s_matrix.build(lazy=False)
+    assert isinstance(compressed, CompressedSMatrixArray)
+
+    copy = CompressedSMatrixArray(**compressed._copy_kwargs())
+
+    for name in ("u", "sigma", "vh_dense", "dense_indices"):
+        np.testing.assert_array_equal(
+            _to_numpy(getattr(copy, name)), _to_numpy(getattr(compressed, name))
+        )
+    assert copy.position_quantization == compressed.position_quantization
+    assert copy.reference_depth == compressed.reference_depth
+
 def test_concatenate_eager_then_lazy():
     images = Images(
         np.arange(2 * 8 * 8, dtype=np.float32).reshape(2, 8, 8),

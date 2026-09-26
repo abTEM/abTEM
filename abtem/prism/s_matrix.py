@@ -1693,6 +1693,22 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return self._vh_dense
 
     @property
+    def dense_indices(self) -> np.ndarray:
+        """Integer Fourier-space indices of the dense plane waves, shape (N, 2)."""
+        return self._dense_indices
+
+    @property
+    def position_quantization(self) -> int | None:
+        """Quantization of the probe positions, as given to the constructor."""
+        return self._position_quantization
+
+    @property
+    def reference_depth(self) -> float:
+        """Depth inside the specimen [Å] the beams are referenced to; reduced waves
+        are propagated from it to the exit surface. 0 means the exit surface."""
+        return self._reference_depth
+
+    @property
     def rank(self) -> int:
         """Number of retained modes.
 
