@@ -162,6 +162,10 @@ filterwarnings = [
     # threadgroup memory ran on the CPU instead. That is the right thing for it
     # to do and nothing for a test to fail over.
     "ignore:linalg.eigh:UserWarning",
+    # Every single-precision Bloch-wave calculation warns about weak
+    # intensities, which is most of them (float32 is the default, and Metal has
+    # nothing else). The warning itself is asserted in test_bloch_waves.py.
+    "ignore::abtem.bloch.BlochWavePrecisionWarning",
 ]
 
 [tool.numpydoc_validation]
