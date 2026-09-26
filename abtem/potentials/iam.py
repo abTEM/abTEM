@@ -2001,12 +2001,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
+        transmission = self.array[0]
         if conjugate:
-            waves._array *= xp.conjugate(self.array[0])
-        else:
-            waves._array *= self.array[0]
+            # the method, not xp.conjugate: a CuPy function rejects a dask array
+            transmission = transmission.conj()
+
+        lazy_waves = isinstance(waves._array, da.Array)
+        if isinstance(transmission, da.Array) and not lazy_waves:
+            # The waves are transmitted in place, and an in-place NumPy or CuPy
+            # product cannot take a dask operand. Keep eager waves eager: compute
+            # the (single-slice) transmission function, synchronously so CuPy
+            # tasks never run concurrently.
+            transmission = transmission.compute(scheduler="synchronous")
+
+        waves._array *= transmission
 
         return waves
 

@@ -24,6 +24,7 @@ import abtem.potentials.iam
 import abtem.waves
 from abtem.core import backend
 from abtem.core.axes import OrdinalAxis
+from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.measurements import DiffractionPatterns, Images
 
 ELEMENT_WISE = ("abs", "real", "imag", "phase", "intensity")
@@ -210,6 +211,94 @@ def test_crystal_potential_generates_eager_slices_from_a_lazily_built_unit():
         lazy.build(lazy=False).array, eager.build(lazy=False).array
     )
 
+
+def _relative_difference_inputs():
+    rng = np.random.default_rng(0)
+    a = rng.random((8, 8)).astype(np.float32) + 0.5
+    b = rng.random((8, 8)).astype(np.float32) + 0.5
+    a[0, 0] = 0.01  # below the threshold below: NaN there
+    valid = np.abs(a) >= 0.1 * a.max()
+    expected = np.where(valid, (a - b) / np.where(valid, a, 1), np.nan) * 100
+    return a, b, expected
+
+
+def test_relative_difference_of_eager_measurements_is_unchanged():
+    a, b, expected = _relative_difference_inputs()
+
+    result = Images(a, sampling=0.1).relative_difference(
+        Images(b, sampling=0.1), min_relative_tol=0.1
+    )
+
+    np.testing.assert_array_equal(result.array, expected)
+
+
+def test_relative_difference_of_lazy_measurements(rejects_dask):
+    a, b, expected = _relative_difference_inputs()
+    lazy_a = Images(da.from_array(a, chunks=4), sampling=0.1)
+    lazy_b = Images(da.from_array(b, chunks=4), sampling=0.1)
+    rejects_dask(abtem.measurements)
+
+    result = lazy_a.relative_difference(lazy_b, min_relative_tol=0.1)
+
+    assert result.is_lazy
+    np.testing.assert_array_equal(result.compute().array, expected)
+
+
+def _transmit(lazy_potential, lazy_waves, conjugate):
+    atoms = ase.build.mx2("MoS2", vacuum=2)
+    potential = abtem.Potential(atoms, gpts=64, slice_thickness=10)
+    potential = potential.build(lazy=lazy_potential)
+    waves = abtem.PlaneWave(energy=100e3).match_grid(potential).build(lazy=lazy_waves)
+    return potential.transmit(waves, conjugate=conjugate)
+
+
+@pytest.mark.parametrize("conjugate", [False, True])
+@pytest.mark.parametrize("lazy_waves", [False, True], ids=["eager_waves", "lazy_waves"])
+def test_transmit_through_a_lazy_potential(lazy_waves, conjugate):
+    expected = _transmit(False, False, conjugate).array
+
+    transmitted = _transmit(True, lazy_waves, conjugate)
+
+    assert transmitted.is_lazy == lazy_waves
+    np.testing.assert_array_equal(_to_numpy(transmitted.array), expected)
+
+
+def _synthetic_transition_potential(xp=np):
+    rng = np.random.default_rng(0)
+    array = rng.standard_normal((3, 32, 32)) + 1j * rng.standard_normal((3, 32, 32))
+    return TransitionPotentialArray(
+        Z=5,
+        energy=100e3,
+        extent=(8.0, 8.0),
+        array=xp.asarray(array.astype(np.complex64)),
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+
+
+def _core_loss_probe_waves(lazy, device="cpu"):
+    probe = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=8.0, gpts=32, device=device
+    )
+    return probe.build(lazy=lazy)
+
+
+def test_transition_potential_methods_accept_lazy_waves(rejects_dask):
+    potential = _synthetic_transition_potential()
+    sites = np.array([[2.0, 2.0], [6.0, 6.0]])
+    eager = _core_loss_probe_waves(lazy=False)
+    expected_threshold = potential.absolute_threshold(eager, 0.9)
+    expected_sites = potential.filter_sites(eager, sites, threshold=1e-6)
+    rejects_dask(abtem.inelastic.core_loss)
+
+    waves = _core_loss_probe_waves(lazy=True)
+    threshold = potential.absolute_threshold(waves, 0.9)
+    filtered = potential.filter_sites(waves, sites, threshold=1e-6)
+
+    assert threshold == expected_threshold
+    np.testing.assert_array_equal(filtered, expected_sites)
+    # the caller's waves are not computed in place
+    assert waves.is_lazy
+
 def test_concatenate_eager_then_lazy():
     images = Images(
         np.arange(2 * 8 * 8, dtype=np.float32).reshape(2, 8, 8),
@@ -314,6 +403,56 @@ class TestLazyCuPy:
 
         np.testing.assert_allclose(
             haadf(lazy_unit=True), haadf(lazy_unit=False), rtol=1e-6, atol=0
+        )
+
+    def test_relative_difference(self):
+        import cupy as cp
+
+        a, b, expected = _relative_difference_inputs()
+        lazy_a = Images(da.from_array(cp.asarray(a), chunks=4), sampling=0.1)
+        lazy_b = Images(da.from_array(cp.asarray(b), chunks=4), sampling=0.1)
+
+        result = lazy_a.relative_difference(lazy_b, min_relative_tol=0.1)
+
+        assert result.is_lazy
+        np.testing.assert_allclose(
+            _to_numpy(result.array), expected, rtol=1e-6, equal_nan=True
+        )
+
+    @pytest.mark.parametrize("conjugate", [False, True])
+    def test_transmit_through_a_lazy_potential_with_eager_waves(self, conjugate):
+        expected = _to_numpy(_transmit(False, False, conjugate).array)
+
+        transmitted = _transmit(True, False, conjugate)
+
+        assert not transmitted.is_lazy
+        np.testing.assert_allclose(
+            _to_numpy(transmitted.array), expected, rtol=1e-6, atol=1e-6
+        )
+
+    def test_transition_potential_methods_with_lazy_waves(self):
+        import cupy as cp
+
+        potential = _synthetic_transition_potential(xp=cp)
+        sites = np.array([[2.0, 2.0], [6.0, 6.0]])
+        eager = _core_loss_probe_waves(lazy=False, device="gpu")
+        expected_threshold = potential.absolute_threshold(eager, 0.9)
+        expected_sites = potential.filter_sites(eager, sites, threshold=1e-6)
+        expected_scattered = _to_numpy(potential.scatter(eager, sites).array)
+
+        waves = _core_loss_probe_waves(lazy=True, device="gpu")
+
+        assert potential.absolute_threshold(waves, 0.9) == pytest.approx(
+            expected_threshold, rel=1e-5
+        )
+        np.testing.assert_array_equal(
+            potential.filter_sites(waves, sites, threshold=1e-6), expected_sites
+        )
+        np.testing.assert_allclose(
+            _to_numpy(potential.scatter(waves, sites).array),
+            expected_scattered,
+            rtol=1e-5,
+            atol=1e-6,
         )
 
     def test_concatenate_eager_then_lazy(self):

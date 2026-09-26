@@ -680,12 +680,15 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         difference = self - other
 
-        xp = get_array_module(self.array)
-
-        valid = xp.abs(self.array) >= min_relative_tol * self.array.max()
-        difference._array[valid] /= self.array[valid]
-        difference._array[valid == 0] = np.nan
-        difference._array *= 100.0
+        # Built out of place with `where`, which works for NumPy, CuPy and dask
+        # alike: in-place boolean-mask assignment fails on a dask array, and
+        # `abs` (rather than `xp.abs`) keeps a lazy CuPy array away from a CuPy
+        # function. Dividing by 1 outside `valid` avoids warnings from entries
+        # that are then discarded.
+        where = da.where if difference.is_lazy else get_array_module(self.array).where
+        valid = abs(self.array) >= min_relative_tol * self.array.max()
+        ratio = difference.array / where(valid, self.array, 1)
+        difference._array = where(valid, ratio, np.nan) * 100.0
 
         difference.metadata["label"] = "Relative difference"
         difference.metadata["units"] = "%"
