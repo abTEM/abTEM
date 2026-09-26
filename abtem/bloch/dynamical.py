@@ -40,7 +40,13 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    cp,
+    device_name_from_array_module,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -67,6 +73,51 @@ from abtem.waves import Waves
 
 if TYPE_CHECKING:
     pass
+
+
+class BlochWavePrecisionWarning(UserWarning):
+    """Bloch waves are being computed in single precision.
+
+    Filter it with ``warnings.filterwarnings("ignore",
+    category=BlochWavePrecisionWarning)`` once a float32 result has been checked
+    against a float64 one.
+    """
+
+
+# Messages already shown in this process. Python's own once-per-location
+# registry cannot do this job: it is invalidated whenever the warning filters
+# change, which abTEM (catch_warnings in ArrayObject) and dask do on every
+# call, so the warning would repeat for every call, energy, orientation and
+# dask block.
+_issued_precision_warnings: set[str] = set()
+
+
+def _warn_if_single_precision(device: str) -> None:
+    # The eigendecomposition and the propagation phases carry an absolute error
+    # of roughly 1e-7 to 1e-5 of the strongest beam in float32, growing with
+    # thickness and beam count: negligible for the strong beams, but a weak
+    # reflection can be off by a large fraction of itself.
+    if np.dtype(get_dtype()) != np.float32:
+        return
+
+    if device_name_from_array_module(get_array_module(device)) == "mps":
+        reason = "the Metal (MPS) device supports single precision only"
+        check = "the 'cpu' or 'gpu' device with precision 'float64'"
+    else:
+        reason = "the 'precision' setting is 'float32'"
+        check = "precision 'float64'"
+
+    message = (
+        f"Bloch waves are computed in single precision because {reason}. Weak "
+        "diffraction intensities may be inaccurate, increasingly so for thick "
+        f"samples and many beams; check the result against {check}, e.g. with "
+        "abtem.config.set({'precision': 'float64'})."
+    )
+    if message in _issued_precision_warnings:
+        return
+
+    _issued_precision_warnings.add(message)
+    warnings.warn(message, BlochWavePrecisionWarning, stacklevel=3)
 
 
 def calculate_scattering_factors(
@@ -228,7 +279,9 @@ def calculate_structure_factors(
             f_e * xp.exp(2.0j * np.pi * positions @ hkl),
             axis=0,
         )
-        / atoms.cell.volume
+        # A Python float, not ASE's np.float64: under NEP 50 a NumPy scalar
+        # widens a single-precision array to double.
+        / float(atoms.cell.volume)
     )
 
     return struct_factors
@@ -896,7 +949,7 @@ def calculate_structure_matrix(
     """
     xp = get_array_module(structure_factor)
 
-    g = xp.asarray(calculate_g_vec(hkl_selected, cell))
+    g = calculate_g_vec(hkl_selected, cell)
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
 
     hkl_selected = np.asarray(hkl_selected)
@@ -905,7 +958,7 @@ def calculate_structure_matrix(
     gmh = gmh.reshape(-1, 3)
 
     A = retrieve_structure_factor_values(structure_factor, hkl, gmh, gpts)
-    A = A.reshape((len(hkl_selected),) * 2)
+    A = xp.asarray(A.reshape((len(hkl_selected),) * 2), dtype=get_dtype(complex=True))
 
     # structure_factor_dict = {
     #     (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
@@ -915,21 +968,22 @@ def calculate_structure_matrix(
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
-    Mii = xp.asarray(Mii)
+    # The geometry is computed in double precision on the host and only then
+    # cast to the working precision: a float64 Mii or diagonal would otherwise
+    # widen a single-precision structure matrix to complex128.
+    sg = excitation_errors(g, energy, use_wave_eq=use_wave_eq)
+    diag = xp.asarray(2 * 1 / energy2wavelength(energy) * sg * Mii, dtype=get_dtype())
+    Mii = xp.asarray(Mii, dtype=get_dtype())
 
     A = A * prefactor * Mii[None] * Mii[:, None]
-
-    sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
-    diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
 
 
 def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
-    array = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
-    array = xp.asarray(array)
+    array = np.all(hkl == [0, 0, 0], axis=1)
+    array = xp.asarray(array, dtype=get_dtype(complex=True))
     return array
 
 
@@ -966,7 +1020,7 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy), dtype=get_dtype())
 
     v, C = xp.linalg.eigh(structure_matrix)
     # v, C = scipy.linalg.eigh(structure_matrix)
@@ -980,14 +1034,13 @@ def calculate_dynamical_scattering(
     initial = plane_wave_coefficients(hkl, xp)
 
     alpha = C_inv @ initial
+    # Thicknesses enter as Python floats: a NumPy float64 scalar would widen a
+    # single-precision result to complex128 (NEP 50).
     if not thicknesses.shape:
-        array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
+        array = C @ (xp.exp(2.0j * xp.pi * float(thicknesses) * gamma) * alpha)
     else:
-        # C's own dtype, not a hard-coded complex128: Metal has no double
-        # precision, and on the host C is complex128 already, so nothing
-        # changes there.
         array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=C.dtype)
-        for i, thickness in enumerate(thicknesses):
+        for i, thickness in enumerate(thicknesses.tolist()):
             array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
     return array
@@ -1059,13 +1112,13 @@ def calculate_scattering_matrix(
     xp = get_array_module(A)
 
     if method == "expm":
-        S = expm(1.0j * xp.pi * z * A * energy2wavelength(energy))
+        S = expm(1.0j * xp.pi * float(z) * A * energy2wavelength(energy))
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
     Mii = calculate_M_matrix(hkl, cell, energy)
-    M = xp.asarray(np.diag(Mii))
-    M_inv = xp.asarray(np.diag(1 / Mii))
+    M = xp.asarray(np.diag(Mii), dtype=get_dtype())
+    M_inv = xp.asarray(np.diag(1 / Mii), dtype=get_dtype())
 
     S = xp.dot(M, xp.dot(S, M_inv))
     return S
@@ -1159,9 +1212,14 @@ def reduce_plane_wave_expansion(values, plane_waves):
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
     xp = get_array_module(amplitudes)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False)
-    z = xp.array(thicknesses)
+    g_vec = xp.asarray(g_vec, dtype=get_dtype())
+    x = xp.asarray(
+        np.linspace(0, extent[0], gpts[0], endpoint=False), dtype=get_dtype()
+    )
+    y = xp.asarray(
+        np.linspace(0, extent[1], gpts[1], endpoint=False), dtype=get_dtype()
+    )
+    z = xp.asarray(thicknesses, dtype=get_dtype())
 
     basis = plane_wave_basis(g_vec, x, y, z)
     wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
@@ -1534,6 +1592,7 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
+        _warn_if_single_precision(self._device)
         A = self.calculate_structure_matrix()
         hkl = self.hkl
         cell = self.cell
@@ -1550,6 +1609,7 @@ class BlochWaves:
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
         assert isinstance(thicknesses, np.ndarray)
+        _warn_if_single_precision(self._device)
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -1697,10 +1757,10 @@ class BlochWaves:
     @staticmethod
     def _calculate_exit_waves(amplitudes, g_vec, x, y, z):
         xp = get_array_module(amplitudes)
-        g_vec = xp.asarray(g_vec)
-        x = xp.asarray(x)
-        y = xp.asarray(y)
-        z = xp.asarray(z)
+        g_vec = xp.asarray(g_vec, dtype=get_dtype())
+        x = xp.asarray(x, dtype=get_dtype())
+        y = xp.asarray(y, dtype=get_dtype())
+        z = xp.asarray(z, dtype=get_dtype())
 
         basis = plane_wave_basis(g_vec, x, y, z)
 
@@ -2339,6 +2399,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -2570,6 +2631,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 )
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
