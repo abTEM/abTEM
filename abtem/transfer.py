@@ -433,7 +433,8 @@ class Aperture(BaseAperture):
     ----------
     semiangle_cutoff : float or BaseDistribution
         The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of
-        angles may be provided.
+        angles may be provided. Must be non-negative; a cutoff of 0 keeps only the
+        zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     energy : float, optional
@@ -547,7 +548,7 @@ class Bullseye(BaseAperture):
         Open fraction of each radial ring period. Must be in the interval (0, 1],
         where 1 gives a fully open disk.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -759,7 +760,7 @@ class Vortex(BaseAperture):
     quantum_number : int
         Quantum number of vortex beam.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -828,9 +829,10 @@ class AnnularAperture(BaseAperture):
     Parameters
     ----------
     inner_cutoff : float
-        The cutoff semiangle of inner radius of the aperture [mrad].
+        The cutoff semiangle of inner radius of the aperture [mrad]. Must be
+        non-negative and smaller than `semiangle_cutoff`.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -905,11 +907,11 @@ class Zernike(BaseAperture):
     Parameters
     ----------
     center_hole_cutoff : float
-        Cutoff semiangle of aperture hole [mrad].
+        Cutoff semiangle of aperture hole [mrad]. Must be non-negative.
     phase_shift: float
         Phase shift of Zernike film [rad]
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -1738,7 +1740,8 @@ class CTF(_HasAberrations, BaseAperture):
     ----------
     semiangle_cutoff: float, optional
         The semiangle cutoff describes the sharp reciprocal-space cutoff due to the
-        objective aperture [mrad] (default is no cutoff).
+        objective aperture [mrad] (default is no cutoff). Must be non-negative; a
+        cutoff of 0 keeps only the zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
