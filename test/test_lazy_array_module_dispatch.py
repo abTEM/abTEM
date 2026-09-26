@@ -420,6 +420,20 @@ def test_multi_energy_s_matrix_build_honours_lazy_false():
     scale = np.abs(lazy.array).max()
     np.testing.assert_allclose(eager.array, lazy.array, rtol=0, atol=1e-5 * scale)
 
+
+def test_eager_multislice_leaves_a_lazy_potential_lazy():
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, sampling=0.2, slice_thickness=1).build(lazy=True)
+    eager_potential = potential.copy().compute()
+    waves = abtem.PlaneWave(energy=60e3)
+    waves.grid.match(potential)
+    expected = waves.build(lazy=False).multislice(eager_potential).array
+
+    exit_waves = waves.build(lazy=False).multislice(potential)
+
+    assert potential.is_lazy
+    np.testing.assert_array_equal(exit_waves.array, expected)
+
 def test_concatenate_eager_then_lazy():
     images = Images(
         np.arange(2 * 8 * 8, dtype=np.float32).reshape(2, 8, 8),

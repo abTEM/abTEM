@@ -2257,7 +2257,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            array = self.compute().array
+            # compute() works in place: materialise a copy, so that partitioning
+            # (e.g. of a lazy potential for an eager multislice) leaves the
+            # caller's object lazy
+            array = self.copy().compute().array if self.is_lazy else self.array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:
