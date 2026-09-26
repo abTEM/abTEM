@@ -252,3 +252,153 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+def test_exact_excitation_errors_match_the_nonparaxial_dispersion():
+    # use_wave_eq="exact": -g_z + k (sqrt(1 - (lambda g_perp)^2) - 1), the
+    # counterpart of the exact multislice propagator; to first order in
+    # (lambda g_perp)^2 it is the paraxial use_wave_eq=True form
+    from abtem.bloch.utils import excitation_errors
+    from abtem.core.energy import energy2wavelength
+
+    energy = 100e3
+    k = 1 / energy2wavelength(energy)
+    g = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, 0.2], [6.0, 0.0, -0.3], [1e-3, 0, 0]])
+
+    exact = excitation_errors(g, energy, use_wave_eq="exact")
+    g_perp_sq = g[:, 0] ** 2 + g[:, 1] ** 2
+    np.testing.assert_allclose(
+        exact, -g[:, 2] + np.sqrt(k**2 - g_perp_sq) - k, rtol=1e-12, atol=1e-12
+    )
+
+    paraxial = excitation_errors(g, energy, use_wave_eq=True)
+    np.testing.assert_allclose(exact[-1], paraxial[-1], rtol=1e-9)
+    assert np.all(exact[1:3] < paraxial[1:3])  # the sphere lies below the paraboloid
+
+    with pytest.raises(ValueError, match="evanescent|g_perp"):
+        excitation_errors(np.array([[1.1 * k, 0.0, 0.0]]), energy, use_wave_eq="exact")
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        excitation_errors(g, energy, use_wave_eq="paraxial")
+
+
+@pytest.mark.slow
+# order=1 at 10 keV is used deliberately, as the paraxial reference
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+def test_exact_bloch_waves_pair_with_exact_multislice():
+    # Bloch waves with use_wave_eq=True solve the paraxial equation that
+    # multislice solves with the first-order propagator; use_wave_eq="exact"
+    # the non-paraxial one of FourierMultislice(order="exact"). At low energy,
+    # where the two differ most (~lambda^3), each Bloch-wave variant must agree
+    # better with its own multislice counterpart than with the other.
+    from abtem.multislice import FourierMultislice
+
+    atoms = bulk("Si", cubic=True)
+    energy = 10e3
+    potential = abtem.Potential(
+        atoms.repeat((2, 2, int(150 / atoms.cell[2, 2]))),
+        sampling=0.05,
+        slice_thickness=0.25,
+        parametrization="lobato",
+    )
+
+    def multislice(order):
+        return (
+            abtem.PlaneWave(energy=energy)
+            .multislice(potential, algorithm=FourierMultislice(order=order), lazy=False)
+            .diffraction_patterns(max_angle=None)
+            .index_diffraction_spots(cell=atoms)
+            .to_data_array()
+        )
+
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="F"
+    )
+
+    def bloch_waves(use_wave_eq):
+        return (
+            BlochWaves(
+                structure_factor=structure_factor,
+                energy=energy,
+                sg_max=1.5,
+                use_wave_eq=use_wave_eq,
+            )
+            .calculate_diffraction_patterns([potential.thickness], lazy=False)
+            .crop(k_max=1.5)
+            .to_data_array()
+        )
+
+    def r_factor(a, b):
+        hkl = sorted(set(a["hkl"].data) & set(b["hkl"].data) - {"0 0 0"})
+        a = np.asarray(a.sel(hkl=hkl).data).ravel()
+        b = np.asarray(b.sel(hkl=hkl).data).ravel()
+        return np.abs(a - b).sum() / b.sum()
+
+    ms = {order: multislice(order) for order in (1, "exact")}
+    bw = {w: bloch_waves(w) for w in (True, "exact")}
+
+    assert r_factor(ms[1], bw[True]) < 0.7 * r_factor(ms[1], bw["exact"])
+    assert r_factor(ms["exact"], bw["exact"]) < 0.9 * r_factor(ms["exact"], bw[True])
+
+
+@pytest.fixture
+def float64():
+    with abtem.config.set({"precision": "float64"}):
+        yield
+
+
+def _tilted_si_bloch_waves(use_wave_eq):
+    # beam || [018] of cubic Si, 7.1 degrees from [001]: g_z != 0 for most beams,
+    # so the (1 + g_z / K) metric of the standard form matters
+    atoms = bulk("Si", cubic=True)
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="F"
+    )
+    return BlochWaves(
+        structure_factor=structure_factor,
+        energy=100e3,
+        sg_max=0.5,
+        use_wave_eq=use_wave_eq,
+        orientation_matrix=orientation_matrix,
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_eigendecomposition_matches_scattering_matrix_when_tilted(use_wave_eq):
+    # Both solution paths must map the symmetrized eigenproblem back to beam
+    # amplitudes with the same metric (they used not to, off zone axis).
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    thickness = 300.0
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [thickness], return_complex=True, lazy=False
+        ).array
+    )[0]
+    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
+    S = np.asarray(bloch_waves.calculate_scattering_matrix(thickness))
+    np.testing.assert_allclose(psi, S[:, direct_beam], atol=1e-10)
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
+    # The wave-equation forms, like multislice, are unitary: sum |psi_g|^2 = 1.
+    # The standard form conserves the current along z instead:
+    # sum (1 + g_z / K) |psi_g|^2 = 1.
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [100.0, 300.0, 600.0], return_complex=True, lazy=False
+        ).array
+    )
+    if use_wave_eq:
+        weights = 1.0
+    else:
+        weights = 1 + bloch_waves.g_vec[:, 2] * energy2wavelength(bloch_waves.energy)
+    np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
+    if not use_wave_eq:
+        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters

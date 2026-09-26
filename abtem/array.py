@@ -195,6 +195,11 @@ def multi_output_blockwise(
         base_axis.numblocks[0] == len(c) for base_axis, c in zip(array_axes, old_chunks)
     )
 
+    # Pin the positional layout the task function has to reproduce: one axis
+    # arg per array dimension, then one arg per new_axes entry.
+    kwargs.setdefault("num_array_axes", base_ndim)
+    kwargs.setdefault("num_transform_args", len(new_axes))
+
     out_symbols = tuple(range(out_ndim))
     array_symbols = tuple(range(new_ndim, out_ndim))
 
@@ -1760,15 +1765,45 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial: Callable,
         array_object_partial: Callable,
         base_ndims: int,
+        num_array_axes: Optional[int] = None,
+        num_transform_args: Optional[int] = None,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
-        array_axes = axes[: len(array.shape)]
+        # How many of the positional args are the ARRAY's axes is decided when
+        # the graph is built -- it is the dask array's ndim, and
+        # multi_output_blockwise passes exactly that many axis args ahead of
+        # the transform's own partitioned args. Recovering it here from
+        # len(array.shape), a property of whichever chunk actually turned up,
+        # silently mis-splits `axes` the moment the two disagree: the tail of
+        # the array's own axes is then fed to the transform's reconstruction
+        # chain, which unwraps one level per stage and eventually tries to
+        # build an object out of an AxisMetadata, raising an error that points
+        # nowhere near here. Split on the graph-time counts instead, and if a
+        # chunk contradicts them, say which side broke.
+        if num_array_axes is None:
+            num_array_axes = len(array.shape)
+        elif num_array_axes != len(array.shape) or (
+            num_transform_args is not None
+            and len(axes) != num_array_axes + num_transform_args
+        ):
+            raise RuntimeError(
+                "blockwise argument layout does not match the graph: it was "
+                f"built for an array of ndim {num_array_axes} followed by "
+                f"{num_transform_args} transform arg(s), but this task got a "
+                f"chunk of shape {getattr(array, 'shape', None)} "
+                f"(ndim {len(array.shape)}, type {type(array).__name__}) and "
+                f"{len(axes)} axis arg(s) of types "
+                f"{tuple(type(a).__name__ for a in axes)} "
+                f"(base_ndims={base_ndims})."
+            )
+
+        array_axes = axes[:num_array_axes]
         # Not `array_axes[:-base_ndims]`: -0 is 0, not "the end" -- see the
         # comment in ArrayObject.squeeze for a base-less array_object.
         n_ensemble_axes = len(array_axes) - base_ndims
         ensemble_axes = array_axes[:n_ensemble_axes]
-        transform_axes = axes[len(array.shape) :]
+        transform_axes = axes[num_array_axes:]
 
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
@@ -1778,7 +1813,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
-        ndims = len(transform_axes) + len(array.shape)
+        ndims = len(transform_axes) + num_array_axes
         packing = np.zeros((1,) * ndims, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
