@@ -4053,7 +4053,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 new_sampling=sampling,
                 new_gpts=gpts,
                 chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                dtype=get_dtype(complex=False),
+                # explicit: inference calls the function on a zero-size block,
+                # which it cannot interpolate, and would fall back to a NumPy
+                # meta, so a CuPy result would report its device as "cpu"
+                meta=get_array_module(self.array).array(
+                    (), dtype=get_dtype(complex=False)
+                ),
             )
         else:
             array = self._batch_interpolate_bilinear(

@@ -627,6 +627,21 @@ class TestLazyCuPy:
             _to_numpy(built.array), expected, rtol=0, atol=1e-5 * scale
         )
 
+    def test_lazy_interpolate_keeps_the_device(self):
+        import cupy as cp
+
+        patterns = _complex_diffraction_patterns(xp=cp).intensity()
+        expected = _complex_diffraction_patterns(lazy=False).intensity()
+        expected = expected.interpolate(0.05).array
+
+        interpolated = patterns.interpolate(0.05)
+
+        assert interpolated.is_lazy
+        assert interpolated.device == "gpu"
+        on_cpu = interpolated.to_cpu().compute()
+        assert isinstance(on_cpu.array, np.ndarray)
+        np.testing.assert_allclose(on_cpu.array, expected, rtol=1e-5, atol=1e-6)
+
     def test_concatenate_eager_then_lazy(self):
         import cupy as cp
 
