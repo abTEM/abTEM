@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWaves, StructureFactor
-from abtem.bloch.dynamical import calculate_structure_factors
+from abtem.bloch.dynamical import BlochwaveEnsemble, calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
     relative_positions_for_centering,
@@ -252,3 +252,149 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+@pytest.fixture(scope="module")
+def silicon_bloch_waves():
+    structure_factor = StructureFactor(
+        bulk("Si", "diamond", a=5.43, cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        thermal_sigma=0.0,
+    )
+    return BlochWaves(structure_factor=structure_factor, energy=200e3, sg_max=0.1)
+
+
+def _intensities_by_hkl(diffraction_patterns):
+    # map each Miller index to its intensities; ensembles and single orientations
+    # generally include different sets of beams
+    diffraction_patterns = diffraction_patterns.to_cpu().compute()
+    array = np.asarray(diffraction_patterns.array)
+    return {
+        tuple(int(i) for i in hkl): array[..., j]
+        for j, hkl in enumerate(diffraction_patterns.miller_indices)
+    }
+
+
+def _assert_matches_single_orientation(ensemble_pattern, single_pattern):
+    ensemble = _intensities_by_hkl(ensemble_pattern)
+    single = _intensities_by_hkl(single_pattern)
+    assert set(single) <= set(ensemble)
+    for hkl, value in ensemble.items():
+        np.testing.assert_allclose(
+            value, single.get(hkl, np.zeros_like(value)), atol=1e-6
+        )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_zero_width_rotation_ensemble_diffraction_matches_unrotated(
+    silicon_bloch_waves, lazy
+):
+    thicknesses = [50.0, 100.0]
+    ensemble = silicon_bloch_waves.rotate("x", abtem.distributions.uniform(0.0, 0.0, 2))
+    assert isinstance(ensemble, BlochwaveEnsemble)
+
+    patterns = ensemble.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.is_lazy == lazy
+    assert [axis.label for axis in patterns.ensemble_axes_metadata] == [
+        "x_rotation",
+        "z",
+    ]
+    patterns = patterns.compute()
+
+    reference = silicon_bloch_waves.calculate_diffraction_patterns(
+        thicknesses, lazy=False
+    )
+    assert patterns.shape == (2,) + reference.shape
+    np.testing.assert_array_equal(patterns.miller_indices, reference.miller_indices)
+    for i in range(2):
+        np.testing.assert_allclose(patterns.array[i], reference.array, atol=1e-6)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_zero_width_rotation_ensemble_exit_waves_match_unrotated(
+    silicon_bloch_waves, lazy
+):
+    ensemble = silicon_bloch_waves.rotate("x", abtem.distributions.uniform(0.0, 0.0, 2))
+
+    exit_waves = ensemble.calculate_exit_waves([50.0], gpts=(32, 32), lazy=lazy)
+    assert exit_waves.is_lazy == lazy
+    exit_waves = exit_waves.compute()
+
+    reference = silicon_bloch_waves.calculate_exit_waves(
+        [50.0], gpts=(32, 32), lazy=False
+    )
+    assert exit_waves.shape == (2,) + reference.shape
+    for i in range(2):
+        np.testing.assert_allclose(exit_waves.array[i], reference.array, atol=1e-6)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_rotation_ensemble_matches_individually_rotated_bloch_waves(
+    silicon_bloch_waves, lazy
+):
+    # Regression test for SciPy >= 1.18, which rejects 1-D angle arrays for a
+    # single-axis Euler sequence. Two distributions also check that the ensemble
+    # composes the rotations in the same order as a non-ensemble rotate call.
+    x_angles = np.array([0.0, 0.01])
+    y_angles = np.array([-0.005, 0.0, 0.008])
+    ensemble = silicon_bloch_waves.rotate(
+        "x",
+        abtem.distributions.from_values(x_angles),
+        "y",
+        abtem.distributions.from_values(y_angles),
+    )
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0], lazy=lazy).compute()
+    assert patterns.shape[:3] == (2, 3, 1)
+    # with extent=None the ensemble uses the largest rotated-cell bounds of all its
+    # members, so fix the extent to compare with single orientations
+    exit_wave_kwargs = {"gpts": (32, 32), "extent": (5.43, 5.43)}
+    exit_waves = ensemble.calculate_exit_waves(
+        [50.0], lazy=lazy, **exit_wave_kwargs
+    ).compute()
+    assert exit_waves.shape == (2, 3, 1, 32, 32)
+
+    for i, x in enumerate(x_angles):
+        for j, y in enumerate(y_angles):
+            single = silicon_bloch_waves.rotate("x", x, "y", y)
+            _assert_matches_single_orientation(
+                patterns[i, j], single.calculate_diffraction_patterns([50.0])
+            )
+            np.testing.assert_allclose(
+                exit_waves.array[i, j],
+                single.calculate_exit_waves([50.0], **exit_wave_kwargs).compute().array,
+                atol=1e-5,
+            )
+
+
+def test_rotation_ensemble_with_multi_axis_sequence(silicon_bloch_waves):
+    angles = np.array([[0.0, 0.01], [0.01, -0.005]])
+    ensemble = silicon_bloch_waves.rotate("xy", angles)
+    assert isinstance(ensemble, BlochwaveEnsemble)
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+    assert patterns.shape[:2] == (2, 1)
+
+    for i, (x, y) in enumerate(angles):
+        single = silicon_bloch_waves.rotate("xy", np.array([x, y]))
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
+
+
+def test_rotation_ensemble_with_fixed_and_distributed_rotations(silicon_bloch_waves):
+    y_angles = np.array([0.0, 0.3, 0.5])
+    ensemble = silicon_bloch_waves.rotate(
+        "x", 0.4, "y", abtem.distributions.from_values(y_angles), degrees=True
+    )
+    assert ensemble.ensemble_shape == (3,)
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+    assert patterns.shape[:2] == (3, 1)
+
+    for i, y in enumerate(y_angles):
+        single = silicon_bloch_waves.rotate("x", 0.4, "y", y, degrees=True)
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
