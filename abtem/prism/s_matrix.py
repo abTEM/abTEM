@@ -3723,6 +3723,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         device: str = None,
         store_on_host: bool = False,
     ):
+        if not semiangle_cutoff > 0.0:
+            # the plane-wave expansion keeps wave vectors strictly inside the cutoff,
+            # so a cutoff of zero would leave none
+            raise ValueError(
+                "PRISM requires a positive 'semiangle_cutoff', got "
+                f"{semiangle_cutoff!r}. For a parallel beam (a semiangle cutoff of "
+                "0), use Probe(semiangle_cutoff=0) or PlaneWave with multislice "
+                "instead."
+            )
+
         if downsample is True:
             downsample = "cutoff"
 
@@ -3809,8 +3819,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._window_gpts = window_gpts
 
         self._store_on_host = store_on_host
-
-        assert semiangle_cutoff > 0.0
 
         if not self._upsample and not all(
             n % f == 0 for f, n in zip(self.interpolation, self.gpts)

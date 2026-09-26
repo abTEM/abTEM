@@ -21,7 +21,7 @@ from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import get_dtype, itemset
 from abtem.potentials.iam import BasePotential, validate_potential
-from abtem.transfer import nyquist_sampling
+from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
 from abtem.visualize.visualizations import Visualization
 
@@ -91,6 +91,13 @@ def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
 
         semiangle_cutoff = probe.aperture._max_semiangle_cutoff
 
+        _raise_if_parallel_beam(
+            semiangle_cutoff,
+            "The default scan sampling (the probe's Nyquist sampling)",
+            "Give the scan an explicit `sampling` or `gpts`. A parallel beam is "
+            "translation invariant, so a single position (`gpts=1`) gives the whole "
+            "result.",
+        )
         scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe._valid_energy)
 
 

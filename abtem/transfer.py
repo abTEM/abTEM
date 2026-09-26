@@ -181,7 +181,15 @@ class BaseTransferFunction(
 
         if self.sampling is None or max_angle is not None:
             if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
+                _raise_if_parallel_beam(
+                    self._max_semiangle_cutoff,
+                    "The default angular range",
+                    "Pass `max_angle` explicitly.",
+                )
                 max_angle = self._max_semiangle_cutoff
+                if max_angle == np.inf:
+                    # no aperture: the same default range as CTF.profiles
+                    max_angle = 50.0
 
             elif max_angle is None:
                 raise RuntimeError()
@@ -263,6 +271,7 @@ class BaseAperture(BaseTransferFunction):
     def nyquist_sampling(self) -> float:
         """Nyquist sampling corresponding to the semiangle cutoff of the
         aperture [Å]."""
+        _raise_if_parallel_beam(self._max_semiangle_cutoff, "The Nyquist sampling")
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
@@ -1978,6 +1987,11 @@ class CTF(_HasAberrations, BaseAperture):
             represents the different
         """
         if max_angle is None:
+            _raise_if_parallel_beam(
+                self._max_semiangle_cutoff,
+                "The default angular range",
+                "Pass `max_angle` explicitly.",
+            )
             if self.semiangle_cutoff == np.inf:
                 max_angle = 50.0
             else:
@@ -2038,6 +2052,16 @@ class CTF(_HasAberrations, BaseAperture):
         return profiles
 
 
+def _raise_if_parallel_beam(semiangle_cutoff, quantity: str, remedy: str = "") -> None:
+    """Raise a ValueError for a zero semiangle cutoff (a parallel beam), for which
+    `quantity`, derived from the cutoff, is not defined."""
+    if np.ndim(semiangle_cutoff) == 0 and semiangle_cutoff == 0.0:
+        raise ValueError(
+            f"{quantity} is derived from the semiangle cutoff and is not defined for "
+            f"semiangle_cutoff=0 (a parallel beam). {remedy}".rstrip()
+        )
+
+
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
     """
     Calculate the Nyquist sampling.
@@ -2049,6 +2073,7 @@ def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
     energy: float
         Electron energy [eV].
     """
+    _raise_if_parallel_beam(semiangle_cutoff, "The Nyquist sampling")
     wavelength = energy2wavelength(energy)
     return 1 / (4 * semiangle_cutoff / wavelength * 1e-3)
 

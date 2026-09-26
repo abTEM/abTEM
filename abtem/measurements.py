@@ -4920,9 +4920,18 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The diffraction pattern(s) with the direct beam removed.
         """
 
+        from abtem.transfer import _raise_if_parallel_beam
+
         if radius is None:
             if "semiangle_cutoff" in self.metadata.keys():
                 radius = self.metadata["semiangle_cutoff"]
+                _raise_if_parallel_beam(
+                    radius,
+                    "The direct-beam radius",
+                    "Pass `radius` explicitly; `radius=0, margin=False` blocks only "
+                    "the zero-angle pixel, which is the whole direct beam of a "
+                    "parallel beam.",
+                )
             else:
                 radius = max(self.angular_sampling) * 1.0001
 
