@@ -169,6 +169,17 @@ def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
     return array.transpose(*order, *trailing)
 
 
+# Scheduler priority of the tasks that pull each output out of a packed
+# multi-output block. A packed block (every detector's output of one multislice
+# task, exit waves included) is released only after all of its extracts have
+# run. Without a priority, the distributed scheduler can run an extract that
+# feeds only a final output long after its block was computed, so the packed
+# blocks accumulate; with it, each extract runs as soon as its block exists.
+# The priority survives graph optimisation only with low-level fusion off, see
+# _keep_annotations_guard.
+_EXTRACT_PRIORITY = 1
+
+
 def multi_output_blockwise(
     func: Callable,
     array: da.core.Array,
@@ -243,14 +254,15 @@ def multi_output_blockwise(
                 drop_chunks.append(item)
         drop_chunks = tuple(drop_chunks)
 
-        new_output = da.map_blocks(
-            _extract_blockwise_multi_output,
-            out_array,
-            chunks=drop_chunks,
-            drop_axis=drop_axis,
-            index=i,
-            meta=out_meta,
-        )
+        with dask.annotate(priority=_EXTRACT_PRIORITY):
+            new_output = da.map_blocks(
+                _extract_blockwise_multi_output,
+                out_array,
+                chunks=drop_chunks,
+                drop_axis=drop_axis,
+                index=i,
+                meta=out_meta,
+            )
         outputs += (new_output,)
     return outputs
 
@@ -566,7 +578,9 @@ class ComputableList(list):
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
-        with _nested_compute_guard(kwargs), _compute_context(
+        with _nested_compute_guard(kwargs), _keep_annotations_guard(
+            kwargs
+        ), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
@@ -741,6 +755,39 @@ def _nested_compute_guard(kwargs: dict):
         yield
 
 
+@contextmanager
+def _keep_annotations_guard(kwargs: dict):
+    """Keep dask annotations through graph optimisation when a distributed
+    client runs the compute.
+
+    dask's low-level task fusion (``optimization.fuse.active``, on by default
+    for arrays) discards layer annotations, so the priority that
+    multi_output_blockwise gives its extract tasks would not reach the
+    scheduler. Blockwise fusion keeps and merges annotations and stays on.
+    Only the distributed scheduler reads annotations: low-level fusion is
+    switched off for the duration of a compute that a distributed client runs.
+    A compute on a named scheduler (e.g. the synchronous one forced on a single
+    GPU), and an explicit ``optimization.fuse.active`` setting, are left alone.
+    """
+    if (
+        kwargs.get("scheduler") is not None
+        or dask.config.get("optimization.fuse.active", None) is not None
+    ):
+        yield
+        return
+
+    try:
+        from distributed import get_client
+
+        get_client()
+    except (ImportError, ValueError):
+        yield
+        return
+
+    with dask.config.set({"optimization.fuse.active": False}):
+        yield
+
+
 def _push_config_to_active_client():
     """Mirror the configuration onto an active distributed client's workers.
 
@@ -775,7 +822,9 @@ def _compute(
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
 
-    with _nested_compute_guard(kwargs), _compute_context(
+    with _nested_compute_guard(kwargs), _keep_annotations_guard(
+        kwargs
+    ), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
         arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
