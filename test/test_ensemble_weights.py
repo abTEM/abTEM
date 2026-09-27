@@ -536,6 +536,29 @@ def test_weighted_tilt_axis(device):
     _assert_close_to(reduced.array, reference)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_weighted_energy_axis(device, tiny_potential):
+    # Energy distributions carry their weights on the EnergyAxis (previously a
+    # plain mean over the sampled energies; here 1.1% of the maximum off).
+    energies, weights = [80e3, 100e3, 200e3], [0.2, 0.7, 0.1]
+    energy = distributions.from_values(energies, weights=weights, ensemble_mean=True)
+
+    images = PlaneWave(energy=energy, device=device).multislice(tiny_potential)
+    reduced = images.intensity().reduce_ensemble()
+
+    reference = sum(
+        p
+        * _to_numpy(
+            PlaneWave(energy=e, device=device)
+            .multislice(tiny_potential)
+            .intensity()
+            .array
+        )
+        for e, p in zip(energies, weights)
+    )
+    _assert_close_to(reduced.array, reference)
+
+
 def test_distribution_weights_are_validated():
     with pytest.raises(ValueError, match=">= 0"):
         distributions.from_values([1.0, 2.0], weights=[0.5, -0.1])
