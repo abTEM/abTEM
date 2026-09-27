@@ -1328,25 +1328,38 @@ def test_diffraction_patterns_interpolate_uniform(gpts, extent):
     )
 
 
+_DISC_SIGMA = 1.0
+_DISC_SAMPLING = (0.02, 0.03)
+_DISC_GPTS = (500, 333)
+
+
 @given(
-    gpts=st.tuples(
-        st.integers(min_value=50, max_value=100),
-        st.integers(min_value=50, max_value=100),
-    ),
-    radius=st.floats(min_value=5, max_value=20),
-    sampling=st.tuples(
-        st.floats(min_value=0.05, max_value=1), st.floats(min_value=0.05, max_value=1)
-    ),
     position=st.tuples(
-        st.floats(min_value=0.0, max_value=0), st.floats(min_value=0.0, max_value=0.0)
+        st.floats(min_value=0.0, max_value=_DISC_GPTS[0] * _DISC_SAMPLING[0]),
+        st.floats(min_value=0.0, max_value=_DISC_GPTS[1] * _DISC_SAMPLING[1]),
     ),
+    radius=st.floats(min_value=0.5 * _DISC_SIGMA, max_value=3.0 * _DISC_SIGMA),
 )
-def test_integrate_disc(gpts, radius, sampling, position):
-    array = np.ones(gpts)
-    measurement = Images(array, sampling=sampling)
-    output = measurement.integrate_disc(position=position, radius=radius)
-    expected = (radius / sampling[0]) * (radius / sampling[1]) * np.pi
-    assert np.abs(output - expected) < 4 * np.pi * radius
+def test_integrate_disc(position, radius):
+    """A disc of radius R centred on a 2-D Gaussian blob of width σ (anywhere
+    in the periodic image, including across its border) captures the
+    fraction 1 - exp(-R²/2σ²) of the blob's total.
+
+    Tolerance: integrate_disc anti-aliases the disc edge with a linear ramp
+    one mean pixel (d = 0.025 Å) wide, which can grow the effective radius by
+    at most d/2; the fraction then changes by at most
+    (d/2) max_R dF/dR = (d/2σ) e^(-1/2) ≈ 0.30 d/σ = 0.0075 (σ = 1 Å). The
+    sampling is anisotropic, so an x/y sampling mix-up misplaces the disc.
+    """
+    array = _periodic_gaussian_blob(_DISC_GPTS, _DISC_SAMPLING, position, _DISC_SIGMA)
+    array /= array.sum()
+    measurement = Images(array, sampling=_DISC_SAMPLING)
+
+    captured = measurement.integrate_disc(position=position, radius=radius)
+
+    expected = 1 - np.exp(-(radius**2) / (2 * _DISC_SIGMA**2))
+    tolerance = 0.30 * np.mean(_DISC_SAMPLING) / _DISC_SIGMA
+    assert abs(captured - expected) < tolerance
 
 
 # @given(sigma=st.floats(min_value=.1, max_value=.5),
