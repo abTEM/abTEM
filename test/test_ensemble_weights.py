@@ -137,6 +137,39 @@ def test_stem_scan_defocus_ensemble_matches_brute_force(
         _assert_close_to(measurement.array, reference)
 
 
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_ctf_defocus_ensemble_matches_brute_force(lazy, device, tiny_potential):
+    # PRISM evaluates the CTF on the S-matrix plane waves itself, a separate code
+    # path from Probe; its ensemble must reduce with the same weights.
+    dist = distributions.from_values(
+        ASYM_VALUES, weights=ASYM_WEIGHTS, ensemble_mean=True
+    )
+    scan = abtem.GridScan((0, 0), (4, 4), gpts=(3, 3))
+    detector = abtem.AnnularDetector(10, 60)
+    s_matrix = abtem.SMatrix(
+        potential=tiny_potential, energy=100e3, semiangle_cutoff=20, device=device
+    )
+
+    ctf = CTF(semiangle_cutoff=20, defocus=dist)
+    reduced = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=lazy)
+
+    reference = sum(
+        p
+        * _to_numpy(
+            s_matrix.scan(
+                scan=scan,
+                detectors=detector,
+                ctf=CTF(semiangle_cutoff=20, defocus=x),
+                lazy=False,
+            ).array
+        )
+        for x, p in zip(ASYM_VALUES, ASYM_WEIGHTS)
+    ) / ASYM_WEIGHTS.sum()
+
+    _assert_close_to(reduced.array, reference)
+
+
 # ---------------------------------------------------------------------------------
 # (b) Width convention: the intensity sees the documented distribution
 # ---------------------------------------------------------------------------------
