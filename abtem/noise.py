@@ -216,13 +216,36 @@ def _make_displacement_field(
        Number of frequency components.
     rms_power : float
        Root-mean-square power of the distortion.
+    seed : int, optional
+       Seed for the random distortions. The x and y distortions are drawn
+       independently of each other.
+
+    Returns
+    -------
+    profile_x, profile_y : np.ndarray
+       Displacements in pixels along axis 0 (x) and axis 1 (y).
     """
 
-    profile_x = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
-    profile_y = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
+    if seed is None:
+        seed_x = seed_y = None
+    else:
+        seed_x, seed_y = (
+            int(child.generate_state(1)[0])
+            for child in np.random.SeedSequence(seed).spawn(2)
+        )
 
-    x_mag_deviation = np.gradient(profile_x, axis=1)
-    y_mag_deviation = np.gradient(profile_y, axis=0)
+    profile_x = _single_axis_distortion(
+        time, max_frequency, num_components, seed=seed_x
+    )
+    profile_y = _single_axis_distortion(
+        time, max_frequency, num_components, seed=seed_y
+    )
+
+    # profile_x (profile_y) displaces the image along axis 0 (axis 1), see
+    # _apply_displacement_field, so its magnification deviation is the
+    # derivative along that same axis
+    x_mag_deviation = np.gradient(profile_x, axis=0)
+    y_mag_deviation = np.gradient(profile_y, axis=1)
 
     frame_mag_deviation = (1 + x_mag_deviation) * (1 + y_mag_deviation) - 1
     frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation**2))
