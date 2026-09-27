@@ -345,5 +345,39 @@ class TestScanNoiseTransform:
         )
         assert snt.apply(self._images()).compute().shape[0] == 2
 
+    def test_samples_get_independent_reproducible_distortions(self):
+        # A non-constant image is needed: a distorted constant image is unchanged.
+        imgs = make_images((16, 24))
+
+        def transform(seeds, samples=3):
+            return ScanNoiseTransform(
+                rms_power=5.0, dwell_time=1e-6, flyback_time=1e-4,
+                samples=samples, seeds=seeds, num_components=20,
+            )
+
+        noisy = transform(0).apply(imgs).compute().array
+        assert noisy.shape == (3, 16, 24)
+        # each sample is a separate distortion realisation ...
+        for i, j in [(0, 1), (0, 2), (1, 2)]:
+            assert not np.allclose(noisy[i], noisy[j])
+        # ... the same seed reproduces all of them exactly ...
+        assert np.array_equal(noisy, transform(0).apply(imgs).compute().array)
+        # ... and sample k is the realisation of its own entry in `seeds`, so a
+        # sample does not depend on which other samples are drawn with it
+        for k, seed in enumerate(transform(0).seeds.values):
+            single = transform((int(seed),), samples=None).apply(imgs).compute()
+            np.testing.assert_array_equal(single.array[0], noisy[k])
+
+    def test_unseeded_samples_are_random(self):
+        imgs = make_images((16, 24))
+        snt = ScanNoiseTransform(
+            rms_power=5.0, dwell_time=1e-6, flyback_time=1e-4,
+            samples=3, num_components=20,
+        )
+        noisy = snt.apply(imgs).compute().array
+        assert noisy.shape == (3, 16, 24)
+        for i, j in [(0, 1), (0, 2), (1, 2)]:
+            assert not np.allclose(noisy[i], noisy[j])
+
     def test_ensemble_axes_metadata(self):
         assert ScanNoiseTransform(1.0, 1e-6, 1e-4).ensemble_axes_metadata == []
