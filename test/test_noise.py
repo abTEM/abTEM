@@ -2,9 +2,9 @@
 
 import numpy as np
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
 
+from abtem.core.axes import ScanAxis
+from abtem.measurements import DiffractionPatterns
 from abtem.noise import (
     NoiseTransform,
     ScanNoiseTransform,
@@ -14,24 +14,41 @@ from abtem.noise import (
     _single_axis_distortion,
 )
 from test_measure import make_images
+from utils import gpu
 
 
 # ---------------------------------------------------------------------------
 # _pixel_times
 # ---------------------------------------------------------------------------
 
-@given(
-    rows=st.integers(4, 32),
-    cols=st.integers(4, 32),
-    dwell_time=st.floats(1e-7, 1e-5),
-    flyback_time=st.floats(1e-5, 1e-3),
-)
-def test_pixel_times_properties(rows, cols, dwell_time, flyback_time):
-    times = _pixel_times(dwell_time, flyback_time, (rows, cols))
-    assert times.shape == (rows, cols)
-    assert np.all(times > 0)
-    assert np.all(np.diff(times, axis=0) > 0)
-    assert np.all(np.diff(times, axis=1) > 0)
+@pytest.mark.parametrize("shape", [(4, 32), (32, 4), (7, 5)])
+def test_pixel_times_raster_model(shape):
+    # Documented raster model: axis 0 is the fast (line) axis, axis 1 indexes the
+    # scan lines. Along a line the beam waits `dwell` per pixel; at the end of a
+    # line it spends `flyback` returning before the next line starts. Non-square
+    # shapes in both orientations catch a mix-up of shape[0] and shape[1].
+    dwell, flyback = 1e-6, 3.7e-5
+    n_fast, n_lines = shape
+    times = _pixel_times(dwell, flyback, shape)
+    assert times.shape == shape
+
+    line_time = n_fast * dwell + flyback
+
+    # consecutive pixels along the fast axis are one dwell time apart
+    np.testing.assert_allclose(np.diff(times, axis=0), dwell, rtol=1e-9)
+    # the same pixel on consecutive lines is one full line (incl. flyback) apart
+    np.testing.assert_allclose(np.diff(times, axis=1), line_time, rtol=1e-9)
+    # line end -> start of the next line: one dwell plus the flyback
+    np.testing.assert_allclose(
+        times[0, 1:] - times[-1, :-1], dwell + flyback, rtol=1e-9
+    )
+    # the whole frame (first to last pixel, plus the last pixel's dwell and
+    # flyback) takes n_lines full line times
+    np.testing.assert_allclose(
+        times[-1, -1] - times[0, 0] + dwell + flyback, n_lines * line_time, rtol=1e-9
+    )
+    # visiting the pixels in raster order (axis 0 fastest) is strictly monotonic
+    assert np.all(np.diff(times.ravel(order="F")) > 0)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +142,99 @@ class TestNoiseTransform:
         from abtem.distributions import from_values
         assert NoiseTransform(dose=1000.0).ensemble_axes_metadata == []
         assert len(NoiseTransform(dose=from_values([500.0, 1000.0])).ensemble_axes_metadata) == 1
+
+
+# ---------------------------------------------------------------------------
+# Poisson statistics of poisson_noise
+# ---------------------------------------------------------------------------
+
+
+def _assert_poisson(counts, lam):
+    """Assert sample mean and variance of i.i.d. counts match Poisson(lam).
+
+    For Poisson(lam): mean = var = lam; the standard error of the sample mean
+    is sqrt(lam / n) and that of the sample variance is sqrt((mu4 - var^2) / n)
+    with mu4 = lam + 3 lam^2, i.e. sqrt((lam + 2 lam^2) / n). Tolerance is 5
+    standard errors (seeds are fixed, so this is also deterministic).
+    """
+    counts = np.asarray(counts, dtype=np.float64).ravel()
+    n = counts.size
+    assert np.all(counts == np.round(counts)) and np.all(counts >= 0)
+    assert abs(counts.mean() - lam) < 5 * np.sqrt(lam / n)
+    assert abs(counts.var(ddof=1) - lam) < 5 * np.sqrt((lam + 2 * lam**2) / n)
+
+
+def _to_device(measurement, device):
+    return measurement.to_gpu() if device == "gpu" else measurement
+
+
+def _to_cpu_array(measurement):
+    array = measurement.compute().array
+    return array.get() if hasattr(array, "get") else array
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lam", [0.5, 50.0])
+class TestPoissonNoiseStatistics:
+    def test_images_dose_per_area(self, lam, device):
+        # Expected counts per pixel = intensity * dose_per_area * pixel area.
+        intensity, sampling = 0.25, (0.1, 0.2)
+        dose_per_area = lam / (intensity * sampling[0] * sampling[1])
+        images = _to_device(
+            make_images((400, 500), sampling=sampling, value=intensity), device
+        )
+        noisy = images.poisson_noise(dose_per_area=dose_per_area, seed=11)
+        _assert_poisson(_to_cpu_array(noisy), lam)
+
+    def test_diffraction_patterns_total_dose(self, lam, device):
+        # A pattern normalised to unit total intensity, spread uniformly over
+        # N detector pixels, receiving `total_dose` electrons: lam = total_dose / N.
+        n_det = 512 * 400
+        total_dose = lam * n_det
+        dp = DiffractionPatterns(np.full((512, 400), 1.0 / n_det), sampling=0.1)
+        noisy = _to_device(dp, device).poisson_noise(total_dose=total_dose, seed=12)
+        _assert_poisson(_to_cpu_array(noisy), lam)
+
+    def test_diffraction_patterns_dose_per_area(self, lam, device):
+        # 4D-STEM: electrons per probe position = dose_per_area * scan pixel area;
+        # a normalised uniform pattern over N detector pixels gives
+        # lam = dose_per_area * dx * dy / N.
+        n_det = 32 * 32
+        scan_sampling = (0.2, 0.25)
+        dose_per_area = lam * n_det / (scan_sampling[0] * scan_sampling[1])
+        dp = DiffractionPatterns(
+            np.full((20, 10, 32, 32), 1.0 / n_det),
+            sampling=0.1,
+            ensemble_axes_metadata=[
+                ScanAxis(label="x", sampling=scan_sampling[0], units="Å"),
+                ScanAxis(label="y", sampling=scan_sampling[1], units="Å"),
+            ],
+        )
+        noisy = _to_device(dp, device).poisson_noise(
+            dose_per_area=dose_per_area, seed=13
+        )
+        _assert_poisson(_to_cpu_array(noisy), lam)
+
+    def test_samples_are_independent_draws(self, lam, device):
+        # Each of the `samples` draws must itself be Poisson(lam), and distinct
+        # draws must be uncorrelated: for independent draws the sample Pearson
+        # correlation over n pixels has standard error ~1/sqrt(n).
+        samples, intensity, sampling = 4, 1.0, (0.1, 0.1)
+        dose_per_area = lam / (intensity * sampling[0] * sampling[1])
+        images = _to_device(
+            make_images((250, 200), sampling=sampling, value=intensity), device
+        )
+        noisy = images.poisson_noise(
+            dose_per_area=dose_per_area, samples=samples, seed=14
+        )
+        array = _to_cpu_array(noisy)
+        assert array.shape == (samples, 250, 200)
+        flat = array.reshape(samples, -1).astype(np.float64)
+        for draw in flat:
+            _assert_poisson(draw, lam)
+        corr = np.corrcoef(flat)
+        off_diagonal = corr[~np.eye(samples, dtype=bool)]
+        assert np.all(np.abs(off_diagonal) < 5 / np.sqrt(flat.shape[1]))
 
 
 # ---------------------------------------------------------------------------
