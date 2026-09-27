@@ -86,8 +86,27 @@ def test_scanned_measurement_type():
 )
 def test_add_subtract(data, measurement, method, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device))
-    new_measurement = getattr(measurement, method)(measurement.copy())
+    # A second operand distinct from the first, b = 2a + 1 (>= 1, so safe to
+    # divide by), so that no two of +, -, *, / can give the same result.
+    other = measurement.__class__(
+        **{
+            **measurement._copy_kwargs(exclude=("array",)),
+            "array": measurement.array * 2 + 1,
+        }
+    )
+    a = asnumpy(measurement.compute().array).copy()
+    b = asnumpy(other.compute().array)
+
+    new_measurement = getattr(measurement, method)(other)
     assert new_measurement.array is not measurement.array
+
+    # Oracle: the same elementwise operation on the plain numpy arrays.
+    expected = getattr(np.asarray(a, dtype=np.float64), method)(b)
+    np.testing.assert_allclose(
+        asnumpy(new_measurement.compute().array), expected, rtol=1e-6
+    )
+    # Not in place: the left operand is left untouched.
+    np.testing.assert_array_equal(asnumpy(measurement.compute().array), a)
 
 
 @settings(max_examples=5)
