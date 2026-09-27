@@ -2321,6 +2321,7 @@ class Images(_BaseMeasurement2D):
         return DiffractionPatterns(
             array=array,
             sampling=sampling,
+            fftshift=True,  # _diffractograms fftshifts
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
@@ -3960,18 +3961,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
         """Scattering angle coordinates [mrad]."""
 
+        # Derived from `coordinates` so the storage order (shifted or
+        # unshifted, even or odd n) is handled in one place.
         xp = get_array_module(self.array)
-        limits = self.angular_limits
-        alpha_x = xp.linspace(
-            limits[0][0], limits[0][1], self.shape[-2], dtype=xp.float32
-        )
-        alpha_y = xp.linspace(
-            limits[1][0], limits[1][1], self.shape[-1], dtype=xp.float32
-        )
-        if self.fftshift:
-            return alpha_x, alpha_y
-        else:
-            return np.fft.fftshift(alpha_x), np.fft.fftshift(alpha_y)
+        wavelength = energy2wavelength(self._get_energy())
+        k_x, k_y = self.coordinates
+        alpha_x = xp.asarray(k_x, dtype=get_dtype()) * (wavelength * 1e3)
+        alpha_y = xp.asarray(k_y, dtype=get_dtype()) * (wavelength * 1e3)
+        return alpha_x, alpha_y
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
