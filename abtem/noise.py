@@ -313,7 +313,8 @@ class ScanNoiseTransform(EnsembleTransform):
         if samples is None and seeds is None:
             samples = 1
 
-        if seeds is not None:
+        # one seed per sample; unseeded samples > 1 get random per-sample seeds
+        if seeds is not None or samples > 1:
             seeds_distribution = validate_distribution(validate_seeds(seeds, samples))
         else:
             seeds_distribution = None
@@ -399,15 +400,16 @@ class ScanNoiseTransform(EnsembleTransform):
         else:
             rms_powers = np.array([self.rms_power], dtype=get_dtype())
 
-        if self.seeds is not None:
-            seed = sum(self.seeds.values)
-        else:
-            seed = None
-
         arrays = []
         for rms_power in rms_powers:
             inner_array = np.zeros_like(array)
             for i in np.ndindex(array.shape[:-2]):
+                # the leading axis is the sample axis; each sample uses its own seed
+                if self.seeds is not None:
+                    seed = int(self.seeds.values[i[0]])
+                else:
+                    seed = None
+
                 displacement_x, displacement_y = _make_displacement_field(
                     time,
                     self.max_frequency,
