@@ -311,6 +311,35 @@ def equal_slice_thicknesses(
     return slice_thicknesses, n_per_slice
 
 
+def _snap_slice_thicknesses(
+    slice_thicknesses: Sequence[float], num_gpts_z: int, depth: float
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """Slice thicknesses given as a sequence, snapped to the z grid.
+
+    Each slice boundary (the cumulative thickness) is moved to the nearest z
+    grid plane, so the slices tile the cell exactly whenever the thicknesses
+    add up to its depth (to within half a z sample). Returns the thicknesses
+    actually used and the number of z grid points in each slice.
+    """
+    sampling_z = depth / num_gpts_z
+    thicknesses = np.asarray([float(dz) for dz in slice_thicknesses])
+    if abs(thicknesses.sum() - depth) > sampling_z / 2:
+        raise ValueError(
+            f"the slice thicknesses must add up to the cell depth, {depth:g} Å "
+            f"(to within half the z sampling, {sampling_z / 2:.3g} Å); they add up "
+            f"to {thicknesses.sum():g} Å"
+        )
+    boundaries = np.round(np.cumsum(thicknesses) / sampling_z).astype(int)
+    boundaries[-1] = num_gpts_z
+    chunks = np.diff(np.concatenate(([0], boundaries)))
+    if chunks.min() < 1:
+        raise ValueError(
+            f"every slice must span at least one z grid point ({sampling_z:.3g} Å "
+            "here); increase the thinnest slice thicknesses or `g_max`"
+        )
+    return tuple(float(n * sampling_z) for n in chunks), tuple(int(n) for n in chunks)
+
+
 def slice_potential(
     potential_3d: np.ndarray,
     slice_chunks: tuple[int, ...],
@@ -762,37 +791,38 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         extent = tuple(np.diag(self.cell)[:2])
 
-        if sampling is not None:
-            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-            validated_gpts = grid._valid_gpts
-
         potential_3d = self.get_potential_3d()
         depth = np.array(self.cell)[2, 2]
-        sampling_z = depth / potential_3d.shape[-1]
+        num_gpts_z = potential_3d.shape[-1]
+        sampling_z = depth / num_gpts_z
+
+        # the lateral grid, resolved once from gpts (int or pair) or sampling
+        if gpts is None and sampling is None:
+            validated_gpts = tuple(potential_3d.shape[:2])
+        else:
+            if isinstance(gpts, int):
+                gpts = (gpts, gpts)
+            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+            validated_gpts = tuple(int(n) for n in grid._valid_gpts)
 
         if slice_thickness is None:
             slice_thickness = min(1.0, depth)
 
         if isinstance(slice_thickness, (float, int)):
             validated_slice_thickness, slice_chunks = equal_slice_thicknesses(
-                num_gpts_z=potential_3d.shape[-1],
+                num_gpts_z=num_gpts_z,
                 slice_thickness=slice_thickness,
                 depth=depth,
             )
         elif isinstance(slice_thickness, Sequence):
-            validated_slice_thickness = tuple(float(dz) for dz in slice_thickness)
+            validated_slice_thickness, slice_chunks = _snap_slice_thicknesses(
+                slice_thickness, num_gpts_z=num_gpts_z, depth=depth
+            )
         else:
             raise ValueError(
                 "Invalid `slice_thickness` argument type, must be float or sequence ",
                 "of floats",
             )
-
-        if gpts is None:
-            validated_gpts = potential_3d.shape[:2]
-        else:
-            assert isinstance(gpts, tuple)
-            assert len(gpts) == 2
-            validated_gpts = gpts
 
         if min(validated_slice_thickness) < sampling_z:
             raise RuntimeError(
@@ -807,7 +837,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
                 chunks=(len(slice_chunks),) + validated_gpts,
                 meta=xp.array((), dtype=potential_3d.dtype),
             )
@@ -816,7 +846,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
             )
 
         sampling = (
@@ -1129,6 +1159,7 @@ def plane_wave_basis(
     numpy.ndarray
         The plane wave basis at the given positions.
     """
+    g = get_array_module(x).asarray(g)  # on the device of the positions
     plane_waves_x = complex_exponential(
         2 * np.pi * g[None, :, 0, None, None] * x[None, None, :, None]
     )
@@ -1333,6 +1364,17 @@ class BlochWaves:
                 [m[union_mask] for m in per_energy], axis=0
             )
 
+    def _require_single_energy(self, method: str) -> None:
+        # These methods return one array computed at one energy; with several
+        # energies they used to answer silently for the first one.
+        if len(self._energies) > 1:
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise ValueError(
+                f"BlochWaves.{method} is defined for a single energy, but this "
+                f"BlochWaves has {len(self._energies)} ({energies} eV); create a "
+                "BlochWaves with one energy for it"
+            )
+
     def _with_energy(self, idx: int, e: float) -> "BlochWaves":
         """Return a single-energy clone using only the beams valid at energy *e*.
 
@@ -1412,7 +1454,13 @@ class BlochWaves:
         return energy2wavelength(self.energy)
 
     def excitation_errors(self) -> np.ndarray:
-        """Excitation errors for the Bloch waves."""
+        """Excitation errors for the Bloch waves [1/Å].
+
+        The standard excitation errors (the ``use_wave_eq=False`` form),
+        whatever `use_wave_eq` is: they select the beams (`sg_max`). The
+        structure matrix uses the form `use_wave_eq` selects.
+        """
+        self._require_single_energy("excitation_errors")
         return excitation_errors(self.g_vec, self.energy)
 
     @property
@@ -1447,6 +1495,7 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The kinematical diffraction pattern.
         """
+        self._require_single_energy("get_kinematical_diffraction_pattern")
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array()
@@ -1459,7 +1508,9 @@ class BlochWaves:
         if excitation_error_sigma is None:
             excitation_error_sigma = self._sg_max / 3.0
 
-        intensity = S_array * np.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
+        xp = get_array_module(S_array)
+        sg = xp.asarray(sg)
+        intensity = S_array * xp.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
 
         metadata = {"energy": self.energy, "sg_max": self._sg_max, "g_max": self.g_max}
 
@@ -1481,6 +1532,7 @@ class BlochWaves:
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
         """
+        self._require_single_energy("calculate_structure_matrix")
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array(lazy=lazy)
@@ -1525,6 +1577,7 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
+        self._require_single_energy("calculate_scattering_matrix")
         A = self.calculate_structure_matrix()
         hkl = self.hkl
         cell = self.cell
@@ -1607,7 +1660,17 @@ class BlochWaves:
 
             def _embed_beams(arr, active_mask, n_total):
                 """Embed (..., n_active) array into (..., n_total) with zeros."""
-                out = np.zeros(arr.shape[:-1] + (n_total,), dtype=arr.dtype)
+                # arr is a GPU (cupy) array whenever this ensemble runs on
+                # device="gpu" -- both here (the lazy=False, eager path) and
+                # per-block inside the map_blocks call below (the lazy path,
+                # where the block itself is cupy-backed). A bare np.zeros(...)
+                # always allocates on host, and cupy refuses the implicit
+                # device->host copy that assigning it into a numpy array's
+                # boolean-masked slice would require, raising a TypeError
+                # instead of doing the transfer silently. Allocate `out` on
+                # whichever device `arr` is actually on.
+                xp = get_array_module(arr)
+                out = xp.zeros(arr.shape[:-1] + (n_total,), dtype=arr.dtype)
                 out[..., active_mask] = arr
                 return out
 
@@ -1621,17 +1684,33 @@ class BlochWaves:
                 if first_result is None:
                     first_result = res
                 active = self._energy_hkl_masks[i]
-                new_chunks = res.array.chunks[:-1] + ((n_union,),)
-                padded = res.array.map_blocks(
-                    _embed_beams,
-                    active_mask=active,
-                    n_total=n_union,
-                    dtype=res.array.dtype,
-                    chunks=new_chunks,
-                )
+                if lazy:
+                    new_chunks = res.array.chunks[:-1] + ((n_union,),)
+                    padded = res.array.map_blocks(
+                        _embed_beams,
+                        active_mask=active,
+                        n_total=n_union,
+                        dtype=res.array.dtype,
+                        chunks=new_chunks,
+                    )
+                else:
+                    # lazy=False -- res.array is a plain numpy/cupy array with
+                    # no .chunks to preserve, so pad it directly instead of
+                    # going through the dask-only map_blocks path above.
+                    padded = _embed_beams(res.array, active, n_union)
                 padded_arrays.append(padded)
 
-            stacked = da.stack(padded_arrays, axis=0)
+            if lazy:
+                stacked = da.stack(padded_arrays, axis=0)
+            else:
+                # Same device concern as _embed_beams above: np.stack on a
+                # list of cupy arrays happens to work today via cupy's
+                # __array_function__ dispatch, but that's an implementation
+                # detail of cupy's NEP-18 support, not something this file
+                # should depend on implicitly elsewhere. Stack on whichever
+                # device the padded arrays are actually on.
+                xp = get_array_module(padded_arrays[0])
+                stacked = xp.stack(padded_arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             rlv = first_result.reciprocal_lattice_vectors
             if rlv.ndim == 3:
@@ -1746,7 +1825,12 @@ class BlochWaves:
                 )
                 for i, e in enumerate(energies)
             ]
-            stacked = da.stack([r.array for r in results], axis=0)
+            arrays = [r.array for r in results]
+            if lazy:
+                stacked = da.stack(arrays, axis=0)
+            else:
+                # da.stack would wrap the eager per-energy arrays in dask
+                stacked = get_array_module(arrays[0]).stack(arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             return Waves(
                 array=stacked,

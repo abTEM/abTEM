@@ -16,6 +16,7 @@ from abtem.bloch.utils import (
     wrapped_is_close,
 )
 from abtem.parametrizations import LobatoParametrization
+from utils import gpu
 
 
 @st.composite
@@ -252,3 +253,120 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+# --- abTEM/abTEM#455 --------------------------------------------------------
+
+
+def _si_structure_factor():
+    return StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+
+
+@pytest.mark.parametrize(
+    "method, args",
+    [
+        ("excitation_errors", ()),
+        ("get_kinematical_diffraction_pattern", ()),
+        ("calculate_structure_matrix", ()),
+        ("calculate_scattering_matrix", (50.0,)),
+    ],
+)
+def test_single_array_methods_refuse_several_energies(method, args):
+    # they return one array at one energy, and used to answer silently for the
+    # first energy
+    sf = _si_structure_factor()
+    with pytest.raises(ValueError, match="single energy"):
+        getattr(BlochWaves(sf, energy=[100e3, 200e3], sg_max=0.1), method)(*args)
+    getattr(BlochWaves(sf, energy=100e3, sg_max=0.1), method)(*args)
+
+
+def test_several_energies_honor_lazy_false():
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=[100e3, 200e3], sg_max=0.1)
+    thicknesses = [10.0, 20.0]
+
+    eager = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
+    lazy = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=True).compute()
+    assert not eager.is_lazy
+    np.testing.assert_allclose(eager.array, lazy.array)
+
+    eager = bloch_waves.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=False)
+    lazy = bloch_waves.calculate_exit_waves(thicknesses, gpts=(16, 16)).compute()
+    assert not eager.is_lazy
+    np.testing.assert_allclose(eager.array, lazy.array)
+
+
+@pytest.mark.parametrize("criterion", ["intensity", "distance"])
+def test_sort_indexed_diffraction_patterns(criterion):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns([10.0, 20.0], lazy=False)
+
+    sorted_spots = spots.sort(criterion)
+
+    if criterion == "intensity":
+        key = np.asarray(sorted_spots.array).max(axis=0)
+    else:
+        key = np.linalg.norm(sorted_spots.positions, axis=-1).max(axis=0)
+    assert np.all(np.diff(key) <= 1e-12)  # descending
+    np.testing.assert_array_equal(
+        sorted_spots.reciprocal_lattice_vectors, spots.reciprocal_lattice_vectors
+    )
+    # the same spots, reordered
+    before = dict(zip(map(tuple, spots.miller_indices), np.asarray(spots.array).T))
+    for hkl, values in zip(map(tuple, sorted_spots.miller_indices),
+                           np.asarray(sorted_spots.array).T):
+        np.testing.assert_array_equal(values, before[hkl])
+
+    with pytest.raises(RuntimeError, match="lazy"):
+        bloch_waves.calculate_diffraction_patterns(10.0, lazy=True).sort(criterion)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sequence_slice_thickness(lazy):
+    sf = _si_structure_factor()
+    depth = sf.cell[2, 2]
+    potential = sf.get_projected_potential(
+        slice_thickness=[2.0, 2.0, depth - 4.0], lazy=lazy
+    )
+    assert len(potential.slice_thickness) == 3
+    assert np.isclose(sum(potential.slice_thickness), depth)
+    # slicing only redistributes the potential along z
+    reference = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    np.testing.assert_allclose(
+        np.asarray(potential.compute().array).sum(0),
+        np.asarray(reference.compute().array).sum(0),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    with pytest.raises(ValueError, match="add up"):
+        sf.get_projected_potential(slice_thickness=[2.0, 2.0], lazy=lazy)
+    with pytest.raises(ValueError, match="at least one z grid point"):
+        sf.get_projected_potential(slice_thickness=[depth - 1e-3, 1e-3], lazy=lazy)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sampling_and_integer_gpts(lazy):
+    sf = _si_structure_factor()
+    default = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    sampled = sf.get_projected_potential(slice_thickness=2.0, sampling=0.05, lazy=lazy)
+    assert sampled.gpts != default.gpts
+    np.testing.assert_allclose(sampled.sampling, 0.05, rtol=0.01)
+    assert sf.get_projected_potential(slice_thickness=2.0, gpts=64, lazy=lazy).gpts == (64, 64)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
+    # NumPy excitation errors / reciprocal vectors used to meet CuPy data
+    from abtem.core.backend import asnumpy
+
+    sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
+    reference_sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device="cpu")
+    for method, kwargs in (
+        ("get_kinematical_diffraction_pattern", {}),
+        ("calculate_exit_waves", dict(thicknesses=[10.0], gpts=(16, 16), lazy=False)),
+    ):
+        result = getattr(BlochWaves(sf, energy=100e3, sg_max=0.1, device=device), method)(**kwargs)
+        expected = getattr(BlochWaves(reference_sf, energy=100e3, sg_max=0.1), method)(**kwargs)
+        np.testing.assert_allclose(
+            asnumpy(result.array), asnumpy(expected.array), rtol=1e-5, atol=1e-7
+        )
