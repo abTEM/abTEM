@@ -140,7 +140,16 @@ def _pixel_times(
     flyback_time : float
         Flyback time for the scanning probe at the end of each scan line in s.
     shape : two ints
-        Dimensions of a scan in pixels.
+        Dimensions of a scan in pixels. The first axis (x) is the fast scan axis,
+        i.e. a scan line runs along axis 0, and the second axis (y) is the slow
+        axis indexing the scan lines.
+
+    Returns
+    -------
+    times : np.ndarray
+        Time at each pixel. Consecutive pixels along a line are separated by
+        `dwell_time`, and consecutive lines by `shape[0] * dwell_time +
+        flyback_time`.
     """
 
     line_time = (dwell_time * shape[0]) + flyback_time
@@ -149,9 +158,7 @@ def _pixel_times(
     )
 
     fast_time = np.tile(
-        np.linspace(
-            (line_time - flyback_time) / shape[1], line_time - flyback_time, shape[0]
-        )[:, None],
+        np.linspace(dwell_time, line_time - flyback_time, shape[0])[:, None],
         (1, shape[1]),
     )
     return slow_time + fast_time
