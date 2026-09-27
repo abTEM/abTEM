@@ -39,12 +39,26 @@ def ensure_is_tuple(x, length: int = 1):
 def array_is_close(
     a1,
     a2,
-    rel_tol=np.inf,
-    abs_tol=np.inf,
+    rel_tol=None,
+    abs_tol=None,
     check_above_abs=0.0,
     check_above_rel=0.0,
     mask=None,
 ):
+    """Whether ``a1`` is within ``rel_tol`` (relative to ``a2``) and/or
+    ``abs_tol`` of ``a2``. The caller must assert the result.
+
+    At least one tolerance is required. Both used to default to ``inf``,
+    which disables the check it controls, so a call with neither returned
+    True whatever the arrays held.
+    """
+    if rel_tol is None and abs_tol is None:
+        raise TypeError("array_is_close requires rel_tol and/or abs_tol")
+    if rel_tol is None:
+        rel_tol = np.inf
+    if abs_tol is None:
+        abs_tol = np.inf
+
     if mask is not None:
         a1 = a1[mask]
         a2 = a2[mask]
@@ -266,10 +280,15 @@ def to_host_array(measurement):
 
 
 def _to_host_array_object(obj):
-    """``obj`` computed (if lazy) and moved to host memory."""
+    """A computed host-memory copy of ``obj``.
+
+    ``to_cpu`` first, since it returns a new object: ``compute`` works in
+    place and would otherwise turn the caller's lazy object eager.
+    """
+    obj = obj.to_cpu()
     if obj.is_lazy:
-        obj = obj.compute()
-    return obj.to_cpu()
+        obj.compute()
+    return obj
 
 
 def assert_array_objects_equal(
