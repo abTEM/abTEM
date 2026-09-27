@@ -3680,8 +3680,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if len(scan_axes) != 2:
             raise NotImplementedError
 
-        xp = get_array_module(self.array)
-
         tiling = ()
         j = 0
         for i in range(len(self.shape)):
@@ -3691,10 +3689,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             else:
                 tiling += (1,)
 
-        if self.is_lazy:
-            array = da.tile(self.array, tiling)
-        else:
-            array = xp.tile(self.array, tiling)
+        # np.tile dispatches to da.tile or cupy.tile; cupy.tile rejects a dask array
+        array = np.tile(self.array, tiling)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -5577,12 +5573,9 @@ class PolarMeasurements(BaseMeasurements):
 
         image_axes = _scan_axes(self)
 
-        xp = get_array_module(self.array)
-
-        if self.is_lazy:
-            array = da.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
-        else:
-            array = xp.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
+        # np.moveaxis dispatches to da.moveaxis or cupy.moveaxis; cupy.moveaxis
+        # rejects a dask array
+        array = np.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()
