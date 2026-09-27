@@ -264,20 +264,72 @@ def _si_structure_factor():
 
 @pytest.mark.parametrize(
     "method, args",
-    [
-        ("excitation_errors", ()),
-        ("get_kinematical_diffraction_pattern", ()),
-        ("calculate_structure_matrix", ()),
-        ("calculate_scattering_matrix", (50.0,)),
-    ],
+    [("calculate_structure_matrix", ()), ("calculate_scattering_matrix", (50.0,))],
 )
-def test_single_array_methods_refuse_several_energies(method, args):
-    # they return one array at one energy, and used to answer silently for the
-    # first energy
+def test_matrix_methods_need_a_single_energy(method, args):
+    # the energies' beam sets differ in size, so there is no common matrix to
+    # stack; they used to answer silently for the first energy
     sf = _si_structure_factor()
-    with pytest.raises(ValueError, match="single energy"):
-        getattr(BlochWaves(sf, energy=[100e3, 200e3], sg_max=0.1), method)(*args)
-    getattr(BlochWaves(sf, energy=100e3, sg_max=0.1), method)(*args)
+    multi = BlochWaves(sf, energy=[100e3, 200e3], sg_max=0.1)
+    with pytest.raises(ValueError, match="select_energy"):
+        getattr(multi, method)(*args)
+    getattr(multi.select_energy(200e3), method)(*args)
+
+
+ENERGIES = (100e3, 200e3)
+
+
+def test_select_energy_equals_single_energy_bloch_waves():
+    sf = _si_structure_factor()
+    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    for energy in ENERGIES:
+        selected = multi.select_energy(energy)
+        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        assert selected.energy == energy
+        np.testing.assert_array_equal(selected.hkl, single.hkl)
+        np.testing.assert_allclose(
+            selected.calculate_structure_matrix(lazy=False),
+            single.calculate_structure_matrix(lazy=False),
+        )
+    with pytest.raises(ValueError, match="not one of"):
+        multi.select_energy(300e3)
+    single = BlochWaves(sf, energy=100e3, sg_max=0.1)
+    assert single.select_energy(100e3) is single
+
+
+def _per_energy_rows(multi_hkl, single_hkl):
+    index = {tuple(h): i for i, h in enumerate(multi_hkl)}
+    return np.array([index[tuple(h)] for h in single_hkl])
+
+
+def test_excitation_errors_with_several_energies():
+    sf = _si_structure_factor()
+    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    sg = multi.excitation_errors()
+    assert sg.shape == (len(ENERGIES), len(multi.hkl))
+    for row, energy in zip(sg, ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        np.testing.assert_allclose(row[rows], single.excitation_errors())
+    assert not np.allclose(sg[0], sg[1])  # really per energy
+
+
+def test_kinematical_pattern_with_several_energies():
+    from abtem.core.axes import EnergyAxis
+
+    sf = _si_structure_factor()
+    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    pattern = multi.get_kinematical_diffraction_pattern()
+    assert isinstance(pattern.ensemble_axes_metadata[0], EnergyAxis)
+    assert pattern.array.shape == (len(ENERGIES), len(multi.hkl))
+    for member, energy in zip(np.asarray(pattern.array), ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        np.testing.assert_allclose(
+            member[rows], single.get_kinematical_diffraction_pattern().array
+        )
+        others = np.setdiff1d(np.arange(len(multi.hkl)), rows)
+        assert np.all(member[others] == 0)
 
 
 def test_several_energies_honor_lazy_false():

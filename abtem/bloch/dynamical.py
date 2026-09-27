@@ -1365,15 +1365,40 @@ class BlochWaves:
             )
 
     def _require_single_energy(self, method: str) -> None:
-        # These methods return one array computed at one energy; with several
-        # energies they used to answer silently for the first one.
+        # The structure and scattering matrices of different energies span
+        # different beam sets (different sizes), so they have no common array
+        # to stack; with several energies these methods used to answer silently
+        # for the first one.
         if len(self._energies) > 1:
             energies = ", ".join(f"{e:g}" for e in self._energies)
             raise ValueError(
                 f"BlochWaves.{method} is defined for a single energy, but this "
-                f"BlochWaves has {len(self._energies)} ({energies} eV); create a "
-                "BlochWaves with one energy for it"
+                f"BlochWaves has {len(self._energies)} ({energies} eV); select "
+                "one with select_energy(energy)"
             )
+
+    def select_energy(self, energy: float) -> "BlochWaves":
+        """The Bloch waves at one of this object's energies.
+
+        Parameters
+        ----------
+        energy : float
+            One of the energies of this BlochWaves [eV].
+
+        Returns
+        -------
+        BlochWaves
+            Single-energy Bloch waves, with the beams selected for that energy:
+            the same as constructing BlochWaves with that energy alone.
+        """
+        matches = np.flatnonzero(np.isclose(self._energies, float(energy)))
+        if len(matches) == 0:
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise ValueError(f"energy {energy:g} eV is not one of {energies} eV")
+        if len(self._energies) == 1:
+            return self
+        idx = int(matches[0])
+        return self._with_energy(idx, float(self._energies[idx]))
 
     def _with_energy(self, idx: int, e: float) -> "BlochWaves":
         """Return a single-energy clone using only the beams valid at energy *e*.
@@ -1459,8 +1484,13 @@ class BlochWaves:
         The standard excitation errors (the ``use_wave_eq=False`` form),
         whatever `use_wave_eq` is: they select the beams (`sg_max`). The
         structure matrix uses the form `use_wave_eq` selects.
+
+        With several energies, an array of shape (energies, beams) over the
+        union of the energies' beam sets (``hkl``); otherwise shape (beams,).
         """
-        self._require_single_energy("excitation_errors")
+        if len(self._energies) > 1:
+            # one row per energy, over the union of the energies' beams
+            return np.stack([excitation_errors(self.g_vec, e) for e in self._energies])
         return excitation_errors(self.g_vec, self.energy)
 
     @property
@@ -1495,7 +1525,10 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The kinematical diffraction pattern.
         """
-        self._require_single_energy("get_kinematical_diffraction_pattern")
+        if len(self._energies) > 1:
+            return self._multi_energy_kinematical_diffraction_pattern(
+                excitation_error_sigma
+            )
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array()
@@ -1521,6 +1554,37 @@ class BlochWaves:
             array=intensity,
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             metadata=metadata,
+        )
+
+    def _multi_energy_kinematical_diffraction_pattern(
+        self, excitation_error_sigma: Optional[float]
+    ) -> IndexedDiffractionPatterns:
+        # each energy on its own beams, embedded into the union beam set (zero
+        # where an energy does not include a beam), as for the dynamical
+        # calculate_diffraction_patterns
+        n_union = int(self._hkl_mask.sum())
+        members = []
+        for i, e in enumerate(self._energies):
+            pattern = self._with_energy(i, float(e)).get_kinematical_diffraction_pattern(
+                excitation_error_sigma
+            )
+            xp = get_array_module(pattern.array)
+            padded = xp.zeros((n_union,), dtype=pattern.array.dtype)
+            padded[self._energy_hkl_masks[i]] = pattern.array
+            members.append(padded)
+        xp = get_array_module(members[0])
+        return IndexedDiffractionPatterns(
+            miller_indices=self.hkl,
+            array=xp.stack(members),
+            reciprocal_lattice_vectors=reciprocal_cell(self.cell),
+            ensemble_axes_metadata=[
+                EnergyAxis(values=tuple(float(e) for e in self._energies))
+            ],
+            metadata={
+                "energy": list(self._energies),
+                "sg_max": self._sg_max,
+                "g_max": self.g_max,
+            },
         )
 
     def calculate_structure_matrix(self, lazy: bool = True) -> np.ndarray:
