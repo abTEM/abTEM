@@ -6,7 +6,7 @@ import numpy as np
 import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
                    assert_array_objects_equal, devices, gpu, lazy_params,
