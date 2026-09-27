@@ -168,9 +168,15 @@ _ACCELERATOR = _accelerator_device()
 # CUDA elsewhere. A test that needs the device string must compare against
 # `gpu.values[0]`, never the literal "gpu" -- or better, derive the array module
 # from `device` with `get_array_module`.
+#
+# It carries the `gpu` marker, like requires_gpu, so `pytest -m "not gpu"`
+# deselects the accelerator half of these tests on a machine that has one.
 gpu = pytest.param(
     _ACCELERATOR or "gpu",
-    marks=pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+    marks=(
+        pytest.mark.gpu,
+        pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+    ),
 )
 
 
