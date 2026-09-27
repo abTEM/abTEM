@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, SupportsFloat
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, EnergyAxis, OrdinalAxis, ParameterAxis
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
     Accelerator,
@@ -25,6 +25,7 @@ from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
     _unpack_distributions,
+    axis_weights,
     validate_distribution,
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
@@ -433,6 +434,7 @@ class Aperture(BaseAperture):
                     values=tuple(self.semiangle_cutoff),
                     units="mrad",
                     tex_label="$\\alpha_{cut}$",
+                    weights=axis_weights(self.semiangle_cutoff),
                     _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
@@ -1213,6 +1215,7 @@ class _HasAberrations(HasAcceleratorMixin):
                         label=parameter_name,
                         values=tuple(value.values),
                         units="Å",
+                        weights=axis_weights(value),
                         _ensemble_mean=value.ensemble_mean,
                         tex_label=symbol_to_tex_symbol(parameter_name),
                     )
@@ -1561,7 +1564,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
             )
 
-        parameter_values, weights = _unpack_distributions(
+        parameter_values, _ = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
 
@@ -1639,12 +1642,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         array *= xp.array(2 * xp.pi / self.wavelength, dtype=dtype)
         array = complex_exponential(-array)
 
-        if cp is not None:
-            weights = cp.asnumpy(weights)
-
-        if weights is not None:
-            array = xp.asarray(weights, dtype=dtype) * array
-
+        # The distribution weights are NOT applied here: each ensemble member is
+        # the unweighted transfer function for its parameter values, and the
+        # weights (carried by the ensemble axis metadata) are applied as
+        # probabilities when the ensemble of measurements is reduced.
         return array
 
 

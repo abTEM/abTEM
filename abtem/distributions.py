@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
+import warnings
 from functools import partial
 from numbers import Number
 from typing import Callable, Iterator, Optional, Sequence, SupportsFloat, overload
@@ -75,10 +76,19 @@ class DistributionFromValues(BaseDistribution):
     values : numpy.ndarray
         The values of the distribution.
     weights : numpy.ndarray, optional
-        The values of the weights. If None, all weights are set to 1.
+        The probability weights of the values; they must be non-negative and need not
+        be normalized. If None, all weights are set to 1 (equal weights).
     ensemble_mean : bool, optional
         If True, the mean of an ensemble of measurements defined by the distribution is
         calculated, otherwise the full ensemble is kept.
+
+    Notes
+    -----
+    The weights are *probabilities*: every ensemble member is simulated as the
+    physically correct (unweighted) wave function for its parameter value, and the
+    weights are applied when an ensemble of measurements is reduced, which
+    computes the weighted mean ``Σ_i p_i I_i / Σ_i p_i`` (see
+    :meth:`abtem.measurements.BaseMeasurements.reduce_ensemble`).
     """
 
     def __init__(
@@ -90,7 +100,21 @@ class DistributionFromValues(BaseDistribution):
         self._values = np.array(values)
 
         if weights is None:
-            weights = np.ones(len(values))
+            weights = np.ones(len(self._values))
+
+        weights = np.asarray(weights)
+
+        if weights.shape != (len(self._values),):
+            raise ValueError(
+                f"expected one weight per value ({len(self._values)}), got weights of "
+                f"shape {weights.shape}"
+            )
+
+        if np.any(weights < 0):
+            raise ValueError("distribution weights are probabilities: must be >= 0")
+
+        if len(weights) and not np.sum(weights) > 0:
+            raise ValueError("distribution weights must not all be zero")
 
         self._weights = weights
 
@@ -315,6 +339,37 @@ def uniform(
     )
 
 
+def _validate_normalize(normalize: str) -> str:
+    if normalize in ("intensity", "amplitude"):
+        warnings.warn(
+            f"normalize='{normalize}' is deprecated. Distribution weights are now "
+            "probabilities applied when the ensemble is reduced (the weighted mean "
+            "Σ p_i I_i / Σ p_i), not factors on the wave amplitude, so the "
+            "normalization only rescales the stored weights and does not change "
+            "reduced results. Use the default normalize='probability'.",
+            FutureWarning,
+            stacklevel=3,
+        )
+    elif normalize != "probability":
+        raise ValueError(
+            f"Unknown normalization method: {normalize!r}; use 'probability'"
+        )
+    return normalize
+
+
+def axis_weights(distribution: BaseDistribution) -> Optional[tuple[float, ...]]:
+    """The probability weights of a 1D distribution as a tuple, for ensemble axis
+    metadata, or None if the weights are all equal (plain mean)."""
+    weights = np.asarray(distribution.weights)
+    if weights.ndim != 1 or len(weights) != len(distribution.values):
+        raise NotImplementedError(
+            "only one-dimensional distributions can define an ensemble axis"
+        )
+    if len(weights) == 0 or np.all(weights == weights[0]):
+        return None
+    return tuple(float(weight) for weight in weights)
+
+
 def _distribution_from_kernel(
     dimension: int,
     num_samples: tuple[int, ...],
@@ -352,7 +407,7 @@ def _distribution_from_kernel(
 
         if normalize == "intensity":
             weights /= np.sqrt((weights**2).sum())
-        elif normalize == "amplitude":
+        elif normalize in ("probability", "amplitude"):
             weights /= weights.sum()
         else:
             raise RuntimeError(f"Unknown normalization method: {normalize}")
@@ -373,7 +428,7 @@ def gaussian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 3.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -402,13 +457,25 @@ def gaussian(
     sampling_limit : float, optional
         Truncate the distribution at this many standard deviations (default is 3.0).
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
+        'probability') are deprecated remnants of the former convention in which
+        the weights multiplied the wave amplitude.
 
     Notes
     -----
     The Gaussian distribution is parameterized by its standard deviation σ
     (``standard_deviation``). The corresponding full-width at half-maximum is
     FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+
+    The weights are the probabilities p_i ∝ exp(-x_i² / 2σ²) of the sampled values:
+    each ensemble member is simulated unweighted and the reduced (incoherently
+    averaged) measurement is Σ p_i I(x_i) / Σ p_i, so the parameter seen by the
+    intensity has standard deviation σ (up to the truncation at ``sampling_limit``).
+    For a defocus spread this corresponds to Kirkland's 1/e focal-spread width
+    Δ = √2·σ used by :class:`abtem.transfer.TemporalEnvelope`.
 
     Note that the Lorentzian and Voigt distributions use the half-width at
     half-maximum (HWHM) γ as their width parameter, so for the same FWHM one
@@ -430,7 +497,7 @@ def gaussian(
         ensemble_mean,
         range_width=standard_deviation,
         sampling_limit=sampling_limit,
-        normalize=normalize,
+        normalize=_validate_normalize(normalize),
         kernel=kernel,
     )
 
@@ -442,7 +509,7 @@ def lorentzian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 10.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -473,7 +540,12 @@ def lorentzian(
         Lorentzian has heavier tails than the Gaussian, so a larger truncation is
         recommended.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
+        'probability') are deprecated remnants of the former convention in which
+        the weights multiplied the wave amplitude.
 
     Notes
     -----
@@ -510,7 +582,7 @@ def lorentzian(
         ensemble_mean,
         range_width=half_width,
         sampling_limit=sampling_limit,
-        normalize=normalize,
+        normalize=_validate_normalize(normalize),
         kernel=kernel,
     )
 
@@ -523,7 +595,7 @@ def voigtian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 5.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -558,7 +630,12 @@ def voigtian(
         Truncate the distribution at this many Voigt half-widths (default is 5.0).
         The Voigt HWHM is estimated using the Thompson et al. (1987) approximation.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
+        'probability') are deprecated remnants of the former convention in which
+        the weights multiplied the wave amplitude.
 
     Notes
     -----
@@ -633,7 +710,7 @@ def voigtian(
         ensemble_mean,
         range_width=tuple(voigt_hwhm),
         sampling_limit=sampling_limit,
-        normalize=normalize,
+        normalize=_validate_normalize(normalize),
         kernel=kernel,
     )
 
@@ -647,7 +724,7 @@ def pseudo_voigtian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 10.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -689,7 +766,12 @@ def pseudo_voigtian(
         effective width is max(σ, γ), so the range is sampling_limit·max(σ, γ)
         on each side of the center.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
+        'probability') are deprecated remnants of the former convention in which
+        the weights multiplied the wave amplitude.
 
     Notes
     -----
@@ -761,7 +843,7 @@ def pseudo_voigtian(
         ensemble_mean,
         range_width=tuple(hw),
         sampling_limit=sampling_limit,
-        normalize=normalize,
+        normalize=_validate_normalize(normalize),
         kernel=kernel,
     )
 
@@ -814,8 +896,10 @@ def validate_distribution(
     elif isinstance(distribution, (tuple, list, np.ndarray)):
         distribution = np.array(distribution)
 
+        # One weight per value (not ``ones_like``: for an (N, 2) array of tilts
+        # that would give (N, 2) weights, misaligned with the N values).
         return DistributionFromValues(
-            distribution, np.ones_like(distribution, dtype=get_dtype(complex=False))
+            distribution, np.ones(len(distribution), dtype=get_dtype(complex=False))
         )
     else:
         raise ValueError(

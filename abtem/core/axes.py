@@ -352,7 +352,24 @@ class ScanAxis(RealSpaceAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
+    """Axis described by an explicit tuple of values.
+
+    Parameters
+    ----------
+    values : tuple
+        The coordinate (parameter value) of each element along the axis.
+    weights : tuple of float, optional
+        Probability weight of each element along the axis, aligned with
+        ``values``. An ensemble axis produced by a weighted distribution (e.g.
+        :func:`abtem.distributions.gaussian`) carries the distribution's weights
+        here, and :meth:`BaseMeasurements.reduce_ensemble` then computes the
+        probability-weighted mean ``Σ p_i I_i / Σ p_i`` over the axis. ``None``
+        (default) means equal weights, i.e. a plain mean. The weights need not
+        be normalized.
+    """
+
     values: tuple = ()
+    weights: Optional[tuple] = None
 
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
@@ -374,13 +391,27 @@ class OrdinalAxis(AxisMetadata):
         return self
 
     def concatenate(self, other: AxisMetadata) -> OrdinalAxis:
-        if not safe_equality(self, other, ("values",)):
+        if not safe_equality(self, other, ("values", "weights")):
             raise RuntimeError()
 
         assert isinstance(other, OrdinalAxis)
 
         kwargs = dataclasses.asdict(self)
         kwargs["values"] = kwargs["values"] + other.values
+
+        if self.weights is None and other.weights is None:
+            kwargs["weights"] = None
+        else:
+            # An axis without weights has equal (unit) weights; the weights
+            # are not required to be normalized, so concatenating keeps each
+            # element's weight as is.
+            self_weights = (
+                (1.0,) * len(self.values) if self.weights is None else self.weights
+            )
+            other_weights = (
+                (1.0,) * len(other.values) if other.weights is None else other.weights
+            )
+            kwargs["weights"] = self_weights + other_weights
 
         return self.__class__(**kwargs)
 
@@ -398,6 +429,22 @@ class OrdinalAxis(AxisMetadata):
             except TypeError:
                 raise ValueError()
 
+        if self.weights is not None:
+            weights = self.weights
+            if isinstance(weights, Number):
+                weights = (weights,)
+            weights = tuple(float(weight) for weight in np.ravel(np.asarray(weights)))
+
+            if len(weights) != len(self.values):
+                raise ValueError(
+                    f"{type(self).__name__} has {len(self.values)} values but "
+                    f"{len(weights)} weights"
+                )
+            if any(weight < 0.0 for weight in weights):
+                raise ValueError("axis weights must be non-negative")
+
+            self.weights = weights
+
     def item_metadata(self, item, metadata=None):
         return {self.label: self.values[item]}
 
@@ -406,10 +453,16 @@ class OrdinalAxis(AxisMetadata):
 
         if isinstance(item, Number):
             kwargs["values"] = (kwargs["values"][item],)
+            if self.weights is not None:
+                kwargs["weights"] = (self.weights[item],)
         else:
             array = np.empty(len(kwargs["values"]), dtype=object)
             array[:] = kwargs["values"]
             kwargs["values"] = tuple(array[item])
+            if self.weights is not None:
+                # Index the weights with exactly the same item as the values
+                # so they stay aligned under any slice, fancy index or mask.
+                kwargs["weights"] = tuple(np.asarray(self.weights, dtype=float)[item])
 
         return self.__class__(**kwargs)  # noqa
 
@@ -634,6 +687,42 @@ complex_labels = {
 #
 #     def format_label(self):
 #         return format_label(self)
+
+
+def _normalized_axis_weights(axis: AxisMetadata, n: int) -> Optional[np.ndarray]:
+    """Return the probability weights of an ensemble axis normalized to sum to one,
+    or None if the axis has equal weights (the plain mean is then exact).
+
+    Parameters
+    ----------
+    axis : AxisMetadata
+        The ensemble axis. Only axes with a ``weights`` attribute (OrdinalAxis and
+        subclasses) can be non-uniformly weighted.
+    n : int
+        The length of the array along the axis, used to check that the weights are
+        aligned with the array.
+    """
+    weights = getattr(axis, "weights", None)
+    if weights is None:
+        return None
+
+    # Host-side metadata arithmetic; cast to the array dtype where applied.
+    weights = np.asarray(weights, dtype=float)
+
+    if weights.shape != (n,):
+        raise RuntimeError(
+            f"ensemble axis '{axis.label}' has {weights.size} weights, but the "
+            f"array has length {n} along the axis"
+        )
+
+    if np.all(weights == weights[0]):
+        return None
+
+    total = weights.sum()
+    if not total > 0.0:
+        raise RuntimeError(f"ensemble axis '{axis.label}' has zero total weight")
+
+    return weights / total
 
 
 def axis_to_dict(axis: AxisMetadata):

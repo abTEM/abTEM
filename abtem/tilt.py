@@ -13,6 +13,7 @@ from abtem.distributions import (
     BaseDistribution,
     DistributionFromValues,
     MultidimensionalDistribution,
+    axis_weights,
     validate_distribution,
 )
 from abtem.transform import WavesToWavesTransform
@@ -193,6 +194,7 @@ class BeamTilt(BaseBeamTilt):
                     label="tilt",
                     values=tuple(tuple(value) for value in self.tilt.values),
                     units="mrad",
+                    weights=axis_weights(self.tilt),
                     _ensemble_mean=self.tilt.ensemble_mean,
                 )
             ]
@@ -248,6 +250,7 @@ class AxisAlignedBeamTilt(DistributionFromValues):
                     values=tuple(self.tilt.values),
                     direction=self._direction,
                     units="mrad",
+                    weights=axis_weights(self.tilt),
                     _ensemble_mean=self.tilt.ensemble_mean,
                 )
             ]
@@ -327,6 +330,7 @@ class BeamTilt2D(BaseBeamTilt):
                     values=tuple(self.tilt_x.values),
                     units="mrad",
                     direction="x",
+                    weights=axis_weights(self.tilt_x),
                     _ensemble_mean=self.tilt_x.ensemble_mean,
                 )
             )
@@ -338,6 +342,7 @@ class BeamTilt2D(BaseBeamTilt):
                     values=tuple(self.tilt_y.values),
                     units="mrad",
                     direction="y",
+                    weights=axis_weights(self.tilt_y),
                     _ensemble_mean=self.tilt_y.ensemble_mean,
                 )
             )
