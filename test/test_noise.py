@@ -83,6 +83,83 @@ def test_make_displacement_field_properties():
     assert np.std(dx2) > np.std(dx1)
 
 
+def test_make_displacement_field_seeded_profiles_independent():
+    time = _pixel_times(1e-6, 1e-4, (16, 24))
+    dx, dy = _make_displacement_field(time, 500, 20, rms_power=1.0, seed=0)
+    # x and y distortions are separate random processes, even for a fixed seed
+    assert not np.allclose(dx, dy)
+    # ... but the same seed reproduces both exactly
+    dx_b, dy_b = _make_displacement_field(time, 500, 20, rms_power=1.0, seed=0)
+    assert np.array_equal(dx, dx_b) and np.array_equal(dy, dy_b)
+    dx_c, dy_c = _make_displacement_field(time, 500, 20, rms_power=1.0, seed=1)
+    assert not np.allclose(dx, dx_c) and not np.allclose(dy, dy_c)
+    # seed=None stays random
+    dx_1, _ = _make_displacement_field(time, 500, 20, rms_power=1.0)
+    dx_2, _ = _make_displacement_field(time, 500, 20, rms_power=1.0)
+    assert not np.allclose(dx_1, dx_2)
+
+
+def _plant_profiles(monkeypatch, profile_x, profile_y):
+    # _make_displacement_field draws the x profile first, then the y profile
+    import abtem.noise
+
+    planted = iter([profile_x, profile_y])
+    monkeypatch.setattr(
+        abtem.noise, "_single_axis_distortion", lambda *args, **kwargs: next(planted)
+    )
+
+
+# The x (y) displacement is added to the axis-0 (axis-1) coordinate in
+# _apply_displacement_field, so its magnification deviation is its derivative
+# along axis 0 (axis 1), in pixels per pixel. rms_power is in percent and, per
+# the code's stated convention, a FWHM: the rms (sigma) of the frame
+# magnification deviation must be rms_power / (100 * 2.355).
+DWELL, FLYBACK, SHAPE = 1e-6, 5e-5, (6, 10)
+LINE_TIME = SHAPE[0] * DWELL + FLYBACK
+
+
+def test_make_displacement_field_pure_x_ramp(monkeypatch):
+    # displacement_x = a * t: d/d(axis 0) = a * dwell everywhere (exact for a
+    # linear ramp), no y displacement -> frame deviation is exactly a * dwell,
+    # so the output is scaled to t * rms_power / (235.5 * dwell).
+    time = _pixel_times(DWELL, FLYBACK, SHAPE)
+    rms_power = 3.0
+    # slope 0.5 px/px keeps (1 + gx) - 1 free of float cancellation
+    _plant_profiles(monkeypatch, 0.5 / DWELL * time, np.zeros_like(time))
+    dx, dy = _make_displacement_field(time, 500, 1, rms_power=rms_power)
+    np.testing.assert_allclose(dx, time * rms_power / (235.5 * DWELL), rtol=1e-12)
+    assert np.all(dy == 0)
+    frame = np.gradient(dx, axis=0)
+    np.testing.assert_allclose(np.sqrt(np.mean(frame**2)), rms_power / 235.5)
+
+
+def test_make_displacement_field_pure_y_ramp(monkeypatch):
+    # displacement_y = b * t: d/d(axis 1) = b * line_time everywhere.
+    time = _pixel_times(DWELL, FLYBACK, SHAPE)
+    rms_power = 3.0
+    _plant_profiles(monkeypatch, np.zeros_like(time), 0.5 / LINE_TIME * time)
+    dx, dy = _make_displacement_field(time, 500, 1, rms_power=rms_power)
+    assert np.all(dx == 0)
+    np.testing.assert_allclose(dy, time * rms_power / (235.5 * LINE_TIME), rtol=1e-12)
+    frame = np.gradient(dy, axis=1)
+    np.testing.assert_allclose(np.sqrt(np.mean(frame**2)), rms_power / 235.5)
+
+
+def test_make_displacement_field_rms_normalisation():
+    # Random x and y distortions: frame deviation (1 + gx)(1 + gy) - 1 is
+    # linear in the scale factor up to the gx * gy cross term, which is of
+    # relative size ~ rms_power / 235.5 ~ 4e-5 here, so rtol 1e-3 is safe.
+    time = _pixel_times(DWELL, FLYBACK, (32, 48))
+    rms_power = 0.01
+    dx, dy = _make_displacement_field(time, 500, 50, rms_power=rms_power, seed=3)
+    gx = np.gradient(dx, axis=0)
+    gy = np.gradient(dy, axis=1)
+    frame = (1 + gx) * (1 + gy) - 1
+    np.testing.assert_allclose(
+        np.sqrt(np.mean(frame**2)), rms_power / 235.5, rtol=1e-3
+    )
+
+
 # ---------------------------------------------------------------------------
 # _apply_displacement_field
 # ---------------------------------------------------------------------------
