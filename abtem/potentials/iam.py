@@ -2291,7 +2291,26 @@ class CrystalPotential(_PotentialBuilder):
         else:
             old_chunks = chunks
 
+        potential_unit = self.potential_unit
+        # A lazily built PotentialArray unit is computed once, here, for all
+        # ensemble members. Left lazy, every member's generate_slices would
+        # compute it again, as a nested compute inside that member's task.
+        unit_is_lazy = (
+            isinstance(potential_unit, PotentialArray) and potential_unit.is_lazy
+        )
+
         if lazy:
+            if unit_is_lazy:
+                # one task of this graph, which every block depends on
+                lazy_unit = dask.delayed(
+                    partial(
+                        potential_unit.__class__,
+                        **potential_unit._copy_kwargs(exclude=("array",)),
+                    )
+                )(potential_unit.array)
+            else:
+                lazy_unit = dask.delayed(potential_unit)
+
             arrays = []
 
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2300,8 +2319,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                lazy_atoms = dask.delayed(self.potential_unit)
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_unit, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
@@ -2311,7 +2329,8 @@ class CrystalPotential(_PotentialBuilder):
                 array = array[0]
 
         else:
-            potential_unit = self.potential_unit
+            if unit_is_lazy:
+                potential_unit = potential_unit.ensure_computed(progress_bar=False)
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2435,12 +2454,13 @@ class CrystalPotential(_PotentialBuilder):
         # eager consumers such as build(lazy=False) cannot place those into a
         # CuPy array, and on CPU compute them one slice at a time. The unit cell
         # is small; materialise it once, into a new object, so that the caller's
-        # unit stays lazy.
-        if potentials.is_lazy:
-            potentials = potentials.__class__(
-                potentials.array.compute(),
-                **potentials._copy_kwargs(exclude=("array",)),
-            )
+        # unit stays lazy. Blocks from _partition_args already receive it in
+        # memory; this covers direct calls. The synchronous scheduler keeps a
+        # compute that runs inside a task from starting a nested thread pool,
+        # and CuPy kernels from running concurrently.
+        potentials = potentials.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
 
         rng = np.random.default_rng(member_seed)
 
@@ -2641,12 +2661,14 @@ class CrystalPotential(_PotentialBuilder):
         else:
             unit_built = self.potential_unit
 
-        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         # A lazily-built PotentialArray unit (the default of Potential.build())
         # carries a dask array here, which the device's tile below does not
-        # accept for CuPy. The unit cell is small; materialise it once.
-        if hasattr(unit_arr, "compute"):
-            unit_arr = unit_arr.compute()
+        # accept for CuPy. The unit cell is small; materialise it once, as in
+        # generate_slices.
+        unit_built = unit_built.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
+        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         if unit_arr.ndim == 3:
             unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
 

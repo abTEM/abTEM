@@ -212,6 +212,54 @@ def test_crystal_potential_generates_eager_slices_from_a_lazily_built_unit():
     )
 
 
+def _crystal_potential_ensemble(executions=None, device="cpu", lazy_unit=True):
+    """A CrystalPotential of three frozen-phonon members, whose unit has two
+    configurations. With `executions`, every run of a unit block is recorded."""
+    fp = abtem.FrozenPhonons(
+        ase.build.bulk("Si", cubic=True), num_configs=2, sigmas=0.1, seed=1
+    )
+    unit = abtem.Potential(fp, sampling=0.2, slice_thickness=1, device=device)
+    unit = unit.build(lazy=lazy_unit)
+    if executions is not None:
+
+        def record(block):
+            if block.size:
+                executions.append(block.shape)
+            return block
+
+        unit = unit.__class__(
+            unit.array.map_blocks(record, meta=unit.array._meta),
+            **unit._copy_kwargs(exclude=("array",)),
+        )
+    return abtem.CrystalPotential(unit, repetitions=(2, 2, 2), seeds=(0, 1, 2))
+
+
+@pytest.mark.parametrize("build", ["build(lazy=True)", "build(lazy=False)", "scan"])
+def test_crystal_potential_computes_a_lazy_unit_once_for_all_members(build):
+    """Every ensemble member needs the whole unit. Computed per member, it would run
+    as a nested compute inside each member's task."""
+
+    def run(potential):
+        if build == "scan":
+            probe = abtem.Probe(energy=60e3, semiangle_cutoff=20)
+            scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), sampling=0.9)
+            detector = abtem.AnnularDetector(inner=40, outer=100)
+            measurement = probe.scan(potential, scan, detector, max_batch=3)
+            return measurement.compute(progress_bar=False).array
+        lazy = build == "build(lazy=True)"
+        return potential.build(lazy=lazy).compute(progress_bar=False).array
+
+    expected = run(_crystal_potential_ensemble(lazy_unit=False))
+    executions = []
+    potential = _crystal_potential_ensemble(executions)
+
+    result = run(potential)
+
+    assert len(executions) == potential.potential_unit.array.npartitions == 2
+    assert potential.potential_unit.is_lazy
+    np.testing.assert_array_equal(result, expected)
+
+
 ENSURE_COMPUTED = {
     "PotentialArray": lambda lazy: _potential().build(lazy=lazy),
     # its first constructor argument is Z, not the array
@@ -568,6 +616,18 @@ class TestLazyCuPy:
 
         built = _crystal_potential(device="gpu", lazy_unit=True).build(lazy=False)
 
+        np.testing.assert_array_equal(_to_numpy(built.array), expected)
+
+    @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+    def test_crystal_potential_ensemble_with_a_lazily_built_unit(self, lazy):
+        expected = _crystal_potential_ensemble(device="gpu", lazy_unit=False)
+        expected = _to_numpy(expected.build(lazy=lazy).compute().array)
+        executions = []
+        potential = _crystal_potential_ensemble(executions, device="gpu")
+
+        built = potential.build(lazy=lazy).compute()
+
+        assert len(executions) == 2
         np.testing.assert_array_equal(_to_numpy(built.array), expected)
 
     def test_blocked_scan_of_a_crystal_potential_with_a_lazily_built_unit(self):
