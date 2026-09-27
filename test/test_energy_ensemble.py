@@ -18,7 +18,7 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
-from utils import lazy_params, si_cubic_atoms
+from utils import gpu, lazy_params, si_cubic_atoms
 
 ENERGIES = [80e3, 200e3, 300e3]
 
@@ -477,6 +477,40 @@ class TestEnergyEnsembleSpotIndexing:
                 ],
                 single.array,
             )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("radius", [None, 0.25])
+    def test_indexing_stays_on_device(self, device, lazy, radius):
+        """Every array the indexing combines with the patterns lives on their
+        device (CuPy refuses implicit NumPy conversion), the result stays
+        there, and it matches the CPU result."""
+        from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+        from abtem.measurements import DiffractionPatterns
+
+        reference = self._patterns()[1]
+        om = self._orientation_matrices()[1]
+        array = copy_to_device(np.asarray(reference.array), device)
+        if lazy:
+            import dask.array as da
+
+            array = da.from_array(array, chunks=(1, 97, 97))
+        dp = DiffractionPatterns(
+            array,
+            sampling=reference.sampling,
+            fftshift=True,
+            ensemble_axes_metadata=reference.ensemble_axes_metadata,
+        )
+        kwargs = dict(cell=self._cell(), orientation_matrices=om, centering="F",
+                      radius=radius)
+        result = dp.index_diffraction_spots(**kwargs)
+        if lazy:
+            result = result.compute()
+        assert get_array_module(result.array) is get_array_module(
+            copy_to_device(np.zeros(1), device)
+        )
+        expected = reference.index_diffraction_spots(**kwargs)
+        np.testing.assert_allclose(asnumpy(result.array), expected.array, rtol=1e-6)
 
     def test_highest_energy_is_not_used_for_every_member(self):
         """The regression: the lowest-energy member indexed as the highest
