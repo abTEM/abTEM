@@ -702,13 +702,23 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
         # label_to_index silently discards labels outside [0, num_slices - 1],
-        # which is how an out-of-cell atom used to disappear. After the wrap
-        # above there is no such atom, so say so rather than dropping one.
-        # Only meaningful after a wrap: with wrap=False (a non-periodic
-        # potential) an atom outside the cell is expected, and label_to_index
-        # dropping it is the pre-existing behaviour this must not change.
-        # np.digitize against increasing bins returns [0, len(bins)], never
-        # negative, so only the upper end can escape.
+        # which is how an out-of-cell atom used to disappear. np.digitize
+        # against increasing bins returns [0, len(bins)], never negative, so
+        # only the upper end can escape: an atom below the entrance face
+        # already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised
+        # after padding. It belongs to the face it left, so clamp it into the
+        # last slice, mirroring what digitize already does at the entrance
+        # face. Its true position is kept: the infinite projection does not
+        # depend on z within a slice, so the projected potential is conserved
+        # exactly, where dropping the atom lost its whole contribution.
+        if not wrap:
+            labels = np.minimum(labels, len(self) - 1)
+
+        # After a wrap there is no atom outside the cell, so say so rather
+        # than dropping one.
         if wrap and len(labels) and labels.max() > len(self) - 1:
             raise RuntimeError(
                 f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
