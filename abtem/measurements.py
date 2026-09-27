@@ -5119,6 +5119,17 @@ class PolarMeasurements(BaseMeasurements):
         """
         Integrate polar regions to produce an image or line profiles.
 
+        Radial bin ``i`` spans ``[radial_offset + i * radial_sampling,
+        radial_offset + (i + 1) * radial_sampling)`` and azimuthal bin ``j`` spans
+        ``[azimuthal_offset + j * azimuthal_sampling,
+        azimuthal_offset + (j + 1) * azimuthal_sampling)``, as binned by
+        :meth:`DiffractionPatterns.polar_binning`. A bin is included if its *center*
+        lies in the half-open interval ``[lower, upper)`` of the limits. Limits on
+        bin edges therefore select exactly the bins between them, and a limit
+        inside a bin includes that bin if it covers at least half of it. Azimuthal
+        limits are periodic in 2 pi, so e.g. ``(-pi / 4, pi / 4)`` wraps around
+        0; limits spanning 2 pi or more include every azimuthal bin.
+
         Parameters
         ----------
         radial_limits : tuple of float
@@ -5147,25 +5158,36 @@ class PolarMeasurements(BaseMeasurements):
             if radial_limits is None:
                 radial_slice = slice(None)
             else:
-                inner_index = int(
-                    (radial_limits[0] - self.radial_offset) / self.radial_sampling
+                # Bin i is included iff its center, radial_offset + (i + 0.5) *
+                # radial_sampling, lies in [inner, outer).
+                inner_index, outer_index = (
+                    int(np.ceil((r - self.radial_offset) / self.radial_sampling - 0.5))
+                    for r in radial_limits
                 )
-                outer_index = int(
-                    (radial_limits[1] - self.radial_offset) / self.radial_sampling
-                )
-                radial_slice = slice(inner_index, outer_index)
+                radial_slice = slice(max(inner_index, 0), max(outer_index, 0))
 
                 if outer_index > self.shape[-2]:
                     raise RuntimeError("Integration limit exceeded.")
 
             if azimuthal_limits is None:
-                azimuthal_slice = slice(None)
+                azimuthal_indices = slice(None)
             else:
-                left_index = int(azimuthal_limits[0] / self.radial_sampling)
-                right_index = int(azimuthal_limits[1] / self.radial_sampling)
-                azimuthal_slice = slice(left_index, right_index)
+                # Bin j is included iff its center, azimuthal_offset + (j + 0.5) *
+                # azimuthal_sampling, lies in [lower, upper) modulo 2 pi.
+                lower, upper = azimuthal_limits
+                centers = (
+                    self.azimuthal_offset
+                    + (np.arange(self.shape[-1]) + 0.5) * self.azimuthal_sampling
+                )
+                if upper - lower >= 2 * np.pi:
+                    included = np.ones(len(centers), dtype=bool)
+                else:
+                    included = (centers - lower) % (2 * np.pi) < upper - lower
+                azimuthal_indices = [int(j) for j in np.flatnonzero(included)]
 
-            array = self.array[..., radial_slice, azimuthal_slice].sum(axis=(-2, -1))
+            array = self.array[..., radial_slice, :][..., azimuthal_indices].sum(
+                axis=(-2, -1)
+            )
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
