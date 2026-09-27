@@ -61,9 +61,9 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "gpu: applied by requires_gpu/requires_multigpu; a presence-only "
-        "marker for the GPU-worker-grouping hook below, not meant to be "
-        "applied directly",
+        "gpu: runs on an accelerator (CuPy or Metal); applied by the `gpu` "
+        "device parameter and by requires_gpu/requires_multigpu, not meant "
+        "to be applied directly. Deselect with -m 'not gpu'.",
     )
 
 
