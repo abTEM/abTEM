@@ -7,7 +7,7 @@ from ase import Atoms
 from ase.build import bulk
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from utils import gpu
+from utils import gpu, requires_gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
@@ -418,3 +418,33 @@ def test_bloch_wave_precision_warning_is_shown_once():
             bloch_waves.calculate_scattering_matrix(50.0)
 
     assert [w.category for w in caught].count(BlochWavePrecisionWarning) == 1
+
+
+def _hermitian_propagator_argument(dtype):
+    # i*H for a Hermitian H, the form expm takes in calculate_scattering_matrix,
+    # with a norm large enough that scaling and squaring is exercised.
+    rng = np.random.default_rng(0)
+    H = rng.normal(size=(64, 64)) + 1j * rng.normal(size=(64, 64))
+    return (1j * (H + H.conj().T)).astype(dtype)
+
+
+@requires_gpu
+@pytest.mark.parametrize(
+    "dtype, tolerance", [(np.complex128, 1e-10), (np.complex64, 1e-4)]
+)
+def test_cupy_expm_matches_scipy(dtype, tolerance):
+    import cupy as cp
+    from scipy.linalg import expm as expm_scipy
+
+    from abtem.bloch.matrix_exponential import expm as expm_cupy
+
+    a = _hermitian_propagator_argument(dtype)
+    reference = expm_scipy(a.astype(np.complex128))
+    result = expm_cupy(cp.asarray(a))
+
+    # The input precision is kept, not widened by float64 constants.
+    assert result.dtype == dtype
+    result = cp.asnumpy(result)
+    np.testing.assert_allclose(
+        result, reference, atol=tolerance * np.abs(reference).max()
+    )
