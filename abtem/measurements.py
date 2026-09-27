@@ -1250,9 +1250,16 @@ class _BaseMeasurement2D(BaseMeasurements):
             direction = direction / xp.linalg.norm(direction)
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            # The offsets are spaced by min(sampling) along the perpendicular
+            # direction in physical units (Å) and only then converted to
+            # pixels (`positions` is in pixels): applying the physical unit
+            # vector directly in pixel space tilts and stretches the offsets
+            # whenever the sampling is anisotropic.
             perpendicular_positions = (
                 xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                * min(self.sampling)
                 * perpendicular_direction[None]
+                / xp.asarray(self.sampling)
             )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
