@@ -56,6 +56,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    get_dtype,
     interleave,
     itemset,
     normalize_axes,
@@ -1339,11 +1340,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         xp = get_array_module(self.array)
 
         # Real dtype matching the array's precision (complex64 -> float32, ...),
-        # so the weights never promote the result.
+        # so the weights never promote the result; integer arrays (e.g. counts)
+        # take the configured float precision rather than truncating the weights.
         dtype = self.array.dtype
-        real_dtype = np.finfo(dtype).dtype if dtype.kind in "fc" else dtype
-
         array = self.array
+        if dtype.kind in "fc":
+            real_dtype = np.finfo(dtype).dtype
+        else:
+            real_dtype = get_dtype(complex=False)
+            array = array.astype(real_dtype)
         for axis in axes:
             if axis in weights:
                 axis_weights = weights[axis]

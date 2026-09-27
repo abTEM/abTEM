@@ -559,6 +559,45 @@ def test_weighted_energy_axis(device, tiny_potential):
     _assert_close_to(reduced.array, reference)
 
 
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32"])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_weighted_reduction_dtype_and_direct_oracle(dtype, lazy, device):
+    from abtem.core.axes import ParameterAxis
+    from abtem.core.backend import get_array_module as xp_for
+
+    rng = np.random.default_rng(0)
+    host = rng.integers(0, 1000, size=(4, 3, 5, 6)).astype(dtype)
+    xp = xp_for(device)
+    array = xp.asarray(host)
+    if lazy:
+        import dask.array as da
+
+        array = da.from_array(array, chunks=(1, 2, -1, -1))
+
+    axes = [
+        ParameterAxis(values=tuple(ASYM_VALUES), weights=tuple(ASYM_WEIGHTS), _ensemble_mean=True),
+        ParameterAxis(values=(1.0, 2.0, 3.0), weights=(0.6, 0.15, 0.25), _ensemble_mean=True),
+    ]
+    images = abtem.Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+    reduced = images.reduce_ensemble()
+    assert reduced.is_lazy == lazy
+
+    # Oracle: explicit float64 double sum with the weights written out.
+    w1 = ASYM_WEIGHTS / ASYM_WEIGHTS.sum()
+    w2 = np.array([0.6, 0.15, 0.25])
+    reference = np.einsum("i,j,ijkl->kl", w1, w2 / w2.sum(), host.astype(np.float64))
+
+    result = _to_numpy(reduced.array)
+    expected_dtype = np.dtype(dtype) if dtype != "int32" else np.dtype(
+        abtem.config.get("precision")
+    )
+    assert result.dtype == expected_dtype
+    # float32: ~1e-7 relative rounding per operation on values up to 1e3.
+    rtol = 1e-12 if dtype == "float64" else 1e-6
+    _assert_close_to(result, reference, rtol=rtol)
+
+
 def test_distribution_weights_are_validated():
     with pytest.raises(ValueError, match=">= 0"):
         distributions.from_values([1.0, 2.0], weights=[0.5, -0.1])
