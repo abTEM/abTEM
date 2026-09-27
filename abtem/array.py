@@ -1039,8 +1039,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
         array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        # by keyword: not every subclass takes the array as its first argument
         kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -1557,7 +1559,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+        # by keyword: not every subclass takes the array as its first argument
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)

@@ -283,6 +283,23 @@ def test_ensure_computed_leaves_the_object_alone(make, lazy):
     np.testing.assert_array_equal(computed.array, ENSURE_COMPUTED[make](False).array)
 
 
+@pytest.mark.parametrize("make", list(ENSURE_COMPUTED))
+def test_ensure_lazy_and_rechunk_rebuild_the_same_object(make):
+    eager = ENSURE_COMPUTED[make](False)
+
+    lazy = eager.ensure_lazy()
+    rechunked = lazy.rechunk((1,))
+    results = (lazy, eager.lazy(), rechunked)
+
+    assert rechunked.array.chunks[0] == (1,) * eager.shape[0]
+    for result in results:
+        assert type(result) is type(eager)
+        assert result.is_lazy
+        np.testing.assert_array_equal(
+            result.compute(progress_bar=False).array, eager.array
+        )
+
+
 def _relative_difference_inputs():
     rng = np.random.default_rng(0)
     a = rng.random((8, 8)).astype(np.float32) + 0.5
