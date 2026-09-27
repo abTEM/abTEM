@@ -880,34 +880,104 @@ def test_pseudo_voigtian_filter_lazy():
 #     measurement.diffractograms()
 
 
+def _periodic_gaussian_blob(gpts, sampling, center, sigma):
+    """exp(-|r - center|² / (2 sigma²)) on a periodic grid (minimum-image
+    distance), peak 1."""
+    extent = [n * d for n, d in zip(gpts, sampling)]
+    coords = []
+    for n, d, c, L in zip(gpts, sampling, center, extent):
+        r = np.arange(n) * d - c
+        coords.append(r - L * np.round(r / L))
+    x, y = np.meshgrid(*coords, indexing="ij")
+    return np.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+
+def _make_images(array, sampling, lazy, device):
+    array = array.astype(get_dtype(complex=False))
+    if lazy:
+        array = da.from_array(array, chunks=(array.shape[0] // 2, -1))
+    images = Images(array, sampling=sampling)
+    return images.to_gpu() if device == "gpu" else images
+
+
+def _line_values(line):
+    return np.asarray(asnumpy(line.compute().array), dtype=np.float64)
+
+
+@lazy_params
+@devices
+def test_images_interpolate_line_through_grid_nodes(lazy, device):
+    """A line running along a grid row/column, sampled at the grid spacing,
+    samples only grid nodes, where spline interpolation is exact -- so the
+    profile equals that row/column of the image. The image is anisotropic in
+    shape and sampling so that an x/y mix-up changes the result."""
+    rng = np.random.default_rng(7)
+    gpts, sampling = (48, 64), (0.2, 0.15)
+    array = rng.random(gpts)
+    images = _make_images(array, sampling, lazy, device)
+    extent = images.extent
+
+    # Along y at x = 0 (the first row of the array).
+    line = images.interpolate_line(start=(0, 0), end=(0, extent[1]), gpts=gpts[1])
+    _assert_matches_reference(_line_values(line), array[0])
+
+    # Along x at y = y_j (the j-th column).
+    j = 17
+    line = images.interpolate_line(
+        start=(0, j * sampling[1]), end=(extent[0], j * sampling[1]), gpts=gpts[0]
+    )
+    _assert_matches_reference(_line_values(line), array[:, j])
+
+
+@settings(max_examples=10, deadline=None)
 @given(data=st.data())
 @lazy_params
 @devices
-def test_images_interpolate_line(data, lazy, device):
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
-    image = wave.build((0, 0), lazy=lazy).intensity()
+def test_images_interpolate_line_at_position(data, lazy, device):
+    """A line of length L at any angle through the centre c of a rotationally
+    symmetric Gaussian blob exp(-|r - c|²/2σ²) samples exp(-t²/2σ²),
+    t = -L/2 ... L/2, independent of the angle (analytic profile)."""
+    # Anisotropic sampling, so pixel/physical-unit mix-ups show; the line
+    # may extend past the image edge, where the image is periodic.
+    gpts, sampling, sigma, length, n = (128, 160), (0.1, 0.08), 0.8, 6.0, 121
+    center = data.draw(
+        st.tuples(
+            *(
+                st.floats(min_value=0, max_value=g * d, exclude_max=True)
+                for g, d in zip(gpts, sampling)
+            )
+        ),
+        label="center",
+    )
+    angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle")
 
-    line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.0)
-    assert np.allclose(
-        image.to_cpu().compute().array[0], line.to_cpu().compute().array,
-        rtol=1e-6, atol=1e-6,
+    images = _make_images(
+        _periodic_gaussian_blob(gpts, sampling, center, sigma), sampling, lazy, device
+    )
+    line = images.interpolate_line_at_position(
+        center=center, angle=angle, extent=length, gpts=n, endpoint=True
     )
 
-    coordinate = st.floats(min_value=0, max_value=wave.extent[0])
-    center = data.draw(st.tuples(coordinate, coordinate))
-    angle1 = data.draw(st.floats(min_value=0, max_value=360.0))
-    angle2 = data.draw(st.floats(min_value=0, max_value=360.0))
-    width = data.draw(st.floats(min_value=0, max_value=2.0))
+    t = np.linspace(-length / 2, length / 2, n)
+    expected = np.exp(-(t**2) / (2 * sigma**2))
+    # Cubic-spline interpolation of a Gaussian 8-10 pixels wide errs by
+    # ~1e-4 of the peak; 1e-3 still rejects any off-centre or mis-rotated
+    # line (a 0.1 Å offset changes the profile by ~1e-2 of the peak).
+    _assert_matches_reference(_line_values(line), expected, rel=1e-3)
 
-    image = wave.build(center, lazy=lazy).intensity()
-    line1 = image.interpolate_line_at_position(
-        center=center, angle=angle1, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu().compute()
-    line2 = image.interpolate_line_at_position(
-        center=center, angle=angle2, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu().compute()
-
-    assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
+    # Averaging across a perpendicular width preserves the rotational
+    # symmetry: the profile must not depend on the angle.
+    width = data.draw(st.floats(min_value=0.1, max_value=2.0), label="width")
+    other_angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle2")
+    wide = [
+        _line_values(
+            images.interpolate_line_at_position(
+                center=center, angle=a, extent=length, gpts=n, width=width
+            )
+        )
+        for a in (angle, other_angle)
+    ]
+    _assert_matches_reference(wide[0], wide[1], rel=1e-3)
 
 
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
