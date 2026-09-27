@@ -1,8 +1,12 @@
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import given
-from utils import si_cubic_atoms
+from utils import assert_array_objects_equal, si_cubic_atoms
+
+from abtem.array import ArrayObject
+from abtem.core.backend import asnumpy
 
 
 @given(data=st.data())
@@ -35,7 +39,69 @@ from utils import si_cubic_atoms
 )
 def test_copy_equals(data, copyable):
     original = data.draw(copyable())
-    assert original.copy() == original
+    copied = original.copy()
+
+    # `copy` returning `self` would satisfy every equality check below.
+    assert copied is not original
+
+    if isinstance(original, ArrayObject):
+        # `==` compares no values for lazy objects (abTEM#413).
+        assert_array_objects_equal(copied, original)
+        _assert_copy_does_not_share_the_array(original)
+    else:
+        assert copied == original
+
+    for path, array in _ndarray_attributes(original):
+        copied_array = _get_path(copied, path)
+        assert not np.may_share_memory(array, copied_array), (
+            f"copy shares the buffer of {'.'.join(map(str, path))}"
+        )
+
+
+def _assert_copy_does_not_share_the_array(original):
+    """Writing into a copy's array must leave the original's untouched."""
+    eager = original.compute()
+    copied = eager.copy()
+    assert copied.array is not eager.array
+
+    before = asnumpy(eager.array).copy()
+    copied.array[...] = copied.array * 2 + 1
+    assert not np.array_equal(asnumpy(copied.array), before)  # the write landed
+    np.testing.assert_array_equal(asnumpy(eager.array), before)
+
+
+def _ndarray_attributes(obj, path=(), seen=None, max_depth=4):
+    """(path, array) for every numpy array reachable from ``obj`` through
+    instance attributes, dicts, lists and tuples."""
+    if seen is None:
+        seen = set()
+    if id(obj) in seen or len(path) > max_depth:
+        return
+    seen.add(id(obj))
+
+    if isinstance(obj, np.ndarray):
+        if obj.size:
+            yield path, obj
+        return
+    if isinstance(obj, dict):
+        items = obj.items()
+    elif isinstance(obj, (list, tuple)):
+        items = enumerate(obj)
+    elif hasattr(obj, "__dict__") and not isinstance(obj, type):
+        items = vars(obj).items()
+    else:
+        return
+    for key, value in items:
+        yield from _ndarray_attributes(value, path + (key,), seen, max_depth)
+
+
+def _get_path(obj, path):
+    for key in path:
+        if isinstance(obj, (dict, list, tuple)):
+            obj = obj[key]
+        else:
+            obj = vars(obj)[key]
+    return obj
 
 
 class TestEqualityDiscriminates:
