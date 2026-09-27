@@ -5,6 +5,8 @@ import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
+import scipy.ndimage
+import scipy.signal
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
@@ -12,7 +14,8 @@ from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, re
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import copy_to_device
+from abtem.core.backend import asnumpy, copy_to_device
+from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -206,71 +209,178 @@ def sigma(draw, max_value=5.0):
     return draw(st.one_of(st.tuples(sigma, sigma), sigma))
 
 
-@given(data=st.data(), sigma=sigma())
+# Anisotropic pixel sampling (x != y), so that applying a sigma/sampling
+# component to the wrong image axis changes the result.
+_anisotropic_sampling = st.tuples(
+    st.floats(min_value=0.02, max_value=0.05),
+    st.floats(min_value=0.06, max_value=0.1),
+)
+
+# Binary-exact anisotropic sampling for the Lorentzian-family tests: with
+# half-widths chosen as (multiple of 0.5 px) x sampling, the documented
+# truncation window (``truncate`` half-widths along each axis) ends exactly on
+# a pixel, so the reference kernel below is unambiguous.
+_LORENTZIAN_SAMPLING = (0.125, 0.0625)
+_lorentzian_hw_pixels = st.sampled_from([0.0, 0.5, 1.5, 2.5])
+
+# How each filter's documented `boundary` maps onto scipy.ndimage's `mode`
+# ('periodic' wraps around; the Gaussian's 'reflect' reflects about the edge
+# of the last pixel, which is scipy's 'reflect').
+_BOUNDARY_TO_SCIPY = {"periodic": "wrap", "reflect": "reflect", "constant": "constant"}
+
+
+def _with_sampling(measurement, sampling):
+    return Images(
+        array=measurement.array,
+        sampling=sampling,
+        ensemble_axes_metadata=measurement.ensemble_axes_metadata,
+        metadata=measurement.metadata,
+    )
+
+
+def _as_float64(measurement):
+    return np.asarray(asnumpy(measurement.compute().array), dtype=np.float64)
+
+
+def _assert_matches_reference(result, expected, rel=1e-5):
+    """Compare with a tolerance relative to the reference signal's peak, so
+    the tolerance can never exceed the signal itself (a zero image fails)."""
+    result = np.asarray(asnumpy(result), dtype=np.float64)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(result, expected, rtol=0, atol=rel * scale)
+
+
+def _analytic_lorentzian_kernel(hw_pixels, truncate=10.0):
+    """The Lorentzian kernel as documented by ``Images.lorentzian_filter``:
+
+        L(x, y) = 1 / (1 + (x/γ_x)² + (y/γ_y)²),   γ = HWHM in pixels,
+
+    truncated at ``truncate`` half-widths along each axis and normalized to
+    unit sum; the γ → 0 limit along an axis is a delta along that axis.
+    """
+    terms = []
+    for axis, hw in enumerate(hw_pixels):
+        radius = int(round(truncate * hw))
+        assert radius == truncate * hw, "choose hw so the window ends on a pixel"
+        x = np.arange(-radius, radius + 1, dtype=np.float64)
+        shape = (-1, 1) if axis == 0 else (1, -1)
+        terms.append(((x / hw) ** 2 if hw > 0 else x * 0.0).reshape(shape))
+    kernel = 1.0 / (1.0 + terms[0] + terms[1])
+    return kernel / kernel.sum()
+
+
+def _scipy_gaussian_kernel(sigma_pixels):
+    """scipy.ndimage's own (truncate=4) 2-D Gaussian kernel, obtained as the
+    impulse response of scipy.ndimage.gaussian_filter on a delta that fits
+    the whole kernel."""
+    radii = [int(4.0 * s + 0.5) for s in sigma_pixels]
+    delta = np.zeros([2 * r + 1 for r in radii])
+    delta[radii[0], radii[1]] = 1.0
+    return scipy.ndimage.gaussian_filter(delta, sigma_pixels, mode="constant")
+
+
+def _convolve_base_axes(array, kernel_2d, mode):
+    """Reference convolution over the two trailing (image) axes."""
+    kernel = kernel_2d.reshape((1,) * (array.ndim - 2) + kernel_2d.shape)
+    return scipy.ndimage.convolve(array, kernel, mode=mode, cval=0.0)
+
+
+@given(
+    data=st.data(),
+    sigma=sigma(),
+    sampling=_anisotropic_sampling,
+    boundary=st.sampled_from(["periodic", "reflect", "constant"]),
+)
 @lazy_params
 @devices
-def test_gaussian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_gaussian_filter_images(data, sigma, sampling, boundary, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), sampling
+    )
     try:
-        filtered = measurement.gaussian_filter(sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.gaussian_filter(sigma, boundary=boundary).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: scipy.ndimage.gaussian_filter, with sigma converted from Å to
+    # pixels separately along x (axis -2) and y (axis -1) and no smoothing
+    # across the ensemble axes.
+    sigma_x, sigma_y = ensure_is_tuple(sigma, 2)
+    sigma_pixels = (0.0,) * (original.ndim - 2) + (
+        sigma_x / sampling[0],
+        sigma_y / sampling[1],
+    )
+    expected = scipy.ndimage.gaussian_filter(
+        original, sigma_pixels, mode=_BOUNDARY_TO_SCIPY[boundary]
+    )
+    _assert_matches_reference(filtered.array, expected)
 
 
-@given(data=st.data(), sigma=sigma())
+@given(
+    data=st.data(),
+    hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
+    boundary=st.sampled_from(["periodic", "constant"]),
+)
 @lazy_params
 @devices
-def test_lorentzian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_lorentzian_filter_images(data, hw_pixels, boundary, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), _LORENTZIAN_SAMPLING
+    )
+    half_width = tuple(h * d for h, d in zip(hw_pixels, _LORENTZIAN_SAMPLING))
     try:
-        filtered = measurement.lorentzian_filter(sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.lorentzian_filter(
+            half_width, boundary=boundary
+        ).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: direct (scipy.ndimage) convolution with the analytic kernel.
+    expected = _convolve_base_axes(
+        original,
+        _analytic_lorentzian_kernel(hw_pixels),
+        mode=_BOUNDARY_TO_SCIPY[boundary],
+    )
+    _assert_matches_reference(filtered.array, expected)
 
 
-@given(data=st.data(), sigma=sigma())
+@given(
+    data=st.data(),
+    sigma_pixels=st.tuples(
+        st.floats(min_value=0.0, max_value=3.0), st.floats(min_value=0.0, max_value=3.0)
+    ),
+    hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
+)
 @lazy_params
 @devices
-def test_voigtian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_voigtian_filter_images(data, sigma_pixels, hw_pixels, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), _LORENTZIAN_SAMPLING
+    )
+    sigma = tuple(s * d for s, d in zip(sigma_pixels, _LORENTZIAN_SAMPLING))
+    half_width = tuple(h * d for h, d in zip(hw_pixels, _LORENTZIAN_SAMPLING))
     try:
-        # Use sigma as both gaussian_sigma and lorentzian_gamma
-        filtered = measurement.voigtian_filter(sigma, sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.voigtian_filter(sigma, half_width).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: a single periodic convolution with the Voigt kernel, built as
+    # the full linear convolution of the Gaussian and Lorentzian kernels.
+    voigt_kernel = scipy.signal.convolve2d(
+        _scipy_gaussian_kernel(sigma_pixels), _analytic_lorentzian_kernel(hw_pixels)
+    )
+    expected = _convolve_base_axes(original, voigt_kernel, mode="wrap")
+    _assert_matches_reference(filtered.array, expected)
 
 
 def _delta_probe_image(gpts=64, lazy=False):
@@ -368,22 +478,56 @@ def test_voigtian_filter_changes_image():
     assert not np.allclose(filtered.array, images.array)
 
 
-def test_voigtian_filter_pure_gaussian_limit():
-    """voigtian_filter with lorentzian_gamma=0 must equal gaussian_filter."""
-    images = _delta_probe_image()
-    sigma = 0.4
-    gauss = images.gaussian_filter(sigma)
-    voigt = images.voigtian_filter(sigma, 0.0)
-    assert np.allclose(gauss.array, voigt.array, atol=1e-5)
+def _unit_delta_image(shape=(64, 96), device="cpu"):
+    """A unit delta on an anisotropically sampled grid, so each filter's
+    output is its own (normalized) impulse response with peak << 1 but
+    known exactly, and tolerances can be set relative to that peak."""
+    array = np.zeros(shape, dtype=get_dtype(complex=False))
+    array[shape[0] // 2, shape[1] // 2] = 1.0
+    images = Images(array, sampling=_LORENTZIAN_SAMPLING)
+    return images.to_gpu() if device == "gpu" else images
 
 
-def test_voigtian_filter_pure_lorentzian_limit():
-    """voigtian_filter with gaussian_sigma=0 must equal lorentzian_filter."""
-    images = _delta_probe_image()
-    hw = 0.4
-    lor = images.lorentzian_filter(hw)
-    voigt = images.voigtian_filter(0.0, hw)
-    assert np.allclose(lor.array, voigt.array, atol=1e-5)
+# Anisotropic widths in pixels; half-widths are multiples of 0.5 px so the
+# Lorentzian truncation window ends on a pixel (see _analytic_lorentzian_kernel).
+_LIMIT_SIGMA_PIXELS = (2.0, 1.25)
+_LIMIT_HW_PIXELS = (1.5, 2.5)
+_LIMIT_SIGMA = tuple(s * d for s, d in zip(_LIMIT_SIGMA_PIXELS, _LORENTZIAN_SAMPLING))
+_LIMIT_HW = tuple(h * d for h, d in zip(_LIMIT_HW_PIXELS, _LORENTZIAN_SAMPLING))
+
+
+def _reference_impulse_response(kernel, shape=(64, 96)):
+    delta = np.zeros(shape)
+    delta[shape[0] // 2, shape[1] // 2] = 1.0
+    return scipy.ndimage.convolve(delta, kernel, mode="wrap")
+
+
+@devices
+def test_voigtian_filter_matches_convolved_kernels(device):
+    """The Voigt impulse response must equal the numerical (linear)
+    convolution of the Gaussian and the Lorentzian kernels."""
+    out = _unit_delta_image(device=device).voigtian_filter(_LIMIT_SIGMA, _LIMIT_HW)
+    voigt_kernel = scipy.signal.convolve2d(
+        _scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS),
+        _analytic_lorentzian_kernel(_LIMIT_HW_PIXELS),
+    )
+    _assert_matches_reference(out.array, _reference_impulse_response(voigt_kernel))
+
+
+@devices
+def test_voigtian_filter_pure_gaussian_limit(device):
+    """voigtian_filter with lorentzian_gamma=0 must be a pure Gaussian."""
+    out = _unit_delta_image(device=device).voigtian_filter(_LIMIT_SIGMA, 0.0)
+    expected = _reference_impulse_response(_scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS))
+    _assert_matches_reference(out.array, expected)
+
+
+@devices
+def test_voigtian_filter_pure_lorentzian_limit(device):
+    """voigtian_filter with gaussian_sigma=0 must be a pure Lorentzian."""
+    out = _unit_delta_image(device=device).voigtian_filter(0.0, _LIMIT_HW)
+    expected = _reference_impulse_response(_analytic_lorentzian_kernel(_LIMIT_HW_PIXELS))
+    _assert_matches_reference(out.array, expected)
 
 
 def test_pseudo_voigtian_filter_changes_image():
@@ -393,22 +537,19 @@ def test_pseudo_voigtian_filter_changes_image():
     assert not np.allclose(filtered.array, images.array)
 
 
-def test_pseudo_voigtian_filter_pure_gaussian_limit():
-    """pseudo_voigtian_filter with eta=0 must equal gaussian_filter."""
-    images = _delta_probe_image()
-    sigma = 0.4
-    gauss = images.gaussian_filter(sigma)
-    pv = images.pseudo_voigtian_filter(sigma, 1.0, eta=0.0)
-    assert np.allclose(gauss.array, pv.array, atol=1e-5)
-
-
-def test_pseudo_voigtian_filter_pure_lorentzian_limit():
-    """pseudo_voigtian_filter with eta=1 must equal lorentzian_filter."""
-    images = _delta_probe_image()
-    hw = 0.4
-    lor = images.lorentzian_filter(hw)
-    pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
-    assert np.allclose(lor.array, pv.array, atol=1e-5)
+@pytest.mark.parametrize("eta", [0.0, 0.3, 1.0])
+@devices
+def test_pseudo_voigtian_filter_mixes_components(eta, device):
+    """pseudo_voigtian_filter = (1 - eta) * Gaussian + eta * Lorentzian
+    (Nguyen et al. 2014), including the pure limits eta = 0 and eta = 1."""
+    out = _unit_delta_image(device=device).pseudo_voigtian_filter(
+        _LIMIT_SIGMA, _LIMIT_HW, eta=eta
+    )
+    gaussian = _reference_impulse_response(_scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS))
+    lorentzian = _reference_impulse_response(
+        _analytic_lorentzian_kernel(_LIMIT_HW_PIXELS)
+    )
+    _assert_matches_reference(out.array, (1 - eta) * gaussian + eta * lorentzian)
 
 
 # Maps _apply_convolve_2d_on_axes' internal mode names onto the
