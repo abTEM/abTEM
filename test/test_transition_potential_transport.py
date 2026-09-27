@@ -230,6 +230,9 @@ def test_lazy_threads_and_eager_agree():
         _scan(probe, potential, tp, scan, sites, lazy=False).to_cpu().array
     )
 
+    # Two all-zero results (every site filtered away, nothing scattered)
+    # would agree trivially.
+    assert np.abs(reference).max() > 0
     assert np.array_equal(result, reference)
 
 
@@ -256,6 +259,11 @@ def test_threaded_and_synchronous_schedulers_agree():
         lazy.compute(progress_bar=False, scheduler="synchronous").to_cpu().array
     )
 
+    # threshold=0.5 still keeps the sites carrying half the overlap; two
+    # all-zero results (every site filtered away) would agree trivially.
+    # Exact equality is kept deliberately: stricter than any atol, and the
+    # scheduler must not change the summation order within a task.
+    assert np.abs(synchronous).max() > 0
     assert np.array_equal(threaded, synchronous)
 
 
