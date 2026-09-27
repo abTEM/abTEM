@@ -106,19 +106,6 @@ def check_valid_quantum_number(Z, n, ell):
         )
 
 
-def _eager_waves(waves):
-    """The waves as an eager object; a lazy one is computed into a copy.
-
-    For the methods that reduce the whole wave intensity to a host-side result
-    (a threshold, a site subset): a lazy array would otherwise meet in-place
-    NumPy/CuPy operations it cannot take part in, or be recomputed piecewise.
-    abTEM's compute() works in place, so the caller's waves are copied first.
-    """
-    if waves.is_lazy:
-        return waves.copy().compute(progress_bar=False)
-    return waves
-
-
 class RadialWavefunction:
     def __init__(
         self,
@@ -1151,7 +1138,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
-        waves = _eager_waves(waves)
+        # The whole intensity is reduced to one host-side number: lazy waves are
+        # computed once, into a copy, rather than piecewise by the operations below
+        waves = waves.ensure_computed(progress_bar=False)
 
         array = abs2(waves.array)
 
@@ -1312,7 +1301,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
-        waves = _eager_waves(waves)
+        # As in absolute_threshold: the mask below needs the intensity in memory
+        waves = waves.ensure_computed(progress_bar=False)
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,

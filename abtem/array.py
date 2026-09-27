@@ -1562,6 +1562,33 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
 
+    def ensure_computed(self, **kwargs) -> Self:
+        """Creates an equivalent in-memory version of the array object, leaving
+        this object unchanged.
+
+        The counterpart of `ensure_lazy`: an object already in memory is returned
+        as it is, and a lazy one is computed into a new object. `compute` works in
+        place, so this is the way to get an in-memory array while the caller's
+        object stays lazy.
+
+        Parameters
+        ----------
+        kwargs :
+            Keyword arguments passed to `compute`.
+
+        Returns
+        -------
+        computed_array_object : ArrayObject or subclass of ArrayObject
+            In-memory version of the array object.
+        """
+        if not self.is_lazy:
+            return self
+
+        # by keyword: not every subclass takes the array as its first argument
+        new_kwargs = self._copy_kwargs(exclude=("array",))
+        new_kwargs["array"] = self.array
+        return self.__class__(**new_kwargs).compute(**kwargs)
+
     def compute(
         self,
         progress_bar: bool | None = None,
@@ -2257,10 +2284,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            # compute() works in place: materialise a copy, so that partitioning
-            # (e.g. of a lazy potential for an eager multislice) leaves the
-            # caller's object lazy
-            array = self.copy().compute().array if self.is_lazy else self.array
+            # Partitioning (e.g. of a lazy potential for an eager multislice)
+            # leaves the caller's object lazy
+            array = self.ensure_computed().array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:

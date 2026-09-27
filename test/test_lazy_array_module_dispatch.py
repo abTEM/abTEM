@@ -212,6 +212,29 @@ def test_crystal_potential_generates_eager_slices_from_a_lazily_built_unit():
     )
 
 
+ENSURE_COMPUTED = {
+    "PotentialArray": lambda lazy: _potential().build(lazy=lazy),
+    # its first constructor argument is Z, not the array
+    "TransitionPotentialArray": lambda lazy: _synthetic_transition_potential(
+        da if lazy else np
+    ),
+}
+
+
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("make", list(ENSURE_COMPUTED))
+def test_ensure_computed_leaves_the_object_alone(make, lazy):
+    obj = ENSURE_COMPUTED[make](lazy)
+
+    computed = obj.ensure_computed(progress_bar=False)
+
+    assert type(computed) is type(obj)
+    assert not computed.is_lazy
+    assert obj.is_lazy == lazy
+    assert (computed is obj) == (not lazy)
+    np.testing.assert_array_equal(computed.array, ENSURE_COMPUTED[make](False).array)
+
+
 def _relative_difference_inputs():
     rng = np.random.default_rng(0)
     a = rng.random((8, 8)).astype(np.float32) + 0.5
