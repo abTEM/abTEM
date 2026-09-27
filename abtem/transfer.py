@@ -868,12 +868,31 @@ class AnnularAperture(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-        if inner_cutoff >= semiangle_cutoff:
+
+    def _validate_semiangle_cutoff(
+        self, semiangle_cutoff: float | BaseDistribution | None
+    ) -> float | BaseDistribution | None:
+        """Also reject a semiangle cutoff that does not exceed the inner cutoff,
+        for which the annulus is empty; run by __init__ and the setter alike."""
+        semiangle_cutoff = super()._validate_semiangle_cutoff(semiangle_cutoff)
+        if semiangle_cutoff is None:
+            return semiangle_cutoff
+
+        if isinstance(semiangle_cutoff, BaseDistribution):
+            smallest = float(np.min(semiangle_cutoff.values))
+            shown = f"a distribution with smallest value {smallest!r}"
+        else:
+            smallest = float(semiangle_cutoff)
+            shown = repr(semiangle_cutoff)
+
+        if self._inner_cutoff >= smallest:
             raise ValueError(
-                f"inner_cutoff ({inner_cutoff!r}) must be smaller than "
-                f"semiangle_cutoff ({semiangle_cutoff!r}); otherwise the "
-                "AnnularAperture has no open area."
+                f"inner_cutoff ({self._inner_cutoff!r}) must be smaller than "
+                f"semiangle_cutoff ({shown}); otherwise the AnnularAperture has "
+                "no open area."
             )
+
+        return semiangle_cutoff
 
     @property
     def inner_cutoff(self) -> float:

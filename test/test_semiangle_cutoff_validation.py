@@ -117,6 +117,27 @@ def test_annular_aperture_rejects_an_empty_annulus(inner_cutoff, match):
         AnnularAperture(inner_cutoff, semiangle_cutoff=30.0)
 
 
+@pytest.mark.parametrize("semiangle_cutoff", [3.0, 5.0])
+def test_annular_aperture_setter_rejects_an_empty_annulus(semiangle_cutoff):
+    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
+
+    with pytest.raises(ValueError, match="no open area"):
+        aperture.semiangle_cutoff = semiangle_cutoff
+
+    assert aperture.semiangle_cutoff == 20.0
+    aperture.semiangle_cutoff = 10.0  # guard: a non-empty annulus is still accepted
+    intensity = _probe_intensity(aperture)
+    assert np.all(np.isfinite(intensity)) and intensity.sum() > 0
+
+
+def test_annular_aperture_compares_a_distribution_by_its_smallest_value():
+    values = abtem.distributions.from_values
+    AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=values([10.0, 20.0]))
+
+    with pytest.raises(ValueError, match="smallest value 3.0"):
+        AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=values([3.0, 20.0]))
+
+
 def test_zernike_rejects_a_negative_center_hole():
     with pytest.raises(ValueError, match="center_hole_cutoff must be non-negative"):
         Zernike(-1.0, np.pi / 2, semiangle_cutoff=30.0)
