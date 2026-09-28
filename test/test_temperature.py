@@ -75,6 +75,11 @@ def test_lazy_partition_args_embed_atoms_once():
     (array,) = frozen_phonons._partition_args(chunks=1, lazy=True)
 
     graph = dict(array.__dask_graph__())
-    atoms_keys = [key for key, value in graph.items() if isinstance(value, ase.Atoms)]
+    # Newer dask wraps literal graph values in a DataNode holding ``.value``.
+    atoms_keys = [
+        key
+        for key, value in graph.items()
+        if isinstance(getattr(value, "value", value), ase.Atoms)
+    ]
     assert len(array.chunks[0]) == 6
     assert len(atoms_keys) == 1
