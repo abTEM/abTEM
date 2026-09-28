@@ -1086,11 +1086,11 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True])
 @devices
-def test_diffraction_patterns_polar_binning(data, lazy, device):
+def test_diffraction_patterns_polar_binning(data, device):
+    """The lazy polar_binning must compute the same bins as the eager one."""
     measurement = data.draw(
-        abtem_st.diffraction_patterns(lazy=lazy, device=device, min_base_side=16)
+        abtem_st.diffraction_patterns(lazy=True, device=device, min_base_side=16)
     )
 
     nbins_radial = data.draw(
@@ -1117,8 +1117,7 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
     )
 
     rotation = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=360.0))
-    print(nbins_radial)
-    measurement.polar_binning(
+    kwargs = dict(
         nbins_radial=nbins_radial,
         nbins_azimuthal=nbins_azimuthal,
         inner=inner,
@@ -1126,16 +1125,16 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
         rotation=rotation,
     )
 
-    step_size = data.draw(
-        abtem_st.sensible_floats(
-            min_value=min(measurement.angular_sampling),
-            max_value=max(min(measurement.angular_sampling), outer - inner),
-        )
-    )
+    lazy = measurement.polar_binning(**kwargs)
+    assert lazy.is_lazy
+    lazy = lazy.compute()
+    eager = measurement.compute().polar_binning(**kwargs)
 
-    # measurement.radial_binning(step_size=step_size,
-    #                           inner=inner,
-    #                           outer=outer)
+    assert isinstance(lazy, PolarMeasurements)
+    assert lazy.shape == measurement.ensemble_shape + (nbins_radial, nbins_azimuthal)
+    np.testing.assert_allclose(
+        asnumpy(lazy.array), asnumpy(eager.array), rtol=1e-6, atol=0
+    )
 
 
 @given(data=st.data())
