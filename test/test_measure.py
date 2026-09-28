@@ -15,6 +15,7 @@ from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, re
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device
+from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
@@ -1392,16 +1393,31 @@ def make_images(shape=(32, 32), sampling=(0.1, 0.1), value=None, complex_=False)
 
 
 class TestImagesCrop:
+    # Anisotropic shape and sampling, extent (3.2, 2.0) Å, so that x/y
+    # mix-ups in the crop region change the result. Every crop below is an
+    # exact whole number of pixels, so the expected region is unambiguous:
+    # pixel i covers [i d, (i + 1) d).
+    _shape, _sampling = (32, 40), (0.1, 0.05)
+
+    def _images(self):
+        return make_images(self._shape, self._sampling)
+
     def test_crop_reduces_extent(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.5, 1.5))
-        assert cropped.extent[0] <= imgs.extent[0]
-        assert cropped.extent[1] <= imgs.extent[1]
+        imgs = self._images()
+        cropped = imgs.crop((1.5, 1.0))
+        # 1.5 Å / 0.1 Å = 15 and 1.0 Å / 0.05 Å = 20 pixels from the origin.
+        assert cropped.base_shape == (15, 20)
+        assert np.allclose(cropped.extent, (1.5, 1.0))
+        assert np.allclose(cropped.sampling, imgs.sampling)
+        np.testing.assert_array_equal(cropped.array, imgs.array[:15, :20])
 
     def test_crop_centered(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.0, 1.0), centered=True)
-        assert cropped.base_shape[0] <= imgs.base_shape[0]
+        imgs = self._images()
+        cropped = imgs.crop((1.2, 1.0), centered=True)
+        # Centred: lower corner at extent/2 - crop/2 = (1.0, 0.5) Å, i.e.
+        # pixel (10, 10); 12 x 20 pixels.
+        assert cropped.base_shape == (12, 20)
+        np.testing.assert_array_equal(cropped.array, imgs.array[10:22, 10:30])
 
     def test_crop_too_large_raises(self):
         imgs = make_images((32, 32), (0.1, 0.1))
@@ -1414,9 +1430,11 @@ class TestImagesCrop:
             imgs.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
 
     def test_crop_with_offset(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.0, 1.0), offset=(0.5, 0.5))
-        assert cropped.base_shape[0] <= imgs.base_shape[0]
+        imgs = self._images()
+        cropped = imgs.crop((1.5, 1.0), offset=(0.5, 0.3))
+        # Lower corner (0.5, 0.3) Å = pixel (5, 6); 15 x 20 pixels.
+        assert cropped.base_shape == (15, 20)
+        np.testing.assert_array_equal(cropped.array, imgs.array[5:20, 6:26])
 
 
 class TestImagesComplexAccessors:
@@ -1521,12 +1539,50 @@ class TestDiffractionPatternsIntegrateRadial:
         assert r2.array.sum() >= r1.array.sum()
 
 
+def _frequency_index_positions(n, fftshift):
+    """Map integer spatial-frequency index -> array position, in numpy's
+    fftfreq convention (shifted: zero frequency at n // 2)."""
+    freqs = np.fft.fftfreq(n, 1 / n)
+    if fftshift:
+        freqs = np.fft.fftshift(freqs)
+    return {int(round(f)): i for i, f in enumerate(freqs)}
+
+
 class TestDiffractionPatternsCrop:
-    def test_crop_reduces_max_angle(self):
-        dp = _dp((64, 64))
-        max_before = min(dp.max_angles)
-        cropped = dp.crop(max_angle=max_before / 2)
-        assert min(cropped.max_angles) <= min(dp.max_angles)
+    @pytest.mark.parametrize("fftshift", [True, False])
+    def test_crop_reduces_max_angle(self, fftshift):
+        """Cropping to max_angle keeps exactly the frequencies |m| dα <= max_angle
+        along each axis (an odd grid centred on zero frequency), with their
+        original values and unchanged sampling."""
+        shape, sampling, energy = (64, 48), (0.05, 0.08), 100e3
+        arr = np.random.default_rng(3).random(shape)
+        dp = DiffractionPatterns(
+            arr, sampling=sampling, fftshift=fftshift, metadata={"energy": energy}
+        )
+        # Anisotropic sampling: the same angle is a different number of
+        # frequency steps along x and y.
+        angular_sampling = [d * energy2wavelength(energy) * 1e3 for d in sampling]
+        max_angle = 10.2 * angular_sampling[0]  # 10 steps along x, 6 along y
+        n_max = [int(np.round(max_angle / a)) for a in angular_sampling]
+        assert n_max == [10, 6]
+
+        cropped = dp.crop(max_angle=max_angle)
+
+        assert cropped.shape == (2 * n_max[0] + 1, 2 * n_max[1] + 1)
+        assert np.allclose(cropped.sampling, dp.sampling)
+        assert cropped.fftshift == fftshift
+
+        # Each kept frequency (m_x, m_y) must hold the original value at that
+        # frequency.
+        old = [_frequency_index_positions(n, fftshift) for n in shape]
+        new = [_frequency_index_positions(n, fftshift) for n in cropped.shape]
+        assert sorted(new[0]) == list(range(-n_max[0], n_max[0] + 1))
+        assert sorted(new[1]) == list(range(-n_max[1], n_max[1] + 1))
+        expected = np.zeros(cropped.shape)
+        for mx, i in new[0].items():
+            for my, j in new[1].items():
+                expected[i, j] = arr[old[0][mx], old[1][my]]
+        np.testing.assert_array_equal(cropped.array, expected)
 
 
 class TestDiffractionPatternsPoisson:
