@@ -248,7 +248,33 @@ def test_upsample_frozen_phonons(lazy, device):
         measurement = measurement.compute()
 
     assert measurement.shape == (3, 3)
-    assert np.all(to_host_array(measurement) >= 0.0)
+
+    # Oracle: the frozen-phonon measurement is the incoherent average over the
+    # configurations, ie. the mean of independent single-configuration
+    # simulations of each displaced structure (iterating the FrozenPhonons
+    # yields exactly those structures). The per-configuration results differ
+    # by ~9% of the signal here, so dropping or duplicating a configuration,
+    # or summing instead of averaging, is far outside the round-off bound.
+    per_configuration = [
+        to_host_array(
+            SMatrix(
+                potential=Potential(
+                    atoms, gpts=96, slice_thickness=2, device=device
+                ),
+                energy=100e3,
+                semiangle_cutoff=20,
+                interpolation=2,
+                upsample=True,
+                device=device,
+            ).scan(scan=scan, detectors=detector, lazy=False)
+        )
+        for atoms in frozen_phonons
+    ]
+    assert len(per_configuration) == 2
+    expected = np.mean(per_configuration, axis=0)
+    np.testing.assert_allclose(
+        to_host_array(measurement), expected, rtol=0, atol=1e-5 * expected.max()
+    )
 
 
 @devices
@@ -301,6 +327,40 @@ def test_upsample_detectors(device):
     for measurement in measurements:
         assert measurement.shape[:2] == (2, 2)
 
+    # Oracle: an independent method. Each detector must read the same signal
+    # off the upsampled reduction as off the multislice exit waves of the same
+    # probes, within the interpolation error the upsampled reduction is held
+    # to above (test_upsample_beats_prism_at_same_interpolation: < 0.05).
+    # Measured: annular 0.9%, pixelated 1.4%, wave intensities 1.3%, radial
+    # bands 0.07-1%.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    annular, flexible, pixelated, waves = measurements
+    annular_ref, flexible_ref, pixelated_ref, waves_ref = references
+
+    assert _relative_error(annular, annular_ref) < 0.05
+
+    # the reduction is downsampled to the antialias cutoff, so it has fewer
+    # 1 mrad radial bins than the reference; single bins hold a few discrete
+    # pixels each, hence compare bands within the common range
+    flexible, flexible_ref = to_host_array(flexible), to_host_array(flexible_ref)
+    assert flexible.shape[2] < flexible_ref.shape[2]
+    for inner, outer in [(0, 20), (20, 40), (40, 70)]:
+        band = flexible[:, :, inner:outer].sum(axis=2)
+        band_ref = flexible_ref[:, :, inner:outer].sum(axis=2)
+        assert _relative_error(band, band_ref) < 0.05, (inner, outer)
+
+    assert pixelated.shape == pixelated_ref.shape
+    assert _relative_error(pixelated, pixelated_ref) < 0.05
+
+    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:], normalization="amplitude")
+    intensity = np.abs(to_host_array(waves)) ** 2
+    intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
+    assert _relative_error(intensity, intensity_ref) < 0.05
+
 
 @devices
 def test_upsample_ctf_ensemble(device):
@@ -323,6 +383,25 @@ def test_upsample_ctf_ensemble(device):
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
 
     assert measurement.shape == (3, 2, 2)
+
+    # Oracle: each ensemble member is an independent simulation with that
+    # member's CTF. The defocus-0 member is the aberration-free probe, ie. the
+    # reduction without a CTF, and the last member is the defocus-50 probe.
+    # The members differ from each other by ~14% of the signal, so a
+    # misordered or misapplied ensemble is far outside the round-off bound.
+    without_ctf = to_host_array(
+        s_matrix.scan(scan=scan, detectors=detector, lazy=False)
+    )
+    defocus_50 = to_host_array(
+        s_matrix.scan(
+            scan=scan, detectors=detector, ctf=abtem.CTF(defocus=50), lazy=False
+        )
+    )
+    measurement = to_host_array(measurement)
+    atol = 1e-5 * without_ctf.max()
+    np.testing.assert_allclose(measurement[0], without_ctf, rtol=0, atol=atol)
+    np.testing.assert_allclose(measurement[2], defocus_50, rtol=0, atol=atol)
+    assert np.abs(measurement[0] - measurement[2]).max() > 100 * atol
 
 
 def test_upsample_downsampled_gpts_independent_of_interpolation():
