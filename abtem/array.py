@@ -175,6 +175,15 @@ def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
 # run. Without a priority, the distributed scheduler can run an extract that
 # feeds only a final output long after its block was computed, so the packed
 # blocks accumulate; with it, each extract runs as soon as its block exists.
+#
+# Only a block with several outputs is annotated. Blockwise fusion gives a fused
+# layer the maximum priority of its parts, and a block with a single output has
+# a single dependent, so the multislice task fuses with its extract and with
+# everything downstream of it: annotating it would raise the priority of the
+# multislice work itself, and workers would start new multislice tasks before
+# combining the results of earlier ones. With several outputs the packed block
+# has several dependents and stays a task of its own.
+#
 # The priority survives graph optimisation only with low-level fusion off, see
 # _keep_annotations_guard.
 _EXTRACT_PRIORITY = 1
@@ -254,7 +263,11 @@ def multi_output_blockwise(
                 drop_chunks.append(item)
         drop_chunks = tuple(drop_chunks)
 
-        with dask.annotate(priority=_EXTRACT_PRIORITY):
+        with (
+            dask.annotate(priority=_EXTRACT_PRIORITY)
+            if len(out_metas) > 1
+            else nullcontext()
+        ):
             new_output = da.map_blocks(
                 _extract_blockwise_multi_output,
                 out_array,
@@ -578,12 +591,13 @@ class ComputableList(list):
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
+        arrays = [array for _, array in arrays_to_write]
         with _nested_compute_guard(kwargs), _keep_annotations_guard(
-            kwargs
+            arrays, kwargs
         ), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+            arrays = dask.compute(arrays, **kwargs)[0]
 
         output = write_func(
             [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
@@ -696,12 +710,7 @@ def _resolve_gpu_scheduler(kwargs: dict) -> dict:
     """
     check_cupy_is_installed()
 
-    from distributed import get_client
-
-    try:
-        client = get_client()
-    except ValueError:
-        client = None
+    client = _active_client()
 
     multi_gpu = config.get("dask.multi-gpu", False)
 
@@ -755,8 +764,44 @@ def _nested_compute_guard(kwargs: dict):
         yield
 
 
+def _active_client():
+    """The active distributed client, or None when there is none or distributed
+    is not installed."""
+    try:
+        from distributed import get_client
+
+        return get_client()
+    except (ImportError, ValueError):
+        return None
+
+
+def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
+    """Whether ``dask.compute(*arrays, **kwargs)`` would run on a distributed
+    client: an active default client, or one named by ``scheduler`` (the client
+    itself, its ``get``, or ``"distributed"``), unless a local scheduler is named
+    by ``scheduler`` or the ``scheduler`` configuration."""
+    try:
+        from distributed import Client
+    except ImportError:
+        return False
+
+    scheduler = dask.base.get_scheduler(
+        scheduler=kwargs.get("scheduler"), collections=arrays
+    )
+    return isinstance(getattr(scheduler, "__self__", None), Client)
+
+
+def _has_annotated_layer(arrays: list) -> bool:
+    """Whether any of the arrays' graphs has a layer with dask annotations."""
+    for array in arrays:
+        layers = getattr(array.__dask_graph__(), "layers", {})
+        if any(getattr(layer, "annotations", None) for layer in layers.values()):
+            return True
+    return False
+
+
 @contextmanager
-def _keep_annotations_guard(kwargs: dict):
+def _keep_annotations_guard(arrays: list, kwargs: dict):
     """Keep dask annotations through graph optimisation when a distributed
     client runs the compute.
 
@@ -764,27 +809,30 @@ def _keep_annotations_guard(kwargs: dict):
     for arrays) discards layer annotations, so the priority that
     multi_output_blockwise gives its extract tasks would not reach the
     scheduler. Blockwise fusion keeps and merges annotations and stays on.
-    Only the distributed scheduler reads annotations: low-level fusion is
-    switched off for the duration of a compute that a distributed client runs.
-    A compute on a named scheduler (e.g. the synchronous one forced on a single
-    GPU), and an explicit ``optimization.fuse.active`` setting, are left alone.
+    Only the distributed scheduler reads annotations, so low-level fusion is
+    switched off only while a distributed client runs a graph that carries
+    annotations; a local scheduler (named by ``scheduler`` or by the
+    ``scheduler`` configuration, e.g. the synchronous one forced on a single
+    GPU), a graph without annotations, and an explicit
+    ``optimization.fuse.active`` setting are left alone.
+
+    Only computes through abTEM's own ``compute`` and ``ComputableList``
+    (``compute`` and ``to_zarr``) pass through this guard. A graph computed any
+    other way -- ``dask.compute(measurement.array)``, ``client.compute``,
+    ``to_zarr(..., compute=False)``, ``to_tiff`` of a lazy array -- runs with
+    dask's default fusion, which drops the extract priority.
     """
     if (
-        kwargs.get("scheduler") is not None
-        or dask.config.get("optimization.fuse.active", None) is not None
+        dask.config.get("optimization.fuse.active", None) is not None
+        or not _has_annotated_layer(arrays)
+        or not _runs_on_distributed_client(arrays, kwargs)
     ):
         yield
         return
 
-    try:
-        from distributed import get_client
-
-        get_client()
-    except (ImportError, ValueError):
-        yield
-        return
-
-    with dask.config.set({"optimization.fuse.active": False}):
+    with dask.config.set(
+        {"optimization.fuse.active": False, "optimization.annotations.fuse": False}
+    ):
         yield
 
 
@@ -797,11 +845,8 @@ def _push_config_to_active_client():
     ``abtem.config.set``. Deduplicated inside push_config_to_workers, so
     calling this on every dispatch is cheap.
     """
-    try:
-        from distributed import get_client
-
-        client = get_client()
-    except (ImportError, ValueError):
+    client = _active_client()
+    if client is None:
         return
     push_config_to_workers(client)
 
@@ -822,12 +867,13 @@ def _compute(
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
 
+    arrays = [wrapper.array for wrapper in array_objects]
     with _nested_compute_guard(kwargs), _keep_annotations_guard(
-        kwargs
+        arrays, kwargs
     ), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
-        arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
+        arrays = dask.compute(arrays, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
         wrapper._array = array

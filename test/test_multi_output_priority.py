@@ -3,18 +3,23 @@
 A scan with several detectors computes one packed block per multislice task (every
 detector's output, exit waves included), and one extract task per detector pulls its
 output out. The packed block is released only when all of its extracts have run. The
-extracts carry a scheduler priority so that the distributed scheduler runs them as soon as
-the block exists, instead of letting the blocks pile up behind an extract that only feeds a
-final output. dask's low-level fusion drops annotations, so abTEM's compute keeps it off
-while a distributed client runs the graph.
+extracts of a block with several outputs carry a scheduler priority so that the
+distributed scheduler runs them as soon as the block exists, instead of letting the blocks
+pile up behind an extract that only feeds a final output. A block with a single output is
+not annotated: it fuses with its extract and everything downstream, and the priority would
+then reach the multislice work itself. dask's low-level fusion drops annotations, so
+abTEM's compute keeps it off, and keeps annotated layers unfused, while a distributed
+client runs an annotated graph.
 """
 
 import collections
 
 import ase.build
 import dask
+import dask.array as da
 import numpy as np
 import pytest
+from utils import gpu
 
 import abtem
 from abtem.array import (
@@ -22,17 +27,18 @@ from abtem.array import (
     ComputableList,
     _keep_annotations_guard,
 )
+from abtem.core.backend import asnumpy
 
 distributed = pytest.importorskip("distributed")
 
-N_WORKERS = 2
+FUSE_KEYS = ("optimization.fuse.active", "optimization.annotations.fuse")
 
 
 def _layer(key):
     return (key[0] if isinstance(key, tuple) else key).rsplit("-", 1)[0]
 
 
-class _PackedBlocks(distributed.diagnostics.plugin.SchedulerPlugin):
+class _Scheduler(distributed.diagnostics.plugin.SchedulerPlugin):
     """Scheduler-side record of the packed blocks held in memory at once, and of the
     priorities the scheduler assigned; runs no code in the tasks."""
 
@@ -60,40 +66,45 @@ class _PackedBlocks(distributed.diagnostics.plugin.SchedulerPlugin):
             self.peak = max(self.peak, held)
 
 
-def _haadf_and_waves_scan():
+def _scan(device, detectors):
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
     frozen_phonons = abtem.FrozenPhonons(
         atoms, num_configs=4, sigmas=0.08, seed=1, ensemble_mean=False
     )
-    potential = abtem.Potential(frozen_phonons, gpts=64, slice_thickness=2)
-    probe = abtem.Probe(energy=60e3, semiangle_cutoff=20)
+    potential = abtem.Potential(
+        frozen_phonons, gpts=64, slice_thickness=2, device=device
+    )
+    probe = abtem.Probe(energy=60e3, semiangle_cutoff=20, device=device)
     scan = abtem.GridScan(
         (0, 0), (1, 1), gpts=(4, 4), fractional=True, potential=potential
     )
-    return probe.scan(
-        potential,
-        scan=scan,
-        detectors=[abtem.AnnularDetector(40, 90), abtem.WavesDetector()],
-        max_batch=2,
-    )
+    return probe.scan(potential, scan=scan, detectors=detectors, max_batch=2)
 
 
-@pytest.fixture
-def cluster_client():
-    with distributed.LocalCluster(
-        n_workers=N_WORKERS,
+def _haadf_and_waves(device):
+    return _scan(device, [abtem.AnnularDetector(40, 90), abtem.WavesDetector()])
+
+
+@pytest.fixture(params=["cpu", gpu])
+def cluster(request):
+    """A distributed cluster of single-threaded workers, the layout of abTEM's dask-cuda
+    cluster; one worker on a GPU, since in-process workers share a CUDA context."""
+    device = request.param
+    n_workers = 2 if device == "cpu" else 1
+    with abtem.config.set({"device": device}), distributed.LocalCluster(
+        n_workers=n_workers,
         threads_per_worker=1,
         processes=False,
         dashboard_address=":0",
-    ) as cluster, distributed.Client(cluster) as client:
-        plugin = _PackedBlocks()
+    ) as local_cluster, distributed.Client(local_cluster) as client:
+        plugin = _Scheduler()
         client.register_plugin(plugin)
-        yield client, cluster.scheduler.plugins[plugin.name]
+        yield device, n_workers, client, local_cluster.scheduler.plugins[plugin.name]
 
 
-def test_extract_priority_reaches_the_distributed_scheduler(cluster_client):
-    client, plugin = cluster_client
-    image, waves = _haadf_and_waves_scan()
+def test_extract_priority_reaches_the_distributed_scheduler(cluster):
+    device, _, _, plugin = cluster
+    image, waves = _haadf_and_waves(device)
 
     ComputableList([image, waves]).compute(progress_bar=False)
 
@@ -101,14 +112,27 @@ def test_extract_priority_reaches_the_distributed_scheduler(cluster_client):
     assert plugin.priorities["apply_transform"] == {0}
 
 
-def test_packed_blocks_are_released_as_they_are_extracted(cluster_client):
+def test_a_single_output_block_is_not_annotated(cluster):
+    """With one detector, the multislice task fuses with its extract and everything
+    downstream; a priority there would reach the multislice work itself."""
+    device, _, _, plugin = cluster
+    waves = _scan(device, abtem.WavesDetector())
+
+    waves.diffraction_patterns(max_angle=60).mean(0).compute(progress_bar=False)
+
+    assert plugin.priorities
+    assert all(priorities == {0} for priorities in plugin.priorities.values())
+
+
+def test_packed_blocks_are_released_as_they_are_extracted(cluster):
     """With a HAADF detector next to a WavesDetector, the distributed scheduler held 15-20
-    of the 32 packed blocks at once (6 runs) before the extracts had a priority, and 3-4
-    with it. The bound is per worker: a block being extracted and one being computed."""
-    client, plugin = cluster_client
+    of the 32 packed blocks at once (2 CPU workers, 6 runs) without the extract priority,
+    and 3-4 with it. The bound is per worker: a block being extracted and one being
+    computed."""
+    device, n_workers, _, plugin = cluster
 
     def elastic_and_total():
-        image, waves = _haadf_and_waves_scan()
+        image, waves = _haadf_and_waves(device)
         patterns = waves.diffraction_patterns(max_angle=60, return_complex=True)
         return ComputableList(
             [image, patterns.intensity().mean(axis=0), patterns.mean(axis=0).intensity()]
@@ -117,28 +141,45 @@ def test_packed_blocks_are_released_as_they_are_extracted(cluster_client):
     computed = elastic_and_total().compute(progress_bar=False)
 
     assert plugin.total == 32
-    assert plugin.peak <= 3 * N_WORKERS
+    assert plugin.peak <= 3 * n_workers
     reference = elastic_and_total().compute(progress_bar=False, scheduler="synchronous")
     for result, ref in zip(computed, reference):
-        np.testing.assert_allclose(
-            result.array, ref.array, rtol=0, atol=1e-5 * np.abs(ref.array).max()
-        )
+        result, ref = asnumpy(result.array), asnumpy(ref.array)
+        np.testing.assert_allclose(result, ref, rtol=0, atol=1e-5 * np.abs(ref).max())
 
 
-def test_keep_annotations_guard_scope(cluster_client):
-    """Low-level fusion is switched off only while a distributed client runs the
-    compute, and is left alone for a named scheduler or an explicit setting."""
+def _annotated_and_plain():
+    x = da.ones((4, 4), chunks=2)
+    with dask.annotate(priority=1):
+        annotated = x.map_blocks(lambda block: block + 1, dtype=float)
+    return annotated, x.map_blocks(lambda block: block + 1, dtype=float)
 
-    def fuse_inside(kwargs, config=None):
-        with dask.config.set(config or {}), _keep_annotations_guard(kwargs):
-            return dask.config.get("optimization.fuse.active", None)
 
-    assert fuse_inside({}) is False
-    assert fuse_inside({"scheduler": "synchronous"}) is None
-    assert fuse_inside({}, {"optimization.fuse.active": True}) is True
-    assert dask.config.get("optimization.fuse.active", None) is None
+def _fusion_inside(arrays, kwargs, config=None):
+    with dask.config.set(config or {}), _keep_annotations_guard(arrays, kwargs):
+        return tuple(dask.config.get(key, None) for key in FUSE_KEYS)
+
+
+def test_keep_annotations_guard_scope(cluster):
+    """Fusion changes only while a distributed client runs an annotated graph, whichever
+    way the client is named; a local scheduler, an unannotated graph and an explicit
+    setting are left alone, and the configuration is restored afterwards."""
+    _, _, client, _ = cluster
+    annotated, plain = _annotated_and_plain()
+    off, untouched = (False, False), (None, True)
+
+    for kwargs in ({}, {"scheduler": client}, {"scheduler": "distributed"}, {"scheduler": client.get}):
+        assert _fusion_inside([annotated], kwargs) == off
+
+    assert _fusion_inside([annotated], {"scheduler": "synchronous"}) == untouched
+    assert _fusion_inside([annotated], {}, {"scheduler": "threads"}) == untouched
+    assert _fusion_inside([plain], {}) == untouched
+    explicit = {"optimization.fuse.active": True}
+    assert _fusion_inside([annotated], {}, explicit) == (True, True)
+    assert tuple(dask.config.get(key, None) for key in FUSE_KEYS) == untouched
 
 
 def test_keep_annotations_guard_without_a_client():
-    with _keep_annotations_guard({}):
-        assert dask.config.get("optimization.fuse.active", None) is None
+    annotated, _ = _annotated_and_plain()
+
+    assert _fusion_inside([annotated], {}) == (None, True)
