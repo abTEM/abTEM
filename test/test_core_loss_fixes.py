@@ -6,6 +6,7 @@ are grouped by the object they belong to rather than by symptom.
 
 from __future__ import annotations
 
+import functools
 import sys
 
 import ase
@@ -177,6 +178,82 @@ class TestContinuumNormalisation:
         amplitude = float(np.median(np.sqrt(u[outer] ** 2 + (du[outer] / k) ** 2)))
 
         assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _si_rv():
+        """r*V(r) of the Si atom [Rydberg * Bohr], built from GPAW exactly as
+        calculate_continuum_radial_wavefunction builds it (the physical
+        input to the problem, not the code under test)."""
+        from gpaw.atom.aeatom import AllElectronAtom
+        from scipy.interpolate import interp1d
+
+        ae = AllElectronAtom("Si", xc="PBE", log=None)
+        ae.run()
+        ae.scalar_relativistic = True
+        ae.refine()
+        return interp1d(
+            ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate",
+            bounds_error=False,
+        )
+
+    @pytest.mark.parametrize("epsilon", [1.0, 25.0, 400.0])
+    @pytest.mark.parametrize("lprime", [0, 1, 2, 3])
+    def test_outer_region_fits_an_energy_normalised_wkb_wave(
+        self, epsilon, lprime
+    ):
+        """Independent of ``_asymptotic_amplitude``'s envelope estimator:
+        least-squares fit the outer region to the WKB form of the solution.
+
+        The potential is the neutral ground-state atom's (no core hole), so
+        there is no Coulomb log-phase term -- but it is not negligible in
+        the outer region either: the PBE tail and the linear extrapolation
+        of r*V beyond GPAW's ~49 Bohr grid leave the local wavenumber q(r)
+        up to ~1% away from k (1 eV). A bare free-wave fit (Riccati-Bessel
+        functions at fixed k) leaves residuals of several percent, so fit
+        u = A sqrt(k/q) [a sin(phi) + b cos(phi)], phi = int q dr, with
+        q(r)^2 = -f(r) from the very radial equation u'' = f u that is
+        solved (``radial_schroedinger_equation``, which defines the
+        problem). A = hypot(a, b) is then the r -> infinity amplitude.
+
+        Energy normalisation, derived: u -> A sin(kr + delta) gives
+        integral u_k u_k' dr = A^2 (pi/2) delta(k - k'), and with E = k^2
+        (Rydberg units), delta(k - k') = 2k delta(E - E'), so
+        <E|E'> = delta(E - E') requires A = 1/sqrt(pi k).
+
+        Measured |A sqrt(pi k) - 1| <= 1.1e-3 (l'=3, 25 eV, the case the
+        WKB form describes worst: 1% fit residual); <= 2e-4 elsewhere.
+        """
+        from ase import units
+        from scipy.integrate import cumulative_trapezoid
+
+        from abtem.inelastic.core_loss import (
+            calculate_continuum_radial_wavefunction,
+            radial_schroedinger_equation,
+        )
+
+        wavefunction = calculate_continuum_radial_wavefunction(
+            Z=14, n=1, l=0, lprime=lprime, epsilon=epsilon
+        )
+        r = wavefunction.radial_grid
+        u = wavefunction._radial_values
+        ef = epsilon / units.Rydberg
+        k = np.sqrt(ef)
+
+        # Outer 40% of the grid, and outside the Si atom.
+        outer = (r > 0.6 * r[-1]) & (r > 10.0)
+        r_outer = r[outer]
+        q = np.sqrt(-radial_schroedinger_equation(ef, lprime, r_outer, self._si_rv()))
+        phi = cumulative_trapezoid(q, r_outer, initial=0.0)
+        basis = np.sqrt(k / q)[:, None] * np.stack([np.sin(phi), np.cos(phi)], axis=1)
+        (a, b), *_ = np.linalg.lstsq(basis, u[outer], rcond=None)
+        amplitude = np.hypot(a, b)
+
+        # The WKB form must actually describe the wave out there ...
+        residual = np.abs(u[outer] - basis @ np.array([a, b])).max()
+        assert residual < 2e-2 * amplitude
+        # ... with the energy-normalised amplitude.
+        assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=2e-3)
 
 
 class TestPrecisionConfig:
