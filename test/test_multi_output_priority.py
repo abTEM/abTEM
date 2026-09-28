@@ -4,12 +4,12 @@ A scan with several detectors computes one packed block per multislice task (eve
 detector's output, exit waves included), and one extract task per detector pulls its
 output out. The packed block is released only when all of its extracts have run. The
 extracts of a block with several outputs carry a scheduler priority so that the
-distributed scheduler runs them as soon as the block exists, instead of letting the blocks
-pile up behind an extract that only feeds a final output. A block with a single output is
-not annotated: it fuses with its extract and everything downstream, and the priority would
-then reach the multislice work itself. dask's low-level fusion drops annotations, so
-abTEM's compute keeps it off, and keeps annotated layers unfused, while a distributed
-client runs an annotated graph.
+distributed scheduler runs them as soon as the block exists, instead of letting the
+blocks pile up behind an extract that only feeds a final output. A block with a single
+output is not annotated: it fuses with its extract and everything downstream, and the
+priority would then reach the multislice work itself. dask's low-level fusion drops
+annotations, so abTEM's compute keeps it off, and keeps annotated layers unfused, while
+a distributed client runs an annotated graph.
 """
 
 import collections
@@ -91,12 +91,16 @@ def cluster(request):
     cluster; one worker on a GPU, since in-process workers share a CUDA context."""
     device = request.param
     n_workers = 2 if device == "cpu" else 1
-    with abtem.config.set({"device": device}), distributed.LocalCluster(
-        n_workers=n_workers,
-        threads_per_worker=1,
-        processes=False,
-        dashboard_address=":0",
-    ) as local_cluster, distributed.Client(local_cluster) as client:
+    with (
+        abtem.config.set({"device": device}),
+        distributed.LocalCluster(
+            n_workers=n_workers,
+            threads_per_worker=1,
+            processes=False,
+            dashboard_address=":0",
+        ) as local_cluster,
+        distributed.Client(local_cluster) as client,
+    ):
         plugin = _Scheduler()
         client.register_plugin(plugin)
         yield device, n_workers, client, local_cluster.scheduler.plugins[plugin.name]
@@ -125,17 +129,21 @@ def test_a_single_output_block_is_not_annotated(cluster):
 
 
 def test_packed_blocks_are_released_as_they_are_extracted(cluster):
-    """With a HAADF detector next to a WavesDetector, the distributed scheduler held 15-20
-    of the 32 packed blocks at once (2 CPU workers, 6 runs) without the extract priority,
-    and 3-4 with it. The bound is per worker: a block being extracted and one being
-    computed."""
+    """With a HAADF detector next to a WavesDetector, the distributed scheduler held
+    15-20 of the 32 packed blocks at once (2 CPU workers, 6 runs) without the extract
+    priority, and 3-4 with it. The bound is per worker: a block being extracted and one
+    being computed."""
     device, n_workers, _, plugin = cluster
 
     def elastic_and_total():
         image, waves = _haadf_and_waves(device)
         patterns = waves.diffraction_patterns(max_angle=60, return_complex=True)
         return ComputableList(
-            [image, patterns.intensity().mean(axis=0), patterns.mean(axis=0).intensity()]
+            [
+                image,
+                patterns.intensity().mean(axis=0),
+                patterns.mean(axis=0).intensity(),
+            ]
         )
 
     computed = elastic_and_total().compute(progress_bar=False)
@@ -168,7 +176,12 @@ def test_keep_annotations_guard_scope(cluster):
     annotated, plain = _annotated_and_plain()
     off, untouched = (False, False), (None, True)
 
-    for kwargs in ({}, {"scheduler": client}, {"scheduler": "distributed"}, {"scheduler": client.get}):
+    for kwargs in (
+        {},
+        {"scheduler": client},
+        {"scheduler": "distributed"},
+        {"scheduler": client.get},
+    ):
         assert _fusion_inside([annotated], kwargs) == off
 
     assert _fusion_inside([annotated], {"scheduler": "synchronous"}) == untouched
