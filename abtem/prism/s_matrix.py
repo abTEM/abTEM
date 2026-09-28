@@ -4165,7 +4165,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def window_gpts(self):
         """The number of grid points describing the cropping window of the reduced
         wave functions."""
-        if self._upsample:
+        # the C-PRISM window belongs to the compressed reduction; at an
+        # interpolation of (1, 1) there is no compression and the plain PRISM
+        # reduction, which does not rescale a cropped window, is used instead
+        if self._upsample_enabled:
             if self._window_gpts == "full":
                 return self.downsampled_gpts
             if self._window_gpts is None:

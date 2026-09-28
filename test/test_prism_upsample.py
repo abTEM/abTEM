@@ -234,13 +234,6 @@ def test_upsample_windowed(device):
     assert np.abs(windowed / reference - 1).max() < 0.085
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SMatrix.window_gpts applies the C-PRISM window whenever "
-    "upsample=True, also at interpolation 1 where no compression happens; the "
-    "plain PRISM reduction then crops to it without rescaling, scaling all "
-    "signals by (window / gpts)^2",
-)
 @devices
 def test_upsample_window_at_interpolation_one_is_exact(device):
     # Oracle: at interpolation 1 the expansion is complete and no compression
