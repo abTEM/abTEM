@@ -2,6 +2,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
+from dask.base import is_dask_collection
 from hypothesis import given
 from utils import assert_array_objects_equal, si_cubic_atoms
 
@@ -44,6 +45,12 @@ def test_copy_equals(data, copyable):
     # `copy` returning `self` would satisfy every equality check below.
     assert copied is not original
 
+    for path, array in _ndarray_attributes(original):
+        copied_array = _get_path(copied, path)
+        assert not np.may_share_memory(array, copied_array), (
+            f"copy shares the buffer of {'.'.join(map(str, path))}"
+        )
+
     if isinstance(original, ArrayObject):
         # `==` compares no values for lazy objects (abTEM#413).
         assert_array_objects_equal(copied, original)
@@ -51,16 +58,13 @@ def test_copy_equals(data, copyable):
     else:
         assert copied == original
 
-    for path, array in _ndarray_attributes(original):
-        copied_array = _get_path(copied, path)
-        assert not np.may_share_memory(array, copied_array), (
-            f"copy shares the buffer of {'.'.join(map(str, path))}"
-        )
-
 
 def _assert_copy_does_not_share_the_array(original):
     """Writing into a copy's array must leave the original's untouched."""
-    eager = original.compute()
+    # to_cpu() first: it returns a new object, whereas compute() works in
+    # place and would leave `original` eager and its lazy copy behind.
+    eager = original.to_cpu()
+    eager.compute()
     copied = eager.copy()
     assert copied.array is not eager.array
 
@@ -82,6 +86,9 @@ def _ndarray_attributes(obj, path=(), seen=None, max_depth=4):
     if isinstance(obj, np.ndarray):
         if obj.size:
             yield path, obj
+        return
+    if is_dask_collection(obj):
+        # Unmaterialised; the eager copy is checked by writing into it.
         return
     if isinstance(obj, dict):
         items = obj.items()
