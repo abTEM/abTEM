@@ -187,6 +187,9 @@ def test_keep_annotations_guard_scope(cluster):
     assert _fusion_inside([annotated], {"scheduler": "synchronous"}) == untouched
     assert _fusion_inside([annotated], {}, {"scheduler": "threads"}) == untouched
     assert _fusion_inside([plain], {}) == untouched
+    # An already computed item next to a lazy one plays no part.
+    assert _fusion_inside([np.ones(3), annotated], {}) == off
+    assert _fusion_inside([np.ones(3), plain], {}) == untouched
     explicit = {"optimization.fuse.active": True}
     assert _fusion_inside([annotated], {}, explicit) == (True, True)
     assert tuple(dask.config.get(key, None) for key in FUSE_KEYS) == untouched
@@ -196,3 +199,43 @@ def test_keep_annotations_guard_without_a_client():
     annotated, _ = _annotated_and_plain()
 
     assert _fusion_inside([annotated], {}) == (None, True)
+    assert _fusion_inside([np.ones(3), annotated], {}) == (None, True)
+    assert _fusion_inside([np.ones(3)], {}) == (None, True)
+
+
+def test_a_list_mixing_computed_and_lazy_objects_computes():
+    """A ComputableList may hold objects that are already computed next to lazy
+    ones, including a multi-detector scan whose graph carries annotations."""
+    potential = abtem.Potential(
+        ase.build.mx2("WSe2", vacuum=2), gpts=64, slice_thickness=2, device="cpu"
+    )
+
+    def exit_wave():
+        return abtem.PlaneWave(energy=60e3, device="cpu").multislice(potential)
+
+    def haadf_and_waves():
+        probe = abtem.Probe(energy=60e3, semiangle_cutoff=20, device="cpu")
+        scan = abtem.GridScan(
+            (0, 0), (1, 1), gpts=(2, 3), fractional=True, potential=potential
+        )
+        return probe.scan(
+            potential,
+            scan=scan,
+            detectors=[abtem.AnnularDetector(40, 90), abtem.WavesDetector()],
+        )
+
+    computed = exit_wave().compute(progress_bar=False)
+    haadf, waves = ComputableList(haadf_and_waves()).compute(
+        progress_bar=False, scheduler="synchronous"
+    )
+    reference = [computed.array, computed.array, haadf.array, waves.array]
+
+    for items in (
+        [computed, exit_wave(), *haadf_and_waves()],
+        [exit_wave(), computed, *haadf_and_waves()],
+    ):
+        results = ComputableList(items).compute(progress_bar=False)
+        for result, ref in zip(results, reference):
+            np.testing.assert_allclose(
+                result.array, ref, rtol=0, atol=1e-6 * np.abs(ref).max()
+            )

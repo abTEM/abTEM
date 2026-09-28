@@ -779,7 +779,8 @@ def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     """Whether ``dask.compute(*arrays, **kwargs)`` would run on a distributed
     client: an active default client, or one named by ``scheduler`` (the client
     itself, its ``get``, or ``"distributed"``), unless a local scheduler is named
-    by ``scheduler`` or the ``scheduler`` configuration."""
+    by ``scheduler`` or the ``scheduler`` configuration. ``arrays`` must all be
+    dask collections."""
     try:
         from distributed import Client
     except ImportError:
@@ -792,7 +793,8 @@ def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
 
 
 def _has_annotated_layer(arrays: list) -> bool:
-    """Whether any of the arrays' graphs has a layer with dask annotations."""
+    """Whether any of the arrays' graphs has a layer with dask annotations.
+    ``arrays`` must all be dask collections."""
     for array in arrays:
         layers = getattr(array.__dask_graph__(), "layers", {})
         if any(getattr(layer, "annotations", None) for layer in layers.values()):
@@ -821,11 +823,15 @@ def _keep_annotations_guard(arrays: list, kwargs: dict):
     other way -- ``dask.compute(measurement.array)``, ``client.compute``,
     ``to_zarr(..., compute=False)``, ``to_tiff`` of a lazy array -- runs with
     dask's default fusion, which drops the extract priority.
+
+    Items that are already computed (a ``ComputableList`` may mix them with lazy
+    ones) are passed through by ``dask.compute`` unchanged and play no part here.
     """
+    lazy = [array for array in arrays if dask.is_dask_collection(array)]
     if (
         dask.config.get("optimization.fuse.active", None) is not None
-        or not _has_annotated_layer(arrays)
-        or not _runs_on_distributed_client(arrays, kwargs)
+        or not _has_annotated_layer(lazy)
+        or not _runs_on_distributed_client(lazy, kwargs)
     ):
         yield
         return
