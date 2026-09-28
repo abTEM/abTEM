@@ -65,3 +65,16 @@ def test_sigmas():
     positions = positions - positions.mean(axis=0)
 
     assert np.abs(positions.std() - 0.1) < 0.001
+
+
+def test_lazy_partition_args_embed_atoms_once():
+    # One Atoms node shared by every configuration chunk, not a copy per chunk.
+    atoms = ase.build.bulk("Au", cubic=True) * (2, 2, 2)
+    frozen_phonons = FrozenPhonons(atoms, num_configs=6, sigmas=0.1, seed=1)
+
+    (array,) = frozen_phonons._partition_args(chunks=1, lazy=True)
+
+    graph = dict(array.__dask_graph__())
+    atoms_keys = [key for key, value in graph.items() if isinstance(value, ase.Atoms)]
+    assert len(array.chunks[0]) == 6
+    assert len(atoms_keys) == 1
