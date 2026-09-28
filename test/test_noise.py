@@ -467,3 +467,90 @@ class TestLazyScanNoise:
         oracle = _scan_noise_oracle(_to_cpu_array(images), rms_powers, snt.seeds.values)
         np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
         np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+
+# ---------------------------------------------------------------------------
+# NoiseTransform (Poisson noise) on lazy (dask-backed) measurements
+# ---------------------------------------------------------------------------
+
+
+def _scan_patterns(scan_shape=(4, 6), pattern_shape=(8, 8), value=None):
+    """4D-STEM-like diffraction patterns; non-uniform expected counts unless
+    `value` is given."""
+    shape = scan_shape + pattern_shape
+    if value is None:
+        array = np.random.default_rng(0).uniform(1.0, 20.0, shape)
+    else:
+        array = np.full(shape, value)
+    return DiffractionPatterns(
+        array,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            ScanAxis(label="x", sampling=0.2, units="Å"),
+            ScanAxis(label="y", sampling=0.2, units="Å"),
+        ],
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+class TestLazyPoissonNoise:
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(dose=1.0, seeds=0),
+            dict(dose=1.0, seeds=0, samples=3),
+            dict(dose=np.array([0.5, 2.0]), seeds=1, samples=3),
+        ],
+        ids=["seed", "samples", "dose-distribution"],
+    )
+    @pytest.mark.parametrize(
+        "chunks, max_batch",
+        [
+            ((-1, -1, -1, -1), "auto"),  # a single chunk
+            ((2, 3, -1, -1), "auto"),  # scan axes split
+            ((1, 6, -1, -1), 1),  # scan axis and sample/dose axes split
+            ((4, 6, -1, -1), 2),  # sample axis split, scan axes whole
+        ],
+        ids=["one-chunk", "scan-chunks", "all-split", "sample-split"],
+    )
+    def test_lazy_equals_eager(self, device, kwargs, chunks, max_batch):
+        patterns = _to_device(_scan_patterns(), device)
+        transform = NoiseTransform(**kwargs)
+
+        eager = transform.apply(patterns)
+        lazy = transform.apply(patterns.ensure_lazy(chunks=chunks), max_batch=max_batch)
+        assert lazy.is_lazy and not eager.is_lazy
+        assert lazy.shape == eager.shape
+        if max_batch == 1:
+            # every noise-ensemble (dose/sample) axis and the first scan axis
+            n_split = lazy.ensemble_dims - 1
+            assert all(len(c) > 1 for c in lazy.array.chunks[:n_split])
+        if max_batch == 2 and lazy.ensemble_dims > 2:
+            # the leading noise-ensemble axis is split, the scan axes are not
+            assert len(lazy.array.chunks[0]) > 1
+
+        np.testing.assert_array_equal(_to_cpu_array(lazy), _to_cpu_array(eager))
+
+    def test_poisson_noise_method_lazy_equals_eager(self, device):
+        patterns = _to_device(_scan_patterns(), device)
+        kwargs = dict(total_dose=500.0, samples=2, seed=5)
+        eager = patterns.poisson_noise(**kwargs)
+        lazy = patterns.ensure_lazy(chunks=(2, 3, -1, -1)).poisson_noise(**kwargs)
+        assert lazy.is_lazy
+        np.testing.assert_array_equal(_to_cpu_array(lazy), _to_cpu_array(eager))
+
+    @pytest.mark.parametrize("seed", [3, None])
+    def test_scan_chunks_are_independent_draws(self, device, seed):
+        # Chunks must not reuse each other's random numbers: residuals of two
+        # different chunks with identical expected counts are uncorrelated,
+        # with a sample Pearson correlation of standard error ~1/sqrt(n).
+        lam = 50.0
+        patterns = _to_device(
+            _scan_patterns((4, 4), (32, 32), value=lam), device
+        ).ensure_lazy(chunks=(2, 2, -1, -1))
+        noisy = _to_cpu_array(NoiseTransform(dose=1.0, seeds=seed).apply(patterns))
+
+        a = noisy[0:2, 0:2].ravel() - lam
+        b = noisy[2:4, 2:4].ravel() - lam
+        assert abs(np.corrcoef(a, b)[0, 1]) < 5 / np.sqrt(a.size)
+        _assert_poisson(noisy, lam)

@@ -19,7 +19,61 @@ if TYPE_CHECKING:
     from abtem.core.axes import AxisMetadata
 
 
+def _poisson_sample(
+    expected: np.ndarray,
+    base_dims: int,
+    offset: tuple[int, ...],
+    seeds: int | tuple[int, ...],
+    sample_axis: Optional[int],
+) -> np.ndarray:
+    """
+    Draw Poisson counts, one base array (image, diffraction pattern, ...) at a
+    time, each from its own random generator keyed on its global ensemble
+    index. The draw of a base array therefore does not depend on how the full
+    array is chunked, so a lazy result equals the eager one for the same seeds.
+
+    Parameters
+    ----------
+    expected : np.ndarray
+        Expected counts; a block of the full array when evaluated lazily.
+    base_dims : int
+        Number of trailing base dimensions, sampled whole.
+    offset : tuple of int
+        Global index of the first entry of the block along each ensemble axis.
+    seeds : int or tuple of int
+        A single seed, or one seed per entry of the sample axis.
+    sample_axis : int, optional
+        The ensemble axis indexing `seeds`, if there is one.
+    """
+    xp = get_array_module(expected)
+    # Poisson sampling requires CPU arrays; move back to GPU afterwards
+    expected = np.clip(asnumpy(expected), a_min=0.0, a_max=None)
+    counts = np.empty(expected.shape, dtype=get_dtype())
+
+    for index in np.ndindex(expected.shape[: expected.ndim - base_dims]):
+        global_index = tuple(i + o for i, o in zip(index, offset))
+        seed = seeds if sample_axis is None else seeds[global_index[sample_axis]]
+        rng = np.random.default_rng(
+            np.random.SeedSequence(seed, spawn_key=global_index)
+        )
+        counts[index] = rng.poisson(expected[index])
+
+    return xp.asarray(counts)
+
+
+def _poisson_sample_block(block, block_info=None, **kwargs):
+    base_dims = kwargs["base_dims"]
+    location = block_info[None]["array-location"]
+    offset = tuple(start for start, _ in location[: len(location) - base_dims])
+    return _poisson_sample(block, offset=offset, **kwargs)
+
+
 class NoiseTransform(EnsembleTransform):
+    # `samples` is implied by `seeds` (one seed per sample), so it is not passed
+    # on when the transform is rebuilt for a chunk: a chunk receives a sub-block
+    # of the seeds, which would not match the full sample count
+    _exclude_from_copy = ("samples",)
+
     def __init__(
         self,
         dose: float | np.ndarray | BaseDistribution,
@@ -83,8 +137,7 @@ class NoiseTransform(EnsembleTransform):
     def metadata(self) -> dict:
         return {"units": "electrons", "label": "Counts"}
 
-    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
-        array = array_object._eager_array
+    def _expected_counts(self, array: np.ndarray) -> np.ndarray:
         xp = get_array_module(array)
 
         if isinstance(self.seeds, BaseDistribution):
@@ -98,31 +151,78 @@ class NoiseTransform(EnsembleTransform):
         else:
             array = array * xp.asarray(self.dose, dtype=get_dtype())
 
+        return array
+
+    def _sampling_kwargs(self, base_dims: int) -> dict:
         if isinstance(self.seeds, BaseDistribution):
-            seed = sum(self.seeds.values)
+            # the sample axis follows the dose axis, see _expected_counts
+            seeds = tuple(int(seed) for seed in self.seeds.values)
+            sample_axis = 1 if isinstance(self.dose, BaseDistribution) else 0
         else:
-            seed = self.seeds
+            # unseeded: draw fresh entropy once, shared by all blocks, so that
+            # blocks are not correlated with each other
+            seeds = (
+                np.random.SeedSequence().entropy if self.seeds is None else self.seeds
+            )
+            sample_axis = None
 
-        seed_rng = np.random.default_rng(seed=seed)
+        return {"base_dims": base_dims, "seeds": seeds, "sample_axis": sample_axis}
 
-        randomized_seed = int(seed_rng.integers(np.iinfo(np.int32).max))
-
-        poisson_rng = np.random.RandomState(seed=randomized_seed)
-
-        # Poisson sampling requires CPU arrays; move back to GPU afterwards
-        array_cpu = array.get() if hasattr(array, "get") else np.asarray(array)
-        array_cpu = np.clip(array_cpu, a_min=0.0, a_max=None)
-        array_cpu = poisson_rng.poisson(array_cpu).astype(get_dtype())
-
-        return xp.asarray(array_cpu)
+    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
+        # called on the whole (eager) array, which starts at the global origin;
+        # lazy arrays are sampled per block in `apply`
+        expected = self._expected_counts(array_object._eager_array)
+        base_dims = len(array_object.base_shape)
+        return _poisson_sample(
+            expected,
+            offset=(0,) * (expected.ndim - base_dims),
+            **self._sampling_kwargs(base_dims),
+        )
 
     def apply(
         self, array_object: ArrayObject, max_batch: int | str = "auto"
     ) -> ArrayObject:
-        new_array_object = array_object.apply_transform(self)
-        if TYPE_CHECKING:
-            assert isinstance(new_array_object, self.__class__)
+        if not array_object.is_lazy:
+            new_array_object = array_object.apply_transform(self)
+            if TYPE_CHECKING:
+                assert isinstance(new_array_object, self.__class__)
+            return new_array_object
+
+        # A block of a lazy array does not know its global position, which the
+        # chunk-independent draw needs: build the expected counts through the
+        # ensemble machinery, then sample them with dask, which does.
+        expected = array_object.apply_transform(
+            _PoissonExpectedCounts(**self._copy_kwargs()), max_batch=max_batch
+        )
+        array = expected.array
+        base_dims = len(expected.base_shape)
+        array = array.rechunk(
+            array.chunks[: array.ndim - base_dims]
+            + tuple((n,) for n in array.shape[array.ndim - base_dims :])
+        )
+        xp = get_array_module(array)
+        array = array.map_blocks(
+            _poisson_sample_block,
+            dtype=get_dtype(),
+            meta=xp.array((), dtype=get_dtype()),
+            **self._sampling_kwargs(base_dims),
+        )
+
+        new_array_object = expected.__class__.from_array_and_metadata(
+            array, axes_metadata=expected.axes_metadata, metadata=expected.metadata
+        )
+        if expected.device == "gpu":
+            new_array_object._device = "gpu"
         return new_array_object
+
+
+class _PoissonExpectedCounts(NoiseTransform):
+    """The deterministic part of `NoiseTransform`: sample tiling and dose
+    scaling, without the Poisson draw. `NoiseTransform.apply` uses it for lazy
+    arrays."""
+
+    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
+        return self._expected_counts(array_object._eager_array)
 
 
 def _pixel_times(
