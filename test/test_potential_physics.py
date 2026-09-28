@@ -176,9 +176,7 @@ def test_infinite_projection_matches_analytic_projected_potential(
     """
     parametrization = PARAMETRIZATIONS[name]()
     with config.set({"precision": precision}):
-        projected, pos, sampling = _infinite_projection(
-            parametrization, Z, 600, device
-        )
+        projected, pos, sampling = _infinite_projection(parametrization, Z, 600, device)
     rel = _band_relative_error(projected, pos, sampling, parametrization, Z, (0.1, 1.0))
     assert np.abs(rel).max() < 1e-2, np.abs(rel).max()
 
@@ -281,7 +279,9 @@ _FINITE_DZ = 0.5
 _TIGHT_CUTOFF = 1e-7
 
 
-def _finite_potential(parametrization, Z, sampling, device, cutoff_tolerance, pos_xy=None):
+def _finite_potential(
+    parametrization, Z, sampling, device, cutoff_tolerance, pos_xy=None
+):
     L = _FINITE_CELL
     if pos_xy is None:
         pos_xy = (L[0] / 2 + 0.013, L[1] / 2 - 0.007)
@@ -395,9 +395,13 @@ def test_finite_projection_total_at_default_cutoff(name, Z):
         potential = _finite_potential(parametrization, Z, 0.05, "cpu", 1e-4)
         numeric = _slice_integrals(potential)
         V = parametrization.potential(chemical_symbols[Z])
-        tail = 4 * np.pi * integrate.quad(
-            lambda r: r**2 * float(V(np.array([r]))[0]), 0.85 * cutoff, 60.0
-        )[0]
+        tail = (
+            4
+            * np.pi
+            * integrate.quad(
+                lambda r: r**2 * float(V(np.array([r]))[0]), 0.85 * cutoff, 60.0
+            )[0]
+        )
     f0 = _f0(parametrization, Z)
     deficit = 1 - numeric.sum() / f0
     assert -1e-3 < deficit < tail / f0 + 1e-2, (deficit, tail / f0)
@@ -430,7 +434,9 @@ def test_finite_and_infinite_projections_agree_on_the_total():
 def _gaussian_potential(Z, slice_thickness, device, gpts=None, sampling=None):
     atoms = Atoms(
         [Z],
-        positions=[(_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007, _FINITE_Z0)],
+        positions=[
+            (_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007, _FINITE_Z0)
+        ],
         cell=_FINITE_CELL,
     )
     return Potential(
@@ -540,7 +546,9 @@ def test_gaussian_and_quadrature_slices_agree_within_the_model_bound(
         g = _slice_integrals(gaussian)
         atoms = Atoms(
             [Z],
-            positions=[(_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007, _FINITE_Z0)],
+            positions=[
+                (_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007, _FINITE_Z0)
+            ],
             cell=_FINITE_CELL,
         )
         quadrature = Potential(
@@ -574,14 +582,14 @@ _CD_CELL = 8.0
 _CD_GRID = 64  # charge-density grid points per axis (0.125 A)
 
 
-def _charge_density_potential(Z, z0, density, slice_thickness):
+def _charge_density_potential(Z, z0, density, slice_thickness, device="cpu"):
     from abtem.potentials.charge_density import ChargeDensityPotential
 
     atoms = Atoms(
         [Z], positions=[(_CD_CELL / 2, _CD_CELL / 2, z0)], cell=[_CD_CELL] * 3, pbc=True
     )
     return ChargeDensityPotential(
-        atoms, density, sampling=0.05, slice_thickness=slice_thickness
+        atoms, density, sampling=0.05, slice_thickness=slice_thickness, device=device
     )
 
 
@@ -589,18 +597,22 @@ def _gaussian_electrons(Z, z0, sigma):
     """-Z electrons in a normalised 3D Gaussian of std `sigma` on the atom
     (minimum-image in all directions, so the density is periodic)."""
     x = np.arange(_CD_GRID) * _CD_CELL / _CD_GRID
-    d = [(x - c + _CD_CELL / 2) % _CD_CELL - _CD_CELL / 2 for c in (_CD_CELL / 2,) * 2 + (z0,)]
+    d = [
+        (x - c + _CD_CELL / 2) % _CD_CELL - _CD_CELL / 2
+        for c in (_CD_CELL / 2,) * 2 + (z0,)
+    ]
     r2 = d[0][:, None, None] ** 2 + d[1][None, :, None] ** 2 + d[2][None, None, :] ** 2
     return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
 
 
-def test_charge_density_point_charges_give_the_ewald_projected_potential():
+@devices
+def test_charge_density_point_charges_give_the_ewald_projected_potential(device):
     """Zero electron density plus a nucleus Z: the potential is that of a
     periodic lattice of point charges in a neutralising background.
 
-    Oracle (summed over all slices = the kz = 0 problem, i.e. a 2D lattice of
-    line charges Z/Lz... integrated over Lz, so charge Z per cell), by an
-    independent 2D Ewald split with width s = 0.7 A:
+    Oracle: summed over all slices this is the kz = 0 problem -- a 2D lattice
+    of line charges carrying Z per cell -- solved by an independent 2D Ewald
+    split with width s = 0.7 A:
 
       V_p(rho) = Z/(4 pi eps0) sum_images E1(|rho - rho_n|^2 / (2 s^2))
                  + Z/(eps0 A) sum_{G != 0} exp(-2 pi^2 s^2 G^2)/(4 pi^2 G^2)
@@ -626,7 +638,7 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential():
     Z = 6
     density = np.zeros((_CD_GRID,) * 3)
     with config.set({"precision": "float64"}):
-        potential = _charge_density_potential(Z, _CD_CELL / 2, density, 1.0)
+        potential = _charge_density_potential(Z, _CD_CELL / 2, density, 1.0, device)
         projected = asnumpy(potential.build(lazy=False).array).sum(0)
 
     gpts, sampling = potential.gpts, potential.sampling
@@ -640,14 +652,19 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential():
     oracle = np.zeros_like(X)
     for i in range(-3, 4):
         for j in range(-3, 4):
-            r2 = (X - centre[0] - i * _CD_CELL) ** 2 + (Y - centre[1] - j * _CD_CELL) ** 2
+            r2 = (X - centre[0] - i * _CD_CELL) ** 2 + (
+                Y - centre[1] - j * _CD_CELL
+            ) ** 2
             oracle += C * exp1(np.maximum(r2, 1e-12) / (2 * s**2))
     m = np.fft.fftfreq(gpts[0], 1 / gpts[0])
     Gx, Gy = m[:, None] / _CD_CELL, m[None, :] / _CD_CELL
     G2 = Gx**2 + Gy**2
     G2[0, 0] = 1.0
     coefficients = (
-        Z / (eps0 * _CD_CELL**2) * np.exp(-2 * np.pi**2 * s**2 * G2) / (4 * np.pi**2 * G2)
+        Z
+        / (eps0 * _CD_CELL**2)
+        * np.exp(-2 * np.pi**2 * s**2 * G2)
+        / (4 * np.pi**2 * G2)
     )
     coefficients[0, 0] = 0.0
     phase = np.exp(-2j * np.pi * (Gx * centre[0] + Gy * centre[1]))
@@ -663,8 +680,9 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential():
     )
 
 
+@devices
 @pytest.mark.parametrize("z0", (3.3, 4.0))
-def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0):
+def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0, device):
     """Nucleus Z plus -Z electrons in a Gaussian of std 0.7 A on it: a neutral
     atom, whose potential is V(r) = Z/(4 pi eps0) erfc(r / (sqrt(2) s)) / r --
     positive and decaying to zero far from the atom.
@@ -691,7 +709,7 @@ def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0):
     Z, sigma, dz = 6, 0.7, 0.5
     with config.set({"precision": "float64"}):
         potential = _charge_density_potential(
-            Z, z0, _gaussian_electrons(Z, z0, sigma), dz
+            Z, z0, _gaussian_electrons(Z, z0, sigma), dz, device
         )
         array = asnumpy(potential.build(lazy=False).array)
 
