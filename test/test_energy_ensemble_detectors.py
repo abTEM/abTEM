@@ -10,9 +10,11 @@ import ase.build
 import dask
 import numpy as np
 import pytest
+from utils import devices
 
 import abtem
 from abtem.core.axes import EnergyAxis
+from abtem.core.backend import asnumpy
 
 ENERGIES = [50e3, 60e3, 70e3]
 
@@ -28,12 +30,12 @@ DETECTORS = {
 _references = {}
 
 
-def _potential(frozen_phonons, exit_planes=None):
+def _potential(frozen_phonons, device, exit_planes=None):
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
     if frozen_phonons:
         atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.08, seed=1)
     return abtem.Potential(
-        atoms, sampling=0.1, slice_thickness=2, exit_planes=exit_planes, device="cpu"
+        atoms, sampling=0.1, slice_thickness=2, exit_planes=exit_planes, device=device
     )
 
 
@@ -51,9 +53,9 @@ def _scan(kind, potential):
     return None
 
 
-def _run(energy, detector, frozen_phonons, scan, lazy, exit_planes=None):
-    potential = _potential(frozen_phonons, exit_planes)
-    probe = abtem.Probe(energy=energy, semiangle_cutoff=20, device="cpu")
+def _run(energy, detector, frozen_phonons, scan, lazy, device, exit_planes=None):
+    potential = _potential(frozen_phonons, device, exit_planes)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=20, device=device)
     probe.grid.match(potential)
     scan = _scan(scan, potential)
     detectors = DETECTORS[detector]()
@@ -68,22 +70,23 @@ def _run(energy, detector, frozen_phonons, scan, lazy, exit_planes=None):
 
 
 def _assert_each_energy_matches_a_single_energy_run(
-    detector, frozen_phonons, scan, lazy, exit_planes=None
+    detector, frozen_phonons, scan, lazy, device, exit_planes=None
 ):
-    result = _run(ENERGIES, detector, frozen_phonons, scan, lazy, exit_planes)
+    result = _run(ENERGIES, detector, frozen_phonons, scan, lazy, device, exit_planes)
     kinds = [type(axis) for axis in result.axes_metadata]
     assert kinds.count(EnergyAxis) == 1
     energy_axis = kinds.index(EnergyAxis)
     assert list(result.axes_metadata[energy_axis].values) == ENERGIES
 
     for i, energy in enumerate(ENERGIES):
-        key = (energy, detector, frozen_phonons, scan, exit_planes)
+        key = (energy, detector, frozen_phonons, scan, device, exit_planes)
         if key not in _references:
-            _references[key] = _run(
-                energy, detector, frozen_phonons, scan, False, exit_planes
-            ).array
+            reference = _run(
+                energy, detector, frozen_phonons, scan, False, device, exit_planes
+            )
+            _references[key] = asnumpy(reference.array)
         reference = _references[key]
-        member = np.take(result.array, i, axis=energy_axis)
+        member = np.take(asnumpy(result.array), i, axis=energy_axis)
         assert member.shape == reference.shape
         np.testing.assert_allclose(
             member, reference, rtol=0, atol=1e-5 * np.abs(reference).max()
@@ -96,13 +99,16 @@ def _assert_each_energy_matches_a_single_energy_run(
     "frozen_phonons", [False, True], ids=["static", "frozen-phonons"]
 )
 @pytest.mark.parametrize("detector", ["annular", "waves"])
-def test_each_energy_matches_a_single_energy_run(detector, frozen_phonons, scan, lazy):
+@devices
+def test_each_energy_matches_a_single_energy_run(
+    detector, frozen_phonons, scan, lazy, device
+):
     """Covers the energy axis being stacked in front of the potential's ensemble axes
     (eager, frozen phonons), a detector's reordering of the scan axes not being shifted
     past them (frozen phonons with a GridScan), and a lazy block returning its declared
     rather than its natural axis order (lazy GridScan)."""
     _assert_each_energy_matches_a_single_energy_run(
-        detector, frozen_phonons, scan, lazy
+        detector, frozen_phonons, scan, lazy, device
     )
 
 
@@ -110,9 +116,10 @@ def test_each_energy_matches_a_single_energy_run(detector, frozen_phonons, scan,
     "frozen_phonons", [False, True], ids=["static", "frozen-phonons"]
 )
 @pytest.mark.parametrize("detector", ["flexible", "segmented"])
-def test_binned_detectors_with_a_multi_energy_scan(detector, frozen_phonons):
+@devices
+def test_binned_detectors_with_a_multi_energy_scan(detector, frozen_phonons, device):
     _assert_each_energy_matches_a_single_energy_run(
-        detector, frozen_phonons, "gridscan", lazy=False
+        detector, frozen_phonons, "gridscan", False, device
     )
 
 
@@ -125,25 +132,28 @@ def test_binned_detectors_with_a_multi_energy_scan(detector, frozen_phonons):
         ("customscan", True, False),
     ],
 )
-def test_other_scan_types_with_a_multi_energy_probe(scan, frozen_phonons, lazy):
+@devices
+def test_other_scan_types_with_a_multi_energy_probe(scan, frozen_phonons, lazy, device):
     _assert_each_energy_matches_a_single_energy_run(
-        "annular", frozen_phonons, scan, lazy
+        "annular", frozen_phonons, scan, lazy, device
     )
 
 
 @pytest.mark.parametrize("detector, scan", [("annular", "gridscan"), ("waves", None)])
-def test_exit_planes_with_a_multi_energy_probe(detector, scan):
+@devices
+def test_exit_planes_with_a_multi_energy_probe(detector, scan, device):
     """The exit-plane axis is one of the leading axes the energy axis must be stacked
     behind."""
     _assert_each_energy_matches_a_single_energy_run(
-        detector, True, scan, lazy=False, exit_planes=1
+        detector, True, scan, False, device, exit_planes=1
     )
 
 
-def test_annular_detector_on_multi_energy_exit_waves():
+@devices
+def test_annular_detector_on_multi_energy_exit_waves(device):
     """AnnularDetector integrates through integrate_radial, which already puts the scan
     axes last; its result must not be reordered a second time."""
-    waves = _run(ENERGIES, "waves", False, "gridscan", lazy=False)
+    waves = _run(ENERGIES, "waves", False, "gridscan", False, device)
     detected = abtem.AnnularDetector(30, 100).detect(waves)
     integrated = waves.diffraction_patterns(max_angle="full").integrate_radial(30, 100)
 
@@ -151,9 +161,7 @@ def test_annular_detector_on_multi_energy_exit_waves():
     assert [type(axis) for axis in detected.axes_metadata] == [
         type(axis) for axis in integrated.axes_metadata
     ]
+    detected, integrated = asnumpy(detected.array), asnumpy(integrated.array)
     np.testing.assert_allclose(
-        detected.array,
-        integrated.array,
-        rtol=0,
-        atol=1e-5 * np.abs(integrated.array).max(),
+        detected, integrated, rtol=0, atol=1e-5 * np.abs(integrated).max()
     )
