@@ -110,6 +110,37 @@ def test_add_subtract(data, measurement, method, lazy, device):
     np.testing.assert_array_equal(asnumpy(measurement.compute().array), a)
 
 
+@lazy_params
+@devices
+@pytest.mark.parametrize("scalar", [2.0, -0.5])
+def test_reflected_arithmetic_with_a_scalar(scalar, lazy, device):
+    # Oracle: numpy's own reflected operators on the plain array. The array is
+    # not symmetric under any of the operations, so e.g. `scalar / m` computed
+    # as `m / scalar` (as __rtruediv__ = __truediv__ used to do) fails.
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(array, sampling=(0.1, 0.2))
+    if lazy:
+        measurement = Images(da.from_array(array, chunks=(1, 3)), sampling=(0.1, 0.2))
+    measurement = measurement.copy_to_device(device)
+
+    for result, expected in (
+        (scalar / measurement, scalar / array),
+        (scalar * measurement, scalar * array),
+    ):
+        assert isinstance(result, Images)
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array), expected, rtol=1e-6
+        )
+
+
+def test_in_place_true_division_refuses_lazy_measurements():
+    # Like the other in-place operators, /= must refuse a lazy measurement
+    # rather than silently returning a new (lazy) object.
+    measurement = Images(da.ones((4, 4), chunks=2), sampling=0.1)
+    with pytest.raises(RuntimeError, match="inplace"):
+        measurement /= 2.0
+
+
 @settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
