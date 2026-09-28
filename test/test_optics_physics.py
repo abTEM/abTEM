@@ -1,4 +1,5 @@
-"""Independent-oracle physics tests for the optics in ``abtem/transfer.py``.
+"""Independent-oracle physics tests for the optics in ``abtem/transfer.py`` and
+the frozen-phonon displacements in ``abtem/inelastic/phonons.py``.
 
 Every expected value here is computed *in the test* from an independent source:
 a textbook formula evaluated by hand, a Gaussian average carried out with plain
@@ -31,11 +32,13 @@ cite Kirkland (2010), Eq. 2.22):
   alpha_s / sqrt(2).
 """
 
+import ase.build
 import numpy as np
 import pytest
 import scipy.constants as const
 from utils import devices
 
+from abtem import FrozenPhonons
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.transfer import (
@@ -534,3 +537,68 @@ def test_soft_aperture_edge_profile_and_area(device):
     )
     # Element [0, 0] is forced to 1 as the DC pixel; the rest are edge pixels.
     assert np.allclose(half.ravel()[1:], 0.5)
+
+
+# ---------------------------------------------------------------------------
+# 8. Frozen-phonon displacements
+# ---------------------------------------------------------------------------
+# Oracle: the FrozenPhonons docstring. Displacements are Gaussian with the given
+# standard deviation along each axis named in `directions`; other axes are left
+# exactly untouched. Displacements are measured from the known input positions
+# (mean zero by construction), so the rms over n samples estimates sigma with
+# relative standard error 1 / sqrt(2 n); tolerances are 5 such errors.
+
+
+def _displacements(frozen_phonons, atoms):
+    trajectory = frozen_phonons.to_atoms_ensemble().trajectory
+    return np.stack([config.positions for config in trajectory]) - atoms.positions
+
+
+def _rms(displacements):
+    return np.sqrt(np.mean(displacements**2))
+
+
+@pytest.mark.parametrize(
+    "directions, moved", [("xy", (0, 1)), ("x", (0,)), ("yz", (1, 2)), ("xyz", (0, 1, 2))]
+)
+def test_frozen_phonons_directions(directions, moved):
+    atoms = ase.build.bulk("Au", cubic=True) * (2, 2, 2)  # 32 atoms
+    sigma, num_configs = 0.08, 400
+    fp = FrozenPhonons(
+        atoms, num_configs=num_configs, sigmas=sigma, directions=directions, seed=7
+    )
+    d = _displacements(fp, atoms)
+
+    rel_err = 1 / np.sqrt(2 * num_configs * len(atoms))  # ~0.6 %
+    for axis in range(3):
+        if axis in moved:
+            assert abs(_rms(d[..., axis]) / sigma - 1) < 5 * rel_err, axis
+        else:
+            assert np.array_equal(d[..., axis], np.zeros_like(d[..., axis])), axis
+
+    # Independent Gaussian components: the x-y sample correlation vanishes
+    # (standard error 1 / sqrt(n) ~ 0.9 %).
+    if moved[:2] == (0, 1):
+        corr = np.corrcoef(d[..., 0].ravel(), d[..., 1].ravel())[0, 1]
+        assert abs(corr) < 5 / np.sqrt(num_configs * len(atoms))
+
+
+def test_frozen_phonons_anisotropic_per_element_sigmas():
+    atoms = ase.build.bulk("NaCl", "rocksalt", a=5.64, cubic=True)  # 4 Na + 4 Cl
+    sigmas = {"Na": (0.05, 0.10, 0.15), "Cl": (0.12, 0.03, 0.08)}
+    num_configs = 1000
+    symbols = np.array(atoms.symbols)
+    rel_err = 1 / np.sqrt(2 * num_configs * 4)  # ~1.1 %
+
+    fp = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, directions="xyz", seed=3)
+    d = _displacements(fp, atoms)
+    for symbol, expected in sigmas.items():
+        for axis in range(3):
+            measured = _rms(d[:, symbols == symbol, axis])
+            assert abs(measured / expected[axis] - 1) < 5 * rel_err, (symbol, axis)
+
+    # With directions="xy" the (nonzero) z sigmas must be ignored exactly.
+    fp = FrozenPhonons(atoms, num_configs=50, sigmas=sigmas, directions="xy", seed=3)
+    d = _displacements(fp, atoms)
+    assert np.array_equal(d[..., 2], np.zeros_like(d[..., 2]))
+    assert np.all(np.abs(d[..., :2]).max(axis=(0, 1)) > 0)
