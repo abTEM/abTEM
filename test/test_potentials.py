@@ -6,7 +6,13 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from hypothesis import given
-from utils import devices, gpu, si_cubic_atoms, si_diamond_atoms
+from utils import (
+    assert_array_matches_device,
+    devices,
+    gpu,
+    si_cubic_atoms,
+    si_diamond_atoms,
+)
 
 from abtem.core.grid import disk_meshgrid
 from abtem.integrals import (
@@ -14,7 +20,7 @@ from abtem.integrals import (
     _threaded_interpolate_radial_functions,
     interpolate_radial_functions,
 )
-from abtem.potentials.iam import CrystalPotential, Potential
+from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 
 
 def _build_with_numpy_fft(potential):
@@ -45,6 +51,26 @@ def _build_with_numpy_fft(potential):
 @pytest.mark.parametrize("projection", ["finite", "infinite"])
 @pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
 def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, projection):
+    """The built potential must obey the k = 0 sum rule,
+    int V d^3r = sum_atoms F_Z(0), with F the parametrization's projected
+    scattering factor (see test_potential_physics._f0 for the units).
+
+    Infinite projection: exact up to float32 round-off and parameter storage
+    (Lobato carbon's nearly cancelling terms alone move F(0) by 1.8e-5), so
+    1e-4. Finite projection: truncation at the cutoff and the taper only remove
+    potential (<= 0.2 % for Z <= 14), and the log-singular core pixel costs
+    <= 1.8 % of the atom's slice at dx = 0.1 A, scaling as dx^2
+    (test_potential_physics); at the coarsest grid drawn here, dx ~ 0.16 A,
+    that is <= 4.6 %, so 8 %. The core-pixel error is a deficit for square
+    pixels but can be an excess for anisotropic ones -- the core pixel is
+    clamped to V(min(sampling) / 2), above its average over a dx != dy pixel
+    -- so the bound is two-sided.
+    """
+    from ase.data import chemical_symbols
+
+    from abtem.core import config
+    from abtem.parametrizations import validate_parametrization
+
     potential = Potential(
         atoms,
         gpts=gpts,
@@ -52,7 +78,24 @@ def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, p
         parametrization=parametrization,
         projection=projection,
     )
-    potential.build(lazy=False).compute()
+    array = potential.build(lazy=False).compute().array
+    total = float(array.astype(np.float64).sum()) * np.prod(potential.sampling)
+
+    parametrization = validate_parametrization(parametrization)
+    with config.set({"precision": "float64"}):
+        expected = sum(
+            float(
+                parametrization.projected_scattering_factor(chemical_symbols[Z])(
+                    np.array([0.0])
+                )[0]
+            )
+            for Z in atoms.numbers
+        )
+    deficit = 1 - total / expected
+    if projection == "infinite":
+        assert abs(deficit) < 1e-4, deficit
+    else:
+        assert abs(deficit) < 8e-2, deficit
 
 
 @given(
@@ -63,13 +106,31 @@ def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, p
 @pytest.mark.parametrize("lazy", [True, False])
 @devices
 def test_build_device_lazy(atoms, gpts, slice_thickness, lazy, device):
+    """Laziness and device must not change the values: compare against an
+    eager CPU build. Lazy vs eager on one device runs the same kernels, so it
+    must match to float32 round-off; GPU vs CPU uses different FFTs and an
+    atomic scatter-add, whose round-off is bounded by ~eps log2(N) of the
+    peak -- 1e-5 of the peak covers both."""
+    from abtem.core.backend import asnumpy
+
     potential = Potential(
         atoms,
         gpts=gpts,
         device=device,
         slice_thickness=slice_thickness,
     )
-    potential.build(lazy=lazy).compute()
+    result = potential.build(lazy=lazy).compute()
+    assert_array_matches_device(result.array, device)
+
+    reference = Potential(
+        atoms, gpts=gpts, device="cpu", slice_thickness=slice_thickness
+    ).build(lazy=False)
+    np.testing.assert_allclose(
+        asnumpy(result.array),
+        reference.array,
+        rtol=0,
+        atol=1e-5 * float(np.abs(reference.array).max()),
+    )
 
 
 @given(
@@ -140,9 +201,47 @@ def test_crystal_potential_with_frozen_phonons(
 
     assert num_frozen_phonons == crystal_potential.num_configurations
 
-    crystal_potential.compute()
+    crystal_potential = crystal_potential.compute()
 
     assert num_frozen_phonons == crystal_potential.num_configurations
+
+    # Every repetition of the unit draws a configuration from the unit's pool
+    # (CrystalPotential docstring). For a pre-built unit the pool is the
+    # unit's own array, so each tile must equal one of its configurations. A
+    # unit built from atoms re-draws its displacements per crystal member, so
+    # there the oracle is the k = 0 sum rule: displacing atoms does not change
+    # int V dA, so every tile must integrate to the undisplaced unit's total
+    # (exact for the infinite projection up to float32 round-off).
+    is_array_unit = isinstance(potential_unit, PotentialArray)
+    unit = potential_unit if is_array_unit else potential_unit.build()
+    unit_array = np.asarray(unit.compute().array)
+    n_slices, gx, gy = unit_array.shape[-3:]
+    unit_configurations = unit_array.reshape((-1, n_slices, gx, gy))
+    crystal_array = np.asarray(crystal_potential.array).reshape(
+        (-1, n_slices * tile[2], gx * tile[0], gy * tile[1])
+    )
+    assert len(crystal_array) == num_frozen_phonons
+    unit_totals = unit_configurations.astype(np.float64).sum((1, 2, 3))
+    for configuration in crystal_array:
+        for i in range(tile[0]):
+            for j in range(tile[1]):
+                for k in range(tile[2]):
+                    block = configuration[
+                        k * n_slices : (k + 1) * n_slices,
+                        i * gx : (i + 1) * gx,
+                        j * gy : (j + 1) * gy,
+                    ]
+                    if is_array_unit:
+                        assert any(
+                            np.array_equal(block, candidate)
+                            for candidate in unit_configurations
+                        )
+                    else:
+                        total = block.astype(np.float64).sum()
+                        np.testing.assert_allclose(
+                            total, unit_totals, rtol=1e-4,
+                            atol=1e-4 * float(np.abs(unit_totals).max()),
+                        )
 
 
 def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
@@ -568,15 +667,19 @@ def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
 
 
 @pytest.fixture
-def si_potential():
-    """Build a Si 2x2x5 potential for depth profile tests."""
+def si_potential(request):
+    """Build a Si 2x2x5 potential for depth profile tests, on the device the
+    test is parametrised over (cpu when it is not)."""
+    callspec = getattr(request.node, "callspec", None)
+    device = callspec.params.get("device", "cpu") if callspec else "cpu"
     atoms = si_cubic_atoms() * (2, 2, 5)
-    return Potential(atoms, slice_thickness=1.0, gpts=(32, 32))
+    return Potential(atoms, slice_thickness=1.0, gpts=(32, 32), device=device)
 
 
 @devices
 def test_potential_depth_profile_shape(si_potential, device):
     pot = si_potential.build().compute()
+    assert_array_matches_device(pot.array, device)
     profile = pot.depth_profile()
     n_x = pot.gpts[0]
     n_z = pot.num_slices
