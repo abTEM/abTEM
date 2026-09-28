@@ -455,11 +455,6 @@ def test_scherzer_first_zero_and_phase_minimum(energy, Cs):
     assert profile[i_min] < profile[i_min // 2] and profile.max() > 0.999
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="set_aberrations assigns the Scherzer *defocus* value to C10 unchanged, "
-    "so C10='scherzer' gives C10 = +sqrt(1.5 Cs lambda), an overfocus",
-)
 def test_scherzer_string_via_C10_symbol():
     # "scherzer" given as C10 must produce the same (underfocused) lens as
     # "scherzer" given as defocus, since defocus = -C10.
@@ -468,11 +463,6 @@ def test_scherzer_string_via_C10_symbol():
     assert np.isclose(ab.C10, -np.sqrt(1.5 * 1e7 * wavelength), rtol=1e-6)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="set_aberrations resolves 'scherzer' using the C30 set so far, so "
-    "defocus='scherzer' given before Cs silently evaluates to 0",
-)
 def test_scherzer_string_independent_of_keyword_order():
     # Scherzer defocus depends on Cs, so it must not matter whether Cs is given
     # before or after defocus="scherzer".
