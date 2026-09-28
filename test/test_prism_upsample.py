@@ -198,9 +198,86 @@ def test_upsample_windowed(device):
         device=device,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    # the cropping window truncates the high-angle scattering tails, hence the
-    # annular dark field signal is slightly reduced
-    assert np.allclose(to_host_array(windowed), to_host_array(full), rtol=0.12)
+    # Oracle: probe multislice. Cropping the reduced wave functions to a window
+    # truncates them, and a truncation in real space is a convolution in
+    # Fourier space: intensity leaks out of the bright-field disc to higher
+    # angles, so the dark-field signal goes UP, not down. Measured against
+    # multislice on this cell (bands 0-20 / 20-40 / 40-100 mrad):
+    #
+    #   window  periods  BF      20-40   ADF 40-100
+    #   64/auto   2.0    1.000   0.996   1.008
+    #   48        1.5    0.984   1.17    1.068
+    #   32        1.0    0.947   1.67    1.081
+    #   24        0.75   0.915   2.01    1.114
+    #
+    # ("periods" is the window in units of the interpolation period,
+    # downsampled gpts / interpolation = 32.) The total intensity of the
+    # windowed patterns stays below one (0.992, 0.987, 0.978), at or above the
+    # multislice intensity inside the same window, so this is a redistribution
+    # by the truncation, not an excess from normalisation. Cropping the full
+    # reduction to 48 px accounts for +3.8% of the ADF by itself; the rest is
+    # the interpolation kernel truncated to the window. Both are inherent to
+    # windows narrower than the 1.75 periods the automatic window enforces
+    # (SMatrix._auto_window_gpts).
+    #
+    # The bound is the error of the one-period (32 px) window: the 1.5-period
+    # window used here must stay more accurate than that.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    reference = to_host_array(
+        probe.scan(potential=potential, scan=scan, detectors=detector, lazy=False)
+    )
+    windowed, full = to_host_array(windowed), to_host_array(full)
+
+    # the full (here: automatic) window is held to the interpolation bound
+    assert np.abs(full / reference - 1).max() < 0.05
+    assert np.abs(windowed / reference - 1).max() < 0.085
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="SMatrix.window_gpts applies the C-PRISM window whenever "
+    "upsample=True, also at interpolation 1 where no compression happens; the "
+    "plain PRISM reduction then crops to it without rescaling, scaling all "
+    "signals by (window / gpts)^2",
+)
+@devices
+def test_upsample_window_at_interpolation_one_is_exact(device):
+    # Oracle: at interpolation 1 the expansion is complete and no compression
+    # applies (SMatrix._upsample_enabled is False), so the reduction is plain
+    # PRISM at interpolation 1, which equals probe multislice. A C-PRISM
+    # window must not change that. It used to be passed on to the PRISM
+    # reduction as its cropping window, without the sqrt(gpts / window)
+    # amplitude rescaling of the compressed reduction, scaling every signal
+    # by (window / gpts)^2: 0.5616 at 48 of 64 px, 0.2408 at 32 px.
+    potential = _small_potential(device=device)
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=20),
+        abtem.AnnularDetector(inner=40, outer=100),
+    ]
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    measurements = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        upsample=True,
+        window_gpts=48,
+        device=device,
+    ).scan(scan=scan, detectors=detectors, lazy=False)
+
+    # PRISM at interpolation 1 matches multislice to single-precision
+    # round-off (see test_prism_scan_matches_probe_scan in
+    # test_propagation_physics.py); 1e-4 leaves room for the summation order
+    for measurement, reference in zip(measurements, references):
+        measurement, reference = to_host_array(measurement), to_host_array(reference)
+        np.testing.assert_allclose(measurement, reference, rtol=1e-4)
 
 
 @devices
