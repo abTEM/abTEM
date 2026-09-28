@@ -1466,14 +1466,46 @@ class TestImagesComplexAccessors:
 
 
 class TestImagesNormalizeEnsemble:
+    # Two members, the second an affine transform (x -> 10 x + 5) of the first.
+    _member = np.array([[1.0, 2.0], [3.0, 7.0]])
+    _arr = np.stack([_member, 10 * _member + 5])
+
+    def _images(self):
+        return Images(
+            self._arr,
+            sampling=(0.1, 0.1),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+
     def test_normalize_reduces_spread(self):
-        arr = np.array([[[1.0, 2.0], [3.0, 4.0]],
-                        [[10.0, 20.0], [30.0, 40.0]]])
-        from abtem.core.axes import OrdinalAxis
-        imgs = Images(arr, sampling=(0.1, 0.1),
-                      ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
-        normalized = imgs.normalize_ensemble()
-        assert normalized.array.shape == arr.shape
+        """Shifting by the min and scaling by the peak-to-peak range removes any
+        per-member offset and scale: both members map onto the same image,
+        spanning exactly [0, 1]."""
+        normalized = self._images().normalize_ensemble(scale="ptp", shift="min")
+        member = self._member
+        # Per member (the whole 2-D image, not each row of it).
+        expected = (member - member.min()) / (member.max() - member.min())
+        np.testing.assert_allclose(normalized.array[0], expected)
+        np.testing.assert_allclose(normalized.array[1], expected)
+
+    def test_normalize_default_mean_max(self):
+        """The defaults shift each member by its mean and divide by its max
+        (evaluated before shifting): the members' means become zero."""
+        normalized = self._images().normalize_ensemble()
+        for original, result in zip(self._arr, normalized.array):
+            np.testing.assert_allclose(
+                result, (original - original.mean()) / original.max()
+            )
+            assert abs(result.mean()) < 1e-12
+
+    def test_normalize_line_profiles_per_profile(self):
+        """For 1-D members the reduction runs along the single base axis."""
+        arr = np.array([[1.0, 3.0, 5.0], [2.0, 2.0, 8.0]])
+        profiles = RealSpaceLineProfiles(
+            arr, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
+        )
+        normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
+        np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
 
 
 class TestImagesScanNoise:
