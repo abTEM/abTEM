@@ -30,7 +30,14 @@ def test_linescan_at_position(position, extent, angle):
     vector = np.array(linescan.end) - np.array(linescan.start)
 
     assert np.allclose(extent, np.linalg.norm(vector))
-    # assert np.allclose(angle, np.rad2deg(np.arctan2(vector[1], vector[0])) % 360, atol=1.)
+    # The line points along angle (degrees from the x-axis, counter-clockwise).
+    # Compare unit vectors rather than angles, so 0 and 360 deg (and any
+    # angle near the arctan2 branch cut) are equivalent.
+    expected_direction = (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)))
+    assert np.allclose(vector / np.linalg.norm(vector), expected_direction)
+    # LineScan.angle is documented in degrees.
+    reported = np.deg2rad(linescan.angle)
+    assert np.allclose((np.cos(reported), np.sin(reported)), expected_direction)
     assert np.allclose(
         position, (np.array(linescan.start) + np.array(linescan.end)) / 2
     )
