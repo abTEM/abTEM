@@ -293,6 +293,19 @@ def _annular_detector_mask(
     return bins
 
 
+def _n_whole_bins(extent: float, step_size: float) -> int:
+    """Number of whole ``step_size`` bins that fit in ``extent``.
+
+    A ratio within float rounding of an integer counts as that integer, so
+    e.g. an extent of 0.3 with steps of 0.1 gives 3 bins, not 2.
+    """
+    ratio = extent / step_size
+    nearest = round(ratio)
+    if np.isclose(ratio, nearest, rtol=1e-9, atol=1e-9):
+        return int(nearest)
+    return int(np.floor(ratio))
+
+
 def _polar_bins_key(
     gpts,
     sampling,
@@ -4450,8 +4463,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if outer is None:
             outer = min(self.max_angles)
 
-        nbins_radial = int((outer - inner) / step_size)
-        return self.polar_binning(nbins_radial, 1, inner, outer)
+        # Bins are step_size wide, as documented: the last partial step (if
+        # outer - inner is not a multiple of step_size) is dropped rather than
+        # spread over the others.
+        nbins_radial = _n_whole_bins(outer - inner, step_size)
+        return self.polar_binning(
+            nbins_radial, 1, inner, inner + nbins_radial * step_size
+        )
 
     @staticmethod
     def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):

@@ -303,19 +303,30 @@ def test_flexible_annular_bins_match_hand_counted_rings(device, step, inner, out
     _check_flexible_bins(device, step, inner, outer)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FlexibleAnnularDetector.nbins_radial is int(np.floor(outer - inner) "
-    "/ step_size) -- floor applied before dividing -- and the bins are then "
-    "spread over the full [inner, outer): when outer - inner is not an integer "
-    "multiple of step_size (always, for the default auto outer = antialias "
-    "cutoff) the bins are wider than step_size while radial_sampling still "
-    "reports step_size.",
-)
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("step, inner, outer", FLEXIBLE_NON_MULTIPLE_CASES)
 def test_flexible_annular_bin_width_is_step_size(device, step, inner, outer):
     _check_flexible_bins(device, step, inner, outer)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "step, inner, outer", FLEXIBLE_CASES + FLEXIBLE_NON_MULTIPLE_CASES[:2]
+)
+def test_diffraction_patterns_radial_binning_bin_width_is_step_size(
+    device, step, inner, outer
+):
+    """DiffractionPatterns.radial_binning is documented as equivalent to the
+    FlexibleAnnularDetector: bins [inner + i step, inner + (i + 1) step)."""
+    patterns = _delta_waves(device).diffraction_patterns(max_angle="full")
+    measurement = patterns.radial_binning(step_size=step, inner=inner, outer=outer)
+    nbins = int(np.floor((outer - inner) / step + 1e-9))
+
+    assert measurement.shape == (nbins, 1)
+    assert measurement.radial_sampling == pytest.approx(step)
+    ax, ay = _pixel_angles()
+    expected = _flexible_expected(np.hypot(ax, ay), step, inner, nbins)
+    np.testing.assert_array_equal(_values(measurement)[:, 0], expected)
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -709,20 +720,12 @@ def si_exit_waves(request):
     return probe.multislice(potential, scan=scan).compute()
 
 
-_FLEXIBLE_AUTO_OUTER_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="FlexibleAnnularDetector with the default outer spreads floor(outer) "
-    "bins over the non-integer [0, outer): bin i is [i, i + 1) * outer / "
-    "floor(outer), not [i, i + 1) mrad as its radial_sampling=1 reports.",
-)
-
-
 @pytest.mark.parametrize(
     "a, b",
     [
         (0.0, 18.0),
-        pytest.param(20.0, 45.0, marks=_FLEXIBLE_AUTO_OUTER_XFAIL),
-        pytest.param(31.0, 57.0, marks=_FLEXIBLE_AUTO_OUTER_XFAIL),
+        (20.0, 45.0),
+        (31.0, 57.0),
     ],
 )
 def test_annular_flexible_pixelated_agree_on_multislice_exit_waves(si_exit_waves, a, b):

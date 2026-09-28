@@ -32,6 +32,7 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
+    _n_whole_bins,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -1629,11 +1630,23 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
 
     @property
     def nbins_radial(self):
-        return int(np.floor(self.outer - self.inner) / self.step_size)
+        # Previously int(np.floor(outer - inner) / step_size) -- floor before
+        # dividing -- with the bins then spread over all of [inner, outer), so
+        # any non-multiple range (always, for the default auto outer) gave bins
+        # wider than the step_size reported as radial_sampling.
+        return _n_whole_bins(self.outer - self.inner, self.step_size)
 
     @property
     def nbins_azimuthal(self):
         return 1
+
+    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
+        # The binned range ends at the last whole step, so every bin is exactly
+        # step_size wide: bin i is [inner + i * step, inner + (i + 1) * step).
+        inner, outer = super().angular_limits(waves)
+        return inner, inner + _n_whole_bins(outer - inner, self.step_size) * (
+            self.step_size
+        )
 
     @property
     def step_size(self) -> float:
