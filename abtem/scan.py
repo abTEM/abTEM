@@ -487,7 +487,7 @@ class LineScan(BaseScan):
     def angle(self):
         """Angle of the line from `start` to `end` and the `x`-axis [deg.]."""
         direction = self.direction
-        return np.arctan2(direction[1], direction[0])
+        return np.rad2deg(np.arctan2(direction[1], direction[0]))
 
     def add_margin(self, margin: float | tuple[float, float]):
         """
