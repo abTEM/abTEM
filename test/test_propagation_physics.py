@@ -22,7 +22,7 @@ from utils import gpu, to_host_array
 
 import abtem
 from abtem.core.energy import energy2wavelength
-from abtem.multislice import FourierMultislice
+from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 devices = pytest.mark.parametrize("device", ["cpu", gpu])
 
@@ -408,3 +408,174 @@ def test_prism_scan_matches_probe_scan(lazy, device):
         np.testing.assert_allclose(
             measurement, expected, rtol=0, atol=bound * np.abs(expected).max()
         )
+
+
+# ---------------------------------------------------------------------------
+# 4. Real-space vs Fourier multislice
+# ---------------------------------------------------------------------------
+
+
+@devices
+@pytest.mark.parametrize("order", [1, 3])
+@pytest.mark.filterwarnings("ignore::numba.core.errors.NumbaPerformanceWarning")
+def test_realspace_plane_wave_unchanged_by_vacuum(order, device):
+    # Oracle: a constant has zero Laplacian and the potential term vanishes in
+    # vacuum, so every term of the real-space series beyond the identity is
+    # zero: the plane wave is unchanged, to the round-off of the stencil (its
+    # coefficients sum to zero only to floating point precision).
+    with abtem.config.set({"precision": "float64"}):
+        vacuum = _vacuum(
+            thickness=20.0, gpts=(48, 62), slice_thickness=2.0, device=device
+        )
+        plane_wave = abtem.PlaneWave(energy=100e3, normalize=False, device=device)
+        exit_wave = to_host_array(
+            plane_wave.match_grid(vacuum).multislice(
+                vacuum, lazy=False, algorithm=RealSpaceMultislice(order=order)
+            )
+        )
+
+    bound = _roundoff_bound(vacuum.num_slices, vacuum.gpts, "float64")
+    np.testing.assert_allclose(exit_wave, 1.0, rtol=0, atol=bound)
+
+
+def _diffraction_intensities(potential, algorithm, energy, device):
+    plane_wave = abtem.PlaneWave(energy=energy, device=device).match_grid(potential)
+    exit_wave = plane_wave.multislice(potential, lazy=False, algorithm=algorithm)
+    return to_host_array(exit_wave.diffraction_patterns(max_angle=None))
+
+
+@devices
+@pytest.mark.parametrize(
+    "order, reference_order",
+    [(1, 1), (3, "exact")],
+    ids=["order1-vs-paraxial", "order3-vs-exact"],
+)
+@pytest.mark.filterwarnings("ignore::numba.core.errors.NumbaPerformanceWarning")
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error:UserWarning")
+def test_realspace_matches_converged_fourier_multislice(order, reference_order, device):
+    # Oracle: an independent method. The real-space algorithm (finite-
+    # difference Laplacian, exponential series of the combined operator, no
+    # operator splitting) and Fourier multislice (FFT propagator, split
+    # operator) solve the same equation, so both converge to the same exit
+    # wave. Order 1 solves the paraxial equation and is compared with the
+    # paraxial (order-1) Fourier propagator; order 3 includes the next
+    # propagator terms and is compared with the exact one.
+    #
+    # The Fourier reference is converged in the slice thickness (dz = 0.04 A;
+    # its own residual at dz = 0.165 A is < 3e-4). Convergence study (float32,
+    # 100 kV, this cell; relative L1 of the full diffraction pattern) of the
+    # real-space result against that reference:
+    #
+    #   gpts  \ dz    0.66     0.33     0.165
+    #   (48, 56)    8.0e-4   7.0e-4   5.0e-4    (order 1 and order 3 alike)
+    #   (72, 84)    8.0e-4   5.0e-4   4.0e-4
+    #
+    # The error falls with both the slice thickness and the sampling, as it
+    # must for two convergent methods, with no floor at this energy (the
+    # paraxial vs exact difference of the reference is < 1e-4). The bound of
+    # 2e-3 is ~3x the dz = 0.33 A error and ~5x below the 1.07e-2 that a 10%
+    # error in the potential term produces.
+    #
+    # The 4.0% quoted for the SrTiO3 fixture of test_realspace_multislice.py
+    # is not a real-space error: at dz = 0.75 A and 30 kV the exact Fourier
+    # result is itself 4.4% away from its own dz -> 0 limit. Against that
+    # limit the real-space order-3 error falls 1.4% -> 0.57% -> 0.21% ->
+    # 0.17% as dz halves from 0.75 A (gpts 60x120; order 1 alike against the
+    # order-1 Fourier limit).
+    energy = 100e3
+    atoms = _general_position_cell() * (2, 2, 3)
+    kwargs = dict(gpts=(48, 56), projection="finite", device=device)
+    reference = _diffraction_intensities(
+        abtem.Potential(atoms, slice_thickness=0.04125, **kwargs),
+        FourierMultislice(order=reference_order),
+        energy,
+        device,
+    )
+    realspace = _diffraction_intensities(
+        abtem.Potential(atoms, slice_thickness=0.33, **kwargs),
+        RealSpaceMultislice(order=order),
+        energy,
+        device,
+    )
+
+    error = np.abs(realspace - reference).sum() / reference.sum()
+    assert error < 2e-3, error
+
+
+# ---------------------------------------------------------------------------
+# 5. Bloch waves vs multislice
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow  # ~10 s: one 733-beam eigenproblem plus 198 slices
+@devices
+def test_bloch_waves_match_multislice(device):
+    # Oracle: an independent method. Bloch waves diagonalise the structure
+    # matrix built from the 3D Fourier coefficients of the potential;
+    # multislice integrates the same potential in real space. Both converge to
+    # the same exit wave, so their low-order beam intensities must agree, and
+    # the sign of the Friedel asymmetry I(g) - I(-g) of this non-
+    # centrosymmetric cell must agree too (it flips with the sign of the
+    # imaginary part of the structure factors).
+    #
+    # Multislice uses the finite projection: it integrates the 3D potential
+    # over each slice, as the Bloch structure factor does. The infinite
+    # projection puts every atom whole into one slice, which misrepresents the
+    # z-structure of this cell (atoms at three depths) -- against Bloch waves
+    # it leaves an R1 floor of 2.1% and a Friedel correlation of 0.92 that no
+    # refinement of either method removes, whereas with the finite projection
+    # both converge.
+    #
+    # Convergence study (R1 over the 48 beams |h|, |k| <= 3 against multislice
+    # at gpts (164, 188), dz 0.1 A):
+    #   multislice gpts (82, 94): 7.7e-3 at dz 0.4, 0.2 and 0.1 A (sampling-
+    #     limited; (42, 48) gives 3.1e-2, so it converges with the sampling)
+    #   Bloch, sg_max 0.25 / 0.5 / 1.0 A^-1 (g_max 2 A^-1): 1.3e-2 / 5.7e-3 /
+    #     3.7e-3, Friedel correlation 0.90 / 0.986 / 0.998; g_max 3 or 4 A^-1
+    #     changes neither by more than 1e-3.
+    # The bound on R1 between the two unconverged runs used here is the sum of
+    # their residuals against the converged limit, 5.7e-3 + 7.7e-3 < 1.5e-2.
+    # The Friedel correlation of the converged limit is 0.999; the truncation
+    # here lowers it to 0.986, the wrong structure-factor sign gives -0.65.
+    from abtem.bloch import BlochWaves, StructureFactor
+
+    energy = 200e3
+    cell = _general_position_cell("CNO")
+    repetitions = 12
+    thickness = cell.cell[2, 2] * repetitions
+    gpts = (82, 94)
+    orders = [(h, k) for h in range(-3, 4) for k in range(-3, 4) if (h, k) != (0, 0)]
+
+    def beams(exit_wave):
+        wave = to_host_array(exit_wave).reshape(gpts)
+        intensity = np.abs(np.fft.fft2(wave)) ** 2
+        intensity /= intensity.sum()
+        values = np.array([intensity[h, k] for h, k in orders])
+        friedel = np.array([intensity[h, k] - intensity[-h, -k] for h, k in orders])
+        return values, friedel
+
+    structure_factor = StructureFactor(
+        cell, g_max=8.0, parametrization="lobato", thermal_sigma=0.0, device=device
+    )
+    bloch_waves = BlochWaves(
+        structure_factor=structure_factor, energy=energy, sg_max=0.5, g_max=2.0,
+        device=device,
+    )
+    bloch, bloch_friedel = beams(
+        bloch_waves.calculate_exit_waves(
+            thicknesses=[thickness], gpts=gpts, extent=tuple(cell.cell.lengths()[:2]),
+            lazy=False,
+        )
+    )
+
+    potential = abtem.Potential(
+        cell * (1, 1, repetitions), gpts=gpts, slice_thickness=0.2,
+        projection="finite", parametrization="lobato", device=device,
+    )
+    plane_wave = abtem.PlaneWave(energy=energy, device=device).match_grid(potential)
+    multislice, multislice_friedel = beams(plane_wave.multislice(potential, lazy=False))
+
+    r1 = np.abs(bloch - multislice).sum() / multislice.sum()
+    assert r1 < 1.5e-2, r1
+    correlation = np.corrcoef(bloch_friedel, multislice_friedel)[0, 1]
+    assert correlation > 0.95, correlation
