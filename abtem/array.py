@@ -158,6 +158,19 @@ def _to_natural_order(
     )
 
 
+def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
+    """The inverse of `_transpose_to_ensemble_source`: permute an array whose
+    first `len(order)` axes are in the declared order back into the natural
+    order, the one every `_calculate_new_array` returns."""
+    if order == tuple(range(len(order))):
+        return array
+    inverse = [0] * len(order)
+    for k, p in enumerate(order):
+        inverse[p] = k
+    trailing = tuple(range(len(order), array.ndim))
+    return array.transpose(*inverse, *trailing)
+
+
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
     """Physically permute an array's first `len(order)` (ensemble) axes into
     the order `_out_ensemble_source` declares (e.g. AnnularDetector/

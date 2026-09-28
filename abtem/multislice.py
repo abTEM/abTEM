@@ -1415,8 +1415,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return base_shape
 
     def _out_ensemble_source(self, waves: Waves) -> tuple[tuple[int, ...], ...]:
+        # Each output starts with the potential's ensemble axes (and the exit
+        # planes), which stay in place; a detector's permutation refers to the
+        # waves' axes that follow them.
+        n = len(self.ensemble_shape)
         return tuple(
-            detector._out_ensemble_source(waves)[0] for detector in self.detectors
+            tuple(range(n))
+            + tuple(i + n for i in detector._out_ensemble_source(waves)[0])
+            for detector in self.detectors
         )
 
     def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata], ...]:
@@ -1595,25 +1601,25 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
                 idx = (slice(None),) * energy_axis_idx + (j,)
                 member = waves.__class__(**waves.get_items(idx))
                 per_energy.append(self._calculate_new_array(member))
-            # Stack at energy_axis_idx itself, reinserting the axis exactly
-            # where indexing removed it -- member's own remaining axes are
-            # *waves*' own axes with energy_axis_idx dropped, in their
-            # original relative order, so this always reproduces waves' own
-            # (natural, undeclared) ensemble axis order, whatever detector
-            # or scan type is in play. A detector like AnnularDetector
-            # declares a *different* axis order in its own metadata (moving
-            # scan axes to the end -- see _out_ensemble_source in
-            # abtem/detectors.py); reordering to match that declared order
+            # Reinsert the energy axis exactly where indexing removed it. Each
+            # member's result starts with this transform's own axes (the
+            # potential's ensemble axes and the exit planes), followed by
+            # waves' own axes with energy_axis_idx dropped, in their original
+            # relative order, so stacking at energy_axis_idx shifted past the
+            # leading axes reproduces waves' own (natural, undeclared) ensemble
+            # axis order, whatever detector or scan type is in play. A detector
+            # like AnnularDetector declares a *different* axis order in its own
+            # metadata (moving scan axes to the end -- see _out_ensemble_source
+            # in abtem/detectors.py); reordering to match that declared order
             # is handled once, uniformly for both eager and lazy results, in
-            # ArrayObject.apply_transform (abtem/array.py) rather than here,
-            # so this function only ever needs to know its own axes, not any
-            # particular detector's output convention.
+            # ArrayObject.apply_transform (abtem/array.py) rather than here.
+            axis = len(self.ensemble_shape) + energy_axis_idx
             if isinstance(per_energy[0], tuple):
                 return tuple(
-                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
+                    np.stack([r[k] for r in per_energy], axis=axis)
                     for k in range(len(per_energy[0]))
                 )
-            return np.stack(per_energy, axis=energy_axis_idx)
+            return np.stack(per_energy, axis=axis)
 
         measurements = self.multislice_func(
             waves=waves,
@@ -1627,7 +1633,19 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
                 f"Expected {len(self.detectors)} outputs, got {len(measurements)}"
             )
 
-        arrays = tuple(measurement.array for measurement in measurements)
+        from abtem.array import _transpose_from_ensemble_source
+
+        # multislice_func allocates each output in the order its detector
+        # declares, which moves the scan axes behind any ensemble axis that
+        # follows them in the waves (a lazy block's length-1 slice of a probe's
+        # energy ensemble). Return the waves' own order, like every
+        # _calculate_new_array; ArrayObject.apply_transform reorders once.
+        arrays = tuple(
+            _transpose_from_ensemble_source(measurement.array, order)
+            for measurement, order in zip(
+                measurements, self._out_ensemble_source(waves)
+            )
+        )
         if len(arrays) == 1:
             arrays = arrays[0]
 

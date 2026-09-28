@@ -769,7 +769,17 @@ class AnnularDetector(_AbstractRadialDetector):
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
             measurement = measurement.to_cpu()
-        return measurement._eager_array
+
+        from abtem.array import _transpose_from_ensemble_source
+
+        # integrate_radial already moves the scan axes behind the other
+        # ensemble axes (e.g. a probe's energy ensemble), which is the order
+        # _out_ensemble_source declares. Like every _calculate_new_array, return
+        # the waves' own order instead: ArrayObject.apply_transform applies the
+        # declared order once, for eager and lazy results alike.
+        return _transpose_from_ensemble_source(
+            measurement._eager_array, self._out_ensemble_source(waves)[0]
+        )
 
     def detect(
         self, waves: WavesType
