@@ -8,7 +8,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator  # type: ignore
 
 from abtem.core.axes import NonLinearAxis, SampleAxis
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.utils import get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.inelastic.phonons import validate_seeds
@@ -294,6 +294,11 @@ def _apply_displacement_field(
 
 
 class ScanNoiseTransform(EnsembleTransform):
+    # `samples` is implied by `seeds` (one seed per sample), so it is not passed
+    # on when the transform is rebuilt for a chunk: a chunk receives a sub-block
+    # of the seeds, which would not match the full sample count
+    _exclude_from_copy = ("samples",)
+
     def __init__(
         self,
         rms_power: float | np.ndarray | BaseDistribution,
@@ -323,7 +328,7 @@ class ScanNoiseTransform(EnsembleTransform):
 
         super().__init__(
             distributions=(
-                "dose",
+                "rms_power",
                 "seeds",
             )
         )
@@ -383,10 +388,14 @@ class ScanNoiseTransform(EnsembleTransform):
     def apply(
         self, array_object: ArrayObject, max_batch: int | str = "auto"
     ) -> ArrayObject:
-        return array_object.apply_transform(self)
+        return array_object.apply_transform(self, max_batch=max_batch)
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
+        xp = get_array_module(array)
+        # the distortion is interpolated with scipy, which requires CPU arrays;
+        # move back to the original device afterwards
+        array = asnumpy(array)
         base_shape = array_object.base_shape
         assert len(base_shape) == 2
 
@@ -429,4 +438,4 @@ class ScanNoiseTransform(EnsembleTransform):
         else:
             array = arrays[0]
 
-        return array
+        return xp.asarray(array)

@@ -381,3 +381,89 @@ class TestScanNoiseTransform:
 
     def test_ensemble_axes_metadata(self):
         assert ScanNoiseTransform(1.0, 1e-6, 1e-4).ensemble_axes_metadata == []
+
+
+# ---------------------------------------------------------------------------
+# ScanNoiseTransform on lazy (dask-backed) images
+# ---------------------------------------------------------------------------
+
+_SCAN_NOISE_KWARGS = dict(
+    dwell_time=1e-6, flyback_time=1e-4, max_frequency=500, num_components=20
+)
+
+
+def _scan_noise_oracle(image, rms_powers, seeds):
+    """Distort `image` directly with the module-level helpers, one realisation
+    per (rms_power, seed) pair, bypassing the ensemble/chunking machinery."""
+    image = np.asarray(image)
+    time = _pixel_times(
+        _SCAN_NOISE_KWARGS["dwell_time"], _SCAN_NOISE_KWARGS["flyback_time"],
+        image.shape,
+    )
+    out = np.zeros((len(rms_powers), len(seeds)) + image.shape, dtype=image.dtype)
+    for i, rms_power in enumerate(rms_powers):
+        for j, seed in enumerate(seeds):
+            dx, dy = _make_displacement_field(
+                time, _SCAN_NOISE_KWARGS["max_frequency"],
+                _SCAN_NOISE_KWARGS["num_components"], rms_power, seed=int(seed),
+            )
+            out[i, j] = _apply_displacement_field(image, dx, dy)
+    return out
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+class TestLazyScanNoise:
+    def _images(self, device):
+        # non-constant, so that a distortion actually changes the image
+        return _to_device(make_images((16, 24)), device)
+
+    def test_ensemble_shape(self, device):
+        snt = ScanNoiseTransform(rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS)
+        assert snt.ensemble_shape == (3,)
+        snt = ScanNoiseTransform(
+            rms_power=np.array([2.0, 5.0]), seeds=0, samples=3, **_SCAN_NOISE_KWARGS
+        )
+        assert snt.ensemble_shape == (2, 3)
+
+    def test_images_scan_noise_lazy_equals_eager(self, device):
+        images = self._images(device)
+        eager = images.scan_noise(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
+        lazy = images.ensure_lazy().scan_noise(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
+        assert lazy.is_lazy and not eager.is_lazy
+        oracle = _scan_noise_oracle(_to_cpu_array(images), [5.0], [7])[0]
+        np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
+        np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+    @pytest.mark.parametrize("max_batch", ["auto", 1])
+    def test_samples_lazy_equals_eager(self, device, max_batch):
+        images = self._images(device)
+        snt = ScanNoiseTransform(rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS)
+
+        eager = snt.apply(images)
+        lazy = snt.apply(images.ensure_lazy(), max_batch=max_batch)
+        if max_batch == 1:
+            # one image per chunk: the sample axis is split across chunks
+            assert len(lazy.array.chunks[0]) == 3
+
+        oracle = _scan_noise_oracle(_to_cpu_array(images), [5.0], snt.seeds.values)[0]
+        np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
+        np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+    @pytest.mark.parametrize("max_batch", ["auto", 1, 2])
+    def test_rms_power_distribution_lazy_equals_eager(self, device, max_batch):
+        images = self._images(device)
+        rms_powers = np.array([2.0, 5.0])
+        snt = ScanNoiseTransform(
+            rms_power=rms_powers, seeds=3, samples=3, **_SCAN_NOISE_KWARGS
+        )
+
+        eager = snt.apply(images)
+        lazy = snt.apply(images.ensure_lazy(), max_batch=max_batch)
+        assert lazy.shape == eager.shape == (2, 3, 16, 24)
+        if max_batch != "auto":
+            # the sample axis is split across chunks
+            assert len(lazy.array.chunks[1]) > 1
+
+        oracle = _scan_noise_oracle(_to_cpu_array(images), rms_powers, snt.seeds.values)
+        np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
+        np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
