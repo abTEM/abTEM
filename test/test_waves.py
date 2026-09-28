@@ -11,6 +11,12 @@ from utils import (
     gpu,
 )
 
+import abtem
+from abtem.core.backend import asnumpy
+from abtem.core.energy import energy2wavelength
+from abtem.prism.s_matrix import BaseSMatrix
+from abtem.waves import Waves
+
 # @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
 # @given(grid_data=grid_data())
 # def test_grid_raises(grid_data, builder):
@@ -107,6 +113,29 @@ def assert_is_normalized(waves):
     )
 
 
+def _draw_normalized_builder(data, waves_builder):
+    # Only the plane-wave strategy takes `normalize` (probes and S-matrices
+    # are always normalized); say so instead of catching a TypeError, which
+    # would also swallow real errors raised while drawing.
+    if waves_builder is abtem_st.plane_wave:
+        return data.draw(waves_builder(normalize=True))
+    return data.draw(waves_builder())
+
+
+def _to_waves(waves):
+    # An S-matrix must be reduced to probe waves; plain Waves have no reduce.
+    if isinstance(waves, BaseSMatrix):
+        return waves.reduce()
+    assert isinstance(waves, Waves)
+    return waves
+
+
+def _total_intensity(waves):
+    return asnumpy(
+        waves.diffraction_patterns(max_angle=None).compute().array.sum(axis=(-2, -1))
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize(
     "waves_builder",
@@ -118,16 +147,8 @@ def assert_is_normalized(waves):
 )
 @pytest.mark.parametrize("lazy", [False])
 def test_normalized(data, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
-
-    waves = waves_builder.build(lazy=lazy)
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
+    waves_builder = _draw_normalized_builder(data, waves_builder)
+    waves = _to_waves(waves_builder.build(lazy=lazy))
     waves.compute()
     assert_is_normalized(waves)
 
@@ -143,18 +164,11 @@ def test_normalized(data, waves_builder, lazy):
 )
 @pytest.mark.parametrize("lazy", [True, False])
 def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
+    waves_builder = _draw_normalized_builder(data, waves_builder)
 
     atoms = atoms[:0]
 
-    waves = waves_builder.multislice(atoms, lazy=lazy)
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
+    waves = _to_waves(waves_builder.multislice(atoms, lazy=lazy))
     waves.compute()
     assert_is_normalized(waves)
 
@@ -170,31 +184,40 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
     ],
 )
 def test_multislice_scatter(data, potential, waves_builder, lazy):
-    try:
-        waves_builder = data.draw(waves_builder(normalize=True))
-    except TypeError:
-        waves_builder = data.draw(waves_builder())
-
+    """Multislice with a real potential is a product of unitary operators --
+    a phase-object transmission function (|t| = 1) and the Fresnel
+    propagator (|P| = 1) -- so it conserves the total intensity exactly,
+    except for what the antialiasing aperture removes."""
+    waves_builder = _draw_normalized_builder(data, waves_builder)
     waves_builder.grid.match(potential)
 
-    waves = waves_builder.build().compute()
+    initial = _total_intensity(_to_waves(waves_builder.build(lazy=lazy)))
 
-    # old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
+    # With the default aperture, intensity scattered beyond the cutoff is
+    # lost; the band-limited transmission function is not exactly unitary
+    # either, so allow the same small gain as before.
+    scattered = _total_intensity(
+        _to_waves(waves_builder.multislice(potential, lazy=lazy))
+    )
+    assert np.all(scattered < initial * 1.0005)
 
-    waves = waves.multislice(potential).compute()
-
-    try:
-        waves = waves.reduce()
-    except AttributeError:
-        pass
-
-    # new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
-
-    # print(old_sum, new_sum, old_sum > new_sum, potential.array)
-    # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
-
-    assert np.all(
-        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0005
+    # With the aperture opened far beyond the corners of the Fourier grid
+    # (cutoff / max(sampling) / 2 must exceed |k|max, which for anisotropic
+    # sampling can be several times the Nyquist frequency of the coarser axis)
+    # and no taper, nothing is removed and the intensity must be conserved to
+    # single precision (observed <= 1e-6). Any per-slice loss, e.g. |t| = 0.99
+    # (2 % intensity per slice), is far larger. This needs every grid
+    # frequency to propagate: components with lambda |k| > 1 are evanescent and
+    # (correctly) decay in the exact propagator.
+    k_max = np.hypot(*(1 / (2 * d) for d in potential.sampling))
+    assume(energy2wavelength(waves_builder.energy) * k_max < 1)
+    with abtem.config.set({"antialias.cutoff": 100.0, "antialias.taper": 0.0}):
+        initial = _total_intensity(_to_waves(waves_builder.build(lazy=lazy)))
+        scattered = _total_intensity(
+            _to_waves(waves_builder.multislice(potential, lazy=lazy))
+        )
+    np.testing.assert_allclose(
+        scattered, np.broadcast_to(initial, scattered.shape), rtol=1e-5
     )
 
 
@@ -318,7 +341,9 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     old_gpts = waves.gpts
     valid_gpts = waves.antialias_valid_gpts
     cutoff_gpts = waves.antialias_cutoff_gpts
-    old_max = waves.intensity().array.max(axis=(-2, -1))
+    old_mean_intensity = asnumpy(
+        waves.intensity().compute().array.mean(axis=(-2, -1))
+    )
 
     downsampled_waves = waves.downsample(
         max_angle=max_angle, normalization=normalization
@@ -348,7 +373,14 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     if normalization == "intensity":
         assert_is_normalized(downsampled_waves)
     elif normalization == "values":
-        np.allclose(old_max, waves.intensity().array.max(axis=(-2, -1)))
+        # 'values' keeps the wave function's point values. The probe is band
+        # limited well inside the kept frequencies (assumed above), so by
+        # Parseval the cell-averaged intensity mean(|psi|^2) is independent of
+        # the sampling and must be unchanged.
+        new_mean_intensity = asnumpy(
+            downsampled_waves.intensity().compute().array.mean(axis=(-2, -1))
+        )
+        np.testing.assert_allclose(new_mean_intensity, old_mean_intensity, rtol=1e-4)
 
 
 @given(
