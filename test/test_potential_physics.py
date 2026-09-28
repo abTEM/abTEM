@@ -564,3 +564,158 @@ def test_gaussian_and_quadrature_slices_agree_within_the_model_bound(
     quadrature_budget[atom_slice] = 2e-2 * abs(q[atom_slice])
     excess = np.abs(g - q) - (bound + quadrature_budget)
     assert np.all(excess < 0), (np.abs(g - q), bound, quadrature_budget)
+
+
+# --------------------------------------------------------------------------
+# Task 4: ChargeDensityPotential against analytic electrostatics
+# --------------------------------------------------------------------------
+
+_CD_CELL = 8.0
+_CD_GRID = 64  # charge-density grid points per axis (0.125 A)
+
+
+def _charge_density_potential(Z, z0, density, slice_thickness):
+    from abtem.potentials.charge_density import ChargeDensityPotential
+
+    atoms = Atoms(
+        [Z], positions=[(_CD_CELL / 2, _CD_CELL / 2, z0)], cell=[_CD_CELL] * 3, pbc=True
+    )
+    return ChargeDensityPotential(
+        atoms, density, sampling=0.05, slice_thickness=slice_thickness
+    )
+
+
+def _gaussian_electrons(Z, z0, sigma):
+    """-Z electrons in a normalised 3D Gaussian of std `sigma` on the atom
+    (minimum-image in all directions, so the density is periodic)."""
+    x = np.arange(_CD_GRID) * _CD_CELL / _CD_GRID
+    d = [(x - c + _CD_CELL / 2) % _CD_CELL - _CD_CELL / 2 for c in (_CD_CELL / 2,) * 2 + (z0,)]
+    r2 = d[0][:, None, None] ** 2 + d[1][None, :, None] ** 2 + d[2][None, None, :] ** 2
+    return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
+
+
+def test_charge_density_point_charges_give_the_ewald_projected_potential():
+    """Zero electron density plus a nucleus Z: the potential is that of a
+    periodic lattice of point charges in a neutralising background.
+
+    Oracle (summed over all slices = the kz = 0 problem, i.e. a 2D lattice of
+    line charges Z/Lz... integrated over Lz, so charge Z per cell), by an
+    independent 2D Ewald split with width s = 0.7 A:
+
+      V_p(rho) = Z/(4 pi eps0) sum_images E1(|rho - rho_n|^2 / (2 s^2))
+                 + Z/(eps0 A) sum_{G != 0} exp(-2 pi^2 s^2 G^2)/(4 pi^2 G^2)
+                   cos(2 pi G.(rho - rho_0))
+
+    where the first term is the projected potential of a point charge minus a
+    Gaussian charge (2D Gaussian line charge: -(Z/2 pi eps0)[ln rho +
+    E1(rho^2/2s^2)/2]), and the second the Gaussian remainder from 2D Poisson,
+    grad^2 V_p = -lambda/eps0. The Ewald split parameters differ from the
+    code's (3D erf split, width 3 A, quadrature + 3D FFT), so nothing is shared.
+
+    ChargeDensityPotential subtracts each slice's minimum, so the comparison
+    is up to one additive constant (sum of the per-slice minima). Tolerance:
+    1e-3 of the oracle's range over 0.2 < rho < 3 A -- above the order-2
+    spline interpolation of the smooth 3 A-wide long-range part from the
+    0.125 A density grid, ~(0.125/3)^3 ~ 7e-5, and excluding the log-singular
+    core pixels.
+    """
+    from scipy.special import exp1
+
+    from abtem.core.constants import eps0
+
+    Z = 6
+    density = np.zeros((_CD_GRID,) * 3)
+    with config.set({"precision": "float64"}):
+        potential = _charge_density_potential(Z, _CD_CELL / 2, density, 1.0)
+        projected = asnumpy(potential.build(lazy=False).array).sum(0)
+
+    gpts, sampling = potential.gpts, potential.sampling
+    x = np.arange(gpts[0]) * sampling[0]
+    y = np.arange(gpts[1]) * sampling[1]
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    centre = (_CD_CELL / 2, _CD_CELL / 2)
+    s = 0.7
+    C = Z / (4 * np.pi * eps0)
+
+    oracle = np.zeros_like(X)
+    for i in range(-3, 4):
+        for j in range(-3, 4):
+            r2 = (X - centre[0] - i * _CD_CELL) ** 2 + (Y - centre[1] - j * _CD_CELL) ** 2
+            oracle += C * exp1(np.maximum(r2, 1e-12) / (2 * s**2))
+    m = np.fft.fftfreq(gpts[0], 1 / gpts[0])
+    Gx, Gy = m[:, None] / _CD_CELL, m[None, :] / _CD_CELL
+    G2 = Gx**2 + Gy**2
+    G2[0, 0] = 1.0
+    coefficients = (
+        Z / (eps0 * _CD_CELL**2) * np.exp(-2 * np.pi**2 * s**2 * G2) / (4 * np.pi**2 * G2)
+    )
+    coefficients[0, 0] = 0.0
+    phase = np.exp(-2j * np.pi * (Gx * centre[0] + Gy * centre[1]))
+    oracle += np.real(np.fft.ifft2(coefficients * phase)) * gpts[0] * gpts[1]
+
+    R = np.hypot(X - centre[0], Y - centre[1])
+    band = (R > 0.2) & (R < 3.0)
+    difference = projected[band] - oracle[band]
+    difference -= difference.mean()
+    assert np.abs(difference).max() < 1e-3 * np.ptp(oracle[band]), (
+        np.abs(difference).max(),
+        np.ptp(oracle[band]),
+    )
+
+
+@pytest.mark.parametrize("z0", (3.3, 4.0))
+def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0):
+    """Nucleus Z plus -Z electrons in a Gaussian of std 0.7 A on it: a neutral
+    atom, whose potential is V(r) = Z/(4 pi eps0) erfc(r / (sqrt(2) s)) / r --
+    positive and decaying to zero far from the atom.
+
+    Oracle: that V integrated over each slice along z with scipy.integrate.quad,
+    at in-plane distances 0.2-3 A (plus the +-Lz images). Because V >= 0 and
+    vanishes far away, the code's per-slice minimum subtraction removes ~0, so
+    the comparison is absolute.
+
+    This is a full-electron density, so issue #421 (full Z added against a
+    valence-only density) does not arise here; the test does not encode it.
+
+    Tolerance: 2e-3 of the peak. The density's kz content is cropped to the
+    slice count; for 0.5 A slices the Gaussian's spectrum at the crop,
+    exp(-2 pi^2 s^2 (1 A^-1)^2), is 6e-5. The remaining errors (order-2 spline
+    interpolation, the 1e-4 eV Ewald cutoff) are of the same order.
+    Two z0: mid-slice and on a slice boundary, where a z-offset shows as an
+    asymmetry between the slices above and below.
+    """
+    from scipy.special import erfc
+
+    from abtem.core.constants import eps0
+
+    Z, sigma, dz = 6, 0.7, 0.5
+    with config.set({"precision": "float64"}):
+        potential = _charge_density_potential(
+            Z, z0, _gaussian_electrons(Z, z0, sigma), dz
+        )
+        array = asnumpy(potential.build(lazy=False).array)
+
+    C = Z / (4 * np.pi * eps0)
+
+    def V(r):
+        return C * erfc(r / (np.sqrt(2) * sigma)) / r
+
+    s = potential.sampling
+    i0 = int(round(_CD_CELL / 2 / s[0]))
+    offsets = np.array([4, 10, 20, 40, 60])  # 0.2, 0.5, 1, 2, 3 A
+    numeric = array[:, i0 + offsets, i0]
+    oracle = np.zeros_like(numeric)
+    for j, (a, b) in enumerate(potential.slice_limits):
+        for k, offset in enumerate(offsets):
+            rho = offset * s[0]
+            for image in (-1, 0, 1):
+                lo, hi = a - z0 - image * _CD_CELL, b - z0 - image * _CD_CELL
+                oracle[j, k] += integrate.quad(
+                    lambda z: V(np.hypot(rho, z)), lo, hi, limit=200
+                )[0]
+    tolerance = 2e-3 * oracle.max()
+    assert np.abs(numeric - oracle).max() < tolerance, float(
+        np.abs(numeric - oracle).max()
+    )
+    # Far from the atom a neutral atom's potential is ~0 in every slice.
+    assert np.abs(numeric[:, -1]).max() < tolerance
