@@ -445,15 +445,6 @@ def test_segmented_detector_single_bright_pixel_lands_in_expected_segment(
     assert np.delete(got, label).max() < 1e-9 * full
 
 
-_OFFSET_CROP_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="_AbstractRadialDetector._calculate_new_array crops the pattern to "
-    "max_angle=outer about k=0 before polar_binning rolls the bins by the "
-    "offset, so pixels farther than outer from k=0 are lost (and the rolled "
-    "bins wrap onto the opposite edge of the cropped pattern).",
-)
-
-
 @pytest.mark.parametrize("device", ["cpu", gpu])
 # (27, 3) and (6, 35) have |k| > outer: they lie outside a pattern cropped to
 # `outer` about k=0, but within `outer` of the offset centre.
@@ -462,8 +453,8 @@ _OFFSET_CROP_XFAIL = pytest.mark.xfail(
     [
         (13, 7),
         (-8, 3),
-        pytest.param((27, 3), marks=_OFFSET_CROP_XFAIL),
-        pytest.param((6, 35), marks=_OFFSET_CROP_XFAIL),
+        (27, 3),
+        (6, 35),
     ],
 )
 def test_segmented_detector_offset_captures_pixels_beyond_centred_crop(device, pixel):

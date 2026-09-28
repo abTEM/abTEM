@@ -353,7 +353,22 @@ class _AbstractRadialDetector(BaseDetector):
         """
         inner, outer = self.angular_limits(waves)
 
-        measurement = waves.diffraction_patterns(max_angle=outer, parity="same")
+        # The pattern is cropped about k=0 and polar_binning then rolls the
+        # bins by the offset, so the crop must reach `outer` beyond the offset
+        # centre (plus a pixel for the nearest-pixel rounding of the offset);
+        # cropping to `outer` alone lost every pixel farther than that from k=0.
+        max_angle: float | str = outer
+        if np.any(np.array(self._offset) != 0.0):
+            max_angle = (
+                outer
+                + float(np.hypot(*self._offset))
+                + max(waves.angular_sampling)
+            )
+            gpts = waves._gpts_within_angle(max_angle, parity="same")
+            if any(g >= n for g, n in zip(gpts, waves._valid_gpts)):
+                max_angle = "full"
+
+        measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")
 
         measurement = measurement.polar_binning(
             nbins_radial=self.nbins_radial,
