@@ -6311,11 +6311,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         A dictionary mapping miller indices to reciprocal space positions [1/Å].
         """
 
+        # positions are (..., spots, 3): iterate over the spot axis (zipping
+        # with the (..., 3, 3) lattice vectors gave 3 entries, whatever the
+        # number of spots)
         positions = {
             tuple(hkl): position
             for hkl, position in zip(
                 self.miller_indices,
-                np.moveaxis(self.reciprocal_lattice_vectors, -2, 0),
+                np.moveaxis(self.positions, -2, 0),
             )
         }
         return positions

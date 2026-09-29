@@ -372,6 +372,18 @@ def test_sort_indexed_diffraction_patterns(criterion):
         bloch_waves.calculate_diffraction_patterns(10.0, lazy=True).sort(criterion)
 
 
+@pytest.mark.parametrize("thicknesses", [10.0, [10.0, 20.0]])
+def test_positions_dict_maps_every_spot_to_its_position(thicknesses):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
+    positions = spots.positions_dict
+    assert len(positions) == len(spots.miller_indices)
+    for hkl, position in zip(map(tuple, spots.miller_indices),
+                             np.moveaxis(spots.positions, -2, 0)):
+        np.testing.assert_array_equal(positions[hkl], position)
+    np.testing.assert_array_equal(positions[(0, 0, 0)], 0.0)
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_projected_potential_sequence_slice_thickness(lazy):
     sf = _si_structure_factor()
