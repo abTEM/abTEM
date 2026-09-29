@@ -1104,8 +1104,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
         array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        # by keyword: not every subclass takes the array as its first argument
         kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -1622,10 +1624,40 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+        # by keyword: not every subclass takes the array as its first argument
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
+
+    def ensure_computed(self, **kwargs) -> Self:
+        """Creates an equivalent in-memory version of the array object, leaving
+        this object unchanged.
+
+        The counterpart of `ensure_lazy`: an object already in memory is returned
+        as it is, and a lazy one is computed into a new object. `compute` works in
+        place, so this is the way to get an in-memory array while the caller's
+        object stays lazy.
+
+        Parameters
+        ----------
+        kwargs :
+            Keyword arguments passed to `compute`.
+
+        Returns
+        -------
+        computed_array_object : ArrayObject or subclass of ArrayObject
+            In-memory version of the array object.
+        """
+        if not self.is_lazy:
+            return self
+
+        # by keyword: not every subclass takes the array as its first argument
+        new_kwargs = self._copy_kwargs(exclude=("array",))
+        new_kwargs["array"] = self.array
+        return self.__class__(**new_kwargs).compute(**kwargs)
 
     def compute(
         self,
@@ -2323,7 +2355,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            array = self.compute().array
+            # Partitioning (e.g. of a lazy potential for an eager multislice)
+            # leaves the caller's object lazy
+            array = self.ensure_computed().array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:
@@ -2632,7 +2666,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
 
     xp = get_array_module(arrays[0].array)
 
-    if arrays[0].is_lazy:
+    if any(has_array.is_lazy for has_array in arrays):
         array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
         array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)

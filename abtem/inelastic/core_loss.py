@@ -1140,6 +1140,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        # The whole intensity is reduced to one host-side number: lazy waves are
+        # computed once, into a copy, rather than piecewise by the operations below
+        waves = waves.ensure_computed(progress_bar=False)
 
         array = abs2(waves.array)
 
@@ -1308,6 +1311,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        # As in absolute_threshold: the mask below needs the intensity in memory
+        waves = waves.ensure_computed(progress_bar=False)
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,
