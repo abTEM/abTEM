@@ -2383,8 +2383,9 @@ class Probe(WavesBuilder):
     Parameters
     ----------
     semiangle_cutoff : float, optional
-        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is
-        given.
+        The cutoff semiangle of the aperture [mrad]. A cutoff of 0 gives a parallel
+        beam (a plane wave); scanning it needs an explicit scan `sampling` or `gpts`.
+        Ignored if a custom aperture is given.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
