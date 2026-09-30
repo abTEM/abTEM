@@ -33,50 +33,73 @@ def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
 def test_components_are_consistent():
     waves = _make_exit_waves([0.02, 0.05, 0.10])
 
-    dp_tds = phonon_loss_diffraction_patterns(waves, component="tds")
-    dp_coh = phonon_loss_diffraction_patterns(waves, component="coherent")
-    dp_inc = phonon_loss_diffraction_patterns(waves, component="incoherent")
-    dp_all = phonon_loss_diffraction_patterns(waves, component="all")
+    dp_diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+    dp_elastic = phonon_loss_diffraction_patterns(waves, components="elastic")
+    dp_total = phonon_loss_diffraction_patterns(waves, components="total")
+    dp_all = phonon_loss_diffraction_patterns(waves, components="all")
 
-    assert np.allclose(dp_all.array[0], dp_coh.array)
-    assert np.allclose(dp_all.array[1], dp_inc.array)
-    assert np.allclose(dp_all.array[2], dp_tds.array)
-    assert np.allclose(dp_tds.array, dp_inc.array - dp_coh.array)
+    assert dp_all.ensemble_axes_metadata[0].values == ("total", "elastic", "diffuse")
+    assert np.allclose(dp_all.array[0], dp_total.array)
+    assert np.allclose(dp_all.array[1], dp_elastic.array)
+    assert np.allclose(dp_all.array[2], dp_diffuse.array)
+    assert np.allclose(dp_diffuse.array, dp_total.array - dp_elastic.array)
 
-    for dp, name in [(dp_tds, "tds"), (dp_coh, "coherent"), (dp_inc, "incoherent")]:
-        assert dp.metadata["phonon_loss_component"] == name
+    for dp, name in [
+        (dp_diffuse, "diffuse"),
+        (dp_elastic, "elastic"),
+        (dp_total, "total"),
+    ]:
+        assert dp.metadata["frozen_phonon_component"] == name
         assert dp.metadata["energy"] == 100e3
+    assert dp_all.metadata["frozen_phonon_component"] == ["total", "elastic", "diffuse"]
+
+
+def test_default_is_the_diffuse_component():
+    waves = _make_exit_waves([0.02, 0.05, 0.10])
+    np.testing.assert_array_equal(
+        phonon_loss_diffraction_patterns(waves).array,
+        phonon_loss_diffraction_patterns(waves, components="diffuse").array,
+    )
 
 
 def test_invalid_component_raises():
     waves = _make_exit_waves([0.02, 0.05, 0.10])
-    with pytest.raises(ValueError, match="component must be one of"):
-        phonon_loss_diffraction_patterns(waves, component="bogus")
+    with pytest.raises(ValueError, match="components must be one of"):
+        phonon_loss_diffraction_patterns(waves, components="bogus")
 
 
-@pytest.mark.parametrize("component", ["tds", "all"])
-def test_single_config_tds_raises_instead_of_returning_zeros(component):
-    """With one frozen-phonon configuration, I_incoherent == I_coherent by
-    construction, so I_tds is identically zero everywhere -- not a bug, but
-    silently returning an all-zero array looks exactly like one. This must
-    raise instead."""
+@pytest.mark.parametrize(
+    "old, new", [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")]
+)
+def test_earlier_component_names_point_to_the_new_ones(old, new):
+    waves = _make_exit_waves([0.02, 0.05, 0.10])
+    with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
+        phonon_loss_diffraction_patterns(waves, components=old)
+
+
+@pytest.mark.parametrize("components", ["diffuse", "all"])
+def test_single_config_diffuse_raises_instead_of_returning_zeros(components):
+    """With one frozen-phonon configuration, the total and the elastic intensity
+    are identical by construction, so the diffuse intensity is identically zero
+    everywhere -- not a bug, but silently returning an all-zero array looks
+    exactly like one. This must raise instead."""
     waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=1)
     with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
-        phonon_loss_diffraction_patterns(waves, component=component)
+        phonon_loss_diffraction_patterns(waves, components=components)
 
 
-@pytest.mark.parametrize("component", ["coherent", "incoherent"])
-def test_single_config_non_tds_components_still_work(component):
-    """coherent/incoherent are well-defined (if trivial) for a single
-    configuration and must not be blocked by the N>=2 check."""
+@pytest.mark.parametrize("components", ["elastic", "total"])
+def test_single_config_elastic_and_total_still_work(components):
+    """elastic/total are well-defined (if trivial) for a single configuration
+    and must not be blocked by the N>=2 check."""
     waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=1)
-    dp = phonon_loss_diffraction_patterns(waves, component=component)
+    dp = phonon_loss_diffraction_patterns(waves, components=components)
     assert not np.allclose(dp.array, 0.0)
 
 
-def test_two_configs_tds_does_not_raise():
+def test_two_configs_diffuse_does_not_raise():
     waves = _make_exit_waves([0.02, 0.05, 0.10], n_configs=2)
-    dp = phonon_loss_diffraction_patterns(waves, component="tds")
+    dp = phonon_loss_diffraction_patterns(waves, components="diffuse")
     assert dp.array.shape[0] == 3
 
 
@@ -85,9 +108,9 @@ class TestThermalWeighting:
         e_values = [0.0, 0.02, 0.05, 0.10]
         waves = _make_exit_waves(e_values)
 
-        dp_unweighted = phonon_loss_diffraction_patterns(waves, component="tds")
+        dp_unweighted = phonon_loss_diffraction_patterns(waves, components="diffuse")
         dp_weighted = phonon_loss_diffraction_patterns(
-            waves, component="tds", temperature=300.0
+            waves, components="diffuse", temperature=300.0
         )
 
         energy_axis = next(
@@ -110,9 +133,9 @@ class TestThermalWeighting:
         T = 300.0
         waves = _make_exit_waves(e_values)
 
-        dp_unweighted = phonon_loss_diffraction_patterns(waves, component="tds")
+        dp_unweighted = phonon_loss_diffraction_patterns(waves, components="diffuse")
         dp_weighted = phonon_loss_diffraction_patterns(
-            waves, component="tds", temperature=T
+            waves, components="diffuse", temperature=T
         )
 
         energy_axis = next(
@@ -145,24 +168,24 @@ class TestThermalWeighting:
                 dp_unweighted.array[i],
             )
 
-    def test_requires_tds_component(self):
+    def test_requires_the_diffuse_component(self):
         waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(ValueError, match="component='tds'"):
+        with pytest.raises(ValueError, match="components='diffuse'"):
             phonon_loss_diffraction_patterns(
-                waves, component="coherent", temperature=300.0
+                waves, components="elastic", temperature=300.0
             )
 
     def test_requires_energies_start_at_zero_and_ascending(self):
         waves_no_zero = _make_exit_waves([0.01, 0.02, 0.05])
         with pytest.raises(ValueError, match="starting at 0"):
             phonon_loss_diffraction_patterns(
-                waves_no_zero, component="tds", temperature=300.0
+                waves_no_zero, components="diffuse", temperature=300.0
             )
 
         waves_unsorted = _make_exit_waves([0.0, 0.05, 0.02])
         with pytest.raises(ValueError, match="starting at 0"):
             phonon_loss_diffraction_patterns(
-                waves_unsorted, component="tds", temperature=300.0
+                waves_unsorted, components="diffuse", temperature=300.0
             )
 
 
@@ -181,10 +204,10 @@ class TestLazyExitWaves:
         waves_lazy = _make_exit_waves(e_values, lazy=True)
 
         dp_eager = phonon_loss_diffraction_patterns(
-            waves_eager, component="tds", temperature=300.0
+            waves_eager, components="diffuse", temperature=300.0
         )
         dp_lazy = phonon_loss_diffraction_patterns(
-            waves_lazy, component="tds", temperature=300.0
+            waves_lazy, components="diffuse", temperature=300.0
         )
 
         assert isinstance(dp_lazy.array, da.core.Array), (
@@ -197,8 +220,8 @@ class TestLazyExitWaves:
         waves_eager = _make_exit_waves(e_values, lazy=False)
         waves_lazy = _make_exit_waves(e_values, lazy=True)
 
-        dp_eager = phonon_loss_diffraction_patterns(waves_eager, component="all")
-        dp_lazy = phonon_loss_diffraction_patterns(waves_lazy, component="all")
+        dp_eager = phonon_loss_diffraction_patterns(waves_eager, components="all")
+        dp_lazy = phonon_loss_diffraction_patterns(waves_lazy, components="all")
 
         assert isinstance(dp_lazy.array, da.core.Array)
         np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)

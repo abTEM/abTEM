@@ -1447,9 +1447,18 @@ class Waves(BaseWaves, ArrayObject):
 
         return diffraction_patterns
 
+    def elastic_diffuse_diffraction_patterns(self, **kwargs):
+        """Elastic, diffuse and total diffraction intensity from frozen-phonon
+        exit waves. See
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns` for full
+        documentation."""
+        from abtem.measurements import elastic_diffuse_diffraction_patterns
+
+        return elastic_diffuse_diffraction_patterns(self, **kwargs)
+
     def phonon_loss_diffraction_patterns(self, **kwargs):
-        """Compute inelastic (TDS) diffraction patterns from energy-resolved
-        frozen-phonon exit waves.  See
+        """Energy-resolved phonon-loss diffraction patterns from frozen-phonon
+        exit waves. See
         :func:`abtem.measurements.phonon_loss_diffraction_patterns` for full
         documentation."""
         from abtem.measurements import phonon_loss_diffraction_patterns
