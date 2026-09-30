@@ -246,22 +246,6 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     return getattr(xp, name)
 
 
-def _element_wise(array, func: str | Callable):
-    """Apply ``func`` to ``array``; a str names a function of the array's module.
-
-    The lazy element-wise methods pass array-module functions to dask by name, so
-    that no CuPy ufunc enters a dask graph. dask tokenizes a callable object that is
-    not a plain function by pickling and unpickling it, and a CuPy ufunc pickles by
-    value, together with the kernels it has compiled: the unpickled copy owns the
-    same CUDA modules and unloads them when it is freed. After that, every launch
-    of those kernels in the process fails with ``CUDA_ERROR_INVALID_HANDLE`` (seen
-    with ``cupy.abs`` on complex64 after an eager ``abs``, CuPy 13.5.1 and 14.2.0).
-    """
-    if isinstance(func, str):
-        func = getattr(get_array_module(array), func)
-    return func(array)
-
-
 def _spatial_frequency_squared(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -569,6 +553,11 @@ def _interpolate_stack(
     return output
 
 
+def _array_module_function(array, name: str):
+    """Apply the element-wise function ``name`` of ``array``'s own module."""
+    return getattr(get_array_module(array), name)(array)
+
+
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Base class for all measurement types.
@@ -641,9 +630,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def real(self) -> Self:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            "real", label="real", units="arb. unit"
-        )
+        return self._apply_element_wise_func("real", label="real", units="arb. unit")
 
     def imag(self) -> Self:
         """Returns the imaginary part of a complex-valued measurement."""
@@ -655,9 +642,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def phase(self) -> Self:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            "angle", label="phase", units="rad."
-        )
+        return self._apply_element_wise_func("angle", label="phase", units="rad.")
 
     def abs(self) -> Self:
         """Calculates the absolute value of a complex-valued measurement."""
@@ -764,14 +749,20 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         return self.mean(axis=axis)
 
     def _apply_element_wise_func(
-        self, func: str | Callable, label: str, units: str
+        self, func: Callable | str, label: str, units: str
     ) -> Self:
         """Apply an element-wise array function, returning a new measurement with the
         given label and units. The measurement itself is not modified.
 
-        ``func`` is either the name of a function of the array module (``"abs"``),
-        resolved for each block, or a module-level function such as ``abs2``.
+        A string names a function of the array's own module (NumPy or CuPy),
+        looked up per block. CuPy's ufuncs (``cp.abs``) must not enter a dask
+        graph themselves: dask has no tokenizer for them and falls back to
+        pickling, which segfaults, and a distributed scheduler would have to
+        pickle them again to ship the graph.
         """
+        if isinstance(func, str):
+            func = functools.partial(_array_module_function, name=func)
+
         d = self._copy_kwargs(exclude=("array",))
         d["metadata"] = {**d["metadata"], "label": label, "units": units}
 
@@ -781,10 +772,10 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             # zero-size meta, so it stays a CuPy array for CuPy chunks; left to
             # dask, the dtype would be inferred from a NumPy dummy, which CuPy
             # functions also reject.
-            meta = _element_wise(da.utils.meta_from_array(self.array), func)
-            d["array"] = self.array.map_blocks(_element_wise, func, meta=meta)
+            meta = func(da.utils.meta_from_array(self.array))
+            d["array"] = self.array.map_blocks(func, meta=meta)
         else:
-            d["array"] = _element_wise(self.array, func)
+            d["array"] = func(self.array)
 
         return self.__class__(**d)
 
