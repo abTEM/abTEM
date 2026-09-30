@@ -553,6 +553,11 @@ def _interpolate_stack(
     return output
 
 
+def _array_module_function(array, name: str):
+    """Apply the element-wise function ``name`` of ``array``'s own module."""
+    return getattr(get_array_module(array), name)(array)
+
+
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Base class for all measurement types.
@@ -625,29 +630,25 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def real(self) -> Self:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            get_array_module(self.array).real, label="real", units="arb. unit"
-        )
+        return self._apply_element_wise_func("real", label="real", units="arb. unit")
 
     def imag(self) -> Self:
         """Returns the imaginary part of a complex-valued measurement."""
         self._check_is_complex()
         return self._apply_element_wise_func(
-            get_array_module(self.array).imag, label="imaginary", units="arb. unit"
+            "imag", label="imaginary", units="arb. unit"
         )
 
     def phase(self) -> Self:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            get_array_module(self.array).angle, label="phase", units="rad."
-        )
+        return self._apply_element_wise_func("angle", label="phase", units="rad.")
 
     def abs(self) -> Self:
         """Calculates the absolute value of a complex-valued measurement."""
         # self._check_is_complex()
         return self._apply_element_wise_func(
-            get_array_module(self.array).abs, label="amplitude", units="arb. unit"
+            "abs", label="amplitude", units="arb. unit"
         )
 
     def intensity(self) -> Self:
@@ -747,9 +748,21 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         return self.mean(axis=axis)
 
-    def _apply_element_wise_func(self, func: Callable, label: str, units: str) -> Self:
+    def _apply_element_wise_func(
+        self, func: Callable | str, label: str, units: str
+    ) -> Self:
         """Apply an element-wise array function, returning a new measurement with the
-        given label and units. The measurement itself is not modified."""
+        given label and units. The measurement itself is not modified.
+
+        A string names a function of the array's own module (NumPy or CuPy),
+        looked up per block. CuPy's ufuncs (``cp.abs``) must not enter a dask
+        graph themselves: dask has no tokenizer for them and falls back to
+        pickling, which segfaults, and a distributed scheduler would have to
+        pickle them again to ship the graph.
+        """
+        if isinstance(func, str):
+            func = functools.partial(_array_module_function, name=func)
+
         d = self._copy_kwargs(exclude=("array",))
         d["metadata"] = {**d["metadata"], "label": label, "units": units}
 
