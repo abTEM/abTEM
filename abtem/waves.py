@@ -1391,7 +1391,15 @@ class Waves(BaseWaves, ArrayObject):
         normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
-            dtype = get_dtype(complex=return_complex)
+            # Declare the precision the blocks return, which follows the waves
+            # as in the eager branch: complex128 waves give float64 patterns
+            # under a float32 configuration. A declared dtype below the blocks'
+            # would make later dask reductions (e.g. sum) accumulate in it.
+            dtype = (
+                self.array.dtype
+                if return_complex
+                else np.finfo(self.array.dtype).dtype
+            )
 
             pattern = da.map_blocks(
                 self._diffraction_pattern,
