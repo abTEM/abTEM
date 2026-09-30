@@ -9,6 +9,7 @@ the module under test, so they catch this without a GPU. The GPU tests run the s
 paths on real CuPy chunks.
 """
 
+import gc
 import types
 
 import ase.build
@@ -66,6 +67,44 @@ class _RejectsDask(types.ModuleType):
             return attr(*args, **kwargs)
 
         return function
+
+
+_UNPICKLED: list[str] = []
+
+
+def _revive(name):
+    _UNPICKLED.append(name)
+    return _PicklesByValue(name)
+
+
+class _PicklesByValue:
+    """A NumPy function that records being unpickled.
+
+    A CuPy ufunc pickles by value, together with the kernels it has compiled, and
+    the unpickled copy unloads their CUDA modules when it is freed; dask tokenizes a
+    callable object that is not a plain function by pickling and unpickling it.
+    This stand-in makes that round trip visible without a GPU.
+    """
+
+    def __init__(self, name):
+        self.name = name
+
+    def __call__(self, *args, **kwargs):
+        return getattr(np, self.name)(*args, **kwargs)
+
+    def __reduce__(self):
+        return _revive, (self.name,)
+
+
+class _FunctionsPickleByValue(types.ModuleType):
+    """NumPy, with the element-wise functions replaced by `_PicklesByValue`."""
+
+    _by_value = ("abs", "real", "imag", "angle")
+
+    def __getattr__(self, name):
+        if name in self._by_value:
+            return _PicklesByValue(name)
+        return getattr(np, name)
 
 
 @pytest.fixture
@@ -135,6 +174,22 @@ def test_element_wise_funcs_apply_per_block(rejects_dask, method):
 
     assert result.is_lazy
     assert result.array.dtype == expected.dtype
+    np.testing.assert_array_equal(result.compute().array, expected)
+
+
+@pytest.mark.parametrize("method", ELEMENT_WISE)
+def test_element_wise_funcs_keep_array_module_functions_out_of_the_graph(
+    monkeypatch, method
+):
+    dp = _complex_diffraction_patterns()
+    expected = getattr(_complex_diffraction_patterns(lazy=False), method)().array
+    stand_in = _FunctionsPickleByValue("pickles_by_value")
+    monkeypatch.setattr(abtem.measurements, "get_array_module", lambda x=None: stand_in)
+    _UNPICKLED.clear()
+
+    result = getattr(dp, method)()
+
+    assert _UNPICKLED == []
     np.testing.assert_array_equal(result.compute().array, expected)
 
 
@@ -585,6 +640,21 @@ class TestLazyCuPy:
         np.testing.assert_allclose(
             _to_numpy(result.array), expected, rtol=1e-6, atol=1e-6
         )
+
+    def test_lazy_abs_after_an_eager_abs(self):
+        # The eager abs compiles cupy.abs for complex64 first, so a pickled copy of
+        # the ufunc would carry that kernel's module; cupy.abs must still work
+        # afterwards, lazily and eagerly.
+        import cupy as cp
+
+        eager = _complex_diffraction_patterns(xp=cp, lazy=False)
+        expected = _to_numpy(eager.abs().array)
+
+        lazy = _complex_diffraction_patterns(xp=cp).abs()
+        gc.collect()
+
+        np.testing.assert_allclose(_to_numpy(lazy.array), expected, rtol=1e-6)
+        np.testing.assert_array_equal(_to_numpy(eager.abs().array), expected)
 
     def test_tile_scan(self):
         patterns = _scan(abtem.PixelatedDetector(max_angle=30, to_cpu=False), "gpu")
