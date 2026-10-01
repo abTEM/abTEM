@@ -49,7 +49,33 @@ def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
     return norm
 
 
-def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=None):
+def _pad_limits(lo: float, hi: float, margin: float, logscale: bool = False) -> list:
+    """Pad a (lo, hi) range by a fractional margin, in log-space when
+    ``logscale`` (an additive margin can push ``lo`` to <= 0, invalid for a
+    log-scaled axis -- matplotlib then silently ignores the resulting
+    ``set_ylim`` call with a UserWarning)."""
+    if not margin:
+        return [lo, hi]
+
+    if logscale:
+        tiny = np.finfo(float).tiny
+        hi = hi if hi > 0 else tiny
+        lo = lo if lo > 0 else hi * 1e-3
+        lo = max(lo, tiny)
+        log_lo, log_hi = np.log10(lo), np.log10(hi)
+        pad = max(log_hi - log_lo, 1e-2) * margin
+        return [10 ** (log_lo - pad), 10 ** (log_hi + pad)]
+
+    pad = (hi - lo) * margin
+    return [lo - pad, hi + pad]
+
+
+def _get_value_limits(
+    array,
+    value_limits: tuple[float, float] = None,
+    margin=None,
+    logscale: bool = False,
+):
     if np.iscomplexobj(array):
         array = np.abs(array)
 
@@ -65,9 +91,9 @@ def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=No
         value_limits[1] = float(np.nanmax(array))
 
     if margin:
-        margin = (value_limits[1] - value_limits[0]) * margin
-        value_limits[0] -= margin
-        value_limits[1] += margin
+        value_limits = _pad_limits(
+            value_limits[0], value_limits[1], margin, logscale=logscale
+        )
 
     return value_limits
 
@@ -160,7 +186,7 @@ class Artist(metaclass=ABCMeta):
     def set_power(self, power=1.0):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
 
     @abstractmethod
@@ -273,6 +299,10 @@ class LinesArtist(Artist1D):
             data = line.get_data()[1]
             new_ylim = [np.min(data), np.max(data)]
             ylim = [min(new_ylim[0], ylim[0]), max(new_ylim[1], ylim[1])]
+
+        if self.get_logscale():
+            return _pad_limits(ylim[0], ylim[1], margin=0.05, logscale=True)
+
         ptp = ylim[1] - ylim[0]
         ptp = max(ptp, ylim[1] * 0.01)
         return [ylim[0] - 0.05 * ptp, ylim[1] + 0.05 * ptp]
@@ -290,11 +320,11 @@ class LinesArtist(Artist1D):
         for i, line in enumerate(self._lines):
             line.set_data(x, y[..., i])
 
-    def get_logscale(self):
-        return self._ax.set_yscale("log")
+    def get_logscale(self) -> bool:
+        return self._ax.get_yscale() == "log"
 
-    def set_logscale(self):
-        self._ax.set_yscale("log")
+    def set_logscale(self, logscale: bool = False):
+        self._ax.set_yscale("log" if logscale else "linear")
 
     def get_power(self):
         return 1.0
@@ -322,7 +352,9 @@ class LinesArtist(Artist1D):
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
-        value_limits = _get_value_limits(data, value_limits, margin=0.05)
+        value_limits = _get_value_limits(
+            data, value_limits, margin=0.05, logscale=self.get_logscale()
+        )
         self._ax.set_ylim(value_limits)
 
     def set_legend(self, **kwargs):
@@ -350,7 +382,7 @@ class Artist2D(Artist):
     def set_cbars(self, cmap):
         pass
 
-    def set_logscale(self):
+    def set_logscale(self, logscale: bool = False):
         pass
 
     @staticmethod

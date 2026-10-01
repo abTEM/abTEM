@@ -162,6 +162,7 @@ class Visualization:
         xlim: tuple[float, float] = None,
         ylim: tuple[float, float] = None,
         convert_complex: str = "none",
+        logscale: bool = False,
         **kwargs,
     ):
         self._measurement = measurement.to_cpu().compute()
@@ -267,6 +268,13 @@ class Visualization:
             self.set_row_titles(row_titles)
 
         self._make_new_artists(artist_type=self._artist_type, **kwargs)
+
+        if logscale:
+            # Set before adjust_coordinate_limits_to_artists/set_(common_)value_limits,
+            # both of which read the artists' current y-scale to keep their
+            # auto-computed margins log-safe (a plain additive margin can push the
+            # lower bound to <= 0, invalid on a log axis).
+            self.set_logscale(logscale)
 
         self.adjust_coordinate_limits_to_artists(xlim=xlim, ylim=ylim)
 

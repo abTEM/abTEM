@@ -17,6 +17,18 @@ from abtem.measurements import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Close matplotlib figures opened by show() after each test -- this file
+    has many show() calls that never close their own figures, which trips
+    matplotlib's "more than 20 figures" RuntimeWarning (escalated to an error
+    via filterwarnings) when pytest runs sequentially in a single process."""
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+
+
 def _make_dp(n_energies=3, gpts=64, sampling=1.0, energy=300e3, lazy=False):
     """Create a simple DiffractionPatterns with an EnergyLossAxis for testing.
 
