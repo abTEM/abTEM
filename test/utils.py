@@ -136,15 +136,18 @@ def _gpu_count() -> int:
 # to break the suite. `requires_multigpu` below already used _gpu_count(); only
 # this single-GPU gate was left keyed on the import.
 def _mps_is_usable() -> bool:
-    """Whether the Metal (MPS) backend is loaded and usable in this process."""
+    """Whether the Metal (MPS) backend is usable in this process.
+
+    Asking loads it -- PyTorch is imported on the first request for the 'mps'
+    device -- which is what any Metal test is about to do anyway.
+    """
     from abtem.core import backend
 
-    if backend.tp is None:
+    try:
+        backend.check_mps_is_available()
+    except RuntimeError:
         return False
-
-    from abtem.core._torch import is_available
-
-    return is_available()
+    return True
 
 
 def _accelerator_device():
@@ -254,16 +257,13 @@ requires_multigpu = _GpuRequirement(
 )
 
 
-# Skip marker for the Metal backend. Note that 'enable_mps' selects the library
-# load order and so has to be set before abTEM is imported -- setting it from
-# inside a test is too late, which is why this tests what actually loaded rather
-# than what the configuration says.
+# Skip marker for the Metal backend, which -- like CUDA -- is exercised whenever
+# the machine has it. Deselect it with -k "not mps".
 requires_mps = pytest.mark.skipif(
     not _mps_is_usable(),
     reason=(
         "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
-        "installed, and 'enable_mps' set before abTEM is imported "
-        "(e.g. ABTEM_ENABLE_MPS=true pytest ...)"
+        "installed"
     ),
 )
 
