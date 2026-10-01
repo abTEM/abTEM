@@ -1018,8 +1018,9 @@ def expm(A: np.ndarray) -> np.ndarray:
         # Metal: exponentiate on the host, in double precision, and hand the
         # result back in the device's complex64. Scaling and squaring breaks
         # down at single precision for the norms of order 10^3 that realistic
-        # beam counts and thicknesses give (721 Si beams at 1000 Å: errors of
-        # 2e-3 in complex64 against 1e-7 in complex128), and torch's own
+        # beam counts and thicknesses give (721 Si beams at 1000 Å: S off by
+        # 2.5e-3 exponentiated in complex64, by 3.5e-4 -- the share of the
+        # single-precision structure matrix -- in complex128), and torch's own
         # matrix_exp, which runs on the device, is single precision too.
         A = asnumpy(A)
         return xp.asarray(expm_scipy(A.astype(np.complex128)).astype(A.dtype))
