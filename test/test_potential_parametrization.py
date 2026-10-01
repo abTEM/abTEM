@@ -49,6 +49,11 @@ def test_lobato_kirkland_match(atomic_number, func):
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.skipif("hankel" not in sys.modules, reason="requires hankel")
 @pytest.mark.slow
+# Pm, Sm, Eu and Pu make GPAWParametrization fall back to an unpolarized atom
+# and warn; the fallback itself is covered by the test below.
+@pytest.mark.filterwarnings(
+    "ignore:The spin-polarized all-electron calculation:UserWarning"
+)
 def test_lobato_gpaw_match(atomic_number, func):
     """DFT-derived parameters should reproduce the tabulated Lobato potential
     to within ~15%. The Lobato functional form has near-degenerate parameter
