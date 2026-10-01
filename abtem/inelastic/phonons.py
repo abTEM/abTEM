@@ -29,7 +29,12 @@ from abtem.core.axes import (
     UnknownAxis,
 )
 from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
-from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    Ensemble,
+    _wrap_with_array,
+    shared_constant_arg,
+    unpack_blockwise_args,
+)
 from abtem.core.utils import CopyMixin, EqualityMixin, itemset
 
 if TYPE_CHECKING:
@@ -209,16 +214,9 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         return partial(self._from_partitioned_args_func, **kwargs)
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
-        if chunks is None:
-            chunks = 1
-
-        if lazy:
-            lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=0)
-            array = da.from_delayed(lazy_args, shape=(), dtype=object)
-        else:
-            atoms = self.atoms
-            array = _wrap_with_array(atoms, ndims=0)
-        return (array,)
+        # This ensemble has no chunking: a single constant travels as one
+        # graph node. `chunks` is part of the Ensemble signature only.
+        return (shared_constant_arg(self.atoms, lazy=lazy),)
 
     def __len__(self):
         if self._num_configs is None:
@@ -295,16 +293,24 @@ class FrozenPhonons(BaseFrozenPhonons):
         using the ASE standard. If list or array, a displacement standard deviation
         should be provided for each atom.
 
-        Anistropic displacements may be given by providing a standard deviation for each
-        principal direction. This may be a tuple of three numbers for identical
-        displacements for all atoms. A dict of tuples of three numbers to specify
-        displacements for each species. A list or array with three numbers for each
-        atom.
+        The standard deviation applies to each displaced direction separately: every
+        direction in `directions` receives an independent Gaussian displacement with
+        standard deviation sigma, so sigma squared is the mean-square displacement
+        along one direction (the isotropic displacement parameter U_iso), not the
+        total mean-square displacement, which is 3 sigma squared for the default
+        `directions`.
+
+        Anisotropic displacements may be given by providing a standard deviation for
+        each Cartesian direction (`x`, `y`, `z`). This may be a tuple of three numbers
+        for identical displacements for all atoms. A dict of tuples of three numbers to
+        specify displacements for each species. A list or array with three numbers for
+        each atom.
 
     directions : str, optional
-        The displacement directions of the atoms as a string; for example 'xy' (default)
-        for displacement in the `x`- and `y`-direction (i.e. perpendicular to the
-        propagation direction).
+        The Cartesian directions in which the atoms are displaced, as a string of one or
+        more of 'x', 'y' and 'z'. The default, 'xyz', displaces the atoms in all three
+        directions, including along the propagation direction; 'xy' restricts the
+        displacements to the plane perpendicular to the propagation direction.
     ensemble_mean : bool, optional
         If True (default), the mean of the ensemble of results from a multislice
         simulation is calculated, otherwise, the result of every frozen phonon
@@ -338,6 +344,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         self._sigmas = validate_sigmas(atoms, sigmas)[0]
         self._directions = directions
+        self._axes  # raises on an invalid direction now rather than when displacing
         self._atoms = atoms
         self._seed = validate_seeds(seed, num_seeds=num_configs)
 
@@ -397,7 +404,9 @@ class FrozenPhonons(BaseFrozenPhonons):
             elif direction == "z":
                 axes += [2]
             else:
-                raise RuntimeError(f"Directions must be 'x', 'y' or 'z', not {axes}.")
+                raise RuntimeError(
+                    f"Directions must be 'x', 'y' or 'z', not {direction!r}."
+                )
         return axes
 
     def randomize(self, atoms: Atoms) -> Atoms:

@@ -11,6 +11,7 @@ from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.base import is_dask_collection
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
@@ -130,23 +131,59 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         if isinstance(value, EmptyEnsemble) and isinstance(
             b.__dict__[key], EmptyEnsemble
         ):
-            return True
+            # `continue`, not `return True`: two EmptyEnsembles make THIS
+            # attribute equal, not the whole object. Returning here skipped
+            # every remaining attribute, so two objects differing in anything
+            # declared after an EmptyEnsemble compared equal. Latent today --
+            # nothing in abtem/ instantiates EmptyEnsemble or its subclass
+            # EmptyTransform -- but demonstrable on any class that holds one.
+            continue
 
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
         if isinstance(value, EqualityMixin):
-            equal = safe_equality(value, b.__dict__[key])
+            # Forward the nested object's own exclusions. This recursion
+            # bypasses its __eq__, which is what would otherwise apply them, so
+            # without this an exclusion holds only for a top-level operand:
+            # SMatrix(built potential) != SMatrix(unbuilt potential) even
+            # though the two potentials themselves compare equal.
+            equal = safe_equality(
+                value, b.__dict__[key], getattr(value, "_eq_exclude", ())
+            )
 
         else:  # if isinstance(value, (tuple, list, np.ndarray)):
             try:
                 equal = np.allclose(value, b.__dict__[key])
             except (ValueError, TypeError):
                 if isinstance(value, EqualityMixin):
-                    equal = safe_equality(value, b.__dict__[key])
+                    equal = safe_equality(
+                        value, b.__dict__[key], getattr(value, "_eq_exclude", ())
+                    )
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
-        if equal is False:
+        # `np.all`, not `equal is False`. The identity test only catches the
+        # `False` singleton, and several producers here return something else:
+        # ase.Atoms.__eq__ returns numpy.bool_, and `np.False_ is False` is
+        # False, so a genuine difference was silently dropped -- two Potentials
+        # whose atoms differ by 1.234 A compared EQUAL. A `==` on arrays that
+        # np.allclose then failed to reduce leaves an array here too.
+        # np.all handles bool, numpy.bool_ and array alike.
+        if is_dask_collection(equal):
+            # Do not reduce a deferred value: np.all on a dask object returns
+            # another dask object, and the `not` in front of it calls
+            # __bool__, which executes the graph. `==` would then run the
+            # simulation it is comparing, throw the result away (the operands
+            # stay lazy) and let any error raised mid-graph escape `==`.
+            # Skipping it keeps the pre-existing behaviour, under which a dask
+            # value could never be the `False` singleton and so never counted
+            # as a difference. That leaves lazy arrays comparing equal
+            # regardless of content -- wrong, but pre-existing and not this
+            # change's to settle; what `==` should mean for a lazy object is
+            # abTEM issue #413.
+            continue
+
+        if not np.all(equal):
             return False
 
     return True
@@ -191,8 +228,15 @@ def _get_dims_to_broadcast(
 
 
 class EqualityMixin:
+    #: Attribute names excluded from equality, for lazily-populated derived
+    #: state. Such an attribute is a function of things already compared, so
+    #: it carries no identity of its own -- but it makes an object stop
+    #: comparing equal to an identical one the moment it is populated. Same
+    #: reasoning as _DeviceArrayCache.__eq__ in integrals.py, one level up.
+    _eq_exclude: tuple[str, ...] = ()
+
     def __eq__(self, other):
-        return safe_equality(self, other)
+        return safe_equality(self, other, exclude=self._eq_exclude)
 
     def __ne__(self, other):
         return not self.__eq__(other)

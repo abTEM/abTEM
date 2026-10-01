@@ -3,14 +3,36 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import assert_array_matches_device, gpu
+from utils import assert_array_matches_device, devices, requires_gpu, to_host_array
 
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 
+
+def _aberrated_ctf():
+    """An aberrated CTF used to regression-test two bugs in the reduction
+    coefficients: the normalization used the complex square instead of the
+    absolute square, and the azimuthal angle convention must match
+    polar_spatial_frequencies, ie. arctan2(ky, kx). The real-space intensity
+    of an aberrated probe is sensitive to both; the vacuum diffraction
+    intensity is sensitive to neither.
+    """
+    from abtem import CTF
+
+    return CTF(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=50,
+        astigmatism=40,
+        astigmatism_angle=0.5236,
+        coma=3e3,
+        coma_angle=1.0,
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
+@devices
 def test_prism_matches_probe(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device))
 
@@ -34,7 +56,7 @@ def test_prism_matches_probe(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_matches_probe_with_interpolation(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device, max_interpolation=3))
 
@@ -55,7 +77,7 @@ def test_prism_matches_probe_with_interpolation(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_prism_matches_probe_with_multislice(data, lazy, device):
     potential = data.draw(abtem_st.potential(device=device))
     s_matrix = data.draw(
@@ -85,7 +107,7 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 # @pytest.mark.parametrize('interpolation', [True, False])
 @pytest.mark.parametrize(
     "detector",
@@ -130,7 +152,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
 @pytest.mark.parametrize(
     "downsample", [True, False], ids=["downsample", "no_downsample"]
 )
-@pytest.mark.parametrize("device", [gpu, "cpu"], ids=["gpu", "cpu"])
+@devices
 @pytest.mark.parametrize(
     "interpolation", [False, True], ids=["no_interpolation", "interpolation"]
 )
@@ -202,7 +224,7 @@ def test_prism_scan(
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.skipif(cp is None, reason="no gpu")
+@requires_gpu
 def test_s_matrix_store_on_host(data, lazy):
     potential = data.draw(abtem_st.potential(device="gpu", ensemble_mean=False))
     s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
@@ -212,7 +234,7 @@ def test_s_matrix_store_on_host(data, lazy):
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize(
     "detector",
     [
@@ -224,6 +246,10 @@ def test_s_matrix_store_on_host(data, lazy):
     ],
 )
 def test_prism_scan_match_probe_scan(data, detector, lazy, device):
+    # unlike test_s_matrix_matches_probe_no_interpolation, the scan here is
+    # matched to the probe explicitly (GridScan.match_probe) rather than left
+    # for s_matrix.scan()/probe.scan() to match on their own -- this pins that
+    # the explicit match_probe workflow agrees between the two reduction paths
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
     s_matrix = data.draw(
         abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
@@ -235,36 +261,28 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
 
     scan = GridScan()
     scan.match_probe(probe)
+    assume(
+        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
+        or isinstance(detector, WavesDetector)
+    )
 
     prism_measurement = s_matrix.scan(
         scan=scan, detectors=detector, lazy=lazy
-    ).compute()
+    ).to_cpu()
     probe_measurement = probe.scan(
         potential=potential, scan=scan, detectors=detector, lazy=lazy
-    ).compute()
+    ).to_cpu()
 
-    # assert prism_measurement.shape == probe_measurement.shape
-    # assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
+    assert prism_measurement.shape == probe_measurement.shape
+    assert prism_measurement == probe_measurement
 
 
 def test_prism_aberrated_ctf_matches_probe():
-    # regression test for two bugs in the reduction coefficients: the
-    # normalization used the complex square instead of the absolute square, and
-    # the azimuthal angle convention must match polar_spatial_frequencies,
-    # ie. arctan2(ky, kx). the real-space intensity of an aberrated probe is
-    # sensitive to both; the vacuum diffraction intensity is sensitive to
-    # neither.
-    from abtem import CTF, Probe, SMatrix
+    # regression test for two bugs in the reduction coefficients: see
+    # _aberrated_ctf's docstring.
+    from abtem import Probe, SMatrix
 
-    ctf = CTF(
-        energy=100e3,
-        semiangle_cutoff=20,
-        defocus=50,
-        astigmatism=40,
-        astigmatism_angle=0.5236,
-        coma=3e3,
-        coma_angle=1.0,
-    )
+    ctf = _aberrated_ctf()
 
     probe = Probe._from_ctf(extent=20, gpts=128, ctf=ctf, energy=100e3)
     probe_intensity = probe.build(lazy=False).intensity().array
@@ -284,3 +302,86 @@ def test_prism_aberrated_ctf_matches_probe():
         np.squeeze(probe_intensity),
         atol=1e-5 * probe_intensity.max(),
     )
+
+
+class TestWrappedCrop2D:
+    """``wrapped_slices`` assumed ``-n <= start < n`` and ``0 < stop <= 2n``.
+
+    Outside that range it returned a wrongly shaped array instead of failing:
+    for a window entirely in negative indices, ``slice(0, stop)`` is Python's
+    negative indexing and selects ``n + stop`` rows rather than none. The crop
+    then reached the caller intact and surfaced as a broadcast error frames
+    away, in ``prism_transition_potential_scan``. Reachable from any model with
+    atoms far enough outside the cell.
+    """
+
+    @staticmethod
+    def _reference(array, corner, size):
+        """The crop by modulo index -- the definition of a periodic crop."""
+        i = (corner[0] + np.arange(size[0])) % array.shape[-2]
+        j = (corner[1] + np.arange(size[1])) % array.shape[-1]
+        return array[..., i[:, None], j[None, :]]
+
+    @pytest.mark.parametrize("n, size", [(192, 64), (17, 5), (8, 8)])
+    def test_every_corner_gives_the_right_shape_and_values(self, n, size):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(0)
+        array = rng.standard_normal((2, n, n))
+        # Several periods either side: the old code was correct only in a
+        # narrow band around zero, and wrong by n + size rows outside it.
+        for corner in range(-3 * n, 3 * n):
+            got = wrapped_crop_2d(array, (corner, 0), (size, size))
+            assert got.shape == (2, size, size)
+            assert np.array_equal(got, self._reference(array, (corner, 0), (size, size)))
+
+    def test_both_axes_wrap_independently(self):
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(1)
+        array = rng.standard_normal((3, 24, 20))
+        for corner in [(-30, -25), (-5, 18), (23, -1), (47, 39), (-48, -40)]:
+            got = wrapped_crop_2d(array, corner, (7, 9))
+            assert got.shape == (3, 7, 9)
+            assert np.array_equal(got, self._reference(array, corner, (7, 9)))
+
+    @pytest.mark.parametrize("size", [16, 24, 32, 48])
+    def test_windows_wider_than_one_period(self, size):
+        """Two slices cannot express these; the general path must.
+
+        The old code was correct here only for corners in a narrow band around
+        zero -- e.g. n=16, corner=-23, size=24 came back as 8x8 -- so sweep the
+        corner rather than picking one.
+        """
+        from abtem.prism.utils import wrapped_crop_2d
+
+        n = 16
+        rng = np.random.default_rng(2)
+        array = rng.standard_normal((1, n, n))
+        for corner in range(-2 * n, 2 * n, 3):
+            got = wrapped_crop_2d(array, (corner, corner), (size, size))
+            assert got.shape == (1, size, size)
+            assert np.array_equal(
+                got, self._reference(array, (corner, corner), (size, size))
+            )
+
+    def test_wrapped_slices_refuses_more_than_one_period(self):
+        from abtem.prism.utils import wrapped_slices
+
+        with pytest.raises(RuntimeError, match="exceeds the period"):
+            wrapped_slices(0, 25, 24)
+
+    @devices
+    def test_matches_on_device(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import wrapped_crop_2d
+
+        rng = np.random.default_rng(3)
+        array = rng.standard_normal((2, 32, 32))
+        for corner in [(-40, 7), (-9, -9), (70, -70)]:
+            got = wrapped_crop_2d(copy_to_device(array, device), corner, (11, 11))
+            assert_array_matches_device(got, device)
+            assert np.allclose(
+                to_host_array(copy_to_device(got, "cpu")),
+                self._reference(array, corner, (11, 11)),
+            )

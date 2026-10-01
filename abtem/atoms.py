@@ -886,6 +886,15 @@ def orthogonalize_cell(
         The applied transform given as Euler angles (by default not returned).
     """
 
+    # Copy once, up front, rather than at each mutating call below. Three
+    # separate ASE calls on `atoms` in this function mutate in place --
+    # `set_cell`/`wrap` immediately below, `translate`/`wrap` when `origin`
+    # is non-default, and `_snap_scaled_positions_to_cell_boundary` right
+    # before `cut()` in the repeat-and-cut branch further down -- so copying
+    # at only one of those call sites still leaves the others writing into
+    # the caller's object.
+    atoms = atoms.copy()
+
     cell = atoms.cell
     cell[np.abs(cell) < 1e-6] = 0.0
     atoms.set_cell(cell)
@@ -1105,6 +1114,61 @@ def cut_cell(
 
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
+
+
+def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
+    """Wrap atoms into their cell by modulo, snapping the boundary cases to zero.
+
+    Wrapping is by ``np.mod`` rather than ``Atoms.wrap``, because ``wrap`` is a
+    **no-op along any axis where ``pbc`` is False** -- which is ASE's default
+    for a hand-built ``Atoms`` and what every ``ase.build.*(vacuum=...)`` slab
+    carries. The slicing this feeds models an infinite-projection potential
+    that is periodic in all three directions whatever the ``Atoms`` object
+    declares, so the bin index must be taken modulo the cell regardless.
+
+    Using ``wrap`` here was actively harmful for those inputs: it left
+    out-of-cell positions untouched, and the boundary snapping below then saw
+    arbitrarily large values rather than near-boundary ones and moved them to
+    zero -- teleporting an atom instead of wrapping it.
+
+    The snap itself is still needed: positions land in ``[0, L)``, and the
+    ``SliceIndexedAtoms`` bin edges are nudged down by 1e-12, so anything in
+    ``(L - 1e-12, L)`` would fall outside every bin and be dropped. The same
+    applies in x and y, where a value a hair below ``L`` puts the atom's FFT
+    peak at the wrong position.
+
+    Idempotent, and the caller's ``Atoms`` is not modified unless ``copy`` is
+    False.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        Atoms to wrap. Not modified unless ``copy`` is False.
+    copy : bool, optional
+        If False, wrap in place. Only for callers that own ``atoms``.
+    """
+    cell = np.diag(np.array(atoms.cell))
+
+    positions = atoms.positions
+    if positions.size == 0 or not np.all(cell > 0.0):
+        # A degenerate cell is reported better by the caller's own validation
+        # than by a modulo-by-zero here.
+        return atoms
+
+    if np.all((positions >= 0.0) & (positions < cell - 1e-10)):
+        return atoms
+
+    if copy:
+        atoms = atoms.copy()
+
+    np.mod(atoms.positions, cell, out=atoms.positions)
+
+    for ax in range(3):
+        length = cell[ax]
+        atoms.positions[atoms.positions[:, ax] > length - 1e-10, ax] = 0.0
+        atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+
+    return atoms
 
 
 def pad_atoms(

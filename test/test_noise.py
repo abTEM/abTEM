@@ -13,6 +13,7 @@ from abtem.noise import (
     _pixel_times,
     _single_axis_distortion,
 )
+from test_measure import make_images
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +101,7 @@ class TestApplyDisplacementField:
 
 class TestNoiseTransform:
     def _images(self, shape=(16, 16), value=100.0):
-        from abtem.measurements import Images
-        return Images(np.full(shape, value), sampling=(0.1, 0.1))
+        return make_images(shape, value=value)
 
     def test_attributes(self):
         nt = NoiseTransform(dose=1000.0, samples=5)
@@ -133,8 +133,7 @@ class TestNoiseTransform:
 
 class TestScanNoiseTransform:
     def _images(self):
-        from abtem.measurements import Images
-        return Images(np.ones((16, 16)), sampling=(0.1, 0.1))
+        return make_images((16, 16), value=1.0)
 
     def test_construction_and_properties(self):
         snt = ScanNoiseTransform(

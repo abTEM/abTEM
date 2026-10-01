@@ -18,6 +18,7 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
@@ -748,6 +749,32 @@ class _FieldBuilder(BaseField):
 
 
 class _FieldBuilderFromAtoms(_FieldBuilder):
+    # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from
+    # the atoms, the slicing and the cell, all of which are compared already.
+    # Declared here, where the attribute is created, so that Potential,
+    # MagneticField and VectorPotential all inherit it rather than one of them
+    # carrying it for the others. Without it a built field stopped comparing
+    # equal to an identical unbuilt one, i.e. equality depended on whether a
+    # result had been computed.
+    #
+    # The exclusion is blunt, and deliberately so for now. get_sliced_atoms()
+    # returns this object rather than a copy, so a caller who mutates what it
+    # returned changes what the field builds while `==` still reports equal.
+    # What that costs depends on the projection, because the two cache classes
+    # differ. For projection="infinite" the cache is a SliceIndexedAtoms,
+    # whose _slice_index is a list of arrays that safe_equality cannot compare
+    # -- `==` on it raises ValueError, which becomes "unequal" -- so the
+    # comparison is constant-False and excluding it gives up nothing. For
+    # projection="finite" the cache is a SlicedAtoms, which has no
+    # _slice_index and compares correctly; there the exclusion does give up a
+    # real check, one that the np.all fix above would otherwise have made
+    # catch the mutation. Neither path regresses against the old behaviour,
+    # which missed the mutation on both. Comparing derived state only when
+    # both operands have it is the better rule, and belongs with the same
+    # question for lazy arrays -- both are abTEM issue #413 -- rather than
+    # here.
+    _eq_exclude = ("_sliced_atoms",)
+
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons,
@@ -865,21 +892,33 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap(eps=0.0)
-            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
-            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
-            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
-            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
-            # outside all bins and is silently dropped.  Snap those back to 0.
-            cell_z = atoms.cell[2, 2]
-            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
-            # Same issue for x and y: orthogonalize_cell can produce -0.0 or tiny-
-            # negative values from matrix multiplication.  wrap(eps=0.0) maps -ε to
-            # L-ε rather than 0, placing the atom's FFT peak at the wrong position.
-            for ax in (0, 1):
-                L = atoms.cell[ax, ax]
-                atoms.positions[atoms.positions[:, ax] > L - 1e-10, ax] = 0.0
-                atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+            # Shared with SliceIndexedAtoms, which applies the same wrap to the
+            # atoms it is handed directly -- e.g. explicit core-loss ``sites``
+            # and CrystalPotential's tiled atoms, which do not come through
+            # here.
+            #
+            # Copy, because these atoms are *not* this method's own. For
+            # DummyFrozenPhonons -- the wrapper every plain Potential(atoms)
+            # gets -- get_transformed_atoms() and randomize() are both the
+            # identity, so writing in place here mutates the object the
+            # potential stores and ships into the task graph as ONE shared
+            # node. Every task on a worker then wraps the same Atoms.
+            #
+            # The previous `copy=False` preserved dev's in-place behaviour
+            # deliberately, with this aliasing noted as a separate defect.
+            # This is that defect: three entry points reach it, and two of
+            # them alias the CALLER's own object, because
+            # _validate_frozen_phonons copies a plain Atoms but passes a list
+            # (-> AtomsEnsemble, which stores references) and a pre-built
+            # frozen-phonons object straight through.
+            #
+            # wrap_and_snap_atoms already takes ownership as a parameter, so
+            # the fix is answering it correctly rather than adding machinery.
+            # This layer and not a neighbouring one: it is the only writer in
+            # the mechanism. get_transformed_atoms has five consumers of which
+            # only this one writes, and randomize copies unconditionally where
+            # this copies only when it must.
+            atoms = wrap_and_snap_atoms(atoms)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -895,7 +934,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                # Non-periodic potentials are randomised after padding and are
+                # deliberately never wrapped; see the note in
+                # SliceIndexedAtoms.__init__.
+                wrap=self.periodic,
             )
 
         return sliced_atoms
@@ -1190,6 +1234,16 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         If 'finite' the 3D potential is numerically integrated between the slice
         boundaries. If 'infinite' (default), the infinite potential projection of each
         atom will be assigned to a single slice.
+
+        On GPU, ``projection='finite'`` is not bit-reproducible: its radial
+        interpolation kernel accumulates overlapping atoms' contributions with
+        an atomic add, whose order (and therefore float32 rounding) varies
+        from run to run (deviation ~1e-7 relative). ``projection='infinite'``
+        has no such accumulation and is deterministic on both CPU and GPU, as
+        is ``'finite'`` on CPU. Compare finite-projection GPU results with a
+        relative tolerance of at least 1e-6 rather than exact equality, and
+        build on CPU (or use ``'infinite'``) where bit-for-bit reproducibility
+        matters.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -1947,12 +2001,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
+        transmission = self.array[0]
         if conjugate:
-            waves._array *= xp.conjugate(self.array[0])
-        else:
-            waves._array *= self.array[0]
+            # the method, not xp.conjugate: a CuPy function rejects a dask array
+            transmission = transmission.conj()
+
+        lazy_waves = isinstance(waves._array, da.Array)
+        if isinstance(transmission, da.Array) and not lazy_waves:
+            # The waves are transmitted in place, and an in-place NumPy or CuPy
+            # product cannot take a dask operand. Keep eager waves eager: compute
+            # the (single-slice) transmission function, synchronously so CuPy
+            # tasks never run concurrently.
+            transmission = transmission.compute(scheduler="synchronous")
+
+        waves._array *= transmission
 
         return waves
 
@@ -2002,6 +2064,11 @@ class CrystalPotential(_PotentialBuilder):
         If True (default), the mean over the frozen-phonon ensemble is calculated.
         If False, the individual configurations are returned.
     """
+
+    # Same derived state as _FieldBuilderFromAtoms, built by this class's own
+    # get_sliced_atoms(). CrystalPotential descends from _PotentialBuilder, not
+    # from _FieldBuilderFromAtoms, so it does not inherit that declaration.
+    _eq_exclude = ("_sliced_atoms",)
 
     def __init__(
         self,
@@ -2224,7 +2291,26 @@ class CrystalPotential(_PotentialBuilder):
         else:
             old_chunks = chunks
 
+        potential_unit = self.potential_unit
+        # A lazily built PotentialArray unit is computed once, here, for all
+        # ensemble members. Left lazy, every member's generate_slices would
+        # compute it again, as a nested compute inside that member's task.
+        unit_is_lazy = (
+            isinstance(potential_unit, PotentialArray) and potential_unit.is_lazy
+        )
+
         if lazy:
+            if unit_is_lazy:
+                # one task of this graph, which every block depends on
+                lazy_unit = dask.delayed(
+                    partial(
+                        potential_unit.__class__,
+                        **potential_unit._copy_kwargs(exclude=("array",)),
+                    )
+                )(potential_unit.array)
+            else:
+                lazy_unit = dask.delayed(potential_unit)
+
             arrays = []
 
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2233,8 +2319,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                lazy_atoms = dask.delayed(self.potential_unit)
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_unit, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
@@ -2244,7 +2329,8 @@ class CrystalPotential(_PotentialBuilder):
                 array = array[0]
 
         else:
-            potential_unit = self.potential_unit
+            if unit_is_lazy:
+                potential_unit = potential_unit.ensure_computed(progress_bar=False)
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2363,6 +2449,19 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy. Blocks from _partition_args already receive it in
+        # memory; this covers direct calls. The synchronous scheduler keeps a
+        # compute that runs inside a task from starting a nested thread pool,
+        # and CuPy kernels from running concurrently.
+        potentials = potentials.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
+
         rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
@@ -2389,14 +2488,9 @@ class CrystalPotential(_PotentialBuilder):
         n_configs = potentials.shape[0]
 
         # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
-        # per-tile access into the pool, so materialise the (small unit-cell)
-        # pool array once. A lazily-built PotentialArray unit carries a dask
-        # array here; compute it so per-tile fancy indexing works and stays on
-        # the target device.
+        # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
-        if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
@@ -2567,6 +2661,13 @@ class CrystalPotential(_PotentialBuilder):
         else:
             unit_built = self.potential_unit
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array here, which the device's tile below does not
+        # accept for CuPy. The unit cell is small; materialise it once, as in
+        # generate_slices.
+        unit_built = unit_built.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
         unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         if unit_arr.ndim == 3:
             unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)

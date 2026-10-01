@@ -166,6 +166,38 @@ def resolve_energy(
     return None
 
 
+def _resolve_other_energy(other: "Accelerator | HasAcceleratorMixin") -> Optional[float]:
+    """Best-effort scalar energy for ``other``, seeing through an indexed
+    energy-ensemble member.
+
+    ``other.accelerator.energy`` (or ``other.energy`` for a bare
+    ``Accelerator``) is ``None`` both when no energy has ever been set *and*
+    when ``other`` is a single, already-indexed member of an energy ensemble
+    -- its real energy then lives in ``other.metadata["energy"]`` or a
+    single-valued ``EnergyAxis`` in ``other.ensemble_axes_metadata`` instead
+    (the same resolution :func:`resolve_energy` already performs for
+    ``Waves._valid_energy``). Reading only the raw accelerator energy
+    conflates the two cases: ``Accelerator.match``/``check_match`` would then
+    treat a perfectly well-defined ensemble member as "no energy defined"
+    and let their own energy silently override it (``match``), or never
+    notice a genuine mismatch against it (``check_match``).
+
+    ``other`` need not be an ``ArrayObject`` -- ``metadata`` and
+    ``ensemble_axes_metadata`` are read with ``getattr`` and default to
+    "absent", so a plain ``Accelerator`` or any other
+    ``HasAcceleratorMixin`` without those attributes falls back to exactly
+    the previous, raw-energy behaviour.
+    """
+    energy = (
+        other.energy if isinstance(other, Accelerator) else other.accelerator.energy
+    )
+    if energy is not None:
+        return float(energy)
+    metadata = getattr(other, "metadata", None)
+    ensemble_axes_metadata = getattr(other, "ensemble_axes_metadata", None) or ()
+    return resolve_energy(None, metadata, ensemble_axes_metadata)
+
+
 class Accelerator(EqualityMixin, CopyMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
@@ -231,19 +263,22 @@ class Accelerator(EqualityMixin, CopyMixin):
         other: Accelerator object
             The accelerator that should be checked.
         """
-        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
-        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
-        other_energy = (
-            other.energy
-            if isinstance(other, Accelerator)
-            else other.accelerator.energy
-        )
+        other_energy = _resolve_other_energy(other)
         if (
             (self.energy is not None)
             and (other_energy is not None)
             and (self.energy != other_energy)
         ):
-            raise RuntimeError("Inconsistent energies")
+            raise RuntimeError(
+                f"Inconsistent energies: {self.energy} eV vs {other_energy} eV. "
+                "A fixed energy (e.g. a built TransitionPotentialArray, or a CTF "
+                "with an explicit energy) cannot be applied to wave functions at "
+                "a different energy -- this also covers one member of a "
+                "multi-energy ensemble, whose own energy is resolved from its "
+                "metadata/ensemble axes even though its accelerator energy reads "
+                "None. Build a separate object per energy, or leave the energy "
+                "unset so it is taken from the wave functions."
+            )
 
     def match(
         self, other: Accelerator | HasAcceleratorMixin, check_match: bool = False
@@ -263,13 +298,7 @@ class Accelerator(EqualityMixin, CopyMixin):
         if check_match:
             self.check_match(other)
 
-        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
-        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
-        other_energy = (
-            other.energy
-            if isinstance(other, Accelerator)
-            else other.accelerator.energy
-        )
+        other_energy = _resolve_other_energy(other)
 
         if other_energy is None:
             if isinstance(other, Accelerator):

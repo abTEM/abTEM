@@ -27,7 +27,7 @@ import pytest
 from ase import Atoms
 from ase.build import bcc100, bcc110, bulk, fcc100, fcc110, fcc111, mx2
 from ase.spacegroup import crystal
-from utils import gpu
+from utils import devices
 
 import abtem
 from abtem.atoms import rotate_atoms_to_plane
@@ -294,7 +294,7 @@ def _max_relative_spread(
 
 # ── lattice-type sweep ───────────────────────────────────────────────────────
 @pytest.mark.parametrize("name", list(LATTICE_STRUCTURES))
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 def test_symmetry_equivalent_atoms_get_identical_potential(name, device):
     atoms = LATTICE_STRUCTURES[name]()
     spread, _ = _max_relative_spread(atoms, device=device)

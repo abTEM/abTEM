@@ -8,6 +8,7 @@ import strategies as abtem_st
 from hypothesis import given, settings
 
 from abtem.core.ensemble import concatenate_array_blocks
+from utils import lazy_params
 
 
 @given(data=st.data())
@@ -129,7 +130,7 @@ def test_array_waves_transform(data, ensemble, chunks):
         abtem_st.ctf,
     ],
 )
-@pytest.mark.parametrize("lazy", [True, False])
+@lazy_params
 def test_apply_waves_transform(data, ensemble, lazy):
     ensemble = data.draw(ensemble())
     waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)

@@ -5,6 +5,8 @@ import types
 
 import numpy as np
 import pytest
+
+from utils import requires_gpu, si_cubic_atoms
 from ase.build import bulk
 
 from abtem import PlaneWave, Potential
@@ -341,7 +343,7 @@ class TestFiniteProjectionChunked:
 
     def test_finite_builds_without_error(self):
         """Finite projection should build without error on CPU."""
-        atoms = bulk("Si", cubic=True) * (2, 2, 2)
+        atoms = si_cubic_atoms() * (2, 2, 2)
         pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
                         projection="finite")
         result = pot.build(lazy=False)
@@ -351,7 +353,7 @@ class TestFiniteProjectionChunked:
 
     def test_finite_deterministic(self):
         """Two builds of the same finite potential must be identical."""
-        atoms = bulk("Si", cubic=True) * (2, 2, 2)
+        atoms = si_cubic_atoms() * (2, 2, 2)
         pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
                         projection="finite")
         arr1 = pot.build(lazy=False)
@@ -361,7 +363,7 @@ class TestFiniteProjectionChunked:
 
     def test_finite_multislice_chunked(self):
         """Finite-projection multislice must be identical across chunk sizes."""
-        atoms = bulk("Si", cubic=True) * (2, 2, 4)
+        atoms = si_cubic_atoms() * (2, 2, 4)
         pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
                         projection="finite")
         waves = PlaneWave(energy=200e3, gpts=pot.gpts)
@@ -378,7 +380,7 @@ class TestCrystalPotentialChunking:
     @pytest.fixture
     def crystal_potential(self):
         """Si CrystalPotential: 4×4 xy tiles, 10 z-reps → 30 slices."""
-        atoms = bulk("Si", cubic=True)
+        atoms = si_cubic_atoms()
         unit = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
         return CrystalPotential(unit, repetitions=(4, 4, 10))
 
@@ -420,11 +422,11 @@ class TestCrystalPotentialChunking:
 
     def test_crystal_matches_explicit_supercell(self):
         """CrystalPotential multislice result must match an explicit supercell Potential."""
-        atoms_unit = bulk("Si", cubic=True)
+        atoms_unit = si_cubic_atoms()
         unit = Potential(atoms_unit, gpts=(32, 32), slice_thickness=2.0)
         crys = CrystalPotential(unit, repetitions=(2, 2, 3))
 
-        atoms_full = bulk("Si", cubic=True) * (2, 2, 3)
+        atoms_full = si_cubic_atoms() * (2, 2, 3)
         full = Potential(atoms_full, gpts=(64, 64), slice_thickness=2.0)
 
         waves = PlaneWave(energy=200e3, gpts=crys.gpts)
@@ -469,7 +471,7 @@ class TestCrystalPotentialChunking:
             with abtem_config.set({"precision": precision}):
                 # Re-build inside the config context so the unit is built at
                 # the configured precision.
-                atoms = bulk("Si", cubic=True)
+                atoms = si_cubic_atoms()
                 unit = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
                 crys = CrystalPotential(unit, repetitions=(4, 4, 10))
                 chunks = list(crys.generate_chunked_slices(chunk_size=4))
@@ -484,13 +486,13 @@ class TestCrystalPotentialChunking:
         waves32.grid.match(crystal_potential)
 
         with abtem_config.set({"precision": "float32"}):
-            atoms = bulk("Si", cubic=True)
+            atoms = si_cubic_atoms()
             unit32 = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
             crys32 = CrystalPotential(unit32, repetitions=(4, 4, 10))
             result32 = waves32.multislice(crys32, lazy=False)
 
         with abtem_config.set({"precision": "float64"}):
-            atoms = bulk("Si", cubic=True)
+            atoms = si_cubic_atoms()
             unit64 = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
             crys64 = CrystalPotential(unit64, repetitions=(4, 4, 10))
             result64 = waves32.multislice(crys64, lazy=False)
@@ -518,6 +520,7 @@ class TestComplexExponential:
         (np.float32, np.complex64),
         (np.float64, np.complex128),
     ])
+    @requires_gpu
     def test_gpu_matches_cpu(self, dtype, expected_cdtype):
         cp = pytest.importorskip("cupy")
         x_cpu = np.linspace(-np.pi, np.pi, 64, dtype=dtype)

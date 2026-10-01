@@ -1,7 +1,7 @@
 import ase
 import numpy as np
 import pytest
-from utils import gpu
+from utils import devices, gpu, to_host_array
 
 import abtem
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
@@ -11,13 +11,6 @@ pytestmark = pytest.mark.filterwarnings(
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::UserWarning"
 )
-
-
-def to_numpy(array):
-    """Convert array to numpy, handling both CPU and GPU arrays."""
-    if hasattr(array, "get"):  # CuPy array
-        return np.asarray(array.get())
-    return np.asarray(array)
 
 
 def create_sto_atoms():
@@ -133,8 +126,8 @@ class TestLazyVsEager:
 
         # Check values are close (allowing for numerical differences)
         np.testing.assert_allclose(
-            to_numpy(lazy_result.array),
-            to_numpy(eager_result.array),
+            to_host_array(lazy_result.array),
+            to_host_array(eager_result.array),
             rtol=1e-5,
             atol=1e-8,
         )
@@ -496,8 +489,8 @@ class TestAlgorithmComparison:
         assert fourier_result.array.shape == realspace_result.array.shape
 
         # Both should produce non-zero results (sanity check)
-        assert np.abs(to_numpy(fourier_result.array)).sum() > 0
-        assert np.abs(to_numpy(realspace_result.array)).sum() > 0
+        assert np.abs(to_host_array(fourier_result.array)).sum() > 0
+        assert np.abs(to_host_array(realspace_result.array)).sum() > 0
 
     def test_higher_orders_differ(self, test_system):
         """Test that higher orders produce different results."""
@@ -524,7 +517,7 @@ class TestAlgorithmComparison:
 
         # Results should be different (if identical, something's wrong)
         assert not np.allclose(
-            to_numpy(order1_result.array), to_numpy(order3_result.array), rtol=1e-10
+            to_host_array(order1_result.array), to_host_array(order3_result.array), rtol=1e-10
         )
 
     def test_fourier_order2_differs_from_order1(self, test_system):
@@ -552,7 +545,7 @@ class TestAlgorithmComparison:
 
         # Results should be different
         assert not np.allclose(
-            to_numpy(order1_result.array), to_numpy(order2_result.array), rtol=1e-10
+            to_host_array(order1_result.array), to_host_array(order2_result.array), rtol=1e-10
         )
 
 
@@ -597,7 +590,7 @@ class TestComplexWorkflows:
 class TestStencilNumericalAccuracy:
     """Verify the fast stencils match the scipy reference implementation."""
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @devices
     @pytest.mark.parametrize("accuracy", [2, 4, 6, 8])
     def test_laplace_stencil_matches_scipy_reference(self, accuracy, device):
         """Compare the fast Laplacian stencils against scipy.ndimage.convolve."""
@@ -626,7 +619,7 @@ class TestStencilNumericalAccuracy:
         )(xp.asarray(a))
 
         np.testing.assert_allclose(
-            to_numpy(result),
+            to_host_array(result),
             ref,
             rtol=1e-5,
             atol=1e-5,

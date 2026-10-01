@@ -16,7 +16,7 @@ from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessA
 from abtem.core.energy import energy2sigma
 from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
-from abtem.integrals import cutoff_taper
+from abtem.integrals import FieldIntegrator, cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
 from abtem.potentials.iam import (
     BaseField,
@@ -343,7 +343,17 @@ def interpolate_quasi_dipole_vector_field_projections(
     return magnetic_field
 
 
-class QuasiDipoleProjections:
+class QuasiDipoleProjections(FieldIntegrator):
+    # _tables is a cache populated lazily by get_integral_table, one entry
+    # per element on first use -- incidental state, never identity, same
+    # reasoning as _DeviceArrayCache.__eq__ (integrals.py) and Potential's
+    # _sliced_atoms exclusion. Without this, a used integrator stops
+    # comparing equal to an identical fresh one once anything is cached, and
+    # two integrators that cached the *same* element compare unequal anyway:
+    # dict.__eq__ on values that are numpy arrays raises ValueError, which
+    # safe_equality's exception guard reports as "unequal".
+    _eq_exclude = ("_tables",)
+
     def __init__(
         self,
         interpolation_func,
@@ -354,6 +364,7 @@ class QuasiDipoleProjections:
         sampling: float = 0.1,
         slice_thickness: float = 0.1,
     ):
+        super().__init__(periodic=False, finite=True)
         self._parametrization = LyonParametrization()
         self._cutoff = cutoff
         self._step_size = integration_steps
@@ -383,13 +394,8 @@ class QuasiDipoleProjections:
     def parametrization(self):
         return self._parametrization
 
-    @property
-    def finite(self):
-        return True
-
-    @property
-    def periodic(self):
-        return False
+    # finite/periodic come from FieldIntegrator, backed by _finite/_periodic
+    # set via super().__init__(periodic=False, finite=True) above.
 
     @property
     def sampling(self):

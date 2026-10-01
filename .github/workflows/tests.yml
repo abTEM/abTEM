@@ -22,6 +22,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Single source of truth for whether this run includes --runslow, so the
+# `tests` job's own command and `all-tests-passed`'s summary (below) can't
+# drift apart by editing one and forgetting the other. Skipped only for the
+# common case (a PR into dev), to keep that feedback loop fast; included for
+# PRs into main (release gate -- see the full OS matrix below), and for
+# every push/schedule/workflow_dispatch run (i.e. right after something
+# actually merges into dev or main, or on a manual run), so a slow-test
+# regression on dev surfaces within minutes of merge rather than only in the
+# weekly cron run.
+env:
+  RUNSLOW: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && 'true' || 'false' }}
+
 jobs:
   tests:
     name: ${{ matrix.os }} / python ${{ matrix.python-version }}
@@ -50,4 +62,40 @@ jobs:
         run: uv sync --group test
 
       - name: Run tests
-        run: uv run pytest test
+        run: uv run pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+
+  # A single, stable check to require in branch protection on main, that
+  # exists (at all) only for a run that includes --runslow -- PRs into main,
+  # and every push/schedule/workflow_dispatch trigger (see RUNSLOW above).
+  # It is not created for the common case (a PR into dev): rather than
+  # reporting a green check on a partial (fast-only) run, this check's
+  # ABSENCE from a dev PR is itself the correct signal that --runslow did
+  # not run there. Whenever it does appear, "All tests passed" is
+  # unambiguous -- the complete suite, slow tests included, actually ran and
+  # passed -- with no separate "which subset ran" caveat needed.
+  #
+  # It also reduces the `tests` job's fanned-out per-matrix-cell checks
+  # (e.g. "ubuntu-latest / python 3.11", a set that changes shape whenever
+  # the OS or Python matrix does) to one stable name, so branch protection
+  # doesn't need every cell named individually.
+  all-tests-passed:
+    name: All tests passed
+    needs: tests
+    runs-on: ubuntu-latest
+    # Duplicates RUNSLOW's expression rather than reading env.RUNSLOW: the
+    # `env` context is not available in a job-level `if:` (only `github`,
+    # `needs`, `vars`, and `inputs` are) -- confirmed the hard way, this
+    # exact line failed the whole workflow to even start with "This run
+    # likely failed because of a workflow file issue" when it referenced
+    # env.RUNSLOW here. The `tests` job's step-level `run:` above can still
+    # use env.RUNSLOW directly; only this job-level `if:` needs the
+    # workaround.
+    if: always() && (github.event_name != 'pull_request' || github.base_ref == 'main')
+    steps:
+      - name: Check test matrix result
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "One or more test matrix jobs did not succeed (result: ${{ needs.tests.result }})."
+            exit 1
+          fi
+          echo "### :white_check_mark: Included \`--runslow\` -- the full test suite ran and passed." >> "$GITHUB_STEP_SUMMARY"

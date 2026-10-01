@@ -48,6 +48,7 @@ def test_lobato_kirkland_match(atomic_number, func):
 @pytest.mark.parametrize("func", ["potential"])
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.skipif("hankel" not in sys.modules, reason="requires hankel")
+@pytest.mark.slow
 def test_lobato_gpaw_match(atomic_number, func):
     """DFT-derived parameters should reproduce the tabulated Lobato potential
     to within ~15%. The Lobato functional form has near-degenerate parameter
