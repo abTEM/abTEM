@@ -1,7 +1,7 @@
 import ase
 import numpy as np
 import pytest
-from utils import devices, gpu, to_host_array
+from utils import devices, gpu, requires_gpu, to_host_array
 
 import abtem
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
@@ -626,10 +626,15 @@ class TestStencilNumericalAccuracy:
             err_msg=f"Stencil mismatch at accuracy={accuracy} on {device}",
         )
 
-    @pytest.mark.parametrize("device", [gpu])
-    def test_gpu_stencil_rejects_non_complex_dtype(self, device):
+    @requires_gpu
+    def test_gpu_stencil_rejects_non_complex_dtype(self):
         """The raw GPU kernel only ships complex specializations; a real array
-        must raise instead of silently reinterpreting the buffer."""
+        must raise instead of silently reinterpreting the buffer.
+
+        CUDA-only: it reaches for cupy directly rather than going through the
+        device parametrization, so it cannot stand in for another accelerator.
+        The Metal stencil's own rejection is covered by the shared
+        dtype check in ``_laplace_operator_stencil``."""
         import cupy as cp
 
         from abtem.finite_difference import _laplace_operator_stencil
