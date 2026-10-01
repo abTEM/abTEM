@@ -3405,6 +3405,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                 sigma=padded_sigma,
                 mode="wrap",
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
@@ -3419,9 +3420,8 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         )
 
         if measurements.is_lazy:
-            # No explicit `boundary=` here, matching the xp is np branch
-            # above (and the pre-existing behavior of this lazy path), which
-            # also lets dask's own default apply at true array edges.
+            # `boundary="periodic"` makes the overlap wrap at the true array
+            # edges, matching the eager path's `mode="wrap"`.
             array = measurements.array.map_overlap(
                 functools.partial(
                     _apply_convolve_2d_on_axes,
@@ -3432,6 +3432,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                     cval=0.0,
                 ),
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:

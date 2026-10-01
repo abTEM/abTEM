@@ -710,6 +710,34 @@ def test_gaussian_source_size_matches_cpu_and_gpu(lazy):
     )
 
 
+def test_gaussian_source_size_lazy_matches_eager_at_edges():
+    """The lazy path must wrap periodically at the scan-grid edges, like the
+    eager path (regression test for abTEM discussion 483)."""
+    rng = np.random.default_rng(0)
+    array = rng.random((12, 12, 4, 4))
+    ensemble_axes_metadata = [
+        ScanAxis(sampling=0.5, _main=True),
+        ScanAxis(sampling=0.5, _main=True),
+    ]
+
+    def make(a):
+        return DiffractionPatterns(
+            a,
+            sampling=0.1,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata={"energy": 100e3},
+        )
+
+    eager = make(array).gaussian_source_size(0.6).array
+    lazy = (
+        make(da.from_array(array, chunks=(6, 6, 4, 4)))
+        .gaussian_source_size(0.6)
+        .compute()
+        .array
+    )
+    np.testing.assert_allclose(lazy, eager, atol=1e-10)
+
+
 def test_lorentzian_filter_lazy():
     """Lorentzian filter works on a lazy (dask-backed) image."""
     images = _delta_probe_image(gpts=32, lazy=True)
