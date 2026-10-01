@@ -306,6 +306,27 @@ def test_invalid_use_wave_eq_is_rejected_at_construction(use_wave_eq):
         assert bloch_waves.use_wave_eq == valid
 
 
+def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
+    from abtem.bloch.dynamical import BlochwaveEnsemble
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    bloch_waves = BlochWaves(structure_factor, energy=100e3, sg_max=0.1)
+    assert bloch_waves.use_wave_eq == "exact"
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor,
+            energy=[80e3, 100e3],
+            sg_max=0.1,
+            use_wave_eq=use_wave_eq,
+        )
+        assert bloch_waves._with_energy(0, 80e3).use_wave_eq == use_wave_eq
+        assert bloch_waves.rotate("x", 0.01).use_wave_eq == use_wave_eq
+        ensemble = bloch_waves.rotate("x", np.array([0.0, 0.01]))
+        assert isinstance(ensemble, BlochwaveEnsemble)
+        assert ensemble.use_wave_eq == use_wave_eq
+        assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
+
+
 @pytest.mark.slow
 # order=1 at 10 keV is used deliberately, as the paraxial reference
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
