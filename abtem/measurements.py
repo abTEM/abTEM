@@ -1992,8 +1992,8 @@ class Images(_BaseMeasurement2D):
     @property
     def coordinates(self) -> tuple[np.ndarray, np.ndarray]:
         """Coordinates of pixels in `x` and `y` [Å]."""
-        x = np.linspace(0.0, self.shape[-2] * self.sampling[0], self.shape[-2])
-        y = np.linspace(0.0, self.shape[-1] * self.sampling[1], self.shape[-1])
+        x = np.arange(self.shape[-2]) * self.sampling[0]
+        y = np.arange(self.shape[-1]) * self.sampling[1]
         return x, y
 
     @property

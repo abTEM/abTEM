@@ -273,6 +273,15 @@ def test_voigtian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
+def test_images_coordinates_spaced_by_sampling():
+    # Pixel i of a periodic image with sampling s sits at i * s; the last
+    # pixel is one sampling short of the extent, not at the extent.
+    images = Images(np.zeros((4, 5)), sampling=(0.5, 0.2))
+    x, y = images.coordinates
+    assert np.allclose(x, [0.0, 0.5, 1.0, 1.5])
+    assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
+
+
 def _delta_probe_image(gpts=64, lazy=False):
     """A throwaway probe-intensity image for the filter tests below -- only
     a non-trivial 2D image is needed, not any particular physics."""
