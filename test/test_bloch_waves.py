@@ -15,6 +15,7 @@ from abtem.bloch.utils import (
     relative_positions_for_centering,
     wrapped_is_close,
 )
+from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
 from utils import gpu
 
@@ -103,9 +104,28 @@ def test_potential_from_structure_factor(
 
     parametrization = abtem.parametrizations.LobatoParametrization(sigmas=thermal_sigma)
 
+    # Compare the two on the requested grid, band-limited the same way:
+    #
+    # - The structure-factor potential there is the exact potential, Fourier
+    #   cropped to the grid. Potential's infinite projection is not: it
+    #   deposits each atom bilinearly onto the four nearest grid points and
+    #   only divides out the average (sinc) response of that, an inexact
+    #   sub-pixel shift whose error grows with the sampling relative to the
+    #   width of the thermally smeared atomic potential (up to ~5% at 0.1 Å
+    #   with the sharpest potentials here, ~0.05% with the atoms on grid
+    #   points). So the reference is built on a grid fine enough for that to
+    #   be negligible and Fourier cropped to the requested grid.
+    # - The structure factors stop at g_max (a steep taper at 0.95 g_max), but
+    #   a fine grid holds frequencies far beyond it (Nyquist 25 1/Å at
+    #   0.02 Å), which the reference keeps: up to ~2.5% with the sharpest
+    #   potentials and the smallest g_max. So both are low-passed to within
+    #   g_max, below the taper.
+    #
+    # They then agree to ~0.1% at worst (over 1500 examples), against up to
+    # ~5% without either step.
     potential = abtem.Potential(
         atoms,
-        gpts=structure_factor_potential.gpts,
+        sampling=0.01,
         slice_thickness=structure_factor_potential.slice_thickness,
         parametrization=parametrization,
         projection="infinite",
@@ -114,13 +134,22 @@ def test_potential_from_structure_factor(
     structure_factor_potential = structure_factor_potential.project().compute()
     potential = potential.build(lazy=lazy).project().compute()
 
+    # sampling is honoured (to within fitting the grid to the cell)
+    assert np.allclose(structure_factor_potential.sampling, sampling, rtol=0.05)
+
     array1 = structure_factor_potential.array
-    array2 = potential.array
+    array2 = fft_interpolate(potential.array, array1.shape).real
+
+    grid_sampling = structure_factor_potential.sampling
+    kx, ky = (np.fft.fftfreq(n, d) for n, d in zip(array1.shape, grid_sampling))
+    within = kx[:, None] ** 2 + ky[None] ** 2 <= (0.9 * g_max) ** 2
+    array1 = np.fft.ifft2(np.fft.fft2(array1) * within).real
+    array2 = np.fft.ifft2(np.fft.fft2(array2) * within).real
     array1 -= array1.min()
     array2 -= array2.min()
 
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
-    assert error < 2.5
+    assert error < 0.5
 
 
 def test_structure_factor_potential_requests_the_slow_fft_diagnostic():
