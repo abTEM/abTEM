@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 import strategies as abtem_st
@@ -5,11 +7,11 @@ from ase import Atoms
 from ase.build import bulk
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from utils import gpu
+from utils import gpu, requires_gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
-from abtem.bloch import BlochWaves, StructureFactor
+from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
 from abtem.bloch.dynamical import calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
@@ -269,19 +271,21 @@ def _silicon_bloch_waves(device, g_max=4.0, sg_max=0.1):
     )
 
 
-# The host reference is double precision whatever the 'precision' setting says:
-# the structure matrix comes out complex128 even at float32. An accelerator may
-# well be single precision -- Metal always is -- so the tolerances allow for
+# Bloch waves honor the 'precision' setting, so the host reference is pinned to
+# double precision here: the tests then measure the accelerator's error against
+# an accurate result, not against a second single-precision one. An accelerator
+# may well be single precision -- Metal always is -- so the tolerances allow for
 # float32 against float64, not merely for a different order of operations.
 @pytest.mark.parametrize("device", [gpu])
 def test_bloch_wave_diffraction_patterns_match_cpu(device):
     thicknesses = [50.0, 200.0, 1000.0]
-    reference = asnumpy(
-        _silicon_bloch_waves("cpu")
-        .calculate_diffraction_patterns(thicknesses=thicknesses)
-        .compute()
-        .array
-    )
+    with abtem.config.set({"precision": "float64"}):
+        reference = asnumpy(
+            _silicon_bloch_waves("cpu")
+            .calculate_diffraction_patterns(thicknesses=thicknesses)
+            .compute()
+            .array
+        )
     result = asnumpy(
         _silicon_bloch_waves(device)
         .calculate_diffraction_patterns(thicknesses=thicknesses)
@@ -295,7 +299,10 @@ def test_bloch_wave_diffraction_patterns_match_cpu(device):
 
 @pytest.mark.parametrize("device", [gpu])
 def test_bloch_wave_scattering_matrix_matches_cpu(device):
-    reference = asnumpy(_silicon_bloch_waves("cpu").calculate_scattering_matrix(50.0))
+    with abtem.config.set({"precision": "float64"}):
+        reference = asnumpy(
+            _silicon_bloch_waves("cpu").calculate_scattering_matrix(50.0)
+        )
     result = asnumpy(_silicon_bloch_waves(device).calculate_scattering_matrix(50.0))
 
     np.testing.assert_allclose(result, reference, atol=3e-5 * np.abs(reference).max())
@@ -308,11 +315,12 @@ def test_bloch_wave_scattering_matrix_matches_cpu(device):
 # matrix alone accounts for.
 @pytest.mark.parametrize("device", [gpu])
 def test_many_beam_scattering_matrix_matches_cpu(device):
-    reference = asnumpy(
-        _silicon_bloch_waves("cpu", g_max=6.0, sg_max=0.3).calculate_scattering_matrix(
-            5000.0
+    with abtem.config.set({"precision": "float64"}):
+        reference = asnumpy(
+            _silicon_bloch_waves(
+                "cpu", g_max=6.0, sg_max=0.3
+            ).calculate_scattering_matrix(5000.0)
         )
-    )
     result = asnumpy(
         _silicon_bloch_waves(device, g_max=6.0, sg_max=0.3).calculate_scattering_matrix(
             5000.0
@@ -322,3 +330,180 @@ def test_many_beam_scattering_matrix_matches_cpu(device):
     assert reference.shape == (721, 721)
     assert np.isfinite(result).all()
     np.testing.assert_allclose(result, reference, atol=2e-3)
+
+
+# The same 721 beams on the CPU, at 1000 Å. Exponentiated in complex64, the
+# scattering matrix came out NaN; with the exponent formed and exponentiated in
+# double, float32 agrees with float64 to 6.5e-5, the share of the
+# single-precision structure matrix (2.1e-4 if the exponent is formed in single
+# precision before the exponential).
+def test_single_precision_scattering_matrix_matches_double():
+    scattering_matrices = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            scattering_matrices[precision] = _silicon_bloch_waves(
+                "cpu", g_max=6.0, sg_max=0.3
+            ).calculate_scattering_matrix(1000.0)
+
+    result = scattering_matrices["float32"]
+    reference = scattering_matrices["float64"]
+    assert reference.shape == (721, 721)
+    assert result.dtype == np.complex64
+    assert np.isfinite(result).all()
+    np.testing.assert_allclose(result, reference, atol=1.5e-4)
+
+
+# Every lazy Bloch-wave array must declare the dtype its blocks actually
+# compute, and both must follow the 'precision' setting. NumPy float64 scalars
+# and host arrays (the cell volume, the M matrix, the excitation errors, the
+# thicknesses) used to widen a float32 calculation to complex128 on the host,
+# leaving a float32 meta over float64 data.
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bloch_wave_dtypes_follow_precision(device, precision):
+    real = np.dtype(precision)
+    complex_ = np.result_type(real, np.complex64)
+    with abtem.config.set({"precision": precision}):
+        bloch_waves = _silicon_bloch_waves(device)
+        structure_factor = bloch_waves.structure_factor
+        calculations = {
+            "structure factors": (
+                lambda lazy: structure_factor.build(lazy=lazy).array,
+                complex_,
+            ),
+            "structure matrix": (
+                lambda lazy: bloch_waves.calculate_structure_matrix(lazy=lazy),
+                complex_,
+            ),
+            "intensities": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(
+                        [50.0, 1000.0], lazy=lazy
+                    ).array
+                ),
+                real,
+            ),
+            "intensities, scalar thickness": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(50.0, lazy=lazy).array
+                ),
+                real,
+            ),
+            "amplitudes": (
+                lambda lazy: (
+                    bloch_waves.calculate_diffraction_patterns(
+                        [50.0], return_complex=True, lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+            "exit waves": (
+                lambda lazy: (
+                    bloch_waves.calculate_exit_waves(
+                        [50.0, 1000.0], gpts=(16, 16), lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+            "exit waves, scalar thickness": (
+                lambda lazy: (
+                    bloch_waves.calculate_exit_waves(
+                        50.0, gpts=(16, 16), lazy=lazy
+                    ).array
+                ),
+                complex_,
+            ),
+        }
+
+        for name, (calculate, expected) in calculations.items():
+            lazy_array = calculate(True)
+            assert lazy_array.dtype == expected, f"{name}: declared meta"
+            assert lazy_array.compute().dtype == expected, f"{name}: computed"
+            assert calculate(False).dtype == expected, f"{name}: eager"
+
+        assert bloch_waves.calculate_scattering_matrix(50.0).dtype == complex_
+
+
+# The cell depth came in as a NumPy float64 scalar, widening a float32
+# potential to float64 under a float32 meta.
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+def test_potential_from_structure_factor_follows_precision(precision, lazy):
+    with abtem.config.set({"precision": precision}):
+        structure_factor = _silicon_bloch_waves("cpu").structure_factor
+        potential = structure_factor.get_projected_potential(
+            slice_thickness=5.43 / 4, lazy=lazy
+        )
+        assert potential.array.dtype == precision
+        assert potential.compute().array.dtype == precision
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_bloch_waves_warn_in_single_precision(device, precision, monkeypatch):
+    with abtem.config.set({"precision": precision}):
+        bloch_waves = _silicon_bloch_waves(device)
+        calculations = [
+            lambda: bloch_waves.calculate_diffraction_patterns([50.0]).compute(),
+            lambda: bloch_waves.calculate_exit_waves(50.0, gpts=(16, 16)).compute(),
+            lambda: bloch_waves.calculate_scattering_matrix(50.0),
+        ]
+
+        for calculate in calculations:
+            # The warning is shown once per process; forget earlier ones.
+            monkeypatch.setattr(
+                abtem.bloch.dynamical, "_issued_precision_warnings", set()
+            )
+            if precision == "float32":
+                # Metal has no double precision to switch to, so the advice
+                # there is to check on another device.
+                check = "'cpu' or 'gpu' device" if device == "mps" else "precision"
+                with pytest.warns(BlochWavePrecisionWarning, match=check):
+                    calculate()
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", BlochWavePrecisionWarning)
+                    calculate()
+
+
+def test_bloch_wave_precision_warning_is_shown_once():
+    with abtem.config.set({"precision": "float32"}):
+        bloch_waves = _silicon_bloch_waves("cpu")
+        abtem.bloch.dynamical._issued_precision_warnings.clear()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for thickness in (50.0, [50.0, 100.0]):
+                bloch_waves.calculate_diffraction_patterns(thickness).compute()
+            bloch_waves.calculate_scattering_matrix(50.0)
+
+    assert [w.category for w in caught].count(BlochWavePrecisionWarning) == 1
+
+
+def _hermitian_propagator_argument(dtype):
+    # i*H for a Hermitian H, the form expm takes in calculate_scattering_matrix,
+    # with a norm large enough that scaling and squaring is exercised.
+    rng = np.random.default_rng(0)
+    H = rng.normal(size=(64, 64)) + 1j * rng.normal(size=(64, 64))
+    return (1j * (H + H.conj().T)).astype(dtype)
+
+
+@requires_gpu
+@pytest.mark.parametrize(
+    "dtype, tolerance", [(np.complex128, 1e-10), (np.complex64, 1e-4)]
+)
+def test_cupy_expm_matches_scipy(dtype, tolerance):
+    import cupy as cp
+    from scipy.linalg import expm as expm_scipy
+
+    from abtem.bloch.matrix_exponential import expm as expm_cupy
+
+    a = _hermitian_propagator_argument(dtype)
+    reference = expm_scipy(a.astype(np.complex128))
+    result = expm_cupy(cp.asarray(a))
+
+    # The input precision is kept, not widened by float64 constants.
+    assert result.dtype == dtype
+    result = cp.asnumpy(result)
+    np.testing.assert_allclose(
+        result, reference, atol=tolerance * np.abs(reference).max()
+    )
