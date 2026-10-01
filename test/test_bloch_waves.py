@@ -184,6 +184,30 @@ def test_rotate_rejects_multiple_energies(rotation):
     assert single_energy.rotate("x", rotation).energy == 200e3
 
 
+@pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
+def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
+    # Regression: StructureFactorArray.get_projected_potential ignored its lazy
+    # argument and followed self.is_lazy.
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0).build(
+        lazy=built_lazy
+    )
+
+    potentials = {
+        lazy: structure_factor.get_projected_potential(slice_thickness=1.0, lazy=lazy)
+        for lazy in (True, False, None)
+    }
+
+    assert potentials[True].is_lazy
+    assert not potentials[False].is_lazy
+    assert potentials[None].is_lazy == built_lazy
+    assert structure_factor.is_lazy == built_lazy
+
+    expected = potentials[False].array
+    for potential in potentials.values():
+        assert potential.slice_thickness == potentials[False].slice_thickness
+        np.testing.assert_allclose(potential.compute().array, expected, atol=1e-6)
+
+
 @settings(max_examples=5)
 @given(
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
