@@ -1015,11 +1015,14 @@ def expm(A: np.ndarray) -> np.ndarray:
     elif xp is np:
         return expm_scipy(A)
     else:
-        # Metal: exponentiate on the host and hand the result back. torch's own
-        # matrix_exp runs on the device but is an order of magnitude less
-        # accurate than scipy's at the same single precision (about 2e-6
-        # against 1.5e-7 relative, for a 97-beam structure matrix).
-        return xp.asarray(expm_scipy(asnumpy(A)))
+        # Metal: exponentiate on the host, in double precision, and hand the
+        # result back in the device's complex64. Scaling and squaring breaks
+        # down at single precision for the norms of order 10^3 that realistic
+        # beam counts and thicknesses give (721 Si beams at 1000 Å: errors of
+        # 2e-3 in complex64 against 1e-7 in complex128), and torch's own
+        # matrix_exp, which runs on the device, is single precision too.
+        A = asnumpy(A)
+        return xp.asarray(expm_scipy(A.astype(np.complex128)).astype(A.dtype))
 
 
 def calculate_scattering_matrix(
