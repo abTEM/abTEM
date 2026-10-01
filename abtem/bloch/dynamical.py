@@ -1892,6 +1892,15 @@ class BlochWaves:
         BlochWavesEnsemble
             The rotated Bloch waves ensemble.
         """
+        if len(self._energies) > 1:
+            # Both branches below build their result from a single energy, so a
+            # multi-energy BlochWaves used to lose all but its first energy.
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise NotImplementedError(
+                "BlochWaves.rotate does not support multiple energies, but this "
+                f"BlochWaves has {len(self._energies)} ({energies} eV); rotate "
+                "BlochWaves constructed with one energy each instead"
+            )
 
         all_axes, all_rotations = validate_rotations(args)
 

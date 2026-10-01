@@ -168,6 +168,22 @@ def test_structure_factor_auto_centering_keeps_allowed_reflections():
     assert [1, 0, 0] in structure_factor.hkl.tolist()
 
 
+@pytest.mark.parametrize(
+    "rotation", [0.01, np.linspace(0.0, 0.01, 3)], ids=["scalar", "ensemble"]
+)
+def test_rotate_rejects_multiple_energies(rotation):
+    # Regression: rotate passed energy=self.energy (the first energy) to the
+    # BlochWaves or BlochwaveEnsemble it built, silently dropping the others.
+    atoms = bulk("Si", cubic=True)
+    bloch_waves = BlochWaves(atoms, energy=[100e3, 200e3], sg_max=0.05, g_max=3.0)
+
+    with pytest.raises(NotImplementedError, match="100000, 200000 eV"):
+        bloch_waves.rotate("x", rotation)
+
+    single_energy = BlochWaves(atoms, energy=200e3, sg_max=0.05, g_max=3.0)
+    assert single_energy.rotate("x", rotation).energy == 200e3
+
+
 @settings(max_examples=5)
 @given(
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
