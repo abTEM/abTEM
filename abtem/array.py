@@ -719,14 +719,16 @@ def _is_mps_array_object(obj) -> bool:
 
 
 def _resolve_mps_scheduler(kwargs: dict) -> dict:
-    """Force the synchronous dask scheduler for a Metal computation.
+    """Resolve the dask scheduler for a Metal computation.
 
     A process holds a single Metal context, and PyTorch's MPS backend aborts
     the process when several of dask's threaded-scheduler workers drive it at
     once -- the same constraint that rules out the threaded scheduler for CuPy
-    in ``_resolve_gpu_scheduler``. Unlike CUDA there is no multi-device cluster
-    to hand the work to instead, so the synchronous scheduler is the only safe
-    resolution.
+    in ``_resolve_gpu_scheduler``, and resolved the same way: a running
+    distributed client whose workers are each single-threaded is left in
+    charge, since the caller started it to run the computation, and anything
+    else gets the synchronous scheduler. (In-process workers then share the
+    one context, which the backend's own lock serializes.)
 
     Parameters
     ----------
@@ -737,9 +739,16 @@ def _resolve_mps_scheduler(kwargs: dict) -> dict:
     Returns
     -------
     dict
-        The keyword arguments, with ``scheduler="synchronous"`` injected.
+        The keyword arguments, with ``scheduler="synchronous"`` injected when
+        no suitable client is available.
     """
-    if "scheduler" not in kwargs:
+    if "scheduler" in kwargs:
+        return kwargs
+
+    client = _active_client()
+    if is_gpu_dask_client(client):
+        push_config_to_workers(client)
+    else:
         kwargs["scheduler"] = "synchronous"
 
     return kwargs

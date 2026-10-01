@@ -465,3 +465,31 @@ def test_per_object_device_keeps_the_metal_scheduler(atoms, monkeypatch):
         result.compute()
 
     assert chosen == ["synchronous"]
+
+
+@pytest.mark.parametrize("threads_per_worker", [1, 2])
+def test_metal_runs_on_a_suitable_distributed_client(threads_per_worker):
+    # As for CUDA: a running client whose workers are each single-threaded is
+    # left in charge of a Metal computation; anything else would drive the
+    # device from several threads at once, so it gets the synchronous scheduler.
+    distributed = pytest.importorskip("distributed")
+    from abtem.array import _resolve_mps_scheduler
+
+    with (
+        distributed.LocalCluster(
+            n_workers=1,
+            threads_per_worker=threads_per_worker,
+            processes=False,
+            dashboard_address=":0",
+        ) as cluster,
+        distributed.Client(cluster),
+    ):
+        kwargs = _resolve_mps_scheduler({})
+
+    if threads_per_worker == 1:
+        assert "scheduler" not in kwargs
+    else:
+        assert kwargs["scheduler"] == "synchronous"
+
+    assert _resolve_mps_scheduler({})["scheduler"] == "synchronous"
+    assert _resolve_mps_scheduler({"scheduler": "threads"}) == {"scheduler": "threads"}
