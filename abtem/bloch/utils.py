@@ -10,7 +10,7 @@ from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
-from abtem.core.backend import cp
+from abtem.core.backend import cp, get_array_module
 from abtem.core.energy import energy2wavelength
 
 
@@ -359,6 +359,97 @@ def retrieve_structure_factor_values(
         array = cp.asarray(array)
 
     return array
+
+
+def retrieve_coupling_structure_factors(
+    array: np.ndarray,
+    hkl_source: np.ndarray,
+    hkl_selected: np.ndarray,
+    gpts: tuple[int, int, int],
+    dtype: Optional[np.dtype] = None,
+    max_chunk_elements: int = 2**20,
+) -> np.ndarray:
+    """
+    Retrieve the structure factors at all pairwise differences of a set of
+    reciprocal space vectors, ``hkl_selected[j] - hkl_selected[i]``, as an (N, N)
+    array.
+
+    This gives the same values as `retrieve_structure_factor_values` applied to
+    the flattened pairwise differences, but without materializing those N**2
+    difference vectors or a pandas index over them, which together need several
+    times the memory of the result: the values are gathered from a dense lookup
+    table over the structure-factor grid, a block of rows at a time, directly
+    into the output array on the device of `array`. The output is the only N x N
+    allocation.
+
+    Parameters
+    ----------
+    array : numpy.ndarray
+        The raveled structure factors.
+    hkl_source : numpy.ndarray
+        The reciprocal space vectors as Miller indices for the source array.
+    hkl_selected : numpy.ndarray
+        The reciprocal space vectors as Miller indices whose pairwise differences
+        are looked up. Given as a (N, 3) array.
+    gpts : tuple of ints
+        The number of grid points in the 3D structure factor.
+    dtype : numpy.dtype, optional
+        The dtype of the output. Defaults to the dtype of `array`.
+    max_chunk_elements : int
+        The approximate number of elements gathered at a time.
+
+    Returns
+    -------
+    numpy.ndarray
+        The (N, N) structure factors.
+    """
+    xp = get_array_module(array)
+    dtype = array.dtype if dtype is None else np.dtype(dtype)
+    gpts = tuple(int(n) for n in gpts)
+    hkl_selected = np.asarray(hkl_selected)
+    num_vectors = len(hkl_selected)
+
+    shift = np.array(gpts) // 2
+    strides = np.array((gpts[1] * gpts[2], gpts[2], 1))
+
+    # Along each axis the differences span [-(max - min), max - min]; all of them
+    # must land on the grid, as `ravel_hkl` (np.ravel_multi_index) would demand.
+    if num_vectors:
+        span = hkl_selected.max(axis=0) - hkl_selected.min(axis=0)
+        if np.any(shift + span >= gpts) or np.any(shift - span < 0):
+            raise ValueError(
+                "invalid entry in coordinates array: differences between the "
+                "selected reciprocal space vectors fall outside the structure "
+                "factor grid"
+            )
+
+    lookup = xp.zeros(int(np.prod(gpts)), dtype=dtype)
+    found = xp.zeros(int(np.prod(gpts)), dtype=bool)
+    source = xp.asarray(ravel_hkl(hkl_source, gpts))
+    lookup[source] = array
+    found[source] = True
+    del source
+
+    # Raveling is linear in hkl, and on the grid (checked above) no axis wraps,
+    # so the raveled index of hkl_j - hkl_i is r_j - r_i + offset.
+    raveled = xp.asarray(hkl_selected @ strides)
+    offset = int(shift @ strides)
+
+    values = xp.empty((num_vectors, num_vectors), dtype=dtype)
+    rows = max(1, max_chunk_elements // max(num_vectors, 1))
+    for start in range(0, num_vectors, rows):
+        stop = min(start + rows, num_vectors)
+        index = raveled[None, :] - raveled[start:stop, None] + offset
+
+        if not bool(found[index].all()):
+            raise KeyError(
+                "differences between the selected reciprocal space vectors are "
+                "missing from the structure factors"
+            )
+
+        xp.take(lookup, index, out=values[start:stop])
+
+    return values
 
 
 def are_vectors_orthogonal(v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:

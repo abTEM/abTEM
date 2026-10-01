@@ -8,11 +8,17 @@ from hypothesis import strategies as st
 
 import abtem
 from abtem.atoms import orthogonalize_cell
-from abtem.bloch import BlochWaves, StructureFactor
-from abtem.bloch.dynamical import calculate_structure_factors
+from abtem.bloch import BlochWaves, StructureFactor, dynamical
+from abtem.bloch.dynamical import (
+    calculate_structure_factors,
+    check_bloch_wave_memory,
+    estimate_bloch_wave_memory,
+)
 from abtem.bloch.utils import (
     auto_detect_centering,
     relative_positions_for_centering,
+    retrieve_coupling_structure_factors,
+    retrieve_structure_factor_values,
     wrapped_is_close,
 )
 from abtem.parametrizations import LobatoParametrization
@@ -252,3 +258,159 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+def _small_bloch_waves():
+    atoms = bulk("Si", cubic=True)
+    structure_factor = StructureFactor(atoms, g_max=4.0, centering="F")
+    return BlochWaves(structure_factor, energy=200e3, sg_max=0.05, g_max=2.0)
+
+
+def test_retrieve_coupling_structure_factors_matches_pandas_lookup():
+    bloch_waves = _small_bloch_waves()
+    structure_factor = bloch_waves.structure_factor.build(lazy=False)
+    hkl_selected = bloch_waves.hkl
+    n = len(hkl_selected)
+
+    gmh = (hkl_selected[None] - hkl_selected[:, None]).reshape(-1, 3)
+    expected = retrieve_structure_factor_values(
+        structure_factor.array, structure_factor.hkl, gmh, structure_factor.gpts
+    ).reshape(n, n)
+
+    # a chunk smaller than a row, a few rows, and everything at once
+    for max_chunk_elements in (1, 3 * n + 1, n**2):
+        values = retrieve_coupling_structure_factors(
+            structure_factor.array,
+            structure_factor.hkl,
+            hkl_selected,
+            structure_factor.gpts,
+            dtype=np.complex128,
+            max_chunk_elements=max_chunk_elements,
+        )
+        assert values.dtype == np.complex128
+        np.testing.assert_array_equal(values, expected)
+
+
+def test_retrieve_coupling_structure_factors_rejects_missing_differences():
+    hkl_source = np.array([[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+    array = np.arange(3, dtype=complex)
+
+    with pytest.raises(ValueError, match="outside the structure factor grid"):
+        retrieve_coupling_structure_factors(
+            array, hkl_source, np.array([[-1, 0, 0], [1, 0, 0]]), (3, 3, 3)
+        )
+
+    with pytest.raises(KeyError, match="missing from the structure factors"):
+        retrieve_coupling_structure_factors(
+            array, hkl_source, np.array([[0, 0, 0], [0, 1, 0]]), (3, 3, 3)
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("solver", ["eigh", "expm"])
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_estimate_bloch_wave_memory_scales_with_the_matrix(device, solver, dtype):
+    guaranteed, expected = estimate_bloch_wave_memory(
+        1000, dtype, device=device, solver=solver
+    )
+    matrix_bytes = 1000**2 * np.dtype(dtype).itemsize
+
+    # the structure matrix itself plus at least the solver's output
+    assert 2 * matrix_bytes <= guaranteed <= expected
+    assert estimate_bloch_wave_memory(2000, dtype, device=device, solver=solver) == (
+        4 * guaranteed,
+        4 * expected,
+    )
+
+
+def test_estimate_bloch_wave_memory_is_dtype_aware():
+    # NumPy's eigh works in double precision, so a complex64 matrix needs more
+    # than half the bytes of a complex128 one
+    _, single = estimate_bloch_wave_memory(1000, np.complex64, "cpu", "eigh")
+    _, double = estimate_bloch_wave_memory(1000, np.complex128, "cpu", "eigh")
+    assert single > double / 2
+
+    # cuSOLVER works in the input precision
+    _, single = estimate_bloch_wave_memory(1000, np.complex64, "gpu", "eigh")
+    _, double = estimate_bloch_wave_memory(1000, np.complex128, "gpu", "eigh")
+    assert single == double // 2
+
+
+def _patch_device_memory(monkeypatch, available, total):
+    monkeypatch.setattr(
+        dynamical, "_device_memory", lambda device: (int(available), int(total))
+    )
+
+
+def test_check_bloch_wave_memory_cpu_policy(monkeypatch):
+    _, expected = estimate_bloch_wave_memory(5000, np.complex128, "cpu", "eigh")
+
+    # exceeding the physical memory raises, with an actionable message
+    _patch_device_memory(monkeypatch, expected / 4, expected / 2)
+    with pytest.raises(MemoryError) as error:
+        check_bloch_wave_memory(5000, np.complex128, device="cpu", solver="eigh")
+    message = str(error.value)
+    assert "5000 beams" in message
+    assert f"{expected / 1e9:.1f} GB" in message
+    assert f"{expected / 2e9:.1f} GB of physical memory" in message
+    assert "g_max" in message and "sg_max" in message
+
+    # exceeding only the currently available memory warns: swap or memory
+    # compression may still let it finish
+    _patch_device_memory(monkeypatch, expected / 2, expected * 2)
+    with pytest.warns(UserWarning, match="5000 beams.*may run out of memory"):
+        check_bloch_wave_memory(5000, np.complex128, device="cpu", solver="eigh")
+
+    _patch_device_memory(monkeypatch, expected * 2, expected * 2)
+    check_bloch_wave_memory(5000, np.complex128, device="cpu", solver="eigh")
+
+
+def test_check_bloch_wave_memory_gpu_policy(monkeypatch):
+    guaranteed, expected = estimate_bloch_wave_memory(
+        5000, np.complex128, "gpu", "eigh"
+    )
+
+    # not even the matrix and its eigenvectors fit: raise
+    _patch_device_memory(monkeypatch, guaranteed - 1, expected * 4)
+    with pytest.raises(MemoryError, match="at least .* available on the GPU"):
+        check_bloch_wave_memory(5000, np.complex128, device="gpu", solver="eigh")
+
+    # only cuSOLVER's (estimated) workspace may not fit: warn
+    _patch_device_memory(monkeypatch, guaranteed, expected * 4)
+    with pytest.warns(UserWarning, match="available on the GPU"):
+        check_bloch_wave_memory(5000, np.complex128, device="gpu", solver="eigh")
+
+    _patch_device_memory(monkeypatch, expected, expected * 4)
+    check_bloch_wave_memory(5000, np.complex128, device="gpu", solver="eigh")
+
+
+def test_check_bloch_wave_memory_skips_cpu_check_without_psutil(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    assert dynamical._device_memory("cpu") is None
+    check_bloch_wave_memory(10**6, np.complex128, device="cpu", solver="eigh")
+
+
+@pytest.mark.parametrize(
+    "calculate, solver",
+    [
+        (lambda bw: bw.calculate_diffraction_patterns([10.0], lazy=False), "eigh"),
+        (lambda bw: bw.calculate_diffraction_patterns([10.0]).compute(), "eigh"),
+        (lambda bw: bw.calculate_scattering_matrix(10.0), "expm"),
+    ],
+    ids=["eager", "lazy", "scattering-matrix"],
+)
+def test_memory_check_runs_before_the_structure_matrix_is_built(
+    monkeypatch, calculate, solver
+):
+    bloch_waves = _small_bloch_waves()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("the structure matrix was built")
+
+    monkeypatch.setattr(dynamical, "retrieve_coupling_structure_factors", fail)
+    _patch_device_memory(monkeypatch, 1, 1)
+
+    with pytest.raises(MemoryError, match=f"{len(bloch_waves)} beams \\({solver} "):
+        calculate(bloch_waves)
