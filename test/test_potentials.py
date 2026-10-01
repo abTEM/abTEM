@@ -1579,6 +1579,58 @@ class TestSliceIndexedAtomsWrapping:
                 atol=1e-5 * np.abs(ensemble[i]).max(),
             )
 
+    @pytest.mark.parametrize(
+        "integrator", ["scattering_factor", "gaussian", "quadrature"]
+    )
+    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator):
+        """A transformed non-periodic cell is cut out of the repeated structure
+        with the integrator's margin already included. Padding it periodically
+        on top added images of those margin atoms: the infinite projection was
+        empty, and the Gaussian and quadrature potentials many times too
+        large."""
+        import ase.build
+        import numpy as np
+
+        from abtem.atoms import orthogonalize_cell
+        from abtem.integrals import (
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+        )
+
+        integrators = {
+            "scattering_factor": ScatteringFactorProjectionIntegrals,
+            "gaussian": GaussianProjectionIntegrals,
+            "quadrature": QuadratureProjectionIntegrals,
+        }
+
+        hexagonal = ase.build.graphene(vacuum=2)
+        orthogonal = orthogonalize_cell(hexagonal)
+
+        def build(atoms, periodic):
+            return (
+                Potential(
+                    atoms,
+                    gpts=64,
+                    slice_thickness=0.5,
+                    periodic=periodic,
+                    integrator=integrators[integrator](),
+                )
+                .build()
+                .compute()
+                .array
+            )
+
+        # Oracle: the orthogonal cell is commensurate with the lattice, so
+        # cutting it out of the repeated hexagonal structure must give the
+        # potential of the same cell built periodically.
+        reference = build(orthogonal, periodic=True)
+        np.testing.assert_allclose(
+            build(hexagonal, periodic=False),
+            reference,
+            rtol=1e-5,
+            atol=1e-5 * np.abs(reference).max(),
+        )
+
     def test_non_orthogonal_cell_raises_before_any_wrapping(self):
         import ase
 

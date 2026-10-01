@@ -845,6 +845,31 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         transformed_atoms : Atoms
             Transformed atoms.
         """
+        return self._transform_atoms()[0]
+
+    def _margins(self) -> tuple[float, float, float]:
+        """The margin the integrator needs along each axis beyond the cell.
+
+        A real-space finite integrator needs every atom within its cutoff of
+        the cell in all three directions. One built by FFT in-plane already
+        sees the in-plane neighbours through the periodic build, so it needs
+        them along z only, and an infinite projection needs none at all.
+        """
+        if not self.integrator.finite:
+            return (0.0, 0.0, 0.0)
+
+        cutoffs = self._cutoffs()
+        margin = max(cutoffs) if len(cutoffs) else 0.0
+
+        if self.integrator.periodic:
+            return (0.0, 0.0, margin)
+
+        return (margin, margin, margin)
+
+    def _transform_atoms(self) -> tuple[Atoms, bool]:
+        """The transformed atoms, and whether they were cut out of a larger
+        repeated structure, in which case they already carry the integrator's
+        margin and must not be padded again."""
         atoms = self.frozen_phonons.atoms
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
@@ -868,21 +893,29 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     return_transform=False,
                     allow_transform=True,
                 )
-                return atoms
+                return atoms, False
             else:
-                cutoffs = self._cutoffs()
+                # The margin comes from the larger repeated structure, so it
+                # is the true neighbourhood of a cell that need not be
+                # commensurate with it. Periodic padding on top of it added
+                # images of the margin atoms -- in-plane, where an FFT build
+                # also wraps them, and in depth -- and inflated the potential
+                # of a transformed non-periodic cell many times over. An
+                # infinite projection's cutoff is infinite, which cut every
+                # atom; it needs no margin.
                 atoms = cut_cell(
                     atoms,
                     cell=self.box,
                     plane=self.plane,
                     origin=self.origin,
-                    margin=max(cutoffs) if cutoffs else 0.0,
+                    margin=self._margins(),
                 )
+                return atoms, True
 
-        return atoms
+        return atoms, False
 
     def _prepare_atoms(self):
-        atoms = self.get_transformed_atoms()
+        atoms, is_cut = self._transform_atoms()
 
         if self.integrator.finite:
             cutoffs = self._cutoffs()
@@ -920,7 +953,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # this copies only when it must.
             atoms = wrap_and_snap_atoms(atoms)
 
-        if not self.integrator.periodic and self.integrator.finite:
+        if is_cut:
+            # cut_cell already supplied exactly the margin padding would add.
+            pass
+        elif not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
         elif self.integrator.periodic:
             atoms = pad_atoms(atoms, margins=margins, directions="z")
