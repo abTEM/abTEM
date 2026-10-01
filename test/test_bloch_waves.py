@@ -291,6 +291,20 @@ def _si_structure_factor():
     return StructureFactor(bulk("Si", cubic=True), g_max=4.0)
 
 
+# With sg_max=0.02 these energies select 21 and 37 beams of Si (at sg_max=0.1
+# both select the same 97, so each energy's beams embedded into the union beam
+# set would go untested); _multi_energy_bloch_waves checks that they differ.
+ENERGIES = (100e3, 200e3)
+SG_MAX = 0.02
+
+
+def _multi_energy_bloch_waves(sf):
+    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=SG_MAX)
+    beam_sets = {frozenset(map(tuple, multi.select_energy(e).hkl)) for e in ENERGIES}
+    assert len(beam_sets) == len(ENERGIES), "the energies select the same beams"
+    return multi
+
+
 @pytest.mark.parametrize(
     "method, args",
     [("calculate_structure_matrix", ()), ("calculate_scattering_matrix", (50.0,))],
@@ -299,21 +313,18 @@ def test_matrix_methods_need_a_single_energy(method, args):
     # the energies' beam sets differ in size, so there is no common matrix to
     # stack; they used to answer silently for the first energy
     sf = _si_structure_factor()
-    multi = BlochWaves(sf, energy=[100e3, 200e3], sg_max=0.1)
+    multi = _multi_energy_bloch_waves(sf)
     with pytest.raises(ValueError, match="select_energy"):
         getattr(multi, method)(*args)
     getattr(multi.select_energy(200e3), method)(*args)
 
 
-ENERGIES = (100e3, 200e3)
-
-
 def test_select_energy_equals_single_energy_bloch_waves():
     sf = _si_structure_factor()
-    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    multi = _multi_energy_bloch_waves(sf)
     for energy in ENERGIES:
         selected = multi.select_energy(energy)
-        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
         assert selected.energy == energy
         np.testing.assert_array_equal(selected.hkl, single.hkl)
         np.testing.assert_allclose(
@@ -322,7 +333,7 @@ def test_select_energy_equals_single_energy_bloch_waves():
         )
     with pytest.raises(ValueError, match="not one of"):
         multi.select_energy(300e3)
-    single = BlochWaves(sf, energy=100e3, sg_max=0.1)
+    single = BlochWaves(sf, energy=100e3, sg_max=SG_MAX)
     assert single.select_energy(100e3) is single
 
 
@@ -333,11 +344,11 @@ def _per_energy_rows(multi_hkl, single_hkl):
 
 def test_excitation_errors_with_several_energies():
     sf = _si_structure_factor()
-    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    multi = _multi_energy_bloch_waves(sf)
     sg = multi.excitation_errors()
     assert sg.shape == (len(ENERGIES), len(multi.hkl))
     for row, energy in zip(sg, ENERGIES):
-        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
         rows = _per_energy_rows(multi.hkl, single.hkl)
         np.testing.assert_allclose(row[rows], single.excitation_errors())
     assert not np.allclose(sg[0], sg[1])  # really per energy
@@ -347,12 +358,12 @@ def test_kinematical_pattern_with_several_energies():
     from abtem.core.axes import EnergyAxis
 
     sf = _si_structure_factor()
-    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=0.1)
+    multi = _multi_energy_bloch_waves(sf)
     pattern = multi.get_kinematical_diffraction_pattern()
     assert isinstance(pattern.ensemble_axes_metadata[0], EnergyAxis)
     assert pattern.array.shape == (len(ENERGIES), len(multi.hkl))
     for member, energy in zip(np.asarray(pattern.array), ENERGIES):
-        single = BlochWaves(sf, energy=energy, sg_max=0.1)
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
         rows = _per_energy_rows(multi.hkl, single.hkl)
         np.testing.assert_allclose(
             member[rows], single.get_kinematical_diffraction_pattern().array
@@ -361,8 +372,25 @@ def test_kinematical_pattern_with_several_energies():
         assert np.all(member[others] == 0)
 
 
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_diffraction_patterns_with_several_energies(lazy):
+    # each energy on its own beams, embedded into the union beam set
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    thicknesses = [10.0, 20.0]
+    patterns = multi.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.array.shape == (len(ENERGIES), len(thicknesses), len(multi.hkl))
+    for member, energy in zip(np.asarray(patterns.compute().array), ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        expected = single.calculate_diffraction_patterns(thicknesses, lazy=False)
+        np.testing.assert_allclose(member[:, rows], expected.array, atol=1e-12)
+        others = np.setdiff1d(np.arange(len(multi.hkl)), rows)
+        assert np.all(member[:, others] == 0)
+
+
 def test_several_energies_honor_lazy_false():
-    bloch_waves = BlochWaves(_si_structure_factor(), energy=[100e3, 200e3], sg_max=0.1)
+    bloch_waves = _multi_energy_bloch_waves(_si_structure_factor())
     thicknesses = [10.0, 20.0]
 
     eager = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
