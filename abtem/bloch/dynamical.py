@@ -835,10 +835,20 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             extent[1] / potential_sliced.shape[-1],
         )
 
+        # The potential is sampled on the fractional (a, b) grid, so a skewed in-plane
+        # cell must be carried by the grid; otherwise the pixels are treated as a
+        # rectangular |a| x |b| grid and multislice uses the orthogonal propagator.
+        # Mirror ``Potential``: only attach the cell when a and b are non-orthogonal.
+        cell_2d = cell_arr[:2, :2]
+        in_plane_orthogonal = abs(float(cell_2d[0] @ cell_2d[1])) <= 1e-9 * (
+            extent[0] * extent[1]
+        )
+
         potential_array = PotentialArray(
             potential_sliced,
             slice_thickness=tuple(validated_slice_thickness),
             sampling=sampling,
+            cell=None if in_plane_orthogonal else cell_2d,
         )
 
         return potential_array
