@@ -94,9 +94,11 @@ _issued_precision_warnings: set[str] = set()
 
 def _warn_if_single_precision(device: str) -> None:
     # The eigendecomposition and the propagation phases carry an absolute error
-    # of roughly 1e-7 to 1e-5 of the strongest beam in float32, growing with
-    # thickness and beam count: negligible for the strong beams, but a weak
-    # reflection can be off by a large fraction of itself.
+    # of roughly 1e-7 to 3e-5 of the strongest beam in float32, growing with
+    # thickness and beam count (Si and Au, 490-850 beams, 1000-20000 Å). Beams
+    # above 1e-3 of the strongest agree with float64 to within about 2e-4
+    # relative, but a weaker reflection can be off by a large fraction of
+    # itself. The matrix exponential adds nothing: it is always taken in double.
     if np.dtype(get_dtype()) != np.float32:
         return
 
@@ -108,9 +110,12 @@ def _warn_if_single_precision(device: str) -> None:
         check = "precision 'float64'"
 
     message = (
-        f"Bloch waves are computed in single precision because {reason}. Weak "
-        "diffraction intensities may be inaccurate, increasingly so for thick "
-        f"samples and many beams; check the result against {check}, e.g. with "
+        f"Bloch waves are computed in single precision because {reason}. Beams "
+        "down to 1e-3 of the strongest typically agree with double precision to "
+        "within about 2e-4 relative, but weaker diffraction intensities may be "
+        "inaccurate, increasingly so for thick samples and many beams "
+        "(scattering matrices are exponentiated in double precision "
+        f"regardless). Check the result against {check}, e.g. with "
         "abtem.config.set({'precision': 'float64'})."
     )
     if message in _issued_precision_warnings:
@@ -820,7 +825,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             validated_gpts = grid._valid_gpts
 
         potential_3d = self.get_potential_3d()
-        depth = np.array(self.cell)[2, 2]
+        depth = float(np.array(self.cell)[2, 2])
         sampling_z = depth / potential_3d.shape[-1]
 
         if slice_thickness is None:
@@ -1116,7 +1121,17 @@ def calculate_scattering_matrix(
     xp = get_array_module(A)
 
     if method == "expm":
+        # Bloch waves are accurate enough in single precision, but the matrix
+        # exponential is the exception: scaling and squaring breaks down at
+        # single precision for the norms of order 10^3 that realistic beam
+        # counts and thicknesses give (721 Si beams at 1000 Å come out NaN in
+        # complex64). The exponent is therefore formed and exponentiated in
+        # double, and only the result follows the 'precision' setting. Metal
+        # has no double precision; expm takes it to the host instead.
+        if xp is np or xp == cp:
+            A = A.astype(xp.complex128)
         S = expm(1.0j * xp.pi * float(z) * A * energy2wavelength(energy))
+        S = S.astype(get_dtype(complex=True), copy=False)
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 

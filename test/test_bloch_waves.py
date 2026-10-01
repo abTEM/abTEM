@@ -332,6 +332,27 @@ def test_many_beam_scattering_matrix_matches_cpu(device):
     np.testing.assert_allclose(result, reference, atol=2e-3)
 
 
+# The same 721 beams on the CPU, at 1000 Å. Exponentiated in complex64, the
+# scattering matrix came out NaN; with the exponent formed and exponentiated in
+# double, float32 agrees with float64 to 6.5e-5, the share of the
+# single-precision structure matrix (2.1e-4 if the exponent is formed in single
+# precision before the exponential).
+def test_single_precision_scattering_matrix_matches_double():
+    scattering_matrices = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            scattering_matrices[precision] = _silicon_bloch_waves(
+                "cpu", g_max=6.0, sg_max=0.3
+            ).calculate_scattering_matrix(1000.0)
+
+    result = scattering_matrices["float32"]
+    reference = scattering_matrices["float64"]
+    assert reference.shape == (721, 721)
+    assert result.dtype == np.complex64
+    assert np.isfinite(result).all()
+    np.testing.assert_allclose(result, reference, atol=1.5e-4)
+
+
 # Every lazy Bloch-wave array must declare the dtype its blocks actually
 # compute, and both must follow the 'precision' setting. NumPy float64 scalars
 # and host arrays (the cell volume, the M matrix, the excitation errors, the
@@ -401,6 +422,20 @@ def test_bloch_wave_dtypes_follow_precision(device, precision):
             assert calculate(False).dtype == expected, f"{name}: eager"
 
         assert bloch_waves.calculate_scattering_matrix(50.0).dtype == complex_
+
+
+# The cell depth came in as a NumPy float64 scalar, widening a float32
+# potential to float64 under a float32 meta.
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+def test_potential_from_structure_factor_follows_precision(precision, lazy):
+    with abtem.config.set({"precision": precision}):
+        structure_factor = _silicon_bloch_waves("cpu").structure_factor
+        potential = structure_factor.get_projected_potential(
+            slice_thickness=5.43 / 4, lazy=lazy
+        )
+        assert potential.array.dtype == precision
+        assert potential.compute().array.dtype == precision
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
