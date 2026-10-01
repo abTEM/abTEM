@@ -159,6 +159,15 @@ def make_hkl_grid(
     return hkl
 
 
+def validate_use_wave_eq(use_wave_eq: bool | str) -> bool | Literal["exact"]:
+    """Check that use_wave_eq is True, False or 'exact', and return it."""
+    if isinstance(use_wave_eq, (bool, np.bool_)):
+        return bool(use_wave_eq)
+    if isinstance(use_wave_eq, str) and use_wave_eq == "exact":
+        return "exact"
+    raise ValueError(f"use_wave_eq must be True, False or 'exact', not {use_wave_eq!r}")
+
+
 def excitation_errors(
     g: np.ndarray, energy: float, use_wave_eq: bool | Literal["exact"] = False
 ) -> np.ndarray:
@@ -188,11 +197,8 @@ def excitation_errors(
     """
     assert g.shape[-1] == 3
     wavelength = energy2wavelength(energy)
-    if isinstance(use_wave_eq, str) and use_wave_eq != "exact":
-        raise ValueError(
-            f"use_wave_eq must be True, False or 'exact', not {use_wave_eq!r}"
-        )
-    if isinstance(use_wave_eq, str):
+    use_wave_eq = validate_use_wave_eq(use_wave_eq)
+    if use_wave_eq == "exact":
         xp = get_array_module(g)
         x = wavelength**2 * (g[..., 0] ** 2 + g[..., 1] ** 2)
         if x.size and float(x.max()) >= 1.0:

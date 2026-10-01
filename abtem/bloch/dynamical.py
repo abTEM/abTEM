@@ -38,6 +38,7 @@ from abtem.bloch.utils import (
     reciprocal_cell,
     reciprocal_space_gpts,
     retrieve_structure_factor_values,
+    validate_use_wave_eq,
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
@@ -1331,7 +1332,7 @@ class BlochWaves:
         self._g_max = g_max
         self._cell = cell
         self._centering = centering
-        self._use_wave_eq = use_wave_eq
+        self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
 
         energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
@@ -2031,7 +2032,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._centering = centering
         self._sg_max = sg_max
         self._g_max = g_max
-        self._use_wave_eq = use_wave_eq
+        self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
 
     def get_ensemble_hkl_mask(self) -> np.ndarray:
