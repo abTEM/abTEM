@@ -9,6 +9,7 @@ the module under test, so they catch this without a GPU. The GPU tests run the s
 paths on real CuPy chunks.
 """
 
+import pickle
 import types
 
 import ase.build
@@ -135,6 +136,47 @@ def test_element_wise_funcs_apply_per_block(rejects_dask, method):
 
     assert result.is_lazy
     assert result.array.dtype == expected.dtype
+    np.testing.assert_array_equal(result.compute().array, expected)
+
+
+class _UnpicklableFunction:
+    """A callable that refuses to be pickled, like a CuPy ufunc (``cp.abs``)."""
+
+    def __init__(self, function):
+        self._function = function
+
+    def __call__(self, *args, **kwargs):
+        return self._function(*args, **kwargs)
+
+    def __reduce__(self):
+        raise TypeError("cannot pickle this function")
+
+
+class _UnpicklableFunctions(types.ModuleType):
+    """NumPy's functions, as callables dask can neither tokenize nor pickle."""
+
+    def __getattr__(self, name):
+        attr = getattr(np, name)
+        if not callable(attr) or isinstance(attr, type):
+            return attr
+        return _UnpicklableFunction(attr)
+
+
+@pytest.mark.parametrize("method", ELEMENT_WISE)
+def test_element_wise_graphs_do_not_hold_array_module_functions(monkeypatch, method):
+    # Regression test: map_blocks(cp.abs) made dask tokenize the CuPy ufunc by
+    # pickling it, which segfaulted on a CUDA machine; a distributed scheduler
+    # would also have to pickle it to ship the graph. The function must be
+    # resolved per block instead, from a graph that holds only picklable parts.
+    dp = _complex_diffraction_patterns()
+    expected = getattr(_complex_diffraction_patterns(lazy=False), method)().array
+    stand_in = _UnpicklableFunctions("unpicklable_functions")
+    monkeypatch.setattr(abtem.measurements, "get_array_module", lambda x=None: stand_in)
+
+    result = getattr(dp, method)()
+
+    pickle.dumps(dict(result.array.__dask_graph__()))
+    assert getattr(dp, method)().array.name == result.array.name
     np.testing.assert_array_equal(result.compute().array, expected)
 
 

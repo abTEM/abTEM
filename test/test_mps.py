@@ -1,9 +1,7 @@
 """Tests for the experimental Metal (MPS) backend on Apple silicon.
 
-Skipped unless PyTorch is installed on Apple silicon *and* 'enable_mps' was set
-before abTEM was imported, e.g.::
-
-    ABTEM_ENABLE_MPS=true pytest test/test_mps.py
+Skipped unless PyTorch is installed on Apple silicon. Nothing needs enabling:
+PyTorch is imported on the first use of the 'mps' device.
 
 Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
@@ -303,6 +301,113 @@ def test_diag_and_fill_diagonal_match_numpy():
     assert np.array_equal(asnumpy(on_device), expected)
 
 
+def _run_isolated(script, hang="the script hung"):
+    """Run ``script`` in a fresh interpreter, for what only a new process shows.
+
+    Library load order is fixed once per process, and a crash or deadlock here
+    would take the test session down with it.
+    """
+    environment = {k: v for k, v in os.environ.items() if k != "ABTEM_ENABLE_MPS"}
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(script)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(hang)
+
+
+def test_importing_abtem_does_not_import_torch():
+    # PyTorch costs about two seconds and 180 MB to import; abTEM defers it to
+    # the first use of the 'mps' device.
+    completed = _run_isolated(
+        """
+        import sys
+        import abtem
+        assert "torch" not in sys.modules
+        """
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_torch_openmp_runtime_is_loaded_ahead_of_pyfftws():
+    # torch and pyfftw each bundle libomp.dylib, and torch's has to initialize
+    # first; importing abTEM loads it, without torch, before pyfftw.
+    completed = _run_isolated(
+        """
+        import ctypes
+        import abtem
+
+        dyld = ctypes.CDLL(None)
+        dyld._dyld_get_image_name.restype = ctypes.c_char_p
+        images = [
+            dyld._dyld_get_image_name(i).decode()
+            for i in range(dyld._dyld_image_count())
+        ]
+        runtimes = [image for image in images if image.endswith("/libomp.dylib")]
+        print(runtimes)
+        assert runtimes and "/torch/lib/" in runtimes[0], runtimes
+        """
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_metal_after_threaded_cpu_ffts():
+    # pyfftw's threaded FFTs run first and torch only arrives afterwards -- the
+    # order that loading torch lazily creates. What then crashes, without
+    # torch's OpenMP runtime loaded first, is torch work on the CPU: the dtype
+    # cast asarray makes before uploading a double-precision host array, and
+    # the CPU fallback torch takes for a large eigendecomposition. Metal-only
+    # operations do not touch OpenMP and would pass either way.
+    completed = _run_isolated(
+        """
+        import numpy as np
+        import abtem
+
+        abtem.config.set({"fftw.threads": 4})
+        waves = abtem.PlaneWave(energy=100e3, gpts=128, extent=10, device="cpu")
+        abtem.core.fft.fft2(waves.build(lazy=False).array)
+
+        xp = abtem.core.backend.get_array_module("mps")
+        assert xp.asarray(np.random.rand(2048, 2048)).shape == (2048, 2048)
+
+        hermitian = np.random.rand(600, 600).astype(np.complex64)
+        hermitian = hermitian + hermitian.conj().T
+        xp.linalg.eigh(xp.asarray(hermitian))
+        """
+    )
+
+    # a segfault shows up as a negative return code, with nothing on stderr
+    assert completed.returncode == 0, (completed.returncode, completed.stderr)
+
+
+def test_pyfftw_imported_before_abtem_is_refused_rather_than_crashing():
+    # Too late to load torch's runtime first: refuse with a reason instead of
+    # importing torch into a process where its operations would segfault.
+    completed = _run_isolated(
+        """
+        import sys
+        import pyfftw
+        import abtem
+
+        try:
+            abtem.core.backend.get_array_module("mps")
+        except RuntimeError as error:
+            assert "pyfftw was imported before abTEM" in str(error)
+        else:
+            raise SystemExit("the Metal backend loaded after pyfftw")
+        assert "torch" not in sys.modules
+        """
+    )
+
+    assert completed.returncode == 0, (completed.returncode, completed.stderr)
+
+
 def test_materializing_a_lazy_array_does_not_deadlock():
     # Every Metal operation holds _TORCH_LOCK. Materializing a lazy array whose
     # graph has Metal work of its own used to hand that graph to dask's
@@ -325,17 +430,9 @@ def test_materializing_a_lazy_array_does_not_deadlock():
         assert np.allclose(xp.asnumpy(lazy), np.e)
         """
     )
-    environment = dict(os.environ, ABTEM_ENABLE_MPS="true")
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-c", script],
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail("materializing a lazy Metal array deadlocked")
+    completed = _run_isolated(
+        script, hang="materializing a lazy Metal array deadlocked"
+    )
 
     assert completed.returncode == 0, completed.stderr
 

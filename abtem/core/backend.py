@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
+import importlib.util
 import logging
 import os
+import platform
+import sys
+import threading
 import warnings
 from numbers import Number
 from types import ModuleType
@@ -64,26 +69,58 @@ except ImportError:
     pass
 
 
-# The Metal (MPS) array namespace and its array type, or None when the backend
-# is disabled. Read these through the module (``backend.tp``) rather than
-# binding them by value, so every caller sees the same object.
-#
-# The import is eager and gated on configuration rather than deferred to the
-# first use of the 'mps' device, because PyTorch has to be imported before
-# pyfftw: each ships its own copy of libomp.dylib, and in a process that loaded
-# pyfftw's first, ordinary torch tensor operations segfault. This module is
-# imported before abtem.core.fft (which imports pyfftw), so loading torch here
-# establishes the order that keeps both usable. The flip side is that
-# 'enable_mps' has to be set before abTEM is imported -- a later
-# abtem.config.set cannot retroactively fix the library load order.
+def _preload_torch_openmp() -> bool:
+    """Load PyTorch's own OpenMP runtime ahead of pyfftw's, without torch.
+
+    PyTorch and pyfftw each ship a copy of libomp.dylib, and the order the two
+    enter the process matters: if pyfftw's comes first, torch's work on the
+    CPU later segfaults -- including the dtype cast it makes before uploading
+    a double-precision host array to Metal, and its CPU fallback for large
+    eigendecompositions. Importing all of torch up front would win that
+    race, but costs about two seconds and 180 MB on every import of abTEM,
+    whether or not Metal is ever used. Only torch's runtime has to be first,
+    and loading that alone takes a few milliseconds -- after which pyfftw can
+    load as usual and torch can wait until something asks for the 'mps'
+    device. This module is imported before abtem.core.fft imports pyfftw.
+
+    Returns
+    -------
+    bool
+        Whether torch can safely be imported later. False only when it is too
+        late: pyfftw's runtime is already in the process and torch's is not.
+    """
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return True  # no Metal device to load torch for
+    if "torch" in sys.modules:
+        return True  # its runtime is already in, ahead of whatever follows
+    try:
+        spec = importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        return True
+    if spec is None or not spec.submodule_search_locations:
+        return True  # not installed; using Metal will say so
+    runtime = os.path.join(spec.submodule_search_locations[0], "lib", "libomp.dylib")
+    if not os.path.exists(runtime):
+        return True  # no runtime of its own to clash with
+    if "pyfftw" in sys.modules:
+        return False
+    try:
+        ctypes.CDLL(runtime, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass  # importing torch will report whatever is wrong with it
+    return True
+
+
+_TORCH_IMPORT_IS_SAFE = _preload_torch_openmp()
+
+# The Metal (MPS) array namespace and its array type, loaded on first use of
+# the 'mps' device and None until then. Read them through the module
+# (``backend.tp``) rather than binding them by value, so every caller sees the
+# namespace once it is loaded. No Metal array can exist before then, so
+# ``backend.tp is None`` correctly answers "not a Metal array" either way.
 tp: Any = None
 TorchNDArray: Any = None
-
-if config.get("enable_mps", False):
-    from abtem.core import _torch
-
-    tp = _torch.torch_numpy
-    TorchNDArray = _torch.TorchNDArray
+_TORCH_LOAD_LOCK = threading.Lock()
 
 
 def _cap_numba_threads_to_omp_num_threads() -> None:
@@ -146,29 +183,39 @@ def check_cupy_is_installed():
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
 
 
-def check_mps_is_enabled():
+def check_mps_is_available():
     """
-    Load the Metal (MPS) array namespace, raising if it is disabled or unusable.
+    Load the Metal (MPS) array namespace, raising if it is unusable.
+
+    PyTorch is imported here, on the first request for the 'mps' device,
+    rather than with abTEM: see ``_preload_torch_openmp``.
 
     Returns
     -------
     module
         The Metal array namespace, as returned by ``get_array_module('mps')``.
     """
+    global tp, TorchNDArray
+
     if tp is None:
-        raise RuntimeError(
-            "The Metal (MPS) backend is experimental and disabled by default. "
-            "Set 'enable_mps' to true before importing abTEM -- it selects the "
-            "library load order and so cannot be turned on afterwards -- either "
-            "in ~/.config/abtem/abtem.yaml or with the environment variable "
-            "ABTEM_ENABLE_MPS=true (DASK_ENABLE_MPS on abTEM releases before "
-            "the configuration paths were fixed). It requires PyTorch "
-            "(https://pytorch.org) on macOS with Apple silicon."
-        )
+        with _TORCH_LOAD_LOCK:
+            if tp is None:
+                if not _TORCH_IMPORT_IS_SAFE:
+                    raise RuntimeError(
+                        "The Metal (MPS) backend cannot be loaded: pyfftw was "
+                        "imported before abTEM, so its OpenMP runtime is already "
+                        "loaded, and importing PyTorch after it would crash the "
+                        "process. Import abtem (or torch) before pyfftw."
+                    )
 
-    from abtem.core import _torch
+                from abtem.core import _torch
 
-    _torch._check_available()
+                _torch._check_available()
+
+                # tp last: other threads test it without the lock, and must
+                # not see it before TorchNDArray is in place too.
+                TorchNDArray = _torch.TorchNDArray
+                tp = _torch.torch_numpy
 
     if config.get("precision") != "float32":
         raise RuntimeError(
@@ -458,8 +505,7 @@ def get_array_module(
             return cp
 
         if x.lower() in ("torch", "mps", "metal"):
-            check_mps_is_enabled()
-            return tp
+            return check_mps_is_available()
 
     if isinstance(x, np.ndarray):
         return np
