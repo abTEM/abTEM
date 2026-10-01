@@ -281,60 +281,98 @@ def test_exact_excitation_errors_match_the_nonparaxial_dispersion():
         excitation_errors(g, energy, use_wave_eq="paraxial")
 
 
+@pytest.mark.parametrize("use_wave_eq", ["paraxial", "True", None])
+def test_invalid_use_wave_eq_is_rejected_at_construction(use_wave_eq):
+    # not only later, at compute time inside dask
+    from abtem.bloch.dynamical import BlochwaveEnsemble
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        BlochWaves(structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=use_wave_eq)
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        BlochwaveEnsemble(
+            "x",
+            np.array([0.0, 0.01]),
+            structure_factor=structure_factor,
+            energy=100e3,
+            sg_max=0.1,
+            g_max=1.0,
+            use_wave_eq=use_wave_eq,
+        )
+    for valid in (False, True, "exact", np.bool_(True)):
+        bloch_waves = BlochWaves(
+            structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=valid
+        )
+        assert bloch_waves.use_wave_eq == valid
+
+
 @pytest.mark.slow
 # order=1 at 10 keV is used deliberately, as the paraxial reference
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
 def test_exact_bloch_waves_pair_with_exact_multislice():
     # Bloch waves with use_wave_eq=True solve the paraxial equation that
     # multislice solves with the first-order propagator; use_wave_eq="exact"
-    # the non-paraxial one of FourierMultislice(order="exact"). At low energy,
-    # where the two differ most (~lambda^3), each Bloch-wave variant must agree
-    # better with its own multislice counterpart than with the other.
+    # the non-paraxial one of FourierMultislice(order="exact"). The two place
+    # the Ewald sphere differently, by ~lambda^3 g^4 / 8, which matters most at
+    # low energy and for the first-order Laue zone (FOLZ). A weakly scattering
+    # crystal (one C atom per 4 x 4 x 5 Å cell) keeps the scattering nearly
+    # kinematic, so a small beam set converges, while the long c puts its FOLZ
+    # ring (~1.8 1/Å at 10 keV) inside the compared beams; there each Bloch-wave
+    # variant must agree with its own multislice counterpart, and clearly not
+    # with the other.
     from abtem.multislice import FourierMultislice
 
-    atoms = bulk("Si", cubic=True)
     energy = 10e3
+    atoms = Atoms("C", positions=[(0, 0, 0)], cell=[4.0, 4.0, 5.0], pbc=True)
     potential = abtem.Potential(
-        atoms.repeat((2, 2, int(150 / atoms.cell[2, 2]))),
+        atoms.repeat((1, 1, 40)),
         sampling=0.05,
         slice_thickness=0.25,
         parametrization="lobato",
+        projection="finite",  # the 3D potential, as the structure factor has it
     )
-
-    def multislice(order):
-        return (
-            abtem.PlaneWave(energy=energy)
-            .multislice(potential, algorithm=FourierMultislice(order=order), lazy=False)
-            .diffraction_patterns(max_angle=None)
-            .index_diffraction_spots(cell=atoms)
-            .to_data_array()
-        )
-
     structure_factor = StructureFactor(
-        atoms, g_max=4.0, parametrization="lobato", centering="F"
+        atoms, g_max=4.0, parametrization="lobato", centering="P"
     )
+
+    # The beams sharing a g_perp = (h, k) / a, one per Laue zone l, all fall on
+    # the same multislice pixel; at a thickness of whole unit cells their phases
+    # exp(2 pi i l z / c) are 1, so the pixel is their coherent sum. Comparing
+    # |sum over l|^2 with the pixel intensity avoids assigning it to a single l.
+    def multislice(order):
+        waves = abtem.PlaneWave(energy=energy).multislice(
+            potential, algorithm=FourierMultislice(order=order), lazy=False
+        )
+        array = np.asarray(waves.array)
+        return np.fft.fft2(array) / array.size
 
     def bloch_waves(use_wave_eq):
-        return (
-            BlochWaves(
-                structure_factor=structure_factor,
-                energy=energy,
-                sg_max=1.5,
-                use_wave_eq=use_wave_eq,
-            )
-            .calculate_diffraction_patterns([potential.thickness], lazy=False)
-            .crop(k_max=1.5)
-            .to_data_array()
+        bloch_waves = BlochWaves(
+            structure_factor=structure_factor,
+            energy=energy,
+            sg_max=0.3,
+            use_wave_eq=use_wave_eq,
         )
-
-    def r_factor(a, b):
-        hkl = sorted(set(a["hkl"].data) & set(b["hkl"].data) - {"0 0 0"})
-        a = np.asarray(a.sel(hkl=hkl).data).ravel()
-        b = np.asarray(b.sel(hkl=hkl).data).ravel()
-        return np.abs(a - b).sum() / b.sum()
+        psi = bloch_waves.calculate_diffraction_patterns(
+            potential.thickness, return_complex=True, lazy=False
+        )
+        summed = {}
+        for (h, k, _), value in zip(bloch_waves.hkl, np.asarray(psi.array)):
+            summed[(h, k)] = summed.get((h, k), 0.0) + value
+        return summed
 
     ms = {order: multislice(order) for order in (1, "exact")}
     bw = {w: bloch_waves(w) for w in (True, "exact")}
 
-    assert r_factor(ms[1], bw[True]) < 0.7 * r_factor(ms[1], bw["exact"])
-    assert r_factor(ms["exact"], bw["exact"]) < 0.9 * r_factor(ms["exact"], bw[True])
+    hk = [(h, k) for h, k in bw[True] if (h, k) != (0, 0) and np.hypot(h, k) / 4.0 <= 2]
+
+    def r_factor(ms, bw):
+        a = np.array([abs(bw[h, k]) ** 2 for h, k in hk])
+        b = np.array([abs(ms[h % ms.shape[0], k % ms.shape[1]]) ** 2 for h, k in hk])
+        return np.abs(a - b).sum() / b.sum()
+
+    # R ~ 1 % for the matched pairs, ~ 10 % for the mixed ones
+    for order, use_wave_eq, other in ((1, True, "exact"), ("exact", "exact", True)):
+        matched = r_factor(ms[order], bw[use_wave_eq])
+        assert matched < 0.03
+        assert r_factor(ms[order], bw[other]) > 3 * matched
