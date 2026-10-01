@@ -461,3 +461,51 @@ def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
     np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
     if not use_wave_eq:
         assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
+    # The standard form (use_wave_eq=False; Helmholtz with only gamma**2 dropped)
+    # is the generalized eigenproblem A C = 2 K gamma B C, with
+    # A = 2 K diag(s_g) + U, U_ij = U_{g_i - g_j} and B = diag(1 + g_z / K). The
+    # wave-equation forms have B = 1. Compare the eigenvalues and the propagated
+    # beams with scipy's generalized Hermitian solver. (Conservation of
+    # sum B |psi_g|^2 alone cannot tell the right metric from a wrong one.)
+    import scipy.linalg
+
+    from abtem.bloch.utils import excitation_errors
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    energy = bloch_waves.energy
+    k = 1 / energy2wavelength(energy)
+    g = bloch_waves.g_vec
+    metric = 1 + g[:, 2] / k if use_wave_eq is False else np.ones(len(g))
+    assert use_wave_eq or np.ptp(metric) > 0.02  # the metric matters
+
+    # U from the paraxial form, which carries no metric
+    paraxial = _tilted_si_bloch_waves(True)
+    assert np.array_equal(paraxial.hkl, bloch_waves.hkl)
+    A = np.asarray(paraxial.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.diag(A).real, 2 * k * excitation_errors(g, energy, use_wave_eq=True)
+    )
+    np.fill_diagonal(A, 2 * k * excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+
+    eigenvalues, C = scipy.linalg.eigh(A, np.diag(metric))  # 2 K gamma; C^H B C = 1
+    structure_matrix = np.asarray(bloch_waves.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.linalg.eigvalsh(structure_matrix), eigenvalues, rtol=0, atol=1e-9
+    )
+
+    # psi(0) = C alpha = e_0, so alpha = C^H B e_0
+    initial = np.all(bloch_waves.hkl == 0, axis=1) * metric
+    alpha = C.conj().T @ initial
+    z = np.array([100.0, 300.0])
+    phases = np.exp(2j * np.pi * z[:, None] * eigenvalues[None] / (2 * k))
+    expected = (phases * alpha) @ C.T
+    psi = bloch_waves.calculate_diffraction_patterns(
+        z, return_complex=True, lazy=False
+    ).array
+    np.testing.assert_allclose(np.asarray(psi), expected, rtol=0, atol=1e-9)
