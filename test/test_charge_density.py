@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -105,6 +107,62 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
     assert pot.repetitions == reps
 
 
+def test_generate_slices_poisson_solve_matches_requested_gpts(
+    monkeypatch, carbon_atoms, charge_density_3d
+):
+    """The internal reciprocal-space Poisson solve (which places the point-charge
+    correction, and for VASPPotential the core-density correction too) must be
+    built at the requested output `gpts` -- not silently pinned to
+    `charge_density`'s own native resolution via `fft_crop`. Before this was
+    fixed, `fft_crop`'s target used `charge.shape[:2]` (the *input* array's own
+    resolution) instead of `ewald_potential.gpts`, so refining `gpts` never
+    actually increased the resolution at which atomic-scale features were
+    resolved -- it only amplified `_interpolate_slice`'s downstream resampling
+    artifacts (see the VASPPotential vacuum/core-sharpness investigation)."""
+    import abtem.potentials.charge_density as cd_mod
+
+    requested_gpts = (77, 77)  # deliberately different from charge_density_3d's
+    assert charge_density_3d.shape[:2] != requested_gpts  # native resolution (32, 32)
+
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, gpts=requested_gpts)
+
+    seen_shapes = []
+    original_fft_crop = cd_mod.fft_crop
+
+    def spy_fft_crop(array, new_shape, **kwargs):
+        seen_shapes.append(new_shape)
+        return original_fft_crop(array, new_shape, **kwargs)
+
+    monkeypatch.setattr(cd_mod, "fft_crop", spy_fft_crop)
+
+    next(pot.generate_slices())
+
+    assert seen_shapes, "fft_crop was not called"
+    assert seen_shapes[0][:2] == requested_gpts
+
+
+def test_subtract_min_defaults_to_false(carbon_atoms, charge_density_3d):
+    """subtract_min must default to False -- the per-slice minimum is not
+    subtracted unless explicitly requested."""
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert pot.subtract_min is False
+
+    slices = [slic.array[0] for slic in pot.generate_slices()]
+    # With the (nonzero, non-uniform) test charge_density, at least one slice's
+    # minimum should not land exactly at zero when left unsubtracted.
+    assert any(not np.isclose(s.min(), 0.0) for s in slices)
+
+
+def test_subtract_min_true_zeros_each_slice_minimum(carbon_atoms, charge_density_3d):
+    pot = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, subtract_min=True
+    )
+    assert pot.subtract_min is True
+
+    for slic in pot.generate_slices():
+        assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
+
+
 def test_charge_density_potential_on_skew_cell_preserves_cell():
     """ChargeDensityPotential.build on a non-orthogonal in-plane cell must produce a
     PotentialArray on the same skew grid (not silently rectified onto a Cartesian
@@ -178,3 +236,62 @@ def test_point_charges_general_cell_conserves_nuclear_charge():
         f"expected {expected_total_charge:.4f} -- pixel_volume should be |det(cell)|/N, "
         f"not prod(diag(cell))/N"
     )
+
+
+def test_no_warning_for_valence_like_density(carbon_atoms, charge_density_3d):
+    """A smooth, low-amplitude density (as any real valence-only density is) must
+    not trigger the all-electron-density warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+
+
+def test_warns_for_implausibly_peaked_density(carbon_atoms):
+    """A density with an implausibly large peak value (as a genuinely all-electron
+    density, e.g. from summing VASP AECCAR0+AECCAR2, would have near each nucleus)
+    must raise the all-electron-density warning."""
+    charge_density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+    charge_density[16, 16, 16] = 1e5
+
+    with pytest.warns(UserWarning, match="all-electron density"):
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_no_warning_for_sharply_peaked_valence_density(carbon_atoms):
+    """A large peak alone must not trigger the warning. VASP's AECCAR2 is
+    valence-only yet keeps the true orbitals' nodal structure near each nucleus, so
+    for a heavy element on a fine grid its peak is genuinely large (SrTiO3 reaches
+    ~900 e/A^3) while its integrated count stays far below the total atomic
+    number."""
+    charge_density = np.random.RandomState(0).rand(64, 64, 64).astype(np.float32) * 1e-3
+    charge_density[32, 32, 32] = 5e3  # ~2.4 electrons in one voxel; total stays low
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_no_warning_for_smooth_density_near_total_atomic_number(carbon_atoms):
+    """A high integrated count alone must not trigger the warning either: a
+    hydrogen-rich system has almost no core electrons to omit, so a legitimate
+    valence-only density integrates to close to the total atomic number."""
+    # Uniform 1.0 e/A^3 in the 5x5x5 cell integrates to 125 electrons, but has no
+    # sharp near-nuclear feature -- nothing here looks all-electron.
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+
+
+def test_no_warning_for_lazy_charge_density(carbon_atoms):
+    """The all-electron-density check is skipped for a lazy (dask) charge_density,
+    even if its content would otherwise trigger the warning, to avoid forcing an
+    eager computation of a potentially large array just for this check."""
+    da = pytest.importorskip("dask.array")
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+    lazy_charge_density = da.from_array(charge_density, chunks=-1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, lazy_charge_density, sampling=0.1)
