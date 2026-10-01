@@ -33,6 +33,7 @@ from abtem.core import backend
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
+    cp,
     get_array_module,
 )
 from abtem.core.chunks import _ceil_to_multiple, estimate_scan_batch_size, validate_chunks
@@ -1251,15 +1252,19 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             if array_on_device is self.array:
                 local_potential_on_device = self._local_potential
             else:
-                if get_array_module(array_on_device) is np:
-                    local_potential_on_device = copy_to_device(
-                        self._local_potential, array_on_device
-                    )
-                else:
+                # Only a cupy array's .device is the context manager that
+                # pins the upload to the right card. A torch tensor has a
+                # .device too, but entering it would change torch's default
+                # device for the block rather than pin anything.
+                if cp is not None and get_array_module(array_on_device) is cp:
                     with array_on_device.device:
                         local_potential_on_device = copy_to_device(
                             self._local_potential, array_on_device
                         )
+                else:
+                    local_potential_on_device = copy_to_device(
+                        self._local_potential, array_on_device
+                    )
             cached = (array_on_device, local_potential_on_device)
             self._device_array_cache[key] = cached
 
