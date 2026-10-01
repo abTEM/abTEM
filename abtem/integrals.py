@@ -17,6 +17,7 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.core.backend import (
     cp,
     cupyx,
@@ -42,6 +43,18 @@ else:
 
 if TYPE_CHECKING:
     from abtem.parametrizations import Parametrization
+
+
+def _require_orthogonal_cell(cell: Optional[np.ndarray]) -> None:
+    """Raise if a non-orthogonal cell is passed to an integrator that does not yet
+    support skewed grids."""
+    if cell is None:
+        return
+    if not is_cell_orthogonal(cell):
+        raise NotImplementedError(
+            "this projection integrator does not yet support non-orthogonal grids; "
+            "use the (default) ScatteringFactorProjectionIntegrals"
+        )
 
 
 _MAX_CACHE_ENTRIES = 32
@@ -201,6 +214,22 @@ def _precision_key() -> str:
     return str(np.dtype(get_dtype(complex=False)))
 
 
+def _hashable_cell(cell: Optional[np.ndarray]) -> Optional[tuple]:
+    """Convert a cell (array-like or ``None``) to a hashable, immutable form
+    suitable for use as a cache-key component.
+
+    A skewed cell changes the reciprocal metric the scattering factor is built
+    from, so a key without it would serve one cell's array to a different
+    cell's request -- the same class of bug ``_precision_key`` exists to avoid
+    elsewhere in this file. Duplicated from
+    ``abtem.measurements._hashable_cell`` rather than imported, to avoid a
+    circular import (``measurements`` sits above this module).
+    """
+    if cell is None:
+        return None
+    return tuple(tuple(float(x) for x in row) for row in np.asarray(cell))
+
+
 def _device_cache_key(device, like=None) -> str | tuple[str, int]:
     """Name the concrete device a cached array belongs to.
 
@@ -253,11 +282,15 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Integrate radial potential between two limits at the given atomic positions on
         a grid. The integration limits are only used when the integration method is
         finite.
+
+        ``cell`` is an optional 2x2 real-space cell (rows are the in-plane lattice
+        vectors) for a non-orthogonal grid; ``None`` (default) means an orthogonal grid.
 
         Parameters
         ----------
@@ -690,7 +723,9 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        _require_orthogonal_cell(cell)
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=True))
@@ -721,7 +756,10 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
 
 def sinc(
-    gpts: tuple[int, int], sampling: tuple[float, float], device: str = "cpu"
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    device: str = "cpu",
+    cell: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Returns an array representing a 2D sinc function centered at [0, 0]. The result is
@@ -745,8 +783,16 @@ def sinc(
     """
     xp = get_array_module(device)
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
+    # the interpolation rolloff lives in fractional index space (kx*dx = h1/N1) and is
+    # therefore independent of the cell shape; only the pixel area dk2 changes for a
+    # skewed cell.
     k = xp.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
-    dk2 = sampling[0] * sampling[1]
+    if cell is None:
+        dk2 = sampling[0] * sampling[1]
+    else:
+        dk2 = abs(float(np.linalg.det(np.asarray(cell, dtype=float)))) / (
+            gpts[0] * gpts[1]
+        )
     k[0, 0] = 1
     sinc = xp.sin(k) / k * dk2
     sinc[0, 0] = dk2
@@ -857,11 +903,19 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ):
         xp = get_array_module(device)
-        kx, ky = spatial_frequencies(gpts, sampling, xp=np)
 
-        k2 = kx[:, None] ** 2 + ky[None] ** 2
+        if cell is None:
+            kx, ky = spatial_frequencies(gpts, sampling, xp=np)
+            k2 = kx[:, None] ** 2 + ky[None] ** 2
+        else:
+            # non-orthogonal cell: |g|^2 from the reciprocal metric
+            from abtem.core.grid import Grid
+
+            k2 = Grid(gpts=gpts, sampling=sampling, cell=cell).k_squared(xp=np)
+
         f = self.parametrization.projected_scattering_factor(symbol)(k2)
         f = xp.asarray(f, dtype=get_dtype(complex=False))
 
@@ -874,12 +928,14 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device, like=None):
-        # The cached array depends on the grid and on the device it was
-        # allocated on, not on the element alone: keying on ``symbol`` served
-        # the first grid's array to every later grid (a broadcast error one
-        # frame away, in integrate_on_grid) and the first device's array to
-        # every later device (a numpy array handed to a cupy kernel).
+    def get_scattering_factor(self, symbol, gpts, sampling, device, cell=None, like=None):
+        # The cached array depends on the grid, the (possibly skewed) cell and
+        # the device it was allocated on, not on the element alone: keying on
+        # ``symbol`` served the first grid's array to every later grid (a
+        # broadcast error one frame away, in integrate_on_grid), the first
+        # cell's array to every later cell (wrong reciprocal metric for a
+        # skewed grid), and the first device's array to every later device (a
+        # numpy array handed to a cupy kernel).
         #
         # ``device`` itself is deliberately not part of the key: it may be an
         # array or a module (get_array_module accepts both), which is not
@@ -890,6 +946,7 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             symbol,
             tuple(gpts),
             tuple(sampling),
+            _hashable_cell(cell),
             device_key,
             _precision_key(),
         )
@@ -899,14 +956,14 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             scattering_factor = self._scattering_factors.put(
                 key,
                 self._calculate_scattering_factor_on_device(
-                    symbol, gpts, sampling, device_key
+                    symbol, gpts, sampling, device_key, cell=cell
                 ),
             )
 
         return scattering_factor
 
     def _calculate_scattering_factor_on_device(
-        self, symbol, gpts, sampling, device_key
+        self, symbol, gpts, sampling, device_key, cell=None
     ):
         """Build the scattering factor *on the device named by the key*.
 
@@ -918,12 +975,16 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         ``with like.device:``.
         """
         if device_key == "cpu":
-            return self._calculate_scattering_factor(symbol, gpts, sampling, "cpu")
+            return self._calculate_scattering_factor(
+                symbol, gpts, sampling, "cpu", cell=cell
+            )
 
         import cupy as cp  # noqa: PLC0415 -- optional dependency
 
         with cp.cuda.Device(device_key[1]):
-            return self._calculate_scattering_factor(symbol, gpts, sampling, "gpu")
+            return self._calculate_scattering_factor(
+                symbol, gpts, sampling, "gpu", cell=cell
+            )
 
     @property
     def scattering_factors(self) -> Mapping[tuple, np.ndarray]:
@@ -939,10 +1000,13 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ):
         xp = get_array_module(device)
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
+
+        inverse_cell = None if cell is None else np.linalg.inv(np.asarray(cell, float))
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
@@ -950,12 +1014,17 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             # will actually be combined with, rather than on the ambient CUDA
             # context, which can name a different device under multi-GPU use.
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device, like=array
+                chemical_symbols[number], gpts, sampling, device, cell=cell, like=array
             )
 
             positions = atoms.positions[atoms.numbers == number]
 
-            positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
+            if inverse_cell is None:
+                positions = positions[:, :2] / sampling
+            else:
+                # skewed grid: place atoms in fractional grid coordinates
+                positions = (positions[:, :2] @ inverse_cell) * np.array(gpts)
+            positions = positions.astype(get_dtype(complex=False))
 
             temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
 
@@ -965,7 +1034,7 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
             temp_array = fft2(temp_array, overwrite_x=True)
 
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+            temp_array *= scattering_factor / sinc(gpts, sampling, device, cell=cell)
 
             # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real
@@ -1012,6 +1081,67 @@ def interpolate_radial_functions(
                     (k * sampling[0] - positions[i, 0]) ** 2
                     + (m * sampling[1] - positions[i, 1]) ** 2
                 )
+
+                idx = int(np.floor(np.log(r_interp / radial_gpts[0] + 1e-12) / dt))
+
+                if idx < 0:
+                    array[k, m] += radial_functions[i, 0]
+                elif idx < n - 1:
+                    slope = radial_derivative[i, idx]
+                    array[k, m] += (
+                        radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
+                    )
+
+
+@jit(nopython=True, nogil=True)
+def interpolate_radial_functions_skew(
+    array: np.ndarray,
+    positions: np.ndarray,
+    disk_indices: np.ndarray,
+    disk_counts: np.ndarray,
+    sampling_vectors: np.ndarray,
+    inv_jacobian: np.ndarray,
+    radial_gpts: np.ndarray,
+    radial_functions: np.ndarray,
+    radial_derivative: np.ndarray,
+):
+    """Skew-grid version of :func:`interpolate_radial_functions`.
+
+    Pixel ``(k, m)`` sits at Cartesian ``r = k * a1 + m * a2`` where ``a1, a2`` are the
+    two real-space sampling vectors (rows of ``sampling_vectors``). ``inv_jacobian`` is
+    the inverse of ``[[a1; a2]].T`` (precomputed) and maps a Cartesian position to its
+    fractional pixel coordinates. ``disk_indices`` are pixel-index offsets sorted by
+    Cartesian distance from the atom and covering the cutoff disk; ``disk_counts[i]``
+    is how many of those (nearest-first) offsets fall within atom ``i``'s lateral
+    cutoff for the current slice (the radial-out-of-range branch below is a final
+    safety net, not the primary truncation).
+    """
+    n = radial_gpts.shape[0]
+    dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
+
+    a1x = sampling_vectors[0, 0]
+    a1y = sampling_vectors[0, 1]
+    a2x = sampling_vectors[1, 0]
+    a2y = sampling_vectors[1, 1]
+
+    for i in range(positions.shape[0]):
+        xi = positions[i, 0]
+        yi = positions[i, 1]
+
+        # map Cartesian -> fractional pixel coords, then round to the nearest pixel
+        fk = inv_jacobian[0, 0] * xi + inv_jacobian[0, 1] * yi
+        fm = inv_jacobian[1, 0] * xi + inv_jacobian[1, 1] * yi
+        px = int(round(fk))
+        py = int(round(fm))
+
+        for j in range(disk_counts[i]):
+            k = px + disk_indices[j, 0]
+            m = py + disk_indices[j, 1]
+
+            if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
+                rx = k * a1x + m * a2x - xi
+                ry = k * a1y + m * a2y - yi
+                r_interp = np.sqrt(rx * rx + ry * ry)
 
                 idx = int(np.floor(np.log(r_interp / radial_gpts[0] + 1e-12) / dt))
 
@@ -1396,8 +1526,27 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        # Detect a skewed in-plane grid. When the cell is None or orthogonal the original
+        # rectangular-grid kernel is used unchanged (bit-identical). Otherwise the radial
+        # potential is stamped via a metric-aware pixel <-> Cartesian map.
+        skew = cell is not None and not is_cell_orthogonal(cell)
+
         xp = get_array_module(device)
+
+        if skew:
+            if xp is cp:
+                raise NotImplementedError(
+                    "finite projection on a non-orthogonal grid is not yet supported on "
+                    "the GPU; use device='cpu' or projection='infinite'"
+                )
+            cell_arr = np.asarray(cell, dtype=float)
+            sampling_vectors = np.stack(
+                [cell_arr[0] / gpts[0], cell_arr[1] / gpts[1]]
+            )
+            # inv_jacobian maps a Cartesian (x, y) to fractional pixel coords (k, m)
+            inv_jacobian = np.linalg.inv(sampling_vectors.T)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
@@ -1410,67 +1559,117 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
 
             fp_dtype = get_dtype(complex=False)
 
-            cutoff = table.radial_gpts[-1]
-            # Precision is the one key component this needed; the symbol was
-            # already here. It belongs for the same reason as everywhere else
-            # in this file, though it takes two steps to get there: the disk is
-            # sized int(ceil(cutoff / min(sampling))), and `cutoff` is
-            # precision-dependent (optimize_cutoff evaluates the parametrization
-            # at the configured dtype) -- 5.066261105906332 against
-            # 5.066261205200659 for Si, ~2e-8 relative.
-            #
-            # That is enough to move the integer. Solving cutoff32/m <= s <
-            # cutoff64/m gives a counterexample for every element tried; at
-            # sampling 0.281458955844481 Si wants radius 18 at float32 and 19
-            # at float64. Serving the float32 disk to a float64 build is then
-            # measurably wrong -- 4.6e-05 absolute on a peak of 312, i.e. 1.5e-7
-            # relative -- because the missing ring lands just inside the last
-            # radial gridpoint, where interpolate_radial_functions still
-            # contributes (idx == n - 2) rather than clamping to zero.
-            #
-            # An earlier version of this key omitted precision, on the argument
-            # that a 400-sampling scan found no case where the integer moves.
-            # It found none because a linear scan cannot: the cases have to be
-            # solved for, not stumbled on.
-            #
-            # The symbol component is older than this commit and was never
-            # missing -- see test_the_sorted_disk_is_not_served_across_elements,
-            # which covers it for the first time rather than fixing it.
-            disk_key = (
-                chemical_symbols[number],
-                tuple(sampling),
-                _precision_key(),
-            )
-            cached_disk = self._sorted_disks.get(disk_key)
-            if cached_disk is not None:
-                disk, disk_radii = cached_disk
-            else:
-                disk = disk_meshgrid(int(np.ceil(cutoff / np.min(sampling))))
-                # Sort the disk pixels by physical radial distance so that the
-                # interpolation can stop at each atom's lateral cutoff.
-                disk_radii = np.hypot(
-                    disk[:, 0] * sampling[0], disk[:, 1] * sampling[1]
+            if skew:
+                # the cutoff disk in Cartesian space maps to an ellipse in pixel space;
+                # use a square mesh whose operator-norm bound (||inv_J||_op * R) safely
+                # contains the ellipse (the radial-out-of-range branch silently skips
+                # any pixels that turn out to be outside the actual Cartesian disk).
+                # skew is CPU-only, so no device caching applies, but the mesh itself
+                # (and its sort by true Cartesian radius) is cached like the
+                # orthogonal case, and truncated per atom/slice via disk_counts below
+                # -- without this a parametrization whose cutoff exceeds the cell (e.g.
+                # the Ewald short-range correction) rescans the full, hugely oversized
+                # mesh for every slice even though most slices are far enough from the
+                # atom in z that only a tiny lateral neighborhood can contribute.
+                #
+                # The cache key also carries precision (see the non-skew branch's
+                # comment for why: `cutoff` is precision-dependent, and serving a
+                # float32 disk to a float64 build is measurably wrong).
+                cutoff = table.radial_gpts[-1]
+                disk_key = (
+                    chemical_symbols[number],
+                    tuple(sampling_vectors.ravel()),
+                    _precision_key(),
                 )
-                order = np.argsort(disk_radii)
-                disk = np.ascontiguousarray(disk[order])
-                disk_radii = disk_radii[order]
-                self._sorted_disks.put(disk_key, (disk, disk_radii))
+                cached_disk = self._sorted_disks.get(disk_key)
+                if cached_disk is not None:
+                    disk, disk_radii = cached_disk
+                else:
+                    op_norm = float(np.linalg.norm(inv_jacobian, ord=2))
+                    disk_radius_pixels = int(np.ceil(cutoff * op_norm))
+                    disk = disk_meshgrid(disk_radius_pixels)
+                    cartesian = disk[:, 0:1] * sampling_vectors[0] + disk[
+                        :, 1:2
+                    ] * sampling_vectors[1]
+                    disk_radii = np.linalg.norm(cartesian, axis=1)
+                    order = np.argsort(disk_radii)
+                    disk = np.ascontiguousarray(disk[order])
+                    disk_radii = disk_radii[order]
+                    self._sorted_disks.put(disk_key, (disk, disk_radii))
 
-            # A pixel at lateral distance r only receives contributions from
-            # the part of the radial potential at 3D distance
-            # sqrt(r ** 2 + dz ** 2), with dz the distance from the atom to the
-            # slice interval. Beyond r = sqrt(cutoff ** 2 - dz ** 2) the
-            # potential is below the cutoff tolerance, so those pixels are
-            # skipped. The margin accounts for the atom position rounding to
-            # the nearest pixel.
-            dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
-            lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
-            margin = np.hypot(sampling[0], sampling[1]) / 2
-            disk_counts = np.searchsorted(
-                disk_radii, lateral_cutoff + margin, side="right"
-            )
+                dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
+                lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
+                margin = (
+                    np.linalg.norm(sampling_vectors[0])
+                    + np.linalg.norm(sampling_vectors[1])
+                ) / 2
+                disk_counts = np.searchsorted(
+                    disk_radii, lateral_cutoff + margin, side="right"
+                )
+            else:
+                cutoff = table.radial_gpts[-1]
+                # Precision is the one key component this needed; the symbol was
+                # already here. It belongs for the same reason as everywhere else
+                # in this file, though it takes two steps to get there: the disk is
+                # sized int(ceil(cutoff / min(sampling))), and `cutoff` is
+                # precision-dependent (optimize_cutoff evaluates the parametrization
+                # at the configured dtype) -- 5.066261105906332 against
+                # 5.066261205200659 for Si, ~2e-8 relative.
+                #
+                # That is enough to move the integer. Solving cutoff32/m <= s <
+                # cutoff64/m gives a counterexample for every element tried; at
+                # sampling 0.281458955844481 Si wants radius 18 at float32 and 19
+                # at float64. Serving the float32 disk to a float64 build is then
+                # measurably wrong -- 4.6e-05 absolute on a peak of 312, i.e. 1.5e-7
+                # relative -- because the missing ring lands just inside the last
+                # radial gridpoint, where interpolate_radial_functions still
+                # contributes (idx == n - 2) rather than clamping to zero.
+                #
+                # An earlier version of this key omitted precision, on the argument
+                # that a 400-sampling scan found no case where the integer moves.
+                # It found none because a linear scan cannot: the cases have to be
+                # solved for, not stumbled on.
+                #
+                # The symbol component is older than this commit and was never
+                # missing -- see test_the_sorted_disk_is_not_served_across_elements,
+                # which covers it for the first time rather than fixing it.
+                disk_key = (
+                    chemical_symbols[number],
+                    tuple(sampling),
+                    _precision_key(),
+                )
+                cached_disk = self._sorted_disks.get(disk_key)
+                if cached_disk is not None:
+                    disk, disk_radii = cached_disk
+                else:
+                    disk = disk_meshgrid(int(np.ceil(cutoff / np.min(sampling))))
+                    # Sort the disk pixels by physical radial distance so that the
+                    # interpolation can stop at each atom's lateral cutoff.
+                    disk_radii = np.hypot(
+                        disk[:, 0] * sampling[0], disk[:, 1] * sampling[1]
+                    )
+                    order = np.argsort(disk_radii)
+                    disk = np.ascontiguousarray(disk[order])
+                    disk_radii = disk_radii[order]
+                    self._sorted_disks.put(disk_key, (disk, disk_radii))
+
+                # A pixel at lateral distance r only receives contributions from
+                # the part of the radial potential at 3D distance
+                # sqrt(r ** 2 + dz ** 2), with dz the distance from the atom to the
+                # slice interval. Beyond r = sqrt(cutoff ** 2 - dz ** 2) the
+                # potential is below the cutoff tolerance, so those pixels are
+                # skipped. The margin accounts for the atom position rounding to
+                # the nearest pixel.
+                dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
+                lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
+                margin = np.hypot(sampling[0], sampling[1]) / 2
+                disk_counts = np.searchsorted(
+                    disk_radii, lateral_cutoff + margin, side="right"
+                )
+
             # Cheap host-side reduction: the largest per-atom truncation index
-            # bounds how much of the sorted disk the kernels need at all.
+            # bounds how much of the sorted disk the kernels need at all (used by
+            # the GPU dispatch below; harmless to compute for the CPU paths too).
             max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
 
             # Transfer the integral table and radial grid to the compute dtype
@@ -1500,7 +1699,19 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             else:
                 temp = array
 
-            if xp is cp:
+            if skew:
+                interpolate_radial_functions_skew(
+                    array=temp,
+                    positions=positions,
+                    disk_indices=xp.asarray(disk),
+                    disk_counts=disk_counts,
+                    sampling_vectors=sampling_vectors,
+                    inv_jacobian=inv_jacobian,
+                    radial_gpts=radial_gpts_device,
+                    radial_functions=radial_potential,
+                    radial_derivative=radial_potential_derivative,
+                )
+            elif xp is cp:
                 # radial_gpts_device already has the correct dtype (computed
                 # above); reuse it directly instead of re-converting.
                 # The kernel truncates per atom at disk_counts (with the
