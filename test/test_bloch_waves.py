@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from ase.build import bulk
+from ase.build import bulk, graphene
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
@@ -12,6 +12,7 @@ from abtem.bloch import BlochWaves, StructureFactor
 from abtem.bloch.dynamical import calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
+    get_reflection_condition,
     relative_positions_for_centering,
     wrapped_is_close,
 )
@@ -77,6 +78,94 @@ def test_auto_detect_centering(data, cell, centering):
 
     assume(centering != "P" or basis_match_templates(basis) == {"P"})
     assert auto_detect_centering(atoms) == centering
+
+
+REFLECTION_CONDITIONS = {
+    "P": lambda h, k, l: np.ones_like(h, dtype=bool),
+    "A": lambda h, k, l: (k + l) % 2 == 0,
+    "B": lambda h, k, l: (h + l) % 2 == 0,
+    "C": lambda h, k, l: (h + k) % 2 == 0,
+    "I": lambda h, k, l: (h + k + l) % 2 == 0,
+    "F": lambda h, k, l: (h % 2 == k % 2) & (k % 2 == l % 2),
+}
+
+
+def _hkl_cube(n=3):
+    hkl = np.stack(
+        np.meshgrid(*(np.arange(-n, n + 1),) * 3, indexing="ij"), axis=-1
+    ).reshape((-1, 3))
+    return hkl[(hkl != 0).any(axis=1)]
+
+
+@pytest.mark.parametrize("centering", ["P", "A", "B", "C", "I", "F"])
+def test_reflection_condition_matches_crystallographic_rules(centering):
+    # Regression: the A, B and C branches applied .all(axis=1) to a 1-D mask
+    # and raised numpy.exceptions.AxisError.
+    hkl = _hkl_cube()
+    mask = get_reflection_condition(hkl, centering)
+    assert mask.shape == (len(hkl),)
+    np.testing.assert_array_equal(mask, REFLECTION_CONDITIONS[centering](*hkl.T))
+
+
+@pytest.mark.parametrize("centering", ["A", "B", "C", "I", "F"])
+def test_centering_templates_are_consistent_with_reflection_conditions(centering):
+    # A crystal built from the centering translations returned by
+    # relative_positions_for_centering must be auto-detected as that centering, and
+    # exactly the reflections removed by get_reflection_condition must be
+    # systematically absent. The A, B and C templates previously encoded
+    # half-translations along a single lattice vector, so the reflection
+    # conditions would have removed allowed reflections.
+    basis = np.array([[0.1, 0.2, 0.3], [0.27, 0.13, 0.41]])
+    lattice = relative_positions_for_centering()[centering]
+    scaled_positions = (lattice[:, None] + basis[None]).reshape((-1, 3)) % 1.0
+    atoms = Atoms(
+        np.tile([6, 8], len(lattice)),
+        scaled_positions=scaled_positions,
+        cell=[3.1, 3.7, 4.3],
+        pbc=True,
+    )
+    assert auto_detect_centering(atoms) == centering
+
+    hkl = _hkl_cube()
+    F = calculate_structure_factors(
+        hkl,
+        atoms,
+        parametrization="lobato",
+        g_max=10.0,
+        thermal_sigma=0.0,
+        occupancy=1.0,
+        device="cpu",
+    )
+    allowed = get_reflection_condition(hkl, centering)
+    assert np.abs(F[~allowed]).max() < 1e-6 * np.abs(F).max()
+    assert (np.abs(F[allowed]) > 1e-4 * np.abs(F).max()).all()
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    assert structure_factor.centering == centering
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+    expected = structure_factor_p.hkl[
+        get_reflection_condition(structure_factor_p.hkl, centering)
+    ]
+    np.testing.assert_array_equal(structure_factor.hkl, expected)
+
+
+def test_structure_factor_auto_centering_keeps_allowed_reflections():
+    # Regression: graphene repeated along c used to be auto-detected as "C" (from a
+    # (0, 0, 1/2) translation) and then crashed in get_reflection_condition; with
+    # only the crash fixed, h + k odd reflections such as (1, 0, 0) would have been
+    # silently dropped.
+    atoms = graphene(vacuum=2.0)
+    atoms.pbc = True
+    atoms = atoms.repeat((1, 1, 20))
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+
+    F = np.asarray(structure_factor_p.build(lazy=False).array)
+    kept = (structure_factor_p.hkl[:, None] == structure_factor.hkl[None]).all(-1)
+    kept = kept.any(axis=1)
+    assert np.abs(F[~kept]).max(initial=0.0) < 1e-6 * np.abs(F).max()
+    assert [1, 0, 0] in structure_factor.hkl.tolist()
 
 
 @settings(max_examples=5)
