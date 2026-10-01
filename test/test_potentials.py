@@ -1462,6 +1462,123 @@ class TestSliceIndexedAtomsWrapping:
             slices, reference, rtol=1e-5, atol=1e-5 * np.abs(reference).max()
         )
 
+    @staticmethod
+    def _outside_atoms():
+        """Five B atoms in a 4 A cube, four of them already outside it: one
+        through each in-plane face and one through each z face."""
+        import ase
+        import numpy as np
+
+        return ase.Atoms(
+            "B5",
+            positions=[
+                [-0.3, 2.0, 2.0],
+                [2.0, 4.2, 2.0],
+                [1.0, 1.0, 4.3],
+                [3.0, 3.0, -0.2],
+                [2.0, 2.0, 2.0],
+            ],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+
+    def test_pad_atoms_crops_only_along_the_repeated_axes(self):
+        import numpy as np
+
+        from abtem.atoms import pad_atoms
+
+        atoms = self._outside_atoms()
+
+        # Nothing is repeated, so nothing is cropped either.
+        padded = pad_atoms(atoms, margins=0.0, directions="z")
+        assert np.array_equal(padded.positions, atoms.positions)
+
+        # Repeated along z only: the z crop still trims the images, but no
+        # atom is cropped in-plane.
+        margin = 0.5
+        padded = pad_atoms(atoms, margins=margin, directions="z")
+        expected = [
+            position + [0.0, 0.0, shift]
+            for position in atoms.positions
+            for shift in (-4.0, 0.0, 4.0)
+            if -margin <= position[2] + shift < 4.0 + margin
+        ]
+        assert sorted(map(tuple, padded.positions.round(12))) == sorted(
+            map(tuple, np.array(expected).round(12))
+        )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_non_periodic_potential_keeps_atoms_already_outside_the_cell(self, device):
+        """Atoms that reach the potential already outside the cell, in-plane or
+        in depth, used to be cropped before slicing and lose all of their
+        potential."""
+        import numpy as np
+
+        from abtem.core.backend import asnumpy
+
+        atoms = self._outside_atoms()
+        potential = Potential(
+            atoms, gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+        )
+        assert len(potential.get_sliced_atoms().atoms) == len(atoms)
+
+        # Oracle: the in-plane build is periodic and the infinite projection
+        # does not depend on depth, so the projected potential must equal that
+        # of the periodic potential, which wraps every atom into the cell.
+        def projected(periodic):
+            return asnumpy(
+                Potential(
+                    atoms,
+                    gpts=(32, 32),
+                    slice_thickness=1.0,
+                    periodic=periodic,
+                    device=device,
+                )
+                .build()
+                .project()
+                .compute()
+                .array
+            )
+
+        reference = projected(True)
+        np.testing.assert_allclose(
+            projected(False),
+            reference,
+            rtol=1e-5,
+            atol=1e-5 * np.abs(reference).max(),
+        )
+
+    def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self):
+        """``for atoms in frozen_phonons: Potential(atoms, periodic=False)``
+        must build the same configurations as
+        ``Potential(frozen_phonons, periodic=False)`` on a cell the potential
+        does not transform. It used to drop the atoms that the iterated
+        displacement had moved out of the cell."""
+        import numpy as np
+
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        atoms = self._outside_atoms()
+        atoms.wrap()
+        phonons = FrozenPhonons(
+            atoms, num_configs=3, sigmas=0.25, seed=1, ensemble_mean=False
+        )
+        iterated = list(phonons)
+        scaled = np.concatenate(
+            [config.get_scaled_positions(wrap=False) for config in iterated]
+        )
+        assert np.any((scaled[:, :2] < 0.0) | (scaled[:, :2] >= 1.0))
+
+        kwargs = dict(gpts=(32, 32), slice_thickness=1.0, periodic=False)
+        ensemble = Potential(phonons, **kwargs).build().compute().array
+        for i, configuration in enumerate(iterated):
+            np.testing.assert_allclose(
+                ensemble[i],
+                Potential(configuration, **kwargs).build().compute().array,
+                rtol=1e-5,
+                atol=1e-5 * np.abs(ensemble[i]).max(),
+            )
+
     def test_non_orthogonal_cell_raises_before_any_wrapping(self):
         import ase
 
