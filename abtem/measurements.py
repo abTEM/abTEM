@@ -63,6 +63,7 @@ from abtem.core.utils import (
     get_dtype,
     is_broadcastable,
     label_to_index,
+    safe_floor_int,
 )
 
 # from abtem.distributions import BaseDistribution
@@ -277,15 +278,7 @@ def _annular_detector_mask(
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if np.any(np.array(offset) != 0.0):
-        offset = (
-            int(round(offset[0] / sampling[0])),
-            int(round(offset[1] / sampling[1])),
-        )
-
-        # if (abs(offset[0]) > bins[0]) or (abs(offset[1]) > bins[1]):
-        #     raise RuntimeError("Detector offset exceeds maximum detected angle.")
-
-        bins = np.roll(bins, offset, (0, 1))
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
 
     if fftshift:
         bins = xp.fft.fftshift(bins)
@@ -293,17 +286,28 @@ def _annular_detector_mask(
     return bins
 
 
-def _n_whole_bins(extent: float, step_size: float) -> int:
-    """Number of whole ``step_size`` bins that fit in ``extent``.
+def _shift_bins_without_wrap(bins, offset, sampling, fill):
+    """Shift a detector mask or bin map in unshifted FFT layout by ``offset``
+    [same units as ``sampling``], rounded to whole pixels.
 
-    A ratio within float rounding of an integer counts as that integer, so
-    e.g. an extent of 0.3 with steps of 0.1 gives 3 bins, not 2.
+    ``np.roll`` alone carries the bins that pass the Nyquist frequency round
+    to the opposite side of the pattern, where they would collect pixels at
+    unrelated frequencies; those positions are set to ``fill`` instead.
     """
-    ratio = extent / step_size
-    nearest = round(ratio)
-    if np.isclose(ratio, nearest, rtol=1e-9, atol=1e-9):
-        return int(nearest)
-    return int(np.floor(ratio))
+    xp = get_array_module(bins)
+    shifts = tuple(int(round(o / d)) for o, d in zip(offset, sampling))
+    bins = xp.roll(bins, shifts, (0, 1))
+
+    for axis, (n, shift) in enumerate(zip(bins.shape, shifts)):
+        frequencies = np.round(np.fft.fftfreq(n) * n).astype(int)
+        # position i now holds the bin from frequency index i - shift
+        wrapped = np.flatnonzero(np.roll(frequencies, shift) + shift != frequencies)
+        if len(wrapped):
+            index = [slice(None), slice(None)]
+            index[axis] = xp.asarray(wrapped)
+            bins[tuple(index)] = fill
+
+    return bins
 
 
 def _polar_bins_key(
@@ -513,15 +517,7 @@ def _polar_detector_bins_uncached(
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
     if np.any(np.array(offset) != 0.0):
-        offset = (
-            int(round(offset[0] / sampling[0])),
-            int(round(offset[1] / sampling[1])),
-        )
-
-        # if (abs(offset[0]) > bins[0]) or (abs(offset[1]) > bins[1]):
-        #     raise RuntimeError("Detector offset exceeds maximum detected angle.")
-
-        bins = np.roll(bins, offset, (0, 1))
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=-1)
 
     if fftshift:
         bins = np.fft.fftshift(bins)
@@ -4364,7 +4360,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Outer integration limit of the bins [mrad]. If not specified, this is set to
             be the maximum detected angle of the diffraction pattern.
         rotation : float
-            Rotation of the bins around the origin [mrad] (default is 0.0).
+            Rotation of the bins around the origin [rad] (default is 0.0).
         offset : two float
             Offset of the bins from the origin in `x` and `y` [mrad].
             Default is (0.0, 0.0).
@@ -4452,7 +4448,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad]. Default is 0.0.
         outer : float, optional
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern.
+            be the maximum detected angle of the diffraction pattern. Every bin is
+            ``step_size`` wide, so if ``outer - inner`` is not a multiple of
+            ``step_size`` the trailing partial step is dropped and the last bin ends
+            at ``inner + n * step_size``.
 
         Returns
         -------
@@ -4466,7 +4465,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         # Bins are step_size wide, as documented: the last partial step (if
         # outer - inner is not a multiple of step_size) is dropped rather than
         # spread over the others.
-        nbins_radial = _n_whole_bins(outer - inner, step_size)
+        nbins_radial = safe_floor_int((outer - inner) / step_size)
         return self.polar_binning(
             nbins_radial, 1, inner, inner + nbins_radial * step_size
         )

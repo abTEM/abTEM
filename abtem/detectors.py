@@ -23,7 +23,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
 from abtem.core.units import units_type
-from abtem.core.utils import cos_sin_deg, get_dtype
+from abtem.core.utils import cos_sin_deg, get_dtype, safe_floor_int
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -32,7 +32,6 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
-    _n_whole_bins,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -336,7 +335,11 @@ class _AbstractRadialDetector(BaseDetector):
         else:
             outer = np.floor(min(waves.cutoff_angles))
 
-        return inner, outer
+        return inner, self._binned_outer(outer)
+
+    def _binned_outer(self, outer: float) -> float:
+        """Outer edge of the outermost bin for a requested ``outer`` [mrad]."""
+        return outer
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         """
@@ -353,10 +356,12 @@ class _AbstractRadialDetector(BaseDetector):
         """
         inner, outer = self.angular_limits(waves)
 
-        # The pattern is cropped about k=0 and polar_binning then rolls the
+        # The pattern is cropped about k=0 and polar_binning then shifts the
         # bins by the offset, so the crop must reach `outer` beyond the offset
         # centre (plus a pixel for the nearest-pixel rounding of the offset);
         # cropping to `outer` alone lost every pixel farther than that from k=0.
+        # A detector reaching past the grid uses the full pattern: the bins
+        # shifted beyond the Nyquist frequency are dropped, not wrapped round.
         max_angle: float | str = outer
         if np.any(np.array(self._offset) != 0.0):
             max_angle = (
@@ -560,7 +565,7 @@ class _AbstractRadialDetector(BaseDetector):
                 gpts=gpts,
                 sampling=angular_sampling,
                 inner=self.inner,
-                outer=self.outer,
+                outer=self._binned_outer(self.outer),
                 nbins_radial=self.nbins_radial,
                 nbins_azimuthal=self.nbins_azimuthal,
                 fftshift=True,
@@ -1613,7 +1618,11 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     inner : float, optional
         Inner integration limit of the bins [mrad].
     outer : float, optional
-        Outer integration limit of the bins [mrad].
+        Outer integration limit of the bins [mrad]. Every bin is ``step_size``
+        wide, so if ``outer - inner`` is not a multiple of ``step_size`` the
+        trailing partial step is dropped and the last bin ends at
+        ``inner + n * step_size``. If not given, the antialias cutoff angle of
+        the detected waves is used.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective
@@ -1643,25 +1652,25 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
             url=url,
         )
 
-    @property
-    def nbins_radial(self):
+    def _nbins_within(self, outer: float) -> int:
         # Previously int(np.floor(outer - inner) / step_size) -- floor before
         # dividing -- with the bins then spread over all of [inner, outer), so
         # any non-multiple range (always, for the default auto outer) gave bins
         # wider than the step_size reported as radial_sampling.
-        return _n_whole_bins(self.outer - self.inner, self.step_size)
+        return safe_floor_int((outer - self.inner) / self.step_size)
+
+    @property
+    def nbins_radial(self):
+        return self._nbins_within(self.outer)
 
     @property
     def nbins_azimuthal(self):
         return 1
 
-    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
+    def _binned_outer(self, outer: float) -> float:
         # The binned range ends at the last whole step, so every bin is exactly
         # step_size wide: bin i is [inner + i * step, inner + (i + 1) * step).
-        inner, outer = super().angular_limits(waves)
-        return inner, inner + _n_whole_bins(outer - inner, self.step_size) * (
-            self.step_size
-        )
+        return self.inner + self._nbins_within(outer) * self.step_size
 
     @property
     def step_size(self) -> float:
@@ -1702,7 +1711,7 @@ class SegmentedDetector(_AbstractRadialDetector):
     outer : float
         Outer integration limit of the bins [mrad].
     rotation : float
-        Rotation of the bins around the origin [mrad].
+        Rotation of the bins around the origin [rad].
     offset : two float
         Offset of the bins from the origin in `x` and `y` [mrad].
     to_cpu : bool, optional

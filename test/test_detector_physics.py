@@ -329,6 +329,31 @@ def test_diffraction_patterns_radial_binning_bin_width_is_step_size(
     np.testing.assert_array_equal(_values(measurement)[:, 0], expected)
 
 
+def test_flexible_annular_show_draws_the_detected_bins():
+    """show() without waves must draw the bins detect() uses: step_size wide,
+    with the trailing partial step [40, 41.3) left undetected."""
+    import matplotlib.pyplot as plt
+
+    step, inner, outer = 2.0, 0.0, 41.3
+    nbins = 20
+    detector = abtem.FlexibleAnnularDetector(step_size=step, inner=inner, outer=outer)
+    assert detector.nbins_radial == nbins
+
+    visualization = detector.show(
+        gpts=GPTS, sampling=SAMPLING, energy=ENERGY, units="mrad"
+    )
+    regions = np.asarray(visualization.measurement.array, dtype=np.float64)
+    plt.close("all")
+
+    ax, ay = _pixel_angles()
+    alpha = np.fft.fftshift(np.hypot(ax, ay))
+    edges = inner + step * np.arange(nbins + 1)
+    _assert_clear_of_edges(alpha, edges)
+    expected = np.floor((alpha - inner) / step)
+    expected[alpha >= edges[-1]] = np.nan
+    np.testing.assert_array_equal(regions, expected)
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("a, b", [(10.0, 30.0), (16.0, 34.0), (4.0, 12.0)])
 def test_flexible_integrate_radial_matches_annular_detector(device, a, b):
@@ -481,6 +506,53 @@ def test_segmented_detector_offset_captures_pixels_beyond_centred_crop(device, p
     full = float(N_PIXELS) ** 2
     np.testing.assert_allclose(got[label], full, rtol=1e-5)
     assert np.delete(got, label).max() < 1e-9 * full
+
+
+# Offset centre 60 pixels along +kx, radius 25.5 x-pixels: the region runs to
+# x-index 85.5, past the Nyquist index 79 of the 160-pixel axis. The bins
+# shifted beyond it used to wrap round onto x-indices -80..-75, so the bright
+# pixels at -75 and -79 (aliases of 85 and 81, which are within the radius of
+# the centre) were detected although they lie ~135 pixels from it.
+_PAST_NYQUIST_OFFSET_PIXELS = (60, 0)
+_PAST_NYQUIST_OUTER = 25.5 * _ds[0]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "make_detector",
+    [
+        lambda outer, offset: abtem.SegmentedDetector(
+            nbins_radial=1, nbins_azimuthal=1, inner=0.0, outer=outer, offset=offset
+        ),
+        lambda outer, offset: abtem.AnnularDetector(
+            inner=0.0, outer=outer, offset=offset
+        ),
+    ],
+    ids=["segmented", "annular"],
+)
+@pytest.mark.parametrize(
+    "pixel, inside", [((75, 0), True), ((-75, 0), False), ((-79, 3), False)]
+)
+def test_offset_detector_reaching_past_nyquist_does_not_wrap(
+    device, make_detector, pixel, inside
+):
+    offset = (
+        _PAST_NYQUIST_OFFSET_PIXELS[0] * _ds[0],
+        _PAST_NYQUIST_OFFSET_PIXELS[1] * _ds[1],
+    )
+    ax, ay = _pixel_angles()
+    _assert_clear_of_edges(
+        np.hypot(ax - offset[0], ay - offset[1]), (_PAST_NYQUIST_OUTER,)
+    )
+
+    detector = make_detector(_PAST_NYQUIST_OUTER, offset)
+    got = _values(detector.detect(_plane_waves(*pixel, device=device))).sum()
+
+    full = float(N_PIXELS) ** 2
+    if inside:
+        np.testing.assert_allclose(got, full, rtol=1e-5)
+    else:
+        assert got < 1e-9 * full
 
 
 # ---------------------------------------------------------------------------
