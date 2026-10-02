@@ -1027,8 +1027,13 @@ def atoms_in_cell(
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
+    # The interval is half-open, [-m, 1 + m), and the tolerance shifts *both*
+    # ends down so that it stays a period long. With it on the lower end only,
+    # float noise from a rotation or orthogonalisation -- an atom at -3e-17
+    # and its periodic image at 1 - 1e-16 -- kept both copies, and a
+    # non-periodic cut of hcp Mg held 8 atoms where its cell has 4.
     mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
-        scaled_positions < (1 + scaled_margins)[None], axis=1
+        scaled_positions < (1 + scaled_margins - 1e-12)[None], axis=1
     )
 
     atoms = atoms[mask]
@@ -1177,8 +1182,12 @@ def pad_atoms(
     directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms
+    Repeat the atoms in the given directions, retaining only the repeated atoms
     within the margin distance from the cell boundary.
+
+    Atoms are cropped only along the directions that were repeated. Along any other
+    direction, including a padded direction with a zero margin, every atom is kept,
+    even one outside the cell.
 
     Parameters
     ----------
@@ -1186,7 +1195,7 @@ def pad_atoms(
         The atoms that should be padded.
     margins: one or tuple of three floats
         The padding margin. Can be specified either as a single value for all
-        directions, or three separate values.
+        directions, or three separate values for `x`, `y` and `z`.
     directions : str
         The directions to pad the atoms as a concatenation of one or more of `x`, `y`
         and `z` for each of the principal directions.
@@ -1203,7 +1212,15 @@ def pad_atoms(
     if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3
 
-    assert isinstance(margins, tuple)
+    # Indexed by axis, not by position in `directions`: a margin per direction
+    # used to be paired with `directions` by zip, so (m,) with "z" gave z the
+    # margin m and a full (mx, my, mz) with "z" gave z mx.
+    margins = tuple(float(margin) for margin in margins)
+    if len(margins) != 3:
+        raise ValueError(
+            "margins must be one value or three values for x, y and z, "
+            f"not {len(margins)}"
+        )
 
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()
@@ -1211,16 +1228,27 @@ def pad_atoms(
     axes = [{"x": 0, "y": 1, "z": 2}[direction] for direction in directions]
 
     reps = [1, 1, 1]
-    for axis, margin in zip(axes, margins):
-        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+    for axis in axes:
+        reps[axis] = int(1 + 2 * np.ceil(margins[axis] / atoms.cell[axis, axis]))
 
-    if any([rep > 1 for rep in reps]):
-        atoms = atoms * reps
-        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
-        atoms.cell = old_cell
+    if not any([rep > 1 for rep in reps]):
+        return atoms
 
-    atoms = atoms_in_cell(atoms, margins)
-    return atoms
+    atoms = atoms * reps
+    atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
+    atoms.cell = old_cell
+
+    # Crop only along the repeated axes: the crop is there to trim the images
+    # just added. Along any other axis it can only remove original atoms, and a
+    # non-periodic potential holds those unwrapped -- an atom displaced out of
+    # the cell before it reached the potential (frozen phonons iterated by
+    # hand, an MD snapshot) was dropped here and lost its whole contribution,
+    # where the same displacement applied by the potential after padding was
+    # kept. An infinite margin disables atoms_in_cell along that axis.
+    crop_margins = tuple(
+        float(margins[axis]) if reps[axis] > 1 else np.inf for axis in range(3)
+    )
+    return atoms_in_cell(atoms, crop_margins)
 
 
 # ---------------------------------------------------------------------------
