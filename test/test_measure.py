@@ -1114,7 +1114,9 @@ def test_interpolate_periodic_spline_and_fft(lazy):
         method="spline", sampling=0.05, boundary="periodic", order=5
     )
     fft_interpolated = images.interpolate(method="fft", sampling=0.05)
-    array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)
+    assert array_is_close(
+        spline_interpolated.array, fft_interpolated.array, rel_tol=0.01
+    )
 
 
 @given(

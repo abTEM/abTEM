@@ -49,6 +49,11 @@ def test_lobato_kirkland_match(atomic_number, func):
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.skipif("hankel" not in sys.modules, reason="requires hankel")
 @pytest.mark.slow
+# Pm, Sm, Eu and Pu make GPAWParametrization fall back to an unpolarized atom
+# and warn; the fallback itself is covered by the test below.
+@pytest.mark.filterwarnings(
+    "ignore:The spin-polarized all-electron calculation:UserWarning"
+)
 def test_lobato_gpaw_match(atomic_number, func):
     """DFT-derived parameters should reproduce the tabulated Lobato potential
     to within ~15%. The Lobato functional form has near-degenerate parameter
@@ -64,3 +69,19 @@ def test_lobato_gpaw_match(atomic_number, func):
     f1 = getattr(gpaw, func)(chemical_symbols[atomic_number])(r)
     f2 = getattr(lobato, func)(chemical_symbols[atomic_number])(r)
     assert array_is_close(f1, f2, rel_tol=0.15, check_above_rel=0.02)
+
+
+@pytest.mark.parametrize("symbol", ["Sm", "Pu"])
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.slow
+def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
+    """GPAW's spin-polarized radial solver fails for some open-shell f-element
+    atoms; the density should then come from a non-spin-polarized calculation
+    (with a warning) rather than raising an AssertionError.
+    """
+    gpaw = GPAWParametrization()
+    with pytest.warns(UserWarning, match="non-spin-polarized"):
+        ae = gpaw._get_all_electron_atom(symbol)
+
+    assert ae.nspins == 1
+    assert np.isclose(ae.rgd.integrate(ae.n_sg.sum(0)), ae.Z, atol=1e-3)

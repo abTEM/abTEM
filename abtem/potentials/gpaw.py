@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -661,15 +662,32 @@ class GPAWParametrization:
         return electrons
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
-        from gpaw.atom.aeatom import AllElectronAtom
-
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
 
         added_electrons = self._get_added_electrons(symbol, charge)
 
+        try:
+            return self._run_all_electron_atom(symbol, added_electrons, spinpol=True)
+        except AssertionError:
+            # GPAW's radial solver fails to find a bound state for some open-shell
+            # atoms (e.g. Pm, Sm, Eu, Pu) in the spin-polarized calculation,
+            # independent of the SCF mixing. The spin-polarized and unpolarized
+            # total densities differ by only ~0.1 electrons, which is negligible
+            # for the independent-atom potential.
+            warnings.warn(
+                f"The spin-polarized all-electron calculation for {symbol} failed "
+                "to converge in GPAW; falling back to a non-spin-polarized "
+                "calculation."
+            )
+            return self._run_all_electron_atom(symbol, added_electrons, spinpol=False)
+
+    @staticmethod
+    def _run_all_electron_atom(symbol, added_electrons, spinpol):
+        from gpaw.atom.aeatom import AllElectronAtom
+
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
+            ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE")
 
             for n, l, df in added_electrons:
                 ae.add(n, l, df)
