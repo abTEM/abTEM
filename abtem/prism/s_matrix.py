@@ -4855,8 +4855,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "SMatrix.build does not support upsample=True (the C-PRISM "
                 "algorithm) on a non-orthogonal (skewed) cell; the dense "
                 "plane-wave expansion and compressed wave vectors both assume an "
-                "orthogonal grid. Use upsample=False (the default), or "
-                "interpolation=(1, 1)."
+                "orthogonal grid. Build the potential with non_orthogonal=False "
+                "to use an orthogonalised supercell instead, or use "
+                "upsample=False (the default) or interpolation=(1, 1)."
             )
 
         lazy = validate_lazy(lazy)

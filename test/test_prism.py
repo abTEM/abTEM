@@ -558,3 +558,27 @@ class TestWrappedCrop2D:
                 to_host_array(copy_to_device(got, "cpu")),
                 self._reference(array, corner, (11, 11)),
             )
+
+
+def test_c_prism_on_a_skewed_cell_points_to_the_orthogonal_path():
+    """A hexagonal cell is simulated on a skewed grid by default, where C-PRISM
+    (upsample=True) is not supported: building it must say how to get dev's
+    orthogonalised supercell back, and that path must still build."""
+    import ase.build
+
+    import abtem
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    kwargs = dict(energy=60e3, semiangle_cutoff=20, interpolation=(2, 2), upsample=True)
+
+    skewed = abtem.Potential(atoms, sampling=0.2, slice_thickness=2)
+    assert skewed.non_orthogonal
+    with pytest.raises(NotImplementedError, match="non_orthogonal=False"):
+        abtem.SMatrix(potential=skewed, **kwargs).build(lazy=False)
+
+    orthogonal = abtem.Potential(
+        atoms, sampling=0.2, slice_thickness=2, non_orthogonal=False
+    )
+    built = abtem.SMatrix(potential=orthogonal, **kwargs).build(lazy=False)
+    assert isinstance(built, CompressedSMatrixArray)
