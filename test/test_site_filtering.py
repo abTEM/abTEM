@@ -93,5 +93,10 @@ def test_results_are_independent_of_the_chunk_size(setup):
     coarse = _run(setup, scatter_max_batch=64)
     fine = _run(setup, scatter_max_batch=1)
 
+    # Two all-zero results (e.g. a filter that drops every site) would agree
+    # trivially; threshold=0.9 must keep the sites carrying 90% of the
+    # overlap, so the signal cannot vanish.
+    assert np.abs(coarse).max() > 0
+
     tolerance = 1e-5 if coarse.dtype == np.float32 else 1e-10
     assert np.allclose(coarse, fine, rtol=tolerance, atol=0)

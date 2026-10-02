@@ -138,24 +138,50 @@ def test_transition_potential_scan_builds_lazy_graph(si_atoms, device):
 @devices
 def test_transition_potential_scan_forwards_inelastic_kwargs(si_atoms, device):
     """double_channel / threshold must flow through to
-    transition_potential_multislice_and_detect via **multislice_func_kwargs."""
+    transition_potential_multislice_and_detect via **multislice_func_kwargs.
+
+    Checked by effect rather than by building a graph: if either kwarg were
+    dropped on the way, both calls would run with the driver's default and
+    produce identical results.
+    - threshold=0.5 keeps only the sites carrying half the probe overlap, so
+      it must lose signal relative to threshold=1.0 (no filtering) -- the 8
+      Si sites of the cell are not all under the probe at (0, 0).
+    - double_channel=False discards the inelastic wave's elastic
+      re-scattering through the slices below each site; with >1 slice that
+      redistributes the detected intensity over the radial bins (the total
+      is nearly conserved, the elastic propagation being unitary).
+    """
     potential = _make_si_potential(si_atoms, device)
+    assert potential.num_slices > 1
     tp = synthetic_transition_potential(
         Z=14, gpts=potential.gpts, extent=potential.extent,
         n_transitions=2, energy=100e3, device=device,
     )
     probe = _make_probe(potential, device)
-    detector = abtem.AnnularDetector(inner=0, outer=40)
-    result = probe.transition_potential_scan(
-        potential=potential,
-        transition_potentials=tp,
-        scan=(0, 0),
-        detectors=detector,
-        double_channel=False,
-        threshold=0.95,
-        lazy=True,
+
+    def run(**kwargs):
+        result = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=(0, 0),
+            detectors=abtem.FlexibleAnnularDetector(to_cpu=True),
+            lazy=False,
+            **kwargs,
+        )
+        return np.asarray(result.array)
+
+    unfiltered = run(double_channel=False, threshold=1.0)
+    filtered = run(double_channel=False, threshold=0.5)
+    scale = np.abs(unfiltered).max()
+    assert scale > 0
+    assert filtered.sum() < unfiltered.sum() * (1 - 1e-3), (
+        "threshold=0.5 had no effect: was it forwarded to the driver?"
     )
-    assert result is not None
+
+    double = run(double_channel=True, threshold=1.0)
+    assert not np.allclose(double, unfiltered, rtol=1e-3, atol=1e-6 * scale), (
+        "double_channel=True matches double_channel=False: was it forwarded?"
+    )
 
 
 @devices
@@ -437,7 +463,18 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
     arr_beam_basis = np.asarray(res_beam_basis.array)
 
     assert arr_multislice.shape == arr_beam_basis.shape
-    np.testing.assert_allclose(arr_beam_basis, arr_multislice, rtol=1e-4, atol=1e-6)
+    # The signal is O(1e-9) (sigma^2 * |H|^2), so an absolute atol must be
+    # scaled to it -- a fixed atol=1e-6 made the comparison vacuous (a x10
+    # amplitude error passed). "Bit-exact" here means agreement to float32
+    # round-off: both paths are the same linear algebra in a different
+    # association order, measured max relative error ~9e-7 (~7 float32
+    # ulps) for both channels, so rtol=1e-5 leaves ~10x headroom while any
+    # physical normalisation error (>= 1e-3) fails.
+    scale = np.abs(arr_multislice).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        arr_beam_basis, arr_multislice, rtol=1e-5, atol=1e-6 * scale
+    )
 
 
 @devices
@@ -788,12 +825,18 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     assert arr_ms.shape == arr_prism.shape, (
         f"shape mismatch: multislice {arr_ms.shape} vs PRISM {arr_prism.shape}"
     )
-    # The entrance plane (exit_planes[0] == -1) records elastic waves in the
-    # multislice path but zeros in PRISM (no pre-scatter reduction is wired).
-    # Compare only the physical exit planes where inelastic signal is produced.
-    if potential.exit_planes[0] == -1:
-        arr_ms = arr_ms[1:]
-        arr_prism = arr_prism[1:]
+    thickness_axis = [type(a).__name__ for a in res_ms.axes_metadata].index(
+        "ThicknessAxis"
+    )
+    assert arr_ms.shape[thickness_axis] == n_exit
+    # exit_planes[0] == -1 is the entrance plane (t = 0): no material has
+    # been traversed, so no ionisation has happened and both drivers must
+    # record exactly zero there; every later plane has inelastic signal.
+    assert potential.exit_planes[0] == -1
+    for arr in (arr_ms, arr_prism):
+        assert np.all(np.take(arr, 0, axis=thickness_axis) == 0)
+        for i in range(1, n_exit):
+            assert np.abs(np.take(arr, i, axis=thickness_axis)).max() > 0
     np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)
 
 
@@ -1116,9 +1159,165 @@ def test_filter_sites_aligns_mask_with_mixed_element_atoms():
 
     filtered = tp.filter_sites(waves, atoms, threshold=1e-12)
 
+    # Expected from the setup, not from a run: validate_sites keeps only the
+    # Z=5 (B) atom, whose xy position is (4, 4). The synthetic transition
+    # potential is white noise in reciprocal space, so its local potential
+    # |ifft2(H)|^2 covers the whole cell and the site's overlap with the
+    # (normalised, unit-intensity) probe is O(1) >> 1e-12: the B site must
+    # survive, and the N site must never appear. A mask misaligned with the
+    # original Atoms (length 2) would raise or return the N position (1, 1);
+    # a filter that drops everything returns an empty array.
     assert isinstance(filtered, np.ndarray)
-    assert filtered.shape[1:] == (2,)
-    assert len(filtered) <= 1  # only the one boron site was ever a candidate
+    np.testing.assert_array_equal(filtered, np.array([[4.0, 4.0]]))
+
+
+def _symmetric_gaussian_transition_potential(gpts, extent, width=0.5):
+    """A single-transition potential whose real-space form is a Gaussian
+    centred on pixel (0, 0) of a periodic grid.
+
+    Its local potential |H(r)|^2 is centrosymmetric, V(r) = V(-r), as for
+    any real transition potential (|Y_lm|^2 is inversion-symmetric). That
+    matters because ``absolute_threshold`` ranks a *convolution* of V with
+    |psi|^2 while ``filter_sites`` evaluates a *correlation*; the two agree
+    only for centrosymmetric V.
+    """
+    from abtem.core.utils import get_dtype
+
+    x = np.fft.fftfreq(gpts[0], 1 / gpts[0]) * extent[0] / gpts[0]
+    y = np.fft.fftfreq(gpts[1], 1 / gpts[1]) * extent[1] / gpts[1]
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    H = np.exp(-(X**2 + Y**2) / (2 * width**2))
+    array = np.fft.fft2(H)[None].astype(get_dtype(complex=True))
+    return TransitionPotentialArray(
+        Z=5,
+        array=array,
+        energy=100e3,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        metadata={"Z": 5, "n": 1, "l": 0},
+    )
+
+
+def _pixel_dense_boron_sites(gpts, extent, z=0.5):
+    """One B site on every pixel of the grid, all in the first slice."""
+    ij = np.stack(
+        np.meshgrid(np.arange(gpts[0]), np.arange(gpts[1]), indexing="ij"), -1
+    ).reshape(-1, 2)
+    sampling = np.array(extent) / np.array(gpts)
+    positions = np.concatenate(
+        [ij * sampling, np.full((len(ij), 1), z)], axis=1
+    )
+    return ij, ase.Atoms(
+        numbers=[5] * len(ij), positions=positions, cell=(*extent, 1.0)
+    )
+
+
+def _oracle_overlaps(tp, waves, ij):
+    """Overlap of each pixel site with the probe, straight from the
+    definition: sum_r V(r - s) |psi(r)|^2, with V the transition
+    potential's local potential |ifft2(H)|^2, evaluated with np.roll in
+    float64 (independent of filter_sites' fast_roll and of
+    absolute_threshold's FFT convolution)."""
+    V = np.abs(np.fft.ifft2(np.asarray(tp.array, dtype=np.complex128))) ** 2
+    V = V.sum(0)
+    psi2 = np.abs(np.asarray(waves.array, dtype=np.complex128)) ** 2
+    return np.array([(np.roll(V, tuple(s), (0, 1)) * psi2).sum() for s in ij])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "absolute_threshold picks overlap[searchsorted(cum, t, 'left') - 1] "
+        "and filter_sites keeps sites with overlap strictly greater than it, "
+        "so the retained set stops ~2 pixels short of the requested fraction "
+        "(t=0.5 retains ~0.487 of the overlap), and for t below the largest "
+        "single-pixel fraction the index wraps to -1, so (almost) every site "
+        "is kept instead of one."
+    ),
+)
+def test_threshold_retains_requested_fraction_of_overlap():
+    """``threshold=t`` means: keep the sites that together carry at least a
+    fraction t of the probe/local-potential overlap (``absolute_threshold``
+    ranks the overlap at every pixel, accumulates it in descending order and
+    cuts where the cumulative fraction reaches t). With a site on every
+    pixel the retained sites are exactly those ranked pixels, so their
+    summed overlap must be >= t of the total, and for t < 1 some must be
+    dropped."""
+    gpts, extent = (32, 32), (8.0, 8.0)
+    tp = _symmetric_gaussian_transition_potential(gpts, extent)
+    waves = _probe_waves(gpts=gpts, extent=extent)
+    ij, sites = _pixel_dense_boron_sites(gpts, extent)
+    overlaps = _oracle_overlaps(tp, waves, ij)
+    total = overlaps.sum()
+
+    for t in (0.001, 0.1, 0.5, 0.9):
+        kept = tp.filter_sites(
+            waves, sites, threshold=tp.absolute_threshold(waves, t)
+        )
+        kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
+        kept_overlap = overlaps[kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]].sum()
+        assert len(kept) < len(ij), f"t={t}: no site was dropped"
+        assert kept_overlap >= t * total, (
+            f"t={t}: retained only {kept_overlap / total:.4f} of the overlap"
+        )
+
+
+@devices
+def test_threshold_drops_sites_and_bounds_the_eels_signal(device):
+    """End-to-end purpose of ``threshold``: through the EELS driver, t < 1
+    must actually drop sites (a smaller integrated signal), dropping more
+    as t decreases, while t = 1 is exactly the unfiltered result.
+
+    Setup: one slice of vacuum, a B site on every pixel, a centrosymmetric
+    Gaussian transition potential. With one slice and single-channel, each
+    site's integrated EELS intensity is sum_q |FT[H(r - s) psi(r)]|^2, i.e.
+    by Parseval its overlap sum_r |H(r - s)|^2 |psi(r)|^2 (up to the
+    antialias aperture), so the retained signal fraction tracks the
+    retained-overlap fraction and should be of order t.
+    """
+    gpts, extent = (32, 32), (8.0, 8.0)
+    tp = _symmetric_gaussian_transition_potential(gpts, extent)
+    potential = abtem.Potential(
+        ase.Atoms(cell=(*extent, 1.0)),
+        gpts=gpts,
+        slice_thickness=1.0,
+        device=device,
+    )
+    assert potential.num_slices == 1
+    _, sites = _pixel_dense_boron_sites(gpts, extent)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=30, device=device)
+    probe.grid.match(potential)
+
+    def integrated(**kwargs):
+        result = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=(4.0, 4.0),
+            detectors=abtem.FlexibleAnnularDetector(to_cpu=True),
+            sites=sites,
+            double_channel=False,
+            lazy=False,
+            **kwargs,
+        )
+        return float(np.asarray(result.array).sum())
+
+    unfiltered = integrated()
+    assert unfiltered > 0
+    assert integrated(threshold=1.0) == pytest.approx(unfiltered, rel=1e-6)
+
+    ratios = {t: integrated(threshold=t) / unfiltered for t in (0.5, 0.9, 0.99)}
+    assert 0 < ratios[0.5] < ratios[0.9] < ratios[0.99] < 1
+    for t, ratio in ratios.items():
+        # The dropped fraction is of order (1 - t), not a multiple of it.
+        # It is not bounded by exactly (1 - t): besides the off-by-one
+        # recorded in test_threshold_retains_requested_fraction_of_overlap,
+        # the cut is ranked on the entrance wave but applied to the wave at
+        # the slice (a symmetric tie group of sites at the cut can fall
+        # below it), and the detected intensity is the overlap only up to
+        # the antialias aperture. Measured: 1 - ratio = 0.554, 0.098,
+        # 0.0097 for t = 0.5, 0.9, 0.99.
+        assert 1 - ratio <= 1.25 * (1 - t), f"t={t}: dropped {1 - ratio:.3f}"
 
 
 def test_local_potential_device_cache_survives_use_but_not_pickle():
