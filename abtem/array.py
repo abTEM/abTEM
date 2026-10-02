@@ -1463,7 +1463,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__truediv__")
 
     def __itruediv__(self, other: Self) -> Self:
-        return self._arithmetic(other, "__itruediv__")
+        return self._in_place_arithmetic(other, "__itruediv__")
+
+    def __rtruediv__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rtruediv__")
 
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
@@ -1481,7 +1484,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
-    __rtruediv__ = __truediv__
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
