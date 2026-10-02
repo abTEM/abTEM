@@ -618,27 +618,29 @@ def test_total_of_a_frozen_phonon_scan_matches_the_pixelated_detector():
     over the same frozen-phonon configurations."""
     import ase.build
 
-    abtem.config.set({"device": "cpu"})
     atoms = ase.build.mx2("MoS2", vacuum=2)
-    phonons = abtem.FrozenPhonons(
-        atoms, num_configs=N_CONFIGS, sigmas=0.1, seed=3, ensemble_mean=False
-    )
-    potential = abtem.Potential(phonons, sampling=0.1, slice_thickness=2)
-    probe = abtem.Probe(energy=80e3, semiangle_cutoff=20)
-    probe.grid.match(potential)
+    with abtem.config.set({"device": "cpu"}):
+        phonons = abtem.FrozenPhonons(
+            atoms, num_configs=N_CONFIGS, sigmas=0.1, seed=3, ensemble_mean=False
+        )
+        potential = abtem.Potential(phonons, sampling=0.1, slice_thickness=2)
+        probe = abtem.Probe(energy=80e3, semiangle_cutoff=20)
+        probe.grid.match(potential)
 
-    exit_waves = probe.multislice(
-        potential, detectors=abtem.WavesDetector(), lazy=False
-    )
-    total = elastic_diffuse_diffraction_patterns(
-        exit_waves, components="total", max_angle=60, parity="same"
-    )
+        exit_waves = probe.multislice(
+            potential, detectors=abtem.WavesDetector(), lazy=False
+        )
+        total = elastic_diffuse_diffraction_patterns(
+            exit_waves, components="total", max_angle=60, parity="same"
+        )
 
-    phonons_mean = abtem.FrozenPhonons(atoms, num_configs=N_CONFIGS, sigmas=0.1, seed=3)
-    potential_mean = abtem.Potential(phonons_mean, sampling=0.1, slice_thickness=2)
-    detected = probe.multislice(
-        potential_mean, detectors=abtem.PixelatedDetector(max_angle=60), lazy=False
-    )
+        phonons_mean = abtem.FrozenPhonons(
+            atoms, num_configs=N_CONFIGS, sigmas=0.1, seed=3
+        )
+        potential_mean = abtem.Potential(phonons_mean, sampling=0.1, slice_thickness=2)
+        detected = probe.multislice(
+            potential_mean, detectors=abtem.PixelatedDetector(max_angle=60), lazy=False
+        )
 
     assert total.shape == detected.shape
     assert _max_error(np.asarray(total.array), np.asarray(detected.array)) < 1e-5
