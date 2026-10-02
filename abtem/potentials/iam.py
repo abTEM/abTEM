@@ -916,12 +916,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def _prepare_atoms(self):
         atoms, is_cut = self._transform_atoms()
-
-        if self.integrator.finite:
-            cutoffs = self._cutoffs()
-            margins = max(cutoffs) if len(cutoffs) else 0.0
-        else:
-            margins = 0.0
+        margins = self._margins()
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
@@ -953,20 +948,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # this copies only when it must.
             atoms = wrap_and_snap_atoms(atoms)
 
-        if is_cut:
-            # cut_cell already supplied exactly the margin padding would add.
-            pass
-        elif not self.integrator.periodic and self.integrator.finite:
+        # Repeats exactly the axes with a nonzero margin, which is the
+        # neighbourhood cut_cell already supplied to a cut cell.
+        if not is_cut:
             atoms = pad_atoms(atoms, margins=margins)
-        elif self.integrator.periodic:
-            atoms = pad_atoms(atoms, margins=margins, directions="z")
 
         if not self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
 
         if self.integrator.finite:
             sliced_atoms = SlicedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness, z_padding=margins
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                z_padding=margins[2],
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
