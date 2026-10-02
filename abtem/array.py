@@ -1290,14 +1290,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self, axes: Optional[int | tuple[int, ...]], reduction_func: str
     ) -> None:
         if axes is None:
-            return
-
-        axes = tuple(
-            axis if axis >= 0 else len(self.shape) + axis
-            for axis in number_to_tuple(axes)
-        )
-        if any(axis >= len(self.ensemble_shape) for axis in axes):
-            return  # _reduction raises for base axes
+            # A reduction over all axes includes every ensemble axis.
+            axes = tuple(range(len(self.ensemble_shape)))
+        else:
+            axes = tuple(
+                axis if axis >= 0 else len(self.shape) + axis
+                for axis in number_to_tuple(axes)
+            )
+            if any(axis >= len(self.ensemble_shape) for axis in axes):
+                return  # _reduction raises for base axes
 
         if self._weighted_axes(axes):
             warnings.warn(
@@ -1337,32 +1338,50 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # keeping it leaves such results bitwise unchanged.
             return self._reduction("mean", axes=axes, split_every=split_every)
 
-        xp = get_array_module(self.array)
+        # Integer arrays (e.g. counts) take the configured float precision rather
+        # than truncating the weights.
+        array_object = self
+        if self.array.dtype.kind not in "fc":
+            array_object = self.__class__(
+                **{
+                    **self._copy_kwargs(exclude=("array",)),
+                    "array": self.array.astype(get_dtype(complex=False)),
+                }
+            )
 
-        # Real dtype matching the array's precision (complex64 -> float32, ...),
-        # so the weights never promote the result; integer arrays (e.g. counts)
-        # take the configured float precision rather than truncating the weights.
-        dtype = self.array.dtype
-        array = self.array
-        if dtype.kind in "fc":
-            real_dtype = np.finfo(dtype).dtype
-        else:
-            real_dtype = get_dtype(complex=False)
-            array = array.astype(real_dtype)
-        for axis in axes:
-            if axis in weights:
-                axis_weights = weights[axis]
-            else:
-                axis_weights = np.full(self.shape[axis], 1.0 / self.shape[axis])
+        # Average the equal-weight axes first: it shrinks the array before the
+        # weighted pass, and the outer-product weights factorize over the axes.
+        unweighted = tuple(axis for axis in axes if axis not in weights)
+        if unweighted:
+            array_object = array_object._reduction(
+                "mean", axes=unweighted, split_every=split_every
+            )
+            weights = {
+                axis - sum(other < axis for other in unweighted): axis_weights
+                for axis, axis_weights in weights.items()
+            }
 
-            shape = [1] * len(self.shape)
-            shape[axis] = self.shape[axis]
-            array = array * xp.asarray(axis_weights.reshape(shape), dtype=real_dtype)
+        # A single multiply by the outer product of the per-axis weights, a small
+        # host array spanning only the weighted axes. The real dtype matches the
+        # array's precision (complex64 -> float32, ...), so the weights never
+        # promote the result.
+        ndim = len(array_object.shape)
+        combined = np.ones((1,) * ndim)
+        for axis, axis_weights in weights.items():
+            shape = [1] * ndim
+            shape[axis] = len(axis_weights)
+            combined = combined * axis_weights.reshape(shape)
 
-        weighted = self.__class__(
-            **{**self._copy_kwargs(exclude=("array",)), "array": array}
+        xp = get_array_module(array_object.array)
+        real_dtype = np.finfo(array_object.array.dtype).dtype
+        array = array_object.array * xp.asarray(combined, dtype=real_dtype)
+
+        weighted = array_object.__class__(
+            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
         )
-        return weighted._reduction("sum", axes=axes, split_every=split_every)
+        return weighted._reduction(
+            "sum", axes=tuple(weights), split_every=split_every
+        )
 
     def _reduction(
         self,

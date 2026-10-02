@@ -25,7 +25,6 @@ from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
     _unpack_distributions,
-    axis_weights,
     validate_distribution,
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
@@ -89,7 +88,12 @@ class BaseTransferFunction(
     @property
     def _energy_ensemble_axes_metadata(self) -> list[AxisMetadata]:
         if isinstance(self._energy_distribution, BaseDistribution):
-            return [EnergyAxis(values=tuple(self._energy_distribution.values))]
+            return [
+                EnergyAxis.from_distribution(
+                    self._energy_distribution,
+                    values=tuple(float(v) for v in self._energy_distribution.values),
+                )
+            ]
         return []
 
     @property
@@ -429,13 +433,11 @@ class Aperture(BaseAperture):
         axes = self._energy_ensemble_axes_metadata
         if isinstance(self.semiangle_cutoff, BaseDistribution):
             axes = axes + [
-                ParameterAxis(
+                ParameterAxis.from_distribution(
+                    self.semiangle_cutoff,
                     label="semiangle_cutoff",
-                    values=tuple(self.semiangle_cutoff),
                     units="mrad",
                     tex_label="$\\alpha_{cut}$",
-                    weights=axis_weights(self.semiangle_cutoff),
-                    _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
         return axes
@@ -1060,8 +1062,9 @@ class TemporalEnvelope(BaseTransferFunction):
     ) -> np.ndarray:
         xp = get_array_module(alpha)
 
-        unpacked, _ = _unpack_distributions(self.focal_spread, shape=alpha.shape, xp=xp)
-        (focal_spread,) = unpacked
+        (focal_spread,) = _unpack_distributions(
+            self.focal_spread, shape=alpha.shape, xp=xp
+        )
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
@@ -1211,12 +1214,10 @@ class _HasAberrations(HasAcceleratorMixin):
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
                 axes_metadata += [
-                    ParameterAxis(
+                    ParameterAxis.from_distribution(
+                        value,
                         label=parameter_name,
-                        values=tuple(value.values),
                         units="Å",
-                        weights=axis_weights(value),
-                        _ensemble_mean=value.ensemble_mean,
                         tex_label=symbol_to_tex_symbol(parameter_name),
                     )
                 ]
@@ -1384,7 +1385,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
 
-        unpacked, _ = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
+        unpacked = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
         angular_spread = unpacked[-1] / 1e3
         parameters = dict(zip(polar_symbols, unpacked[:-1]))
 
@@ -1564,7 +1565,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
             )
 
-        parameter_values, _ = _unpack_distributions(
+        parameter_values = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
 

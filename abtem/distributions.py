@@ -342,11 +342,11 @@ def uniform(
 def _validate_normalize(normalize: str) -> str:
     if normalize in ("intensity", "amplitude"):
         warnings.warn(
-            f"normalize='{normalize}' is deprecated. Distribution weights are now "
-            "probabilities applied when the ensemble is reduced (the weighted mean "
-            "Σ p_i I_i / Σ p_i), not factors on the wave amplitude, so the "
-            "normalization only rescales the stored weights and does not change "
-            "reduced results. Use the default normalize='probability'.",
+            f"normalize='{normalize}' is deprecated and now equivalent to "
+            "normalize='probability'. Distribution weights are probabilities "
+            "applied when the ensemble is reduced (the weighted mean "
+            "Σ p_i I_i / Σ p_i), not factors on the wave amplitude, so the weights "
+            "are normalized to sum to one. Use the default normalize='probability'.",
             FutureWarning,
             stacklevel=3,
         )
@@ -354,20 +354,7 @@ def _validate_normalize(normalize: str) -> str:
         raise ValueError(
             f"Unknown normalization method: {normalize!r}; use 'probability'"
         )
-    return normalize
-
-
-def axis_weights(distribution: BaseDistribution) -> Optional[tuple[float, ...]]:
-    """The probability weights of a 1D distribution as a tuple, for ensemble axis
-    metadata, or None if the weights are all equal (plain mean)."""
-    weights = np.asarray(distribution.weights)
-    if weights.ndim != 1 or len(weights) != len(distribution.values):
-        raise NotImplementedError(
-            "only one-dimensional distributions can define an ensemble axis"
-        )
-    if len(weights) == 0 or np.all(weights == weights[0]):
-        return None
-    return tuple(float(weight) for weight in weights)
+    return "probability"
 
 
 def _distribution_from_kernel(
@@ -405,12 +392,9 @@ def _distribution_from_kernel(
         x = values - center[i]
         weights = kernel(i, x)
 
-        if normalize == "intensity":
-            weights /= np.sqrt((weights**2).sum())
-        elif normalize in ("probability", "amplitude"):
-            weights /= weights.sum()
-        else:
+        if normalize != "probability":
             raise RuntimeError(f"Unknown normalization method: {normalize}")
+        weights /= weights.sum()
 
         distributions.append(
             DistributionFromValues(
@@ -460,9 +444,9 @@ def gaussian(
         Scaling of the stored probability weights: 'probability' (default)
         normalizes them to sum to one. The weights are probabilities applied when
         the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
-        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
-        'probability') are deprecated remnants of the former convention in which
-        the weights multiplied the wave amplitude.
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -543,9 +527,9 @@ def lorentzian(
         Scaling of the stored probability weights: 'probability' (default)
         normalizes them to sum to one. The weights are probabilities applied when
         the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
-        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
-        'probability') are deprecated remnants of the former convention in which
-        the weights multiplied the wave amplitude.
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -633,9 +617,9 @@ def voigtian(
         Scaling of the stored probability weights: 'probability' (default)
         normalizes them to sum to one. The weights are probabilities applied when
         the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
-        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
-        'probability') are deprecated remnants of the former convention in which
-        the weights multiplied the wave amplitude.
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -769,9 +753,9 @@ def pseudo_voigtian(
         Scaling of the stored probability weights: 'probability' (default)
         normalizes them to sum to one. The weights are probabilities applied when
         the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
-        reduced result. 'intensity' (Σ p_i² = 1) and 'amplitude' (alias of
-        'probability') are deprecated remnants of the former convention in which
-        the weights multiplied the wave amplitude.
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -914,9 +898,14 @@ def tuple_range_except(n, i):
 
 def _unpack_distributions(
     *args: float | BaseDistribution, shape: tuple[int, ...], xp: ArrayModule = np
-) -> tuple[tuple[float | np.ndarray, ...], float | np.ndarray]:
+) -> tuple[float | np.ndarray, ...]:
+    """Broadcastable parameter values of the given (distributions of) parameters.
+
+    The distribution weights are not returned: they are probabilities carried by
+    the ensemble axis metadata and applied when the ensemble is reduced.
+    """
     if len(args) == 0:
-        return (), 1.0
+        return ()
 
     xp = get_array_module(xp)
     dtype = get_dtype(complex=False)
@@ -925,7 +914,6 @@ def _unpack_distributions(
     base_axes = tuple(range(num_new_axes, num_new_axes + len(shape)))
 
     unpacked = []
-    weights = 1.0
     i = 0
     for arg in args:
         if not isinstance(arg, BaseDistribution):
@@ -934,15 +922,9 @@ def _unpack_distributions(
             axis = tuple_range_except(num_new_axes, i) + base_axes
             values = xp.asarray(np.expand_dims(arg.values, axis=axis), dtype=dtype)
             unpacked.append(values)
-            new_weights = xp.asarray(
-                np.expand_dims(arg.weights, axis=axis), dtype=dtype
-            )
-            weights = new_weights if weights is None else weights * new_weights
             i += 1
 
-    unpacked_tuple = tuple(unpacked)
-
-    return unpacked_tuple, weights
+    return tuple(unpacked)
 
 
 class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):

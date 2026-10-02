@@ -21,7 +21,6 @@ from abtem.core.utils import CopyMixin, EqualityMixin, expand_dims_to_broadcast
 from abtem.distributions import (
     BaseDistribution,
     EnsembleFromDistributions,
-    axis_weights,
     validate_distribution,
 )
 
@@ -272,12 +271,7 @@ class EnsembleTransform(
             distribution = getattr(self, name)
             if isinstance(distribution, BaseDistribution):
                 ensemble_axes_metadata += [
-                    ParameterAxis(
-                        values=tuple(distribution),
-                        weights=axis_weights(distribution),
-                        _ensemble_mean=distribution.ensemble_mean,
-                        **value,
-                    )
+                    ParameterAxis.from_distribution(distribution, **value)
                 ]
 
         return ensemble_axes_metadata

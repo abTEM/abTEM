@@ -608,16 +608,18 @@ def test_distribution_weights_are_validated():
 
 
 def test_deprecated_normalize_options_warn_but_do_not_change_reduction():
-    # 'intensity' normalization only rescales the stored weights; the reduction
-    # divides by Σp, so the reduced result is unchanged.
+    # The deprecated options behave as 'probability': the stored weights sum to
+    # one (not Σp² = 1, which no longer means anything), and the reduction is
+    # unchanged.
     new = distributions.gaussian(15.0, num_samples=7)
     with pytest.warns(FutureWarning, match="deprecated"):
         old = distributions.gaussian(15.0, num_samples=7, normalize="intensity")
     with pytest.warns(FutureWarning, match="deprecated"):
-        distributions.gaussian(15.0, num_samples=7, normalize="amplitude")
+        amplitude = distributions.gaussian(15.0, num_samples=7, normalize="amplitude")
 
     np.testing.assert_allclose(np.sum(new.weights), 1.0)
-    np.testing.assert_allclose(np.sum(np.array(old.weights) ** 2), 1.0)
+    np.testing.assert_array_equal(old.weights, new.weights)
+    np.testing.assert_array_equal(amplitude.weights, new.weights)
 
     a = Probe(defocus=new, **PROBE_KW).build().intensity().reduce_ensemble()
     b = Probe(defocus=old, **PROBE_KW).build().intensity().reduce_ensemble()
@@ -625,3 +627,127 @@ def test_deprecated_normalize_options_warn_but_do_not_change_reduction():
 
     with pytest.raises(ValueError, match="Unknown normalization"):
         distributions.gaussian(15.0, num_samples=7, normalize="bogus")
+
+
+# ---------------------------------------------------------------------------------
+# (h) Every axis built from a distribution carries its weights; reductions that
+#     would ignore them warn or apply them
+# ---------------------------------------------------------------------------------
+
+
+def test_transfer_function_energy_axis_carries_weights():
+    # The transfer-function energy axis used to be built without weights (and
+    # without the ensemble_mean flag), unlike the Probe/PlaneWave energy axis.
+    energy = distributions.from_values(
+        [100e3, 200e3, 300e3], weights=[0.2, 0.7, 0.1], ensemble_mean=True
+    )
+    for transfer_function in (
+        CTF(energy=energy, defocus=50.0, semiangle_cutoff=20.0),
+        abtem.transfer.Aperture(semiangle_cutoff=20.0, energy=energy),
+        abtem.transfer.TemporalEnvelope(focal_spread=10.0, energy=energy),
+    ):
+        (axis,) = [
+            axis
+            for axis in transfer_function.ensemble_axes_metadata
+            if isinstance(axis, abtem.core.axes.EnergyAxis)
+        ]
+        assert axis.weights == (0.2, 0.7, 0.1)
+        assert axis._ensemble_mean
+        # identical to the axis of a wave function with the same energy spread
+        wave_axis = PlaneWave(energy=energy).ensemble_axes_metadata[0]
+        assert axis == wave_axis
+
+
+def test_reduction_over_all_axes_warns_for_weighted_axes():
+    dist = distributions.from_values(
+        ASYM_VALUES, weights=ASYM_WEIGHTS, ensemble_mean=False
+    )
+    images = Probe(defocus=dist, **PROBE_KW).build().intensity()
+    with pytest.warns(UserWarning, match="ignores the weights"):
+        images.sum()
+    with pytest.warns(UserWarning, match="ignores the weights"):
+        images.mean()
+
+
+def test_concatenating_weighted_with_unweighted_axis_raises():
+    from abtem.core.axes import ParameterAxis
+
+    weighted = ParameterAxis(label="C10", values=(0.0, 1.0), weights=(0.2, 0.8))
+    unweighted = ParameterAxis(label="C10", values=(2.0,))
+    with pytest.raises(ValueError, match="relative weighting is undefined"):
+        weighted.concatenate(unweighted)
+    with pytest.raises(ValueError, match="relative weighting is undefined"):
+        unweighted.concatenate(weighted)
+
+    # equal weights on the weighted side: the plain mean is exact either way
+    equal = ParameterAxis(label="C10", values=(0.0, 1.0), weights=(0.5, 0.5))
+    assert equal.concatenate(unweighted).weights is None
+    assert weighted.concatenate(weighted).weights == (0.2, 0.8, 0.2, 0.8)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_weighted_and_unweighted_axes_reduced_together(lazy, device):
+    # Weighted, unweighted, weighted: the unweighted axis is averaged first, which
+    # renumbers the weighted axes behind it.
+    from abtem.core.axes import ParameterAxis
+    from abtem.core.backend import get_array_module as xp_for
+
+    rng = np.random.default_rng(1)
+    host = rng.random((4, 2, 3, 5, 6))
+    array = xp_for(device).asarray(host)
+    if lazy:
+        import dask.array as da
+
+        array = da.from_array(array, chunks=(1, 1, 2, -1, -1))
+
+    w1, w3 = ASYM_WEIGHTS, np.array([0.6, 0.15, 0.25])
+    axes = [
+        ParameterAxis(
+            values=tuple(ASYM_VALUES), weights=tuple(w1), _ensemble_mean=True
+        ),
+        ParameterAxis(values=(1.0, 2.0), _ensemble_mean=True),
+        ParameterAxis(values=(1.0, 2.0, 3.0), weights=tuple(w3), _ensemble_mean=True),
+    ]
+    images = abtem.Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+    reduced = images.reduce_ensemble()
+    assert reduced.is_lazy == lazy
+
+    reference = np.einsum(
+        "i,j,k,ijklm->lm", w1 / w1.sum(), np.full(2, 0.5), w3 / w3.sum(), host
+    )
+    _assert_close_to(reduced.array, reference, rtol=1e-12)
+
+
+def test_visualization_range_sum_applies_weights():
+    # Summing a range of ensemble members for display weights a weighted axis
+    # (scaled so that equal weights would give the plain sum) without warning.
+    from abtem.visualize.visualizations import _sum_ensemble_range
+
+    dist = distributions.from_values(
+        ASYM_VALUES, weights=ASYM_WEIGHTS, ensemble_mean=False
+    )
+    images = Probe(defocus=dist, **PROBE_KW).build().intensity().compute()
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        summed = _sum_ensemble_range(images[1:], (0,))
+
+    members = _to_numpy(images.array)[1:]
+    weights = ASYM_WEIGHTS[1:]
+    reference = len(weights) * np.einsum("i,ijk->jk", weights / weights.sum(), members)
+    _assert_close_to(summed.array, reference)
+
+    # unweighted axes keep the plain sum
+    unweighted = abtem.Images(
+        images.array,
+        sampling=images.sampling,
+        ensemble_axes_metadata=[
+            abtem.core.axes.ParameterAxis(values=tuple(ASYM_VALUES))
+        ],
+    )
+    _assert_close_to(
+        _sum_ensemble_range(unweighted, (0,)).array, _to_numpy(images.array).sum(0)
+    )

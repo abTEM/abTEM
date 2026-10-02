@@ -13,7 +13,6 @@ from abtem.distributions import (
     BaseDistribution,
     DistributionFromValues,
     MultidimensionalDistribution,
-    axis_weights,
     validate_distribution,
 )
 from abtem.transform import WavesToWavesTransform
@@ -190,12 +189,11 @@ class BeamTilt(BaseBeamTilt):
         """Metadata describing (an ensemble of) tilted wave function(s)."""
         if isinstance(self.tilt, BaseDistribution):
             return [
-                TiltAxis(
-                    label="tilt",
+                TiltAxis.from_distribution(
+                    self.tilt,
                     values=tuple(tuple(value) for value in self.tilt.values),
+                    label="tilt",
                     units="mrad",
-                    weights=axis_weights(self.tilt),
-                    _ensemble_mean=self.tilt.ensemble_mean,
                 )
             ]
         else:
@@ -245,13 +243,11 @@ class AxisAlignedBeamTilt(DistributionFromValues):
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         if isinstance(self.tilt, BaseDistribution):
             return [
-                AxisAlignedTiltAxis(
+                AxisAlignedTiltAxis.from_distribution(
+                    self.tilt,
                     label=f"tilt_{self._direction}",
-                    values=tuple(self.tilt.values),
                     direction=self._direction,
                     units="mrad",
-                    weights=axis_weights(self.tilt),
-                    _ensemble_mean=self.tilt.ensemble_mean,
                 )
             ]
         else:
@@ -325,25 +321,15 @@ class BeamTilt2D(BaseBeamTilt):
 
         if isinstance(self.tilt_x, BaseDistribution):
             ensemble_axes_metadata.append(
-                AxisAlignedTiltAxis(
-                    label="tilt_x",
-                    values=tuple(self.tilt_x.values),
-                    units="mrad",
-                    direction="x",
-                    weights=axis_weights(self.tilt_x),
-                    _ensemble_mean=self.tilt_x.ensemble_mean,
+                AxisAlignedTiltAxis.from_distribution(
+                    self.tilt_x, label="tilt_x", units="mrad", direction="x"
                 )
             )
 
         if isinstance(self.tilt_y, BaseDistribution):
             ensemble_axes_metadata.append(
-                AxisAlignedTiltAxis(
-                    label="tilt_y",
-                    values=tuple(self.tilt_y.values),
-                    units="mrad",
-                    direction="y",
-                    weights=axis_weights(self.tilt_y),
-                    _ensemble_mean=self.tilt_y.ensemble_mean,
+                AxisAlignedTiltAxis.from_distribution(
+                    self.tilt_y, label="tilt_y", units="mrad", direction="y"
                 )
             )
 

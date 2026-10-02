@@ -399,21 +399,54 @@ class OrdinalAxis(AxisMetadata):
         kwargs = dataclasses.asdict(self)
         kwargs["values"] = kwargs["values"] + other.values
 
-        if self.weights is None and other.weights is None:
-            kwargs["weights"] = None
+        if self.weights is not None and other.weights is not None:
+            kwargs["weights"] = self.weights + other.weights
+        elif _has_unequal_weights(self.weights) or _has_unequal_weights(
+            other.weights
+        ):
+            # The weights need not be normalized, so an unweighted axis has no
+            # defined scale relative to a weighted one: any choice (e.g. unit
+            # weights) would silently set the relative weight of the two parts.
+            raise ValueError(
+                f"cannot concatenate an ensemble axis '{self.label}' carrying "
+                "probability weights with one that has none; their relative "
+                "weighting is undefined"
+            )
         else:
-            # An axis without weights has equal (unit) weights; the weights
-            # are not required to be normalized, so concatenating keeps each
-            # element's weight as is.
-            self_weights = (
-                (1.0,) * len(self.values) if self.weights is None else self.weights
-            )
-            other_weights = (
-                (1.0,) * len(other.values) if other.weights is None else other.weights
-            )
-            kwargs["weights"] = self_weights + other_weights
+            # Equal weights on both sides: a plain mean is exact.
+            kwargs["weights"] = None
 
         return self.__class__(**kwargs)
+
+    @classmethod
+    def from_distribution(
+        cls, distribution: Any, values: Optional[tuple] = None, **kwargs: Any
+    ) -> OrdinalAxis:
+        """Ensemble axis described by a one-dimensional distribution.
+
+        Sets the values, the probability weights and the ``_ensemble_mean`` flag
+        from the distribution, so that no axis built from a distribution can
+        lose its weights.
+
+        Parameters
+        ----------
+        distribution : BaseDistribution
+            The distribution defining the ensemble axis.
+        values : tuple, optional
+            The axis values, if they must be converted from the distribution
+            values (default is ``tuple(distribution.values)``).
+        **kwargs
+            Further fields of the axis metadata (label, units, ...).
+        """
+        if values is None:
+            values = tuple(distribution.values)
+
+        return cls(
+            values=values,
+            weights=_distribution_axis_weights(distribution),
+            _ensemble_mean=distribution.ensemble_mean,
+            **kwargs,
+        )
 
     def __len__(self) -> int:
         return len(self.values)
@@ -715,7 +748,7 @@ def _normalized_axis_weights(axis: AxisMetadata, n: int) -> Optional[np.ndarray]
             f"array has length {n} along the axis"
         )
 
-    if np.all(weights == weights[0]):
+    if not _has_unequal_weights(weights):
         return None
 
     total = weights.sum()
@@ -723,6 +756,28 @@ def _normalized_axis_weights(axis: AxisMetadata, n: int) -> Optional[np.ndarray]
         raise RuntimeError(f"ensemble axis '{axis.label}' has zero total weight")
 
     return weights / total
+
+
+def _has_unequal_weights(weights: Optional[Any]) -> bool:
+    """Whether the weights are given and not all equal (equal or absent weights
+    make the plain mean exact)."""
+    if weights is None or len(weights) == 0:
+        return False
+    weights = np.asarray(weights, dtype=float)
+    return not np.all(weights == weights[0])
+
+
+def _distribution_axis_weights(distribution: Any) -> Optional[tuple[float, ...]]:
+    """The probability weights of a one-dimensional distribution as a tuple, for
+    ensemble axis metadata, or None if the weights are all equal (plain mean)."""
+    weights = np.asarray(distribution.weights)
+    if weights.ndim != 1 or len(weights) != len(distribution.values):
+        raise NotImplementedError(
+            "only one-dimensional distributions can define an ensemble axis"
+        )
+    if not _has_unequal_weights(weights):
+        return None
+    return tuple(float(weight) for weight in weights)
 
 
 def axis_to_dict(axis: AxisMetadata):
