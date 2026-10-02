@@ -7166,10 +7166,16 @@ def elastic_diffuse_diffraction_patterns(
         to that scattering angle [mrad], plus the same margin when the metadata has
         a ``semiangle_cutoff``. Default is False.
     unbiased : bool, optional
-        Correct the (N − 1)/N bias of the diffuse intensity:
-        D_u = N/(N − 1)·D and E_u = T − D_u; the total is unchanged. The diffuse
-        component, and the elastic one with ``unbiased``, need at least 2
-        configurations. Default is False.
+        Correct the (N − 1)/N bias of the diffuse intensity, assuming independent
+        configurations: D_u = N/(N − 1)·D and E_u = T − D_u; the total is
+        unchanged. The diffuse component, and the elastic one with ``unbiased``,
+        need at least 2 configurations. Both components are differences of
+        intensities and can be slightly negative: E_u where the elastic intensity
+        is close to zero, e.g. between the Bragg reflections of a plane wave, and
+        D (or D_u) from roundoff, e.g. down to −2.9e-7 of max T in float32 and
+        −5.5e-16 in float64 for three identical configurations of a probe exit
+        wave. Clip them before showing them on a logarithmic scale. Default is
+        False.
     reduction_dtype : {None, 'float32', 'float64'}, optional
         Precision of the moments. The diffuse part is a difference of two
         intensities, so its relative error grows as max T / max D: where the
@@ -7188,8 +7194,9 @@ def elastic_diffuse_diffraction_patterns(
     from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
 
     names, stacked = _validate_frozen_phonon_components(components)
-    if not isinstance(unbiased, bool):
+    if not isinstance(unbiased, (bool, np.bool_)):
         raise TypeError(f"unbiased must be a bool, got {type(unbiased).__name__}")
+    unbiased = bool(unbiased)
     reduction_dtype = _validate_reduction_dtype(reduction_dtype)
 
     fp_axis_idx = next(
@@ -7299,9 +7306,10 @@ def phonon_loss_diffraction_patterns(
 
     Note that the diffuse intensity is the variance of the diffracted amplitude
     across frozen-phonon configurations: with a single configuration per energy
-    it is exactly zero everywhere, so the diffuse component (and ``'all'``)
-    requires at least 2 configurations per energy (enforced with a
-    ``ValueError``); in practice many more are needed for good statistics.
+    it is exactly zero everywhere, so the diffuse component (and ``'all'``), and
+    the elastic component with ``unbiased=True``, require at least 2
+    configurations per energy (enforced with a ``ValueError``); in practice many
+    more are needed for good statistics.
 
     Parameters
     ----------

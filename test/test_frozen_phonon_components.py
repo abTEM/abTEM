@@ -520,6 +520,14 @@ def test_invalid_components_raise(components, error, match):
         elastic_diffuse_diffraction_patterns(_exit_waves(), components=components)
 
 
+def test_unbiased_accepts_a_numpy_bool():
+    waves = _exit_waves()
+    result = elastic_diffuse_diffraction_patterns(waves, unbiased=np.True_)
+    expected = elastic_diffuse_diffraction_patterns(waves, unbiased=True)
+    np.testing.assert_array_equal(result.array, expected.array)
+    assert result.metadata["unbiased"] is True
+
+
 @pytest.mark.parametrize("unbiased", [1, None, "yes"])
 def test_unbiased_must_be_a_bool(unbiased):
     with pytest.raises(TypeError, match="unbiased must be a bool"):
