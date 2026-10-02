@@ -226,3 +226,27 @@ def test_waves_detector_keeps_data_on_device_by_default():
     from abtem.detectors import WavesDetector
 
     assert WavesDetector().to_cpu is False
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.AnnularDetector(inner=10, outer=40),
+        abtem.FlexibleAnnularDetector(outer=40),
+        abtem.SegmentedDetector(
+            inner=10, outer=40, nbins_radial=2, nbins_azimuthal=4
+        ),
+    ],
+    ids=["annular", "flexible_annular", "segmented"],
+)
+def test_radial_detector_show_without_waves_defaults_units(detector):
+    """show() from energy, gpts and sampling alone draws in mrad by default."""
+    import matplotlib.pyplot as plt
+
+    def drawn(**kwargs):
+        detector.show(energy=100e3, gpts=64, sampling=0.05, **kwargs)
+        image = np.ma.filled(plt.gcf().axes[0].images[0].get_array(), np.nan)
+        plt.close("all")
+        return image
+
+    np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
