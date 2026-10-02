@@ -749,12 +749,21 @@ class _FieldBuilder(BaseField):
         return output_potential
 
 
-def _plane_frame(plane) -> np.ndarray:
-    """The linear map `rotate_atoms_to_plane` applies to positions, acting on
-    row vectors: a permutation of the Cartesian axes."""
+def _plane_frame(
+    atoms: Atoms, plane, small_cell_components: float = 0.0
+) -> np.ndarray:
+    """The linear map `rotate_atoms_to_plane` applies to the positions of
+    `atoms`, acting on row vectors. Cell components smaller than
+    `small_cell_components` are zeroed first, as `orthogonalize_cell` does
+    before it rotates the atoms."""
     if plane == "xy":
         return np.eye(3)
-    return np.eye(3)[:, list(plane_to_axes(plane))]
+    atoms = atoms.copy()
+    if small_cell_components:
+        cell = np.array(atoms.cell)
+        cell[np.abs(cell) < small_cell_components] = 0.0
+        atoms.set_cell(cell)
+    return rotate_atoms_to_plane(atoms, plane, return_transform_matrix=True)[1]
 
 
 class _FieldBuilderFromAtoms(_FieldBuilder):
@@ -891,8 +900,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
 
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
-            atoms = rotate_atoms_to_plane(atoms, self.plane)
-            return atoms, False, _plane_frame(self.plane)
+            atoms, frame = rotate_atoms_to_plane(
+                atoms, self.plane, return_transform_matrix=True
+            )
+            return atoms, False, frame
 
         # `diag(atoms.cell) == self.box` is not by itself proof the cell is
         # orthogonal: for a near-orthorhombic cell with off-diagonal noise
@@ -905,6 +916,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             atoms.cell
         ):
             if self.periodic:
+                plane_frame = _plane_frame(
+                    atoms, self.plane, small_cell_components=1e-6
+                )
                 atoms, affine = orthogonalize_cell(
                     atoms,
                     box=self.box,
@@ -913,7 +927,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     return_transform_matrix=True,
                     allow_transform=True,
                 )
-                return atoms, False, _plane_frame(self.plane) @ affine
+                return atoms, False, plane_frame @ affine
             else:
                 # The margin comes from the larger repeated structure, so it
                 # is the true neighbourhood of a cell that need not be
@@ -923,6 +937,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 # of a transformed non-periodic cell many times over. An
                 # infinite projection's cutoff is infinite, which cut every
                 # atom; it needs no margin.
+                plane_frame = _plane_frame(atoms, self.plane)
                 atoms = cut_cell(
                     atoms,
                     cell=self.box,
@@ -930,7 +945,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     origin=self.origin,
                     margin=self._margins(),
                 )
-                return atoms, True, _plane_frame(self.plane)
+                return atoms, True, plane_frame
 
         return atoms, False, np.eye(3)
 

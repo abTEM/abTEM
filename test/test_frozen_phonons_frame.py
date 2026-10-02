@@ -27,8 +27,23 @@ def _single_atom():
     return ase.Atoms("Au", positions=[(2.0, 2.0, 2.0)], cell=(4.0, 4.0, 4.0), pbc=True)
 
 
+def _rectangular_rotated_about_y(num_atoms):
+    """A rectangular cell rotated about y: with plane="xz" this is a rotation about
+    the potential's z, which standardize_cell undoes."""
+    atoms = ase.Atoms(
+        "Si" * num_atoms,
+        scaled_positions=[(i / num_atoms, 0.5, 0.5) for i in range(num_atoms)],
+        cell=(4.0, 4.0, 5.0),
+        pbc=True,
+    )
+    atoms.rotate(30, "y", rotate_cell=True)
+    return atoms
+
+
 TRANSFORMS = {
     "plane_xz": (ase.build.bulk("Si", cubic=True), {"plane": "xz"}),
+    # three atoms: with any other number standardize_cell raises an IndexError
+    "rotated_cell_plane_xz": (_rectangular_rotated_about_y(3), {"plane": "xz"}),
     "plane_yz": (ase.build.bulk("Si", cubic=True), {"plane": "yz"}),
     "hexagonal": (ase.build.mx2("WSe2", vacuum=2), {}),
     "hexagonal_rotated_17": (_rotated(ase.build.mx2("WSe2", vacuum=2), 17), {}),
@@ -44,15 +59,16 @@ TRANSFORMS = {
 def test_frame_is_the_map_the_transform_applies_to_positions(name):
     """Shifting every atom by v moves each transformed atom by v @ frame.
 
-    The shift is larger than orthogonalize_cell's snapping tolerance at the cell
-    boundary, and each transformed atom is paired with the nearest transformed copy
-    of the same atom, so periodic images cannot be mistaken for each other.
+    v is chosen so that every component of its image, v @ frame, is larger than
+    orthogonalize_cell's snapping tolerance at the cell boundary. Each transformed
+    atom is paired with the nearest transformed copy of the same atom, so periodic
+    images cannot be mistaken for each other.
     """
     atoms, kwargs = TRANSFORMS[name]
-    v = np.array([0.03, 0.07, 0.05])
 
     potential = abtem.Potential(atoms, sampling=0.1, **kwargs)
     reference, _, frame = potential._transform_atoms()
+    v = np.array([0.03, 0.07, 0.05]) @ np.linalg.inv(frame)
     shifted_atoms = atoms.copy()
     shifted_atoms.positions += v
     shifted_potential = abtem.Potential(shifted_atoms, sampling=0.1, **kwargs)
@@ -70,8 +86,11 @@ def test_frame_is_the_map_the_transform_applies_to_positions(name):
             paired += 1
 
     assert paired >= len(atoms)
-    if name.startswith("plane"):
+    if "plane" in name:
         assert not np.allclose(frame, np.eye(3))
+    if name == "rotated_cell_plane_xz":
+        # not a permutation: standardize_cell's rotation about z is included
+        assert not np.allclose(np.abs(frame), np.round(np.abs(frame)))
 
 
 def test_frame_of_a_rotated_cell_is_not_a_permutation():
