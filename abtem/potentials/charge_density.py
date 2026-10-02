@@ -271,11 +271,11 @@ def _generate_slices(
     if ewald_potential.plane != "xy":
         axes = plane_to_axes(ewald_potential.plane)
         charge = np.moveaxis(charge, axes[:2], (0, 1))
-        atoms = ewald_potential.get_transformed_atoms()
+        atoms, _, frame = ewald_potential._transform_atoms()
     else:
-        atoms = ewald_potential.frozen_phonons.atoms
+        atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
 
-    atoms = ewald_potential.frozen_phonons.randomize(atoms)
+    atoms = ewald_potential.frozen_phonons._randomize_transformed(atoms, frame)
 
     charge = -np.fft.fftn(charge)
 

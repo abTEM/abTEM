@@ -42,6 +42,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
+    SOURCE_INDEX,
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
@@ -748,6 +749,14 @@ class _FieldBuilder(BaseField):
         return output_potential
 
 
+def _plane_frame(plane) -> np.ndarray:
+    """The linear map `rotate_atoms_to_plane` applies to positions, acting on
+    row vectors: a permutation of the Cartesian axes."""
+    if plane == "xy":
+        return np.eye(3)
+    return np.eye(3)[:, list(plane_to_axes(plane))]
+
+
 class _FieldBuilderFromAtoms(_FieldBuilder):
     # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from
     # the atoms, the slicing and the cell, all of which are compared already.
@@ -845,7 +854,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         transformed_atoms : Atoms
             Transformed atoms.
         """
-        return self._transform_atoms()[0]
+        atoms = self._transform_atoms()[0]
+        del atoms.arrays[SOURCE_INDEX]
+        return atoms
 
     def _margins(self) -> tuple[float, float, float]:
         """The margin the integrator needs along each axis beyond the cell.
@@ -866,13 +877,22 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         return (margin, margin, margin)
 
-    def _transform_atoms(self) -> tuple[Atoms, bool]:
-        """The transformed atoms, and whether they were cut out of a larger
+    def _transform_atoms(self) -> tuple[Atoms, bool, np.ndarray]:
+        """The transformed atoms; whether they were cut out of a larger
         repeated structure, in which case they already carry the integrator's
-        margin and must not be padded again."""
-        atoms = self.frozen_phonons.atoms
+        margin and must not be padded again; and the linear map from the
+        Cartesian axes of the frozen phonons' atoms to those of the transformed
+        atoms, acting on row vectors.
+
+        Each transformed atom carries, in the ``SOURCE_INDEX`` array, the index
+        of the atom of the frozen phonons' atoms it is a copy of.
+        """
+        atoms = self.frozen_phonons.atoms.copy()
+        atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
+
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
+            return atoms, False, _plane_frame(self.plane)
 
         # `diag(atoms.cell) == self.box` is not by itself proof the cell is
         # orthogonal: for a near-orthorhombic cell with off-diagonal noise
@@ -885,15 +905,15 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             atoms.cell
         ):
             if self.periodic:
-                atoms = orthogonalize_cell(
+                atoms, affine = orthogonalize_cell(
                     atoms,
                     box=self.box,
                     plane=self.plane,
                     origin=self.origin,
-                    return_transform=False,
+                    return_transform_matrix=True,
                     allow_transform=True,
                 )
-                return atoms, False
+                return atoms, False, _plane_frame(self.plane) @ affine
             else:
                 # The margin comes from the larger repeated structure, so it
                 # is the true neighbourhood of a cell that need not be
@@ -910,12 +930,14 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     origin=self.origin,
                     margin=self._margins(),
                 )
-                return atoms, True
+                return atoms, True, _plane_frame(self.plane)
 
-        return atoms, False
+        return atoms, False, np.eye(3)
 
-    def _prepare_atoms(self):
-        atoms, is_cut = self._transform_atoms()
+    def _atoms_to_slice(self) -> tuple[Atoms, float]:
+        """The atoms of this configuration as they are sliced, and the margin
+        the integrator needs beyond the cell."""
+        atoms, is_cut, frame = self._transform_atoms()
 
         if self.integrator.finite:
             cutoffs = self._cutoffs()
@@ -924,34 +946,18 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             margins = 0.0
 
         if self.periodic:
-            atoms = self.frozen_phonons.randomize(atoms)
+            atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
             # Shared with SliceIndexedAtoms, which applies the same wrap to the
             # atoms it is handed directly -- e.g. explicit core-loss ``sites``
             # and CrystalPotential's tiled atoms, which do not come through
             # here.
             #
-            # Copy, because these atoms are *not* this method's own. For
-            # DummyFrozenPhonons -- the wrapper every plain Potential(atoms)
-            # gets -- get_transformed_atoms() and randomize() are both the
-            # identity, so writing in place here mutates the object the
-            # potential stores and ships into the task graph as ONE shared
-            # node. Every task on a worker then wraps the same Atoms.
-            #
-            # The previous `copy=False` preserved dev's in-place behaviour
-            # deliberately, with this aliasing noted as a separate defect.
-            # This is that defect: three entry points reach it, and two of
-            # them alias the CALLER's own object, because
-            # _validate_frozen_phonons copies a plain Atoms but passes a list
-            # (-> AtomsEnsemble, which stores references) and a pre-built
-            # frozen-phonons object straight through.
-            #
-            # wrap_and_snap_atoms already takes ownership as a parameter, so
-            # the fix is answering it correctly rather than adding machinery.
-            # This layer and not a neighbouring one: it is the only writer in
-            # the mechanism. get_transformed_atoms has five consumers of which
-            # only this one writes, and randomize copies unconditionally where
-            # this copies only when it must.
-            atoms = wrap_and_snap_atoms(atoms)
+            # No copy: _transform_atoms returns a copy of the frozen phonons'
+            # atoms, and randomize returns either a new object or the atoms it
+            # is given, so these atoms are this method's own. Writing in place
+            # cannot reach the atoms the potential stores or ships into a task
+            # graph.
+            atoms = wrap_and_snap_atoms(atoms, copy=False)
 
         if is_cut:
             # cut_cell already supplied exactly the margin padding would add.
@@ -962,7 +968,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             atoms = pad_atoms(atoms, margins=margins, directions="z")
 
         if not self.periodic:
-            atoms = self.frozen_phonons.randomize(atoms)
+            atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
+
+        return atoms, margins
+
+    def _prepare_atoms(self):
+        atoms, margins = self._atoms_to_slice()
 
         if self.integrator.finite:
             sliced_atoms = SlicedAtoms(
@@ -979,6 +990,40 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
 
         return sliced_atoms
+
+    def to_atoms_ensemble(self) -> AtomsEnsemble:
+        """
+        The atomic configurations this potential simulates, one for each frozen
+        phonon configuration.
+
+        Each configuration is the atoms as they are sliced: transformed to the
+        potential's plane, origin and box, displaced by the frozen phonons, and
+        wrapped into the cell when the potential is periodic. With a finite
+        projection it also holds the images of atoms within the integration
+        margin outside the cell.
+
+        Iterating the frozen phonons gives configurations of the untransformed
+        atoms instead, which are different ones whenever the potential
+        transforms the cell.
+
+        Returns
+        -------
+        atoms_ensemble : AtomsEnsemble
+        """
+        if self.ensemble_shape:
+            potentials = [
+                wrapped.item() for _, _, wrapped in self.generate_blocks(1)
+            ]
+        else:
+            potentials = [self]
+
+        trajectory = []
+        for potential in potentials:
+            atoms = potential._atoms_to_slice()[0]
+            del atoms.arrays[SOURCE_INDEX]
+            trajectory.append(atoms)
+
+        return AtomsEnsemble(trajectory)
 
     def get_sliced_atoms(self) -> BaseSlicedAtoms:
         """

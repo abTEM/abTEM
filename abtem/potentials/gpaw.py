@@ -27,6 +27,7 @@ from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import (
+    SOURCE_INDEX,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -453,7 +454,10 @@ class GPAWPotential(_PotentialBuilder):
 
         calculator = _DummyGPAW.from_generic(calculator)
 
-        atoms = self.frozen_phonons.atoms
+        atoms = self.frozen_phonons.atoms.copy()
+        # Per-atom displacement standard deviations follow their atoms into
+        # the repeated cell.
+        atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
 
         if self.repetitions != (1, 1, 1):
             # cell_cv = calculator.gd.cell_cv * self.repetitions

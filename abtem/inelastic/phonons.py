@@ -48,6 +48,13 @@ except ImportError:
     Reader = None
 
 
+# Per-atom array naming, for each atom of a transformed or repeated structure, the
+# index of the atom of the original structure it is a copy of. A potential sets it
+# before transforming the atoms, so that per-atom displacement standard deviations
+# can follow their atoms into a structure with a different number of atoms.
+SOURCE_INDEX = "abtem_source_index"
+
+
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
         assert Reader is not None
@@ -135,6 +142,16 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ----------
         atoms : Atoms
         """
+
+    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+        """Randomize atoms that a potential transformed from :attr:`atoms`.
+
+        `frame` is the linear map from the Cartesian axes of :attr:`atoms` to
+        those of `atoms`, acting on row vectors. Subclasses whose displacements
+        have no direction ignore it; this keeps subclasses that implement only
+        `randomize(atoms)` working.
+        """
+        return self.randomize(atoms)
 
     @abstractmethod
     def __len__(self) -> int:
@@ -306,11 +323,21 @@ class FrozenPhonons(BaseFrozenPhonons):
         specify displacements for each species. A list or array with three numbers for
         each atom.
 
+        The directions of anisotropic standard deviations are the Cartesian axes of
+        `atoms` as given. A potential that rotates the atoms to another `plane`, or
+        orthogonalizes their cell, rotates the displacements with them. Per-atom
+        standard deviations follow their atoms when the potential repeats the cell.
+
     directions : str, optional
-        The Cartesian directions in which the atoms are displaced, as a string of one or
-        more of 'x', 'y' and 'z'. The default, 'xyz', displaces the atoms in all three
-        directions, including along the propagation direction; 'xy' restricts the
-        displacements to the plane perpendicular to the propagation direction.
+        The directions in which the atoms are displaced, as a string of one or more of
+        'x', 'y' and 'z'. In a potential, these are the axes of the potential: 'x' and
+        'y' perpendicular to the propagation direction and 'z' along it, whatever
+        `plane` the atoms are rotated to. The default, 'xyz', displaces the atoms in all
+        three directions; 'xy' keeps them in place along the propagation direction.
+        Iterating the frozen phonons, or calling :meth:`to_atoms_ensemble`, displaces
+        `atoms` without a potential, and the directions are then the axes of `atoms`.
+        :meth:`~abtem.potentials.iam.Potential.to_atoms_ensemble` returns the
+        configurations as a potential simulates them.
     ensemble_mean : bool, optional
         If True (default), the mean of the ensemble of results from a multislice
         simulation is calculated, otherwise, the result of every frozen phonon
@@ -390,9 +417,6 @@ class FrozenPhonons(BaseFrozenPhonons):
     def __len__(self) -> int:
         return self.num_configs
 
-    def _validate_sigmas(self, atoms: Atoms):
-        return validate_sigmas(atoms, self._sigmas)
-
     @property
     def _axes(self) -> list[int]:
         axes = []
@@ -409,31 +433,73 @@ class FrozenPhonons(BaseFrozenPhonons):
                 )
         return axes
 
-    def randomize(self, atoms: Atoms) -> Atoms:
-        sigmas, anisotropic = self._validate_sigmas(atoms)
+    def _sigmas_of(self, atoms: Atoms) -> np.ndarray:
+        """The standard deviations of the given atoms, one row per atom.
 
-        if isinstance(sigmas, dict):
-            sigmas = atom_property_dict_to_atom_property_array(atoms, sigmas)
+        Per-species standard deviations apply to any structure. Per-atom ones
+        belong to :attr:`atoms`; a structure with a different number of atoms
+        needs the :data:`SOURCE_INDEX` array, which a potential sets before
+        transforming the atoms.
+        """
+        if isinstance(self._sigmas, dict):
+            return atom_property_dict_to_atom_property_array(atoms, self._sigmas)
 
-        assert isinstance(sigmas, np.ndarray)
+        sigmas = np.asarray(self._sigmas)
+        if SOURCE_INDEX in atoms.arrays:
+            return sigmas[atoms.arrays[SOURCE_INDEX]]
+        if len(sigmas) != len(atoms):
+            raise RuntimeError(
+                f"Per-atom displacement standard deviations are given for "
+                f"{len(sigmas)} atoms, but {len(atoms)} atoms are displaced; give "
+                "them per species instead."
+            )
+        return sigmas
+
+    def randomize(self, atoms: Atoms, frame: Optional[np.ndarray] = None) -> Atoms:
+        """
+        Randomly displace the atoms.
+
+        Parameters
+        ----------
+        atoms : Atoms
+            The atoms to displace: :attr:`atoms`, or a copy a potential has
+            transformed (rotated, orthogonalized or repeated).
+        frame : 3x3 array, optional
+            The linear map from the Cartesian axes of :attr:`atoms` to those of
+            `atoms`, acting on row vectors: a displacement `d` along the axes of
+            :attr:`atoms` is `d @ frame` along those of `atoms`. Only anisotropic
+            standard deviations depend on it. The default is the identity.
+
+        Returns
+        -------
+        displaced : Atoms
+        """
+        sigmas = self._sigmas_of(atoms)
 
         atoms = atoms.copy()
 
         rng = np.random.default_rng(self.seed[0])
+        r = rng.normal(size=(len(atoms), 3))
 
-        if anisotropic:
-            r = rng.normal(size=(len(atoms), 3))
-            for axis in self._axes:
-                # If sigmas is 2D (anisotropic), extract the sigma for this axis
-                sigma_axis = sigmas[:, axis] if sigmas.ndim == 2 else sigmas
-                atoms.positions[:, axis] += sigma_axis * r[:, axis]
+        if sigmas.ndim == 2:
+            # Anisotropic standard deviations are given along the axes of
+            # self.atoms; the displacements are drawn along those axes and
+            # mapped to the axes of `atoms`. An isotropic Gaussian is the same
+            # distribution along any axes, so isotropic standard deviations
+            # need no mapping, and seeded results are the same with any frame.
+            displacements = sigmas * r
+            if frame is not None and not np.array_equal(frame, np.eye(3)):
+                displacements = displacements @ frame
         else:
-            r = rng.normal(size=(len(atoms), 3))
+            displacements = sigmas[:, None] * r
 
-            for axis in self._axes:
-                atoms.positions[:, axis] += sigmas * r[:, axis]
+        for axis in self._axes:
+            atoms.positions[:, axis] += displacements[:, axis]
 
         return atoms
+
+    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+        return self.randomize(atoms, frame=frame)
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -473,6 +539,11 @@ class FrozenPhonons(BaseFrozenPhonons):
     def to_atoms_ensemble(self):
         """
         Convert the frozen phonons to an ensemble of atoms.
+
+        The configurations displace `atoms` as given. A potential that rotates,
+        orthogonalizes or cuts the cell simulates configurations of the
+        transformed atoms instead, which
+        :meth:`~abtem.potentials.iam.Potential.to_atoms_ensemble` returns.
 
         Returns
         -------
