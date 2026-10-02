@@ -376,6 +376,149 @@ class TestCTFEnergyEnsemble:
         assert isinstance(ap.ensemble_axes_metadata[0], EnergyAxis)
 
 
+class TestTransferFunctionEnergyMatching:
+    """A transfer function whose energy is a distribution is matched to the
+    EnergyAxis of a multi-energy ensemble and evaluated per member, rather than
+    adding a second energy axis. Oracle: the same simulation run separately at
+    each single energy."""
+
+    CTF_KWARGS = dict(defocus=50.0, Cs=-20e4, semiangle_cutoff=20.0, focal_spread=20.0)
+
+    @staticmethod
+    def _potential():
+        atoms = ase.Atoms(
+            "CSi", positions=[(1.5, 2.0, 1.0), (3.5, 3.0, 2.0)], cell=(5, 5, 3)
+        )
+        return abtem.Potential(atoms, gpts=48, slice_thickness=1.0)
+
+    def _exit_waves(self, energy, lazy):
+        waves = PlaneWave(energy=energy).multislice(self._potential(), lazy=lazy)
+        return waves.compute() if lazy else waves
+
+    def _oracle(self, ctf_kwargs=None):
+        ctf_kwargs = self.CTF_KWARGS if ctf_kwargs is None else ctf_kwargs
+        return np.stack(
+            [
+                self._exit_waves(energy, lazy=False)
+                .apply_ctf(abtem.CTF(energy=energy, **ctf_kwargs))
+                .intensity()
+                .array
+                for energy in TEST_ENERGIES
+            ]
+        )
+
+    @lazy_params
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply", "apply_transform"])
+    def test_matches_single_energy_simulations(self, lazy, apply):
+        waves = self._exit_waves(TEST_ENERGIES, lazy)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+
+        if apply == "apply_ctf":
+            result = waves.apply_ctf(ctf)
+        elif apply == "ctf.apply":
+            result = ctf.apply(waves)
+        else:
+            result = waves.apply_transform(ctf)
+
+        assert len(result.ensemble_axes_metadata) == 1
+        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
+        assert result.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
+        assert result.accelerator.energy is None
+        np.testing.assert_allclose(
+            result.intensity().compute().array, self._oracle(), rtol=1e-4, atol=1e-6
+        )
+
+    def test_matches_ctf_without_energy(self):
+        """Matching the energies is equivalent to leaving the CTF energy unset."""
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        matched = waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS))
+        unset = waves.apply_ctf(abtem.CTF(**self.CTF_KWARGS))
+        assert np.array_equal(matched.array, unset.array)
+
+    def test_ensemble_mean(self):
+        """The reported example: an ensemble-mean energy distribution on both."""
+        distribution = abtem.distributions.from_values(
+            TEST_ENERGIES, ensemble_mean=True
+        )
+        waves = PlaneWave(energy=distribution).multislice(self._potential())
+        ctf = abtem.CTF(energy=distribution, **self.CTF_KWARGS)
+        intensity = waves.apply_ctf(ctf).intensity().reduce_ensemble().compute()
+        assert intensity.ensemble_shape == ()
+        np.testing.assert_allclose(
+            intensity.array, self._oracle().mean(0), rtol=1e-4, atol=1e-6
+        )
+
+    def test_with_defocus_series(self):
+        """The CTF's other ensemble axes precede the matched energy axis, as for
+        a single energy, and each (defocus, energy) member is the oracle's."""
+        defocus = abtem.distributions.from_values([0.0, 40.0, 80.0])
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, defocus=defocus, semiangle_cutoff=20.0)
+        result = waves.apply_ctf(ctf)
+
+        assert result.ensemble_shape == (3, len(TEST_ENERGIES))
+        assert isinstance(result.ensemble_axes_metadata[1], EnergyAxis)
+
+        intensity = result.intensity().array
+        for i, value in enumerate(defocus.values):
+            oracle = self._oracle(dict(defocus=float(value), semiangle_cutoff=20.0))
+            np.testing.assert_allclose(intensity[i], oracle, rtol=1e-4, atol=1e-6)
+
+    def test_mismatched_energies_raise(self):
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=[100e3, 200e3, 250e3], defocus=50))
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES[::-1], defocus=50))
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES[:2], defocus=50))
+
+    def test_fixed_energy_on_ensemble_raises(self):
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        with pytest.raises(ValueError, match="fixed energy"):
+            abtem.Aperture(semiangle_cutoff=20, energy=100e3).apply(waves)
+
+    @pytest.mark.parametrize("index", [None, 1])
+    def test_single_energy_waves_raise(self, index):
+        if index is None:
+            waves = self._exit_waves(200e3, lazy=False)
+        else:
+            waves = self._exit_waves(TEST_ENERGIES, lazy=False)[index]
+        with pytest.raises(ValueError, match="not an energy ensemble"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, defocus=50))
+
+    def test_single_valued_energy_distribution_is_scalar(self):
+        ctf = abtem.CTF(energy=[200e3], defocus=50)
+        assert ctf.energy == 200e3
+        assert ctf.ensemble_axes_metadata == []
+
+    def test_profiles(self):
+        """Each energy member of the profiles is the single-energy profile on the
+        common spatial-frequency grid, which reaches max_angle at the highest
+        energy."""
+        from abtem.core.energy import energy2wavelength
+
+        max_angle = 30.0
+        profiles = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS).profiles(
+            max_angle=max_angle
+        )
+        assert isinstance(profiles.ensemble_axes_metadata[0], EnergyAxis)
+        assert profiles.ensemble_shape[0] == len(TEST_ENERGIES)
+        assert "energy" not in profiles.metadata
+
+        shortest = energy2wavelength(max(TEST_ENERGIES))
+        for i, energy in enumerate(TEST_ENERGIES):
+            member_max_angle = max_angle * energy2wavelength(energy) / shortest
+            oracle = abtem.CTF(energy=energy, **self.CTF_KWARGS).profiles(
+                max_angle=member_max_angle
+            )
+            assert np.isclose(profiles.sampling, oracle.sampling)
+            np.testing.assert_allclose(
+                profiles.array[i], oracle.array, rtol=1e-4, atol=1e-6
+            )
+            assert profiles[i].metadata["energy"] == energy
+
+
 # ---------------------------------------------------------------------------
 # SrTiO3 fixture used by BlochWaves tests
 # ---------------------------------------------------------------------------

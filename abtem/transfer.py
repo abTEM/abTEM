@@ -36,6 +36,25 @@ if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
 
 
+def _split_energy(
+    energy: float | list | tuple | np.ndarray | BaseDistribution | None,
+) -> tuple[float | None, BaseDistribution | None]:
+    """Split an energy argument into a scalar energy and an energy distribution,
+    exactly one of which may be set.
+
+    A list/array of energies becomes an energy-ensemble distribution, consistent
+    with PlaneWave/Probe/SMatrix accepting a list of energies. A single-valued
+    distribution is a plain scalar energy, as for :class:`.EnergyEnsemble`.
+    """
+    if isinstance(energy, (list, tuple, np.ndarray)):
+        energy = validate_distribution(energy)
+    if isinstance(energy, BaseDistribution):
+        if len(energy.values) == 1:
+            return float(energy.values[0]), None
+        return None, energy
+    return energy, None
+
+
 class BaseTransferFunction(
     ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGrid2DMixin
 ):
@@ -52,15 +71,7 @@ class BaseTransferFunction(
         # Unwrap EnergyEnsemble (passed from Probe.ctf / SMatrix with ensemble energy)
         if hasattr(energy, "energy"):
             energy = energy.energy  # EnergyEnsemble → scalar or BaseDistribution
-        # A list/array of energies becomes an energy-ensemble distribution,
-        # consistent with PlaneWave/Probe/SMatrix accepting a list of energies.
-        if isinstance(energy, (list, tuple, np.ndarray)):
-            energy = validate_distribution(energy)
-        if isinstance(energy, BaseDistribution):
-            self._energy_distribution = energy
-            energy = None
-        else:
-            self._energy_distribution = None
+        energy, self._energy_distribution = _split_energy(energy)
         self._accelerator = Accelerator(energy=energy)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         super().__init__(distributions=("energy",) + tuple(distributions))
@@ -76,14 +87,8 @@ class BaseTransferFunction(
     def energy(self, value: float | BaseDistribution | None) -> None:
         if hasattr(value, "energy"):
             value = value.energy  # unwrap EnergyEnsemble
-        if isinstance(value, (list, tuple, np.ndarray)):
-            value = validate_distribution(value)
-        if isinstance(value, BaseDistribution):
-            self._energy_distribution = value
-            self._accelerator.energy = None
-        else:
-            self._energy_distribution = None
-            self._accelerator.energy = value
+        value, self._energy_distribution = _split_energy(value)
+        self._accelerator.energy = value
 
     @property
     def _energy_ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -92,10 +97,26 @@ class BaseTransferFunction(
         return []
 
     @property
+    def _energy_metadata(self) -> dict:
+        """Energy metadata of measurements evaluated from the transfer function.
+
+        Only a scalar energy is recorded: an energy distribution is described by
+        the leading EnergyAxis, whose items carry each member's energy.
+        """
+        if self._energy_distribution is not None:
+            return {}
+        return {"energy": self.energy}
+
+    @property
     def _valid_wavelength(self) -> float:
-        """Wavelength [Å], using first ensemble energy when energy is a distribution."""
+        """Wavelength [Å]; the shortest one when energy is a distribution.
+
+        On a common spatial-frequency grid the highest energy (shortest
+        wavelength) reaches the smallest scattering angle, so a grid sized for
+        it covers a given angle for every member of the energy ensemble.
+        """
         if isinstance(self._energy_distribution, BaseDistribution):
-            return energy2wavelength(float(self._energy_distribution.values[0]))
+            return energy2wavelength(float(np.max(self._energy_distribution.values)))
         return self.wavelength
 
     @abstractmethod
@@ -216,7 +237,7 @@ class BaseTransferFunction(
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
             fftshift=False,
-            metadata={"energy": self.energy},
+            metadata=self._energy_metadata,
         )
         return diffraction_patterns
 
@@ -1774,8 +1795,11 @@ class CTF(_HasAberrations, BaseAperture):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies give an energy-ensemble CTF, with a leading EnergyAxis;
+        applied to a multi-energy ensemble of wave functions, its energies must
+        match the ensemble's, and each member is evaluated at its own energy.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -2071,6 +2095,14 @@ class CTF(_HasAberrations, BaseAperture):
         ctf_profiles : ReciprocalSpaceLineProfiles
             Ensemble of reciprocal space line profiles. The first ensemble dimension
             represents the different
+
+        Notes
+        -----
+        If the energy is a distribution, the profiles of all energies share one
+        spatial-frequency grid along a leading :class:`.EnergyAxis`, so the same
+        position along the profile is a different scattering angle for each
+        energy. The grid reaches `max_angle` at the highest energy, so every
+        energy covers at least `max_angle`.
         """
         if max_angle is None:
             _raise_if_parallel_beam(
@@ -2083,30 +2115,29 @@ class CTF(_HasAberrations, BaseAperture):
             else:
                 max_angle = self._max_semiangle_cutoff * 1.6
 
-        self.accelerator.check_is_defined()
+        if self._energy_distribution is None:
+            self.accelerator.check_is_defined()
 
-        sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
-        alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(get_dtype(complex=False))
+        # Spatial frequencies [1/Å] of the profile points
+        k = np.linspace(0, max_angle * 1e-3 / self._valid_wavelength, gpts)
+        sampling = k[1] - k[0]
 
         phi = np.array(phi)
 
-        components = dict()
-        components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
-
-        if self._spatial_envelope.angular_spread != 0.0:
-            components["spatial envelope"] = self._evaluate_to_match(
-                self._spatial_envelope, alpha, phi
-            )
-
-        if self._temporal_envelope.focal_spread != 0.0:
-            components["temporal envelope"] = self._evaluate_to_match(
-                self._temporal_envelope, alpha, phi
-            )
-
-        if self._aperture.semiangle_cutoff != np.inf:
-            components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
-
-        components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
+        if self._energy_distribution is None:
+            components = self._profile_components(k * self.wavelength, phi)
+        else:
+            # Evaluate each energy at its own wavelength and stack the members
+            # along the leading energy axis of `ensemble_axes_metadata`.
+            members = []
+            for energy in self._energy_distribution.values:
+                member = self.copy()
+                member.energy = float(energy)
+                members.append(member._profile_components(k * member.wavelength, phi))
+            components = {
+                key: np.stack([member[key] for member in members], axis=0)
+                for key in members[0]
+            }
 
         ensemble_axes_metadata: list[AxisMetadata] = self.ensemble_axes_metadata
         if len(components) > 1:
@@ -2126,7 +2157,7 @@ class CTF(_HasAberrations, BaseAperture):
         else:
             profiles = components["ctf"]
 
-        metadata = {"energy": self.energy}
+        metadata = self._energy_metadata
 
         profiles = ReciprocalSpaceLineProfiles(
             profiles,
@@ -2136,6 +2167,32 @@ class CTF(_HasAberrations, BaseAperture):
         )
 
         return profiles
+
+    def _profile_components(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """The radial line profiles of each CTF component, and of their product
+        under the key "ctf", at a single energy."""
+        alpha = alpha.astype(get_dtype(complex=False))
+
+        components = dict()
+        components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
+
+        if self._spatial_envelope.angular_spread != 0.0:
+            components["spatial envelope"] = self._evaluate_to_match(
+                self._spatial_envelope, alpha, phi
+            )
+
+        if self._temporal_envelope.focal_spread != 0.0:
+            components["temporal envelope"] = self._evaluate_to_match(
+                self._temporal_envelope, alpha, phi
+            )
+
+        if self._aperture.semiangle_cutoff != np.inf:
+            components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
+
+        components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
+        return components
 
 
 def _raise_if_parallel_beam(semiangle_cutoff, quantity: str, remedy: str = "") -> None:

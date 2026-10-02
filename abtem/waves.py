@@ -20,6 +20,7 @@ from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    EnergyAxis,
     FrozenPhononsAxis,
     OrdinalAxis,
     RealSpaceAxis,
@@ -72,10 +73,11 @@ from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.distributions import BaseDistribution, EnsembleFromDistributions, validate_distribution
 from abtem.tilt import TiltType2D, validate_tilt
-from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
+from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture, BaseTransferFunction
 from abtem.transform import WavesToWavesTransform
 
 if TYPE_CHECKING:
+    from abtem.transform import ArrayObjectTransform
     from abtem.visualize import Visualization
 
 
@@ -1476,6 +1478,98 @@ class Waves(BaseWaves, ArrayObject):
 
         return phonon_loss_diffraction_patterns(self, **kwargs)
 
+    @property
+    def _multi_energy_axes(self) -> list[tuple[int, EnergyAxis]]:
+        """The ensemble axes describing more than one energy, with their indices."""
+        return [
+            (i, axis)
+            for i, axis in enumerate(self.ensemble_axes_metadata)
+            if isinstance(axis, EnergyAxis) and len(axis.values) > 1
+        ]
+
+    def apply_transform(
+        self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
+    ) -> ArrayObject | list[ArrayObject]:
+        if isinstance(transform, BaseTransferFunction) and (
+            self._multi_energy_axes or transform._energy_distribution is not None
+        ):
+            return self._apply_transfer_function_per_energy(transform, max_batch)
+
+        return super().apply_transform(transform, max_batch=max_batch)
+
+    def _apply_transfer_function_per_energy(
+        self, transfer_function: BaseTransferFunction, max_batch: int | str = "auto"
+    ) -> Waves:
+        """Apply a transfer function to a multi-energy ensemble of wave functions.
+
+        A transfer function depends on the wavelength, so a single evaluation
+        cannot represent several energies at once. Each energy member is
+        transformed at its own wavelength and the results are restacked along
+        the ensemble's EnergyAxis. A transfer function whose energy is a
+        distribution must describe exactly the energies of the ensemble: it is
+        matched to the existing EnergyAxis rather than adding another one.
+        """
+        energy_axes = self._multi_energy_axes
+        energy = transfer_function.energy
+
+        if isinstance(energy, BaseDistribution):
+            transfer_energies = tuple(float(value) for value in energy.values)
+            if not energy_axes:
+                raise ValueError(
+                    f"Cannot apply a {type(transfer_function).__name__} whose energy "
+                    f"is a distribution {transfer_energies} eV to wave functions "
+                    "that are not an energy ensemble. Its energies must match the "
+                    "EnergyAxis of a multi-energy ensemble; for single-energy wave "
+                    "functions use a scalar energy or leave it unset."
+                )
+            wave_energies = tuple(float(value) for value in energy_axes[0][1].values)
+            if len(transfer_energies) != len(wave_energies) or not np.allclose(
+                transfer_energies, wave_energies, rtol=1e-9, atol=0.0
+            ):
+                raise ValueError(
+                    f"The energies of the {type(transfer_function).__name__} "
+                    f"{transfer_energies} eV do not match the energies of the wave "
+                    f"function ensemble {wave_energies} eV. Use the same energies in "
+                    "the same order, or leave the energy unset so the per-member "
+                    "energies of the wave functions are used."
+                )
+        elif energy is not None:
+            raise ValueError(
+                f"Cannot apply a {type(transfer_function).__name__} with a fixed "
+                "energy to a multi-energy ensemble: each energy member requires its "
+                "own wavelength. Pass a transfer function without an energy so the "
+                "per-member energies are used."
+            )
+
+        axis_index, energy_axis = energy_axes[0]
+        members = []
+        for i, member_energy in enumerate(energy_axis.values):
+            index = tuple(
+                i if j == axis_index else slice(None)
+                for j in range(len(self.ensemble_shape))
+            )
+            member_transfer_function = transfer_function.copy()
+            # The setter also clears an energy distribution.
+            member_transfer_function.energy = float(member_energy)
+            members.append(
+                self[index].apply_transform(member_transfer_function, max_batch=max_batch)
+            )
+
+        # The transfer function's own ensemble axes are prepended to each
+        # member's; the energy axis is restored to its position among the
+        # ensemble axes of the input wave functions.
+        num_new_axes = len(members[0].ensemble_shape) - (len(self.ensemble_shape) - 1)
+        waves = stack_array_object(
+            members, energy_axis, axis=num_new_axes + axis_index
+        )
+        # The stacked object must remain a genuine multi-energy ensemble:
+        # its scalar accelerator/metadata energy come from member[0] and
+        # would misrepresent the other members.
+        waves.accelerator.energy = None
+        waves._metadata.pop("energy", None)
+        assert isinstance(waves, Waves)
+        return waves
+
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
     ) -> Waves:
@@ -1485,7 +1579,10 @@ class Waves(BaseWaves, ArrayObject):
         Parameters
         ----------
         ctf : CTF, optional
-            Contrast transfer function to be applied.
+            Contrast transfer function to be applied. For a multi-energy ensemble
+            of wave functions it is evaluated for each energy member at its own
+            wavelength; its energy must then be unset, or a distribution of
+            exactly the ensemble's energies.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto'
             (default), the batch size is automatically chosen based on the abtem user
@@ -1500,48 +1597,13 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
-        from abtem.array import stack
-        from abtem.core.axes import EnergyAxis
-
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        # Multi-energy ensemble: a single CTF cannot represent several
-        # wavelengths at once.  Apply the CTF to each energy member at its own
-        # wavelength and restack along the EnergyAxis.
-        energy_axes = [
-            (i, ax)
-            for i, ax in enumerate(self.ensemble_axes_metadata)
-            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-        ]
-        if energy_axes:
-            if ctf.accelerator.energy is not None:
-                raise ValueError(
-                    "Cannot apply a CTF with a fixed energy to a multi-energy "
-                    "ensemble: each energy member requires its own wavelength. "
-                    "Pass a CTF without an energy so the per-member energies are "
-                    "used."
-                )
-            axis_idx, energy_axis = energy_axes[0]
-            members = []
-            for i, energy in enumerate(energy_axis.values):
-                index = tuple(
-                    i if j == axis_idx else slice(None)
-                    for j in range(len(self.ensemble_shape))
-                )
-                member_ctf = ctf.copy()
-                member_ctf.accelerator.energy = float(energy)
-                members.append(
-                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
-                )
-            waves = stack(members, energy_axis, axis=axis_idx)
-            # The stacked object must remain a genuine multi-energy ensemble:
-            # its scalar accelerator/metadata energy come from member[0] and
-            # would misrepresent the other members.
-            waves.accelerator.energy = None
-            waves._metadata.pop("energy", None)
-            assert isinstance(waves, Waves)
-            return waves
+        # A multi-energy ensemble, or a CTF whose energy is a distribution, is
+        # matched member by member (see `_apply_transfer_function_per_energy`).
+        if self._multi_energy_axes or ctf._energy_distribution is not None:
+            return self.apply_transform(ctf, max_batch=max_batch)
 
         if not ctf.accelerator.energy:
             # Single energy: resolve the wavelength from the wave functions
