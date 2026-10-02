@@ -12,8 +12,11 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
-from abtem.measurements import elastic_diffuse_diffraction_patterns
+from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+from abtem.measurements import (
+    elastic_diffuse_diffraction_patterns,
+    phonon_loss_diffraction_patterns,
+)
 from abtem.waves import Waves
 
 N_CONFIGS = 3
@@ -24,11 +27,18 @@ HELPER_KWARGS = dict(max_angle="cutoff", parity="odd")
 DP_KWARGS = dict(**HELPER_KWARGS, fftshift=True)
 
 
-def _exit_waves(diffuse_fraction=1.0, n_configs=N_CONFIGS, lazy=False, seed=1):
+def _exit_waves(
+    diffuse_fraction=1.0,
+    n_configs=N_CONFIGS,
+    lazy=False,
+    seed=1,
+    gpts=GPTS,
+    metadata=None,
+):
     """Configurations ψ_j = μ + noise_j, complex64, with a frozen-phonon axis followed
     by a second ensemble axis; ``diffuse_fraction`` scales the noise."""
     rng = np.random.default_rng(seed)
-    shape = (N_MEMBERS,) + GPTS
+    shape = (N_MEMBERS,) + gpts
 
     def normal(size):
         return rng.normal(size=size) + 1j * rng.normal(size=size)
@@ -37,7 +47,7 @@ def _exit_waves(diffuse_fraction=1.0, n_configs=N_CONFIGS, lazy=False, seed=1):
     noise = normal((n_configs,) + shape) * diffuse_fraction
     array = (mean[None] + noise).astype(np.complex64)
     if lazy:
-        array = da.from_array(array, chunks=(1, 1) + GPTS)
+        array = da.from_array(array, chunks=(1, 1) + gpts)
     return Waves(
         array,
         energy=100e3,
@@ -46,6 +56,7 @@ def _exit_waves(diffuse_fraction=1.0, n_configs=N_CONFIGS, lazy=False, seed=1):
             FrozenPhononsAxis(_ensemble_mean=False),
             OrdinalAxis(label="member", values=tuple(range(N_MEMBERS))),
         ],
+        metadata=dict(metadata or {}),
     )
 
 
@@ -193,6 +204,231 @@ def test_waves_method_matches_the_function():
         waves.elastic_diffuse_diffraction_patterns(components="diffuse").array,
         elastic_diffuse_diffraction_patterns(waves, components="diffuse").array,
     )
+
+
+@pytest.mark.parametrize("block_direct", [True, np.True_], ids=["bool", "numpy_bool"])
+def test_block_direct_true_blocks_up_to_the_semiangle_cutoff(block_direct):
+    """block_direct=True blocks what DiffractionPatterns.block_direct() blocks: with a
+    20 mrad semiangle cutoff in the metadata, the bright-field disk and a margin of one
+    pixel. Per pattern, a radius of 1 mrad (True taken as a number) blocks 5 pixels
+    here, the default 51 (angular sampling 7.7 x 6.2 mrad)."""
+    waves = _exit_waves(gpts=(48, 60), metadata={"semiangle_cutoff": 20.0})
+    unblocked = elastic_diffuse_diffraction_patterns(waves, components="total")
+    expected = unblocked.block_direct()
+    one_mrad = unblocked.block_direct(radius=1.0)
+    assert (expected.array == 0).sum() > 5 * (one_mrad.array == 0).sum()
+
+    blocked = elastic_diffuse_diffraction_patterns(
+        waves, components="total", block_direct=block_direct
+    )
+
+    np.testing.assert_array_equal(blocked.array, expected.array)
+
+
+def _zeroed_pixels(blocked, unblocked):
+    """The pixels (row, column) zeroed by blocking, in any pattern of the stack."""
+    blocked, unblocked = np.asarray(blocked.array), np.asarray(unblocked.array)
+    zeroed = (blocked == 0) & (unblocked != 0)
+    zeroed = zeroed.reshape((-1,) + zeroed.shape[-2:]).any(axis=0)
+    return [tuple(int(i) for i in index) for index in np.argwhere(zeroed)]
+
+
+@pytest.mark.parametrize("block_direct", [True, np.True_], ids=["bool", "numpy_bool"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"semiangle_cutoff": 0.0},
+        {"semiangle_cutoff": 1e-6},
+        {"semiangle_cutoff": 1e-3},
+        {"semiangle_cutoff": 1.0},
+        {"semiangle_cutoff": np.inf},
+    ],
+    ids=["no_cutoff", "parallel_beam", "1e-6", "1e-3", "1.0", "no_aperture"],
+)
+def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
+    metadata, block_direct
+):
+    """Without a semiangle cutoff, or with one smaller than the angular sampling
+    (7.7 x 6.2 mrad here) or an infinite one, the direct beam is the zero-angle pixel
+    alone, and only that pixel is blocked."""
+    waves = _exit_waves(gpts=(48, 60), metadata=metadata)
+    unblocked = elastic_diffuse_diffraction_patterns(waves)
+    center = tuple(n // 2 for n in unblocked.base_shape)
+
+    blocked = elastic_diffuse_diffraction_patterns(waves, block_direct=block_direct)
+
+    assert _zeroed_pixels(blocked, unblocked) == [center]
+    np.testing.assert_array_equal(
+        np.asarray(blocked.array)[..., center[0], center[1]], 0.0
+    )
+    keep = np.ones(unblocked.base_shape, dtype=bool)
+    keep[center] = False
+    np.testing.assert_array_equal(
+        np.asarray(blocked.array)[..., keep], np.asarray(unblocked.array)[..., keep]
+    )
+
+
+@pytest.mark.parametrize("semiangle_cutoff", [float("nan"), -5.0])
+def test_block_direct_true_with_an_invalid_cutoff_raises(semiangle_cutoff):
+    waves = _exit_waves(metadata={"semiangle_cutoff": semiangle_cutoff})
+    with pytest.raises(ValueError, match="must be non-negative"):
+        elastic_diffuse_diffraction_patterns(waves, block_direct=True)
+
+
+def _sweep_grids():
+    """(extent, gpts, max_angle): one SrTiO3 cell and a 5 x 5 supercell over
+    gpts 32 to 300, and random grids."""
+    grids = [
+        ((extent, extent), (n, n), "cutoff")
+        for extent in (3.905, 19.525)
+        for n in range(32, 301)
+    ]
+    rng = np.random.default_rng(0)
+    max_angles = ["cutoff", "valid", "full", 10.0, 50.0]
+    while len(grids) < 2 * 269 + 30:
+        extent = tuple(float(x) for x in rng.uniform(2.0, 40.0, 2))
+        gpts = tuple(int(x) for x in rng.integers(16, 200, 2))
+        grids.append((extent, gpts, max_angles[rng.integers(len(max_angles))]))
+    return grids
+
+
+def _sweep_waves(extent, gpts, energy_axis=False):
+    """Two configurations, non-zero everywhere, without a semiangle cutoff."""
+    rng = np.random.default_rng(sum(gpts))
+    axes = [FrozenPhononsAxis(_ensemble_mean=False)]
+    shape = (2,) + gpts
+    if energy_axis:
+        axes = [EnergyLossAxis(values=(0.02,))] + axes
+        shape = (1,) + shape
+    array = (5 + rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+        np.complex64
+    )
+    return Waves(array, energy=200e3, extent=extent, ensemble_axes_metadata=axes)
+
+
+_SWEEP_FUNCTIONS = {
+    "waves": lambda waves, **kwargs: waves[0].diffraction_patterns(**kwargs),
+    "elastic_diffuse": lambda waves, **kwargs: elastic_diffuse_diffraction_patterns(
+        waves, components="total", **kwargs
+    ),
+    "phonon_loss": lambda waves, **kwargs: phonon_loss_diffraction_patterns(
+        waves, components="total", **kwargs
+    ),
+}
+
+
+@pytest.mark.parametrize("function", list(_SWEEP_FUNCTIONS))
+def test_block_direct_true_blocks_the_zero_angle_pixel_on_any_grid(function):
+    """Without a semiangle cutoff, block_direct=True blocks exactly the zero-angle
+    pixel. Its float32 coordinate carries roundoff on many grids (e.g. -2.8e-14
+    mrad), so a radius of 0 would leave it, and a radius of one sampling step would
+    reach its neighbours."""
+    patterns_of = _SWEEP_FUNCTIONS[function]
+    wrong = []
+    # NumPy's FFT needs no plan for each of the several hundred grid shapes.
+    with abtem.config.set({"fft": "numpy"}):
+        for extent, gpts, max_angle in _sweep_grids():
+            waves = _sweep_waves(extent, gpts, energy_axis=function == "phonon_loss")
+            unblocked = patterns_of(waves, max_angle=max_angle)
+            if min(unblocked.base_shape) < 3:
+                continue
+            blocked = patterns_of(waves, max_angle=max_angle, block_direct=True)
+            center = tuple(n // 2 for n in unblocked.base_shape)
+            if _zeroed_pixels(blocked, unblocked) != [center]:
+                wrong.append((extent, gpts, max_angle))
+    assert wrong == []
+
+
+def _probe_waves(extent, gpts, semiangle_cutoff, energy_axis=False):
+    """Two identical configurations of a probe in vacuum (soft aperture), whose
+    diffraction patterns are the direct beam alone."""
+    probe = abtem.Probe(
+        energy=200e3, extent=extent, gpts=gpts, semiangle_cutoff=semiangle_cutoff
+    )
+    with abtem.config.set({"device": "cpu"}):
+        built = probe.build(lazy=False)
+    array = np.asarray(built.array)
+    axes = [FrozenPhononsAxis(_ensemble_mean=False)]
+    array = np.stack([array, array])
+    if energy_axis:
+        axes = [EnergyLossAxis(values=(0.02,))] + axes
+        array = array[None]
+    return Waves(
+        array,
+        energy=200e3,
+        extent=extent,
+        ensemble_axes_metadata=axes,
+        metadata=dict(built.metadata),
+    )
+
+
+@pytest.mark.parametrize("fraction", [0.3, 0.5, 0.7, 0.9, 0.99, 1.0, 1.5])
+@pytest.mark.parametrize(
+    "extent, gpts",
+    [((19.525, 19.525), (128, 128)), ((19.525, 9.7625), (128, 64))],
+    ids=["isotropic", "anisotropic"],
+)
+@pytest.mark.parametrize("function", list(_SWEEP_FUNCTIONS))
+def test_block_direct_true_blocks_a_small_soft_aperture(
+    function, extent, gpts, fraction
+):
+    """A soft aperture reaches the nearest pixels once the cutoff exceeds half the
+    angular sampling; block_direct=True must still leave no direct-beam intensity.
+    The cutoff is a fraction of the smaller angular sampling (1.28 mrad)."""
+    sampling = abtem.Probe(energy=200e3, extent=extent, gpts=gpts).angular_sampling
+    waves = _probe_waves(
+        extent,
+        gpts,
+        fraction * min(sampling),
+        energy_axis=function == "phonon_loss",
+    )
+    patterns_of = _SWEEP_FUNCTIONS[function]
+    with abtem.config.set({"device": "cpu"}):
+        unblocked = np.asarray(patterns_of(waves, max_angle="full").array)
+        blocked = np.asarray(
+            patterns_of(waves, max_angle="full", block_direct=True).array
+        )
+    assert np.abs(blocked).sum() < 1e-6 * np.abs(unblocked).sum()
+
+
+def test_block_direct_true_keeps_the_first_order_reflections_of_a_plane_wave():
+    """In a one-unit-cell plane-wave pattern the pixels next to the zero-angle pixel
+    are the (100) and (010) reflections; block_direct=True keeps them."""
+    from ase import Atoms
+
+    a = 3.905
+    atoms = Atoms(
+        "SrTiO3",
+        scaled_positions=[
+            (0, 0, 0),
+            (0.5, 0.5, 0.5),
+            (0.5, 0.5, 0),
+            (0.5, 0, 0.5),
+            (0, 0.5, 0.5),
+        ],
+        cell=[a, a, a],
+        pbc=True,
+    ) * (1, 1, 4)
+    with abtem.config.set({"device": "cpu"}):
+        phonons = abtem.FrozenPhonons(
+            atoms, num_configs=2, sigmas=0.05, seed=1, ensemble_mean=False
+        )
+        potential = abtem.Potential(phonons, gpts=(48, 48), slice_thickness=a / 2)
+        exit_waves = abtem.PlaneWave(energy=200e3).multislice(potential, lazy=False)
+    unblocked = elastic_diffuse_diffraction_patterns(exit_waves, components="total")
+    center = tuple(n // 2 for n in unblocked.base_shape)
+    first_order = [(center[0] + 1, center[1]), (center[0], center[1] + 1)]
+    unblocked_array = np.asarray(unblocked.array)
+    assert min(unblocked_array[index] for index in first_order) > 0
+
+    blocked = elastic_diffuse_diffraction_patterns(
+        exit_waves, components="total", block_direct=True
+    )
+
+    assert _zeroed_pixels(blocked, unblocked) == [center]
+    for index in first_order:
+        assert np.asarray(blocked.array)[index] == unblocked_array[index]
 
 
 @pytest.mark.parametrize(

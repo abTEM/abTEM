@@ -4973,6 +4973,49 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return self.bandlimit(radius, outer=np.inf)
 
+    def _apply_block_direct(self, block_direct) -> DiffractionPatterns:
+        """Apply the ``block_direct`` argument of ``Waves.diffraction_patterns`` and
+        the frozen-phonon functions.
+
+        True (a bool or ``numpy.bool_``) blocks the direct beam. With a finite
+        ``semiangle_cutoff`` in the metadata larger than half the smaller angular
+        sampling, that is the bright-field disk and its margin, as
+        ``block_direct()`` blocks it; the margin covers the soft edge of the
+        aperture, which reaches the nearest pixels from that cutoff on. Without one,
+        or with a cutoff of at most half the smaller angular sampling (a plane wave,
+        a parallel beam, or a nearly parallel one), or an infinite one (no
+        aperture), it is the zero-angle pixel alone: a radius of half the smaller
+        angular sampling, without a margin, reaches that pixel and no other,
+        whatever roundoff its float32 coordinate carries. The default radius of
+        ``block_direct()`` would also reach the nearest pixels, which in a
+        one-unit-cell pattern are the first-order reflections. A hard aperture
+        records the same cutoff, so with a cutoff between half and the full
+        smaller angular sampling the margin also blocks the nearest pixels, which
+        it leaves dark; the metadata cannot tell the two apertures apart. A NaN or
+        negative cutoff raises the ``ValueError`` of ``block_direct()``. An
+        ensemble of cutoffs leaves none in the metadata, so True blocks only the
+        zero-angle pixel and the bright-field disks stay; pass a radius instead. A
+        number is the ``radius`` of ``block_direct()`` [mrad], with its margin.
+        False, 0 and None block nothing.
+        """
+        if not block_direct:
+            return self
+
+        # bool is a subclass of int, so True is checked before it can be taken
+        # as a radius of 1 mrad.
+        if not isinstance(block_direct, (bool, np.bool_)):
+            return self.block_direct(radius=block_direct)
+
+        half_sampling = 0.5 * min(self.angular_sampling)
+        semiangle_cutoff = self.metadata.get("semiangle_cutoff")
+        if semiangle_cutoff is None or (
+            np.ndim(semiangle_cutoff) == 0
+            and (0.0 <= semiangle_cutoff <= half_sampling or semiangle_cutoff == np.inf)
+        ):
+            return self.block_direct(radius=half_sampling, margin=False)
+
+        return self.block_direct()
+
 
 def _complex_from_real_and_imag(real, imag):
     xp = get_array_module(real)
@@ -7088,9 +7131,18 @@ def elastic_diffuse_diffraction_patterns(
     parity : str
         Passed to ``Waves.diffraction_patterns``.
     block_direct : bool or float, optional
-        If True, the direct beam is blocked in the resulting diffraction
-        patterns. If given as a float, masks up to that scattering angle
-        [mrad]. Default is False.
+        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
+        the metadata larger than half the smaller angular sampling, up to the
+        cutoff plus a margin of the larger angular sampling, as by
+        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
+        half the smaller angular sampling or an infinite one (a plane wave, a
+        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
+        records the same cutoff, so between half and the full sampling the margin
+        also blocks its dark nearest pixels. With an ensemble of cutoffs the
+        metadata has none, so only the zero-angle pixel is blocked and the
+        bright-field disks stay; pass a radius then. If given as a float, masks up
+        to that scattering angle [mrad], plus the same margin when the metadata has
+        a ``semiangle_cutoff``. Default is False.
     unbiased : bool, optional
         Correct the (N − 1)/N bias of the diffuse intensity:
         D_u = N/(N − 1)·D and E_u = T − D_u. Requires at least 2
@@ -7191,11 +7243,7 @@ def elastic_diffuse_diffraction_patterns(
         metadata=metadata,
     )
 
-    if block_direct:
-        radius = block_direct if isinstance(block_direct, (int, float)) else None
-        result = result.block_direct(radius=radius)
-
-    return result
+    return result._apply_block_direct(block_direct)
 
 
 def phonon_loss_diffraction_patterns(
@@ -7242,9 +7290,18 @@ def phonon_loss_diffraction_patterns(
     parity : str
         Passed to ``Waves.diffraction_patterns``.
     block_direct : bool or float, optional
-        If True, the direct beam is blocked in the resulting diffraction
-        patterns. If given as a float, masks up to that scattering angle
-        [mrad]. Default is False.
+        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
+        the metadata larger than half the smaller angular sampling, up to the
+        cutoff plus a margin of the larger angular sampling, as by
+        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
+        half the smaller angular sampling or an infinite one (a plane wave, a
+        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
+        records the same cutoff, so between half and the full sampling the margin
+        also blocks its dark nearest pixels. With an ensemble of cutoffs the
+        metadata has none, so only the zero-angle pixel is blocked and the
+        bright-field disks stay; pass a radius then. If given as a float, masks up
+        to that scattering angle [mrad], plus the same margin when the metadata has
+        a ``semiangle_cutoff``. Default is False.
     temperature : float, optional
         Sample temperature [K]. If given, unfolds the diffuse signal — computed
         from a single frozen-phonon run per energy *magnitude* — into signed
@@ -7292,6 +7349,9 @@ def phonon_loss_diffraction_patterns(
         components=components,
         max_angle=max_angle,
         parity=parity,
+        # A per-pixel mask, so blocking before the temperature unfolding below
+        # gives the same result as blocking after it.
+        block_direct=block_direct,
         unbiased=unbiased,
         reduction_dtype=reduction_dtype,
     )
@@ -7318,10 +7378,6 @@ def phonon_loss_diffraction_patterns(
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=result.metadata,
         )
-
-    if block_direct:
-        radius = block_direct if isinstance(block_direct, (int, float)) else None
-        result = result.block_direct(radius=radius)
 
     return result
 

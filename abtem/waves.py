@@ -1383,8 +1383,18 @@ class Waves(BaseWaves, ArrayObject):
                     [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float,
-            masks up to that scattering angle [mrad].
+            If True the direct beam is masked (default is False): with a finite
+            ``semiangle_cutoff`` in the metadata larger than half the smaller
+            angular sampling, up to the cutoff plus a margin of the larger angular
+            sampling, as by ``DiffractionPatterns.block_direct()``; without one, or
+            with one of at most half the smaller angular sampling or an infinite one
+            (a plane wave, a parallel beam, or no aperture), only the zero-angle
+            pixel. A hard aperture records the same cutoff, so between half and the
+            full sampling the margin also blocks its dark nearest pixels. With an
+            ensemble of cutoffs the metadata has none, so only the zero-angle pixel
+            is blocked and the bright-field disks stay; pass a radius then. If given
+            as a float, masks up to that scattering angle [mrad], plus the same
+            margin when the metadata has a ``semiangle_cutoff``.
         fftshift : bool, optional
             If False, do not shift the direct beam to the center of the diffraction
             patterns (default is True).
@@ -1468,12 +1478,7 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
-        return diffraction_patterns
+        return diffraction_patterns._apply_block_direct(block_direct)
 
     def elastic_diffuse_diffraction_patterns(self, **kwargs):
         """Elastic, diffuse and total diffraction intensity from frozen-phonon

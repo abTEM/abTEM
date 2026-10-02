@@ -10,7 +10,7 @@ from abtem.measurements import phonon_loss_diffraction_patterns
 from abtem.waves import Waves
 
 
-def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
+def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False, metadata=None):
     rng = np.random.default_rng(seed)
     n_energies = len(e_values)
     array = (
@@ -27,6 +27,7 @@ def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
             EnergyLossAxis(values=tuple(float(e) for e in e_values)),
             FrozenPhononsAxis(_ensemble_mean=False),
         ],
+        metadata=dict(metadata or {}),
     )
 
 
@@ -103,6 +104,11 @@ def test_two_configs_diffuse_does_not_raise():
     assert dp.array.shape[0] == 3
 
 
+def _computed(measurement):
+    array = measurement.array
+    return np.asarray(array.compute() if isinstance(array, da.core.Array) else array)
+
+
 class TestThermalWeighting:
     def test_signed_axis_and_zero_bin_passthrough(self):
         e_values = [0.0, 0.02, 0.05, 0.10]
@@ -168,12 +174,68 @@ class TestThermalWeighting:
                 dp_unweighted.array[i],
             )
 
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {},
+            {"semiangle_cutoff": 0.0},
+            {"semiangle_cutoff": 1e-3},
+            {"semiangle_cutoff": np.inf},
+        ],
+        ids=["no_cutoff", "parallel_beam", "1e-3", "no_aperture"],
+    )
+    def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
+        self, metadata, lazy
+    ):
+        """Without a semiangle cutoff, or with one smaller than the angular sampling
+        or an infinite one, block_direct=True blocks the zero-angle pixel of every
+        unfolded pattern and nothing else."""
+        waves = _make_exit_waves(
+            [0.0, 0.02, 0.05, 0.10], gpts=48, lazy=lazy, metadata=metadata
+        )
+        unfolded = _computed(phonon_loss_diffraction_patterns(waves, temperature=300.0))
+        center = tuple(n // 2 for n in unfolded.shape[-2:])
+
+        blocked = _computed(
+            phonon_loss_diffraction_patterns(
+                waves, temperature=300.0, block_direct=True
+            )
+        )
+
+        np.testing.assert_array_equal(blocked[..., center[0], center[1]], 0.0)
+        keep = np.ones(unfolded.shape[-2:], dtype=bool)
+        keep[center] = False
+        np.testing.assert_array_equal(blocked[..., keep], unfolded[..., keep])
+
     def test_requires_the_diffuse_component(self):
         waves = _make_exit_waves([0.0, 0.02, 0.05])
         with pytest.raises(ValueError, match="components='diffuse'"):
             phonon_loss_diffraction_patterns(
                 waves, components="elastic", temperature=300.0
             )
+
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    @pytest.mark.parametrize("block_direct", [True, 15.0])
+    def test_block_direct_gives_the_unfolded_patterns_blocked(self, block_direct, lazy):
+        """The direct beam is blocked before the unfolding, a per-pixel mask that
+        gives the same result as blocking the unfolded patterns; True blocks up to
+        the semiangle cutoff, as DiffractionPatterns.block_direct() does."""
+        waves = _make_exit_waves(
+            [0.0, 0.02, 0.05, 0.10],
+            gpts=48,
+            lazy=lazy,
+            metadata={"semiangle_cutoff": 20.0},
+        )
+        unfolded = phonon_loss_diffraction_patterns(waves, temperature=300.0)
+        radius = None if block_direct is True else block_direct
+        expected = _computed(unfolded.block_direct(radius=radius))
+
+        blocked = phonon_loss_diffraction_patterns(
+            waves, temperature=300.0, block_direct=block_direct
+        )
+
+        np.testing.assert_array_equal(_computed(blocked), expected)
 
     def test_requires_energies_start_at_zero_and_ascending(self):
         waves_no_zero = _make_exit_waves([0.01, 0.02, 0.05])
