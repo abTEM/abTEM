@@ -113,9 +113,10 @@ class DistributionFromValues(BaseDistribution):
         if np.any(weights < 0):
             raise ValueError("distribution weights are probabilities: must be >= 0")
 
-        if len(weights) and not np.sum(weights) > 0:
-            raise ValueError("distribution weights must not all be zero")
-
+        # No all-zero check here: the blocks built by ``divide`` (and their
+        # negations) may hold only zero-weight members of a valid distribution.
+        # ``from_values`` rejects an all-zero distribution, and the reduction
+        # refuses an ensemble axis with zero total weight.
         self._weights = weights
 
         self._ensemble_mean = ensemble_mean
@@ -297,9 +298,12 @@ def from_values(
     if weights is None:
         weights = np.ones(len(values))
     values_array = np.array(values)
-    return DistributionFromValues(
+    distribution = DistributionFromValues(
         values=values_array, weights=weights, ensemble_mean=ensemble_mean
     )
+    if len(distribution.weights) and not np.sum(distribution.weights) > 0:
+        raise ValueError("distribution weights must not all be zero")
+    return distribution
 
 
 def uniform(

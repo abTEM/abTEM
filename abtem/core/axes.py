@@ -786,6 +786,11 @@ def axis_to_dict(axis: AxisMetadata):
         if isinstance(value, np.ndarray) or hasattr(value, "__cuda_array_interface__"):
             d[key] = tuple(value.tolist())
 
+    # Unweighted axes are written without the key, so files that carry no
+    # weighted axis stay readable by abTEM versions predating ``weights``.
+    if "weights" in d and d["weights"] is None:
+        del d["weights"]
+
     d["type"] = axis.__class__.__name__
     return d
 

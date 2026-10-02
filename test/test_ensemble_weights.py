@@ -751,3 +751,49 @@ def test_visualization_range_sum_applies_weights():
     _assert_close_to(
         _sum_ensemble_range(unweighted, (0,)).array, _to_numpy(images.array).sum(0)
     )
+
+
+@pytest.mark.parametrize("max_batch", [1, 2, "auto"])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_zero_weight_members(max_batch, lazy):
+    # Zero-weight members are legal (empty bins of a measured spectrum or a
+    # histogrammed spread). A lazy build divides the distribution into blocks, and
+    # a block holding only zero-weight members must not be rejected as an
+    # all-zero distribution.
+    values, weights = ASYM_VALUES, np.array([0.0, 0.0, 0.5, 0.5])
+    dist = distributions.from_values(values, weights=weights, ensemble_mean=True)
+    probe = Probe(defocus=dist, **PROBE_KW)
+    reduced = probe.build(lazy=lazy, max_batch=max_batch).intensity().reduce_ensemble()
+
+    reference = sum(
+        p * _to_numpy(Probe(defocus=x, **PROBE_KW).build().intensity().array)
+        for x, p in zip(values, weights)
+    ) / weights.sum()
+    _assert_close_to(reduced.array, reference)
+
+
+def test_unweighted_axes_are_written_without_weights_key():
+    # Files without weighted axes must stay readable by abTEM versions that
+    # predate the ``weights`` field: their axis constructors reject the key.
+    import dataclasses
+
+    from abtem.core.axes import (
+        ParameterAxis,
+        ThicknessAxis,
+        axis_from_dict,
+        axis_to_dict,
+    )
+
+    unweighted = ThicknessAxis(values=(1.0, 2.0))
+    d = axis_to_dict(unweighted)
+    assert "weights" not in d
+    legacy_fields = {
+        field.name for field in dataclasses.fields(ThicknessAxis)
+    } - {"weights"}
+    assert set(d) - {"type"} <= legacy_fields
+    assert axis_from_dict(d) == unweighted
+
+    weighted = ParameterAxis(label="C10", values=(0.0, 1.0), weights=(0.2, 0.8))
+    d = axis_to_dict(weighted)
+    assert d["weights"] == (0.2, 0.8)
+    assert axis_from_dict(d) == weighted
