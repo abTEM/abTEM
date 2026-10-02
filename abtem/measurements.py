@@ -7071,6 +7071,13 @@ def _validate_reduction_dtype(reduction_dtype) -> Optional[np.dtype]:
     return dtype
 
 
+def _needs_the_diffuse_part(names: tuple[str, ...], unbiased: bool) -> bool:
+    """Whether the components need D = T − E, and with it both moments: the
+    diffuse component does, and so does the elastic one with ``unbiased``
+    (E_u = T − N/(N − 1)·D)."""
+    return "diffuse" in names or (unbiased and "elastic" in names)
+
+
 def _form_frozen_phonon_components(
     total, elastic, num_configurations: int, names: tuple[str, ...], unbiased: bool
 ) -> list:
@@ -7082,12 +7089,16 @@ def _form_frozen_phonon_components(
     the expectation of E is |⟨ψ⟩|² + σ²/N, so D is low by a factor (N − 1)/N;
     ``unbiased`` uses D_u = N/(N − 1)·D and E_u = T − D_u instead, whose
     expectations are σ² and |⟨ψ⟩|².
+
+    ``total`` or ``elastic`` is None where no requested component needs it.
     """
-    diffuse = total - elastic
-    if unbiased:
-        diffuse = diffuse * (num_configurations / (num_configurations - 1))
-        elastic = total - diffuse
-    parts = {"total": total, "elastic": elastic, "diffuse": diffuse}
+    parts = {"total": total, "elastic": elastic}
+    if _needs_the_diffuse_part(names, unbiased):
+        diffuse = total - elastic
+        if unbiased:
+            diffuse = diffuse * (num_configurations / (num_configurations - 1))
+            parts["elastic"] = total - diffuse
+        parts["diffuse"] = diffuse
     return [parts[name] for name in names]
 
 
@@ -7145,7 +7156,8 @@ def elastic_diffuse_diffraction_patterns(
         a ``semiangle_cutoff``. Default is False.
     unbiased : bool, optional
         Correct the (N − 1)/N bias of the diffuse intensity:
-        D_u = N/(N − 1)·D and E_u = T − D_u. Requires at least 2
+        D_u = N/(N − 1)·D and E_u = T − D_u; the total is unchanged. The diffuse
+        component, and the elastic one with ``unbiased``, need at least 2
         configurations. Default is False.
     reduction_dtype : {None, 'float32', 'float64'}, optional
         Precision of the moments. The diffuse part is a difference of two
@@ -7191,12 +7203,13 @@ def elastic_diffuse_diffraction_patterns(
         )
 
     N = exit_waves.shape[fp_axis_idx]
-    if N < 2 and ("diffuse" in names or unbiased):
+    needs_diffuse = _needs_the_diffuse_part(names, unbiased)
+    if N < 2 and needs_diffuse:
         raise ValueError(
-            f"the diffuse component and unbiased=True need at least 2 frozen-phonon "
-            f"configurations, got N={N}. The diffuse intensity is the variance of "
-            "the diffracted amplitude across configurations, which is exactly zero "
-            "for a single configuration."
+            "the diffuse component, and the elastic component with unbiased=True, "
+            f"need at least 2 frozen-phonon configurations, got N={N}. The diffuse "
+            "intensity is the variance of the diffracted amplitude across "
+            "configurations, which is exactly zero for a single configuration."
         )
 
     if reduction_dtype is not None:
@@ -7208,12 +7221,18 @@ def elastic_diffuse_diffraction_patterns(
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 
-    # Elastic: the intensity of the mean wave, |FT(Σ_j ψ_j)|² / N².
-    dp_elastic = exit_waves.sum(axis=fp_axis_idx).diffraction_patterns(**dp_kwargs)
-    elastic = dp_elastic.array / N**2
+    # Both moments' patterns have the same metadata, sampling and fftshift;
+    # ``patterns`` is whichever was formed.
+    total = elastic = None
+    if needs_diffuse or "elastic" in names:
+        # Elastic: the intensity of the mean wave, |FT(Σ_j ψ_j)|² / N².
+        patterns = exit_waves.sum(axis=fp_axis_idx).diffraction_patterns(**dp_kwargs)
+        elastic = patterns.array / N**2
 
-    # Total: the mean of the configurations' intensities, Σ_j |FT(ψ_j)|² / N.
-    total = exit_waves.diffraction_patterns(**dp_kwargs).array.sum(axis=fp_axis_idx) / N
+    if needs_diffuse or "total" in names:
+        # Total: the mean of the configurations' intensities, Σ_j |FT(ψ_j)|² / N.
+        patterns = exit_waves.diffraction_patterns(**dp_kwargs)
+        total = patterns.array.sum(axis=fp_axis_idx) / N
 
     parts = _form_frozen_phonon_components(total, elastic, N, names, unbiased)
 
@@ -7230,15 +7249,15 @@ def elastic_diffuse_diffraction_patterns(
     else:
         array = parts[0]
 
-    metadata = dict(dp_elastic.metadata)
+    metadata = dict(patterns.metadata)
     metadata["frozen_phonon_component"] = list(names) if stacked else names[0]
     metadata["num_configurations"] = N
     metadata["unbiased"] = unbiased
 
     result = DiffractionPatterns(
         array,
-        sampling=dp_elastic.sampling,
-        fftshift=dp_elastic.fftshift,
+        sampling=patterns.sampling,
+        fftshift=patterns.fftshift,
         ensemble_axes_metadata=ensemble_axes_metadata or None,
         metadata=metadata,
     )

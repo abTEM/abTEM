@@ -190,12 +190,80 @@ def test_float64_reduction_keeps_a_small_diffuse_part(lazy):
     assert _max_error(default_array, reference) > 100 * float64_error
 
 
-def test_lazy_exit_waves_give_the_eager_result():
-    eager = elastic_diffuse_diffraction_patterns(_exit_waves())
-    lazy = elastic_diffuse_diffraction_patterns(_exit_waves(lazy=True))
+@pytest.mark.parametrize("components", ["all", "total", "elastic", "diffuse"])
+def test_lazy_exit_waves_give_the_eager_result(components):
+    eager = elastic_diffuse_diffraction_patterns(_exit_waves(), components=components)
+    lazy = elastic_diffuse_diffraction_patterns(
+        _exit_waves(lazy=True), components=components
+    )
 
     assert isinstance(lazy.array, da.core.Array)
     np.testing.assert_allclose(lazy.array.compute(), eager.array, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "kwargs, formed",
+    [
+        (dict(components="elastic"), ["mean"]),
+        (dict(components="total"), ["configurations"]),
+        (dict(components=("total",), unbiased=True), ["configurations"]),
+        (dict(components="diffuse"), ["mean", "configurations"]),
+        (dict(components="all"), ["mean", "configurations"]),
+        (dict(components="elastic", unbiased=True), ["mean", "configurations"]),
+    ],
+)
+def test_only_the_moments_the_components_need_are_formed(monkeypatch, kwargs, formed):
+    """The elastic component needs only the patterns of the mean wave, the total only
+    those of the configurations; the diffuse component, and the elastic one with
+    unbiased, need both."""
+    waves = _exit_waves()
+    everything = elastic_diffuse_diffraction_patterns(
+        waves, unbiased=kwargs.get("unbiased", False)
+    )
+    names = {(N_MEMBERS,): "mean", (N_CONFIGS, N_MEMBERS): "configurations"}
+    calls = []
+    diffraction_patterns = Waves.diffraction_patterns
+
+    def spy(self, *args, **spy_kwargs):
+        calls.append(names[self.ensemble_shape])
+        return diffraction_patterns(self, *args, **spy_kwargs)
+
+    monkeypatch.setattr(Waves, "diffraction_patterns", spy)
+    result = elastic_diffuse_diffraction_patterns(waves, **kwargs)
+    monkeypatch.undo()
+
+    assert calls == formed
+    components = kwargs["components"]
+    order = ("total", "elastic", "diffuse")
+    if isinstance(components, str) and components != "all":
+        np.testing.assert_array_equal(
+            result.array, everything.array[order.index(components)]
+        )
+    else:
+        selected = order if components == "all" else components
+        np.testing.assert_array_equal(
+            result.array, everything.array[[order.index(c) for c in selected]]
+        )
+
+
+def test_metadata_does_not_depend_on_the_moments_formed():
+    waves = _exit_waves(metadata={"semiangle_cutoff": 20.0})
+    results = {
+        name: elastic_diffuse_diffraction_patterns(waves, components=name)
+        for name in ("total", "elastic", "diffuse")
+    }
+    for name, result in results.items():
+        metadata = dict(result.metadata)
+        assert metadata.pop("frozen_phonon_component") == name
+        assert metadata == {
+            **waves.metadata,
+            "label": "intensity",
+            "units": "arb. unit",
+            "num_configurations": N_CONFIGS,
+            "unbiased": False,
+        }
+        assert result.sampling == results["diffuse"].sampling
+        assert result.fftshift
 
 
 def test_waves_method_matches_the_function():
@@ -487,11 +555,29 @@ def test_exit_waves_need_a_frozen_phonon_axis():
 
 
 @pytest.mark.parametrize(
-    "kwargs", [dict(components="diffuse"), dict(components="all"), dict(unbiased=True)]
+    "kwargs",
+    [
+        dict(components="diffuse"),
+        dict(components="all"),
+        dict(unbiased=True),
+        dict(components="elastic", unbiased=True),
+        dict(components=("total", "elastic"), unbiased=True),
+    ],
 )
 def test_a_single_configuration_raises_where_the_diffuse_part_is_needed(kwargs):
     with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
         elastic_diffuse_diffraction_patterns(_exit_waves(n_configs=1), **kwargs)
+
+
+def test_unbiased_total_of_a_single_configuration_is_the_total():
+    """unbiased changes only the elastic and diffuse components, so the total of a
+    single configuration is available with it."""
+    waves = _exit_waves(n_configs=1)
+    total = elastic_diffuse_diffraction_patterns(waves, components="total")
+    unbiased = elastic_diffuse_diffraction_patterns(
+        waves, components="total", unbiased=True
+    )
+    np.testing.assert_array_equal(unbiased.array, total.array)
 
 
 def test_a_single_configuration_gives_elastic_equal_to_total():
