@@ -208,6 +208,45 @@ class TestThermalWeighting:
         keep[center] = False
         np.testing.assert_array_equal(blocked[..., keep], unfolded[..., keep])
 
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    @pytest.mark.parametrize(
+        "reduction_dtype, dtype",
+        [(None, np.float32), ("float32", np.float32), ("float64", np.float64)],
+    )
+    def test_unfolding_keeps_the_precision_of_the_patterns(
+        self, reduction_dtype, dtype, lazy
+    ):
+        """complex64 exit waves give float32 patterns, and reduction_dtype sets the
+        precision; the loss/gain weights must not raise it to float64."""
+        e_values = [0.0, 0.02, 0.05, 0.10]
+        waves = _make_exit_waves(e_values, lazy=lazy)
+        diffuse = _computed(
+            phonon_loss_diffraction_patterns(waves, reduction_dtype=reduction_dtype)
+        )
+        assert diffuse.dtype == dtype
+
+        unfolded = phonon_loss_diffraction_patterns(
+            waves, temperature=300.0, reduction_dtype=reduction_dtype
+        )
+
+        assert unfolded.array.dtype == dtype
+        array = _computed(unfolded)
+        assert array.dtype == dtype
+        n_occ = 1.0 / np.expm1(np.array(e_values[1:]) / (units.kB * 300.0))
+        loss = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
+        gain = n_occ / (2.0 * n_occ + 1.0)
+        diffuse = diffuse.astype(np.float64)
+        expected = np.concatenate(
+            [
+                (diffuse[1:] * gain[:, None, None])[::-1],
+                diffuse[:1],
+                diffuse[1:] * loss[:, None, None],
+            ]
+        )
+        np.testing.assert_allclose(
+            array, expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+        )
+
     @pytest.mark.parametrize("components", ["elastic", "all", ("diffuse",)])
     def test_requires_the_diffuse_component(self, components):
         waves = _make_exit_waves([0.0, 0.02, 0.05])

@@ -6968,9 +6968,10 @@ def _thermal_weight_tds(
     gain_weight = n_occ / (2.0 * n_occ + 1.0)
 
     def _broadcast(weight):
+        # In the intensities' precision, so that float32 intensities stay float32.
         shape = [1] * I_tds.ndim
         shape[energy_axis_idx] = len(weight)
-        return xp.asarray(weight.reshape(shape))
+        return xp.asarray(weight.reshape(shape), dtype=I_tds.dtype)
 
     zero_slice = tuple(
         slice(0, 1) if i == energy_axis_idx else slice(None)
