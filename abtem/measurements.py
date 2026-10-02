@@ -553,6 +553,11 @@ def _interpolate_stack(
     return output
 
 
+def _array_module_function(array, name: str):
+    """Apply the element-wise function ``name`` of ``array``'s own module."""
+    return getattr(get_array_module(array), name)(array)
+
+
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Base class for all measurement types.
@@ -625,29 +630,25 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def real(self) -> Self:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            get_array_module(self.array).real, label="real", units="arb. unit"
-        )
+        return self._apply_element_wise_func("real", label="real", units="arb. unit")
 
     def imag(self) -> Self:
         """Returns the imaginary part of a complex-valued measurement."""
         self._check_is_complex()
         return self._apply_element_wise_func(
-            get_array_module(self.array).imag, label="imaginary", units="arb. unit"
+            "imag", label="imaginary", units="arb. unit"
         )
 
     def phase(self) -> Self:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
-        return self._apply_element_wise_func(
-            get_array_module(self.array).angle, label="phase", units="rad."
-        )
+        return self._apply_element_wise_func("angle", label="phase", units="rad.")
 
     def abs(self) -> Self:
         """Calculates the absolute value of a complex-valued measurement."""
         # self._check_is_complex()
         return self._apply_element_wise_func(
-            get_array_module(self.array).abs, label="amplitude", units="arb. unit"
+            "abs", label="amplitude", units="arb. unit"
         )
 
     def intensity(self) -> Self:
@@ -747,9 +748,21 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         return self.mean(axis=axis)
 
-    def _apply_element_wise_func(self, func: Callable, label: str, units: str) -> Self:
+    def _apply_element_wise_func(
+        self, func: Callable | str, label: str, units: str
+    ) -> Self:
         """Apply an element-wise array function, returning a new measurement with the
-        given label and units. The measurement itself is not modified."""
+        given label and units. The measurement itself is not modified.
+
+        A string names a function of the array's own module (NumPy or CuPy),
+        looked up per block. CuPy's ufuncs (``cp.abs``) must not enter a dask
+        graph themselves: dask has no tokenizer for them and falls back to
+        pickling, which segfaults, and a distributed scheduler would have to
+        pickle them again to ship the graph.
+        """
+        if isinstance(func, str):
+            func = functools.partial(_array_module_function, name=func)
+
         d = self._copy_kwargs(exclude=("array",))
         d["metadata"] = {**d["metadata"], "label": label, "units": units}
 
@@ -1979,8 +1992,8 @@ class Images(_BaseMeasurement2D):
     @property
     def coordinates(self) -> tuple[np.ndarray, np.ndarray]:
         """Coordinates of pixels in `x` and `y` [Å]."""
-        x = np.linspace(0.0, self.shape[-2] * self.sampling[0], self.shape[-2])
-        y = np.linspace(0.0, self.shape[-1] * self.sampling[1], self.shape[-1])
+        x = np.arange(self.shape[-2]) * self.sampling[0]
+        y = np.arange(self.shape[-1]) * self.sampling[1]
         return x, y
 
     @property
@@ -3392,6 +3405,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                 sigma=padded_sigma,
                 mode="wrap",
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
@@ -3406,9 +3420,8 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         )
 
         if measurements.is_lazy:
-            # No explicit `boundary=` here, matching the xp is np branch
-            # above (and the pre-existing behavior of this lazy path), which
-            # also lets dask's own default apply at true array edges.
+            # `boundary="periodic"` makes the overlap wrap at the true array
+            # edges, matching the eager path's `mode="wrap"`.
             array = measurements.array.map_overlap(
                 functools.partial(
                     _apply_convolve_2d_on_axes,
@@ -3419,6 +3432,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                     cval=0.0,
                 ),
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
@@ -5182,6 +5196,17 @@ class PolarMeasurements(BaseMeasurements):
         """
         Integrate polar regions to produce an image or line profiles.
 
+        Radial bin ``i`` spans ``[radial_offset + i * radial_sampling,
+        radial_offset + (i + 1) * radial_sampling)`` and azimuthal bin ``j`` spans
+        ``[azimuthal_offset + j * azimuthal_sampling,
+        azimuthal_offset + (j + 1) * azimuthal_sampling)``, as binned by
+        :meth:`DiffractionPatterns.polar_binning`. A bin is included if its *center*
+        lies in the half-open interval ``[lower, upper)`` of the limits. Limits on
+        bin edges therefore select exactly the bins between them, and a limit
+        inside a bin includes that bin if it covers at least half of it. Azimuthal
+        limits are periodic in 2 pi, so e.g. ``(-pi / 4, pi / 4)`` wraps around
+        0; limits spanning 2 pi or more include every azimuthal bin.
+
         Parameters
         ----------
         radial_limits : tuple of float
@@ -5210,25 +5235,36 @@ class PolarMeasurements(BaseMeasurements):
             if radial_limits is None:
                 radial_slice = slice(None)
             else:
-                inner_index = int(
-                    (radial_limits[0] - self.radial_offset) / self.radial_sampling
+                # Bin i is included iff its center, radial_offset + (i + 0.5) *
+                # radial_sampling, lies in [inner, outer).
+                inner_index, outer_index = (
+                    int(np.ceil((r - self.radial_offset) / self.radial_sampling - 0.5))
+                    for r in radial_limits
                 )
-                outer_index = int(
-                    (radial_limits[1] - self.radial_offset) / self.radial_sampling
-                )
-                radial_slice = slice(inner_index, outer_index)
+                radial_slice = slice(max(inner_index, 0), max(outer_index, 0))
 
                 if outer_index > self.shape[-2]:
                     raise RuntimeError("Integration limit exceeded.")
 
             if azimuthal_limits is None:
-                azimuthal_slice = slice(None)
+                azimuthal_indices = slice(None)
             else:
-                left_index = int(azimuthal_limits[0] / self.radial_sampling)
-                right_index = int(azimuthal_limits[1] / self.radial_sampling)
-                azimuthal_slice = slice(left_index, right_index)
+                # Bin j is included iff its center, azimuthal_offset + (j + 0.5) *
+                # azimuthal_sampling, lies in [lower, upper) modulo 2 pi.
+                lower, upper = azimuthal_limits
+                centers = (
+                    self.azimuthal_offset
+                    + (np.arange(self.shape[-1]) + 0.5) * self.azimuthal_sampling
+                )
+                if upper - lower >= 2 * np.pi:
+                    included = np.ones(len(centers), dtype=bool)
+                else:
+                    included = (centers - lower) % (2 * np.pi) < upper - lower
+                azimuthal_indices = [int(j) for j in np.flatnonzero(included)]
 
-            array = self.array[..., radial_slice, azimuthal_slice].sum(axis=(-2, -1))
+            array = self.array[..., radial_slice, :][..., azimuthal_indices].sum(
+                axis=(-2, -1)
+            )
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 

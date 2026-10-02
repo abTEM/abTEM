@@ -273,6 +273,15 @@ def test_voigtian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
+def test_images_coordinates_spaced_by_sampling():
+    # Pixel i of a periodic image with sampling s sits at i * s; the last
+    # pixel is one sampling short of the extent, not at the extent.
+    images = Images(np.zeros((4, 5)), sampling=(0.5, 0.2))
+    x, y = images.coordinates
+    assert np.allclose(x, [0.0, 0.5, 1.0, 1.5])
+    assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
+
+
 def _delta_probe_image(gpts=64, lazy=False):
     """A throwaway probe-intensity image for the filter tests below -- only
     a non-trivial 2D image is needed, not any particular physics."""
@@ -710,6 +719,34 @@ def test_gaussian_source_size_matches_cpu_and_gpu(lazy):
     )
 
 
+def test_gaussian_source_size_lazy_matches_eager_at_edges():
+    """The lazy path must wrap periodically at the scan-grid edges, like the
+    eager path (regression test for abTEM discussion 483)."""
+    rng = np.random.default_rng(0)
+    array = rng.random((12, 12, 4, 4))
+    ensemble_axes_metadata = [
+        ScanAxis(sampling=0.5, _main=True),
+        ScanAxis(sampling=0.5, _main=True),
+    ]
+
+    def make(a):
+        return DiffractionPatterns(
+            a,
+            sampling=0.1,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata={"energy": 100e3},
+        )
+
+    eager = make(array).gaussian_source_size(0.6).array
+    lazy = (
+        make(da.from_array(array, chunks=(6, 6, 4, 4)))
+        .gaussian_source_size(0.6)
+        .compute()
+        .array
+    )
+    np.testing.assert_allclose(lazy, eager, atol=1e-10)
+
+
 def test_lorentzian_filter_lazy():
     """Lorentzian filter works on a lazy (dask-backed) image."""
     images = _delta_probe_image(gpts=32, lazy=True)
@@ -1007,8 +1044,9 @@ def test_polar_measurements_integrate(data, lazy, device):
         st.one_of(st.just((radial_inner, radial_outer)), st.none())
     )
 
+    # Azimuthal limits are in radians.
     azimuthal_outer = data.draw(
-        abtem_st.sensible_floats(min_value=0.0, max_value=360.0)
+        abtem_st.sensible_floats(min_value=0.0, max_value=2 * np.pi)
     )
     azimuthal_inner = data.draw(
         abtem_st.sensible_floats(min_value=0.0, max_value=azimuthal_outer)
@@ -1076,7 +1114,9 @@ def test_interpolate_periodic_spline_and_fft(lazy):
         method="spline", sampling=0.05, boundary="periodic", order=5
     )
     fft_interpolated = images.interpolate(method="fft", sampling=0.05)
-    array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)
+    assert array_is_close(
+        spline_interpolated.array, fft_interpolated.array, rel_tol=0.01
+    )
 
 
 @given(
@@ -1343,41 +1383,142 @@ class TestRealSpaceLineProfiles:
 # ---------------------------------------------------------------------------
 
 class TestPolarMeasurements:
-    def _polar(self, nbins_radial=8, nbins_azimuthal=6):
-        arr = np.ones((4, 4, nbins_radial, nbins_azimuthal))
+    # Base shape (3 radial, 4 azimuthal). With the default geometry below, radial
+    # bin i spans [5 i, 5 i + 5) mrad and azimuthal bin j spans
+    # [j pi / 2, (j + 1) pi / 2) rad, i.e. the bins of
+    # DiffractionPatterns.polar_binning(nbins_radial=3, nbins_azimuthal=4,
+    # inner=0, outer=15). Limits select the bins whose centers lie in
+    # [lower, upper), with the azimuth periodic in 2 pi.
+    #
+    # The non-uniform array is A[i, j] = 10 i + j, so
+    #   row sums    R_i = sum_j A[i, j] = 40 i + 6        -> R = (6, 46, 86)
+    #   column sums C_j = sum_i A[i, j] = 30 + 3 j        -> C = (30, 33, 36, 39)
+    #   total       = 6 + 46 + 86 = 138
+    # The second scan position holds 2 A, so every expected value doubles there.
+
+    def _polar(
+        self,
+        values="indexed",
+        radial_sampling=5.0,
+        radial_offset=0.0,
+        azimuthal_offset=0.0,
+        lazy=False,
+        device="cpu",
+    ):
+        i, j = np.meshgrid(np.arange(3), np.arange(4), indexing="ij")
+        base = np.ones((3, 4)) if values == "ones" else 10.0 * i + j
+        arr = np.stack([base, 2 * base])
+        arr = copy_to_device(arr, device)
+        if lazy:
+            arr = da.from_array(arr, chunks=(1, -1, -1))
         return PolarMeasurements(
             arr,
-            radial_sampling=5.0,
-            azimuthal_sampling=360.0 / nbins_azimuthal,
-            radial_offset=0.0,
-            azimuthal_offset=0.0,
-            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
+            radial_sampling=radial_sampling,
+            azimuthal_sampling=2 * np.pi / 4,
+            radial_offset=radial_offset,
+            azimuthal_offset=azimuthal_offset,
+            ensemble_axes_metadata=[ScanAxis()],
             metadata={"energy": 100e3},
         )
 
+    @staticmethod
+    def _values(result):
+        return np.asarray(result.compute().to_cpu().array)
+
     def test_construction(self):
         pm = self._polar()
-        assert pm.shape[-2] == 8
-        assert pm.shape[-1] == 6
+        assert pm.shape[-2] == 3
+        assert pm.shape[-1] == 4
+        assert pm.outer_angle == 15.0
+
+    @pytest.mark.parametrize(
+        "values, radial_limits, azimuthal_limits, expected",
+        [
+            # ones: every selected bin contributes 1.
+            ("ones", None, None, 12.0),  # all 3 x 4 bins
+            ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
+            ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
+            ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
+            # indexed: A[i, j] = 10 i + j.
+            ("indexed", None, None, 138.0),  # total
+            ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
+            ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
+            ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
+            ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
+            # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
+            ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
+            ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
+            # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
+            ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
+            ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
+            # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
+            ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
+        ],
+    )
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values(
+        self, values, radial_limits, azimuthal_limits, expected, lazy, device
+    ):
+        pm = self._polar(values=values, lazy=lazy, device=device)
+        result = pm.integrate(
+            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+        )
+        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
+
+    @pytest.mark.parametrize(
+        "radial_limits, azimuthal_limits, expected",
+        [
+            # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
+            ((25, 35), None, 132.0),  # R_1 + R_2
+            ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
+            # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
+            (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
+            (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
+            # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
+            (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
+            # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
+            ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
+        ],
+    )
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values_with_offsets(
+        self, radial_limits, azimuthal_limits, expected, lazy, device
+    ):
+        pm = self._polar(
+            radial_offset=20.0, azimuthal_offset=np.pi / 4, lazy=lazy, device=device
+        )
+        result = pm.integrate(
+            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+        )
+        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
+
+    def test_integrate_limits_on_inexact_bin_edges(self):
+        # With radial_sampling = 0.1 the edge 0.3 is bin index 3, although
+        # 0.3 / 0.1 == 2.9999999999999996 in floating point. (0, 0.3) must select
+        # all three radial bins: total = 138.
+        pm = self._polar(radial_sampling=0.1)
+        result = pm.integrate(radial_limits=(0, 0.3))
+        np.testing.assert_allclose(self._values(result), [138.0, 276.0])
+
+    def test_integrate_radial_limit_exceeded(self):
+        # outer_angle is 15 mrad; a limit extending over a whole further bin
+        # (center 17.5 mrad) asks for data that does not exist.
+        with pytest.raises(RuntimeError):
+            self._polar().integrate(radial_limits=(0, 20))
 
     def test_integrate_radial(self):
-        pm = self._polar()
-        result = pm.integrate_radial(0, pm.outer_angle)
-        assert isinstance(result, Images)
-
-    def test_integrate_all(self):
-        pm = self._polar()
-        result = pm.integrate(
-            radial_limits=(0, pm.outer_angle),
-            azimuthal_limits=None,
-        )
-        assert result.shape == pm.ensemble_shape
+        # integrate_radial(5, 15) == integrate(radial_limits=(5, 15)) = R_1 + R_2.
+        result = self._polar().integrate_radial(5, 15)
+        np.testing.assert_allclose(self._values(result), [132.0, 264.0])
 
     def test_integrate_with_detector_regions(self):
+        # Region k is flat index k of the (3, 4) base: region 1 = A[0, 1] = 1,
+        # region 4 = A[1, 0] = 10.
         pm = self._polar()
-        n_regions = pm.shape[-2] * pm.shape[-1]
-        result = pm.integrate(detector_regions=list(range(n_regions))).compute()
-        assert result is not None
+        result = pm.integrate(detector_regions=[1, 4])
+        np.testing.assert_allclose(self._values(result), [11.0, 22.0])
 
 
 # ---------------------------------------------------------------------------
