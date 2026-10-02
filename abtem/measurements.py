@@ -6043,8 +6043,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         Parameters
         ----------
         criterion : {'distance', 'intensity'}
-            The boundary parameter determines how the images are extended beyond their
-            boundaries when the filter overlaps with a border.
+            The sort key, descending:
 
                 ``distance`` :
                     Sort according to the distance in reciprocal space from the zero
@@ -6058,26 +6057,31 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         sorted_spots : IndexedDiffractionPatterns
             The indexed diffraction spots sorted according to the given criterion.
         """
-        if self.lazy:
+        if self.is_lazy:
             raise RuntimeError("Cannot sort lazy IndexedDiffractionPatterns.")
 
         if criterion == "distance":
-            criterion = -np.linalg.norm(self.positions, axis=1)
+            # |g| over x, y, z; any ensemble prefix of the lattice vectors (e.g.
+            # one per orientation) leaves it unchanged, so reduce it away
+            distance = np.linalg.norm(self.positions, axis=-1)
+            key = -distance.reshape(-1, distance.shape[-1]).max(axis=0)
         elif criterion == "intensity":
             ensemble_axes = tuple(range(len(self.ensemble_shape)))
-            criterion = -np.max(self.intensities, axis=ensemble_axes)
+            key = -asnumpy(self.intensities.max(axis=ensemble_axes))
         else:
-            raise ValueError()
+            raise ValueError(
+                f"criterion must be 'distance' or 'intensity', not {criterion!r}"
+            )
 
-        order = np.argsort(criterion)
+        order = np.argsort(key)
         array = self.array[..., order]
         miller_indices = self.miller_indices[order]
-        reciprocal_lattice_vectors = self.reciprocal_lattice_vectors[..., order, :, :]
 
+        # the lattice vectors are per ensemble member, (..., 3, 3), not per spot
         return self.__class__(
             array,
             miller_indices,
-            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
+            reciprocal_lattice_vectors=self.reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self._metadata,
         )
@@ -6421,11 +6425,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         A dictionary mapping miller indices to reciprocal space positions [1/Å].
         """
 
+        # positions are (..., spots, 3): iterate over the spot axis (zipping
+        # with the (..., 3, 3) lattice vectors gave 3 entries, whatever the
+        # number of spots)
         positions = {
             tuple(hkl): position
             for hkl, position in zip(
                 self.miller_indices,
-                np.moveaxis(self.reciprocal_lattice_vectors, -2, 0),
+                np.moveaxis(self.positions, -2, 0),
             )
         }
         return positions
