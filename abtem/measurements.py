@@ -6962,8 +6962,16 @@ def _thermal_weight_tds(
     flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
-    beta = 1.0 / (units.kB * temperature)
-    n_occ = 1.0 / (np.exp(nonzero_e * beta) - 1.0)
+    k_t = units.kB * temperature
+    if k_t == 0.0:
+        # The limit T -> 0, also where k_B T underflows: no thermal phonons
+        # (n = 0), so the whole signal is loss.
+        n_occ = np.zeros_like(nonzero_e)
+    else:
+        # Where E / k_B T overflows the exponential, n -> 0 is the correct limit;
+        # expm1 keeps n finite where E / k_B T is tiny.
+        with np.errstate(over="ignore"):
+            n_occ = 1.0 / np.expm1(nonzero_e / k_t)
     loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
     gain_weight = n_occ / (2.0 * n_occ + 1.0)
 
@@ -7349,7 +7357,8 @@ def phonon_loss_diffraction_patterns(
         ``components="diffuse"`` and an ``EnergyLossAxis`` whose values start at
         0 and strictly increase (the classical diffuse signal is symmetric in
         loss/gain; only their *split* is a quantum effect). The zero-energy bin
-        is unweighted. Default is None (no unfolding — the returned energies are
+        is unweighted. Must be finite and non-negative; at 0 the whole signal is on
+        the loss side. Default is None (no unfolding — the returned energies are
         the ones in ``exit_waves``).
     unbiased : bool, optional
         See :func:`elastic_diffuse_diffraction_patterns`.
@@ -7397,6 +7406,43 @@ def phonon_loss_diffraction_patterns(
         raise ValueError(
             "temperature-based loss/gain unfolding requires components='diffuse'."
         )
+    if temperature is not None:
+        # Only a single real number: bools, complex numbers and text, as scalars
+        # or 0-d arrays, raise rather than being converted, and so does a masked
+        # value.
+        if np.ma.is_masked(temperature):
+            raise ValueError("temperature must be a number [K], got a masked value")
+        value = temperature
+        if isinstance(value, (list, tuple, np.ndarray)):
+            array = np.asarray(value)
+            if array.ndim != 0:
+                raise ValueError(
+                    "temperature must be a single number [K], got an array of "
+                    f"shape {array.shape}"
+                )
+            if array.dtype.kind not in "iufO":
+                raise TypeError(
+                    f"temperature must be a number [K], got {temperature!r}"
+                )
+            value = array.item()
+        if isinstance(
+            value,
+            (bool, np.bool_, str, bytes, bytearray, complex, np.complexfloating),
+        ):
+            raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+        try:
+            # A Python float, so that k_B T is formed in double precision
+            # whatever the precision of the number given.
+            temperature = float(value)
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"temperature must be a number [K], got {temperature!r}"
+            ) from error
+        # A negative temperature would swap the loss and gain weights.
+        if not (np.isfinite(temperature) and temperature >= 0.0):
+            raise ValueError(
+                f"temperature must be finite and non-negative [K], got {temperature!r}"
+            )
 
     result = elastic_diffuse_diffraction_patterns(
         exit_waves,

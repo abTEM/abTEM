@@ -286,6 +286,164 @@ class TestThermalWeighting:
 
         np.testing.assert_array_equal(_computed(blocked), expected)
 
+    def test_zero_temperature_puts_the_whole_signal_on_the_loss_side(self):
+        """The limit T -> 0 has no thermal phonons (n = 0): loss weight 1, gain
+        weight 0."""
+        e_values = [0.0, 0.02, 0.05, 0.10]
+        waves = _make_exit_waves(e_values)
+        diffuse = np.asarray(phonon_loss_diffraction_patterns(waves).array)
+
+        unfolded = phonon_loss_diffraction_patterns(waves, temperature=0.0)
+
+        energies = unfolded.ensemble_axes_metadata[0].values
+        np.testing.assert_allclose(
+            energies, [-0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10]
+        )
+        array = np.asarray(unfolded.array)
+        np.testing.assert_array_equal(array[:3], 0.0)
+        np.testing.assert_array_equal(array[3:], diffuse)
+
+    @pytest.mark.parametrize(
+        "temperature", [-300.0, float("nan"), float("inf"), -float("inf")]
+    )
+    def test_a_negative_or_non_finite_temperature_raises(self, temperature):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(ValueError, match="must be finite and non-negative"):
+            phonon_loss_diffraction_patterns(waves, temperature=temperature)
+
+    @pytest.mark.parametrize(
+        "temperature", [True, np.True_], ids=["bool", "numpy_bool"]
+    )
+    def test_a_bool_temperature_raises(self, temperature):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(TypeError, match="temperature must be a number"):
+            phonon_loss_diffraction_patterns(waves, temperature=temperature)
+
+    @pytest.mark.parametrize(
+        "temperature",
+        [
+            "300",
+            b"300",
+            bytearray(b"300"),
+            300j,
+            np.complex64(300),
+            np.complex128(300 + 1j),
+            np.clongdouble(300),
+            np.array(True),
+            np.array("300"),
+            np.array(b"300"),
+        ],
+        ids=[
+            "str",
+            "bytes",
+            "bytearray",
+            "complex",
+            "complex64",
+            "complex128",
+            "clongdouble",
+            "bool_array",
+            "str_array",
+            "bytes_array",
+        ],
+    )
+    def test_a_temperature_that_is_not_a_number_raises(self, temperature):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(TypeError, match="temperature must be a number"):
+            phonon_loss_diffraction_patterns(waves, temperature=temperature)
+
+    @pytest.mark.parametrize(
+        "kind", ["decimal", "fraction", "object_array", "float_only"]
+    )
+    def test_any_real_number_is_a_temperature(self, kind):
+        """Real numbers other than float, int and the NumPy scalars give the same
+        result as the float."""
+        from decimal import Decimal
+        from fractions import Fraction
+
+        class FloatOnly:
+            def __float__(self):
+                return 300.0
+
+        temperature = {
+            "decimal": Decimal(300),
+            "fraction": Fraction(300),
+            "object_array": np.array(300.0, dtype=object),
+            "float_only": FloatOnly(),
+        }[kind]
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        expected = phonon_loss_diffraction_patterns(waves, temperature=300.0)
+
+        result = phonon_loss_diffraction_patterns(waves, temperature=temperature)
+
+        np.testing.assert_array_equal(
+            np.asarray(result.array), np.asarray(expected.array)
+        )
+
+    def test_a_masked_temperature_raises(self):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(ValueError, match="masked"):
+            phonon_loss_diffraction_patterns(waves, temperature=np.ma.masked)
+
+    def test_an_array_of_temperatures_raises(self):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(ValueError, match="must be a single number"):
+            phonon_loss_diffraction_patterns(
+                waves, temperature=np.array([300.0, 310.0])
+            )
+
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32])
+    def test_the_temperature_is_used_in_double_precision(self, dtype):
+        """k_B T in the precision of a float16 or float32 scalar puts the gain
+        weight off by up to 7.6e-4 or 1.0e-9 (relative; 0.02 and 0.05 eV at 300 K);
+        the float64 unfolding shows either."""
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        expected = phonon_loss_diffraction_patterns(
+            waves, temperature=300.0, reduction_dtype="float64"
+        )
+        result = phonon_loss_diffraction_patterns(
+            waves, temperature=dtype(300.0), reduction_dtype="float64"
+        )
+        np.testing.assert_array_equal(
+            np.asarray(result.array), np.asarray(expected.array)
+        )
+
+    def test_a_temperature_whose_k_b_t_underflows_is_the_zero_temperature_limit(
+        self,
+    ):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        zero = phonon_loss_diffraction_patterns(waves, temperature=0.0)
+        tiny = phonon_loss_diffraction_patterns(waves, temperature=5e-324)
+        np.testing.assert_array_equal(np.asarray(tiny.array), np.asarray(zero.array))
+
+    def test_a_very_high_temperature_splits_the_signal_evenly(self):
+        """n -> infinity: loss and gain weights both tend to 1/2."""
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        diffuse = np.asarray(phonon_loss_diffraction_patterns(waves).array)
+
+        array = np.asarray(
+            phonon_loss_diffraction_patterns(waves, temperature=1e300).array
+        )
+
+        np.testing.assert_allclose(array[3:], diffuse[1:] / 2, rtol=1e-6)
+        np.testing.assert_allclose(array[:2], diffuse[:0:-1] / 2, rtol=1e-6)
+
+    def test_a_low_temperature_unfolds_without_overflow_warnings(self):
+        """E / k_B T overflows the exponential (0.1 eV at 1 K), where n -> 0 is the
+        correct limit: the whole signal is loss, and nothing warns."""
+        import warnings
+
+        e_values = [0.0, 0.1, 0.2]
+        waves = _make_exit_waves(e_values)
+        diffuse = np.asarray(phonon_loss_diffraction_patterns(waves).array)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            unfolded = phonon_loss_diffraction_patterns(waves, temperature=1.0)
+
+        array = np.asarray(unfolded.array)
+        np.testing.assert_array_equal(array[:2], 0.0)
+        np.testing.assert_array_equal(array[2:], diffuse)
+
     def test_requires_energies_start_at_zero_and_ascending(self):
         waves_no_zero = _make_exit_waves([0.01, 0.02, 0.05])
         with pytest.raises(ValueError, match="starting at 0"):
