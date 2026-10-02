@@ -107,3 +107,45 @@ def test_lazy_partition_args_embed_atoms_once():
     ]
     assert len(array.chunks[0]) == 6
     assert len(atoms_keys) == 1
+
+
+def test_gpaw_lazy_partition_args_ship_the_calculator_once():
+    # The calculator (density and potential grids) is one graph node shared by
+    # every configuration chunk, not a literal argument pickled into each task
+    # the scheduler sends to a worker. GPAW is not needed: _partition_args only
+    # reads the calculator, and a stand-in object marks where it ends up.
+    import cloudpickle
+
+    from abtem.potentials.gpaw import GPAWPotential
+
+    class StandInCalculator:
+        def __init__(self):
+            self.stand_in_calculator_grid = np.zeros(1000)
+
+    calculator = StandInCalculator()
+    potential = GPAWPotential.__new__(GPAWPotential)
+    potential._calculators = calculator
+    potential._frozen_phonons = FrozenPhonons(
+        ase.build.bulk("Au", cubic=True), num_configs=4, sigmas=0.1, seed=1
+    )
+
+    (array,) = potential._partition_args(chunks=1, lazy=True)
+
+    tasks_with_calculator = [
+        key
+        for key, task in dict(array.__dask_graph__()).items()
+        if b"stand_in_calculator_grid" in cloudpickle.dumps(task)
+    ]
+    assert len(array.chunks[0]) == 4
+    assert len(tasks_with_calculator) == 1
+
+    (eager,) = potential._partition_args(chunks=1, lazy=False)
+    for lazy_args, eager_args in zip(array.compute(), eager):
+        eager_args = eager_args.item()
+        assert lazy_args["calculators"] is calculator
+        assert eager_args["calculators"] is calculator
+        # the lazy chunk arrives wrapped in a one-element object array
+        lazy_atoms, lazy_seeds = np.asarray(lazy_args["frozen_phonons"]).item()
+        eager_atoms, eager_seeds = eager_args["frozen_phonons"]
+        assert lazy_atoms == eager_atoms
+        assert tuple(lazy_seeds) == tuple(eager_seeds)

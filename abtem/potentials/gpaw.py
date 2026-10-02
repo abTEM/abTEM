@@ -563,9 +563,14 @@ class GPAWPotential(_PotentialBuilder):
             # Delayed objects from to_delayed() compose correctly instead.
             fp_chunks = partitioned.to_delayed().ravel() if lazy else partitioned
 
+            # One graph node shared by every chunk's task. Passed as a literal
+            # argument instead, the calculator (with its density and potential
+            # grids) would be pickled into each task sent to a worker.
+            shared_calculators = dask.delayed(calculators) if lazy else calculators
+
             for i, fp in enumerate(fp_chunks):
                 if lazy:
-                    block = dask.delayed(frozen_phonons)(calculators, fp)
+                    block = dask.delayed(frozen_phonons)(shared_calculators, fp)
 
                     itemset(array, i, da.from_delayed(block, shape=(1,), dtype=object))
                 else:
