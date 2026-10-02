@@ -54,6 +54,7 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     PixelatedDetector,
     SegmentedDetector,
+    SpectralAnnularDetector,
     WavesDetector,
     validate_detectors,
 )
@@ -3191,6 +3192,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         sides = []
         for detector in detectors:
+            offset = getattr(detector, "_offset", None)
+            if isinstance(detector, SpectralAnnularDetector) or (
+                isinstance(detector, (AnnularDetector, SegmentedDetector))
+                and offset is not None
+                and np.any(np.asarray(offset) != 0.0)
+            ):
+                # an off-centre region (or a q-sweep of them) is not an angular
+                # band about k = 0: `inner`/`outer` alone do not bound the
+                # angles it collects, which reach outer + |offset|
+                return None
             if isinstance(detector, (AnnularDetector, SegmentedDetector)):
                 outer = detector.outer
                 inner = detector.inner

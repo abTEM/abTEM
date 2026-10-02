@@ -1291,3 +1291,30 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
                           blend_angle=1e4)
     assert np.allclose(beyond.angular_sampling, reference.angular_sampling)
+
+
+def test_upsample_offset_detectors_are_not_routed():
+    # routing reads a detector's band from inner/outer alone, which bound the
+    # collected angles only for a region centred on k = 0: an offset region
+    # (or a q-sweep of them) reaches outer + |offset|, across the cut here
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+
+    cut = 40.0
+    centred = abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=5.0, outer=20.0
+    )
+    assert built._routing_sides(cut, [centred]) == ["low"]
+
+    for detector in (
+        abtem.SegmentedDetector(
+            nbins_radial=1, nbins_azimuthal=4, inner=5.0, outer=20.0,
+            offset=(25.0, 0.0),
+        ),
+        abtem.AnnularDetector(inner=5.0, outer=20.0, offset=(25.0, 0.0)),
+        abtem.SpectralAnnularDetector(outer=5.0, q_max=60.0),
+    ):
+        assert built._routing_sides(cut, [detector]) is None
