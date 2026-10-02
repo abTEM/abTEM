@@ -1359,6 +1359,33 @@ class TestSliceIndexedAtomsWrapping:
         assert self._per_slice(sliced) == [1, 0, 1, 1]
         assert np.array_equal(sliced.atoms.positions, atoms.positions)
 
+    def test_atoms_far_outside_the_faces_warn_but_are_kept(self):
+        """Clamping a misplaced atom into a face slice is a guess at its depth,
+        so it warns; within the threshold (the test above, which runs with
+        warnings as errors) it does not."""
+        import ase
+
+        import numpy as np
+
+        from abtem.slicing import FACE_SLICE_WARNING_DISTANCE, SliceIndexedAtoms
+
+        far = FACE_SLICE_WARNING_DISTANCE + 0.5
+        atoms = ase.Atoms(
+            "B4",
+            positions=[
+                [1.0, 1.0, -far],
+                [1.0, 1.0, 2.0],
+                [1.0, 1.0, 4.0 + far],
+                [1.0, 1.0, 100.0],
+            ],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+        with pytest.warns(UserWarning, match=r"^3 atom\(s\) lie more than"):
+            sliced = SliceIndexedAtoms(atoms, slice_thickness=1.0, wrap=False)
+
+        assert self._per_slice(sliced) == [1, 0, 1, 2]
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_non_periodic_infinite_projection_conserves_every_atom(self, device):
         """An atom displaced out of a non-periodic cell used to lose all of its
