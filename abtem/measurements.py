@@ -7004,8 +7004,9 @@ def _thermal_weight_tds(
 
 FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
 
-# Names used before the components were settled; rejected with a pointer to
-# the current name.
+# The component names that results saved by earlier development versions of
+# phonon_loss_diffraction_patterns carry, and the names they map to. Passed as
+# components they raise a ValueError naming the mapped name.
 _RENAMED_FROZEN_PHONON_COMPONENTS = {
     "incoherent": "total",
     "coherent": "elastic",
@@ -7275,6 +7276,7 @@ def phonon_loss_diffraction_patterns(
     *,
     unbiased: bool = False,
     reduction_dtype=None,
+    **kwargs,
 ) -> "DiffractionPatterns":
     """
     Energy-resolved phonon-loss diffraction patterns from frozen-phonon exit
@@ -7345,6 +7347,18 @@ def phonon_loss_diffraction_patterns(
     """
     from abtem.core.axes import EnergyLossAxis
 
+    # A "component" keyword raises a TypeError that names "components".
+    if "component" in kwargs:
+        raise TypeError(
+            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
+            "'component': it is now 'components'"
+        )
+    if kwargs:
+        raise TypeError(
+            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
+            f"{next(iter(kwargs))!r}"
+        )
+
     energy_axis_idx = next(
         (
             i
@@ -7358,7 +7372,10 @@ def phonon_loss_diffraction_patterns(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    if temperature is not None and components != "diffuse":
+    # Validated before the temperature check, so that a renamed component such
+    # as 'tds' gets the error that names its replacement.
+    names, stacked = _validate_frozen_phonon_components(components)
+    if temperature is not None and (stacked or names != ("diffuse",)):
         raise ValueError(
             "temperature-based loss/gain unfolding requires components='diffuse'."
         )

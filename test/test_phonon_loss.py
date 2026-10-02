@@ -208,12 +208,22 @@ class TestThermalWeighting:
         keep[center] = False
         np.testing.assert_array_equal(blocked[..., keep], unfolded[..., keep])
 
-    def test_requires_the_diffuse_component(self):
+    @pytest.mark.parametrize("components", ["elastic", "all", ("diffuse",)])
+    def test_requires_the_diffuse_component(self, components):
         waves = _make_exit_waves([0.0, 0.02, 0.05])
         with pytest.raises(ValueError, match="components='diffuse'"):
             phonon_loss_diffraction_patterns(
-                waves, components="elastic", temperature=300.0
+                waves, components=components, temperature=300.0
             )
+
+    @pytest.mark.parametrize(
+        "old, new",
+        [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")],
+    )
+    def test_earlier_component_names_point_to_the_new_ones(self, old, new):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
+            phonon_loss_diffraction_patterns(waves, components=old, temperature=300.0)
 
     @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
     @pytest.mark.parametrize("block_direct", [True, 15.0])

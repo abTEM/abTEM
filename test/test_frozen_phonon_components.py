@@ -542,6 +542,24 @@ def test_reduction_dtype_must_be_float32_or_float64(reduction_dtype, error):
         )
 
 
+def test_the_earlier_component_keyword_points_to_components():
+    waves = Waves(
+        np.ones((1, N_CONFIGS) + GPTS, dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            EnergyLossAxis(values=(0.02,)),
+            FrozenPhononsAxis(_ensemble_mean=False),
+        ],
+    )
+    with pytest.raises(TypeError, match="'component': it is now 'components'"):
+        phonon_loss_diffraction_patterns(waves, component="tds")
+    with pytest.raises(TypeError, match="'component': it is now 'components'"):
+        waves.phonon_loss_diffraction_patterns(component="diffuse")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'bogus'"):
+        phonon_loss_diffraction_patterns(waves, bogus=1)
+
+
 def test_exit_waves_need_a_frozen_phonon_axis():
     waves = _exit_waves()
     without = Waves(
