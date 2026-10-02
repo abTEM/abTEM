@@ -520,9 +520,11 @@ class FrozenPhonons(BaseFrozenPhonons):
         chunks = validate_chunks(self.ensemble_shape, chunks)
         if lazy:
             arrays = []
+            # One graph node shared by every chunk; created inside the loop,
+            # each chunk would get its own copy under a fresh UUID key.
+            lazy_atoms = dask.delayed(self.atoms)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 seeds = self.seed[start:stop]
-                lazy_atoms = dask.delayed(self.atoms)
                 lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)

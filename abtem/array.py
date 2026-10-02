@@ -1893,6 +1893,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial: Callable,
         array_object_partial: Callable,
         base_ndims: int,
+        out_ndim: int,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
@@ -1911,8 +1912,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
-        ndims = len(transform_axes) + len(array.shape)
-        packing = np.zeros((1,) * ndims, dtype=object)
+        packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
 
@@ -1979,6 +1979,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 validated_chunks[: len(transform.ensemble_shape)]
             )
 
+            # A block of multi_output_blockwise has one dimension per axis of
+            # this array plus one per dimension of each partitioned transform
+            # argument, not one per argument: MultisliceTransform passes a
+            # frozen-phonon potential with several exit planes as one 2D
+            # argument, and large constants as 0D arguments whose blocks can be
+            # bare objects, so the count comes from the declared arguments. A
+            # packed block with fewer dimensions breaks dask's concatenation
+            # over dropped axes (AnnularDetector drops the wave-function axes).
+            out_ndim = len(self.shape) + sum(len(axis.shape) for axis in new_axes)
+
             num_dropped_axes = tuple(
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
             )
@@ -2035,6 +2045,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
+                out_ndim=out_ndim,
             )
         else:
             new_arrays = transform._calculate_new_array(self)

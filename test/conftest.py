@@ -37,7 +37,10 @@ settings.register_profile(
     print_blob=True,
     deadline=None,
     suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.filter_too_much),
-    phases=[Phase.generate],
+    # Not just Phase.generate: without `explicit` every @example is silently
+    # skipped, without `reuse` a failure found once is never replayed from the
+    # example database, and without `shrink` it is reported unminimised.
+    phases=[Phase.explicit, Phase.reuse, Phase.generate, Phase.shrink],
 )
 settings.load_profile("dev")
 
