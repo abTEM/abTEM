@@ -860,6 +860,30 @@ def calculate_M_matrix(
     return Mii
 
 
+def _metric(
+    hkl: np.ndarray,
+    cell: np.ndarray | Cell,
+    energy: float,
+    use_wave_eq: bool | Literal["exact"],
+) -> np.ndarray:
+    """Diagonal of M, the symmetrizing metric of the Bloch-wave eigenproblem.
+
+    The standard Bloch-wave equation (use_wave_eq=False; the Helmholtz equation
+    with only gamma**2 dropped) is the generalized eigenproblem
+
+        A C = 2 K gamma B C,   B = diag(1 + g_z / K),
+
+    solved as the Hermitian problem (M A M) C' = 2 K gamma C' with
+    M = B**(-1/2) (calculate_M_matrix) and C = M C'. The wave-equation forms
+    (use_wave_eq=True or "exact") -- the paraxial and non-paraxial equations
+    multislice solves -- have gamma with the constant coefficient 2 K instead:
+    an ordinary Hermitian eigenproblem, M = 1.
+    """
+    if use_wave_eq:
+        return np.ones(len(hkl))
+    return calculate_M_matrix(hkl, cell, energy)
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
@@ -867,7 +891,7 @@ def calculate_structure_matrix(
     cell: Cell | np.ndarray,
     energy: float,
     gpts: tuple[int, int, int],
-    use_wave_eq: bool | Literal["exact"] = False,
+    use_wave_eq: bool | Literal["exact"] = "exact",
 ) -> np.ndarray:
     """Calculate the structure matrix for a given set of reciprocal space vectors.
 
@@ -887,13 +911,17 @@ def calculate_structure_matrix(
         The energy of the electrons [eV].
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
-    use_wave_eq : bool or 'exact'
-        If True, the Bloch wave equation derived from the paraxial wave equation is
-        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
-        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
-        (converging to it needs an `sg_max` large enough to include the beams whose
-        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
-        is used. See :func:`abtem.bloch.utils.excitation_errors`.
+    use_wave_eq : bool or 'exact', optional
+        The form of the Bloch-wave equation. If 'exact' (default), the non-paraxial
+        wave equation solved by multislice with the default exact propagator,
+        ``FourierMultislice(order="exact")``; the most accurate form (converging to
+        exact multislice needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). If True, the paraxial wave
+        equation, matching ``FourierMultislice(order=1)``. If False, the standard
+        (textbook) Bloch-wave equation: the Helmholtz equation with the second
+        z-derivative of the Bloch-wave amplitudes dropped, with excitation errors
+        measured from the Ewald sphere. See
+        :func:`abtem.bloch.utils.excitation_errors`.
 
     Returns
     -------
@@ -903,7 +931,7 @@ def calculate_structure_matrix(
     xp = get_array_module(structure_factor)
 
     g = xp.asarray(calculate_g_vec(hkl_selected, cell))
-    Mii = calculate_M_matrix(hkl_selected, cell, energy)
+    Mii = _metric(hkl_selected, cell, energy, use_wave_eq)
 
     hkl_selected = np.asarray(hkl_selected)
 
@@ -926,8 +954,10 @@ def calculate_structure_matrix(
     A = A * prefactor * Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+    # M (2 K diag(s_g) + U) M: the diagonal carries M**2, like the off-diagonal
+    # M_i M_j
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
+    diag *= Mii**2
 
     xp.fill_diagonal(A, diag)
     return A
@@ -945,6 +975,7 @@ def calculate_dynamical_scattering(
     cell: np.ndarray | Cell,
     energy: float,
     thicknesses: float | Iterable[float],
+    use_wave_eq: bool | Literal["exact"] = "exact",
 ) -> np.ndarray:
     """Calculate the dynamical scattering given a structure matrix.
 
@@ -960,6 +991,10 @@ def calculate_dynamical_scattering(
         The energy of the electrons [eV].
     thicknesses : sequence of floats
         The thicknesses of the sample [Å].
+    use_wave_eq : bool or 'exact', optional
+        The form of the Bloch-wave equation the structure matrix was built for
+        (see :func:`calculate_structure_matrix`; default 'exact'); decides the
+        metric used to map its eigenvectors back to beam amplitudes.
 
     Returns
     -------
@@ -972,27 +1007,27 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(_metric(hkl, cell, energy, use_wave_eq))
 
+    # eigenvectors C' of the symmetrized structure matrix M A M; orthonormal
     v, C = xp.linalg.eigh(structure_matrix)
-    # v, C = scipy.linalg.eigh(structure_matrix)
 
     gamma = v * energy2wavelength(energy) / 2.0
 
-    np.fill_diagonal(C, np.diag(C) / Mii)
-
-    C_inv = xp.conjugate(C.T)
-
+    # The incident plane wave, C alpha = e_0 at z = 0, with C = M C' the
+    # physical Bloch-wave coefficients: alpha = C'^H M^-1 e_0 = C'^H e_0, as
+    # M_00 = 1 (g_z = 0 for the direct beam).
     initial = plane_wave_coefficients(hkl, xp)
+    alpha = xp.conjugate(C.T) @ initial
 
-    alpha = C_inv @ initial
+    C = Mii[:, None] * C
+
+    z = np.atleast_1d(thicknesses)
+    phases = xp.exp(2.0j * xp.pi * xp.asarray(z)[None] * gamma[:, None])
+    array = (C @ (phases * alpha[:, None])).T
+
     if not thicknesses.shape:
-        array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
-    else:
-        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
-        for i, thickness in enumerate(thicknesses):
-            array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
-
+        return array[0]
     return array
 
 
@@ -1026,6 +1061,7 @@ def calculate_scattering_matrix(
     z: float,
     energy: float,
     method: str = "expm",
+    use_wave_eq: bool | Literal["exact"] = "exact",
 ) -> np.ndarray:
     """Calculate the scattering matrix for a given set of reciprocal space vectors.
 
@@ -1047,6 +1083,10 @@ def calculate_scattering_matrix(
                 Use a matrix exponential.
             ``decomposition`` :
                 Use a Hermitian matrix eigendecomposition.
+    use_wave_eq : bool or 'exact', optional
+        The form of the Bloch-wave equation the structure matrix was built for
+        (see :func:`calculate_structure_matrix`; default 'exact'); decides the
+        metric used to map the result back to beam amplitudes.
 
     Returns
     -------
@@ -1060,7 +1100,8 @@ def calculate_scattering_matrix(
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
+    # S = C exp(2 pi i gamma z) C^-1 with C = M C': M expm(...) M^-1
+    Mii = _metric(hkl, cell, energy, use_wave_eq)
     M = xp.asarray(np.diag(Mii))
     M_inv = xp.asarray(np.diag(1 / Mii))
 
@@ -1258,13 +1299,17 @@ class BlochWaves:
         Lattice centering.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
-    use_wave_eq : bool or 'exact'
-        If True, the Bloch wave equation derived from the paraxial wave equation is
-        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
-        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
-        (converging to it needs an `sg_max` large enough to include the beams whose
-        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
-        is used. See :func:`abtem.bloch.utils.excitation_errors`.
+    use_wave_eq : bool or 'exact', optional
+        The form of the Bloch-wave equation. If 'exact' (default), the non-paraxial
+        wave equation solved by multislice with the default exact propagator,
+        ``FourierMultislice(order="exact")``; the most accurate form (converging to
+        exact multislice needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). If True, the paraxial wave
+        equation, matching ``FourierMultislice(order=1)``. If False, the standard
+        (textbook) Bloch-wave equation: the Helmholtz equation with the second
+        z-derivative of the Bloch-wave amplitudes dropped, with excitation errors
+        measured from the Ewald sphere. See
+        :func:`abtem.bloch.utils.excitation_errors`.
     """
 
     def __init__(
@@ -1276,7 +1321,7 @@ class BlochWaves:
         orientation_matrix: Optional[np.ndarray] = None,
         centering: str = "auto",
         device: Optional[str] = None,
-        use_wave_eq: bool | Literal["exact"] = False,
+        use_wave_eq: bool | Literal["exact"] = "exact",
     ):
         if isinstance(structure_factor, Atoms):
             if g_max is None:
@@ -1422,8 +1467,8 @@ class BlochWaves:
         return energy2wavelength(self.energy)
 
     def excitation_errors(self) -> np.ndarray:
-        """Excitation errors for the Bloch waves."""
-        return excitation_errors(self.g_vec, self.energy)
+        """Excitation errors for the Bloch waves, in the form set by `use_wave_eq`."""
+        return excitation_errors(self.g_vec, self.energy, use_wave_eq=self.use_wave_eq)
 
     @property
     def structure_matrix_nbytes(self) -> int:
@@ -1535,7 +1580,9 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        # eagerly: a lazy structure matrix is a dask array, which xp.asarray
+        # below would compute through NumPy -- refused for CuPy blocks on GPU
+        A = self.calculate_structure_matrix(lazy=False)
         hkl = self.hkl
         cell = self.cell
 
@@ -1543,7 +1590,12 @@ class BlochWaves:
         A = xp.asarray(A)
 
         S = calculate_scattering_matrix(
-            A=A, hkl=hkl, cell=cell, z=z, energy=self.energy
+            A=A,
+            hkl=hkl,
+            cell=cell,
+            z=z,
+            energy=self.energy,
+            use_wave_eq=self.use_wave_eq,
         )
         return S
 
@@ -1571,6 +1623,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
                 drop_axis=1,
                 chunks=chunks,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
@@ -1582,6 +1635,7 @@ class BlochWaves:
                 cell=self.cell,
                 energy=self.energy,
                 thicknesses=thicknesses,
+                use_wave_eq=self.use_wave_eq,
             )
 
         return array
@@ -1959,7 +2013,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: float,
         centering: str = "P",
         device: Optional[str] = None,
-        use_wave_eq: bool | Literal["exact"] = False,
+        use_wave_eq: bool | Literal["exact"] = "exact",
         use_degrees: bool = False,
     ):
         axes = args[::2]
