@@ -1053,8 +1053,13 @@ def atoms_in_cell(
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
+    # The interval is half-open, [-m, 1 + m), and the tolerance shifts *both*
+    # ends down so that it stays a period long. With it on the lower end only,
+    # float noise from a rotation or orthogonalisation -- an atom at -3e-17
+    # and its periodic image at 1 - 1e-16 -- kept both copies, and a
+    # non-periodic cut of hcp Mg held 8 atoms where its cell has 4.
     mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
-        scaled_positions < (1 + scaled_margins)[None], axis=1
+        scaled_positions < (1 + scaled_margins - 1e-12)[None], axis=1
     )
 
     atoms = atoms[mask]
@@ -1233,7 +1238,15 @@ def pad_atoms(
     if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3
 
-    assert isinstance(margins, tuple)
+    # Indexed by axis, not by position in `directions`: a margin per direction
+    # used to be paired with `directions` by zip, so (m,) with "z" gave z the
+    # margin m and a full (mx, my, mz) with "z" gave z mx.
+    margins = tuple(float(margin) for margin in margins)
+    if len(margins) != 3:
+        raise ValueError(
+            "margins must be one value or three values for x, y and z, "
+            f"not {len(margins)}"
+        )
 
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()

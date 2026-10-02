@@ -1359,6 +1359,33 @@ class TestSliceIndexedAtomsWrapping:
         assert self._per_slice(sliced) == [1, 0, 1, 1]
         assert np.array_equal(sliced.atoms.positions, atoms.positions)
 
+    def test_atoms_far_outside_the_faces_warn_but_are_kept(self):
+        """Clamping a misplaced atom into a face slice is a guess at its depth,
+        so it warns; within the threshold (the test above, which runs with
+        warnings as errors) it does not."""
+        import ase
+
+        import numpy as np
+
+        from abtem.slicing import FACE_SLICE_WARNING_DISTANCE, SliceIndexedAtoms
+
+        far = FACE_SLICE_WARNING_DISTANCE + 0.5
+        atoms = ase.Atoms(
+            "B4",
+            positions=[
+                [1.0, 1.0, -far],
+                [1.0, 1.0, 2.0],
+                [1.0, 1.0, 4.0 + far],
+                [1.0, 1.0, 100.0],
+            ],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+        with pytest.warns(UserWarning, match=r"^3 atom\(s\) lie more than"):
+            sliced = SliceIndexedAtoms(atoms, slice_thickness=1.0, wrap=False)
+
+        assert self._per_slice(sliced) == [1, 0, 1, 2]
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_non_periodic_infinite_projection_conserves_every_atom(self, device):
         """An atom displaced out of a non-periodic cell used to lose all of its
@@ -1507,6 +1534,15 @@ class TestSliceIndexedAtomsWrapping:
             map(tuple, np.array(expected).round(12))
         )
 
+        # Margins are per axis: a zero margin in-plane repeats nothing there,
+        # which is the same as padding z alone.
+        per_axis = pad_atoms(atoms, margins=(0.0, 0.0, margin))
+        assert np.array_equal(per_axis.positions, padded.positions)
+
+        # A margin per direction used to be paired with `directions` by zip.
+        with pytest.raises(ValueError, match="three values for x, y and z"):
+            pad_atoms(atoms, margins=(margin,), directions="z")
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_non_periodic_potential_keeps_atoms_already_outside_the_cell(self, device):
         """Atoms that reach the potential already outside the cell, in-plane or
@@ -1548,14 +1584,20 @@ class TestSliceIndexedAtomsWrapping:
             atol=1e-5 * np.abs(reference).max(),
         )
 
-    def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self):
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self, device):
         """``for atoms in frozen_phonons: Potential(atoms, periodic=False)``
         must build the same configurations as
         ``Potential(frozen_phonons, periodic=False)`` on a cell the potential
         does not transform. It used to drop the atoms that the iterated
-        displacement had moved out of the cell."""
+        displacement had moved out of the cell.
+
+        Only an untransformed cell is used: there, iteration already yields
+        the simulated configurations, which is the contract #462 extends to
+        transformed cells. A fix for #462 should leave this test passing."""
         import numpy as np
 
+        from abtem.core.backend import asnumpy
         from abtem.inelastic.phonons import FrozenPhonons
 
         atoms = self._outside_atoms()
@@ -1569,25 +1611,32 @@ class TestSliceIndexedAtomsWrapping:
         )
         assert np.any((scaled[:, :2] < 0.0) | (scaled[:, :2] >= 1.0))
 
-        kwargs = dict(gpts=(32, 32), slice_thickness=1.0, periodic=False)
-        ensemble = Potential(phonons, **kwargs).build().compute().array
+        kwargs = dict(
+            gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+        )
+        ensemble = asnumpy(Potential(phonons, **kwargs).build().compute().array)
         for i, configuration in enumerate(iterated):
             np.testing.assert_allclose(
                 ensemble[i],
-                Potential(configuration, **kwargs).build().compute().array,
+                asnumpy(Potential(configuration, **kwargs).build().compute().array),
                 rtol=1e-5,
                 atol=1e-5 * np.abs(ensemble[i]).max(),
             )
 
+    @pytest.mark.parametrize("structure", ["graphene", "Mg", "MoS2"])
     @pytest.mark.parametrize(
         "integrator", ["scattering_factor", "gaussian", "quadrature"]
     )
-    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator):
+    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator, structure):
         """A transformed non-periodic cell is cut out of the repeated structure
         with the integrator's margin already included. Padding it periodically
         on top added images of those margin atoms: the infinite projection was
         empty, and the Gaussian and quadrature potentials many times too
-        large."""
+        large.
+
+        hcp Mg and MoS2 also put atoms within float noise of the faces after
+        the cut, at scaled -3e-17 and 1 - 1e-16. With no margin to absorb them,
+        a crop keeping both ends of that pair held each such atom twice."""
         import ase.build
         import numpy as np
 
@@ -1603,7 +1652,11 @@ class TestSliceIndexedAtomsWrapping:
             "quadrature": QuadratureProjectionIntegrals,
         }
 
-        hexagonal = ase.build.graphene(vacuum=2)
+        hexagonal = {
+            "graphene": lambda: ase.build.graphene(vacuum=2),
+            "Mg": lambda: ase.build.bulk("Mg"),
+            "MoS2": lambda: ase.build.mx2("MoS2", vacuum=2),
+        }[structure]()
         orthogonal = orthogonalize_cell(hexagonal)
 
         def build(atoms, periodic):

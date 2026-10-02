@@ -949,16 +949,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         return atoms, False, np.eye(3)
 
-    def _atoms_to_slice(self) -> tuple[Atoms, float]:
+    def _atoms_to_slice(self) -> tuple[Atoms, tuple[float, float, float]]:
         """The atoms of this configuration as they are sliced, and the margin
-        the integrator needs beyond the cell."""
+        the integrator needs beyond the cell along each axis."""
         atoms, is_cut, frame = self._transform_atoms()
-
-        if self.integrator.finite:
-            cutoffs = self._cutoffs()
-            margins = max(cutoffs) if len(cutoffs) else 0.0
-        else:
-            margins = 0.0
+        margins = self._margins()
 
         if self.periodic:
             atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
@@ -974,13 +969,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # graph.
             atoms = wrap_and_snap_atoms(atoms, copy=False)
 
-        if is_cut:
-            # cut_cell already supplied exactly the margin padding would add.
-            pass
-        elif not self.integrator.periodic and self.integrator.finite:
+        # Repeats exactly the axes with a nonzero margin, which is the
+        # neighbourhood cut_cell already supplied to a cut cell.
+        if not is_cut:
             atoms = pad_atoms(atoms, margins=margins)
-        elif self.integrator.periodic:
-            atoms = pad_atoms(atoms, margins=margins, directions="z")
 
         if not self.periodic:
             atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
@@ -992,7 +984,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.integrator.finite:
             sliced_atoms = SlicedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness, z_padding=margins
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                z_padding=margins[2],
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
