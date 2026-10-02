@@ -1212,7 +1212,15 @@ def pad_atoms(
     if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3
 
-    assert isinstance(margins, tuple)
+    # Indexed by axis, not by position in `directions`: a margin per direction
+    # used to be paired with `directions` by zip, so (m,) with "z" gave z the
+    # margin m and a full (mx, my, mz) with "z" gave z mx.
+    margins = tuple(float(margin) for margin in margins)
+    if len(margins) != 3:
+        raise ValueError(
+            "margins must be one value or three values for x, y and z, "
+            f"not {len(margins)}"
+        )
 
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()

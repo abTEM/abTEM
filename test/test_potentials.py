@@ -1534,6 +1534,15 @@ class TestSliceIndexedAtomsWrapping:
             map(tuple, np.array(expected).round(12))
         )
 
+        # Margins are per axis: a zero margin in-plane repeats nothing there,
+        # which is the same as padding z alone.
+        per_axis = pad_atoms(atoms, margins=(0.0, 0.0, margin))
+        assert np.array_equal(per_axis.positions, padded.positions)
+
+        # A margin per direction used to be paired with `directions` by zip.
+        with pytest.raises(ValueError, match="three values for x, y and z"):
+            pad_atoms(atoms, margins=(margin,), directions="z")
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_non_periodic_potential_keeps_atoms_already_outside_the_cell(self, device):
         """Atoms that reach the potential already outside the cell, in-plane or
@@ -1575,14 +1584,20 @@ class TestSliceIndexedAtomsWrapping:
             atol=1e-5 * np.abs(reference).max(),
         )
 
-    def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self):
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self, device):
         """``for atoms in frozen_phonons: Potential(atoms, periodic=False)``
         must build the same configurations as
         ``Potential(frozen_phonons, periodic=False)`` on a cell the potential
         does not transform. It used to drop the atoms that the iterated
-        displacement had moved out of the cell."""
+        displacement had moved out of the cell.
+
+        Only an untransformed cell is used: there, iteration already yields
+        the simulated configurations, which is the contract #462 extends to
+        transformed cells. A fix for #462 should leave this test passing."""
         import numpy as np
 
+        from abtem.core.backend import asnumpy
         from abtem.inelastic.phonons import FrozenPhonons
 
         atoms = self._outside_atoms()
@@ -1596,12 +1611,14 @@ class TestSliceIndexedAtomsWrapping:
         )
         assert np.any((scaled[:, :2] < 0.0) | (scaled[:, :2] >= 1.0))
 
-        kwargs = dict(gpts=(32, 32), slice_thickness=1.0, periodic=False)
-        ensemble = Potential(phonons, **kwargs).build().compute().array
+        kwargs = dict(
+            gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+        )
+        ensemble = asnumpy(Potential(phonons, **kwargs).build().compute().array)
         for i, configuration in enumerate(iterated):
             np.testing.assert_allclose(
                 ensemble[i],
-                Potential(configuration, **kwargs).build().compute().array,
+                asnumpy(Potential(configuration, **kwargs).build().compute().array),
                 rtol=1e-5,
                 atol=1e-5 * np.abs(ensemble[i]).max(),
             )
