@@ -1579,15 +1579,20 @@ class TestSliceIndexedAtomsWrapping:
                 atol=1e-5 * np.abs(ensemble[i]).max(),
             )
 
+    @pytest.mark.parametrize("structure", ["graphene", "Mg", "MoS2"])
     @pytest.mark.parametrize(
         "integrator", ["scattering_factor", "gaussian", "quadrature"]
     )
-    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator):
+    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator, structure):
         """A transformed non-periodic cell is cut out of the repeated structure
         with the integrator's margin already included. Padding it periodically
         on top added images of those margin atoms: the infinite projection was
         empty, and the Gaussian and quadrature potentials many times too
-        large."""
+        large.
+
+        hcp Mg and MoS2 also put atoms within float noise of the faces after
+        the cut, at scaled -3e-17 and 1 - 1e-16. With no margin to absorb them,
+        a crop keeping both ends of that pair held each such atom twice."""
         import ase.build
         import numpy as np
 
@@ -1603,7 +1608,11 @@ class TestSliceIndexedAtomsWrapping:
             "quadrature": QuadratureProjectionIntegrals,
         }
 
-        hexagonal = ase.build.graphene(vacuum=2)
+        hexagonal = {
+            "graphene": lambda: ase.build.graphene(vacuum=2),
+            "Mg": lambda: ase.build.bulk("Mg"),
+            "MoS2": lambda: ase.build.mx2("MoS2", vacuum=2),
+        }[structure]()
         orthogonal = orthogonalize_cell(hexagonal)
 
         def build(atoms, periodic):

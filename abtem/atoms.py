@@ -1027,8 +1027,13 @@ def atoms_in_cell(
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
+    # The interval is half-open, [-m, 1 + m), and the tolerance shifts *both*
+    # ends down so that it stays a period long. With it on the lower end only,
+    # float noise from a rotation or orthogonalisation -- an atom at -3e-17
+    # and its periodic image at 1 - 1e-16 -- kept both copies, and a
+    # non-periodic cut of hcp Mg held 8 atoms where its cell has 4.
     mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
-        scaled_positions < (1 + scaled_margins)[None], axis=1
+        scaled_positions < (1 + scaled_margins - 1e-12)[None], axis=1
     )
 
     atoms = atoms[mask]
