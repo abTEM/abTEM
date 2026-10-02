@@ -733,7 +733,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         slice_thickness: Optional[float | Sequence[float]] = 0.5,
         sampling: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
-        lazy: bool = True,
+        lazy: Optional[bool] = None,
     ) -> PotentialArray:
         """Calculate the projected potential from the structure factors.
 
@@ -745,15 +745,22 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             The sampling of the projected potential [Å].
         gpts : int or tuple of ints
             The grid points of the projected potential.
-        lazy : bool
+        lazy : bool, optional
             If True, the calculation is done lazily using dask. If False, the
-             calculation is done eagerly.
+            calculation is done eagerly. If None (default), the calculation is lazy
+            if the structure factors are lazy.
 
         Returns
         -------
         PotentialArray
             The projected potential.
         """
+        if lazy is not None and lazy != self.is_lazy:
+            structure_factor = self.ensure_lazy() if lazy else self.ensure_computed()
+            return structure_factor.get_projected_potential(
+                slice_thickness, sampling, gpts
+            )
+
         if not is_cell_orthogonal(self.cell):
             raise NotImplementedError(
                 "Converting structure factor to projected potential is not supported ",
@@ -1892,6 +1899,15 @@ class BlochWaves:
         BlochWavesEnsemble
             The rotated Bloch waves ensemble.
         """
+        if len(self._energies) > 1:
+            # Both branches below build their result from a single energy, so a
+            # multi-energy BlochWaves used to lose all but its first energy.
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise NotImplementedError(
+                "BlochWaves.rotate does not support multiple energies, but this "
+                f"BlochWaves has {len(self._energies)} ({energies} eV); rotate "
+                "BlochWaves constructed with one energy each instead"
+            )
 
         all_axes, all_rotations = validate_rotations(args)
 
