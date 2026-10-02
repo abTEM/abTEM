@@ -127,6 +127,50 @@ def test_potential_from_structure_factor(
     assert error < 2.5
 
 
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+def test_skewed_structure_factor_potential_multislice(lazy):
+    # A hexagonal (skewed in-plane) cell: the structure-factor potential is sampled on
+    # the fractional (a, b) grid, so it must carry the skewed cell for multislice to
+    # use the right propagator. The projected potentials agree pixel by pixel either
+    # way, hence the comparison of exit waves rather than of potentials.
+    a = 2.46
+    atoms = Atoms(
+        "C2",
+        scaled_positions=[[1 / 3, 2 / 3, 0.5], [2 / 3, 1 / 3, 0.5]],
+        cell=[[a, 0, 0], [-a / 2, a * np.sqrt(3) / 2, 0], [0, 0, 4.0]],
+        pbc=True,
+    ).repeat((1, 1, 5))
+    thermal_sigma = 0.08
+
+    structure_factor = StructureFactor(
+        atoms, g_max=8.0, thermal_sigma=thermal_sigma, centering="P"
+    )
+    structure_factor_potential = structure_factor.get_projected_potential(
+        slice_thickness=1.0, lazy=lazy
+    )
+    assert np.allclose(structure_factor_potential.cell, atoms.cell[:2, :2])
+
+    potential = abtem.Potential(
+        atoms,
+        gpts=structure_factor_potential.gpts,
+        slice_thickness=structure_factor_potential.slice_thickness,
+        parametrization=LobatoParametrization(sigmas=thermal_sigma),
+        projection="infinite",
+    )
+    assert np.allclose(potential.grid.cell, structure_factor_potential.cell)
+
+    def exit_intensity(p):
+        waves = abtem.PlaneWave(energy=100e3).multislice(p, lazy=lazy).compute()
+        return np.abs(waves.array) ** 2
+
+    intensity1 = exit_intensity(structure_factor_potential)
+    intensity2 = exit_intensity(potential)
+
+    # Measured R1 ~0.55% with the cell carried, ~4.4% when the skewed cell is dropped.
+    r1 = np.abs(intensity1 - intensity2).sum() / intensity2.sum() * 100
+    assert r1 < 1.5
+
+
 def test_structure_factor_potential_requests_the_slow_fft_diagnostic():
     # This 3D transform cannot go through abtem.core.fft.ifftn (the FFTW
     # backend there transforms only the trailing two axes, silently making it
