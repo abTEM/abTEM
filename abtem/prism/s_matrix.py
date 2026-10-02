@@ -320,6 +320,18 @@ def _common_kwargs(a, b):
     return set(a_kwargs).intersection(b_kwargs)
 
 
+def _validate_prism_semiangle_cutoff(semiangle_cutoff: float) -> None:
+    # The plane-wave expansion keeps wave vectors strictly inside the cutoff, so a
+    # cutoff of zero would leave none, and a negative one is meaningless.
+    if not semiangle_cutoff > 0.0:
+        raise ValueError(
+            "PRISM requires a positive 'semiangle_cutoff', got "
+            f"{semiangle_cutoff!r}. For a parallel beam (a semiangle cutoff of "
+            "0), use Probe(semiangle_cutoff=0) or PlaneWave with multislice "
+            "instead."
+        )
+
+
 def _pack_wave_vectors(wave_vectors):
     return tuple(
         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
@@ -841,7 +853,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         Array defining the wave vectors corresponding to each plane wave.
         Must have shape Nx2, where N is equal to the number of plane waves.
     semiangle_cutoff : float
-        The radial cutoff of the plane-wave expansion [mrad].
+        The radial cutoff of the plane-wave expansion [mrad]. Must be positive.
     energy : float
         Electron energy [eV].
     sampling : one or two float, optional
@@ -900,6 +912,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             metadata=metadata,
         )
 
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
@@ -1563,7 +1576,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     dense_indices : numpy.ndarray
         Integer Fourier-space indices of the dense plane waves of shape (N, 2).
     semiangle_cutoff : float
-        The radial cutoff of the plane-wave expansion [mrad].
+        The radial cutoff of the plane-wave expansion [mrad]. Must be positive.
     energy : float
         Electron energy [eV].
     extent : two float
@@ -1614,6 +1627,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._interpolation = interpolation
         self._window_gpts = tuple(window_gpts)
@@ -1678,6 +1692,22 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     def vh_dense(self) -> np.ndarray:
         """Right singular vectors at the dense plane-wave expansion."""
         return self._vh_dense
+
+    @property
+    def dense_indices(self) -> np.ndarray:
+        """Integer Fourier-space indices of the dense plane waves, shape (N, 2)."""
+        return self._dense_indices
+
+    @property
+    def position_quantization(self) -> int | None:
+        """Quantization of the probe positions, as given to the constructor."""
+        return self._position_quantization
+
+    @property
+    def reference_depth(self) -> float:
+        """Depth inside the specimen [Å] the beams are referenced to; reduced waves
+        are propagated from it to the exit surface. 0 means the exit surface."""
+        return self._reference_depth
 
     @property
     def rank(self) -> int:
@@ -3594,7 +3624,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     Parameters
     ----------
     semiangle_cutoff : float
-        The radial cutoff of the plane-wave expansion [mrad].
+        The radial cutoff of the plane-wave expansion [mrad]. Must be positive;
+        for a parallel beam (a cutoff of 0) use Probe or PlaneWave multislice.
     energy : float or list of float
         Electron energy [eV]. A single float runs a standard single-energy
         calculation. A list or array of floats builds the scattering matrix
@@ -3734,6 +3765,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         device: str = None,
         store_on_host: bool = False,
     ):
+        _validate_prism_semiangle_cutoff(semiangle_cutoff)
+
         if downsample is True:
             downsample = "cutoff"
 
@@ -3820,8 +3853,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._window_gpts = window_gpts
 
         self._store_on_host = store_on_host
-
-        assert semiangle_cutoff > 0.0
 
         if not self._upsample and not all(
             n % f == 0 for f, n in zip(self.interpolation, self.gpts)
@@ -4769,7 +4800,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             def _embed_wave_vectors(arr, indices, n_union):
                 """Embed arr (n_wv, ...) into (n_union, ...) at the given indices."""
-                out = np.zeros((n_union,) + arr.shape[1:], dtype=arr.dtype)
+                # arr's own module: a NumPy array cannot take a CuPy block
+                out = get_array_module(arr).zeros(
+                    (n_union,) + arr.shape[1:], dtype=arr.dtype
+                )
                 out[indices] = arr
                 return out
 
@@ -4794,6 +4828,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                             _embed_wave_vectors,
                             dtype=array.dtype,
                             chunks=new_chunks,
+                            meta=get_array_module(array).array((), dtype=array.dtype),
                             indices=indices,
                             n_union=n_union,
                         )
@@ -4801,7 +4836,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                         embedded = _embed_wave_vectors(r.array, indices, n_union)
                     embedded_arrays.append(embedded)
 
-            stacked_array = da.stack(embedded_arrays, axis=0)
+            if lazy:
+                stacked_array = da.stack(embedded_arrays, axis=0)
+            else:
+                xp = get_array_module(embedded_arrays[0])
+                stacked_array = xp.stack(embedded_arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in self._energies))
             return SMatrixArray(
                 array=stacked_array,
