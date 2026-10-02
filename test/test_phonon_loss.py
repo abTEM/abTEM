@@ -300,6 +300,150 @@ class TestThermalWeighting:
             )
 
 
+class TestMomentumResolvedSpectrum:
+    """momentum_resolved_spectrum builds S(q, E) from the diffuse component only."""
+
+    @staticmethod
+    def _spectrum(patterns):
+        from abtem.detectors import SpectralSlitDetector
+        from abtem.measurements import momentum_resolved_spectrum
+
+        detector = SpectralSlitDetector(q_max=60.0, width=20.0)
+        return np.asarray(momentum_resolved_spectrum(patterns, detector).array)
+
+    def test_a_component_axis_gives_the_diffuse_spectrum(self):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+        stacked = phonon_loss_diffraction_patterns(waves, components="all")
+        np.testing.assert_array_equal(self._spectrum(stacked), self._spectrum(diffuse))
+
+    @pytest.mark.parametrize("components", ["total", "elastic"])
+    def test_a_single_other_component_raises(self, components):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        patterns = phonon_loss_diffraction_patterns(waves, components=components)
+        with pytest.raises(ValueError, match=f"is the '{components}' component"):
+            self._spectrum(patterns)
+
+    def test_a_component_indexed_from_a_stack_is_checked(self):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        stacked = phonon_loss_diffraction_patterns(waves, components="all")
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+
+        with pytest.raises(ValueError, match="is the 'total' component"):
+            self._spectrum(stacked[0])
+        np.testing.assert_array_equal(
+            self._spectrum(stacked[2]), self._spectrum(diffuse)
+        )
+
+    @pytest.mark.parametrize("reduction", ["sum", "mean"])
+    def test_a_stack_reduced_over_its_component_axis_raises(self, reduction):
+        """Summing or averaging over the component axis mixes the elastic
+        intensity in, and leaves only the stacked names in the metadata."""
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        stacked = phonon_loss_diffraction_patterns(waves, components="all")
+        reduced = getattr(stacked, reduction)(axis=0)
+        with pytest.raises(ValueError, match="without their component axis"):
+            self._spectrum(reduced)
+
+    def test_a_reduced_stack_of_the_diffuse_component_alone_is_used(self):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        stacked = phonon_loss_diffraction_patterns(waves, components=("diffuse",))
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+        np.testing.assert_allclose(
+            self._spectrum(stacked.sum(axis=0)), self._spectrum(diffuse), rtol=1e-6
+        )
+
+    def test_another_recorded_component_is_used_as_given(self):
+        """Only the components with the elastic intensity are rejected; another
+        name, such as a parity-projected one-phonon channel, is used as given."""
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+        kwargs = diffuse._copy_kwargs(exclude=("metadata",))
+        kwargs["metadata"] = {**diffuse.metadata, "frozen_phonon_component": "one"}
+        one = diffuse.__class__(**kwargs)
+        np.testing.assert_array_equal(self._spectrum(one), self._spectrum(diffuse))
+
+    @staticmethod
+    def _with_earlier_names(stacked):
+        """The stack in the layout results saved by dev's code have:
+        ("coherent", "incoherent", "tds") on the component axis and
+        phonon_loss_component="all"."""
+        from abtem.core.axes import OrdinalAxis
+
+        kwargs = stacked._copy_kwargs(
+            exclude=("array", "ensemble_axes_metadata", "metadata")
+        )
+        kwargs["array"] = np.asarray(stacked.array)[[1, 0, 2]]
+        kwargs["ensemble_axes_metadata"] = [
+            OrdinalAxis(label="component", values=("coherent", "incoherent", "tds"))
+        ] + list(stacked.ensemble_axes_metadata[1:])
+        metadata = {
+            key: value
+            for key, value in stacked.metadata.items()
+            if key not in ("frozen_phonon_component", "num_configurations", "unbiased")
+        }
+        kwargs["metadata"] = {**metadata, "phonon_loss_component": "all"}
+        return stacked.__class__(**kwargs)
+
+    def test_a_stack_with_the_earlier_names_gives_the_diffuse_spectrum(self, tmp_path):
+        """Results saved with the earlier names keep working: "tds" is the
+        diffuse component, also after a zarr round trip."""
+        import abtem
+
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        diffuse = self._spectrum(
+            phonon_loss_diffraction_patterns(waves, components="diffuse")
+        )
+        earlier = self._with_earlier_names(
+            phonon_loss_diffraction_patterns(waves, components="all")
+        )
+
+        np.testing.assert_array_equal(self._spectrum(earlier), diffuse)
+        path = str(tmp_path / "earlier.zarr")
+        earlier.to_zarr(path)
+        loaded = abtem.from_zarr(path).compute()
+        np.testing.assert_array_equal(self._spectrum(loaded), diffuse)
+        np.testing.assert_array_equal(self._spectrum(loaded[2]), diffuse)
+        for index in (0, 1):
+            with pytest.raises(ValueError, match="contains the elastic"):
+                self._spectrum(loaded[index])
+        with pytest.raises(ValueError, match="without their component axis"):
+            self._spectrum(loaded.sum(axis=0))
+
+    @pytest.mark.parametrize(
+        "name, accepted",
+        [("incoherent", False), ("coherent", False), ("tds", True), ("one", True)],
+    )
+    def test_a_single_component_with_an_earlier_name_is_checked(self, name, accepted):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+        kwargs = diffuse._copy_kwargs(exclude=("metadata",))
+        kwargs["metadata"] = {
+            key: value
+            for key, value in diffuse.metadata.items()
+            if key != "frozen_phonon_component"
+        }
+        kwargs["metadata"]["phonon_loss_component"] = name
+        earlier = diffuse.__class__(**kwargs)
+
+        if accepted:
+            np.testing.assert_array_equal(
+                self._spectrum(earlier), self._spectrum(diffuse)
+            )
+        else:
+            with pytest.raises(ValueError, match="contains the elastic"):
+                self._spectrum(earlier)
+
+    def test_patterns_without_the_component_metadata_are_used_as_given(self):
+        waves = _make_exit_waves([0.02, 0.05, 0.10])
+        diffuse = phonon_loss_diffraction_patterns(waves, components="diffuse")
+        kwargs = diffuse._copy_kwargs(exclude=("metadata",))
+        kwargs["metadata"] = dict(diffuse.metadata)
+        del kwargs["metadata"]["frozen_phonon_component"]
+        plain = diffuse.__class__(**kwargs)
+        np.testing.assert_array_equal(self._spectrum(plain), self._spectrum(diffuse))
+
+
 class TestLazyExitWaves:
     """exit_waves may be a lazy (dask-backed) Waves object -- e.g. built with
     multislice(..., lazy=True) and fed straight into to_zarr(). CuPy's own

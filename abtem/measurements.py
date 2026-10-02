@@ -7005,14 +7005,23 @@ def _thermal_weight_tds(
 
 FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
 
-# The component names that results saved by earlier development versions of
-# phonon_loss_diffraction_patterns carry, and the names they map to. Passed as
-# components they raise a ValueError naming the mapped name.
+# The names "incoherent", "coherent" and "tds" and the current names they map
+# to. Passed as components they raise a ValueError naming the current name;
+# momentum_resolved_spectrum reads them as the current name in saved results.
 _RENAMED_FROZEN_PHONON_COMPONENTS = {
     "incoherent": "total",
     "coherent": "elastic",
     "tds": "diffuse",
 }
+
+
+def _current_component_name(name):
+    """The name a component recorded under one of the names of
+    ``_RENAMED_FROZEN_PHONON_COMPONENTS`` maps to, e.g. ``"tds"`` ->
+    ``"diffuse"``; any other value unchanged."""
+    if isinstance(name, str):
+        return _RENAMED_FROZEN_PHONON_COMPONENTS.get(name, name)
+    return name
 
 
 def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], bool]:
@@ -7450,7 +7459,18 @@ def momentum_resolved_spectrum(
     tds_diffraction_patterns : DiffractionPatterns
         Energy-resolved TDS diffraction patterns as returned by
         :func:`phonon_loss_diffraction_patterns`.  Must have an
-        ``EnergyLossAxis`` in its ensemble axes.
+        ``EnergyLossAxis`` in its ensemble axes. From a component axis, the
+        diffuse component is used. Without one, the component recorded in the
+        metadata is checked: the total and elastic components, which contain the
+        elastic (Bragg) intensity, raise a ``ValueError``, and so do stacked
+        components whose axis was reduced away; any other component is used as
+        given. The names ``"coherent"``, ``"incoherent"`` and ``"tds"``, on the
+        component axis or under ``phonon_loss_component``, are read as elastic,
+        total and diffuse. The check reads only the metadata. Arithmetic keeps the
+        metadata of its left operand, so ``stacked[0] - stacked[1]`` (total minus
+        elastic) is rejected but ``diffuse + total`` is not; slicing a stack does
+        not update the recorded names, so ``stacked[2:].sum(axis=0)`` is rejected.
+        Pass the diffuse component itself, e.g. ``stacked[2]``.
     detector : SpectralAnnularDetector or SpectralSlitDetector
         Detector that controls the integration strategy and q-range.
 
@@ -7465,20 +7485,58 @@ def momentum_resolved_spectrum(
     dp = tds_diffraction_patterns
 
     # --- select the diffuse component from a stack of components ---
+    # The names "coherent", "incoherent" and "tds", on the component axis or
+    # under "phonon_loss_component" ("all" for a stack of them), are read as
+    # "elastic", "total" and "diffuse".
     for i, ax in enumerate(dp.ensemble_axes_metadata):
         if isinstance(ax, OrdinalAxis) and ax.label == "component":
-            if "diffuse" not in ax.values:
+            names = [_current_component_name(value) for value in ax.values]
+            if "diffuse" not in names:
                 raise ValueError(
                     "tds_diffraction_patterns has a component axis without the "
                     f"'diffuse' component: {tuple(ax.values)}"
                 )
-            diffuse_idx = list(ax.values).index("diffuse")
+            diffuse_idx = names.index("diffuse")
             slicing = tuple(
                 diffuse_idx if j == i else slice(None)
                 for j in range(len(dp.ensemble_axes_metadata))
             )
             dp = dp[slicing]
             break
+    else:
+        # Without a component axis, the metadata names the component: a single
+        # name, or the stacked names together with, under "component", the one an
+        # index selected. Stacked names without that entry mean the component
+        # axis was reduced away, e.g. summed or averaged over. The total and
+        # elastic components contain the elastic (Bragg) intensity and are
+        # rejected; any other recorded component is used as given.
+        bragg_components = ("total", "elastic")
+        component = dp.metadata.get(
+            "frozen_phonon_component", dp.metadata.get("phonon_loss_component")
+        )
+        if component == "all":
+            # A stack under the names "coherent", "incoherent" and "tds".
+            component = ["coherent", "incoherent", "tds"]
+        if isinstance(component, (list, tuple)):
+            if "component" in dp.metadata:
+                component = dp.metadata["component"]
+            elif any(
+                _current_component_name(name) in bragg_components for name in component
+            ):
+                raise ValueError(
+                    "tds_diffraction_patterns holds the components "
+                    f"{tuple(component)} without their component axis, e.g. summed "
+                    "or averaged over it. Select the diffuse component before "
+                    "reducing, or pass components='diffuse' (the default) to "
+                    "phonon_loss_diffraction_patterns."
+                )
+        component = _current_component_name(component)
+        if component in bragg_components:
+            raise ValueError(
+                f"tds_diffraction_patterns is the {component!r} component, which "
+                "contains the elastic (Bragg) intensity. Pass components='diffuse' "
+                "(the default) to phonon_loss_diffraction_patterns."
+            )
 
     # --- find the energy axis ---
     energy_axis_idx = None
