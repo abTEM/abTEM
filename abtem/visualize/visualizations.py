@@ -159,6 +159,7 @@ class Visualization:
         cbar: bool = False,
         interactive: bool = True,
         title: str = None,
+        suptitle: str = None,
         xlim: tuple[float, float] = None,
         ylim: tuple[float, float] = None,
         convert_complex: str = "none",
@@ -265,6 +266,13 @@ class Visualization:
             ]
 
             self.set_row_titles(row_titles)
+
+        # Independent of the per-column/row titles above: a whole-figure
+        # title must not short-circuit the title chain (it once did, as an
+        # ``elif`` partner of ``if suptitle``, which silently replaced a
+        # string ``title`` on exploded plots with the auto-generated ones).
+        if suptitle:
+            self.get_figure().suptitle(suptitle)
 
         self._make_new_artists(artist_type=self._artist_type, **kwargs)
 

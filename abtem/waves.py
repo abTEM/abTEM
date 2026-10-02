@@ -377,7 +377,9 @@ def reduce_ensemble(
         reduced_output = output.reduce_ensemble()
     else:
         if any(
-            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+            isinstance(ax, FrozenPhononsAxis)
+            and not ax._ensemble_mean
+            and not ax._ensemble_mean_forced
             for ax in output.ensemble_axes_metadata
         ):
             warnings.warn(

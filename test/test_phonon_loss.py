@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from ase import units
 
-from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
+from abtem.core.axes import OrdinalAxis, EnergyLossAxis, FrozenPhononsAxis, PhononParityAxis
 from abtem.measurements import phonon_loss_diffraction_patterns
 from abtem.waves import Waves
 
@@ -24,6 +24,40 @@ def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
         energy=100e3,
         sampling=0.1,
         ensemble_axes_metadata=[
+            EnergyLossAxis(values=tuple(float(e) for e in e_values)),
+            FrozenPhononsAxis(_ensemble_mean=False),
+        ],
+    )
+
+
+def _make_parity_exit_waves(
+    e_values, n_configs=6, gpts=24, seed=0, lazy=False, real=None, twin=None,
+):
+    """Build exit_waves carrying a ("real", "twin") PhononParityAxis, as
+    `multislice()` on a parity_projection=True ensemble returns them."""
+    rng = np.random.default_rng(seed)
+    n_energies = len(e_values)
+    shape = (n_energies, n_configs, gpts, gpts)
+
+    def _random_complex():
+        return (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+
+    if real is None:
+        real = _random_complex()
+    if twin is None:
+        twin = _random_complex()
+
+    array = np.stack([real, twin], axis=0)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 1, 1, gpts, gpts))
+    return Waves(
+        array,
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            PhononParityAxis(values=("real", "twin")),
             EnergyLossAxis(values=tuple(float(e) for e in e_values)),
             FrozenPhononsAxis(_ensemble_mean=False),
         ],
@@ -52,6 +86,36 @@ def test_invalid_component_raises():
     waves = _make_exit_waves([0.02, 0.05, 0.10])
     with pytest.raises(ValueError, match="component must be one of"):
         phonon_loss_diffraction_patterns(waves, component="bogus")
+
+
+def test_invalid_component_raises_for_parity_projected_input():
+    """component is ignored (not applicable) once exit_waves carries a
+    PhononParityAxis, but an invalid value must still be rejected rather
+    than silently dropped -- the parity path must not bypass this check
+    just because it doesn't use the value."""
+    waves = _make_parity_exit_waves([0.02, 0.05])
+    with pytest.raises(ValueError, match="component must be one of"):
+        phonon_loss_diffraction_patterns(waves, component="bogus")
+
+
+def test_block_direct_true_infers_radius_from_metadata():
+    """block_direct=True must resolve to radius=None (auto-infer from
+    metadata), not a literal radius of 1 -- bool is a subclass of int, so
+    isinstance(True, (int, float)) is True, and a naive check would silently
+    treat block_direct=True as block_direct=1."""
+    waves = _make_exit_waves([0.02, 0.05])
+    waves.metadata["semiangle_cutoff"] = 15.0
+
+    dp_auto = phonon_loss_diffraction_patterns(waves, component="tds", block_direct=True)
+    dp_explicit = phonon_loss_diffraction_patterns(
+        waves, component="tds", block_direct=15.0
+    )
+    dp_wrong = phonon_loss_diffraction_patterns(
+        waves, component="tds", block_direct=1.0
+    )
+
+    np.testing.assert_array_equal(dp_auto.array, dp_explicit.array)
+    assert not np.array_equal(dp_auto.array, dp_wrong.array)
 
 
 @pytest.mark.parametrize("component", ["tds", "all"])
@@ -199,6 +263,486 @@ class TestLazyExitWaves:
 
         dp_eager = phonon_loss_diffraction_patterns(waves_eager, component="all")
         dp_lazy = phonon_loss_diffraction_patterns(waves_lazy, component="all")
+
+        assert isinstance(dp_lazy.array, da.core.Array)
+        np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)
+
+
+class TestClassicalStatistics:
+    """Unfolding of snapshots sampled with classical (equipartition)
+    amplitudes, e.g. from molecular dynamics."""
+
+    def test_classical_weights_apply_the_quantum_correction(self):
+        """classical weights = quantum weights * x coth x, x = E / 2kT: the
+        standard correction of a classical spectrum, and detailed balance
+        holds in both modes."""
+        from ase import units
+
+        from abtem.measurements import _loss_gain_weights
+
+        e = np.array([0.01, 0.05, 0.2])
+        T = 300.0
+        x = e / (2 * units.kB * T)
+        loss_q, gain_q = _loss_gain_weights(e, T, "quantum")
+        loss_c, gain_c = _loss_gain_weights(e, T, "classical")
+
+        np.testing.assert_allclose(loss_q + gain_q, 1.0)
+        np.testing.assert_allclose(loss_c + gain_c, x / np.tanh(x))
+        np.testing.assert_allclose(loss_c, loss_q * x / np.tanh(x))
+        np.testing.assert_allclose(gain_c, gain_q * x / np.tanh(x))
+        for loss, gain in ((loss_q, gain_q), (loss_c, gain_c)):
+            np.testing.assert_allclose(loss / gain, np.exp(e / (units.kB * T)))
+
+        # high temperature: the classical split is even and unscaled
+        loss_hot, gain_hot = _loss_gain_weights(np.array([0.001]), 5000.0, "classical")
+        np.testing.assert_allclose([loss_hot[0], gain_hot[0]], [0.5, 0.5], atol=1e-3)  # deviation is x/2 ~ 6e-4
+        # low temperature: zero-point motion restored, gain switched off
+        loss_cold, gain_cold = _loss_gain_weights(np.array([0.1]), 10.0, "classical")
+        assert gain_cold[0] < 1e-40
+        np.testing.assert_allclose(loss_cold[0], 0.1 / (2 * units.kB * 10.0))
+
+    def test_classical_mode_in_four_run_rest_parity(self):
+        """With rest fields and no static reference the one-phonon channel is
+        returned alone and may be unfolded; the classical weights must reach
+        that path too."""
+        from ase import units
+
+        from abtem.core.axes import PhononRestParityAxis
+
+        e_values = [0.0, 0.02, 0.05]
+        n_configs, gpts = 4, 16
+        rng = np.random.default_rng(3)
+        shape = (2, 2, len(e_values), n_configs, gpts, gpts)
+        members = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+        waves = Waves(
+            members, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        T = 300.0
+        quantum = phonon_loss_diffraction_patterns(waves, temperature=T, max_angle="full")
+        classical = phonon_loss_diffraction_patterns(
+            waves, temperature=T, snapshot_statistics="classical", max_angle="full"
+        )
+        x = np.array(e_values[1:]) / (2 * units.kB * T)
+        for k, f in enumerate(x / np.tanh(x)):
+            np.testing.assert_allclose(classical.array[3 + k], quantum.array[3 + k] * f, rtol=1e-5)
+            np.testing.assert_allclose(classical.array[1 - k], quantum.array[1 - k] * f, rtol=1e-5)
+
+    def test_invalid_statistics_rejected(self):
+        from abtem.measurements import _loss_gain_weights, unfold_loss_gain
+
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            _loss_gain_weights(np.array([0.05]), 300.0, "bogus")
+        waves = _make_exit_waves([0.0, 0.02, 0.05], n_configs=4)
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            phonon_loss_diffraction_patterns(
+                waves, temperature=300.0, snapshot_statistics="bogus"
+            )
+        dp = phonon_loss_diffraction_patterns(waves)
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            unfold_loss_gain(dp, 300.0, snapshot_statistics="md")
+
+        # also without temperature: the argument is only consumed by the
+        # unfolding, so an unvalidated typo would be silently ignored
+        with pytest.raises(ValueError, match="snapshot_statistics"):
+            phonon_loss_diffraction_patterns(waves, snapshot_statistics="clasical")
+
+    def test_classical_mode_threads_through_both_entry_points(self):
+        from ase import units
+
+        from abtem.measurements import unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_exit_waves(e_values, n_configs=4)
+        T = 300.0
+        via_call = phonon_loss_diffraction_patterns(
+            waves, temperature=T, snapshot_statistics="classical", max_angle="full"
+        )
+        via_helper = unfold_loss_gain(
+            phonon_loss_diffraction_patterns(waves, max_angle="full"),
+            T, snapshot_statistics="classical",
+        )
+        quantum = phonon_loss_diffraction_patterns(waves, temperature=T, max_angle="full")
+        np.testing.assert_allclose(via_call.array, via_helper.array, rtol=1e-6)
+
+        # classical / quantum = x coth x on every non-zero energy, both sides
+        x = np.array(e_values[1:]) / (2 * units.kB * T)
+        factor = x / np.tanh(x)
+        for k, f in enumerate(factor):
+            loss_ratio = via_call.array[3 + k] / quantum.array[3 + k]
+            gain_ratio = via_call.array[1 - k] / quantum.array[1 - k]
+            np.testing.assert_allclose(loss_ratio, f, rtol=1e-5)
+            np.testing.assert_allclose(gain_ratio, f, rtol=1e-5)
+        np.testing.assert_allclose(via_call.array[2], quantum.array[2])  # zero bin
+
+
+class TestParityProjection:
+    """Tests for the "Phonon order"=("all", "one", "multi") ensemble output
+    when exit_waves carries a PhononParityAxis (issue #373).
+    """
+
+    def test_block_direct_true_infers_radius_from_metadata(self):
+        waves = _make_parity_exit_waves([0.02, 0.05], n_configs=6)
+        waves.metadata["semiangle_cutoff"] = 15.0
+
+        dp_auto = phonon_loss_diffraction_patterns(waves, block_direct=True)
+        dp_explicit = phonon_loss_diffraction_patterns(waves, block_direct=15.0)
+        dp_wrong = phonon_loss_diffraction_patterns(waves, block_direct=1.0)
+
+        np.testing.assert_array_equal(dp_auto.array, dp_explicit.array)
+        assert not np.array_equal(dp_auto.array, dp_wrong.array)
+
+    def test_shape_and_axes(self):
+        e_values = [0.02, 0.05, 0.10]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+
+        dp = phonon_loss_diffraction_patterns(waves)
+
+        from abtem.core.axes import OrdinalAxis
+
+        phonon_order_axis = next(
+            ax for ax in dp.ensemble_axes_metadata
+            if isinstance(ax, OrdinalAxis) and ax.label == "Phonon order"
+        )
+        assert phonon_order_axis.values == ("all", "one", "multi")
+        assert dp.array.shape[0] == 3
+
+        energy_axis = next(
+            ax for ax in dp.ensemble_axes_metadata if isinstance(ax, EnergyLossAxis)
+        )
+        assert len(energy_axis.values) == 3
+        # FrozenPhononsAxis and PhononParityAxis must both be gone
+        assert not any(
+            isinstance(ax, FrozenPhononsAxis) for ax in dp.ensemble_axes_metadata
+        )
+        assert not any(
+            isinstance(ax, PhononParityAxis) for ax in dp.ensemble_axes_metadata
+        )
+
+    def test_all_equals_ordinary_tds_over_full_parity_set(self):
+        """"all" is one + multi, and for the symmetric (real, twin) set that
+        is exactly the ordinary I_incoherent - I_coherent estimator over all
+        2N members -- not a statistical agreement, an identity."""
+        e_values = [0.02, 0.05, 0.10]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+
+        full_set = Waves(
+            np.concatenate([waves.array[0], waves.array[1]], axis=1),
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        dp_full = phonon_loss_diffraction_patterns(
+            full_set, component="tds", max_angle="full"
+        )
+
+        scale = np.abs(dp.array[1]).max()
+        np.testing.assert_allclose(dp.array[0], dp_full.array, atol=1e-5 * scale, rtol=0)
+        np.testing.assert_allclose(
+            dp.array[0], dp.array[1] + dp.array[2], atol=1e-6 * scale, rtol=0
+        )
+
+    def test_one_phonon_and_multi_phonon_isolate_known_signals(self):
+        """Construct real/twin so that psi_odd and psi_even are exactly
+        known, independently-verifiable signals."""
+        e_values = [0.02, 0.05]
+        n_configs, gpts = 4, 16
+        shape = (len(e_values), n_configs, gpts, gpts)
+        rng = np.random.default_rng(1)
+
+        static = (
+            rng.normal(size=(gpts, gpts)) + 1j * rng.normal(size=(gpts, gpts))
+        ).astype(np.complex64)
+        delta = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+        eps = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(
+            np.complex64
+        )
+
+        # real = static + delta + eps, twin = static - delta + eps
+        #   => psi_odd  = (real - twin) / 2 = delta          (one-phonon)
+        #   => psi_even = (real + twin) / 2 = static + eps   (multi-phonon =
+        #      its variance over configs; the constant static drops out)
+        real = static + delta + eps
+        twin = static - delta + eps
+
+        waves = _make_parity_exit_waves(
+            e_values, n_configs=n_configs, gpts=gpts, real=real, twin=twin,
+        )
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+
+        # independent reference: FFT delta/eps directly; axis=1 of shape
+        # (n_e, n_c, gpts, gpts) is the frozen-phonon axis
+        delta_waves = Waves(
+            delta, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        eps_waves = Waves(
+            eps, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        I_one_ref = delta_waves.diffraction_patterns(max_angle="full").array.mean(axis=1)
+        I_multi_ref = (
+            eps_waves.diffraction_patterns(max_angle="full").array.mean(axis=1)
+            - eps_waves.sum(axis=1).diffraction_patterns(max_angle="full").array
+            / n_configs**2
+        )
+
+        np.testing.assert_allclose(dp.array[1], I_one_ref, rtol=1e-4)
+        np.testing.assert_allclose(dp.array[2], I_multi_ref, rtol=1e-4, atol=1e-4 * I_multi_ref.max())
+
+    def test_requires_real_twin_parity_axis_values(self):
+        e_values = [0.02, 0.05]
+        waves = _make_exit_waves(e_values, n_configs=4)
+        array = np.stack([waves.array, waves.array, waves.array], axis=0)
+        bad_waves = Waves(
+            array, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin", "static"))
+            ]
+            + waves.ensemble_axes_metadata,
+        )
+        with pytest.raises(ValueError, match="'real', 'twin'"):
+            phonon_loss_diffraction_patterns(bad_waves)
+
+    def test_temperature_is_rejected(self):
+        """One-phonon Bose weights at +/-E are wrong for the multi channel
+        (its two-phonon processes sit at +2E, 0, -2E), so the combined call
+        must refuse rather than mislabel."""
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        with pytest.raises(ValueError, match="unfold_loss_gain"):
+            phonon_loss_diffraction_patterns(waves, temperature=300.0)
+
+    def test_unfold_loss_gain_selects_the_one_phonon_channel_of_a_stack(self):
+        """One-phonon Bose weights apply to the 'one' channel alone, so
+        unfolding a whole "Phonon order" stack has only one possible meaning
+        and picks that channel itself rather than making the caller index the
+        axis by hand. The stack survives into the spectrum, so both forms
+        must do it, and both must equal passing the 'one' slot explicitly."""
+        from abtem.detectors import SpectralSlitDetector
+        from abtem.measurements import momentum_resolved_spectrum, unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+        order = list(dp.ensemble_axes_metadata[0].values)
+        one = dp[order.index("one")]
+
+        auto = unfold_loss_gain(dp, 300.0)
+        manual = unfold_loss_gain(one, 300.0)
+        np.testing.assert_array_equal(auto.array, manual.array)
+        assert auto.metadata["phonon_loss_component"] == "one"
+        # the stacking axis is consumed, not carried through
+        assert not any(
+            getattr(ax, "label", None) == "Phonon order"
+            for ax in auto.ensemble_axes_metadata
+        )
+        assert auto.array.shape[0] == 5  # signed energies, no channel axis
+
+        # and the same through a MomentumResolvedSpectrum
+        detector = SpectralSlitDetector(width=4.0, q_min=0.0, q_max=20.0)
+        auto_spec = unfold_loss_gain(momentum_resolved_spectrum(dp, detector), 300.0)
+        manual_spec = unfold_loss_gain(
+            momentum_resolved_spectrum(one, detector), 300.0
+        )
+        np.testing.assert_array_equal(auto_spec.array, manual_spec.array)
+        assert auto_spec.array.shape[-1] == 5
+
+    def test_unfold_loss_gain_on_one_slot_matches_internal_unfolding(self):
+        from abtem.measurements import unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+        one = dp[1]
+        assert not any(
+            isinstance(ax, OrdinalAxis) and ax.label == "Phonon order"
+            for ax in one.ensemble_axes_metadata
+        )
+
+        unfolded = unfold_loss_gain(one, 300.0)
+        assert isinstance(unfolded, type(one))
+        energy_axis = next(
+            ax for ax in unfolded.ensemble_axes_metadata
+            if isinstance(ax, EnergyLossAxis)
+        )
+        assert energy_axis.values == (-0.05, -0.02, 0.0, 0.02, 0.05)
+        assert unfolded.array.shape[0] == 5
+
+        # identical to what the non-parity path does with temperature=,
+        # applied to the same (unweighted) input
+        waves_odd = Waves(
+            (waves.array[0] - waves.array[1]) / 2,
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata[1:],
+        )
+        ref = phonon_loss_diffraction_patterns(
+            waves_odd, component="incoherent", max_angle="full"
+        )
+        from abtem.measurements import _thermal_weight_tds
+        ref_array, _ = _thermal_weight_tds(
+            ref.array, np.asarray(e_values), 0, 300.0
+        )
+        np.testing.assert_allclose(unfolded.array, ref_array, rtol=1e-5)
+
+        # detailed balance: loss/gain = exp(E / kT) at every nonzero energy
+        from ase import units
+        loss, gain = unfolded.array[3:], unfolded.array[:2][::-1]
+        ratio = loss.sum(axis=(-2, -1)) / gain.sum(axis=(-2, -1))
+        np.testing.assert_allclose(
+            ratio, np.exp(np.array([0.02, 0.05]) / (units.kB * 300.0)), rtol=1e-5
+        )
+
+    def test_unfold_loss_gain_commutes_with_momentum_resolved_spectrum(self):
+        """unfold_loss_gain must accept a MomentumResolvedSpectrum (energy is
+        its last base axis) and give the same result as unfolding the
+        diffraction patterns before building the spectrum."""
+        from abtem.detectors import SpectralSlitDetector
+        from abtem.measurements import momentum_resolved_spectrum, unfold_loss_gain
+
+        e_values = [0.0, 0.02, 0.05]
+        waves = _make_parity_exit_waves(e_values, n_configs=6)
+        dp_one = phonon_loss_diffraction_patterns(waves, max_angle="full")[1]
+        detector = SpectralSlitDetector(width=20.0, q_min=0.0, q_max=60.0)
+
+        spectrum_then_unfold = unfold_loss_gain(
+            momentum_resolved_spectrum(dp_one, detector), 300.0
+        )
+        unfold_then_spectrum = momentum_resolved_spectrum(
+            unfold_loss_gain(dp_one, 300.0), detector
+        )
+        assert spectrum_then_unfold.e_values == (-0.05, -0.02, 0.0, 0.02, 0.05)
+        assert spectrum_then_unfold.e_values == unfold_then_spectrum.e_values
+        np.testing.assert_allclose(
+            spectrum_then_unfold.array, unfold_then_spectrum.array, rtol=1e-6
+        )
+
+    def test_unfold_loss_gain_requires_energy_axis(self):
+        from abtem.measurements import unfold_loss_gain
+
+        waves = _make_exit_waves([0.02, 0.05], n_configs=4)
+        dp = waves.diffraction_patterns(max_angle="full")
+        no_energy = dp.sum(axis=0)  # drops the EnergyLossAxis
+        with pytest.raises(ValueError, match="EnergyLossAxis"):
+            unfold_loss_gain(no_energy, 300.0)
+
+    def test_rest_parity_axis_is_averaged_out_before_projection(self):
+        """With a rest-parity axis the waves are first averaged over the two
+        rest signs and the static member is subtracted from the even part.
+        Build psi(s, t) = static + s*delta + t*rho + chi + eps (eps absent
+        from the static member) so that the rest-odd part rho and the
+        rest-even, bin-independent part chi must both drop out exactly,
+        leaving one = mean|delta|^2 and multi = variance(eps)."""
+        from abtem.core.axes import PhononRestParityAxis
+
+        e_values = [0.02, 0.05]
+        n_configs, gpts = 4, 16
+        shape = (len(e_values), n_configs, gpts, gpts)
+        rng = np.random.default_rng(7)
+
+        def rc(size):
+            return (rng.normal(size=size) + 1j * rng.normal(size=size)).astype(
+                np.complex64
+            )
+
+        static, delta, eps = rc((gpts, gpts)), rc(shape), rc(shape)
+        rho = 5.0 * rc(shape)  # deliberately large rest-odd part
+
+        # members: real/twin/static x rest sign; the static member carries the
+        # rest-odd part rho and a rest-realization-dependent even part chi
+        # that must cancel against the same chi in real and twin
+        chi = 3.0 * rc(shape)
+        members = np.empty((3, 2) + shape, dtype=np.complex64)
+        for parity, s_sign in enumerate((1, -1, 0)):
+            for rest, t_sign in enumerate((1, -1)):
+                members[parity, rest] = (
+                    static + s_sign * delta + t_sign * rho + chi + (eps if s_sign else 0)
+                )
+
+        waves = Waves(
+            members, energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin", "static")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        dp = phonon_loss_diffraction_patterns(waves, max_angle="full")
+        assert dp.array.shape[0] == 3
+
+        reference = _make_parity_exit_waves(
+            e_values, n_configs=n_configs, gpts=gpts,
+            real=static + delta + eps, twin=static - delta + eps,
+        )
+        dp_ref = phonon_loss_diffraction_patterns(reference, max_angle="full")
+        scale = np.abs(dp_ref.array[1]).max()
+        np.testing.assert_allclose(dp.array, dp_ref.array, atol=1e-5 * scale, rtol=0)
+
+        lazy_waves = Waves(
+            da.from_array(members, chunks=(1, 1, 1, 1, gpts, gpts)),
+            energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
+        )
+        dp_lazy = phonon_loss_diffraction_patterns(lazy_waves, max_angle="full")
+        assert isinstance(dp_lazy.array, da.core.Array)
+        np.testing.assert_allclose(
+            dp_lazy.array.compute(), dp.array, atol=1e-5 * scale, rtol=0
+        )
+
+        # without the static member (the four-run default) only the
+        # one-phonon channel is returned, as a plain DiffractionPatterns
+        waves_four = Waves(
+            members[:2], energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=tuple(e_values)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        dp_four = phonon_loss_diffraction_patterns(waves_four, max_angle="full")
+        assert dp_four.metadata["phonon_loss_component"] == "one"
+        assert not any(
+            getattr(ax, "label", None) == "Phonon order"
+            for ax in dp_four.ensemble_axes_metadata
+        )
+        np.testing.assert_allclose(dp_four.array, dp.array[1], atol=1e-5 * scale, rtol=0)
+
+        # ... and temperature unfolding is then allowed (one-phonon weights)
+        waves_four_t = Waves(
+            members[:2], energy=100e3, sampling=0.1,
+            ensemble_axes_metadata=[
+                PhononParityAxis(values=("real", "twin")),
+                PhononRestParityAxis(values=("plus", "minus")),
+                EnergyLossAxis(values=(0.0, 0.05)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        unfolded = phonon_loss_diffraction_patterns(
+            waves_four_t, max_angle="full", temperature=300.0
+        )
+        assert unfolded.array.shape[0] == 3
+        with pytest.raises(ValueError, match="unfold_loss_gain"):
+            phonon_loss_diffraction_patterns(waves, max_angle="full", temperature=300.0)
+
+    def test_lazy_matches_eager(self):
+        e_values = [0.02, 0.05, 0.10]
+        waves_eager = _make_parity_exit_waves(e_values, n_configs=6, lazy=False)
+        waves_lazy = _make_parity_exit_waves(e_values, n_configs=6, lazy=True)
+
+        dp_eager = phonon_loss_diffraction_patterns(waves_eager)
+        dp_lazy = phonon_loss_diffraction_patterns(waves_lazy)
 
         assert isinstance(dp_lazy.array, da.core.Array)
         np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)
