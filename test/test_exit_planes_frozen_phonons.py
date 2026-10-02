@@ -178,6 +178,8 @@ def test_annular_detector_alongside_a_detector_that_keeps_its_axes(device):
     )
     assert lazy[0].shape == (NUM_EXIT_PLANES, *SCAN_GPTS)
 
+    # In place: both detectors come from one graph, computed once here, so
+    # to_host_array below only copies to the host.
     lazy.compute()
     for lazy_measurement, eager_measurement in zip(lazy, eager):
         _assert_close(to_host_array(lazy_measurement), to_host_array(eager_measurement))

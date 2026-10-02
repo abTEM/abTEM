@@ -9,8 +9,8 @@ the module under test, so they catch this without a GPU. The GPU tests run the s
 paths on real CuPy chunks.
 """
 
-import pickle
 import gc
+import pickle
 import types
 
 import ase.build
