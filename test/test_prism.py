@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import assert_array_matches_device, devices, requires_gpu, to_host_array
+from utils import (assert_array_matches_device, assert_array_objects_equal,
+                   devices, requires_gpu, to_host_array)
 
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
@@ -105,8 +106,15 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
         )
 
 
+# PRISM and multislice are different code paths, so their results agree only
+# to within float round-off. These are the tolerances of np.allclose, which is
+# what `==` applied to the eager array before the comparison was made
+# value-based for lazy results too.
+PRISM_VS_PROBE_TOLERANCES = dict(rtol=1e-5, atol=1e-8)
+
+
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True])
+@pytest.mark.parametrize("lazy", [True, False])
 @devices
 # @pytest.mark.parametrize('interpolation', [True, False])
 @pytest.mark.parametrize(
@@ -143,7 +151,9 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
         potential=potential, scan=scan, detectors=detector, lazy=lazy
     ).to_cpu()
 
-    assert s_matrix_measurement == probe_measurement
+    assert_array_objects_equal(
+        s_matrix_measurement, probe_measurement, **PRISM_VS_PROBE_TOLERANCES
+    )
 
 
 @pytest.mark.slow
@@ -274,7 +284,9 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
     ).to_cpu()
 
     assert prism_measurement.shape == probe_measurement.shape
-    assert prism_measurement == probe_measurement
+    assert_array_objects_equal(
+        prism_measurement, probe_measurement, **PRISM_VS_PROBE_TOLERANCES
+    )
 
 
 def _hexagonal_carbon(reps, a=3.0, cz=2.0, angle=60.0):

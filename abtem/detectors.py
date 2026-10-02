@@ -22,7 +22,6 @@ from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
-from abtem.core.units import units_type
 from abtem.core.utils import cos_sin_deg, get_dtype
 from abtem.measurements import (
     BaseMeasurements,
@@ -501,11 +500,6 @@ class _AbstractRadialDetector(BaseDetector):
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
-            if units_type[kwargs["units"]] == "reciprocal_space":
-                if energy is None:
-                    raise ValueError(
-                        "energy or waves must be provided when using real space units"
-                    )
             if gpts is None:
                 gpts = 1024
 
