@@ -508,6 +508,111 @@ def test_segmented_detector_offset_captures_pixels_beyond_centred_crop(device, p
     assert np.delete(got, label).max() < 1e-9 * full
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_segmented_detector_with_offset_matches_eager(device):
+    """A lazy detection rebuilds the detector from its constructor arguments,
+    which read ``offset`` back as an attribute."""
+    offset = (5 * _ds[0], 3 * _ds[1])
+    detector = abtem.SegmentedDetector(rotation=0.4, offset=offset, **SEGMENTED)
+    waves = _random_waves(device)
+
+    eager = _values(detector.detect(waves))
+    lazy = _values(detector.detect(waves.ensure_lazy()))
+
+    np.testing.assert_array_equal(lazy, eager)
+
+
+def _shown_regions(detector, *args, **kwargs):
+    import matplotlib.pyplot as plt
+
+    visualization = detector.show(*args, units="mrad", **kwargs)
+    measurement = visualization.measurement
+    plt.close("all")
+    return np.asarray(measurement.array, dtype=np.float64), measurement
+
+
+def _shown_angles(measurement):
+    """(ax, ay) [mrad] of every pixel of a drawn (fftshifted) region map."""
+    n0, n1 = measurement.shape[-2:]
+    d0, d1 = measurement.angular_sampling
+    ax = (np.arange(n0) - n0 // 2)[:, None] * d0
+    ay = (np.arange(n1) - n1 // 2)[None, :] * d1
+    return np.broadcast_to(ax, (n0, n1)), np.broadcast_to(ay, (n0, n1))
+
+
+def test_segmented_detector_show_draws_the_offset():
+    """show() draws the segments about the offset centre, as detected."""
+    rotation = 0.4
+    offset_pixels = (5, 3)
+    offset = (offset_pixels[0] * _ds[0], offset_pixels[1] * _ds[1])
+    detector = abtem.SegmentedDetector(rotation=rotation, offset=offset, **SEGMENTED)
+
+    regions, _ = _shown_regions(detector, gpts=GPTS, sampling=SAMPLING, energy=ENERGY)
+
+    ax, ay = _pixel_angles()
+    kx, ky = ax - offset[0], ay - offset[1]
+    alpha, phi = np.hypot(kx, ky), np.arctan2(ky, kx)
+    _segmented_geometry_is_unambiguous(alpha, phi, rotation)
+    expected = np.fft.fftshift(
+        _segment_index(alpha, phi, rotation=rotation, **SEGMENTED)
+    ).astype(np.float64)
+    expected[expected < 0] = np.nan
+
+    np.testing.assert_array_equal(regions, expected)
+
+
+def test_radial_detector_show_default_grid_covers_the_detector():
+    """Without ``sampling`` the drawn grid reaches 10 % beyond the detector
+    (it used to reach outer / 4.4, and an integer ``outer`` failed)."""
+    detector = abtem.SegmentedDetector(
+        nbins_radial=2, nbins_azimuthal=4, inner=10, outer=40, offset=(6.0, 0.0)
+    )
+    regions, measurement = _shown_regions(detector, energy=100e3, gpts=64)
+
+    np.testing.assert_allclose(measurement.max_angles, 1.1 * 46.0, rtol=0.05)
+    assert set(np.unique(regions[np.isfinite(regions)])) == set(range(8))
+
+
+def test_flexible_annular_show_with_waves_matches_detection():
+    """show(waves) on a detector that has not detected yet sizes the default
+    outer from the waves as detect() does (it raised TypeError), and draws
+    detect()'s bins."""
+    step = 2.0
+    waves = _delta_waves()
+    detected = abtem.FlexibleAnnularDetector(step_size=step).detect(waves)
+    nbins = detected.shape[0]
+
+    regions, measurement = _shown_regions(
+        abtem.FlexibleAnnularDetector(step_size=step), waves
+    )
+    labels = np.unique(regions[np.isfinite(regions)])
+    np.testing.assert_array_equal(labels, np.arange(nbins))
+
+    ax, ay = _shown_angles(measurement)
+    alpha = np.hypot(ax, ay)
+    assert alpha[np.isfinite(regions)].max() < nbins * step
+    clear = np.abs(alpha / step - np.round(alpha / step)) > 1e-6
+    labelled = np.isfinite(regions) & clear
+    np.testing.assert_array_equal(regions[labelled], np.floor(alpha[labelled] / step))
+
+
+def test_annular_detector_show_with_waves_and_default_outer():
+    """AnnularDetector(inner=...).show(waves) draws [inner, cutoff) (it raised
+    RuntimeError: radial_sampling is not defined when outer angle is None)."""
+    waves = _delta_waves()
+    detector = abtem.AnnularDetector(inner=20.0)
+    inner, outer = detector.angular_limits(waves)
+
+    regions, measurement = _shown_regions(detector, waves)
+
+    ax, ay = _shown_angles(measurement)
+    alpha = np.hypot(ax, ay)
+    drawn = np.isfinite(regions)
+    assert drawn.any()
+    assert alpha[drawn].min() >= inner
+    assert alpha[drawn].max() < outer
+
+
 # Offset centre 60 pixels along +kx, radius 25.5 x-pixels: the region runs to
 # x-index 85.5, past the Nyquist index 79 of the 160-pixel axis. The bins
 # shifted beyond it used to wrap round onto x-indices -80..-75, so the bright
