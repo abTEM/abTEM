@@ -36,11 +36,16 @@ from abtem.bloch.utils import (
     make_hkl_grid,
     reciprocal_cell,
     reciprocal_space_gpts,
-    retrieve_structure_factor_values,
+    retrieve_coupling_structure_factors,
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import (
+    cp,
+    device_name_from_array_module,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -858,6 +863,168 @@ def calculate_M_matrix(
     return Mii
 
 
+# Peak memory of a Bloch-wave calculation, in multiples of the bytes of its
+# (N, N) structure matrix, counting the matrix itself, as (guaranteed, expected)
+# per solver, device and matrix dtype. Building the structure matrix allocates
+# no other N x N array (see `retrieve_coupling_structure_factors`), so the peak
+# is set by the solver, which runs while the structure matrix is still alive.
+#
+# eigh, CPU (numpy.linalg.eigh, LAPACK ?heevd): NumPy's linalg computes in
+# double precision whatever the input, so a complex64 matrix gets a complex128
+# working copy and complex128 eigenvectors that are cast back, and needs more
+# bytes than a complex128 matrix of the same N. The peak RSS above the matrix,
+# measured for N = 3000-6000 (OpenBLAS, macOS), was 1.8-3.3x the matrix for
+# complex128 and 6.0-10.5x for complex64, the larger multiples at the smaller N,
+# where BLAS's fixed buffers weigh in; LAPACK's ?heevd workspace (N**2 complex
+# and 2 N**2 real elements) is not all touched.
+#
+# eigh, GPU (cupy.linalg.eigh, cuSOLVER ?heevd): computed in the input precision,
+# with the matrix, an F-ordered copy that becomes the eigenvectors, and a solver
+# workspace. cuSOLVER does not document the workspace size; the one published
+# figure (cusolverDnDsyevd_bufferSize for N = 24500) is 3.07 N**2 elements of
+# the matrix dtype. Only the matrix and its copy are certain.
+#
+# expm, CPU (scipy.linalg.expm): computed in the input precision. The peak RSS
+# above the matrix, including its scaled copy, measured for complex128 and
+# N = 2000-4000 was 5.9-9.8x the matrix, 5.9-7.0x for N >= 3500; complex64 is
+# assumed to need the same multiple of its own bytes.
+#
+# expm, GPU (abtem.bloch.matrix_exponential.expm): counted from the code, the
+# [13/13] Pade approximant has ~15 N x N arrays alive at its peak in
+# cupy.linalg.solve, plus the structure matrix and its scaled copy. Its float64
+# identity matrices widen everything inside to complex128, so a complex64
+# structure matrix needs about twice as many of its own bytes.
+_BLOCH_WAVE_MEMORY_FACTORS: dict[tuple[str, str], dict[str, tuple[float, float]]] = {
+    ("cpu", "eigh"): {"complex64": (10.0, 10.0), "complex128": (4.0, 4.0)},
+    ("gpu", "eigh"): {"complex64": (2.0, 5.1), "complex128": (2.0, 5.1)},
+    ("cpu", "expm"): {"complex64": (8.0, 8.0), "complex128": (8.0, 8.0)},
+    ("gpu", "expm"): {"complex64": (33.0, 33.0), "complex128": (17.0, 17.0)},
+}
+
+
+def estimate_bloch_wave_memory(
+    num_beams: int,
+    dtype: np.dtype | type,
+    device: str = "cpu",
+    solver: str = "eigh",
+) -> tuple[int, int]:
+    """Estimate the peak memory of a Bloch-wave calculation, from building the
+    structure matrix through solving it.
+
+    Parameters
+    ----------
+    num_beams : int
+        The number of beams, N; the structure matrix is N x N.
+    dtype : numpy.dtype
+        The dtype of the structure matrix.
+    device : {'cpu', 'gpu'}
+        The device the calculation runs on.
+    solver : {'eigh', 'expm'}
+        The solver applied to the structure matrix: the Hermitian
+        eigendecomposition used for diffraction patterns and exit waves, or the
+        matrix exponential used for the scattering matrix.
+
+    Returns
+    -------
+    tuple of ints
+        The memory certain to be needed and the expected peak [bytes].
+    """
+    dtype = np.dtype(dtype)
+    factors = _BLOCH_WAVE_MEMORY_FACTORS[(device, solver)]
+    # Anything else (a real matrix, say) gets the most demanding listed dtype.
+    guaranteed, expected = factors.get(dtype.name, max(factors.values()))
+    matrix_bytes = num_beams**2 * dtype.itemsize
+    return int(guaranteed * matrix_bytes), int(expected * matrix_bytes)
+
+
+def _device_memory(device: str) -> Optional[tuple[int, int]]:
+    """The available and total memory of the device [bytes], or None if unknown."""
+    if device == "gpu":
+        free_bytes, total_bytes = cp.cuda.Device().mem_info
+        # Blocks cached by CuPy's memory pool count as free: the pool releases
+        # them and retries before it lets an allocation fail.
+        free_bytes += cp.get_default_memory_pool().free_bytes()
+        return free_bytes, total_bytes
+
+    try:
+        import psutil
+    except ImportError:
+        return None
+
+    memory = psutil.virtual_memory()
+    return memory.available, memory.total
+
+
+def check_bloch_wave_memory(
+    num_beams: int,
+    dtype: np.dtype | type,
+    device: str = "cpu",
+    solver: str = "eigh",
+) -> None:
+    """Raise a clear error before a Bloch-wave calculation that cannot fit in
+    memory starts allocating, instead of letting a raw CUDA/NumPy allocation
+    failure surface from deep inside the solver; warn if it may not fit.
+
+    On the GPU, the error is raised if the memory certain to be needed exceeds
+    the free device memory, and the warning if the expected peak, which includes
+    cuSOLVER's undocumented workspace, does. On the CPU, swap and memory
+    compression can let a calculation exceeding the available memory finish, so
+    the error is raised only if the expected peak exceeds the physical memory,
+    and the warning if it exceeds the available memory. The CPU check needs
+    psutil and is skipped without it.
+
+    Parameters
+    ----------
+    num_beams : int
+        The number of beams, N; the structure matrix is N x N.
+    dtype : numpy.dtype
+        The dtype of the structure matrix.
+    device : {'cpu', 'gpu'}
+        The device the calculation runs on.
+    solver : {'eigh', 'expm'}
+        The solver applied to the structure matrix.
+    """
+    guaranteed_bytes, expected_bytes = estimate_bloch_wave_memory(
+        num_beams, dtype, device=device, solver=solver
+    )
+
+    memory = _device_memory(device)
+    if memory is None:
+        return
+    available_bytes, total_bytes = memory
+
+    description = (
+        f"The Bloch-wave calculation with {num_beams} beams ({solver} of a "
+        f"{num_beams}x{num_beams} {np.dtype(dtype).name} structure matrix)"
+    )
+    suggestion = (
+        "Reduce `g_max` and/or `sg_max` to select fewer beams, or run on a device "
+        "with more memory."
+    )
+
+    if device == "gpu" and guaranteed_bytes > available_bytes:
+        raise MemoryError(
+            f"{description} needs at least {guaranteed_bytes / 1e9:.1f} GB, but "
+            f"only {available_bytes / 1e9:.1f} GB is available on the GPU. "
+            f"{suggestion}"
+        )
+
+    if device == "cpu" and expected_bytes > total_bytes:
+        raise MemoryError(
+            f"{description} needs an estimated {expected_bytes / 1e9:.1f} GB, "
+            f"more than the {total_bytes / 1e9:.1f} GB of physical memory. "
+            f"{suggestion}"
+        )
+
+    if expected_bytes > available_bytes:
+        warnings.warn(
+            f"{description} needs an estimated {expected_bytes / 1e9:.1f} GB, but "
+            f"only {available_bytes / 1e9:.1f} GB is available on the "
+            f"{device.upper()}; it may run out of memory. {suggestion}",
+            stacklevel=2,
+        )
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
@@ -866,6 +1033,7 @@ def calculate_structure_matrix(
     energy: float,
     gpts: tuple[int, int, int],
     use_wave_eq: bool = False,
+    solver: Optional[str] = "eigh",
 ) -> np.ndarray:
     """Calculate the structure matrix for a given set of reciprocal space vectors.
 
@@ -888,6 +1056,11 @@ def calculate_structure_matrix(
     use_wave_eq : bool
         If True, the Bloch wave equation derived from the wave equation is used.
         Otherwise standard Bloch wave is used.
+    solver : {'eigh', 'expm'} or None
+        The solver the structure matrix will be passed to. Before anything N x N
+        is allocated, the memory needed by building the matrix and then solving
+        it is checked against the memory available (see
+        `check_bloch_wave_memory`). If None, the check is skipped.
 
     Returns
     -------
@@ -899,25 +1072,31 @@ def calculate_structure_matrix(
     g = xp.asarray(calculate_g_vec(hkl_selected, cell))
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
 
-    hkl_selected = np.asarray(hkl_selected)
-
-    gmh = hkl_selected[None] - hkl_selected[:, None]
-    gmh = gmh.reshape(-1, 3)
-
-    A = retrieve_structure_factor_values(structure_factor, hkl, gmh, gpts)
-    A = A.reshape((len(hkl_selected),) * 2)
-
-    # structure_factor_dict = {
-    #     (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
-    # }
-    # A = np.array([structure_factor_dict[(h, k, l)] for h, k, l in gmh])
-    # A = A.reshape((len(hkl_selected),) * 2)
-
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
+
+    # The dtype the scaling below promotes the structure factors to, so that the
+    # matrix can be allocated once in it and scaled in place.
+    dtype = np.result_type(structure_factor.dtype, prefactor, Mii.dtype)
+
+    if solver is not None:
+        check_bloch_wave_memory(
+            len(hkl_selected),
+            dtype,
+            device=device_name_from_array_module(xp),
+            solver=solver,
+        )
+
+    A = retrieve_coupling_structure_factors(
+        structure_factor, hkl, hkl_selected, gpts, dtype=dtype
+    )
 
     Mii = xp.asarray(Mii)
 
-    A = A * prefactor * Mii[None] * Mii[:, None]
+    # In place: `A * prefactor * ...` would hold the unscaled matrix and a
+    # scaled one at once, doubling the peak.
+    A *= prefactor
+    A *= Mii[None]
+    A *= Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
@@ -975,11 +1154,10 @@ def calculate_dynamical_scattering(
 
     np.fill_diagonal(C, np.diag(C) / Mii)
 
-    C_inv = xp.conjugate(C.T)
-
     initial = plane_wave_coefficients(hkl, xp)
 
-    alpha = C_inv @ initial
+    # alpha = C^H @ initial, without materializing C^H as an N x N copy.
+    alpha = xp.conjugate(xp.conjugate(initial) @ C)
     if not thicknesses.shape:
         array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
     else:
@@ -1050,15 +1228,16 @@ def calculate_scattering_matrix(
     xp = get_array_module(A)
 
     if method == "expm":
-        S = expm(1.0j * xp.pi * z * A * energy2wavelength(energy))
+        # The scalars are multiplied first, so that A is scaled only once.
+        S = expm((1.0j * xp.pi * z * energy2wavelength(energy)) * A)
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
-    M = xp.asarray(np.diag(Mii))
-    M_inv = xp.asarray(np.diag(1 / Mii))
-
-    S = xp.dot(M, xp.dot(S, M_inv))
+    # M @ S @ M^-1 for the diagonal M, in place rather than with two dense
+    # N x N diagonal matrices and two matrix products.
+    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    S *= Mii[:, None]
+    S *= (1 / Mii)[None]
     return S
 
 
@@ -1472,7 +1651,9 @@ class BlochWaves:
             metadata=metadata,
         )
 
-    def calculate_structure_matrix(self, lazy: bool = True) -> np.ndarray:
+    def calculate_structure_matrix(
+        self, lazy: bool = True, solver: Optional[str] = "eigh"
+    ) -> np.ndarray:
         """Calculate the structure matrix.
 
         Parameters
@@ -1480,6 +1661,10 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
+        solver : {'eigh', 'expm'} or None
+            The solver the structure matrix will be passed to, for checking up
+            front that building and solving it fits in memory. If None, the check
+            is skipped.
         """
         hkl = self.hkl
 
@@ -1496,6 +1681,7 @@ class BlochWaves:
                 energy=self.energy,
                 use_wave_eq=self.use_wave_eq,
                 gpts=structure_factor.gpts,
+                solver=solver,
                 new_axis=1,
                 chunks=(len(hkl), len(hkl)),
                 meta=xp.array((), dtype=get_dtype(complex=True)),
@@ -1509,6 +1695,7 @@ class BlochWaves:
                 energy=self.energy,
                 use_wave_eq=self.use_wave_eq,
                 gpts=structure_factor.gpts,
+                solver=solver,
             )
         return A
 
@@ -1525,7 +1712,7 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        A = self.calculate_structure_matrix(solver="expm")
         hkl = self.hkl
         cell = self.cell
 
