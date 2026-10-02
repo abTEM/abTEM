@@ -932,9 +932,12 @@ class Waves(BaseWaves, ArrayObject):
         Returns
         -------
         depth_profile : Images
-            2D image(s) with the depth (z) as the first base axis and the
-            remaining spatial axis as the second. Any additional ensemble axes
-            (e.g. scan positions) are preserved.
+            2D image(s) with the remaining spatial axis as the first base axis
+            and the depth (z) as the second, with one z row per exit plane.
+            The z sampling is the exit-plane spacing. Since images have no
+            coordinate offset, z is measured from the first exit plane (the
+            entrance surface, z = 0, for integer ``exit_planes``). Any
+            additional ensemble axes (e.g. scan positions) are preserved.
         """
         thickness_idx = None
         for i, ax in enumerate(self.ensemble_axes_metadata):
@@ -983,10 +986,26 @@ class Waves(BaseWaves, ArrayObject):
         else:
             array = xp.moveaxis(array, thickness_idx, -1)
 
-        thickness_values = self.ensemble_axes_metadata[thickness_idx].values
-        z_extent = max(thickness_values)
+        thickness_values = np.array(
+            self.ensemble_axes_metadata[thickness_idx].values, dtype=float
+        )
         n_z = len(thickness_values)
-        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+        if n_z > 1:
+            # One row per exit plane: n_z points spanning [t_0, t_{n_z-1}] are
+            # separated by n_z - 1 intervals. For uniformly spaced exit planes
+            # this is exactly their spacing.
+            z_sampling = (thickness_values[-1] - thickness_values[0]) / (n_z - 1)
+            if not np.allclose(np.diff(thickness_values), z_sampling):
+                warnings.warn(
+                    "The exit planes are not uniformly spaced (thicknesses "
+                    f"{np.round(thickness_values, 3).tolist()} Å), but the depth "
+                    "profile has a uniform z-axis with their mean spacing "
+                    f"({z_sampling:.3f} Å); intermediate rows are not drawn at "
+                    "their exact thickness. Use exit_planes that evenly divide "
+                    "the number of slices for an exact z-axis."
+                )
+        else:
+            z_sampling = thickness_values[0] if thickness_values[0] > 0 else 1.0
 
         remaining_metadata = [
             ax
@@ -1138,13 +1157,22 @@ class Waves(BaseWaves, ArrayObject):
         visualization.set_xlabel(f"{spatial_label} [Å]")
         visualization.set_ylabel("z [Å]")
 
-        z_sampling = profile.sampling[1]
+        # The profile's z-axis starts at 0 with row i centred on
+        # i * sampling; shift it so that row i is centred on the thickness of
+        # exit plane i, which need not start at 0 for explicit exit_planes.
+        z_offset = float(
+            next(
+                ax_meta.values[0]
+                for ax_meta in self.ensemble_axes_metadata
+                if isinstance(ax_meta, ThicknessAxis)
+            )
+        )
         for idx in np.ndindex(visualization.axes.shape):
             artist = visualization.artists[idx]
             xlim = artist.get_xlim()
             ylim = artist.get_ylim()
             artist.set_extent(
-                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+                (xlim[0], xlim[1], ylim[0] + z_offset, ylim[1] + z_offset)
             )
 
         visualization.adjust_coordinate_limits_to_artists()
@@ -2383,8 +2411,9 @@ class Probe(WavesBuilder):
     Parameters
     ----------
     semiangle_cutoff : float, optional
-        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is
-        given.
+        The cutoff semiangle of the aperture [mrad]. A cutoff of 0 gives a parallel
+        beam (a plane wave); scanning it needs an explicit scan `sampling` or `gpts`.
+        Ignored if a custom aperture is given.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
