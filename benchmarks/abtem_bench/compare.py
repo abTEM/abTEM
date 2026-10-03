@@ -47,19 +47,9 @@ class Accepted:
 
     def matches(self, case_id: str) -> bool:
         cid = registry.CaseId.parse(case_id)
-        pattern = _literal_brackets(self.case)
-        return fnmatch.fnmatchcase(case_id, pattern) or fnmatch.fnmatchcase(
-            cid.name, pattern
+        return registry.glob_match(case_id, self.case) or registry.glob_match(
+            cid.name, self.case
         )
-
-
-def _literal_brackets(glob: str) -> str:
-    """Escape ``[`` and ``]`` so a variant like ``x[order1]@*`` matches literally.
-
-    fnmatch treats brackets as character classes; case ids use them for the
-    variant name.
-    """
-    return glob.replace("[", "[[]").replace("]", "[]]").replace("[[[]]", "[[]")
 
 
 def load_accepted(

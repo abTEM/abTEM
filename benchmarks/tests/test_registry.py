@@ -82,18 +82,40 @@ def test_validate_sources_rejects_sampling_keyword_but_not_prose(tmp_path):
         )
     )
     registry.validate_case_sources(tmp_path)
+    scan = tmp_path / "scan.py"
+    scan.write_text("def f(GridScan):\n    return GridScan(sampling=0.5)\n")
+    registry.validate_case_sources(tmp_path)  # a scan's sampling is allowed
     bad = tmp_path / "bad.py"
     bad.write_text("def f(Potential):\n    return Potential(sampling=0.05)\n")
+    with pytest.raises(CaseDefinitionError, match="bad.py:2"):
+        registry.validate_case_sources(tmp_path)
+    bad.write_text('def f(Probe):\n    return Probe(**{"sampling": 0.05})\n')
     with pytest.raises(CaseDefinitionError, match="bad.py:2"):
         registry.validate_case_sources(tmp_path)
 
 
 def test_case_hash_tracks_case_sources(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n")
-    h1 = registry.case_hash(tmp_path)
-    assert registry.case_hash(tmp_path) == h1
+    h1 = registry.case_hash([tmp_path / "a.py"])
+    assert registry.case_hash([tmp_path / "a.py"]) == h1
     (tmp_path / "a.py").write_text("x = 2\n")
-    assert registry.case_hash(tmp_path) != h1
+    assert registry.case_hash([tmp_path / "a.py"]) != h1
+
+
+def test_case_hash_covers_the_modules_that_shape_a_case():
+    names = {p.name for p in registry.case_files()}
+    assert {"fixtures.py", "presets.py", "registry.py", "worker.py"} <= names
+    assert {"hrtem.py", "stem.py", "potentials.py", "diffraction.py"} <= names
+    assert "compare.py" not in names and "cli.py" not in names
+
+
+def test_an_exact_variant_id_selects_itself():
+    reg = registry.load_cases()
+    only = ["stem.multidetector[order1]@quick/cpu"]
+    ids = registry.select_ids(reg, "quick", ["cpu"], only=only)
+    assert [str(i) for i in ids] == only
+    assert not registry.glob_match("stem.multidetector@quick/cpu", only[0])
+    assert registry.glob_match("stem.multidetector[eager]@quick/cpu", "stem.*@*/cpu")
 
 
 def test_shipped_cases_load_and_pass_validation():
