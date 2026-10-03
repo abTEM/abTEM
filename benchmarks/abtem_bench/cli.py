@@ -157,8 +157,8 @@ def cmd_self_check(args: argparse.Namespace) -> int:
         command=_command(),
         overwrite=args.overwrite,
     )
-    if _report_failed(bundles):
-        return 1
+    failed = _report_failed(bundles)
+    out.mkdir(parents=True, exist_ok=True)
     floors = cmp.noise_floor(bundles[0], bundles[1], reg)
     store.dump_json(out / "noise.json", floors)
     report = cmp.compare(bundles[0], bundles[1], reg)
@@ -175,14 +175,13 @@ def cmd_self_check(args: argparse.Namespace) -> int:
             f"self-check: {len(not_identical)} case(s) not bit-identical: "
             + ", ".join(not_identical)
         )
-        return (
-            1
-            if args.preset == "accuracy"
-            and "cpu" in args.device
-            and args.device == ["cpu"]
-            else 0
-        )
-    print("self-check: all cases bit-identical")
+    else:
+        print("self-check: all cases bit-identical")
+    if failed:
+        return 1
+    # Bit identity is the expectation only for the float64 preset on CPU.
+    if not_identical and args.preset == "accuracy" and args.device == ["cpu"]:
+        return 1
     return 0
 
 

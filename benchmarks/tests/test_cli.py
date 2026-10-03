@@ -174,7 +174,10 @@ def test_the_json_report_is_strict_json(tmp_path):
 def _failed_bundle(path: Path, status: str) -> store.Bundle:
     b = store.Bundle(path)
     b.write_manifest({"case_hash": "h"})
-    b.write_case("potential.infinite@quick/cpu", {"status": store.STATUS_OK})
+    ok = {"status": store.STATUS_OK, "timings": {"median": 1.0}, "memory": {}}
+    b.write_case(
+        "potential.infinite@quick/cpu", ok, {"potential": (np.ones(2), [], {})}
+    )
     b.write_case("stem.multidetector@quick/cpu", {"status": status, "error": "boom"})
     return b
 
@@ -197,6 +200,7 @@ def test_capture_and_self_check_exit_1_when_a_case_failed(
     ]
     monkeypatch.setattr(runner, "capture", lambda *a, **k: bundles)
     monkeypatch.setattr(runner, "find_repo", lambda: tmp_path)
+    monkeypatch.setattr(cli.cmp, "ACCEPTED_CHANGES_PATH", tmp_path / "none.toml")
     only = ["--only", "potential.infinite*", "--only", "stem.multidetector*"]
     argv = ["--ref", "x", "--out", str(tmp_path / "out")] + only
     assert cli.main(["capture"] + argv) == 1
@@ -205,6 +209,9 @@ def test_capture_and_self_check_exit_1_when_a_case_failed(
     assert "capture: 1 case(s) failed: stem.multidetector@quick/cpu" in captured.err
     assert cli.main(["self-check"] + argv) == 1
     assert "capture: 1 case(s) failed" in capsys.readouterr().err
+    # the failed case does not cost the other cases their noise floor
+    noise = json.loads((tmp_path / "out" / "noise.json").read_text())
+    assert list(noise) == ["potential.infinite@quick/cpu"]
 
 
 def test_capture_exits_0_when_every_case_is_ok(tmp_path, monkeypatch):
