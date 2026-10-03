@@ -79,6 +79,20 @@ def test_an_entry_for_a_compared_case_without_drift_is_stale(
     assert "Stale accepted" in cmp.to_markdown(report)
 
 
+def test_the_changelog_lists_only_entries_for_compared_cases(
+    tmp_path, registry_with_demo
+):
+    ref, cand = _drift(tmp_path)
+    toml = _toml(
+        tmp_path,
+        f'case = "demo.case@quick/*"\nsince = "v0"\nreason = "here"\n{LOOSE}',
+        f'case = "demo.case@standard/*"\nsince = "v0"\nreason = "elsewhere"\n{LOOSE}',
+    )
+    md = cmp.to_markdown(cmp.compare(ref, cand, registry_with_demo, accepted_path=toml))
+    assert "| here |" in md and "elsewhere" not in md
+    assert "max_abs ≤ 1.0e+01" in md
+
+
 def test_brackets_in_an_entry_glob_are_literal(registry_with_demo):
     entry = cmp.Accepted("demo.case[auto]@*", "v0", "r")
     assert entry.matches("demo.case[auto]@quick/cpu")
