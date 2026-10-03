@@ -233,6 +233,31 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def use_invoking_checkout() -> Path | None:
+    """Make ``import abtem`` in this process resolve to the harness's checkout.
+
+    compare imports ``abtem.core.testing`` from the checkout the harness and the
+    cases come from. Without this, the import resolves to whatever abtem the
+    environment provides, typically an editable install of some other checkout
+    at some other commit, which may not have the helper or may have a different
+    one. Workers are unaffected: each gets its ref's worktree on PYTHONPATH.
+    Returns the checkout put on ``sys.path``, or None when the harness is not in
+    a checkout (installed from a wheel), where the environment's abtem is used.
+    """
+    try:
+        root = prepare.repo_root()
+    except FileNotFoundError:
+        return None
+    if not (root / "abtem" / "__init__.py").exists():
+        return None
+    if "abtem" in sys.modules:
+        return None  # already imported; a later sys.path change cannot redirect it
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    return root
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    use_invoking_checkout()
     return args.func(args)
