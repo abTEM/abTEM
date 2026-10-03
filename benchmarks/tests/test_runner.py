@@ -182,3 +182,13 @@ def test_case_timeout_prefers_the_declared_tier_timeout():
         runner.case_timeout(CaseId("stem.multidetector", tier="standard")) == declared
     )
     assert runner.case_timeout(CaseId("nosuch.case", tier="quick")) == 120.0
+
+
+def test_overwrite_refuses_a_manifest_that_is_not_a_bundles(tmp_path, this_checkout):
+    out = tmp_path / "project"
+    (out / "src").mkdir(parents=True)
+    (out / "manifest.json").write_text('{"name": "my-extension"}')
+    (out / "src" / "data.txt").write_text("keep")
+    with pytest.raises(runner.BundleExistsError, match="not a bundle"):
+        runner.new_bundle(out, this_checkout, "accuracy", "quick", ["cpu"], "t", True)
+    assert (out / "src" / "data.txt").read_text() == "keep"

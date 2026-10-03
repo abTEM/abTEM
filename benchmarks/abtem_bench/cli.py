@@ -228,6 +228,12 @@ def cmd_compare(args: argparse.Namespace) -> int:
         store.dump_json(Path(args.json), cmp.to_json(report))
     print(md)
     failures = report.failures(gates)
+    if "memory" in gates and report.memory_unjudged:
+        print(
+            f"warning: --fail-on memory did not judge {report.memory_unjudged} "
+            "case id(s): the noise file has no memory floor for them",
+            file=sys.stderr,
+        )
     for f in failures:
         print(f"FAIL {f}", file=sys.stderr)
     return 1 if failures else 0

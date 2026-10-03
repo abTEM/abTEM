@@ -372,7 +372,9 @@ def axes_diff(ref_axes: list, cand_axes: list) -> tuple[list[str], list[str]]:
             if key not in a or key not in b:
                 side = "candidate" if key in b else "reference"
                 text = f"{where} only in the {side}"
-                (bad if key in AXIS_STRUCTURAL_KEYS else info).append(text)
+                present = a.get(key, b.get(key))
+                structural = key in AXIS_STRUCTURAL_KEYS and present is not None
+                (bad if structural else info).append(text)
             elif key in AXIS_LABEL_KEYS or key.startswith("_"):
                 if a[key] != b[key]:
                     info.append(
@@ -476,19 +478,27 @@ def widened(
 
 
 def check_noise(noise: Any, source: str) -> dict[str, dict[str, float]]:
-    """``noise`` if it is a dict of case id -> dict of numbers, else CompareError."""
+    """``noise`` if it maps case ids to dicts of finite non-negative numbers.
+
+    A floor widens tolerances to three times its value, so an infinite or NaN
+    floor would switch a check off; it is refused (CompareError) instead.
+    """
     ok = isinstance(noise, dict) and all(
         isinstance(cid, str)
         and isinstance(floor, dict)
         and all(
-            isinstance(v, (int, float)) and not isinstance(v, bool)
+            isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and math.isfinite(v)
+            and v >= 0
             for v in floor.values()
         )
         for cid, floor in noise.items()
     )
     if not ok:
         raise CompareError(
-            f"{source}: a noise file maps case ids to dicts of numbers "
+            f"{source}: a noise file maps case ids to dicts of finite, "
+            "non-negative numbers "
             '({"<case id>": {"memory": 0.01, ...}})'
         )
     return noise
@@ -775,9 +785,13 @@ def _pair_row(
         row.outputs[name] = s
         row.notes.extend(f"{name}: {m}" for m in s["mismatch"])
         if s["axes_info"]:
-            row.notes.append(f"{name}: axis metadata differs ({len(s['axes_info'])})")
+            row.notes.append(
+                f"{name}: axis metadata differs ({_fields(s['axes_info'])})"
+            )
         if s["metadata_info"]:
-            row.notes.append(f"{name}: metadata differs ({len(s['metadata_info'])})")
+            row.notes.append(
+                f"{name}: metadata differs ({_fields(s['metadata_info'])})"
+            )
         if order[s["verdict"]] > order[worst]:
             worst = s["verdict"]
     new = [n for n in cand_outputs if n not in ref_outputs]
@@ -845,13 +859,31 @@ def _single_row(
     return row
 
 
+def _fields(diffs: list[str], limit: int = 3) -> str:
+    """The first words of up to ``limit`` difference texts, for a report note."""
+    names = [
+        d.split(" ")[0] if not d.startswith("axis ") else " ".join(d.split(" ")[:3])
+        for d in diffs
+    ]
+    text = ", ".join(names[:limit])
+    return text + (f", +{len(names) - limit} more" if len(names) > limit else "")
+
+
 def _stale(accepted: list[Accepted], rows: list[Row]) -> list[Accepted]:
     """Applying entries that cover a case both bundles hold but match no drift.
 
     An entry for a case outside the compared bundles (a partial capture, another
-    tier) is not stale: nothing here could have matched it.
+    tier), or for a case whose run failed or was unsupported on either side, is
+    not stale: nothing here could have matched it.
     """
-    paired = [r.cand_id for r in rows if r.kind == SAME and r.ref_id and r.cand_id]
+    paired = [
+        r.cand_id
+        for r in rows
+        if r.kind == SAME
+        and r.cand_id
+        and r.ref_status == store.STATUS_OK
+        and r.cand_status == store.STATUS_OK
+    ]
     for a in accepted:
         a.covers = any(a.matches(c) for c in paired)
     return [a for a in accepted if a.covers and not a.matched]
