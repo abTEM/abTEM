@@ -244,3 +244,23 @@ def test_close_stats_vector():
     )  # the tiny element fails without the mask
     z = np.zeros(3)
     assert close_stats(z, z)["identical"] and close_stats(z, z)["max_abs_norm"] == 0.0
+
+
+def test_close_stats_leaves_out_shared_non_finite_values():
+    from abtem.core.testing import close_stats
+
+    r = np.array([1.0, np.nan, 2.0, np.inf])
+    shared = close_stats(np.array([1.0 + 1e-12, np.nan, 2.0, np.inf]), r)
+    assert shared["nonfinite_mismatch"] == 0 and not shared["identical"]
+    assert shared["n_checked"] == 2
+    assert shared["rel_above"] == pytest.approx(1e-12, rel=1e-3)
+    assert shared["max_abs_norm"] == pytest.approx(0.5e-12, rel=1e-3)
+    assert shared["intensity"] == pytest.approx(1e-12 / 3, rel=1e-3)
+    same = close_stats(r.copy(), r)
+    assert same["identical"] and same["rel_above"] == 0.0
+
+    for cand in ([1.0, 3.0, 2.0, np.inf], [1.0, np.nan, 2.0, -np.inf]):
+        one_sided = close_stats(np.array(cand), r)
+        assert one_sided["nonfinite_mismatch"] == 1
+        assert one_sided["max_abs_norm"] == np.inf
+        assert one_sided["rel_above"] == np.inf
