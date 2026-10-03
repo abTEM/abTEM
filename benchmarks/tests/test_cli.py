@@ -59,6 +59,9 @@ def test_compare_uses_the_harness_checkout_not_the_installed_abtem(tmp_path):
     assert Path(root) == CHECKOUT
     assert Path(abtem_file).resolve().is_relative_to(CHECKOUT)
 
+    # an explicit, empty accepted-changes file: the shipped one is not under test
+    accepted = tmp_path / "accepted.toml"
+    accepted.write_text("")
     run = subprocess.run(
         [
             sys.executable,
@@ -68,6 +71,8 @@ def test_compare_uses_the_harness_checkout_not_the_installed_abtem(tmp_path):
             "compare",
             str(tmp_path / "ref"),
             str(tmp_path / "cand"),
+            "--accepted",
+            str(accepted),
         ],
         cwd=tmp_path,
         env=env,
