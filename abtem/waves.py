@@ -70,7 +70,11 @@ from abtem.multislice import (
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
-from abtem.distributions import BaseDistribution, EnsembleFromDistributions, validate_distribution
+from abtem.distributions import (
+    BaseDistribution,
+    EnsembleFromDistributions,
+    validate_distribution,
+)
 from abtem.tilt import TiltType2D, validate_tilt
 from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
 from abtem.transform import WavesToWavesTransform
@@ -468,9 +472,8 @@ class Waves(BaseWaves, ArrayObject):
         if isinstance(energy, (list, tuple, np.ndarray)):
             energy = validate_distribution(energy)
         if isinstance(energy, BaseDistribution):
-            energy_axis = EnergyAxis(
-                values=tuple(float(v) for v in energy.values),
-                _ensemble_mean=energy.ensemble_mean,
+            energy_axis = EnergyAxis.from_distribution(
+                energy, values=tuple(float(v) for v in energy.values)
             )
             ensemble_axes_metadata = [energy_axis] + list(ensemble_axes_metadata)
             energy = None  # energy stored in ensemble axis, not accelerator
@@ -1830,10 +1833,11 @@ class EnergyEnsemble(EnsembleFromDistributions):
         from abtem.core.axes import EnergyAxis
         e = self.energy
         if isinstance(e, BaseDistribution):
-            return [EnergyAxis(
-                values=tuple(float(v) for v in e.values),
-                _ensemble_mean=e.ensemble_mean,
-            )]
+            return [
+                EnergyAxis.from_distribution(
+                    e, values=tuple(float(v) for v in e.values)
+                )
+            ]
         return []
 
 
