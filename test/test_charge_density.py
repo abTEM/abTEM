@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.charge_density import ChargeDensityPotential
 
 
@@ -103,3 +104,33 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
         carbon_atoms, charge_density_3d, sampling=0.1, repetitions=reps
     )
     assert pot.repetitions == reps
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "charge_densities", [1, 3], ids=["shared", "per_configuration"]
+)
+def test_build_from_frozen_phonons(
+    carbon_atoms, charge_density_3d, lazy, charge_densities
+):
+    """Each configuration equals the potential of its displaced atoms built alone,
+    with one charge density for every configuration or one for each."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    densities = [charge_density_3d * (1 + 0.1 * i) for i in range(charge_densities)]
+    charge_density = densities[0] if charge_densities == 1 else np.stack(densities)
+
+    potential = ChargeDensityPotential(frozen_phonons, charge_density, sampling=0.2)
+    built = potential.build(lazy=lazy)
+    if lazy:
+        built = built.compute()
+
+    assert built.ensemble_shape == (3,)
+    for i, atoms in enumerate(frozen_phonons):
+        density = densities[i if charge_densities > 1 else 0]
+        expected = ChargeDensityPotential(atoms, density, sampling=0.2)
+        expected = expected.build(lazy=False)
+        np.testing.assert_allclose(
+            built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
+        )

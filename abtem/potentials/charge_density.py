@@ -491,11 +491,19 @@ class ChargeDensityPotential(_PotentialBuilder):
                 charge_densities = charge_densities.to_delayed().ravel()
             elif hasattr(charge_densities, "compute"):
                 raise RuntimeError
+            elif charge_densities.shape[0] == 1 and n_ensemble > 1:
+                # One charge density shared by every configuration.
+                charge_densities = [charge_densities[0]] * n_ensemble
 
             frozen_phonon_blocks = (
                 self._get_ewald_potential()
                 .frozen_phonons._partition_args(chunks, lazy=lazy)[0]
             )
+            if lazy:
+                # Iterating a dask array yields dask array slices, whose shapes
+                # dask cannot infer once wrapped by dask.delayed below; the
+                # delayed blocks of to_delayed() compose correctly.
+                frozen_phonon_blocks = frozen_phonon_blocks.to_delayed().ravel()
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (cd, fp) in enumerate(
@@ -520,10 +528,11 @@ class ChargeDensityPotential(_PotentialBuilder):
         if hasattr(args, "item"):
             args = args.item()
 
+        default_atoms = kwargs.pop("_default_atoms")
         if args["atoms"] is not None:
-            atoms = frozen_phonons_partial(args["atoms"])
+            atoms = frozen_phonons_partial(args["atoms"]).item()
         else:
-            atoms = DummyFrozenPhonons(kwargs.pop("_default_atoms"))
+            atoms = DummyFrozenPhonons(default_atoms)
 
         charge_density = args["charge_density"]
         potential = ChargeDensityPotential(
