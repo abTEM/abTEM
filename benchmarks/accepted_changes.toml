@@ -24,24 +24,29 @@
 # A drift beyond any bound stays DRIFT, and so does a non-finite value present
 # in one output only.
 #
-# Bounds are about twice the largest drift measured on the CPU at the quick and
-# standard tiers (2026-10-03), rounded up to one significant digit; the A100
-# agrees to two digits where it was measured. Nothing is measured at the large
+# Each bound is twice the largest drift measured on the CPU at the quick and
+# standard tiers (2026-10-03), rounded up to one significant digit, so two to
+# four times the measurement; the A100 agrees to two digits where it was
+# measured. Nothing is measured at the large
 # tier: entries written for every tier ("@*") bound it with the quick and
 # standard figures, so a larger drift there shows as DRIFT.
 
 # The exact Fresnel propagator (#298) is the default since 2026-07-07; every
 # multislice case's default variant moves against v1.0.10 (order 1 there).
-# The relative error in the far tails of the patterns reaches O(1) to O(10), so
-# the HRTEM and CBED entries leave it unbounded. Their max_abs_norm grows about
-# a hundred-fold from the quick to the standard tier, so each of the two tiers
-# has its own entry and the large tier none until it is measured.
+# The relative error in the far tails of the patterns reaches O(1) to O(10).
+# The HRTEM and CBED max_abs_norm grows from the quick to the standard tier
+# (exit wave 2.8e-3 to 0.25, CBED 2.2e-3 to 7.7e-2), so each of the two tiers
+# has its own entry and the large tier none until it is measured. Where the
+# accepted drift is itself that large, no bound tells it from a corrupted
+# output of the same size; the [order1] variants, which share every code path
+# but the propagator and carry bounds near 1e-6, guard those cases.
 
 [[accepted]]
 case = "hrtem.exitwave@quick/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
 pr = 298
+max_rel = 4e-1
 max_intensity = 5e-4
 max_abs_norm = 6e-3
 
@@ -50,6 +55,7 @@ case = "hrtem.exitwave@standard/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); through 157 slices the order-1 phase error moved the exit wave by up to a quarter of its maximum."
 pr = 298
+max_rel = 2e1
 max_intensity = 7e-3
 max_abs_norm = 6e-1
 
@@ -58,6 +64,7 @@ case = "diffraction.cbed@quick/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
 pr = 298
+max_rel = 3
 max_intensity = 3e-4
 max_abs_norm = 5e-3
 
@@ -66,6 +73,7 @@ case = "diffraction.cbed@standard/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles, more so through 157 slices."
 pr = 298
+max_rel = 2e1
 max_intensity = 2e-3
 max_abs_norm = 2e-1
 
