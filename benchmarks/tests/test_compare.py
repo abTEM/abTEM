@@ -38,13 +38,45 @@ def test_accepted_entry_turns_drift_into_accepted(tmp_path, registry_with_demo):
     report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
     assert report.rows[0].verdict == cmp.ACCEPTED
     assert report.rows[0].accepted_by == ["intended"]
-    assert [a.case for a in report.stale_accepted] == ["demo.case[auto]*"]
+    # no [auto] id was compared, so its entry is not stale
+    assert report.stale_accepted == []
     assert report.failures({"drift": None}) == []
     md = cmp.to_markdown(report)
-    assert "Accepted changes" in md and "Stale accepted" in md
+    assert "Accepted changes" in md and "Stale accepted" not in md
     # the changelog states how large the accepted drift is
     assert report.accepted[0].worst["rel_above"] == pytest.approx(0.5)
     assert "rel 5.0e-01" in md
+
+
+def test_an_entry_for_a_compared_case_without_drift_is_stale(
+    tmp_path, registry_with_demo
+):
+    gpu = "demo.case@quick/gpu"
+    ref = bundle(
+        tmp_path,
+        "ref",
+        {
+            CID: (record(), {"out": (ARR, [], {})}),
+            gpu: (record(), {"out": (ARR, [], {})}),
+        },
+        label="v0",
+    )
+    cand = bundle(
+        tmp_path,
+        "cand",
+        {
+            CID: (record(), {"out": (ARR * 1.5, [], {})}),
+            gpu: (record(), {"out": (ARR, [], {})}),
+        },
+    )
+    toml = _toml(
+        tmp_path,
+        f'case = "demo.case@quick/cpu"\nsince = "v0"\nreason = "r"\n{LOOSE}',
+        f'case = "demo.case@quick/gpu"\nsince = "v0"\nreason = "gone"\n{LOOSE}',
+    )
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert [a.case for a in report.stale_accepted] == ["demo.case@quick/gpu"]
+    assert "Stale accepted" in cmp.to_markdown(report)
 
 
 def test_brackets_in_an_entry_glob_are_literal(registry_with_demo):
@@ -166,9 +198,6 @@ def test_invalid_entries_are_refused(tmp_path, registry_with_demo, entry, messag
         cmp.compare(ref, cand, registry_with_demo, accepted_path=_toml(tmp_path, entry))
 
 
-@pytest.mark.xfail(
-    strict=False, reason="shipped file gains max_abs_norm bounds separately"
-)
 def test_the_shipped_accepted_changes_file_is_valid():
     from abtem_bench import registry
 
