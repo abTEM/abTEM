@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import abtem
+from abtem.core.axes import FrozenPhononsAxis
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     DummyFrozenPhonons,
@@ -44,6 +45,16 @@ def _rectangular_rotated_about_y(num_atoms):
     return atoms
 
 
+def _with_cell_noise(atoms):
+    """The cell with 1e-8 A added to a component that is zero, below the 1e-6 A
+    that orthogonalize_cell zeroes before it rotates the atoms."""
+    atoms = atoms.copy()
+    cell = np.array(atoms.cell)
+    cell[1, 0] += 1e-8
+    atoms.set_cell(cell)
+    return atoms
+
+
 TRANSFORMS = {
     "plane_xz": (ase.build.bulk("Si", cubic=True), {"plane": "xz"}),
     # three atoms: with any other number standardize_cell raises an IndexError
@@ -55,6 +66,11 @@ TRANSFORMS = {
     "graphene_rotated_17_non_periodic": (
         _rotated(ase.build.graphene(vacuum=2), 17),
         {"periodic": False},
+    ),
+    # numerical noise makes the cell non-orthogonal, so it is orthogonalized
+    "noisy_rotated_cell_plane_xz": (
+        _with_cell_noise(_rectangular_rotated_about_y(3)),
+        {"plane": "xz"},
     ),
     # a non-periodic cut of a cell rotated to another plane
     "rotated_cell_plane_xz_non_periodic": (
@@ -363,25 +379,29 @@ def _many_atoms():
     )
 
 
-def test_directions_along_rotated_axes_drop_the_rotated_component():
-    """With directions referring to axes rotated about x, the displacement keeps
-    exactly its components along the rotated x and y and none along the rotated
-    z, whatever the input axes those are."""
+@pytest.mark.parametrize("sheared", [False, True], ids=["rotated", "rotated_sheared"])
+def test_directions_along_rotated_axes_drop_the_rotated_component(sheared):
+    """With directions referring to axes rotated about x, and also sheared, the
+    displacement keeps exactly its components along the new x and y and none
+    along the new z, whatever the input axes those are. Under a shear the
+    projection that does this is not symmetric."""
     atoms = _many_atoms()
     sigmas = (0.05, 0.10, 0.20)
     fp = abtem.FrozenPhonons(
         atoms, num_configs=1, sigmas=sigmas, directions="xy", seed=3
     )
     frame = _rotation("x", 30)
+    if sheared:
+        frame = frame @ np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.3], [0.0, 0.0, 1.0]])
 
     displaced = fp._randomize_transformed(atoms, directions_frame=frame)
 
     r = np.random.default_rng(fp.seed[0]).normal(size=(len(atoms), 3))
     drawn = np.array(sigmas, dtype=np.float32) * r
     displacement = (displaced.positions - atoms.positions) @ frame
-    np.testing.assert_allclose(displacement[:, 2], 0.0, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(displacement[:, 2], 0.0, rtol=0, atol=1e-14)
     np.testing.assert_allclose(
-        displacement[:, :2], (drawn @ frame)[:, :2], rtol=0, atol=1e-15
+        displacement[:, :2], (drawn @ frame)[:, :2], rtol=0, atol=1e-14
     )
 
 
@@ -458,12 +478,17 @@ def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(
         np.testing.assert_array_equal(single.build().compute().array, ensemble[i])
 
 
-def test_non_periodic_finite_configuration_holds_the_box():
+@pytest.mark.parametrize(
+    "atoms",
+    [ase.build.mx2("WSe2", vacuum=2), ase.build.bulk("Si", cubic=True)],
+    ids=["cut_hexagonal", "padded_orthogonal"],
+)
+def test_non_periodic_finite_configuration_holds_the_box(atoms):
     """A non-periodic potential with a finite projection also integrates the atoms
     within its cutoff outside the box, each displaced independently of the box's
     atoms. A configuration holds the box's atoms, the same ones as with an infinite
-    projection, without those."""
-    atoms = ase.build.mx2("WSe2", vacuum=2)
+    projection, without those. The hexagonal cell is cut out of a repeated one, the
+    orthogonal one padded with images."""
     fp = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.08, seed=7)
 
     def configurations(projection):
@@ -509,6 +534,40 @@ def test_potential_to_atoms_ensemble_keeps_an_energy_resolved_ensemble():
     )
 
 
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_potential_to_atoms_ensemble_keeps_ensemble_mean(ensemble_mean):
+    atoms = ase.build.bulk("Si", cubic=True)
+    fp = abtem.FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.05, seed=1, ensemble_mean=ensemble_mean
+    )
+    configurations = abtem.Potential(fp, sampling=0.2).to_atoms_ensemble()
+    assert configurations.ensemble_mean is ensemble_mean
+
+
+class _TwoAxes(abtem.AtomsEnsemble):
+    """A 2 x 2 ensemble of configurations that is not energy resolved."""
+
+    def __init__(self, atoms):
+        super().__init__([atoms] * 4)
+        self._shape = (2, 2)
+
+    @property
+    def ensemble_shape(self):
+        return self._shape
+
+    @property
+    def ensemble_axes_metadata(self):
+        return [FrozenPhononsAxis(), FrozenPhononsAxis()]
+
+
+def test_potential_to_atoms_ensemble_rejects_other_ensembles_of_two_axes():
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(_TwoAxes(atoms), sampling=0.2)
+    assert potential.ensemble_shape == (2, 2)
+    with pytest.raises(NotImplementedError, match="2 ensemble axes"):
+        potential.to_atoms_ensemble()
+
+
 def test_potential_without_frozen_phonons_has_one_configuration():
     atoms = ase.build.bulk("Si", cubic=True)
     potential = abtem.Potential(atoms, sampling=0.1, plane="xz")
@@ -528,12 +587,14 @@ def test_the_atoms_of_a_potential_do_not_expose_the_source_index(projection):
 
 
 class _OwnRandomize(abtem.FrozenPhonons):
-    """Written against a randomize that takes the atoms only."""
+    """Written against a randomize that takes the atoms only; it shifts every atom
+    by a constant, which the built-in randomize never does."""
+
+    shift = np.array([0.11, 0.07, 0.03])
 
     def randomize(self, atoms):
         atoms = atoms.copy()
-        rng = np.random.default_rng(self.seed[0])
-        atoms.positions += rng.normal(scale=0.05, size=atoms.positions.shape)
+        atoms.positions += self.shift
         return atoms
 
 
@@ -550,12 +611,8 @@ def test_a_subclass_with_its_own_randomize_keeps_working(plane):
     own = _OwnRandomize(atoms, num_configs=2, sigmas=0.05, seed=1)
     potential = abtem.Potential(own, sampling=0.2, plane=plane)
     transformed = potential.get_transformed_atoms()
-    for seed, configuration in zip(own.seed, potential.to_atoms_ensemble()):
-        rng = np.random.default_rng(seed)
-        expected = transformed.positions + rng.normal(
-            scale=0.05, size=transformed.positions.shape
-        )
-        expected = np.mod(expected, np.diag(transformed.cell))
+    expected = np.mod(transformed.positions + own.shift, np.diag(transformed.cell))
+    for configuration in potential.to_atoms_ensemble():
         np.testing.assert_allclose(configuration.positions, expected, atol=1e-10)
     assert potential.build(lazy=False).array.shape[0] == 2
 
