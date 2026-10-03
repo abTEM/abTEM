@@ -2,54 +2,100 @@
 #
 # A DRIFT verdict (candidate differs from the reference beyond the case's
 # tolerance) fails `abtem-bench compare --fail-on drift` unless an entry here
-# matches it. Add the entry in the same pull request as the change that causes
-# the drift; the report renders every matched entry as the changelog table, and
-# reports entries that no longer match anything as stale.
+# covers it. Add the entry in the same pull request as the change that causes
+# the drift; the report renders the entries that apply as the changelog table,
+# with the drift it measured, and reports entries that match nothing as stale.
 #
 # Fields
-#   case    glob over case ids, e.g. "hrtem.exitwave*" or "stem.*@quick/cpu";
-#           the name part must match at least one registered case
-#   since   the reference tag or ref the acceptance applies against
-#   reason  one line, present tense, states what changed and why it is right
+#   case    glob over case ids or names, e.g. "hrtem.exitwave@*" or
+#           "stem.*@quick/cpu"; brackets are literal; must match at least one
+#           registered case id
+#   since   the reference the entry applies against: a bundle's ref label, its
+#           git describe, or a sha prefix of 7+ hex digits. Against any other
+#           reference the entry is not applied.
+#   reason  one line, present tense: what changed and why the result is right
 #   pr      pull request number that introduced the change
+#   max_rel, max_intensity, max_abs_norm
+#           optional bounds per output on rel, |intensity| and max_abs_norm; a
+#           drift beyond a bound stays DRIFT
 #
-# [[accepted]]
-# case = "hrtem.exitwave*"
-# since = "v1.0.10"
-# reason = "Exact Fresnel propagator is the default (#298); order-1 phase error removed."
-# pr = 298
+# Bounds below are about twice the largest drift measured on the quick tier
+# (CPU and A100) and the standard tier (A100).
 
 # The exact Fresnel propagator (#298) is the default since 2026-07-07; every
-# multislice case's default variant moves against v1.0.10 (order 1 there). The
-# [order1] variants hold the propagator fixed and are deliberately NOT accepted
-# here: their residual drift against v1.0.10 is attributed separately.
+# multislice case's default variant moves against v1.0.10 (order 1 there).
+# The relative error in the far tails of the patterns reaches O(1), so these
+# entries bound the integrated intensity only.
 
 [[accepted]]
 case = "hrtem.exitwave@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
 pr = 298
+max_intensity = 6.2e-3
 
 [[accepted]]
 case = "diffraction.cbed@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
 pr = 298
+max_intensity = 1.3e-3
 
 [[accepted]]
 case = "stem.multidetector@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
 pr = 298
+max_intensity = 8e-3
 
 [[accepted]]
 case = "stem.multidetector[eager]@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
 pr = 298
+max_intensity = 8e-3
 
 [[accepted]]
 case = "stem.multidetector[auto]@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
 pr = 298
+max_intensity = 8e-3
+
+# The Lobato projected scattering factors use float64 pi and pi**2 since #269;
+# v1.0.10 rounded both to float32. That is the whole difference between the
+# two refs once the propagator is held at order 1: with v1.0.10's
+# projected_scattering_factor in dev, the potential is bit-identical to
+# v1.0.10's. The error compounds with the number of slices.
+
+[[accepted]]
+case = "potential.infinite@*"
+since = "v1.0.10"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, a 5e-8 relative error in the potential."
+pr = 269
+max_rel = 2e-7
+max_intensity = 1e-7
+
+[[accepted]]
+case = "hrtem.exitwave[order1]@*"
+since = "v1.0.10"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+pr = 269
+max_rel = 1e-5
+max_intensity = 4e-7
+
+[[accepted]]
+case = "diffraction.cbed[order1]@*"
+since = "v1.0.10"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+pr = 269
+max_rel = 5e-5
+max_intensity = 1e-7
+
+[[accepted]]
+case = "stem.multidetector[order1]@*"
+since = "v1.0.10"
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+pr = 269
+max_rel = 1e-5
+max_intensity = 1e-6
