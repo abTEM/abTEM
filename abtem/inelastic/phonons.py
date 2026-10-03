@@ -198,6 +198,14 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """Number of atomic configurations."""
 
     def __iter__(self):
+        """
+        Iterate over the configurations of :attr:`atoms`.
+
+        Each configuration is :attr:`atoms` as given, displaced by
+        :meth:`randomize`. A potential that rotates, orthogonalizes or cuts the
+        cell simulates configurations of the transformed atoms instead, which
+        :meth:`~abtem.potentials.iam.Potential.to_atoms_ensemble` returns.
+        """
         for _, _, fp in self.generate_blocks(1):
             fp = fp.item()
             yield fp.randomize(fp.atoms)
