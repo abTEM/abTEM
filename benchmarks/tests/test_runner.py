@@ -74,6 +74,50 @@ def test_new_bundle_refuses_a_non_empty_directory_unless_overwriting(
     assert not (out / "cases" / "stale.json").exists()
 
 
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_directory_that_is_not_a_bundle_is_never_deleted(
+    tmp_path, this_checkout, overwrite
+):
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / "keep.txt").write_text("mine")
+    with pytest.raises(runner.BundleExistsError, match="not a bundle"):
+        runner.new_bundle(
+            out, this_checkout, "accuracy", "quick", ["cpu"], "t", overwrite
+        )
+    assert (out / "keep.txt").read_text() == "mine"
+    assert not (out / "manifest.json").exists()
+
+
+def test_overwrite_replaces_a_bundle_and_creates_a_missing_directory(
+    tmp_path, this_checkout
+):
+    out = tmp_path / "b"
+    runner.new_bundle(out, this_checkout, "accuracy", "quick", ["cpu"], "t")
+    (out / "stale.txt").write_text("old")
+    runner.new_bundle(out, this_checkout, "accuracy", "quick", ["cpu"], "t", True)
+    assert (out / "manifest.json").exists() and not (out / "stale.txt").exists()
+    fresh = tmp_path / "new" / "b"
+    runner.new_bundle(fresh, this_checkout, "accuracy", "quick", ["cpu"], "t", True)
+    assert (fresh / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("target", ["cwd", "parent"])
+def test_overwrite_never_deletes_the_current_directory_or_a_parent(
+    tmp_path, monkeypatch, this_checkout, target
+):
+    out = tmp_path / "outer" / "b"
+    runner.new_bundle(out, this_checkout, "accuracy", "quick", ["cpu"], "t")
+    inner = out / "cases"
+    inner.mkdir()
+    monkeypatch.chdir(inner if target == "parent" else out)
+    with pytest.raises(runner.BundleExistsError, match="current directory"):
+        runner.new_bundle(
+            out, this_checkout, "accuracy", "quick", ["cpu"], "t", overwrite=True
+        )
+    assert (out / "manifest.json").exists() and inner.exists()
+
+
 def test_rounds_recompute_statistics_over_all_rounds():
     prev = {
         "timings": {"warm": [1.0, 2.0, 3.0], "warm_cpu": [1, 1, 1], "cold": 5.0},
