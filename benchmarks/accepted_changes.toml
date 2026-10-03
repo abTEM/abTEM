@@ -7,95 +7,136 @@
 # with the drift it measured, and reports entries that match nothing as stale.
 #
 # Fields
-#   case    glob over case ids or names, e.g. "hrtem.exitwave@*" or
-#           "stem.*@quick/cpu"; brackets are literal; must match at least one
-#           registered case id
-#   since   the reference the entry applies against: a bundle's ref label, its
-#           git describe, or a sha prefix of 7+ hex digits. Against any other
-#           reference the entry is not applied.
-#   reason  one line, present tense: what changed and why the result is right
-#   pr      pull request number that introduced the change
-#   max_rel, max_intensity, max_abs_norm
-#           optional bounds per output on rel, |intensity| and max_abs_norm; a
-#           drift beyond a bound stays DRIFT
+#   case          glob over case ids or names, e.g. "hrtem.exitwave@*" or
+#                 "stem.*@quick/cpu"; brackets are literal; must match at least
+#                 one registered case id
+#   since         the reference the entry applies against: a bundle's ref
+#                 label, its git describe, or a sha prefix of 7+ hex digits.
+#                 Against any other reference the entry is not applied.
+#   reason        one line, present tense: what changed and why the result is
+#                 right
+#   pr            pull request number that introduced the change
+#   max_abs_norm  required bound per output on max|c - r| / max|r|; the
+#                 integrated intensity alone does not notice a shifted, flipped
+#                 or phase-scrambled output
+#   max_rel, max_intensity
+#                 optional bounds per output on rel and |intensity|
+# A drift beyond any bound stays DRIFT, and so does a non-finite value present
+# in one output only.
 #
-# Bounds below are about twice the largest drift measured on the quick tier
-# (CPU and A100) and the standard tier (A100).
+# Bounds are about twice the largest drift measured on the CPU at the quick and
+# standard tiers (2026-10-03), rounded up to one significant digit; the A100
+# agrees to two digits where it was measured. Nothing is measured at the large
+# tier: entries written for every tier ("@*") bound it with the quick and
+# standard figures, so a larger drift there shows as DRIFT.
 
 # The exact Fresnel propagator (#298) is the default since 2026-07-07; every
 # multislice case's default variant moves against v1.0.10 (order 1 there).
-# The relative error in the far tails of the patterns reaches O(1), so these
-# entries bound the integrated intensity only.
+# The relative error in the far tails of the patterns reaches O(1) to O(10), so
+# the HRTEM and CBED entries leave it unbounded. Their max_abs_norm grows about
+# a hundred-fold from the quick to the standard tier, so each of the two tiers
+# has its own entry and the large tier none until it is measured.
 
 [[accepted]]
-case = "hrtem.exitwave@*"
+case = "hrtem.exitwave@quick/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the order-1 phase error is gone from the exit wave and its diffraction pattern."
 pr = 298
-max_intensity = 6.2e-3
+max_intensity = 5e-4
+max_abs_norm = 6e-3
 
 [[accepted]]
-case = "diffraction.cbed@*"
+case = "hrtem.exitwave@standard/*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); through 157 slices the order-1 phase error moved the exit wave by up to a quarter of its maximum."
+pr = 298
+max_intensity = 7e-3
+max_abs_norm = 6e-1
+
+[[accepted]]
+case = "diffraction.cbed@quick/*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles."
 pr = 298
-max_intensity = 1.3e-3
+max_intensity = 3e-4
+max_abs_norm = 5e-3
+
+[[accepted]]
+case = "diffraction.cbed@standard/*"
+since = "v1.0.10"
+reason = "Exact Fresnel propagator is the default (#298); the CBED pattern changes most at high scattering angles, more so through 157 slices."
+pr = 298
+max_intensity = 2e-3
+max_abs_norm = 2e-1
 
 [[accepted]]
 case = "stem.multidetector@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); BF, ADF and segmented signals change accordingly."
 pr = 298
+max_rel = 2e-2
 max_intensity = 8e-3
+max_abs_norm = 1e-2
 
 [[accepted]]
 case = "stem.multidetector[eager]@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); eager path, same change as the lazy default."
 pr = 298
+max_rel = 2e-2
 max_intensity = 8e-3
+max_abs_norm = 1e-2
 
 [[accepted]]
 case = "stem.multidetector[auto]@*"
 since = "v1.0.10"
 reason = "Exact Fresnel propagator is the default (#298); auto-sized batches, same change as the lazy default."
 pr = 298
+max_rel = 2e-2
 max_intensity = 8e-3
+max_abs_norm = 1e-2
 
-# The Lobato projected scattering factors use float64 pi and pi**2 since #269;
-# v1.0.10 rounded both to float32. That is the whole difference between the
-# two refs once the propagator is held at order 1: with v1.0.10's
-# projected_scattering_factor in dev, the potential is bit-identical to
-# v1.0.10's. The error compounds with the number of slices.
+# With the propagator held at order 1, the remaining difference is two float32
+# roundings in v1.0.10 that #269 makes float64: pi and pi**2 in Lobato's
+# projected_scattering_factor, and the accumulator of
+# DiffractionPatterns._radial_binning, which the segmented detector uses. With
+# both restored to float32 in dev, potential.infinite, hrtem.exitwave[order1]
+# and stem.multidetector[order1] are bit-identical to v1.0.10 at the quick tier,
+# and diffraction.cbed[order1] differs by 7e-14 (in the SrTiO3 potential; the
+# mechanism of that last residual is not isolated).
 
 [[accepted]]
 case = "potential.infinite@*"
 since = "v1.0.10"
-reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, a 5e-8 relative error in the potential."
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); v1.0.10 rounded them to float32, which moved the potential by up to 7e-8 relative."
 pr = 269
 max_rel = 2e-7
-max_intensity = 1e-7
+max_intensity = 6e-8
+max_abs_norm = 2e-7
 
 [[accepted]]
 case = "hrtem.exitwave[order1]@*"
 since = "v1.0.10"
-reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
 max_rel = 1e-5
 max_intensity = 4e-7
+max_abs_norm = 2e-6
 
 [[accepted]]
 case = "diffraction.cbed[order1]@*"
 since = "v1.0.10"
-reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's change of up to 7e-8 accumulates through the slices."
 pr = 269
-max_rel = 5e-5
-max_intensity = 1e-7
+max_rel = 6e-5
+max_intensity = 8e-8
+max_abs_norm = 6e-7
 
 [[accepted]]
 case = "stem.multidetector[order1]@*"
 since = "v1.0.10"
-reason = "Lobato scattering factors use float64 pi and pi**2 (#269); the potential's 5e-8 change accumulates through the slices."
+reason = "Lobato scattering factors use float64 pi and pi**2, and segmented-detector bins accumulate in the working precision instead of float32 (#269); the segmented signal moves by up to 4e-6 relative."
 pr = 269
-max_rel = 1e-5
-max_intensity = 1e-6
+max_rel = 8e-6
+max_intensity = 2e-6
+max_abs_norm = 7e-6
