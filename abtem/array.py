@@ -168,6 +168,119 @@ def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
     return array.transpose(*_inverse_permutation(order), *trailing)
 
 
+def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
+    """The index of the ensemble axis holding more than one energy, if any."""
+    for i, axis in enumerate(array_object.ensemble_axes_metadata):
+        if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+            return i
+    return None
+
+
+def _copy_with_scalar_energy(array_object: "ArrayObject", energy: Optional[float]):
+    """A copy of `array_object` sharing its array, with `energy` as its scalar
+    energy: `accelerator.energy`, and `metadata["energy"]` where the key is
+    present."""
+    kwargs = array_object._copy_kwargs(exclude=("array",))
+    kwargs["array"] = array_object._array
+    if "energy" in kwargs:
+        kwargs["energy"] = energy
+    if "energy" in (kwargs.get("metadata") or {}):
+        kwargs["metadata"]["energy"] = energy
+    return array_object.__class__(**kwargs)
+
+
+def _with_the_energy_of_a_single_valued_energy_axis(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it carrying the energy of its single-valued
+    `EnergyAxis` in place of a different scalar energy.
+
+    A scalar energy (`accelerator.energy` or `metadata["energy"]`) takes
+    precedence over the axis in `resolve_energy`, so waves that carry both, with
+    an axis value that differs from the scalar, are evaluated at the wrong
+    wavelength. This is the state of a lazy block holding one energy of such
+    waves. The copy shares the array; the object itself is returned when it has
+    no such axis or no scalar energy that differs from the axis value.
+    """
+    axis = next(
+        (
+            axis
+            for axis in array_object.ensemble_axes_metadata
+            if isinstance(axis, EnergyAxis) and len(axis.values) == 1
+        ),
+        None,
+    )
+    if axis is None:
+        return array_object
+
+    energy = float(axis.values[0])
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None or float(scalar) == energy for scalar in scalars):
+        return array_object
+
+    return _copy_with_scalar_energy(array_object, energy)
+
+
+def _without_scalar_energy(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it with no scalar energy, so that only its
+    `EnergyAxis` decides the energies (see `resolve_energy`). The copy shares the
+    array."""
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None for scalar in scalars):
+        return array_object
+    return _copy_with_scalar_energy(array_object, None)
+
+
+def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
+    """`transform._calculate_new_array(array_object)`, evaluated for each energy of
+    a multi-energy ensemble on its own when the transform depends on the
+    wavelength (`_splits_energy_ensembles`).
+
+    A detector or a multislice run uses one angular sampling and one wavelength
+    for the whole array it is given, which is right for one energy only. Each
+    energy member is therefore transformed separately and the results are
+    restacked where indexing removed the energy axis: after the transform's own
+    ensemble axes, among the array object's own axes in their natural order,
+    which is the order every `_calculate_new_array` returns. This runs on the
+    whole array of an eager call and on every block of a lazy one, whatever
+    energies the block holds. An array object with a single-valued energy axis,
+    such as a block holding one energy, is transformed at that energy even if it
+    carries a different scalar energy; one without such a scalar energy is
+    transformed as it is, not as a copy.
+    """
+    if not getattr(transform, "_splits_energy_ensembles", False):
+        return transform._calculate_new_array(array_object)
+
+    index = _multi_energy_axis(array_object)
+    if index is None:
+        return transform._calculate_new_array(
+            _with_the_energy_of_a_single_valued_energy_axis(array_object)
+        )
+
+    energies = array_object.ensemble_axes_metadata[index].values
+    members = []
+    for j, energy in enumerate(energies):
+        items = array_object.get_items((slice(None),) * index + (j,))
+        if items.get("energy") is not None:
+            # A scalar energy on the ensemble is not this member's.
+            items["energy"] = energy
+        members.append(transform._calculate_new_array(array_object.__class__(**items)))
+
+    axis = len(transform.ensemble_shape) + index
+    if isinstance(members[0], tuple):
+        return tuple(
+            get_array_module(outputs[0]).stack(outputs, axis=axis)
+            for outputs in zip(*members)
+        )
+    return get_array_module(members[0]).stack(members, axis=axis)
+
+
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
     """Physically permute an array's first `len(order)` (ensemble) axes into
     the order `_out_ensemble_source` declares (e.g. AnnularDetector/
@@ -1917,7 +2030,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
 
-        out_arrays = transform._calculate_new_array(array_object)
+        out_arrays = _calculate_new_array_per_energy(transform, array_object)
 
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
@@ -1946,6 +2059,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObject
             The transformed array object.
         """
+
+        # A transform whose output size depends on the ensemble (a pixelated
+        # detector's crop of a multi-energy ensemble) is fixed against the whole
+        # ensemble here, before an eager call or a lazy block sees one energy.
+        transform = transform._match_ensemble(self)
 
         new_arrays: (
             da.core.Array
@@ -2058,7 +2176,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 out_ndim=out_ndim,
             )
         else:
-            new_arrays = transform._calculate_new_array(self)
+            new_arrays = _calculate_new_array_per_energy(transform, self)
             if not isinstance(new_arrays, tuple):
                 new_arrays = (new_arrays,)
             ensemble_sources = transform._out_ensemble_source(self)

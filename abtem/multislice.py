@@ -1318,6 +1318,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         Additional keyword arguments passed to the multislice function.
     """
 
+    _splits_energy_ensembles = True
+
     def __init__(
         self,
         potential: BasePotential,
@@ -1559,68 +1561,25 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             **func_kwargs,
         )
 
+    def _match_ensemble(self, waves: Waves) -> MultisliceTransform:
+        """This transform with its detectors matched against the whole ensemble.
+
+        The detectors are matched before a multi-energy ensemble is split into
+        its energies (see `abtem.array._calculate_new_array_per_energy`), so a
+        radial detector with an auto-sized outer angle raises, eagerly and
+        lazily alike, and a pixelated detector crops every energy to the
+        pixel count of the ensemble.
+        """
+        matched = [detector._match_ensemble(waves) for detector in self._detectors]
+        if all(new is old for new, old in zip(matched, self._detectors)):
+            return self
+
+        transform = copy.copy(self)
+        transform._detectors = matched
+        transform._user_detectors = matched[: len(self._user_detectors)]
+        return transform
+
     def _calculate_new_array(self, waves: Waves):
-        from abtem.core.axes import EnergyAxis
-
-        # Eager energy-ensemble path: iterate per-energy so that each call
-        # receives a single-energy Waves and _valid_energy resolves correctly.
-        energy_axis_idx = next(
-            (
-                i
-                for i, ax in enumerate(waves.ensemble_axes_metadata)
-                if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-            ),
-            None,
-        )
-        if energy_axis_idx is not None:
-            import numpy as np
-
-            # Match every detector against the *full*, un-indexed ensemble
-            # waves before splitting into per-energy members below -- the
-            # same waves the lazy path's `_out_base_shape` matches against to
-            # size the output array up front (abtem/detectors.py). Without
-            # this, an auto-sizing radial detector (e.g.
-            # FlexibleAnnularDetector with no explicit outer) would instead
-            # see each per-energy `member` one at a time -- via
-            # `_match_waves`'s own per-call energy-ensemble guard -- either
-            # raising there in an order that varies with which member the
-            # detector is reused across, or, once unguarded, sizing its bins
-            # from each member's own cutoff angle and producing per-member
-            # arrays of different shapes for `np.stack` below to fail on.
-            # Matching here instead reaches the same
-            # cannot-auto-size-for-an-ensemble guard while still holding the
-            # full ensemble, so eager raises the same clear error as lazy,
-            # regardless of energy order.
-            for detector in self.detectors:
-                if hasattr(detector, "_match_waves"):
-                    detector._match_waves(waves)
-
-            energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
-            per_energy = []
-            for j in range(len(energy_axis.values)):
-                idx = (slice(None),) * energy_axis_idx + (j,)
-                member = waves.__class__(**waves.get_items(idx))
-                per_energy.append(self._calculate_new_array(member))
-            # Reinsert the energy axis exactly where indexing removed it. Each
-            # member's result starts with this transform's own axes (the
-            # potential's ensemble axes and the exit planes), followed by
-            # waves' own axes with energy_axis_idx dropped, in their original
-            # relative order, so stacking at energy_axis_idx shifted past the
-            # leading axes reproduces waves' own (natural, undeclared) ensemble
-            # axis order, whatever detector or scan type is in play. A detector
-            # like AnnularDetector declares a *different* axis order in its own
-            # metadata (moving scan axes to the end -- see _out_ensemble_source
-            # in abtem/detectors.py); reordering to match that declared order
-            # is handled once, uniformly for both eager and lazy results, in
-            # ArrayObject.apply_transform (abtem/array.py) rather than here.
-            axis = len(self.ensemble_shape) + energy_axis_idx
-            if isinstance(per_energy[0], tuple):
-                return tuple(
-                    np.stack([r[k] for r in per_energy], axis=axis)
-                    for k in range(len(per_energy[0]))
-                )
-            return np.stack(per_energy, axis=axis)
-
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,
