@@ -57,16 +57,15 @@ A `DRIFT` fails `--fail-on drift` unless an entry in `accepted_changes.toml` cov
 
 ```toml
 [[accepted]]
-case = "hrtem.exitwave@*"   # glob over case ids or names; must match a registered id
-since = "v1.0.10"           # applies only when the reference bundle is this ref
+case = "hrtem.exitwave@quick/*"  # glob over case ids or names; must match a registered id
+since = "v1.0.10"                # applies only when the reference bundle is this ref
 reason = "One line: what changed and why the new result is right."
 pr = 298
-max_abs_norm = 0.3          # required: max|diff| / max|reference| per output
-max_rel = 0.2               # optional bounds per output: rel, |intensity|
-max_intensity = 3e-4
+max_abs_norm = 6e-3              # required: max|diff| / max|reference| per output
+max_intensity = 5e-4             # optional bounds per output: |intensity|, rel (max_rel)
 ```
 
-`since` matches the reference bundle's ref label, its `git describe`, or a prefix of at least seven hex digits of its sha, so an entry never hides drift against a later reference. Every entry must set `max_abs_norm`, the largest elementwise difference relative to the largest reference element: the integrated intensity is unchanged by a shift, a flip or a phase scramble of the output, so a bound on it alone would accept a corrupted result. `max_rel` and `max_intensity` are optional. A drift beyond any bound of any matching entry stays `DRIFT`, and an output with non-finite values that differ between the two sides is never accepted, whatever the bounds. Unknown keys are refused, and `accepted` must be an array of tables (`[[accepted]]`). An explicit `--accepted <path>` must exist; when the default file is absent, nothing is accepted and the report says so (`accepted_path` and `accepted_exists` in the JSON report). The report renders the entries that apply as the changelog with the drift measured for each, and lists entries that match nothing as stale.
+`since` matches the reference bundle's ref label, its `git describe`, or a prefix of at least seven hex digits of its sha, so an entry never hides drift against a later reference. Every entry must set `max_abs_norm`, the largest elementwise difference relative to the largest reference element: the integrated intensity is unchanged by a shift, a flip or a phase scramble of the output, so a bound on it alone would accept a corrupted result. `max_rel` and `max_intensity` are optional. A drift beyond any bound of any matching entry stays `DRIFT`, and an output with non-finite values that differ between the two sides is never accepted, whatever the bounds. Unknown keys are refused, and `accepted` must be an array of tables (`[[accepted]]`). An explicit `--accepted <path>` must exist; when the default file is absent, nothing is accepted and the report says so (`accepted_path` and `accepted_exists` in the JSON report). The report renders the entries that apply as the changelog with the drift measured for each, and lists as stale the entries that cover a case both bundles hold but match no drift.
 
 ## Adding a case
 
