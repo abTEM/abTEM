@@ -12,7 +12,7 @@ import string
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -956,13 +956,19 @@ def to_markdown(report: Report) -> str:
             + "."
         )
         lines.append("")
-    counts: dict[str, int] = {}
-    for row in report.rows:
-        counts[row.verdict] = counts.get(row.verdict, 0) + 1
-    lines.append(
-        "Summary: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + "."
-    )
+    summary = "Summary: " + _counts(r for r in report.rows if r.kind == SAME) + "."
+    attribution = [r for r in report.rows if r.kind == ATTRIBUTION]
+    if attribution:
+        summary += f" Attribution rows: {_counts(attribution)}."
+    lines.append(summary)
     return "\n".join(lines) + "\n"
+
+
+def _counts(rows: Iterable[Row]) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row.verdict] = counts.get(row.verdict, 0) + 1
+    return ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
 
 
 def _entry_json(a: Accepted) -> dict[str, Any]:

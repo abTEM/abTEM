@@ -179,6 +179,9 @@ def test_compare_as_pairs_variant_with_reference_default(tmp_path, registry_with
         (CID, alt, cmp.IDENTICAL, cmp.ATTRIBUTION),
         (CID, None, cmp.ONLY_A, cmp.SAME),
     ]
+    assert cmp.to_markdown(cmp.compare(ref, cand, registry_with_demo)).endswith(
+        "Summary: ONLY-A 1. Attribution rows: IDENTICAL 1.\n"
+    )
     # an attribution row never fails the comparison, even when it drifts
     report = cmp.compare(
         ref, one(tmp_path, "cand2", arr * 2, cid=alt), registry_with_demo
