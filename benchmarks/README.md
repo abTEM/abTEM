@@ -6,8 +6,8 @@ Runs a fixed matrix of user-facing abTEM workloads against a checkout and record
 
 - The harness (`abtem_bench/`) and the cases (`abtem_bench/cases/`) always come from the checkout you invoke; only the `abtem` package is swapped per ref, via a git worktree under `.worktrees/bench/<sha>` placed on `PYTHONPATH` behind the harness directory. Both refs run byte-identical case code, and every bundle records a hash of the case sources.
 - Each case id runs in a fresh subprocess (`python -P -m abtem_bench.worker`). The worker prints and records which abtem it imported and aborts if it is not the requested worktree.
-- Peak host memory is `ru_maxrss` of that subprocess from `os.wait4`. VRAM is sampled from the CuPy pool and the driver. No meter runs code on the computation.
-- A case whose API is missing on a ref records `UNSUPPORTED` instead of failing the run.
+- Peak host memory is the worker's own `VmHWM` from `/proc/self/status`, read after the case finishes. `ru_maxrss` from `os.wait4` is recorded too (`peak_rss_wait4_bytes`) but not compared: Linux carries the runner's high-water mark into the child, so it never reads below the runner's own peak. On GPU cases a background thread samples the CuPy pool and the driver's device usage; CPU cases never initialise the GPU. No meter runs code on the computation.
+- A case may declare `requires=`, a check on the imported abtem; a ref that fails it records `UNSUPPORTED` instead of failing the run. No shipped case needs one: v1.0.10 runs all of them.
 
 ## Running
 
@@ -31,9 +31,11 @@ python -P -m abtem_bench capture --ref origin/dev ...              # container: 
 
 `prepare` needs only the standard library. Without git and without a prepared index, the runner stops with a message naming the ref to prepare.
 
-`uv pip install -e benchmarks` (in a throwaway environment) installs the `abtem-bench` console script instead. The `-P` flag matters when running from a checkout: without it the current directory shadows `PYTHONPATH`.
+Workers run with the same Python as the CLI, so that environment needs abtem's dependencies (abtem itself comes from each ref's worktree). `uv pip install -e benchmarks` into that environment installs the `abtem-bench` console script instead of the `PYTHONPATH` line. The `-P` flag matters when running from a checkout: without it the current directory shadows `PYTHONPATH`.
 
-Case ids are `name[variant]@tier/device`; `--only` takes globs on ids or names. Tiers are `quick` (seconds per case, the CI tier), `standard` (minutes) and `large` (GPU stress sizes).
+Case ids are `name[variant]@tier/device`; `--only` takes globs on ids or names, with brackets matched literally. Tiers are `quick` (seconds per case, the CI tier), `standard` (minutes) and `large` (GPU stress sizes). A case times out after its tier's declared `timeout`, else 120 s on `quick` and 900 s on `standard`. A case is skipped (`SKIPPED-MEMORY`) when less than 8 GB of memory is available when it starts.
+
+`capture` and `self-check` refuse an output directory that already holds files unless `--overwrite` is given, which deletes it first. `--repeats` sets the number of warm repeats per worker; `--rounds N` runs the whole case list N times, the refs interleaved per case, and merges the timings of all rounds into one record. The ref worktrees under `.worktrees/bench/` stay for the next run; remove them with `git worktree remove`.
 
 ## Presets
 
@@ -41,9 +43,29 @@ Case ids are `name[variant]@tier/device`; `--only` takes globs on ids or names. 
 
 ## Reading a report
 
-One row per paired case id. `verdict` is the worst over the case's outputs: `IDENTICAL` (bit-for-bit), `OK` (within the case tolerance), `DRIFT` (beyond tolerance), `ACCEPTED` (drift listed in `accepted_changes.toml`), `SHAPE` (shape, dtype or axes changed), or the run status (`UNSUPPORTED`, `ERROR`, `OOM`, `TIMEOUT`). `rel` is the largest relative error over elements above the case's `above_rel` fraction of the reference maximum; `intensity` the relative change of the integrated intensity; `time`, `cold` and `rss` are candidate over reference ratios (warm median, first call, peak resident memory). Speed and memory flags fire beyond `max(threshold, 3 x noise floor)` from a self-check; `auto` variants are never flagged.
+One row per paired case id. `verdict` is the worst over the case's outputs: `IDENTICAL` (bit-for-bit), `OK` (within the case tolerance), `DRIFT` (beyond tolerance), `ACCEPTED` (drift covered by `accepted_changes.toml`), `SHAPE` (shape, dtype or axes changed), or a run status (`UNSUPPORTED`, `ERROR`, `OOM`, `TIMEOUT`, `SKIPPED-MEMORY`; the note says which side failed). `ONLY-A` and `ONLY-B` are ids present in only the reference or only the candidate. Attribution rows pair a candidate variant declaring `compare_as` (`x[order1]`) with the reference default (`x`); they are informational and never fail a gate.
 
-A `DRIFT` fails `--fail-on drift` unless an entry in `accepted_changes.toml` matches the case; add the entry in the same pull request as the change, with the PR number and a one-line reason. The report renders matched entries as the changelog and lists entries that no longer match anything.
+`rel` is the largest relative error over elements above the case's `above_rel` fraction of the reference maximum, `intensity` the largest relative change of the integrated intensity; both name the output when a case has several. Any NaN in these counts as beyond tolerance. Axes compare numerically to a relative 1e-9; label and internal-field differences are listed in the note but do not change the verdict. `time`, `cold`, `rss` and `vram` are candidate over reference ratios (warm median, first call, peak resident memory, peak CuPy pool usage).
+
+Speed is flagged beyond `max(--speed-threshold, 3 x speed floor)`, or marked `short` when the two medians differ by less than `--min-delta` seconds (default 0.05). Memory and VRAM are flagged beyond `max(--memory-threshold, 3 x floor)`, and only against a noise floor (`--noise`, a self-check directory or its `noise.json`): one process's peak memory is not reproducible enough to judge without one. The floor also widens each accuracy tolerance to three times the spread the self-check measured, which matters on GPU, where float64 is not bit-reproducible. `auto` variants are never flagged. `compare` refuses bundles with different case code (`--allow-case-mismatch`), different presets (`--allow-preset-mismatch`) or no common case id.
+
+`--fail-on` takes a comma-separated list of gates: `drift` and `shape` (rows of that verdict), `error` (a failed run on the candidate side), `missing` (`ONLY-A` rows), `speed[:N%]` and `memory[:N%]` (an increase beyond the flag threshold, or beyond `N%`; `memory` needs `--noise`). Exit code 0 means every gate passed, 1 that a gate failed, 2 an input error (unknown gate, missing bundle, refused comparison, invalid `accepted_changes.toml`).
+
+## Accepted changes
+
+A `DRIFT` fails `--fail-on drift` unless an entry in `accepted_changes.toml` covers it. Add the entry in the same pull request as the change:
+
+```toml
+[[accepted]]
+case = "hrtem.exitwave@*"   # glob over case ids or names; must match a registered id
+since = "v1.0.10"           # applies only when the reference bundle is this ref
+reason = "One line: what changed and why the new result is right."
+pr = 298
+max_rel = 0.2               # optional bounds per output: rel, |intensity|, max_abs_norm
+max_intensity = 3e-4
+```
+
+`since` matches the reference bundle's ref label, its `git describe`, or a prefix of at least seven hex digits of its sha, so an entry never hides drift against a later reference. The optional bounds cap how far the accepted drift may go; a drift beyond any bound of any matching entry stays `DRIFT`. Unknown keys are refused. The report renders the entries that apply as the changelog with the drift measured for each, and lists entries that match nothing as stale.
 
 ## Adding a case
 
@@ -54,5 +76,7 @@ Decorate a function `(params, device) -> run` with `@case` in a module under `ab
 ```
 uvx ruff check benchmarks/abtem_bench benchmarks/tests abtem/core/testing.py
 uvx mypy --follow-imports=silent --ignore-missing-imports benchmarks/abtem_bench
-pytest benchmarks/tests
+PYTHONPATH=benchmarks python -P -m pytest benchmarks/tests
 ```
+
+CI runs the harness tests on Linux.
