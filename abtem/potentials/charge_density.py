@@ -399,6 +399,22 @@ class ChargeDensityPotential(_PotentialBuilder):
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
 
+        # A 3D charge density, or a stack of them along a first axis: one for
+        # every configuration, or one shared by all of them.
+        if self._charge_density.ndim == 4:
+            num_configurations = (
+                self._frozen_phonons.ensemble_shape[0]
+                if len(self._frozen_phonons.ensemble_shape)
+                else 1
+            )
+            num_densities = self._charge_density.shape[0]
+            if num_densities not in (1, num_configurations):
+                raise ValueError(
+                    f"{num_densities} charge densities were given for "
+                    f"{num_configurations} atomic configurations; give one, or one "
+                    "for each configuration."
+                )
+
         cell = self._frozen_phonons.atoms.cell * repetitions
 
         super().__init__(

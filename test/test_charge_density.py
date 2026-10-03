@@ -159,3 +159,23 @@ def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     np.testing.assert_allclose(
         actual.array[0], expected.array, rtol=0, atol=1e-5 * expected.array.max()
     )
+
+
+@pytest.mark.parametrize("num_densities", [2, 4])
+def test_a_charge_density_count_other_than_one_or_the_configurations_raises(
+    carbon_atoms, charge_density_3d, num_densities
+):
+    """Three configurations take one charge density or three: two leave one
+    configuration without a density, and four leave one density unused."""
+    frozen_phonons = FrozenPhonons(carbon_atoms, num_configs=3, sigmas=0.1, seed=4)
+    densities = np.stack([charge_density_3d] * num_densities)
+    with pytest.raises(ValueError, match="charge densities were given for 3"):
+        ChargeDensityPotential(frozen_phonons, densities, sampling=0.2)
+
+
+def test_several_charge_densities_without_frozen_phonons_raise(
+    carbon_atoms, charge_density_3d
+):
+    densities = np.stack([charge_density_3d] * 2)
+    with pytest.raises(ValueError, match="charge densities were given for 1"):
+        ChargeDensityPotential(carbon_atoms, densities, sampling=0.2)
