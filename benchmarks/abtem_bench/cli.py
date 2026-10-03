@@ -19,6 +19,32 @@ def _devices(text: str) -> list[str]:
     return out
 
 
+def _at_least(minimum: int):
+    def parse(text: str) -> int:
+        value = int(text)
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"must be {minimum} or more")
+        return value
+
+    return parse
+
+
+def _command() -> str:
+    """The invocation as a command someone can run again."""
+    return "python -P -m abtem_bench " + shlex.join(sys.argv[1:])
+
+
+def _add_capture_options(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--preset", default="accuracy", choices=sorted(presets.PRESETS))
+    p.add_argument("--repeats", type=_at_least(0), default=None)
+    p.add_argument("--rounds", type=_at_least(1), default=1)
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="delete an existing bundle at the output path first",
+    )
+
+
 def _add_selection(p: argparse.ArgumentParser) -> None:
     p.add_argument("--tier", default="quick", choices=registry.TIER_NAMES)
     p.add_argument(
@@ -57,14 +83,15 @@ def cmd_capture(args: argparse.Namespace) -> int:
         repo,
         [args.ref],
         ids,
-        Path(args.out).parent,
+        Path(args.out).resolve().parent,
         args.preset,
         args.tier,
         args.device,
         args.repeats,
         rounds=args.rounds,
         labels=[Path(args.out).name],
-        command=shlex.join(sys.argv),
+        command=_command(),
+        overwrite=args.overwrite,
     )
     print(f"bundle: {bundles[0].path}")
     return 0
@@ -77,7 +104,7 @@ def cmd_self_check(args: argparse.Namespace) -> int:
         print("no cases selected", file=sys.stderr)
         return 2
     repo = runner.find_repo()
-    out = Path(args.out)
+    out = Path(args.out).resolve()
     bundles = runner.capture(
         repo,
         [args.ref, args.ref],
@@ -89,7 +116,8 @@ def cmd_self_check(args: argparse.Namespace) -> int:
         args.repeats,
         rounds=args.rounds,
         labels=["a", "b"],
-        command=shlex.join(sys.argv),
+        command=_command(),
+        overwrite=args.overwrite,
     )
     floors = cmp.noise_floor(bundles[0], bundles[1])
     store.dump_json(out / "noise.json", floors)
@@ -173,9 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="git ref (tag, branch, sha) of the abtem to measure",
     )
     s.add_argument("--out", required=True, help="bundle directory to create")
-    s.add_argument("--preset", default="accuracy", choices=sorted(presets.PRESETS))
-    s.add_argument("--repeats", type=int, default=None)
-    s.add_argument("--rounds", type=int, default=1)
+    _add_capture_options(s)
     _add_selection(s)
     s.set_defaults(func=cmd_capture)
 
@@ -189,9 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="directory receiving bundles a/ and b/, noise.json, self_check.md",
     )
-    s.add_argument("--preset", default="accuracy", choices=sorted(presets.PRESETS))
-    s.add_argument("--repeats", type=int, default=None)
-    s.add_argument("--rounds", type=int, default=1)
+    _add_capture_options(s)
     _add_selection(s)
     s.set_defaults(func=cmd_self_check)
 
@@ -260,4 +284,9 @@ def use_invoking_checkout() -> Path | None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     use_invoking_checkout()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (cmp.CompareError, runner.BundleExistsError, runner.RefError) as exc:
+        # Input problems, not gate failures: exit 2, which --fail-on never uses.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2

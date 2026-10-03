@@ -68,15 +68,19 @@ def _gpu_name() -> str | None:
         return None
 
 
-def fingerprint() -> dict[str, Any]:
-    """Machine and stack identity recorded in every manifest."""
+def fingerprint(gpu: bool = True) -> dict[str, Any]:
+    """Machine and stack identity recorded in every manifest.
+
+    The GPU name is queried only when ``gpu`` is true: the query initialises
+    the device, which a CPU-only capture must not touch.
+    """
     return {
         "hostname": socket.gethostname(),
         "os": platform.platform(),
         "python": sys.version.split()[0],
         "cpu": _cpu_model(),
         "cpu_count": os.cpu_count(),
-        "gpu": _gpu_name(),
+        "gpu": _gpu_name() if gpu else None,
         "numpy": _version("numpy"),
         "scipy": _version("scipy"),
         "dask": _version("dask"),
@@ -166,7 +170,9 @@ class Bundle:
     """One capture: a directory of case records and output arrays."""
 
     def __init__(self, path: str | Path):
-        self.path = Path(path)
+        # Absolute, so a bundle passed to a worker that runs in another cwd
+        # still names the same directory.
+        self.path = Path(path).resolve()
 
     # -- layout -------------------------------------------------------------
     @property
@@ -223,6 +229,14 @@ class Bundle:
                 }
         record["outputs"] = index
         dump_json(self.case_json(case_id), record)
+
+    def clear_case(self, case_id: str) -> None:
+        """Remove a case's record, outputs and log, so nothing stale survives."""
+        import shutil
+
+        self.case_json(case_id).unlink(missing_ok=True)
+        self.log_path(case_id).unlink(missing_ok=True)
+        shutil.rmtree(self.case_dir(case_id), ignore_errors=True)
 
     def read_case(self, case_id: str) -> dict[str, Any]:
         return load_json(self.case_json(case_id))
