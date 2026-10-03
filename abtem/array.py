@@ -141,6 +141,11 @@ def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     return arr
 
 
+def _inverse_permutation(order: tuple[int, ...]) -> tuple[int, ...]:
+    """The permutation that undoes `order`."""
+    return tuple(int(i) for i in np.argsort(order))
+
+
 def _to_natural_order(
     shape: tuple[int, ...], order: tuple[int, ...]
 ) -> tuple[int, ...]:
@@ -148,14 +153,8 @@ def _to_natural_order(
     recovering the size each of the first `len(order)` (ensemble) axes would
     have in the array's own natural (undeclared) axis order. Any trailing
     (base) axes beyond that span are untouched."""
-    ensemble_len = len(order)
-    inverse = [0] * ensemble_len
-    for k, p in enumerate(order):
-        inverse[p] = k
-    return (
-        tuple(shape[inverse[p]] for p in range(ensemble_len))
-        + shape[ensemble_len:]
-    )
+    inverse = _inverse_permutation(order)
+    return tuple(shape[i] for i in inverse) + shape[len(order) :]
 
 
 def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
@@ -164,11 +163,8 @@ def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
     order, the one every `_calculate_new_array` returns."""
     if order == tuple(range(len(order))):
         return array
-    inverse = [0] * len(order)
-    for k, p in enumerate(order):
-        inverse[p] = k
     trailing = tuple(range(len(order), array.ndim))
-    return array.transpose(*inverse, *trailing)
+    return array.transpose(*_inverse_permutation(order), *trailing)
 
 
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
