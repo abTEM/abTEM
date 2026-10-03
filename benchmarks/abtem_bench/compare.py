@@ -78,6 +78,7 @@ class Accepted:
     captured at that ref (its label, its ``git describe``, or a prefix of at
     least 7 hex digits of its sha). The optional bounds cap how large the
     accepted drift may be, per output; a drift beyond a bound stays ``DRIFT``.
+    A non-finite value that differs between the two outputs is never accepted.
     """
 
     case: str
@@ -112,11 +113,16 @@ class Accepted:
         return {k: getattr(self, k) for k in BOUND_KEYS if getattr(self, k) is not None}
 
     def violations(self, outputs: dict[str, dict[str, Any]]) -> list[str]:
-        """Outputs whose drift exceeds one of this entry's bounds."""
+        """Outputs whose drift exceeds a bound or has non-finite mismatches."""
         out = []
         for name, s in outputs.items():
             if s.get("identical"):
                 continue
+            if s.get("nonfinite_mismatch"):
+                out.append(
+                    f"{name} has {s['nonfinite_mismatch']} non-finite values "
+                    "that differ"
+                )
             for key, bound in self.bounds().items():
                 value = s.get(BOUND_KEYS[key])
                 if value is not None and key == "max_intensity":
@@ -159,13 +165,22 @@ def load_accepted(
 
     Every entry needs a non-empty ``case``, ``since`` and ``reason``; ``pr`` is
     a positive integer; bounds are positive finite numbers; unknown keys are
-    refused (a misspelt bound would otherwise be silently unbounded). With a
+    refused (a misspelt bound would otherwise be silently unbounded).
+    ``max_abs_norm`` is required: the integrated intensity is unchanged by a
+    shift, a flip or a phase scramble of the output, so only a bound on the
+    largest elementwise difference rejects a corrupted result. With a
     registry, the ``case`` glob must match at least one registered case id of
     any tier, device or variant.
+
+    ``path=None`` reads the shipped file and returns no entries when it is
+    absent; an explicit ``path`` must exist.
     """
-    path = path or ACCEPTED_CHANGES_PATH
-    if not path.exists():
-        return []
+    if path is None:
+        path = ACCEPTED_CHANGES_PATH
+        if not path.exists():
+            return []
+    elif not path.exists():
+        raise CompareError(f"accepted changes file not found: {path}")
     try:
         data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as exc:
@@ -175,7 +190,12 @@ def load_accepted(
         raise CompareError(f"{path.name}: unknown top-level keys {sorted(extra)}")
     known_ids = _all_case_ids(reg) if reg else None
     out = []
-    for i, entry in enumerate(data.get("accepted", [])):
+    entries = data.get("accepted", [])
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise CompareError(
+            f"{path.name}: 'accepted' must be an array of tables ([[accepted]])"
+        )
+    for i, entry in enumerate(entries):
         where = f"{path.name}: entry {i}"
         unknown = set(entry) - ENTRY_KEYS
         if unknown:
@@ -192,6 +212,11 @@ def load_accepted(
         for key in BOUND_KEYS:
             if key in entry and not _number(entry[key]):
                 raise CompareError(f"{where}: {key!r} must be a positive number")
+        if "max_abs_norm" not in entry:
+            raise CompareError(
+                f"{where}: 'max_abs_norm' is required: it is the bound a shifted, "
+                "flipped or rescaled output cannot pass"
+            )
         acc = Accepted(
             entry["case"].strip(), entry["since"].strip(), entry["reason"].strip(), pr
         )
@@ -531,6 +556,9 @@ class Report:
     fingerprint_match: bool
     thresholds: dict[str, float]
     noise: dict[str, dict[str, float]]
+    #: the accepted_changes.toml read (or looked for), and whether it exists
+    accepted_path: Path | None = None
+    accepted_exists: bool = True
 
     def failures(self, gates: dict[str, float | None]) -> list[str]:
         """Messages for every gate that fails; empty when the comparison passes.
@@ -690,6 +718,9 @@ def compare(
 
     Raises CompareError when the bundles ran different case code or presets
     (unless allowed), share no case id, or accepted_changes.toml is invalid.
+    ``accepted_path=None`` reads the shipped accepted_changes.toml and accepts
+    nothing when it is absent (the report says so); an explicit path must
+    exist.
     Speed ratios beyond ``max(speed_threshold, 3 x floor)`` are flagged, or
     marked ``short`` when the two medians differ by less than ``min_delta``
     seconds. Memory and VRAM ratios are flagged only for cases with a noise
@@ -711,6 +742,7 @@ def compare(
         )
     fp_match = man_r.get("fingerprint_short") == man_c.get("fingerprint_short")
     entries = load_accepted(accepted_path, reg)
+    used_path = accepted_path if accepted_path is not None else ACCEPTED_CHANGES_PATH
     ref_info = man_r.get("ref", {})
     accepted = [a for a in entries if a.applies_to(ref_info)]
     not_applicable = [a for a in entries if not a.applies_to(ref_info)]
@@ -761,6 +793,8 @@ def compare(
         fingerprint_match=fp_match,
         thresholds=thresholds,
         noise=noise,
+        accepted_path=used_path,
+        accepted_exists=used_path.exists(),
     )
 
 
@@ -850,6 +884,10 @@ def to_markdown(report: Report) -> str:
         )
     if not report.preset_match:
         notes.append("presets differ: the two bundles ran under different settings")
+    if not report.accepted_exists:
+        notes.append(
+            f"no accepted_changes.toml at {report.accepted_path}; no drift is accepted"
+        )
     if not report.fingerprint_match:
         notes.append(
             "machine fingerprints differ: bit-identity is not expected, "
@@ -1001,6 +1039,10 @@ def to_json(report: Report) -> dict[str, Any]:
         "fingerprint_match": report.fingerprint_match,
         "thresholds": report.thresholds,
         "noise": report.noise,
+        "accepted_path": None
+        if report.accepted_path is None
+        else str(report.accepted_path),
+        "accepted_exists": report.accepted_exists,
         "rows": [
             {
                 "reference_id": r.ref_id,
