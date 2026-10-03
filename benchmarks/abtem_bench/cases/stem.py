@@ -27,7 +27,9 @@ def _nominal_bytes(p) -> int:
             scan=(16, 16),
             max_batch=8,
             chunk=8,
-            timeout=1800,
+            # A cold CPU run takes about 45 minutes (16x16 positions, 41 slices
+            # of 1024², one thread); a GPU run takes seconds.
+            timeout=5400,
         ),
         "large": Tier(
             gpts=(4096, 4096),
