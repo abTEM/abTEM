@@ -51,6 +51,10 @@ ENTRY_KEYS = {"case", "since", "reason", "pr", *BOUND_KEYS}
 #: are not a change of the result. Fields starting with ``_`` are abtem's
 #: internal bookkeeping and are treated the same way.
 AXIS_LABEL_KEYS = ("label", "tex_label", "tex_units")
+#: Axis fields that define the grid; absent from one side, they are a mismatch.
+AXIS_STRUCTURAL_KEYS = ("type", "sampling", "offset", "values", "units", "endpoint")
+#: Output metadata fields that only name or typeset a quantity; ignored.
+METADATA_LABEL_KEYS = ("label", "units", "tex_label", "tex_units")
 AXIS_RTOL = 1e-9
 AXIS_ATOL = 1e-12
 
@@ -325,9 +329,13 @@ def _close(x: Any, y: Any) -> bool:
     if isinstance(x, bool) or isinstance(y, bool):
         return x == y
     if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+        if math.isnan(x) and math.isnan(y):
+            return True
         return math.isclose(x, y, rel_tol=AXIS_RTOL, abs_tol=AXIS_ATOL)
     if isinstance(x, list) and isinstance(y, list):
         return len(x) == len(y) and all(_close(p, q) for p, q in zip(x, y))
+    if isinstance(x, dict) and isinstance(y, dict):
+        return x.keys() == y.keys() and all(_close(x[k], y[k]) for k in x)
     return x == y
 
 
@@ -339,9 +347,10 @@ def _short_repr(value: Any, limit: int = 40) -> str:
 def axes_diff(ref_axes: list, cand_axes: list) -> tuple[list[str], list[str]]:
     """(mismatches, informational differences) between two serialised axes.
 
-    Numbers are compared to ``AXIS_RTOL``; other values exactly. Labels,
-    internal ``_`` fields and fields present on one side only are
-    informational.
+    Numbers are compared to ``AXIS_RTOL`` and ``AXIS_ATOL``, NaN equal to NaN;
+    other values exactly. A field in ``AXIS_STRUCTURAL_KEYS`` present on one
+    side only is a mismatch. Labels, internal ``_`` fields and other fields
+    present on one side only are informational.
     """
     if len(ref_axes) != len(cand_axes):
         return [f"{len(cand_axes)} axes, reference has {len(ref_axes)}"], []
@@ -352,7 +361,8 @@ def axes_diff(ref_axes: list, cand_axes: list) -> tuple[list[str], list[str]]:
             where = f"axis {i} {key}"
             if key not in a or key not in b:
                 side = "candidate" if key in b else "reference"
-                info.append(f"{where} only in the {side}")
+                text = f"{where} only in the {side}"
+                (bad if key in AXIS_STRUCTURAL_KEYS else info).append(text)
             elif key in AXIS_LABEL_KEYS or key.startswith("_"):
                 if a[key] != b[key]:
                     info.append(
@@ -363,12 +373,34 @@ def axes_diff(ref_axes: list, cand_axes: list) -> tuple[list[str], list[str]]:
     return bad, info
 
 
+def metadata_diff(ref_meta: dict, cand_meta: dict) -> list[str]:
+    """Differences between two outputs' metadata, by the rules of ``axes_diff``.
+
+    Label fields and fields starting with ``_`` are left out. The result is
+    informational: it never changes a verdict.
+    """
+    diffs: list[str] = []
+    for key in sorted(set(ref_meta) | set(cand_meta)):
+        if key in METADATA_LABEL_KEYS or key.startswith("_"):
+            continue
+        if key not in ref_meta or key not in cand_meta:
+            side = "candidate" if key in cand_meta else "reference"
+            diffs.append(f"{key} only in the {side}")
+        elif not _close(ref_meta[key], cand_meta[key]):
+            diffs.append(
+                f"{key} {_short_repr(ref_meta[key])} → {_short_repr(cand_meta[key])}"
+            )
+    return diffs
+
+
 def output_stats(
     ref_arr: np.ndarray,
     cand_arr: np.ndarray,
     ref_axes: list,
     cand_axes: list,
     above_rel: float,
+    ref_meta: dict | None = None,
+    cand_meta: dict | None = None,
 ) -> dict[str, Any]:
     from abtem.core.testing import close_stats
 
@@ -385,6 +417,7 @@ def output_stats(
     notes.extend(bad)
     s["mismatch"] = notes
     s["axes_info"] = info
+    s["metadata_info"] = metadata_diff(ref_meta or {}, cand_meta or {})
     return s
 
 
@@ -719,14 +752,16 @@ def _pair_row(
             row.notes.append(f"{name}: missing in the candidate")
             worst = SHAPE
             continue
-        a, ax_a, _ = reference.load_output(ref_id, name)
-        b, ax_b, _ = candidate.load_output(cand_id, name)
-        s = output_stats(a, b, ax_a, ax_b, tol.above_rel)
+        a, ax_a, meta_a = reference.load_output(ref_id, name)
+        b, ax_b, meta_b = candidate.load_output(cand_id, name)
+        s = output_stats(a, b, ax_a, ax_b, tol.above_rel, meta_a, meta_b)
         s["verdict"] = verdict_for(s, tol)
         row.outputs[name] = s
         row.notes.extend(f"{name}: {m}" for m in s["mismatch"])
         if s["axes_info"]:
             row.notes.append(f"{name}: axis metadata differs ({len(s['axes_info'])})")
+        if s["metadata_info"]:
+            row.notes.append(f"{name}: metadata differs ({len(s['metadata_info'])})")
         if order[s["verdict"]] > order[worst]:
             worst = s["verdict"]
     new = [n for n in cand_outputs if n not in ref_outputs]
