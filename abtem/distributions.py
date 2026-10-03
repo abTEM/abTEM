@@ -115,8 +115,9 @@ class DistributionFromValues(BaseDistribution):
 
         # No all-zero check here: the blocks built by ``divide`` (and their
         # negations) may hold only zero-weight members of a valid distribution.
-        # ``from_values`` rejects an all-zero distribution, and the reduction
-        # refuses an ensemble axis with zero total weight.
+        # ``from_values`` rejects an all-zero distribution. An ensemble axis
+        # whose weights are all zero (e.g. a slice of zero-weight members) has
+        # equal weights and is reduced with the plain mean.
         self._weights = weights
 
         self._ensemble_mean = ensemble_mean

@@ -726,6 +726,10 @@ def _normalized_axis_weights(axis: AxisMetadata, n: int) -> Optional[np.ndarray]
     """Return the probability weights of an ensemble axis normalized to sum to one,
     or None if the axis has equal weights (the plain mean is then exact).
 
+    Equal weights include all-zero weights, e.g. on a slice holding only
+    zero-weight members: their weighted mean is undefined (0/0), and the plain
+    mean is used as the fallback, so such a slice can still be reduced or shown.
+
     Parameters
     ----------
     axis : AxisMetadata
@@ -751,11 +755,8 @@ def _normalized_axis_weights(axis: AxisMetadata, n: int) -> Optional[np.ndarray]
     if not _has_unequal_weights(weights):
         return None
 
-    total = weights.sum()
-    if not total > 0.0:
-        raise RuntimeError(f"ensemble axis '{axis.label}' has zero total weight")
-
-    return weights / total
+    # Unequal non-negative weights always have a positive sum.
+    return weights / weights.sum()
 
 
 def _has_unequal_weights(weights: Optional[Any]) -> bool:

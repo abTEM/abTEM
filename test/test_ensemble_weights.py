@@ -797,3 +797,19 @@ def test_unweighted_axes_are_written_without_weights_key():
     d = axis_to_dict(weighted)
     assert d["weights"] == (0.2, 0.8)
     assert axis_from_dict(d) == weighted
+
+
+def test_all_zero_weight_axis_falls_back_to_plain_mean():
+    # A slice holding only zero-weight members has an undefined weighted mean
+    # (0/0); it is reduced with the plain mean rather than refused.
+    dist = distributions.from_values(
+        ASYM_VALUES, weights=[0.0, 0.0, 0.5, 0.5], ensemble_mean=False
+    )
+    images = Probe(defocus=dist, **PROBE_KW).build().intensity().compute()
+    zero_part = images[:2]
+    assert zero_part.ensemble_axes_metadata[0].weights == (0.0, 0.0)
+    _assert_close_to(
+        zero_part.reduce_ensemble(axis=0).array,
+        _to_numpy(images.array)[:2].mean(0),
+        rtol=1e-6,
+    )
