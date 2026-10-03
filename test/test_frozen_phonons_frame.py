@@ -158,6 +158,34 @@ def _equal_per_atom_rows(atoms):
     return np.repeat(np.linspace(0.05, 0.1, len(atoms))[:, None], 3, axis=1)
 
 
+def _magnetic_iron():
+    atoms = ase.build.bulk("Fe", "bcc", a=2.87, cubic=True)
+    atoms.set_array("magnetic_moments", np.tile([0.0, 0.0, 2.0], (len(atoms), 1)))
+    return atoms
+
+
+@pytest.mark.parametrize("field", ["MagneticField", "VectorPotential"])
+def test_rotated_magnetic_field_equals_displacing_the_input_atoms(field):
+    """Public API only: the magnetic fields share the potential's transform, so
+    frozen phonons with anisotropic sigmas and plane="xz" give the field of the
+    input atoms displaced along their own axes."""
+    from abtem.magnetism import iam as magnetism
+
+    field = getattr(magnetism, field)
+    atoms, sigmas = _magnetic_iron(), (0.03, 0.05, 0.07)
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=1)
+    r = np.random.default_rng(fp.seed[0]).normal(size=(len(atoms), 3))
+    displaced = atoms.copy()
+    displaced.positions += np.array(sigmas, dtype=np.float32) * r
+
+    kwargs = dict(sampling=0.2, slice_thickness=1.5, plane="xz")
+    actual = field(fp, **kwargs).build(lazy=False).array[0]
+    expected = field(displaced, **kwargs).build(lazy=False).array
+
+    scale = np.abs(expected).max()
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * scale)
+
+
 @pytest.mark.parametrize(
     "sigmas",
     [0.1, {"W": 0.08, "Se": 0.09}, (0.1, 0.1, 0.1), _equal_per_atom_rows],
