@@ -7046,6 +7046,10 @@ def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], boo
             raise ValueError(
                 f"components must name at least one of {FROZEN_PHONON_COMPONENTS}"
             )
+        if names == ("all",):
+            return FROZEN_PHONON_COMPONENTS, True
+        if names.count("all") > 1:
+            raise ValueError("components gives 'all' more than once")
     else:
         raise TypeError(
             "components must be one of "
@@ -7073,7 +7077,9 @@ def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], boo
     if len(set(names)) != len(names):
         raise ValueError(f"components contains a name twice: {names}")
 
-    return names, stacked
+    # Plain str, so that str subclasses such as numpy.str_ do not reach the
+    # metadata and the component axis.
+    return tuple(str(name) for name in names), stacked
 
 
 def _validate_reduction_dtype(reduction_dtype) -> Optional[np.dtype]:

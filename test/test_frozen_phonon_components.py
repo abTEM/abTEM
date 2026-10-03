@@ -499,6 +499,38 @@ def test_block_direct_true_keeps_the_first_order_reflections_of_a_plane_wave():
         assert np.asarray(blocked.array)[index] == unblocked_array[index]
 
 
+@pytest.mark.parametrize("components", [("all",), ["all"]], ids=["tuple", "list"])
+def test_a_sequence_of_all_alone_is_all(components):
+    waves = _exit_waves()
+    result = elastic_diffuse_diffraction_patterns(waves, components=components)
+    everything = elastic_diffuse_diffraction_patterns(waves, components="all")
+    assert result.ensemble_axes_metadata[0].values == ("total", "elastic", "diffuse")
+    assert result.metadata["frozen_phonon_component"] == [
+        "total",
+        "elastic",
+        "diffuse",
+    ]
+    np.testing.assert_array_equal(result.array, everything.array)
+
+
+def test_component_names_are_recorded_as_plain_str():
+    waves = _exit_waves()
+    single = elastic_diffuse_diffraction_patterns(waves, components=np.str_("total"))
+    stacked = elastic_diffuse_diffraction_patterns(
+        waves, components=(np.str_("diffuse"), np.str_("total"))
+    )
+
+    assert type(single.metadata["frozen_phonon_component"]) is str
+    assert [type(name) for name in stacked.metadata["frozen_phonon_component"]] == [
+        str,
+        str,
+    ]
+    assert [type(name) for name in stacked.ensemble_axes_metadata[0].values] == [
+        str,
+        str,
+    ]
+
+
 @pytest.mark.parametrize(
     "components, error, match",
     [
@@ -507,6 +539,7 @@ def test_block_direct_true_keeps_the_first_order_reflections_of_a_plane_wave():
         ((), ValueError, "at least one"),
         (("total", "total"), ValueError, "twice"),
         (("all", "total"), ValueError, "'all' cannot be combined"),
+        (("all", "all"), ValueError, "'all' more than once"),
         (("total", 1), TypeError, "must be strings"),
         ("bogus", ValueError, "components must be one of"),
         ("tds", ValueError, "'tds' is now 'diffuse'"),
