@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.inelastic.phonons import SOURCE_INDEX
+from abtem.inelastic.phonons import SOURCE_INDEX, DummyFrozenPhonons
 
 
 def _rotated(atoms, angle):
@@ -259,7 +259,94 @@ def test_potential_without_frozen_phonons_has_one_configuration():
     )
 
 
-def test_get_transformed_atoms_does_not_expose_the_source_index():
+@pytest.mark.parametrize("projection", ["infinite", "finite"])
+def test_the_atoms_of_a_potential_do_not_expose_the_source_index(projection):
+    """get_transformed_atoms and get_sliced_atoms (which the core-loss sites use)."""
     atoms = ase.build.mx2("WSe2", vacuum=2)
-    transformed = abtem.Potential(atoms, sampling=0.1).get_transformed_atoms()
-    assert SOURCE_INDEX not in transformed.arrays
+    potential = abtem.Potential(atoms, sampling=0.1, projection=projection)
+    assert SOURCE_INDEX not in potential.get_transformed_atoms().arrays
+    assert SOURCE_INDEX not in potential.get_sliced_atoms().atoms.arrays
+
+
+class _OwnRandomize(abtem.FrozenPhonons):
+    """Written against a randomize that takes the atoms only."""
+
+    def randomize(self, atoms):
+        atoms = atoms.copy()
+        rng = np.random.default_rng(self.seed[0])
+        atoms.positions += rng.normal(scale=0.05, size=atoms.positions.shape)
+        return atoms
+
+
+class _OwnRandomizeWithFrame(abtem.FrozenPhonons):
+    def randomize(self, atoms, frame=None):
+        return super().randomize(atoms, frame=frame)
+
+
+@pytest.mark.parametrize("plane", ["xy", "xz"])
+def test_a_subclass_with_its_own_randomize_keeps_working(plane):
+    """A subclass whose randomize takes the atoms only is called with the atoms
+    only; one that takes a frame gets it."""
+    atoms = ase.build.bulk("Si", cubic=True)
+    own = _OwnRandomize(atoms, num_configs=2, sigmas=0.05, seed=1)
+    potential = abtem.Potential(own, sampling=0.2, plane=plane)
+    transformed = potential.get_transformed_atoms()
+    for seed, configuration in zip(own.seed, potential.to_atoms_ensemble()):
+        rng = np.random.default_rng(seed)
+        expected = transformed.positions + rng.normal(
+            scale=0.05, size=transformed.positions.shape
+        )
+        expected = np.mod(expected, np.diag(transformed.cell))
+        np.testing.assert_allclose(configuration.positions, expected, atol=1e-10)
+    assert potential.build(lazy=False).array.shape[0] == 2
+
+    sigmas = (0.05, 0.10, 0.20)
+    with_frame = _OwnRandomizeWithFrame(atoms, num_configs=1, sigmas=sigmas, seed=1)
+    plain = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=1)
+    np.testing.assert_array_equal(
+        abtem.Potential(with_frame, sampling=0.2, plane=plane)
+        .to_atoms_ensemble()
+        .trajectory[0]
+        .positions,
+        abtem.Potential(plain, sampling=0.2, plane=plane)
+        .to_atoms_ensemble()
+        .trajectory[0]
+        .positions,
+    )
+
+
+class _StoredConfiguration(DummyFrozenPhonons):
+    """Returns the configuration it stores, whatever atoms it is given."""
+
+    def randomize(self, atoms):
+        return self.atoms
+
+
+def _stored_configuration():
+    return ase.Atoms(
+        "Si2", positions=[(-0.3, 1.0, 1.0), (2.0, 5.3, 1.0)], cell=(4.0, 5.0, 4.0)
+    )
+
+
+def test_a_stored_configuration_returned_by_randomize_is_not_changed():
+    """The potential wraps the atoms randomize returns into the cell; it must not
+    do so in the object the frozen phonons keep."""
+    stored = _stored_configuration()
+    before = stored.positions.copy()
+
+    abtem.Potential(_StoredConfiguration(stored), sampling=0.1).build(lazy=False)
+
+    np.testing.assert_array_equal(stored.positions, before)
+
+
+def test_potential_to_atoms_ensemble_takes_a_stored_configuration():
+    """Atoms that randomize returns need not carry the potential's own arrays."""
+    stored = _stored_configuration()
+    potential = abtem.Potential(_StoredConfiguration(stored), sampling=0.1)
+
+    (configuration,) = potential.to_atoms_ensemble()
+
+    np.testing.assert_allclose(
+        configuration.positions, np.mod(stored.positions, (4.0, 5.0, 4.0)), atol=1e-12
+    )
+    assert SOURCE_INDEX not in configuration.arrays

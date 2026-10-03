@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from typing import (
@@ -53,6 +54,18 @@ except ImportError:
 # before transforming the atoms, so that per-atom displacement standard deviations
 # can follow their atoms into a structure with a different number of atoms.
 SOURCE_INDEX = "abtem_source_index"
+
+
+def _accepts_keyword(method: Callable, name: str) -> bool:
+    """Whether a method accepts a keyword argument of the given name."""
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == name or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
@@ -474,6 +487,17 @@ class FrozenPhonons(BaseFrozenPhonons):
         -------
         displaced : Atoms
         """
+        return self._randomize(atoms, frame=frame)
+
+    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+        if type(self).randomize is FrozenPhonons.randomize:
+            return self._randomize(atoms, frame=frame)
+        # A subclass's own randomize, which may take the atoms only.
+        if _accepts_keyword(self.randomize, "frame"):
+            return self.randomize(atoms, frame=frame)
+        return self.randomize(atoms)
+
+    def _randomize(self, atoms: Atoms, frame: Optional[np.ndarray] = None) -> Atoms:
         sigmas = self._sigmas_of(atoms)
 
         atoms = atoms.copy()
@@ -497,9 +521,6 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms.positions[:, axis] += displacements[:, axis]
 
         return atoms
-
-    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
-        return self.randomize(atoms, frame=frame)
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):

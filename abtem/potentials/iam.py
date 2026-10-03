@@ -864,7 +864,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             Transformed atoms.
         """
         atoms = self._transform_atoms()[0]
-        del atoms.arrays[SOURCE_INDEX]
+        atoms.arrays.pop(SOURCE_INDEX, None)
         return atoms
 
     def _margins(self) -> tuple[float, float, float]:
@@ -949,6 +949,17 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         return atoms, False, np.eye(3)
 
+    def _displace(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+        """The frozen phonons' displacement of atoms this potential transformed,
+        as an object this potential owns."""
+        displaced = self.frozen_phonons._randomize_transformed(atoms, frame)
+        if displaced is not atoms:
+            # Only `atoms` is known to be this potential's own copy; an
+            # ensemble may return an object it keeps, such as a stored
+            # configuration, which the wrap below must not change.
+            displaced = displaced.copy()
+        return displaced
+
     def _atoms_to_slice(self) -> tuple[Atoms, tuple[float, float, float]]:
         """The atoms of this configuration as they are sliced, and the margin
         the integrator needs beyond the cell along each axis."""
@@ -956,17 +967,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         margins = self._margins()
 
         if self.periodic:
-            atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
+            atoms = self._displace(atoms, frame)
             # Shared with SliceIndexedAtoms, which applies the same wrap to the
             # atoms it is handed directly -- e.g. explicit core-loss ``sites``
             # and CrystalPotential's tiled atoms, which do not come through
-            # here.
-            #
-            # No copy: _transform_atoms returns a copy of the frozen phonons'
-            # atoms, and randomize returns either a new object or the atoms it
-            # is given, so these atoms are this method's own. Writing in place
-            # cannot reach the atoms the potential stores or ships into a task
-            # graph.
+            # here. In place, because _displace returns atoms this potential
+            # owns: neither the atoms the potential stores nor an object the
+            # frozen phonons keep can be reached from here.
             atoms = wrap_and_snap_atoms(atoms, copy=False)
 
         # Repeats exactly the axes with a nonzero margin, which is the
@@ -975,12 +982,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             atoms = pad_atoms(atoms, margins=margins)
 
         if not self.periodic:
-            atoms = self.frozen_phonons._randomize_transformed(atoms, frame)
+            atoms = self._displace(atoms, frame)
 
         return atoms, margins
 
     def _prepare_atoms(self):
         atoms, margins = self._atoms_to_slice()
+        atoms.arrays.pop(SOURCE_INDEX, None)
 
         if self.integrator.finite:
             sliced_atoms = SlicedAtoms(
@@ -1029,7 +1037,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         trajectory = []
         for potential in potentials:
             atoms = potential._atoms_to_slice()[0]
-            del atoms.arrays[SOURCE_INDEX]
+            atoms.arrays.pop(SOURCE_INDEX, None)
             trajectory.append(atoms)
 
         return AtomsEnsemble(trajectory)
