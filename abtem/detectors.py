@@ -144,6 +144,8 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
+    _splits_energy_ensembles = True
+
     def __init__(self, to_cpu: bool = True, url: Optional[str] = None):
         self._to_cpu = to_cpu
         self._url = url
@@ -367,6 +369,19 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement._eager_array
 
+    def _match_ensemble(self, waves: WavesType) -> _AbstractRadialDetector:
+        """Refuse an auto-sized outer angle of a detector with radial bins for a
+        multi-energy ensemble.
+
+        Each energy is detected on its own, so without this an auto-sized outer
+        angle would follow each energy's cutoff (see `_match_waves`).
+        """
+        from abtem.array import _multi_energy_axis
+
+        if _multi_energy_axis(waves) is not None:
+            self._match_waves(waves)
+        return self
+
     def _match_waves(self, waves: WavesType) -> None:
         """Auto-size ``outer`` from ``waves``, unless the user gave one.
 
@@ -379,16 +394,18 @@ class _AbstractRadialDetector(BaseDetector):
         makes each call self-consistent, at the cost of being a no-op for
         the common case (repeated calls at one energy already agree).
 
-        A multi-member energy ensemble cannot be auto-sized at all: each
-        member has its own antialias cutoff angle (`waves.cutoff_angles`,
-        which scales with wavelength at a fixed grid -- it is not the
-        semiangle_cutoff/aperture, which does not enter it at all), so a
-        single radial axis cannot fit all of them (see the module docstring
+        A detector with radial bins (`FlexibleAnnularDetector`,
+        `SegmentedDetector`) cannot be auto-sized for a multi-member energy
+        ensemble at all: each member has its own antialias cutoff angle
+        (`waves.cutoff_angles`, which scales with wavelength at a fixed grid --
+        it is not the semiangle_cutoff/aperture, which does not enter it at all),
+        so a single radial axis cannot fit all of them (see the module docstring
         analogue: this is the `FlexibleAnnularDetector` gotcha; unlike a
         single-value cutoff, the two shortest-first / longest-first energy
         orders would otherwise silently size the bins differently). Refuse
         it instead of picking one member's cutoff (or lazy's own, different,
-        convention) silently.
+        convention) silently. `AnnularDetector` has no radial bins to share and
+        sizes an auto outer angle per energy instead (see its `_match_ensemble`).
         """
         if self._outer_is_explicit:
             return
@@ -727,6 +744,12 @@ class AnnularDetector(_AbstractRadialDetector):
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
+    def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
+        # An auto-sized outer angle follows each energy's cutoff, as a separate
+        # run of each energy would; the result has no radial axis to share. (The
+        # metadata of an AnnularDetector result never records an outer angle.)
+        return self
+
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
 
@@ -756,14 +779,26 @@ class AnnularDetector(_AbstractRadialDetector):
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
+        diffraction_patterns._check_integration_limits(self.inner, outer)
         offset = self.offset if self.offset is not None else (0.0, 0.0)
-        measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer, offset=offset,
+
+        # Integrated over the pattern axes only, so the result keeps the waves'
+        # own axis order, the one every _calculate_new_array returns;
+        # ArrayObject.apply_transform moves the scan axes to the end, as
+        # _out_ensemble_source declares, once for eager and lazy results alike.
+        intensity = DiffractionPatterns._integrate_fourier_space(
+            diffraction_patterns._eager_array,
+            sampling=diffraction_patterns.angular_sampling,
+            inner=self.inner,
+            outer=outer,
+            fftshift=False,
+            offset=offset,
         )
 
-        if self.to_cpu and hasattr(measurement, "to_cpu"):
-            measurement = measurement.to_cpu()
-        return measurement._eager_array
+        if self.to_cpu and hasattr(intensity, "get"):
+            intensity = intensity.get()
+
+        return intensity
 
     def detect(
         self, waves: WavesType
@@ -1048,6 +1083,7 @@ class SpectralSlitDetector(BaseDetector):
                 )
             if len(corners) != 4:
                 raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
+            self._from_corners = True
             self._corners = tuple(float(c) for c in corners)
             # offset = start of q-sweep (left edge, ky-centre), consistent with
             # geometry mode where offset is the q=0 origin.
@@ -1059,6 +1095,7 @@ class SpectralSlitDetector(BaseDetector):
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
             self._q_min = 0.0
+            self._q_max = self._extent
             self._center = (
                 (corners[0] + corners[1]) / 2.0,
                 (corners[2] + corners[3]) / 2.0,
@@ -1070,7 +1107,9 @@ class SpectralSlitDetector(BaseDetector):
             q_max = float(q_max)
             if q_min < 0 or q_min >= q_max:
                 raise ValueError(f"q_min must satisfy 0 <= q_min < q_max, got q_min={q_min}, q_max={q_max}.")
+            self._from_corners = False
             self._q_min = q_min
+            self._q_max = q_max
             self._offset = tuple(float(v) for v in offset)
             self._angle = float(angle)
             # Physical slit extent and centre: spans from q_min to q_max along
@@ -1130,6 +1169,22 @@ class SpectralSlitDetector(BaseDetector):
     def corners(self) -> tuple[float, float, float, float]:
         """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
         return self._corners
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor takes the geometry either as corners or as the slit
+        # parameters, not both, so a copy (and every lazy block) is rebuilt from
+        # the form it was given in. A detector that did not record its form
+        # (one pickled by an earlier version) is rebuilt from the slit parameters,
+        # which describe the same rectangle in both forms.
+        if getattr(self, "_from_corners", False):
+            exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
+        else:
+            exclude = exclude + ("corners",)
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "q_max" in kwargs:
+            # as given, not q_min + extent, which can differ in the last bit
+            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+        return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
         """Radial bounds [mrad] of the acceptance region, for grid-sufficiency
@@ -1470,6 +1525,14 @@ class SpectralAnnularDetector(AnnularDetector):
             inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
         )
 
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor's `angle` is the sweep angle; a copy (and every lazy
+        # block) is rebuilt from it.
+        kwargs = super()._copy_kwargs(exclude=exclude + ("angle",), cls=cls)
+        if "angle" not in exclude:
+            kwargs["angle"] = self.sweep_angle
+        return kwargs
+
     @property
     def q_min(self) -> float:
         """Start of the q sweep [mrad]."""
@@ -1756,6 +1819,9 @@ class PixelatedDetector(BaseDetector):
         ``full``
             Diffraction patterns will not be cropped and will include angles outside
             the antialiasing aperture.
+        For waves with several energies, every energy is cropped to the same
+        number of pixels, those of the highest energy, as
+        `Waves.diffraction_patterns` crops such waves.
     resample : str or False
         If 'uniform', the diffraction patterns from rectangular cells will be
         downsampled to a uniform angular sampling.
@@ -1774,6 +1840,15 @@ class PixelatedDetector(BaseDetector):
         memory.
     """
 
+    # Cropping and resampling work on pixels and 1/Å, the same for every energy
+    # once the crop is fixed for the whole ensemble (see _match_ensemble), so a
+    # multi-energy ensemble is detected at once.
+    _splits_energy_ensembles = False
+
+    # A detector without a recorded ensemble crop, such as one pickled by an
+    # earlier version, has none.
+    _ensemble_gpts: Optional[tuple[int, int]] = None
+
     def __init__(
         self,
         max_angle: str | float = "valid",
@@ -1781,11 +1856,50 @@ class PixelatedDetector(BaseDetector):
         reciprocal_space: bool = True,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
+        # The crop of a multi-energy ensemble before any resampling, set by
+        # _match_ensemble and kept through the constructor so that lazy blocks
+        # rebuild it.
+        self._ensemble_gpts = _ensemble_gpts
         super().__init__(to_cpu=to_cpu, url=url)
+
+    def _match_ensemble(self, waves: WavesType) -> PixelatedDetector:
+        """Fix the crop size of a multi-energy ensemble.
+
+        Cropped to `max_angle`, each energy has its own number of pixels, since
+        the angular sampling scales with the wavelength. Every energy is cropped
+        to the pixel count of the whole ensemble instead, before any resampling,
+        as `Waves.diffraction_patterns` crops an ensemble at once, so the members
+        stack, and their axes are labelled with the ensemble's sampling.
+        """
+        from abtem.array import _multi_energy_axis, _without_scalar_energy
+
+        if (
+            self._ensemble_gpts is not None
+            or not self.reciprocal_space
+            or _multi_energy_axis(waves) is None
+        ):
+            return self
+
+        # The highest energy of the axis decides, not a scalar energy that may
+        # have been left on the waves.
+        matched = self.copy()
+        matched._ensemble_gpts = self._crop_gpts(_without_scalar_energy(waves))
+        return matched
+
+    def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:
+        """The number of pixels the diffraction patterns are cropped to before any
+        resampling: those within `max_angle`, or the ensemble's (see
+        `_match_ensemble`)."""
+        if self._ensemble_gpts is not None:
+            return self._ensemble_gpts
+        if self.max_angle:
+            return waves._gpts_within_angle(self.max_angle)
+        return waves._valid_gpts
 
     @property
     def max_angle(self) -> str | float:
@@ -1840,7 +1954,7 @@ class PixelatedDetector(BaseDetector):
         """
         if self.resample:
             sampling = waves.reciprocal_space_sampling
-            gpts = waves._gpts_within_angle(self.max_angle)
+            gpts = self._crop_gpts(waves)
 
             gpts, sampling = _diffraction_pattern_resampling_gpts(
                 old_sampling=sampling,
@@ -1852,17 +1966,11 @@ class PixelatedDetector(BaseDetector):
 
             if self.max_angle:
                 gpts = tuple(
-                    min(g, g_max)
-                    for g, g_max in zip(
-                        gpts, waves._gpts_within_angle(self.max_angle)
-                    )
+                    min(g, g_max) for g, g_max in zip(gpts, self._crop_gpts(waves))
                 )
-        elif self.max_angle and not self.resample:
-            gpts = waves._gpts_within_angle(self.max_angle)
-            sampling = waves.reciprocal_space_sampling
         else:
             sampling = waves.reciprocal_space_sampling
-            gpts = waves._valid_gpts
+            gpts = self._crop_gpts(waves)
 
         return sampling, gpts
 
@@ -1935,7 +2043,9 @@ class PixelatedDetector(BaseDetector):
         """
         measurements: Images | DiffractionPatterns
 
-        if self.reciprocal_space:
+        if self.reciprocal_space and self._ensemble_gpts is not None:
+            measurements = waves._diffraction_patterns(self._ensemble_gpts)
+        elif self.reciprocal_space:
             measurements = waves.diffraction_patterns(
                 max_angle=self.max_angle, parity="same"
             )
@@ -1993,6 +2103,10 @@ class WavesDetector(BaseDetector):
        like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
+    # The wave functions do not depend on the wavelength once computed, so a
+    # multi-energy ensemble is passed on at once, without a copy.
+    _splits_energy_ensembles = False
+
     def __init__(
         self,
         gpts: Optional[tuple[int, int]] = None,
@@ -2001,6 +2115,11 @@ class WavesDetector(BaseDetector):
     ):
         self._gpts = gpts
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def gpts(self) -> Optional[tuple[int, int]]:
+        """Number of grid points of the detected wave functions."""
+        return self._gpts
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves

@@ -231,6 +231,74 @@ def test_waves_detector_keeps_data_on_device_by_default():
 @pytest.mark.parametrize(
     "detector",
     [
+        abtem.AnnularDetector(inner=30, outer=100, offset=(5.0, -3.0)),
+        abtem.FlexibleAnnularDetector(step_size=10, inner=10, outer=80),
+        abtem.PixelatedDetector(max_angle=60, resample="uniform"),
+        abtem.WavesDetector(),
+        abtem.SpectralSlitDetector(width=20, q_max=60, angle=30.0, offset=(5.0, 0.0)),
+        abtem.SpectralSlitDetector(corners=(-10.0, 50.0, -5.0, 5.0)),
+        abtem.SpectralAnnularDetector(outer=10, q_max=40, angle=45.0),
+    ],
+    ids=lambda detector: type(detector).__name__,
+)
+def test_lazy_detect_matches_eager_detect(detector):
+    """A lazy block rebuilds the detector from its constructor arguments, which
+    must give back the detector itself."""
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    waves = abtem.Waves(
+        array.astype(np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[abtem.core.axes.UnknownAxis()],
+    )
+
+    eager = detector.detect(waves)
+    lazy = detector.detect(waves.ensure_lazy()).compute(progress_bar=False)
+
+    np.testing.assert_array_equal(lazy.array, eager.array)
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem.SpectralSlitDetector(
+            width=20, q_min=5.0, q_max=60, angle=30.0, offset=(5.0, -3.0)
+        ),
+        abtem.SpectralSlitDetector(corners=(-10.0, 50.0, -5.0, 5.0)),
+    ],
+    ids=["slit-parameters", "corners"],
+)
+def test_a_spectral_slit_detector_without_the_attributes_of_an_older_version(detector):
+    """An older version did not record the form the geometry was given in
+    (`_from_corners`) nor the given `q_max`. Such a detector is rebuilt from its slit
+    parameters, which describe the same rectangle."""
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
+    waves = abtem.Waves(
+        array.astype(np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[abtem.core.axes.UnknownAxis()],
+    )
+
+    detector = detector.copy()
+    mask = detector._get_detector_region_array(waves)
+    eager = detector.detect(waves)
+
+    del detector._from_corners, detector._q_max
+    rebuilt = type(detector)(**detector._copy_kwargs())
+
+    np.testing.assert_allclose(rebuilt.corners, detector.corners, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(rebuilt._get_detector_region_array(waves), mask)
+    np.testing.assert_array_equal(rebuilt.detect(waves).array, eager.array)
+    lazy = rebuilt.detect(waves.ensure_lazy()).compute(progress_bar=False)
+    np.testing.assert_array_equal(lazy.array, eager.array)
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [
         abtem.AnnularDetector(inner=10, outer=40),
         abtem.FlexibleAnnularDetector(outer=40),
         abtem.SegmentedDetector(
