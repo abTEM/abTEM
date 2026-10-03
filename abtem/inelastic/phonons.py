@@ -368,12 +368,12 @@ class FrozenPhonons(BaseFrozenPhonons):
         The directions of anisotropic standard deviations are the Cartesian axes of
         `atoms` as given. A potential that rotates the atoms to another `plane`, or
         orthogonalizes their cell, applies the same linear map to the displacements,
-        including the small strain an orthogonalization may need. Isotropic standard
-        deviations, equal in all three directions for every atom, are applied along
-        the potential's axes without that map: an isotropic Gaussian is the same
-        along any rotated axes, and the seeded displacements stay those of
-        `sigmas * r`. Per-atom standard deviations follow their atoms when the
-        potential repeats the cell.
+        including the small strain an orthogonalization may need. An atom whose
+        standard deviations are equal in all three directions (a float, for example)
+        is displaced along the potential's axes without that map: an isotropic
+        Gaussian is the same along any rotated axes, and its seeded displacement
+        stays that of `sigma * r`. Per-atom standard deviations follow their atoms
+        when the potential repeats the cell.
 
     directions : str, optional
         The directions in which the atoms are displaced, as a string of one or more of
@@ -558,27 +558,40 @@ class FrozenPhonons(BaseFrozenPhonons):
             # Anisotropic standard deviations are given along the axes of
             # self.atoms; the displacements are drawn along those axes and
             # mapped to the axes of `atoms`. An isotropic Gaussian is the same
-            # distribution along any rotated axes, so isotropic standard
-            # deviations are not mapped, and their seeded displacements are
-            # the same with any frame.
-            isotropic = np.all(sigmas == sigmas[:, :1])
-            if not isotropic and not _is_identity(frame):
-                displacements = displacements @ _as_frame(frame)
+            # distribution along any rotated axes, so an atom whose three
+            # standard deviations are equal is not mapped, and its seeded
+            # displacement is the same with any frame.
+            anisotropic = np.any(sigmas != sigmas[:, :1], axis=1)
+            if np.any(anisotropic) and not _is_identity(frame):
+                displacements[anisotropic] = displacements[anisotropic] @ _as_frame(
+                    frame
+                )
         else:
             displacements = sigmas[:, None] * r
 
         axes = self._axes
         if len(set(axes)) < 3 and not _is_identity(directions_frame):
-            # `directions` refers to other axes than those of `atoms`: keep the
-            # components along those axes and map the result back.
+            # `directions` refers to the axes of `directions_frame`: the
+            # displacement keeps its components along those of these axes it
+            # lists, which is a projection along the axes of `atoms`.
             directions_frame = _as_frame(directions_frame)
             kept = np.zeros(3)
             kept[axes] = 1.0
-            displacements = (displacements @ directions_frame) * kept
-            atoms.positions[:] += displacements @ np.linalg.inv(directions_frame)
-        else:
-            for axis in axes:
-                atoms.positions[:, axis] += displacements[:, axis]
+            projection = (
+                directions_frame @ np.diag(kept) @ np.linalg.inv(directions_frame)
+            )
+            diagonal = np.round(np.diag(projection))
+            if np.allclose(projection, np.diag(diagonal), rtol=0.0, atol=1e-12):
+                # The kept axes are axes of `atoms` too (a permutation, or a
+                # strain that leaves the dropped axes alone): keep those
+                # components exactly.
+                axes = [axis for axis in range(3) if diagonal[axis] == 1.0]
+            else:
+                atoms.positions[:] += displacements @ projection
+                return atoms
+
+        for axis in axes:
+            atoms.positions[:, axis] += displacements[:, axis]
 
         return atoms
 

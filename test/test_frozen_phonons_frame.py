@@ -193,6 +193,28 @@ def test_isotropic_sigmas_give_the_seeded_displacements_unchanged(name, sigmas):
     )
 
 
+def test_only_the_anisotropic_atoms_are_mapped():
+    """Per-species sigmas with one isotropic species: its atoms are displaced by
+    sigma * r along the potential's axes, unmapped, while the anisotropic
+    species is mapped by the frame."""
+    atoms = ase.build.bulk("NaCl", "rocksalt", a=5.64, cubic=True)
+    sigmas = {"Na": (0.1, 0.1, 0.1), "Cl": (0.05, 0.10, 0.20)}
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=5)
+    transformed, _, frame = abtem.Potential(
+        fp, sampling=0.1, plane="xz"
+    )._transform_atoms()
+
+    displaced = fp.randomize(transformed, frame=frame)
+
+    r = np.random.default_rng(fp.seed[0]).normal(size=(len(transformed), 3))
+    per_atom = fp._sigmas_of(transformed)
+    expected = per_atom * r
+    chlorine = transformed.numbers == 17
+    expected[chlorine] = expected[chlorine] @ frame
+    np.testing.assert_array_equal(displaced.positions, transformed.positions + expected)
+    assert not np.allclose(frame, np.eye(3))
+
+
 def test_anisotropic_sigmas_with_an_identity_frame_are_unchanged():
     atoms = ase.build.bulk("Si", cubic=True)
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=(0.05, 0.1, 0.2), seed=3)
@@ -295,6 +317,59 @@ def test_sigmas_without_a_species_of_the_atoms_raise():
     germanium.numbers[:] = 32
     with pytest.raises(RuntimeError, match="provided for all atomic species"):
         fp.randomize(germanium)
+
+
+def _rotation(axis, degrees):
+    """The rotation as a 3x3 matrix acting on row vectors."""
+    unit_vectors = ase.Atoms(positions=np.eye(3))
+    unit_vectors.rotate(degrees, axis)
+    return unit_vectors.positions
+
+
+def _many_atoms():
+    return ase.Atoms(
+        "Au50",
+        scaled_positions=np.random.default_rng(1).uniform(0.1, 0.9, (50, 3)),
+        cell=(5.0, 6.0, 7.0),
+        pbc=True,
+    )
+
+
+def test_directions_along_rotated_axes_drop_the_rotated_component():
+    """With directions referring to axes rotated about x, the displacement keeps
+    exactly its components along the rotated x and y and none along the rotated
+    z, whatever the input axes those are."""
+    atoms = _many_atoms()
+    sigmas = (0.05, 0.10, 0.20)
+    fp = abtem.FrozenPhonons(
+        atoms, num_configs=1, sigmas=sigmas, directions="xy", seed=3
+    )
+    frame = _rotation("x", 30)
+
+    displaced = fp._randomize_transformed(atoms, directions_frame=frame)
+
+    r = np.random.default_rng(fp.seed[0]).normal(size=(len(atoms), 3))
+    drawn = np.array(sigmas, dtype=np.float32) * r
+    displacement = (displaced.positions - atoms.positions) @ frame
+    np.testing.assert_allclose(displacement[:, 2], 0.0, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(
+        displacement[:, :2], (drawn @ frame)[:, :2], rtol=0, atol=1e-15
+    )
+
+
+@pytest.mark.parametrize("degrees", [4, 17, 33, 61, 122])
+def test_directions_along_axes_rotated_in_the_plane_are_kept_exactly(degrees):
+    """A rotation about z keeps the plane of x and y: directions="xy" then keeps
+    the x and y components of sigma * r exactly, as without a frame, although
+    the projection onto the rotated plane is diagonal only to rounding, which
+    for most angles would move some coordinates by a few 1e-16 A."""
+    atoms = _many_atoms()
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions="xy", seed=3)
+    frame = _rotation("z", degrees)
+
+    displaced = fp._randomize_transformed(atoms, directions_frame=frame)
+
+    np.testing.assert_array_equal(displaced.positions, fp.randomize(atoms).positions)
 
 
 def test_a_frame_that_is_not_3x3_raises():
@@ -572,6 +647,34 @@ def test_gpaw_potential_drops_the_directions_of_the_potential(
     if directions == "xy":
         dropped = 1 if plane == "xz" else 2
         expected[:, dropped] = atoms.positions[:, dropped]
+    np.testing.assert_array_equal(displaced.positions, expected)
+
+
+@pytest.mark.parametrize(
+    "sigmas", [0.1, (0.05, 0.10, 0.20)], ids=["isotropic", "anisotropic"]
+)
+def test_gpaw_directions_with_a_strained_frame_are_unchanged(monkeypatch, sigmas):
+    """A sheared cell, which the potentials GPAWPotential builds orthogonalize by
+    a strain in the plane: directions="xy" still drops exactly the z component,
+    and the x and y components stay sigma * r, bit for bit."""
+    stub = _GPAWStub(monkeypatch)
+    # Twenty atoms, so that mapping the displacements to the strained axes and
+    # back would move at least one coordinate by rounding.
+    atoms = ase.Atoms(
+        "Au20",
+        scaled_positions=np.random.default_rng(0).uniform(0.1, 0.9, (20, 3)),
+        cell=[[4.0, 0.0, 0.0], [0.4, 4.0, 0.0], [0.0, 0.0, 5.0]],
+        pbc=True,
+    )
+    fp = abtem.FrozenPhonons(
+        atoms, num_configs=1, sigmas=sigmas, directions="xy", seed=3
+    )
+
+    displaced = stub.displace(atoms, fp)
+
+    r = np.random.default_rng(fp.seed[0]).normal(size=(len(atoms), 3))
+    expected = atoms.positions.copy()
+    expected[:, :2] += (np.array(sigmas, dtype=np.float32) * r)[:, :2]
     np.testing.assert_array_equal(displaced.positions, expected)
 
 
