@@ -145,7 +145,7 @@ def run(args: argparse.Namespace) -> int:
 
         timings: dict[str, Any] = {"setup": setup, "warm": [], "warm_cpu": []}
         result = None
-        with meters.VRAMSampler() as vram:
+        with meters.VRAMSampler(device=cid.device) as vram:
             if case.warmup in ("cold_and_warm", "cold_only"):
                 result, t = meters.timed(run_fn, cid.device)
                 timings["cold"] = t.wall
@@ -173,6 +173,7 @@ def run(args: argparse.Namespace) -> int:
         outputs = {
             n: _extract(o) for n, o in _name_outputs(case, _materialize(result)).items()
         }
+        record["memory"]["peak_rss_bytes"] = meters.vm_hwm_bytes()
         record["status"] = store.STATUS_OK
         record["wall_total"] = time.perf_counter() - t_start
         bundle.write_case(args.case_id, record, outputs)
@@ -183,12 +184,14 @@ def run(args: argparse.Namespace) -> int:
         record["status"] = store.STATUS_OOM
         record["error"] = traceback.format_exc()
         record["error_summary"] = _last_line(record["error"])
+        record["memory"] = {"peak_rss_bytes": meters.vm_hwm_bytes()}
         bundle.write_case(args.case_id, record)
         return 3
     except Exception:  # noqa: BLE001 -- the record is the error report
         record["status"] = store.STATUS_ERROR
         record["error"] = traceback.format_exc()
         record["error_summary"] = _last_line(record["error"])
+        record["memory"] = {"peak_rss_bytes": meters.vm_hwm_bytes()}
         bundle.write_case(args.case_id, record)
         print(record["error"], file=sys.stderr)
         return 1
@@ -204,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True, help="bundle directory")
     p.add_argument("--repeats", type=int, default=None)
     args = p.parse_args(argv)
+    if args.repeats is not None and args.repeats < 0:
+        p.error("--repeats must be 0 or more")
     if args.repeats is None:
         args.repeats = presets.PRESETS[args.preset].repeats
     Path(args.out).mkdir(parents=True, exist_ok=True)

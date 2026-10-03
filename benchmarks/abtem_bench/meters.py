@@ -2,8 +2,11 @@
 
 Every meter here is either a clock or a driver/allocator query. None of them
 runs code on the computation being measured, and none touches dask workers.
-Peak host memory is not measured here at all: the runner reads it from
-``os.wait4`` on the worker process, which is exact and free.
+Peak host memory is the worker's own ``VmHWM``, read once after the case has
+finished: the high-water mark of the worker's address space since its exec.
+``ru_maxrss`` from ``os.wait4`` is not used for it, because Linux carries the
+parent's high-water mark into the child at fork and exec, which puts a floor
+of the runner's own peak under every reading.
 """
 
 from __future__ import annotations
@@ -73,6 +76,7 @@ class VRAMSampler:
     cuFFT workspace held outside the pool. Both are queries, not computation.
     """
 
+    device: str = "gpu"
     interval: float = 0.005
     peak_pool: int = 0
     peak_device: int = 0
@@ -82,8 +86,11 @@ class VRAMSampler:
     _active: bool = False
 
     def _loop(self, cp) -> None:
-        pool = cp.get_default_memory_pool()
-        dev = cp.cuda.Device()
+        try:
+            pool = cp.get_default_memory_pool()
+            dev = cp.cuda.Device()
+        except Exception:  # noqa: BLE001 -- no usable device; record nothing
+            return
         while not self._stop.is_set():
             try:
                 used = pool.used_bytes()
@@ -96,6 +103,8 @@ class VRAMSampler:
             self._stop.wait(self.interval)
 
     def __enter__(self) -> "VRAMSampler":
+        if self.device != "gpu":
+            return self  # a CPU case must not initialise the GPU
         cp = _cupy()
         if cp is None:
             return self
@@ -111,7 +120,7 @@ class VRAMSampler:
             self._thread.join(timeout=2.0)
 
     def as_dict(self) -> dict:
-        if not self._active:
+        if not self._active or self.samples == 0:
             return {
                 "peak_vram_pool_bytes": None,
                 "peak_vram_device_bytes": None,
@@ -122,3 +131,15 @@ class VRAMSampler:
             "peak_vram_device_bytes": int(self.peak_device),
             "samples": self.samples,
         }
+
+
+def vm_hwm_bytes() -> int | None:
+    """This process's peak resident memory since exec (``VmHWM``), or None."""
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None

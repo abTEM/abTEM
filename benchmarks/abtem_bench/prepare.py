@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 HARNESS_DIR = Path(__file__).resolve().parents[1]  # .../benchmarks
@@ -89,7 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     repo = repo_root()
     for ref in args.ref:
-        e = prepare(repo, ref)
+        try:
+            e = prepare(repo, ref)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"error: git cannot resolve {ref!r}: {exc.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 2
         print(f"{ref:<20} {e['sha'][:12]}  {e['describe']:<28} {e['worktree']}")
     print(f"index: {bench_dir(repo) / INDEX_NAME}")
     return 0

@@ -5,8 +5,10 @@ package is swapped by putting the ref's worktree on PYTHONPATH after the
 harness directory. ``python -P`` keeps the worker's cwd off ``sys.path`` so a
 checkout cannot shadow the worktree.
 
-Peak host memory is ``ru_maxrss`` from ``os.wait4`` on the worker: exact,
-per child, and costing the measured process nothing.
+Peak host memory is reported by the worker itself (see ``meters``). The
+runner keeps ``ru_maxrss`` from ``os.wait4`` only as ``peak_rss_wait4_bytes``,
+an upper bound that includes the runner's own high-water mark, for workers that
+die before they can report.
 """
 
 from __future__ import annotations
@@ -27,7 +29,31 @@ from abtem_bench import prepare, presets, registry, store
 
 HARNESS_DIR = Path(__file__).resolve().parents[1]  # .../benchmarks
 MEM_FLOOR_BYTES = 8 * 1024**3
-TIER_TIMEOUTS = {"quick": 300.0, "standard": 1800.0, "large": None}
+# Defaults for cases that do not declare Tier(timeout=...).
+TIER_TIMEOUTS: dict[str, float | None] = {
+    "quick": 120.0,
+    "standard": 900.0,
+    "large": None,
+}
+LOG_TAIL_LINES = 40
+
+
+class RefError(RuntimeError):
+    """A ref cannot be resolved (unknown to git, or missing from the prepared index)."""
+
+
+class BundleExistsError(RuntimeError):
+    """The output directory already holds a bundle and overwrite was not asked for."""
+
+
+def case_timeout(case_id: registry.CaseId) -> float | None:
+    """The case's own tier timeout if it declares one, else the tier default."""
+    case = registry.REGISTRY.get(case_id.name)
+    if case is not None and case_id.tier in case.tiers:
+        declared = case.tiers[case_id.tier].timeout
+        if declared is not None:
+            return float(declared)
+    return TIER_TIMEOUTS.get(case_id.tier)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -56,7 +82,10 @@ class Ref:
 def resolve_ref(repo: Path, ref: str) -> tuple[str, str]:
     """Resolve ``ref`` with git, or from the index written by ``prepare``."""
     if _git_available():
-        sha = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        try:
+            sha = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        except subprocess.CalledProcessError as exc:
+            raise RefError(f"git cannot resolve {ref!r} in {repo}") from exc
         try:
             describe = _git(repo, "describe", "--tags", "--always", sha)
         except subprocess.CalledProcessError:
@@ -64,10 +93,10 @@ def resolve_ref(repo: Path, ref: str) -> tuple[str, str]:
         return sha, describe
     entry = prepare.load_index(repo).get(ref)
     if entry is None:
-        raise RuntimeError(
+        raise RefError(
             f"git is not available and {ref!r} is not in "
             f"{prepare.bench_dir(repo) / prepare.INDEX_NAME}; run "
-            f"'python3 -P -m abtem_bench.prepare --ref {ref}' on a machine with git"
+            f"'python -P -m abtem_bench.prepare --ref {ref}' on a machine with git"
         )
     return entry["sha"], entry["describe"]
 
@@ -78,9 +107,9 @@ def ensure_worktree(repo: Path, sha: str) -> Path:
     if (path / "abtem" / "__init__.py").exists():
         return path
     if not _git_available():
-        raise RuntimeError(
+        raise RefError(
             f"git is not available and no prepared worktree exists at {path}; run "
-            "'python3 -P -m abtem_bench.prepare --ref <ref>' on a machine with git"
+            "'python -P -m abtem_bench.prepare --ref <ref>' on a machine with git"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():  # stale registration without files
@@ -113,11 +142,21 @@ _OOM_PATTERNS = (
 
 
 def classify_failure(returncode: int, stderr: str, timed_out: bool) -> tuple[str, str]:
-    """Map a worker's exit into a status and a one-line reason."""
+    """Map a worker's exit into a status and a one-line reason.
+
+    Only the end of the log is searched: a warning printed early (a device
+    probe, a deprecation) must not be mistaken for the cause of the exit.
+    """
+    stderr = "\n".join(stderr.splitlines()[-LOG_TAIL_LINES:])
     if timed_out:
         return store.STATUS_TIMEOUT, "timeout"
     if returncode == -signal.SIGKILL or returncode == 137:
         return store.STATUS_OOM, "killed (SIGKILL), most likely the OOM killer"
+    if returncode < 0:
+        return (
+            store.STATUS_ERROR,
+            f"killed by signal {signal.Signals(-returncode).name}",
+        )
     for pat in _OOM_PATTERNS:
         if pat in stderr:
             return store.STATUS_OOM, pat
@@ -141,8 +180,13 @@ def run_case(
     timeout: float | None = None,
     python: str = sys.executable,
 ) -> dict[str, Any]:
-    """Run one case in a fresh worker process and return its record."""
+    """Run one case in a fresh worker process and return its record.
+
+    Any earlier record of the case in the bundle is removed first, so a worker
+    that dies without writing one can never be read as the previous result.
+    """
     cid = str(case_id)
+    bundle.clear_case(cid)
     avail = store.mem_available_bytes()
     if avail is not None and avail < MEM_FLOOR_BYTES:
         record: dict[str, Any] = {
@@ -215,7 +259,7 @@ def run_case(
                 timer.cancel()
         proc.returncode = os.waitstatus_to_exitcode(status)
     wall = time.perf_counter() - t0
-    peak_rss = rusage.ru_maxrss * 1024  # Linux reports kilobytes
+    peak_rss_wait4 = rusage.ru_maxrss * 1024  # Linux reports kilobytes
 
     written_by_worker = bundle.has_case(cid)
     if written_by_worker:
@@ -236,7 +280,8 @@ def run_case(
     if timed_out and result["status"] == store.STATUS_OK:
         result["status"] = store.STATUS_TIMEOUT
     memory: dict[str, Any] = dict(result.get("memory") or {})
-    memory["peak_rss_bytes"] = int(peak_rss)
+    memory.setdefault("peak_rss_bytes", None)
+    memory["peak_rss_wait4_bytes"] = int(peak_rss_wait4)
     result["memory"] = memory
     result["worker_wall"] = wall
     result["returncode"] = proc.returncode
@@ -249,11 +294,29 @@ def run_case(
 
 
 def new_bundle(
-    out: Path, ref: Ref, preset: str, tier: str, devices: list[str], command: str
+    out: Path,
+    ref: Ref,
+    preset: str,
+    tier: str,
+    devices: list[str],
+    command: str,
+    overwrite: bool = False,
 ) -> store.Bundle:
+    """Create an empty bundle at ``out``.
+
+    An existing bundle there is refused unless ``overwrite`` is set, in which
+    case it is deleted first: records of another ref or an earlier capture must
+    never mix into this one.
+    """
     bundle = store.Bundle(out)
+    if bundle.path.exists() and any(bundle.path.iterdir()):
+        if not overwrite:
+            raise BundleExistsError(
+                f"{bundle.path} is not empty; choose another --out or pass --overwrite"
+            )
+        shutil.rmtree(bundle.path)
     bundle.path.mkdir(parents=True, exist_ok=True)
-    fp = store.fingerprint()
+    fp = store.fingerprint(gpu="gpu" in devices)
     bundle.write_manifest(
         {
             "schema_version": store.SCHEMA_VERSION,
@@ -292,6 +355,7 @@ def capture(
     labels: list[str] | None = None,
     command: str = "",
     progress=print,
+    overwrite: bool = False,
 ) -> list[store.Bundle]:
     """Capture every case for every ref, interleaved per case (A, B, A, B, ...).
 
@@ -299,34 +363,32 @@ def capture(
     directory names (needed when the same ref is captured twice for a
     self-check).
     """
+    if rounds < 1:
+        raise ValueError("rounds must be 1 or more")
     prepared = [prepare_ref(repo, r) for r in refs]
     labels = labels or [r.label.replace("/", "_") for r in prepared]
     bundles = [
-        new_bundle(out / lab, ref, preset, tier, devices, command)
+        new_bundle(out / lab, ref, preset, tier, devices, command, overwrite)
         for lab, ref in zip(labels, prepared)
     ]
-    timeout = TIER_TIMEOUTS.get(tier)
     for rnd in range(rounds):
         for cid in case_ids:
             for ref, bundle in zip(prepared, bundles):
-                if rounds > 1 and bundle.has_case(str(cid)):
-                    # later rounds append to the timing lists
-                    prev = bundle.read_case(str(cid))
-                else:
-                    prev = None
+                prev = bundle.read_case(str(cid)) if bundle.has_case(str(cid)) else None
                 rec = run_case(
-                    ref, cid, bundle, preset, repeats=repeats, timeout=timeout
+                    ref,
+                    cid,
+                    bundle,
+                    preset,
+                    repeats=repeats,
+                    timeout=case_timeout(cid),
                 )
                 if (
                     prev
                     and prev.get("status") == store.STATUS_OK
                     and rec.get("status") == store.STATUS_OK
                 ):
-                    for key in ("warm", "warm_cpu"):
-                        rec["timings"][key] = prev["timings"].get(key, []) + rec[
-                            "timings"
-                        ].get(key, [])
-                    rec["timings"]["rounds"] = rnd + 1
+                    rec = _merge_rounds(prev, rec, rnd + 1)
                     store.dump_json(bundle.case_json(str(cid)), rec)
                 t = rec.get("timings", {}).get("median")
                 rss = (rec.get("memory") or {}).get("peak_rss_bytes")
@@ -339,6 +401,45 @@ def capture(
     for bundle in bundles:
         _record_abtem_identity(bundle)
     return bundles
+
+
+def _merge_rounds(
+    prev: dict[str, Any], rec: dict[str, Any], rounds: int
+) -> dict[str, Any]:
+    """Combine a case's earlier rounds with the latest one.
+
+    Timing statistics are recomputed over all warm repeats of all rounds; cold
+    is the median of the per-round cold times (each round is a fresh process);
+    peak memory is the largest peak of any round. Outputs are the latest
+    round's.
+    """
+    import statistics
+
+    pt, t = prev.get("timings", {}), rec["timings"]
+    for key in ("warm", "warm_cpu"):
+        t[key] = list(pt.get(key, [])) + list(t.get(key, []))
+    colds = list(pt.get("cold_all", [pt["cold"]] if "cold" in pt else []))
+    if "cold" in t:
+        colds.append(t["cold"])
+    if colds:
+        t["cold_all"] = colds
+        t["cold"] = float(statistics.median(colds))
+    if t["warm"]:
+        t["median"] = float(statistics.median(t["warm"]))
+        t["min"] = float(min(t["warm"]))
+    elif colds:
+        t["median"] = t["min"] = t["cold"]
+    t["rounds"] = rounds
+    pm, m = prev.get("memory") or {}, rec.setdefault("memory", {})
+    for key in (
+        "peak_rss_bytes",
+        "peak_rss_wait4_bytes",
+        "peak_vram_pool_bytes",
+        "peak_vram_device_bytes",
+    ):
+        values = [v for v in (pm.get(key), m.get(key)) if v is not None]
+        m[key] = max(values) if values else None
+    return rec
 
 
 def _record_abtem_identity(bundle: store.Bundle) -> None:
