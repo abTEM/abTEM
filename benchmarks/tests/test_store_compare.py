@@ -114,6 +114,41 @@ def test_memory_is_flagged_only_against_a_noise_floor(tmp_path, registry_with_de
     assert floored.failures({"memory": 0.25}) == []
 
 
+def _metered(tmp_path, name, meter, rss):
+    rec = record(rss=rss)
+    if meter is not None:
+        rec["memory"]["rss_meter"] = meter
+    return bundle(tmp_path, name, {CID: (rec, {"out": (np.ones((4, 4)), [], {})})})
+
+
+def test_peak_rss_from_different_meters_is_not_compared(tmp_path, registry_with_demo):
+    # bundles from the earlier harness revision carry no marker: wait4
+    old = _metered(tmp_path, "old", None, 100 * 1024**2)
+    new = _metered(tmp_path, "new", "VmHWM", 130 * 1024**2)
+    row = cmp.compare(old, new, registry_with_demo, noise={CID: {"memory": 0.0}}).rows[
+        0
+    ]
+    assert row.rss_ratio is None and "memory" not in row.flags
+    note = "peak RSS measured with different meters (wait4 vs VmHWM); not compared"
+    assert note in row.notes
+    assert cmp.noise_floor(old, new).get(CID, {}).get("memory") is None
+    # the other way round names the meters in reference-then-candidate order
+    back = cmp.compare(new, old, registry_with_demo).rows[0]
+    assert "(VmHWM vs wait4)" in "; ".join(back.notes)
+
+
+def test_peak_rss_from_the_same_meter_compares_as_before(tmp_path, registry_with_demo):
+    for meter in (None, "VmHWM"):
+        a = _metered(tmp_path, f"a{meter}", meter, 100 * 1024**2)
+        b = _metered(tmp_path, f"b{meter}", meter, 120 * 1024**2)
+        row = cmp.compare(a, b, registry_with_demo, noise={CID: {"memory": 0.01}}).rows[
+            0
+        ]
+        assert row.rss_ratio == pytest.approx(1.2) and "memory" in row.flags
+        assert not any("meters" in n for n in row.notes)
+        assert cmp.noise_floor(a, b)[CID]["memory"] == pytest.approx(abs(100 / 120 - 1))
+
+
 def test_vram_ratio_and_flag(tmp_path, registry_with_demo):
     arr = np.ones((4, 4))
 

@@ -33,6 +33,7 @@ def test_end_to_end_with_a_relative_bundle_path(tmp_path, monkeypatch, this_chec
     mem = rec["memory"]
     # the worker's own peak; wait4's figure also carries the runner's high water
     assert 0 < mem["peak_rss_bytes"] <= mem["peak_rss_wait4_bytes"]
+    assert mem["rss_meter"] == "VmHWM"
     # a CPU case never touches the GPU
     assert mem["peak_vram_pool_bytes"] is None and mem["samples"] == 0
 
@@ -116,6 +117,34 @@ def test_overwrite_never_deletes_the_current_directory_or_a_parent(
             out, this_checkout, "accuracy", "quick", ["cpu"], "t", overwrite=True
         )
     assert (out / "manifest.json").exists() and inner.exists()
+
+
+@pytest.mark.parametrize(
+    "exc, status", [(MemoryError, store.STATUS_OOM), (RuntimeError, store.STATUS_ERROR)]
+)
+def test_failed_workers_name_the_rss_meter_too(tmp_path, monkeypatch, exc, status):
+    import argparse
+
+    from abtem_bench import worker
+
+    def boom(expected_root):
+        raise exc("boom")
+
+    monkeypatch.setattr(worker, "_identify", boom)
+    args = argparse.Namespace(
+        out=str(tmp_path / "b"),
+        case_id=str(CID),
+        ref_label="x",
+        ref_sha="0" * 40,
+        preset="accuracy",
+        expected_root=None,
+        repeats=0,
+    )
+    worker.run(args)
+    rec = store.Bundle(args.out).read_case(str(CID))
+    assert rec["status"] == status
+    assert rec["memory"]["rss_meter"] == "VmHWM"
+    assert rec["memory"]["peak_rss_bytes"] > 0
 
 
 def test_rounds_recompute_statistics_over_all_rounds():

@@ -481,9 +481,14 @@ def noise_floor(
             continue
         f: dict[str, float] = {}
         mem_a, mem_b = ra.get("memory", {}), rb.get("memory", {})
+        same_meter = rss_meters(mem_a, mem_b) is None
         for key, x, y in (
             ("speed", ra["timings"].get("median"), rb["timings"].get("median")),
-            ("memory", mem_a.get("peak_rss_bytes"), mem_b.get("peak_rss_bytes")),
+            (
+                "memory",
+                mem_a.get("peak_rss_bytes") if same_meter else None,
+                mem_b.get("peak_rss_bytes") if same_meter else None,
+            ),
             (
                 "vram",
                 mem_a.get("peak_vram_pool_bytes"),
@@ -640,6 +645,18 @@ def _ratio_of(a: Any, b: Any) -> float | None:
     return b / a if a and b else None
 
 
+def rss_meters(mem_a: dict[str, Any], mem_b: dict[str, Any]) -> tuple[str, str] | None:
+    """The two meters of ``peak_rss_bytes`` when they differ and both are present.
+
+    A record without ``rss_meter`` comes from a harness revision that stored the
+    ``os.wait4`` figure.
+    """
+    if not (mem_a.get("peak_rss_bytes") and mem_b.get("peak_rss_bytes")):
+        return None
+    meters = (mem_a.get("rss_meter", "wait4"), mem_b.get("rss_meter", "wait4"))
+    return meters if meters[0] != meters[1] else None
+
+
 def _pair_row(
     reference: store.Bundle,
     candidate: store.Bundle,
@@ -738,7 +755,16 @@ def _pair_row(
             row.flags.append(flag)
     row.cold_ratio = _ratio_of(rr["timings"].get("cold"), rc["timings"].get("cold"))
     mem_r, mem_c = rr.get("memory", {}), rc.get("memory", {})
-    row.rss_ratio = _ratio_of(mem_r.get("peak_rss_bytes"), mem_c.get("peak_rss_bytes"))
+    meters = rss_meters(mem_r, mem_c)
+    if meters:
+        row.notes.append(
+            "peak RSS measured with different meters "
+            f"({meters[0]} vs {meters[1]}); not compared"
+        )
+    else:
+        row.rss_ratio = _ratio_of(
+            mem_r.get("peak_rss_bytes"), mem_c.get("peak_rss_bytes")
+        )
     if _ratio_flagged(row, row.rss_ratio, "memory", thresholds["memory"]):
         row.flags.append("memory")
     row.vram_ratio = _ratio_of(
