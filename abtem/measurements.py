@@ -4973,6 +4973,49 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return self.bandlimit(radius, outer=np.inf)
 
+    def _apply_block_direct(self, block_direct) -> DiffractionPatterns:
+        """Apply the ``block_direct`` argument of ``Waves.diffraction_patterns`` and
+        the frozen-phonon functions.
+
+        True (a bool or ``numpy.bool_``) blocks the direct beam. With a finite
+        ``semiangle_cutoff`` in the metadata larger than half the smaller angular
+        sampling, that is the bright-field disk and its margin, as
+        ``block_direct()`` blocks it; the margin covers the soft edge of the
+        aperture, which reaches the nearest pixels from that cutoff on. Without one,
+        or with a cutoff of at most half the smaller angular sampling (a plane wave,
+        a parallel beam, or a nearly parallel one), or an infinite one (no
+        aperture), it is the zero-angle pixel alone: a radius of half the smaller
+        angular sampling, without a margin, reaches that pixel and no other,
+        whatever roundoff its float32 coordinate carries. The default radius of
+        ``block_direct()`` would also reach the nearest pixels, which in a
+        one-unit-cell pattern are the first-order reflections. A hard aperture
+        records the same cutoff, so with a cutoff between half and the full
+        smaller angular sampling the margin also blocks the nearest pixels, which
+        it leaves dark; the metadata cannot tell the two apertures apart. A NaN or
+        negative cutoff raises the ``ValueError`` of ``block_direct()``. An
+        ensemble of cutoffs leaves none in the metadata, so True blocks only the
+        zero-angle pixel and the bright-field disks stay; pass a radius instead. A
+        number is the ``radius`` of ``block_direct()`` [mrad], with its margin.
+        False, 0 and None block nothing.
+        """
+        if not block_direct:
+            return self
+
+        # bool is a subclass of int, so True is checked before it can be taken
+        # as a radius of 1 mrad.
+        if not isinstance(block_direct, (bool, np.bool_)):
+            return self.block_direct(radius=block_direct)
+
+        half_sampling = 0.5 * min(self.angular_sampling)
+        semiangle_cutoff = self.metadata.get("semiangle_cutoff")
+        if semiangle_cutoff is None or (
+            np.ndim(semiangle_cutoff) == 0
+            and (0.0 <= semiangle_cutoff <= half_sampling or semiangle_cutoff == np.inf)
+        ):
+            return self.block_direct(radius=half_sampling, margin=False)
+
+        return self.block_direct()
+
 
 def _complex_from_real_and_imag(real, imag):
     xp = get_array_module(real)
@@ -6919,15 +6962,24 @@ def _thermal_weight_tds(
     flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
-    beta = 1.0 / (units.kB * temperature)
-    n_occ = 1.0 / (np.exp(nonzero_e * beta) - 1.0)
+    k_t = units.kB * temperature
+    if k_t == 0.0:
+        # The limit T -> 0, also where k_B T underflows: no thermal phonons
+        # (n = 0), so the whole signal is loss.
+        n_occ = np.zeros_like(nonzero_e)
+    else:
+        # Where E / k_B T overflows the exponential, n -> 0 is the correct limit;
+        # expm1 keeps n finite where E / k_B T is tiny.
+        with np.errstate(over="ignore"):
+            n_occ = 1.0 / np.expm1(nonzero_e / k_t)
     loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
     gain_weight = n_occ / (2.0 * n_occ + 1.0)
 
     def _broadcast(weight):
+        # In the intensities' precision, so that float32 intensities stay float32.
         shape = [1] * I_tds.ndim
         shape[energy_axis_idx] = len(weight)
-        return xp.asarray(weight.reshape(shape))
+        return xp.asarray(weight.reshape(shape), dtype=I_tds.dtype)
 
     zero_slice = tuple(
         slice(0, 1) if i == energy_axis_idx else slice(None)
@@ -6959,35 +7011,321 @@ def _thermal_weight_tds(
     return result_array, e_values_signed
 
 
+FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
+
+# The names "incoherent", "coherent" and "tds" and the current names they map
+# to. Passed as components they raise a ValueError naming the current name;
+# momentum_resolved_spectrum reads them as the current name in saved results.
+_RENAMED_FROZEN_PHONON_COMPONENTS = {
+    "incoherent": "total",
+    "coherent": "elastic",
+    "tds": "diffuse",
+}
+
+
+def _current_component_name(name):
+    """The name a component recorded under one of the names of
+    ``_RENAMED_FROZEN_PHONON_COMPONENTS`` maps to, e.g. ``"tds"`` ->
+    ``"diffuse"``; any other value unchanged."""
+    if isinstance(name, str):
+        return _RENAMED_FROZEN_PHONON_COMPONENTS.get(name, name)
+    return name
+
+
+def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], bool]:
+    """The requested component names, in the order given, and whether they are
+    stacked along a component axis (``"all"`` or a sequence) or returned alone
+    (a single name)."""
+    if isinstance(components, str):
+        if components == "all":
+            return FROZEN_PHONON_COMPONENTS, True
+        names, stacked = (components,), False
+    elif isinstance(components, (tuple, list)):
+        names, stacked = tuple(components), True
+        if not names:
+            raise ValueError(
+                f"components must name at least one of {FROZEN_PHONON_COMPONENTS}"
+            )
+        if names == ("all",):
+            return FROZEN_PHONON_COMPONENTS, True
+        if names.count("all") > 1:
+            raise ValueError("components gives 'all' more than once")
+    else:
+        raise TypeError(
+            "components must be one of "
+            f"{FROZEN_PHONON_COMPONENTS}, 'all', or a tuple or list of those "
+            f"names, got {type(components).__name__}"
+        )
+
+    for name in names:
+        if not isinstance(name, str):
+            raise TypeError(
+                f"component names must be strings, got {type(name).__name__}"
+            )
+        if name in _RENAMED_FROZEN_PHONON_COMPONENTS:
+            raise ValueError(
+                f"{name!r} is now {_RENAMED_FROZEN_PHONON_COMPONENTS[name]!r}"
+            )
+        if name == "all":
+            raise ValueError("'all' cannot be combined with other component names")
+        if name not in FROZEN_PHONON_COMPONENTS:
+            raise ValueError(
+                f"components must be one of {FROZEN_PHONON_COMPONENTS} or 'all', "
+                f"got {name!r}"
+            )
+
+    if len(set(names)) != len(names):
+        raise ValueError(f"components contains a name twice: {names}")
+
+    # Plain str, so that str subclasses such as numpy.str_ do not reach the
+    # metadata and the component axis.
+    return tuple(str(name) for name in names), stacked
+
+
+def _validate_reduction_dtype(reduction_dtype) -> Optional[np.dtype]:
+    if reduction_dtype is None:
+        return None
+    try:
+        dtype = np.dtype(reduction_dtype)
+    except TypeError as error:
+        raise TypeError(
+            f"reduction_dtype must be float32 or float64, got {reduction_dtype!r}"
+        ) from error
+    if dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        raise ValueError(f"reduction_dtype must be float32 or float64, got {dtype}")
+    return dtype
+
+
+def _needs_the_diffuse_part(names: tuple[str, ...], unbiased: bool) -> bool:
+    """Whether the components need D = T − E, and with it both moments: the
+    diffuse component does, and so does the elastic one with ``unbiased``
+    (E_u = T − N/(N − 1)·D)."""
+    return "diffuse" in names or (unbiased and "elastic" in names)
+
+
+def _form_frozen_phonon_components(
+    total, elastic, num_configurations: int, names: tuple[str, ...], unbiased: bool
+) -> list:
+    """The requested components from the frozen-phonon moments.
+
+    With N configurations ψ_j, the mean amplitude m = Σ_j ψ_j / N and the
+    total T = Σ_j |ψ_j|² / N, the elastic intensity is E = |m|² and the diffuse
+    intensity D = T − E = Σ_j |ψ_j − m|² / N. For independent configurations
+    the expectation of E is |⟨ψ⟩|² + σ²/N, so D is low by a factor (N − 1)/N;
+    ``unbiased`` uses D_u = N/(N − 1)·D and E_u = T − D_u instead, whose
+    expectations are σ² and |⟨ψ⟩|².
+
+    ``total`` or ``elastic`` is None where no requested component needs it.
+    """
+    parts = {"total": total, "elastic": elastic}
+    if _needs_the_diffuse_part(names, unbiased):
+        diffuse = total - elastic
+        if unbiased:
+            diffuse = diffuse * (num_configurations / (num_configurations - 1))
+            parts["elastic"] = total - diffuse
+        parts["diffuse"] = diffuse
+    return [parts[name] for name in names]
+
+
+def elastic_diffuse_diffraction_patterns(
+    exit_waves,
+    components: str | Sequence[str] = "all",
+    max_angle: str | float = "cutoff",
+    parity: str = "odd",
+    block_direct: bool | float = False,
+    *,
+    unbiased: bool = False,
+    reduction_dtype=None,
+) -> "DiffractionPatterns":
+    """
+    Elastic, diffuse and total diffraction intensity from frozen-phonon exit
+    waves.
+
+    With N configurations ψ_j along the ``FrozenPhononsAxis``, per pixel k of
+    the diffraction pattern::
+
+        total   T(k) = Σ_j |FT(ψ_j)(k)|² / N
+        elastic E(k) = |FT(Σ_j ψ_j)(k)|² / N²   (the intensity of the mean wave)
+        diffuse D(k) = T(k) − E(k)
+
+    The ``FrozenPhononsAxis`` is removed; every other ensemble axis is kept, so
+    each of its members gets its own components. With more than one
+    ``FrozenPhononsAxis``, the last one is reduced.
+
+    Parameters
+    ----------
+    exit_waves : Waves
+        Complex exit waves with a ``FrozenPhononsAxis`` in their ensemble axes,
+        e.g. from a scan or multislice with a ``WavesDetector`` and
+        ``FrozenPhonons(..., ensemble_mean=False)``.
+    components : {'all', 'total', 'elastic', 'diffuse'} or sequence of str
+        A single name returns that component without a component axis. ``'all'``
+        or a tuple or list of names stacks the components along a new leading
+        ``OrdinalAxis(label='component')``, in the order given (``'all'`` is
+        ``('total', 'elastic', 'diffuse')``).
+    max_angle : str or float
+        Passed to ``Waves.diffraction_patterns``.
+    parity : str
+        Passed to ``Waves.diffraction_patterns``.
+    block_direct : bool or float, optional
+        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
+        the metadata larger than half the smaller angular sampling, up to the
+        cutoff plus a margin of the larger angular sampling, as by
+        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
+        half the smaller angular sampling or an infinite one (a plane wave, a
+        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
+        records the same cutoff, so between half and the full sampling the margin
+        also blocks its dark nearest pixels. With an ensemble of cutoffs the
+        metadata has none, so only the zero-angle pixel is blocked and the
+        bright-field disks stay; pass a radius then. If given as a float, masks up
+        to that scattering angle [mrad], plus the same margin when the metadata has
+        a ``semiangle_cutoff``. Default is False.
+    unbiased : bool, optional
+        Correct the (N − 1)/N bias of the diffuse intensity, assuming independent
+        configurations: D_u = N/(N − 1)·D and E_u = T − D_u; the total is
+        unchanged. The diffuse component, and the elastic one with ``unbiased``,
+        need at least 2 configurations. Both components are differences of
+        intensities and can be slightly negative: E_u where the elastic intensity
+        is close to zero, e.g. between the Bragg reflections of a plane wave, and
+        D (or D_u) from roundoff, e.g. down to −2.9e-7 of max T in float32 and
+        −5.5e-16 in float64 for three identical configurations of a probe exit
+        wave. Clip them before showing them on a logarithmic scale. Default is
+        False.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+        Precision of the moments. The diffuse part is a difference of two
+        intensities, so its relative error grows as max T / max D: where the
+        diffuse part is small, e.g. inside a bright-field disk, float32 moments
+        can lose most of it. ``'float64'`` casts the exit waves to complex128
+        before the diffraction patterns are formed, so |ψ|² and both sums are
+        computed in float64. Default is None, the precision of the exit waves.
+
+    Returns
+    -------
+    DiffractionPatterns
+        Intensities without the ``FrozenPhononsAxis``. The metadata records
+        ``frozen_phonon_component`` (the name, or the list of names),
+        ``num_configurations`` (N) and ``unbiased``.
+    """
+    from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
+
+    names, stacked = _validate_frozen_phonon_components(components)
+    if not isinstance(unbiased, (bool, np.bool_)):
+        raise TypeError(f"unbiased must be a bool, got {type(unbiased).__name__}")
+    unbiased = bool(unbiased)
+    reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(exit_waves.ensemble_axes_metadata)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have a FrozenPhononsAxis in ensemble_axes_metadata. "
+            "Build the frozen phonons with ensemble_mean=False and detect the exit "
+            "waves with a WavesDetector."
+        )
+
+    if not np.iscomplexobj(exit_waves.array):
+        raise ValueError(
+            "exit_waves must contain complex wave functions (not intensities). "
+            "Pass the Waves object directly, not DiffractionPatterns."
+        )
+
+    N = exit_waves.shape[fp_axis_idx]
+    needs_diffuse = _needs_the_diffuse_part(names, unbiased)
+    if N < 2 and needs_diffuse:
+        raise ValueError(
+            "the diffuse component, and the elastic component with unbiased=True, "
+            f"need at least 2 frozen-phonon configurations, got N={N}. The diffuse "
+            "intensity is the variance of the diffracted amplitude across "
+            "configurations, which is exactly zero for a single configuration."
+        )
+
+    if reduction_dtype is not None:
+        complex_dtype = np.result_type(reduction_dtype, np.complex64)
+        if exit_waves.array.dtype != complex_dtype:
+            kwargs = exit_waves._copy_kwargs(exclude=("array",))
+            kwargs["array"] = exit_waves.array.astype(complex_dtype)
+            exit_waves = exit_waves.__class__(**kwargs)
+
+    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
+
+    # Both moments' patterns have the same metadata, sampling and fftshift;
+    # ``patterns`` is whichever was formed.
+    total = elastic = None
+    if needs_diffuse or "elastic" in names:
+        # Elastic: the intensity of the mean wave, |FT(Σ_j ψ_j)|² / N².
+        patterns = exit_waves.sum(axis=fp_axis_idx).diffraction_patterns(**dp_kwargs)
+        elastic = patterns.array / N**2
+
+    if needs_diffuse or "total" in names:
+        # Total: the mean of the configurations' intensities, Σ_j |FT(ψ_j)|² / N.
+        patterns = exit_waves.diffraction_patterns(**dp_kwargs)
+        total = patterns.array.sum(axis=fp_axis_idx) / N
+
+    parts = _form_frozen_phonon_components(total, elastic, N, names, unbiased)
+
+    ensemble_axes_metadata = [
+        ax for i, ax in enumerate(exit_waves.ensemble_axes_metadata) if i != fp_axis_idx
+    ]
+    if stacked:
+        xp = get_array_module(parts[0])
+        stack_fn = _array_module_fn(parts[0], xp, "stack")
+        array = stack_fn(parts, axis=0)
+        ensemble_axes_metadata = [
+            OrdinalAxis(label="component", values=names)
+        ] + ensemble_axes_metadata
+    else:
+        array = parts[0]
+
+    metadata = dict(patterns.metadata)
+    metadata["frozen_phonon_component"] = list(names) if stacked else names[0]
+    metadata["num_configurations"] = N
+    metadata["unbiased"] = unbiased
+
+    result = DiffractionPatterns(
+        array,
+        sampling=patterns.sampling,
+        fftshift=patterns.fftshift,
+        ensemble_axes_metadata=ensemble_axes_metadata or None,
+        metadata=metadata,
+    )
+
+    return result._apply_block_direct(block_direct)
+
+
 def phonon_loss_diffraction_patterns(
     exit_waves,
-    component: str = "tds",
+    components: str | Sequence[str] = "diffuse",
     max_angle: str | float = "cutoff",
     parity: str = "odd",
     block_direct: bool | float = False,
     temperature: Optional[float] = None,
+    *,
+    unbiased: bool = False,
+    reduction_dtype=None,
+    **kwargs,
 ) -> "DiffractionPatterns":
     """
-    Compute inelastic (TDS) diffraction patterns from energy-resolved
-    frozen-phonon exit waves.
+    Energy-resolved phonon-loss diffraction patterns from frozen-phonon exit
+    waves.
 
-    The thermal diffuse scattering signal is obtained per energy bin as::
+    The components are those of :func:`elastic_diffuse_diffraction_patterns`,
+    formed for each energy bin of the ``EnergyLossAxis``: the diffuse intensity
+    is the phonon-loss signal. With ``temperature``, the diffuse intensity is
+    unfolded into signed loss and gain sides.
 
-        I_coherent   = |FT(Σ_j psi_j)|² / N²   (elastic)
-        I_incoherent = Σ_j |FT(psi_j)|² / N     (total)
-        I_tds        = I_incoherent - I_coherent  (inelastic / phonon loss)
-
-    The returned ``DiffractionPatterns`` retain the ``EnergyLossAxis`` but the
-    ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
-    or ``SlitDetector`` to integrate over desired q points.
-
-    Note that ``I_tds`` is the variance of the diffracted amplitude across
-    frozen-phonon configurations: with a single configuration per energy,
-    ``I_incoherent`` and ``I_coherent`` are identical by construction and
-    ``I_tds`` is exactly zero everywhere, not a numerical artifact. At least
-    2 configurations per energy are required for ``component="tds"``/``"all"``
-    (this is enforced with a ``ValueError``); in practice many more are
-    needed for good statistics.
+    Note that the diffuse intensity is the variance of the diffracted amplitude
+    across frozen-phonon configurations: with a single configuration per energy
+    it is exactly zero everywhere, so the diffuse component (and ``'all'``), and
+    the elastic component with ``unbiased=True``, require at least 2
+    configurations per energy (enforced with a ``ValueError``); in practice many
+    more are needed for good statistics.
 
     Parameters
     ----------
@@ -6999,27 +7337,41 @@ def phonon_loss_diffraction_patterns(
         prefer building it with ``projection="finite"`` — see the
         :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` notes
         on slice-boundary artifacts with out-of-plane displacement.
-    component : {'tds', 'coherent', 'incoherent', 'all'}
-        Which component to return.  ``'all'`` stacks the three along a
-        new leading ``OrdinalAxis(label='component')``.
+    components : {'diffuse', 'total', 'elastic', 'all'} or sequence of str
+        Which components to return; see
+        :func:`elastic_diffuse_diffraction_patterns`. Default is ``'diffuse'``.
     max_angle : str or float
         Passed to ``Waves.diffraction_patterns``.
     parity : str
         Passed to ``Waves.diffraction_patterns``.
     block_direct : bool or float, optional
-        If True, the direct beam is blocked in the resulting diffraction
-        patterns. If given as a float, masks up to that scattering angle
-        [mrad]. Default is False.
+        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
+        the metadata larger than half the smaller angular sampling, up to the
+        cutoff plus a margin of the larger angular sampling, as by
+        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
+        half the smaller angular sampling or an infinite one (a plane wave, a
+        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
+        records the same cutoff, so between half and the full sampling the margin
+        also blocks its dark nearest pixels. With an ensemble of cutoffs the
+        metadata has none, so only the zero-angle pixel is blocked and the
+        bright-field disks stay; pass a radius then. If given as a float, masks up
+        to that scattering angle [mrad], plus the same margin when the metadata has
+        a ``semiangle_cutoff``. Default is False.
     temperature : float, optional
-        Sample temperature [K]. If given, unfolds the TDS signal — computed
+        Sample temperature [K]. If given, unfolds the diffuse signal — computed
         from a single frozen-phonon run per energy *magnitude* — into signed
         quantum loss (``+E``) and gain (``-E``) sides using Bose-Einstein
         detailed balance, following P. Zeiger's approach. Requires
-        ``component="tds"`` and an ``EnergyLossAxis`` whose values start at 0
-        and strictly increase (the classical/incoherent-minus-coherent
-        signal is symmetric in loss/gain; only their *split* is a quantum
-        effect). The zero-energy bin is unweighted. Default is None (no
-        unfolding — the returned energies are the ones in ``exit_waves``).
+        ``components="diffuse"`` and an ``EnergyLossAxis`` whose values start at
+        0 and strictly increase (the classical diffuse signal is symmetric in
+        loss/gain; only their *split* is a quantum effect). The zero-energy bin
+        is unweighted. Must be finite and non-negative; at 0 the whole signal is on
+        the loss side. Default is None (no unfolding — the returned energies are
+        the ones in ``exit_waves``).
+    unbiased : bool, optional
+        See :func:`elastic_diffuse_diffraction_patterns`.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+        See :func:`elastic_diffuse_diffraction_patterns`.
 
     Returns
     -------
@@ -7028,123 +7380,112 @@ def phonon_loss_diffraction_patterns(
         ``EnergyLossAxis`` preserved (or replaced by its signed loss/gain
         unfolding if ``temperature`` is given).
     """
-    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
+    from abtem.core.axes import EnergyLossAxis
 
-    # --- validate ensemble axes ---
-    fp_axis_idx = None
-    energy_axis_idx = None
-    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
-        if isinstance(ax, FrozenPhononsAxis):
-            fp_axis_idx = i
-        if isinstance(ax, EnergyLossAxis):
-            energy_axis_idx = i
-
-    if fp_axis_idx is None:
-        raise ValueError(
-            "exit_waves must have a FrozenPhononsAxis in ensemble_axes_metadata. "
-            "Did you create the EnergyResolvedAtomsEnsemble with ensemble_mean=False?"
+    # A "component" keyword raises a TypeError that names "components".
+    if "component" in kwargs:
+        raise TypeError(
+            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
+            "'component': it is now 'components'"
         )
+    if kwargs:
+        raise TypeError(
+            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
+            f"{next(iter(kwargs))!r}"
+        )
+
+    energy_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, EnergyLossAxis)
+        ),
+        None,
+    )
     if energy_axis_idx is None:
         raise ValueError(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    if not np.iscomplexobj(exit_waves.array):
+    # Validated before the temperature check, so that a renamed component such
+    # as 'tds' gets the error that names its replacement.
+    names, stacked = _validate_frozen_phonon_components(components)
+    if temperature is not None and (stacked or names != ("diffuse",)):
         raise ValueError(
-            "exit_waves must contain complex wave functions (not intensities). "
-            "Pass the Waves object directly, not DiffractionPatterns."
+            "temperature-based loss/gain unfolding requires components='diffuse'."
         )
-
-    # --- number of frozen-phonon configurations ---
-    N = exit_waves.shape[fp_axis_idx]
-
-    if N < 2 and component in ("tds", "all"):
-        raise ValueError(
-            f"component={component!r} requires at least 2 frozen-phonon "
-            f"configurations per energy, got N={N}. TDS/phonon-loss is "
-            "I_incoherent - I_coherent, the variance of the diffracted "
-            "amplitude across configurations -- for a single configuration "
-            "I_incoherent and I_coherent are identical by construction, so "
-            "the result is exactly zero everywhere, not a numerical fluke. "
-            "Build the EnergyResolvedAtomsEnsemble with more than one "
-            "configuration per energy to get a non-trivial signal."
-        )
-
-    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
-
-    # Coherent: sum complex exit waves first, then compute diffraction pattern
-    #   I_coh = |FT(Σ_j psi_j)|² / N²
-    coherent_waves = exit_waves.sum(axis=fp_axis_idx)
-    dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
-    I_coherent = dp_coherent.array / N**2
-
-    # Incoherent: compute diffraction patterns first, then sum intensities
-    #   I_inc = Σ_j |FT(psi_j)|² / N
-    dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
-    I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
-
-    # TDS = incoherent - coherent
-    I_tds = I_incoherent - I_coherent
-
-    # --- select component ---
-    valid_components = ("tds", "coherent", "incoherent", "all")
-    if component not in valid_components:
-        raise ValueError(f"component must be one of {valid_components}")
-
-    if temperature is not None and component != "tds":
-        raise ValueError(
-            "temperature-based loss/gain unfolding requires component='tds'."
-        )
-
-    remaining_axes = [
-        ax
-        for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
-        if i != fp_axis_idx
-    ]
-
     if temperature is not None:
-        remaining_energy_axis_idx = next(
-            i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
-        )
-        energy_axis = remaining_axes[remaining_energy_axis_idx]
-        e_values = np.asarray(energy_axis.values, dtype=float)
-        I_tds, e_values_signed = _thermal_weight_tds(
-            I_tds, e_values, remaining_energy_axis_idx, temperature
-        )
-        remaining_axes[remaining_energy_axis_idx] = EnergyLossAxis(
-            values=tuple(e_values_signed), units=energy_axis.units
-        )
+        # Only a single real number: bools, complex numbers and text, as scalars
+        # or 0-d arrays, raise rather than being converted, and so does a masked
+        # value.
+        if np.ma.is_masked(temperature):
+            raise ValueError("temperature must be a number [K], got a masked value")
+        value = temperature
+        if isinstance(value, (list, tuple, np.ndarray)):
+            array = np.asarray(value)
+            if array.ndim != 0:
+                raise ValueError(
+                    "temperature must be a single number [K], got an array of "
+                    f"shape {array.shape}"
+                )
+            if array.dtype.kind not in "iufO":
+                raise TypeError(
+                    f"temperature must be a number [K], got {temperature!r}"
+                )
+            value = array.item()
+        if isinstance(
+            value,
+            (bool, np.bool_, str, bytes, bytearray, complex, np.complexfloating),
+        ):
+            raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+        try:
+            # A Python float, so that k_B T is formed in double precision
+            # whatever the precision of the number given.
+            temperature = float(value)
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                f"temperature must be a number [K], got {temperature!r}"
+            ) from error
+        # A negative temperature would swap the loss and gain weights.
+        if not (np.isfinite(temperature) and temperature >= 0.0):
+            raise ValueError(
+                f"temperature must be finite and non-negative [K], got {temperature!r}"
+            )
 
-    if component == "all":
-        xp = get_array_module(I_tds)
-        stack_fn = _array_module_fn(I_tds, xp, "stack")
-        result_array = stack_fn([I_coherent, I_incoherent, I_tds], axis=0)
-        component_axis = OrdinalAxis(
-            label="component",
-            values=("coherent", "incoherent", "tds"),
-        )
-        remaining_axes = [component_axis] + remaining_axes
-    elif component == "tds":
-        result_array = I_tds
-    elif component == "coherent":
-        result_array = I_coherent
-    else:
-        result_array = I_incoherent
-
-    metadata = dict(dp_coherent.metadata)
-    metadata["phonon_loss_component"] = component
-
-    result = DiffractionPatterns(
-        result_array,
-        sampling=dp_coherent.sampling,
-        fftshift=dp_coherent.fftshift,
-        ensemble_axes_metadata=remaining_axes or None,
-        metadata=metadata,
+    result = elastic_diffuse_diffraction_patterns(
+        exit_waves,
+        components=components,
+        max_angle=max_angle,
+        parity=parity,
+        # A per-pixel mask, so blocking before the temperature unfolding below
+        # gives the same result as blocking after it.
+        block_direct=block_direct,
+        unbiased=unbiased,
+        reduction_dtype=reduction_dtype,
     )
 
-    if block_direct:
-        radius = block_direct if isinstance(block_direct, (int, float)) else None
-        result = result.block_direct(radius=radius)
+    if temperature is not None:
+        ensemble_axes_metadata = list(result.ensemble_axes_metadata)
+        remaining_energy_axis_idx = next(
+            i
+            for i, ax in enumerate(ensemble_axes_metadata)
+            if isinstance(ax, EnergyLossAxis)
+        )
+        energy_axis = ensemble_axes_metadata[remaining_energy_axis_idx]
+        e_values = np.asarray(energy_axis.values, dtype=float)
+        array, e_values_signed = _thermal_weight_tds(
+            result.array, e_values, remaining_energy_axis_idx, temperature
+        )
+        ensemble_axes_metadata[remaining_energy_axis_idx] = EnergyLossAxis(
+            values=tuple(e_values_signed), units=energy_axis.units
+        )
+        result = DiffractionPatterns(
+            array,
+            sampling=result.sampling,
+            fftshift=result.fftshift,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=result.metadata,
+        )
 
     return result
 
@@ -7180,7 +7521,18 @@ def momentum_resolved_spectrum(
     tds_diffraction_patterns : DiffractionPatterns
         Energy-resolved TDS diffraction patterns as returned by
         :func:`phonon_loss_diffraction_patterns`.  Must have an
-        ``EnergyLossAxis`` in its ensemble axes.
+        ``EnergyLossAxis`` in its ensemble axes. From a component axis, the
+        diffuse component is used. Without one, the component recorded in the
+        metadata is checked: the total and elastic components, which contain the
+        elastic (Bragg) intensity, raise a ``ValueError``, and so do stacked
+        components whose axis was reduced away; any other component is used as
+        given. The names ``"coherent"``, ``"incoherent"`` and ``"tds"``, on the
+        component axis or under ``phonon_loss_component``, are read as elastic,
+        total and diffuse. The check reads only the metadata. Arithmetic keeps the
+        metadata of its left operand, so ``stacked[0] - stacked[1]`` (total minus
+        elastic) is rejected but ``diffuse + total`` is not; slicing a stack does
+        not update the recorded names, so ``stacked[2:].sum(axis=0)`` is rejected.
+        Pass the diffuse component itself, e.g. ``stacked[2]``.
     detector : SpectralAnnularDetector or SpectralSlitDetector
         Detector that controls the integration strategy and q-range.
 
@@ -7194,17 +7546,59 @@ def momentum_resolved_spectrum(
 
     dp = tds_diffraction_patterns
 
-    # --- auto-select TDS slice when component="all" was used ---
-    if dp.metadata.get("phonon_loss_component") == "all":
-        for i, ax in enumerate(dp.ensemble_axes_metadata):
-            if isinstance(ax, OrdinalAxis) and ax.label == "component":
-                tds_idx = list(ax.values).index("tds")
-                slicing = tuple(
-                    tds_idx if j == i else slice(None)
-                    for j in range(len(dp.ensemble_axes_metadata))
+    # --- select the diffuse component from a stack of components ---
+    # The names "coherent", "incoherent" and "tds", on the component axis or
+    # under "phonon_loss_component" ("all" for a stack of them), are read as
+    # "elastic", "total" and "diffuse".
+    for i, ax in enumerate(dp.ensemble_axes_metadata):
+        if isinstance(ax, OrdinalAxis) and ax.label == "component":
+            names = [_current_component_name(value) for value in ax.values]
+            if "diffuse" not in names:
+                raise ValueError(
+                    "tds_diffraction_patterns has a component axis without the "
+                    f"'diffuse' component: {tuple(ax.values)}"
                 )
-                dp = dp[slicing]
-                break
+            diffuse_idx = names.index("diffuse")
+            slicing = tuple(
+                diffuse_idx if j == i else slice(None)
+                for j in range(len(dp.ensemble_axes_metadata))
+            )
+            dp = dp[slicing]
+            break
+    else:
+        # Without a component axis, the metadata names the component: a single
+        # name, or the stacked names together with, under "component", the one an
+        # index selected. Stacked names without that entry mean the component
+        # axis was reduced away, e.g. summed or averaged over. The total and
+        # elastic components contain the elastic (Bragg) intensity and are
+        # rejected; any other recorded component is used as given.
+        bragg_components = ("total", "elastic")
+        component = dp.metadata.get(
+            "frozen_phonon_component", dp.metadata.get("phonon_loss_component")
+        )
+        if component == "all":
+            # A stack under the names "coherent", "incoherent" and "tds".
+            component = ["coherent", "incoherent", "tds"]
+        if isinstance(component, (list, tuple)):
+            if "component" in dp.metadata:
+                component = dp.metadata["component"]
+            elif any(
+                _current_component_name(name) in bragg_components for name in component
+            ):
+                raise ValueError(
+                    "tds_diffraction_patterns holds the components "
+                    f"{tuple(component)} without their component axis, e.g. summed "
+                    "or averaged over it. Select the diffuse component before "
+                    "reducing, or pass components='diffuse' (the default) to "
+                    "phonon_loss_diffraction_patterns."
+                )
+        component = _current_component_name(component)
+        if component in bragg_components:
+            raise ValueError(
+                f"tds_diffraction_patterns is the {component!r} component, which "
+                "contains the elastic (Bragg) intensity. Pass components='diffuse' "
+                "(the default) to phonon_loss_diffraction_patterns."
+            )
 
     # --- find the energy axis ---
     energy_axis_idx = None
