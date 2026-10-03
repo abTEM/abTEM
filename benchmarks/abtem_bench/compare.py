@@ -835,6 +835,16 @@ def _single_row(
     return row
 
 
+def _stale(accepted: list[Accepted], rows: list[Row]) -> list[Accepted]:
+    """Applying entries that cover a case both bundles hold but match no drift.
+
+    An entry for a case outside the compared bundles (a partial capture, another
+    tier) is not stale: nothing here could have matched it.
+    """
+    paired = [r.cand_id for r in rows if r.kind == SAME and r.ref_id and r.cand_id]
+    return [a for a in accepted if not a.matched and any(a.matches(c) for c in paired)]
+
+
 def compare(
     reference: store.Bundle,
     candidate: store.Bundle,
@@ -921,7 +931,7 @@ def compare(
         rows=rows,
         accepted=accepted,
         not_applicable=not_applicable,
-        stale_accepted=[a for a in accepted if not a.matched],
+        stale_accepted=_stale(accepted, rows),
         case_hash_match=hash_match,
         preset_match=preset_match,
         fingerprint_match=fp_match,
@@ -1124,7 +1134,8 @@ def to_markdown(report: Report) -> str:
         lines.append("")
     if report.stale_accepted:
         lines.append(
-            "Stale accepted entries (apply to this reference but match no drift): "
+            "Stale accepted entries (apply to this reference and to a compared "
+            "case, but match no drift): "
             + ", ".join(f"`{a.case}`" for a in report.stale_accepted)
             + "."
         )
