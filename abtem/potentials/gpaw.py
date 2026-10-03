@@ -201,6 +201,14 @@ class _DummyParametrization:
         return {}
 
 
+def _drops_directions(frozen_phonons: BaseFrozenPhonons) -> bool:
+    """Whether the frozen phonons displace the atoms along fewer than three axes."""
+    return (
+        isinstance(frozen_phonons, FrozenPhonons)
+        and len(set(frozen_phonons.directions.lower())) < 3
+    )
+
+
 def _slice_axes_frame(atoms: Atoms, plane, gpts) -> np.ndarray:
     """The linear map from the Cartesian axes of `atoms` to those of the potentials
     `_generate_slices` builds from them, acting on row vectors."""
@@ -333,7 +341,14 @@ class GPAWPotential(_PotentialBuilder):
         cut out of a larger repeated potential, which may not preserve periodicity.
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
         Approximates frozen phonons for a single GPAW calculator by displacing only the
-        nuclear core potentials. Supercedes the atoms from the calculator.
+        nuclear core potentials. Supercedes the atoms from the calculator. The atoms are
+        displaced along their own axes before they are transformed to `plane`, `box`
+        and `origin`, so every displacement gets the linear map of that transform:
+        anisotropic ones as in :class:`~abtem.potentials.iam.Potential`, and isotropic
+        ones too, which therefore get the small strain of a non-orthogonal cell's
+        orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
+        isotropic displacements without it. `directions` refers to the axes of the
+        potential, as in :class:`~abtem.potentials.iam.Potential`.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -483,9 +498,13 @@ class GPAWPotential(_PotentialBuilder):
 
         # The atoms are displaced along their own axes, before _generate_slices
         # transforms them, while `directions` refers to the axes of the
-        # transformed atoms.
+        # transformed atoms. Only frozen phonons that drop directions need that
+        # frame.
+        directions_frame = None
+        if _drops_directions(self.frozen_phonons):
+            directions_frame = _slice_axes_frame(atoms, self.plane, self.gpts)
         random_atoms = self.frozen_phonons._randomize_transformed(
-            atoms, directions_frame=_slice_axes_frame(atoms, self.plane, self.gpts)
+            atoms, directions_frame=directions_frame
         )
 
         interpolators = get_core_correction_interpolators(

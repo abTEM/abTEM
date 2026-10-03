@@ -678,6 +678,26 @@ def test_gpaw_directions_with_a_strained_frame_are_unchanged(monkeypatch, sigmas
     np.testing.assert_array_equal(displaced.positions, expected)
 
 
+@pytest.mark.parametrize("directions", ["xyz", "zyx"])
+def test_gpaw_needs_no_directions_frame_for_all_directions(monkeypatch, directions):
+    """The frame of the potentials GPAWPotential builds is needed only to drop
+    directions; with all three it is not computed."""
+    stub = _GPAWStub(monkeypatch)
+
+    def unused(*args, **kwargs):
+        raise AssertionError("the directions frame was computed")
+
+    monkeypatch.setattr(stub.module, "_slice_axes_frame", unused)
+    atoms = _single_atom()
+    fp = abtem.FrozenPhonons(
+        atoms, num_configs=1, sigmas=0.1, directions=directions, seed=3
+    )
+
+    displaced = stub.displace(atoms, fp, plane="xz")
+
+    np.testing.assert_array_equal(displaced.positions, fp.randomize(atoms).positions)
+
+
 def test_gpaw_per_atom_sigmas_follow_their_atoms_into_the_repetitions(monkeypatch):
     stub = _GPAWStub(monkeypatch)
     atoms = ase.build.bulk("Si", cubic=True)
