@@ -101,7 +101,9 @@ def validate_detectors(
     Returns
     -------
     list of BaseDetector
-        A list of validated detectors.
+        A list of validated detectors. With `waves`, every detector that matches
+        itself to the waves (e.g. by auto-sizing its outer angle) is returned as a
+        matched copy, and the detectors that were passed in are not modified.
 
     Raises
     ------
@@ -121,9 +123,16 @@ def validate_detectors(
         raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
     if waves is not None:
+        matched = []
         for detector in detectors:
             if hasattr(detector, "_match_waves"):
+                # Matching writes the waves' cutoff angle onto the detector. Done on
+                # a copy, the caller's detector keeps no outer angle that a later,
+                # unrelated run (another energy, grid or algorithm) would reuse.
+                detector = detector.copy()
                 detector._match_waves(waves)
+            matched.append(detector)
+        detectors = matched
 
     return detectors
 
