@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
@@ -46,6 +47,7 @@ from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
+    EnergyResolvedAtomsEnsemble,
     FrozenPhonons,
     validate_seeds,
 )
@@ -766,6 +768,31 @@ def _plane_frame(
     return rotate_atoms_to_plane(atoms, plane, return_transform_matrix=True)[1]
 
 
+def _pad_atoms_marking_images(
+    atoms: Atoms, margins: tuple[float, float, float]
+) -> tuple[Atoms, np.ndarray]:
+    """`pad_atoms`, and a mask that is True for the atoms of the result that are
+    the given atoms rather than images `pad_atoms` added."""
+    tagged = atoms.copy()
+    tagged.set_array("abtem_pad_index", np.arange(len(atoms)))
+    padded = pad_atoms(tagged, margins=margins)
+    index = padded.arrays.pop("abtem_pad_index")
+    # An image is the given atom shifted by a nonzero multiple of the cell
+    # lengths along a padded axis; the given atom itself is not shifted.
+    lengths = np.diag(np.array(atoms.cell))
+    shifts = np.round((padded.positions - atoms.positions[index]) / lengths)
+    return padded, np.all(shifts == 0.0, axis=1)
+
+
+def _in_cell(atoms: Atoms) -> np.ndarray:
+    """A mask of the atoms in the half-open cell, by the interval `atoms_in_cell`
+    uses without a margin."""
+    scaled_positions = atoms.positions / np.diag(np.array(atoms.cell))
+    return np.all(
+        (scaled_positions >= -1e-12) & (scaled_positions < 1.0 - 1e-12), axis=1
+    )
+
+
 class _FieldBuilderFromAtoms(_FieldBuilder):
     # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from
     # the atoms, the slicing and the cell, all of which are compared already.
@@ -960,9 +987,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             displaced = displaced.copy()
         return displaced
 
-    def _atoms_to_slice(self) -> tuple[Atoms, tuple[float, float, float]]:
-        """The atoms of this configuration as they are sliced, and the margin
-        the integrator needs beyond the cell along each axis."""
+    def _configuration(self) -> tuple[Atoms, Atoms, tuple[float, float, float]]:
+        """This configuration of the atoms; the atoms as they are sliced; and
+        the margin the integrator needs beyond the cell along each axis.
+
+        The configuration is the transformed atoms, displaced, and wrapped
+        into the cell when the potential is periodic. The atoms to slice add
+        the atoms within the margin outside the cell: images of the
+        configuration for a periodic potential, and for a non-periodic one the
+        surrounding atoms, displaced independently of those in the cell.
+        """
         atoms, is_cut, frame = self._transform_atoms()
         margins = self._margins()
 
@@ -974,20 +1008,31 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # here. In place, because _displace returns atoms this potential
             # owns: neither the atoms the potential stores nor an object the
             # frozen phonons keep can be reached from here.
-            atoms = wrap_and_snap_atoms(atoms, copy=False)
+            configuration = wrap_and_snap_atoms(atoms, copy=False)
+            # Repeats exactly the axes with a nonzero margin. A periodic
+            # potential's atoms are never cut.
+            return configuration, pad_atoms(configuration, margins=margins), margins
 
-        # Repeats exactly the axes with a nonzero margin, which is the
-        # neighbourhood cut_cell already supplied to a cut cell.
-        if not is_cut:
-            atoms = pad_atoms(atoms, margins=margins)
+        # A non-periodic potential is displaced after padding, so that the
+        # atoms in the margin are displaced independently of those in the
+        # cell. A cut cell already holds the margin cut_cell supplied.
+        if is_cut:
+            in_cell = _in_cell(atoms)
+        else:
+            atoms, in_cell = _pad_atoms_marking_images(atoms, margins)
 
-        if not self.periodic:
-            atoms = self._displace(atoms, frame)
+        atoms = self._displace(atoms, frame)
 
-        return atoms, margins
+        if len(atoms) == len(in_cell):
+            configuration = atoms[in_cell]
+        else:
+            # The frozen phonons returned a different number of atoms.
+            configuration = atoms.copy()
+
+        return configuration, atoms, margins
 
     def _prepare_atoms(self):
-        atoms, margins = self._atoms_to_slice()
+        _, atoms, margins = self._configuration()
         atoms.arrays.pop(SOURCE_INDEX, None)
 
         if self.integrator.finite:
@@ -1008,16 +1053,23 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         return sliced_atoms
 
-    def to_atoms_ensemble(self) -> AtomsEnsemble:
+    def to_atoms_ensemble(self) -> AtomsEnsemble | EnergyResolvedAtomsEnsemble:
         """
         The atomic configurations this potential simulates, one for each frozen
         phonon configuration.
 
-        Each configuration is the atoms as they are sliced: transformed to the
-        potential's plane, origin and box, displaced by the frozen phonons, and
-        wrapped into the cell when the potential is periodic. With a finite
-        projection it also holds the images of atoms within the integration
-        margin outside the cell.
+        Each configuration is the atoms in the potential's box: transformed to
+        its plane, origin and box, displaced by the frozen phonons, and wrapped
+        into the box when the potential is periodic. A potential built from a
+        configuration alone, with the same `gpts` or `sampling`, slicing,
+        projection and `periodic`, and the default plane, origin and box,
+        reproduces that configuration's member of this potential's ensemble.
+
+        The exception is a non-periodic potential with a finite projection.
+        It also integrates the atoms within its cutoff outside the box, each
+        displaced independently, which are not part of a configuration; a
+        potential built from a configuration uses images of the configuration's
+        own atoms there instead.
 
         Iterating the frozen phonons gives configurations of the untransformed
         atoms instead, which are different ones whenever the potential
@@ -1025,22 +1077,56 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Returns
         -------
-        atoms_ensemble : AtomsEnsemble
+        atoms_ensemble : AtomsEnsemble or EnergyResolvedAtomsEnsemble
+            An :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` for
+            frozen phonons of that type, with its energies and axes, otherwise an
+            :class:`~abtem.inelastic.phonons.AtomsEnsemble` with the axes of the
+            frozen phonons.
+
+        Raises
+        ------
+        NotImplementedError
+            For frozen phonons with more than one ensemble axis, other than an
+            :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`.
         """
-        if self.ensemble_shape:
-            potentials = [
-                wrapped.item() for _, _, wrapped in self.generate_blocks(1)
-            ]
-        else:
-            potentials = [self]
+        frozen_phonons = self.frozen_phonons
 
-        trajectory = []
-        for potential in potentials:
-            atoms = potential._atoms_to_slice()[0]
+        def configuration(potential):
+            atoms = potential._configuration()[0]
             atoms.arrays.pop(SOURCE_INDEX, None)
-            trajectory.append(atoms)
+            return atoms
 
-        return AtomsEnsemble(trajectory)
+        if not self.ensemble_shape:
+            return AtomsEnsemble([configuration(self)])
+
+        if len(self.ensemble_shape) > 1 and not isinstance(
+            frozen_phonons, EnergyResolvedAtomsEnsemble
+        ):
+            raise NotImplementedError(
+                f"The frozen phonons have {len(self.ensemble_shape)} ensemble "
+                "axes; configurations can be returned for one axis, or for an "
+                "EnergyResolvedAtomsEnsemble."
+            )
+
+        configurations = np.empty(self.ensemble_shape, dtype=object)
+        for index, _, wrapped in self.generate_blocks(1):
+            itemset(configurations, index, configuration(wrapped.item()))
+
+        axes_metadata = [copy.deepcopy(axis) for axis in self.ensemble_axes_metadata]
+
+        if isinstance(frozen_phonons, EnergyResolvedAtomsEnsemble):
+            return EnergyResolvedAtomsEnsemble(
+                configurations,
+                energies=frozen_phonons.energies,
+                ensemble_mean=frozen_phonons.ensemble_mean,
+                ensemble_axes_metadata=axes_metadata,
+            )
+
+        return AtomsEnsemble(
+            list(configurations),
+            ensemble_mean=frozen_phonons.ensemble_mean,
+            ensemble_axes_metadata=axes_metadata,
+        )
 
     def get_sliced_atoms(self) -> BaseSlicedAtoms:
         """

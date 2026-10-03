@@ -14,7 +14,11 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.inelastic.phonons import SOURCE_INDEX, DummyFrozenPhonons
+from abtem.inelastic.phonons import (
+    SOURCE_INDEX,
+    DummyFrozenPhonons,
+    EnergyResolvedAtomsEnsemble,
+)
 
 
 def _rotated(atoms, angle):
@@ -293,35 +297,106 @@ def test_a_frame_that_is_not_3x3_raises():
         fp.randomize(atoms, frame=np.eye(2))
 
 
+REBUILT = {
+    "hexagonal": (ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1), {}),
+    "orthogonal": (abtem.orthogonalize_cell(ase.build.mx2("WSe2", vacuum=2)), {}),
+    "plane_xz": (ase.build.bulk("Si", cubic=True), {"plane": "xz"}),
+    "hexagonal_non_periodic": (ase.build.mx2("WSe2", vacuum=2), {"periodic": False}),
+}
+
+
 @pytest.mark.parametrize(
-    "atoms",
+    "name, projection",
     [
-        ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1),
-        abtem.orthogonalize_cell(ase.build.mx2("WSe2", vacuum=2)),
+        (name, projection)
+        for name in REBUILT
+        for projection in ("infinite", "finite")
+        # see test_non_periodic_finite_configuration_holds_the_box
+        if not (name.endswith("non_periodic") and projection == "finite")
     ],
-    ids=["hexagonal", "orthogonal"],
 )
-def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(atoms):
-    """Each configuration, built on its own, gives the ensemble member it belongs
-    to. Iterating the frozen phonons does so only for a cell the potential keeps."""
+def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(
+    name, projection
+):
+    """Each configuration, built on its own with the same projection and
+    `periodic`, gives the ensemble member it belongs to, exactly. A configuration
+    holds the atoms of the box only: a finite projection's images of the atoms
+    within its margin, added again by the rebuild, would count them twice."""
+    atoms, kwargs = REBUILT[name]
+    periodic = kwargs.get("periodic", True)
+    sigmas = {s: 0.08 for s in set(atoms.get_chemical_symbols())}
     fp = abtem.FrozenPhonons(
-        atoms,
-        num_configs=3,
-        sigmas={"W": 0.08, "Se": 0.09},
-        seed=7,
-        ensemble_mean=False,
+        atoms, num_configs=3, sigmas=sigmas, seed=7, ensemble_mean=False
     )
-    potential = abtem.Potential(fp, sampling=0.05, slice_thickness=2)
+    potential = abtem.Potential(
+        fp, sampling=0.05, slice_thickness=2, projection=projection, **kwargs
+    )
     ensemble = potential.build().compute().array
 
     configurations = potential.to_atoms_ensemble()
     assert len(configurations) == 3
     for i, configuration in enumerate(configurations):
         assert SOURCE_INDEX not in configuration.arrays
-        single = abtem.Potential(configuration, sampling=0.05, slice_thickness=2)
-        np.testing.assert_allclose(
-            single.build().compute().array, ensemble[i], rtol=1e-6, atol=1e-6
+        assert len(configuration) == len(potential.get_transformed_atoms())
+        single = abtem.Potential(
+            configuration,
+            sampling=0.05,
+            slice_thickness=2,
+            projection=projection,
+            periodic=periodic,
         )
+        np.testing.assert_array_equal(single.build().compute().array, ensemble[i])
+
+
+def test_non_periodic_finite_configuration_holds_the_box():
+    """A non-periodic potential with a finite projection also integrates the atoms
+    within its cutoff outside the box, each displaced independently of the box's
+    atoms. A configuration holds the box's atoms, the same ones as with an infinite
+    projection, without those."""
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    fp = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.08, seed=7)
+
+    def configurations(projection):
+        potential = abtem.Potential(
+            fp, sampling=0.1, periodic=False, projection=projection
+        )
+        return potential, potential.to_atoms_ensemble()
+
+    finite, finite_configurations = configurations("finite")
+    infinite, infinite_configurations = configurations("infinite")
+    in_box = len(infinite.get_transformed_atoms())
+    assert len(finite.get_sliced_atoms().atoms) > in_box
+    for a, b in zip(finite_configurations, infinite_configurations):
+        assert len(a) == in_box
+        np.testing.assert_array_equal(a.numbers, b.numbers)
+
+
+def test_potential_to_atoms_ensemble_keeps_an_energy_resolved_ensemble():
+    """Two energies by three configurations stay a 2 x 3 ensemble with the same
+    energies and axes, and the potential of the returned ensemble is the one of
+    the original."""
+    base = ase.build.mx2("WSe2", vacuum=2)
+    rng = np.random.default_rng(0)
+    snapshots = np.empty((2, 3), dtype=object)
+    for index in np.ndindex(snapshots.shape):
+        snapshot = base.copy()
+        snapshot.positions += rng.normal(scale=0.05, size=snapshot.positions.shape)
+        snapshots[index] = snapshot
+    ensemble = EnergyResolvedAtomsEnsemble(snapshots, energies=[0.0, 0.02])
+    potential = abtem.Potential(ensemble, sampling=0.1, slice_thickness=2)
+
+    configurations = potential.to_atoms_ensemble()
+
+    assert isinstance(configurations, EnergyResolvedAtomsEnsemble)
+    assert configurations.ensemble_shape == (2, 3)
+    np.testing.assert_array_equal(configurations.energies, ensemble.energies)
+    assert [type(axis) for axis in configurations.ensemble_axes_metadata] == [
+        type(axis) for axis in ensemble.ensemble_axes_metadata
+    ]
+    rebuilt = abtem.Potential(configurations, sampling=0.1, slice_thickness=2)
+    np.testing.assert_array_equal(
+        rebuilt.build().compute().array, potential.build().compute().array
+    )
 
 
 def test_potential_without_frozen_phonons_has_one_configuration():
