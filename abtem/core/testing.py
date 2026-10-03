@@ -84,7 +84,14 @@ def close_stats(
         (``max|c - r| / max|r|``), ``rel_above`` (maximum relative error over
         the checked elements, ``nan`` if none is checked), ``intensity``
         (relative change of the integrated intensity), ``n_checked`` (number of
-        elements in the relative comparison) and ``shape_ok``.
+        elements in the relative comparison), ``nonfinite_mismatch`` (number
+        of elements that are NaN or infinite and not the same in both arrays)
+        and ``shape_ok``.
+
+    Only elements finite in both arrays enter ``max_abs_norm``, ``rel_above``
+    and ``intensity``; an element that is NaN in both, or the same infinity in
+    both, is left out. Any other non-finite element makes ``max_abs_norm`` and
+    ``rel_above`` infinite.
     """
     c = np.asarray(candidate)
     r = np.asarray(reference)
@@ -96,6 +103,7 @@ def close_stats(
             rel_above=np.nan,
             intensity=np.nan,
             n_checked=0,
+            nonfinite_mismatch=0,
         )
         return stats
 
@@ -103,13 +111,17 @@ def close_stats(
         c.dtype == r.dtype
     )
 
+    valid = np.isfinite(c) & np.isfinite(r)
+    same = (c == r) | (np.isnan(c) & np.isnan(r))
+    stats["nonfinite_mismatch"] = int((~valid & ~same).sum())
+    c, r = c[valid], r[valid]
+
     diff = np.abs(c.astype(np.complex128) - r.astype(np.complex128))
     ref_abs = np.abs(r.astype(np.complex128))
     ref_max = float(ref_abs.max()) if ref_abs.size else 0.0
+    diff_max = float(diff.max()) if diff.size else 0.0
     stats["max_abs_norm"] = (
-        float(diff.max() / ref_max)
-        if ref_max > 0
-        else (0.0 if diff.size == 0 or float(diff.max()) == 0.0 else np.inf)
+        diff_max / ref_max if ref_max > 0 else (0.0 if diff_max == 0.0 else np.inf)
     )
 
     checked = ref_abs > above_rel * ref_max
@@ -118,6 +130,8 @@ def close_stats(
         stats["rel_above"] = float((diff[checked] / ref_abs[checked]).max())
     else:
         stats["rel_above"] = np.nan
+    if stats["nonfinite_mismatch"]:
+        stats["max_abs_norm"] = stats["rel_above"] = np.inf
 
     if np.iscomplexobj(c) or np.iscomplexobj(r):
         i_c = float((np.abs(c) ** 2).sum())
