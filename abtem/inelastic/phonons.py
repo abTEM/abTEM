@@ -56,6 +56,21 @@ except ImportError:
 SOURCE_INDEX = "abtem_source_index"
 
 
+def _is_identity(frame: Optional[np.ndarray]) -> bool:
+    """Whether a frame is the identity, to within rounding of a rotation or an
+    orthogonalization; None is the identity."""
+    if frame is None:
+        return True
+    return np.allclose(_as_frame(frame), np.eye(3), rtol=0.0, atol=1e-12)
+
+
+def _as_frame(frame: Optional[np.ndarray]) -> np.ndarray:
+    frame = np.eye(3) if frame is None else np.asarray(frame, dtype=float)
+    if frame.shape != (3, 3):
+        raise ValueError(f"A frame must be a 3x3 matrix, not of shape {frame.shape}.")
+    return frame
+
+
 def _accepts_keyword(method: Callable, name: str) -> bool:
     """Whether a method accepts a keyword argument of the given name."""
     try:
@@ -298,7 +313,6 @@ def validate_seeds(
 from abtem.atoms import (
     AtomProperties,
     B_to_sigma,
-    atom_property_dict_to_atom_property_array,
     sigma_to_B,
     validate_per_atom_property,
     validate_sigmas,
@@ -338,8 +352,13 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         The directions of anisotropic standard deviations are the Cartesian axes of
         `atoms` as given. A potential that rotates the atoms to another `plane`, or
-        orthogonalizes their cell, rotates the displacements with them. Per-atom
-        standard deviations follow their atoms when the potential repeats the cell.
+        orthogonalizes their cell, applies the same linear map to the displacements,
+        including the small strain an orthogonalization may need. Isotropic standard
+        deviations, equal in all three directions for every atom, are applied along
+        the potential's axes without that map: an isotropic Gaussian is the same
+        along any rotated axes, and the seeded displacements stay those of
+        `sigmas * r`. Per-atom standard deviations follow their atoms when the
+        potential repeats the cell.
 
     directions : str, optional
         The directions in which the atoms are displaced, as a string of one or more of
@@ -455,7 +474,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         transforming the atoms.
         """
         if isinstance(self._sigmas, dict):
-            return atom_property_dict_to_atom_property_array(atoms, self._sigmas)
+            sigmas = validate_per_atom_property(atoms, self._sigmas, return_array=True)
+            assert isinstance(sigmas, np.ndarray)
+            return sigmas
 
         sigmas = np.asarray(self._sigmas)
         if SOURCE_INDEX in atoms.arrays:
@@ -506,14 +527,16 @@ class FrozenPhonons(BaseFrozenPhonons):
         r = rng.normal(size=(len(atoms), 3))
 
         if sigmas.ndim == 2:
+            displacements = sigmas * r
             # Anisotropic standard deviations are given along the axes of
             # self.atoms; the displacements are drawn along those axes and
             # mapped to the axes of `atoms`. An isotropic Gaussian is the same
-            # distribution along any axes, so isotropic standard deviations
-            # need no mapping, and seeded results are the same with any frame.
-            displacements = sigmas * r
-            if frame is not None and not np.array_equal(frame, np.eye(3)):
-                displacements = displacements @ frame
+            # distribution along any rotated axes, so isotropic standard
+            # deviations are not mapped, and their seeded displacements are
+            # the same with any frame.
+            isotropic = np.all(sigmas == sigmas[:, :1])
+            if not isotropic and not _is_identity(frame):
+                displacements = displacements @ _as_frame(frame)
         else:
             displacements = sigmas[:, None] * r
 

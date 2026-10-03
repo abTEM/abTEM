@@ -143,16 +143,26 @@ def test_rotated_potential_equals_displacing_the_input_atoms(plane):
     np.testing.assert_allclose(actual.array[0], expected.array, rtol=1e-6, atol=1e-6)
 
 
+def _equal_per_atom_rows(atoms):
+    return np.repeat(np.linspace(0.05, 0.1, len(atoms))[:, None], 3, axis=1)
+
+
 @pytest.mark.parametrize(
-    "sigmas", [0.1, {"W": 0.08, "Se": 0.09}], ids=["float", "dict"]
+    "sigmas",
+    [0.1, {"W": 0.08, "Se": 0.09}, (0.1, 0.1, 0.1), _equal_per_atom_rows],
+    ids=["float", "dict", "equal_tuple", "equal_per_atom_rows"],
 )
 @pytest.mark.parametrize("name", ["plane_xz", "hexagonal_rotated_17"])
 def test_isotropic_sigmas_give_the_seeded_displacements_unchanged(name, sigmas):
-    """An isotropic Gaussian needs no rotation: the displacements are sigma * r along
-    the potential's axes, as before the frame was introduced, for any frame."""
+    """An isotropic Gaussian is the same distribution along any rotated axes, so
+    sigmas equal in all three directions are not mapped by the frame: the
+    displacements are sigma * r along the potential's axes for any frame. That
+    includes a 3-tuple or per-atom rows with three equal components."""
     atoms, kwargs = TRANSFORMS[name]
     if isinstance(sigmas, dict) and "W" not in atoms.get_chemical_symbols():
         sigmas = {"Si": 0.07}
+    if callable(sigmas):
+        sigmas = sigmas(atoms)
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=5)
     potential = abtem.Potential(fp, sampling=0.1, **kwargs)
     transformed, _, frame = potential._transform_atoms()
@@ -160,6 +170,8 @@ def test_isotropic_sigmas_give_the_seeded_displacements_unchanged(name, sigmas):
     displaced = fp.randomize(transformed, frame=frame)
 
     per_atom = fp._sigmas_of(transformed)
+    if per_atom.ndim == 2:
+        per_atom = per_atom[:, 0]
     r = np.random.default_rng(fp.seed[0]).normal(size=(len(transformed), 3))
     expected = transformed.positions.copy()
     for axis in range(3):
@@ -180,6 +192,52 @@ def test_anisotropic_sigmas_with_an_identity_frame_are_unchanged():
     np.testing.assert_array_equal(
         fp.randomize(atoms, frame=np.eye(3)).positions, expected
     )
+
+
+def test_a_frame_off_the_identity_by_rounding_is_the_identity():
+    """Orthogonalizing a hexagonal cell without rotating it gives a frame that
+    differs from the identity by rounding only; anisotropic displacements then
+    stay sigma * r exactly, as without a frame."""
+    atoms = ase.build.mx2("WSe2", vacuum=2)
+    fp = abtem.FrozenPhonons(
+        atoms,
+        num_configs=1,
+        sigmas={"W": (0.05, 0.1, 0.2), "Se": (0.1, 0.07, 0.03)},
+        seed=3,
+    )
+    transformed, _, frame = abtem.Potential(fp, sampling=0.1)._transform_atoms()
+    assert not np.array_equal(frame, np.eye(3))
+    np.testing.assert_allclose(frame, np.eye(3), rtol=0, atol=1e-12)
+
+    np.testing.assert_array_equal(
+        fp.randomize(transformed, frame=frame).positions,
+        fp.randomize(transformed).positions,
+    )
+
+
+def test_anisotropic_sigmas_follow_the_strain_of_an_orthogonalization():
+    """A sheared cell that orthogonalize_cell straightens without repeating it:
+    anisotropic displacements get the same linear map as the positions, so the
+    frozen phonons equal the potential of the input atoms displaced along their
+    own axes."""
+    atoms = ase.Atoms(
+        "Au",
+        positions=[(2.0, 2.0, 2.5)],
+        cell=[[4.0, 0.0, 0.0], [0.4, 4.0, 0.0], [0.0, 0.0, 5.0]],
+        pbc=True,
+    )
+    sigmas = (0.05, 0.10, 0.20)
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=11)
+    frame = abtem.Potential(fp, sampling=0.05)._transform_atoms()[2]
+    assert np.abs(frame[1, 0]) > 0.05
+
+    r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
+    displaced = atoms.copy()
+    displaced.positions += np.array(sigmas, dtype=np.float32) * r
+
+    actual = abtem.Potential(fp, sampling=0.05).build().compute().array[0]
+    expected = abtem.Potential(displaced, sampling=0.05).build().compute().array
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * expected.max())
 
 
 def test_per_atom_sigmas_follow_their_atoms_into_a_transformed_cell():
@@ -217,6 +275,22 @@ def test_per_atom_sigmas_for_other_atoms_raise():
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=[0.1] * len(atoms), seed=1)
     with pytest.raises(RuntimeError, match="give them per species"):
         fp.randomize(atoms * (2, 1, 1))
+
+
+def test_sigmas_without_a_species_of_the_atoms_raise():
+    atoms = ase.build.bulk("Si", cubic=True)
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas={"Si": 0.1}, seed=1)
+    germanium = atoms.copy()
+    germanium.numbers[:] = 32
+    with pytest.raises(RuntimeError, match="provided for all atomic species"):
+        fp.randomize(germanium)
+
+
+def test_a_frame_that_is_not_3x3_raises():
+    atoms = ase.build.bulk("Si", cubic=True)
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=(0.1, 0.2, 0.3), seed=1)
+    with pytest.raises(ValueError, match="3x3"):
+        fp.randomize(atoms, frame=np.eye(2))
 
 
 @pytest.mark.parametrize(
