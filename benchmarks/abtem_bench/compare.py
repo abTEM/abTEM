@@ -1158,7 +1158,27 @@ def _entry_json(a: Accepted) -> dict[str, Any]:
     }
 
 
+def _finite_json(obj: Any) -> Any:
+    """``obj`` with non-finite floats as the strings ``"inf"``, ``"-inf"``, ``"nan"``.
+
+    Strict JSON parsers (and ``jq``) reject the ``Infinity`` and ``NaN`` tokens
+    that ``json`` writes by default.
+    """
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return "nan" if math.isnan(obj) else ("inf" if obj > 0 else "-inf")
+    if isinstance(obj, dict):
+        return {k: _finite_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_finite_json(v) for v in obj]
+    return obj
+
+
 def to_json(report: Report) -> dict[str, Any]:
+    """The report as a JSON-ready dict; non-finite floats become strings."""
+    return _finite_json(_report_dict(report))
+
+
+def _report_dict(report: Report) -> dict[str, Any]:
     def side(m: dict[str, Any]) -> dict[str, Any]:
         return {
             "ref": m.get("ref"),

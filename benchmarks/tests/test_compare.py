@@ -603,3 +603,20 @@ def test_memory_is_reported_as_not_judged_for_cases_without_a_floor(
     assert "not judged" not in cmp.to_markdown(
         cmp.compare(ref, cand, registry_with_demo)
     )
+
+
+def test_to_json_replaces_non_finite_floats_with_strings():
+    out = cmp._finite_json(
+        {
+            "a": [float("nan"), float("inf"), -float("inf"), 1.5],
+            "b": {"c": np.float64("nan")},
+            "d": "nan",
+            "e": 3,
+        }
+    )
+    assert out == {
+        "a": ["nan", "inf", "-inf", 1.5],
+        "b": {"c": "nan"},
+        "d": "nan",
+        "e": 3,
+    }

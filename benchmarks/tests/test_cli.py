@@ -154,6 +154,23 @@ def test_a_missing_explicit_accepted_file_exits_2(tmp_path, capsys):
     assert "missing.toml" in capsys.readouterr().err
 
 
+def _no_constants(token):
+    raise ValueError(f"non-standard JSON constant {token}")
+
+
+def test_the_json_report_is_strict_json(tmp_path):
+    a = np.linspace(1.0, 2.0, 16).reshape(4, 4)
+    b = a.copy()
+    b[1, 1] = np.nan  # NaN and infinite statistics
+    argv = _pair(tmp_path, a)
+    _bundle(tmp_path / "cand", "cand", b)
+    out = tmp_path / "report.json"
+    assert cli.main(argv + ["--json", str(out)]) == 0
+    report = json.loads(out.read_text(), parse_constant=_no_constants)
+    stats = report["rows"][0]["outputs"]["out"]
+    assert stats["max_abs_norm"] == "inf" and stats["nonfinite_mismatch"] == 1
+
+
 def _failed_bundle(path: Path, status: str) -> store.Bundle:
     b = store.Bundle(path)
     b.write_manifest({"case_hash": "h"})
