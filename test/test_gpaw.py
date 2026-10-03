@@ -162,6 +162,33 @@ def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
     assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
 
 
+def test_gpaw_frozen_phonon_directions_are_the_axes_of_the_potential(
+    gpaw_calculator_bonding,
+):
+    """With plane="xz" the beam runs along the input y axis, so directions="xy"
+    drops the displacement along input y, which equals a zero sigma there."""
+    atoms = gpaw_calculator_bonding.atoms
+
+    def build(sigmas, directions):
+        frozen_phonons = FrozenPhonons(
+            atoms, num_configs=1, sigmas=sigmas, directions=directions, seed=3
+        )
+        return (
+            GPAWPotential(
+                gpaw_calculator_bonding,
+                sampling=0.1,
+                frozen_phonons=frozen_phonons,
+                plane="xz",
+            )
+            .build(lazy=False)
+            .array
+        )
+
+    dropped = build((0.05, 0.10, 0.20), "xy")
+    zero_sigma = build((0.05, 0.0, 0.20), "xyz")
+    np.testing.assert_array_equal(dropped, zero_sigma)
+
+
 def test_gpaw_potential_multiple_calculators(gpaw_calculator_bonding):
     gpaw_potential = GPAWPotential([gpaw_calculator_bonding] * 2, sampling=0.05)
     assert gpaw_potential.ensemble_shape == (2,)

@@ -171,13 +171,20 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         atoms : Atoms
         """
 
-    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+    def _randomize_transformed(
+        self,
+        atoms: Atoms,
+        frame: Optional[np.ndarray] = None,
+        directions_frame: Optional[np.ndarray] = None,
+    ) -> Atoms:
         """Randomize atoms that a potential transformed from :attr:`atoms`.
 
         `frame` is the linear map from the Cartesian axes of :attr:`atoms` to
-        those of `atoms`, acting on row vectors. Subclasses whose displacements
-        have no direction ignore it; this keeps subclasses that implement only
-        `randomize(atoms)` working.
+        those of `atoms`, and `directions_frame` the one from the axes of `atoms`
+        to the axes the displacement directions refer to, both acting on row
+        vectors; None is the identity. Ensembles whose displacements have no
+        direction ignore both, so a subclass that implements only
+        `randomize(atoms)` keeps working.
         """
         return self.randomize(atoms)
 
@@ -510,15 +517,27 @@ class FrozenPhonons(BaseFrozenPhonons):
         """
         return self._randomize(atoms, frame=frame)
 
-    def _randomize_transformed(self, atoms: Atoms, frame: np.ndarray) -> Atoms:
+    def _randomize_transformed(
+        self,
+        atoms: Atoms,
+        frame: Optional[np.ndarray] = None,
+        directions_frame: Optional[np.ndarray] = None,
+    ) -> Atoms:
         if type(self).randomize is FrozenPhonons.randomize:
-            return self._randomize(atoms, frame=frame)
+            return self._randomize(
+                atoms, frame=frame, directions_frame=directions_frame
+            )
         # A subclass's own randomize, which may take the atoms only.
         if _accepts_keyword(self.randomize, "frame"):
             return self.randomize(atoms, frame=frame)
         return self.randomize(atoms)
 
-    def _randomize(self, atoms: Atoms, frame: Optional[np.ndarray] = None) -> Atoms:
+    def _randomize(
+        self,
+        atoms: Atoms,
+        frame: Optional[np.ndarray] = None,
+        directions_frame: Optional[np.ndarray] = None,
+    ) -> Atoms:
         sigmas = self._sigmas_of(atoms)
 
         atoms = atoms.copy()
@@ -540,8 +559,18 @@ class FrozenPhonons(BaseFrozenPhonons):
         else:
             displacements = sigmas[:, None] * r
 
-        for axis in self._axes:
-            atoms.positions[:, axis] += displacements[:, axis]
+        axes = self._axes
+        if len(set(axes)) < 3 and not _is_identity(directions_frame):
+            # `directions` refers to other axes than those of `atoms`: keep the
+            # components along those axes and map the result back.
+            directions_frame = _as_frame(directions_frame)
+            kept = np.zeros(3)
+            kept[axes] = 1.0
+            displacements = (displacements @ directions_frame) * kept
+            atoms.positions[:] += displacements @ np.linalg.inv(directions_frame)
+        else:
+            for axis in axes:
+                atoms.positions[:, axis] += displacements[:, axis]
 
         return atoms
 

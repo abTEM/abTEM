@@ -499,3 +499,86 @@ def test_potential_to_atoms_ensemble_takes_a_stored_configuration():
         configuration.positions, np.mod(stored.positions, (4.0, 5.0, 4.0)), atol=1e-12
     )
     assert SOURCE_INDEX not in configuration.arrays
+
+
+class _GPAWStub:
+    """Runs GPAWPotential.generate_slices without GPAW and records the displaced
+    atoms it hands to the slicing."""
+
+    def __init__(self, monkeypatch):
+        import abtem.potentials.gpaw as gpaw_module
+
+        self.module = gpaw_module
+        self.displaced = []
+
+        class Calculator(gpaw_module._DummyGPAW):
+            setups = None
+
+        def generate_slices(*args, atoms, **kwargs):
+            self.displaced.append(atoms.copy())
+            return iter(())
+
+        monkeypatch.setattr(gpaw_module, "GPAW", object)
+        monkeypatch.setattr(
+            gpaw_module, "get_core_correction_interpolators", lambda *args: []
+        )
+        monkeypatch.setattr(gpaw_module, "_generate_slices", generate_slices)
+        self.calculator_class = Calculator
+
+    def displace(self, atoms, frozen_phonons, **kwargs):
+        calculator = self.calculator_class(
+            setup_mode=None,
+            setup_xc=None,
+            nt_sG=None,
+            gd=None,
+            D_asp={},
+            atoms=atoms,
+            Q_aL={},
+            valence_potential=None,
+        )
+        potential = self.module.GPAWPotential(
+            calculator, sampling=0.2, frozen_phonons=frozen_phonons, **kwargs
+        )
+        list(potential.generate_slices())
+        return self.displaced[-1]
+
+
+@pytest.mark.parametrize("directions", ["xyz", "xy"])
+@pytest.mark.parametrize("plane", ["xy", "xz"])
+def test_gpaw_potential_drops_the_directions_of_the_potential(
+    monkeypatch, plane, directions
+):
+    """GPAWPotential displaces the atoms along their own axes before it rotates
+    them; `directions` still refers to the axes of the potential, so with
+    plane="xz" and directions="xy" the input y axis, the beam, is dropped."""
+    stub = _GPAWStub(monkeypatch)
+    atoms = _single_atom()
+    sigmas = (0.05, 0.10, 0.20)
+    fp = abtem.FrozenPhonons(
+        atoms, num_configs=1, sigmas=sigmas, directions=directions, seed=3
+    )
+
+    displaced = stub.displace(atoms, fp, plane=plane)
+
+    r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
+    expected = atoms.positions + np.array(sigmas, dtype=np.float32) * r
+    if directions == "xy":
+        dropped = 1 if plane == "xz" else 2
+        expected[:, dropped] = atoms.positions[:, dropped]
+    np.testing.assert_array_equal(displaced.positions, expected)
+
+
+def test_gpaw_per_atom_sigmas_follow_their_atoms_into_the_repetitions(monkeypatch):
+    stub = _GPAWStub(monkeypatch)
+    atoms = ase.build.bulk("Si", cubic=True)
+    sigmas = np.linspace(0.05, 0.10, len(atoms))
+    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=3)
+
+    displaced = stub.displace(atoms, fp, repetitions=(2, 1, 1))
+
+    repeated = atoms * (2, 1, 1)
+    r = np.random.default_rng(fp.seed[0]).normal(size=(len(repeated), 3))
+    per_atom = np.tile(sigmas.astype(np.float32), 2)
+    np.testing.assert_array_equal(
+        displaced.positions, repeated.positions + per_atom[:, None] * r
+    )

@@ -201,6 +201,15 @@ class _DummyParametrization:
         return {}
 
 
+def _slice_axes_frame(atoms: Atoms, plane, gpts) -> np.ndarray:
+    """The linear map from the Cartesian axes of `atoms` to those of the potentials
+    `_generate_slices` builds from them, acting on row vectors."""
+    potential = Potential(atoms=atoms[:1], gpts=gpts, projection="finite", plane=plane)
+    if potential.plane != "xy" and not is_cell_orthogonal(atoms.cell):
+        raise NotImplementedError
+    return potential._transform_atoms()[2]
+
+
 def _generate_slices(
     interpolators,
     valence_potential,
@@ -472,7 +481,12 @@ class GPAWPotential(_PotentialBuilder):
         # gd = calculator.gd
         # nt_sG = calculator.nt_sG
 
-        random_atoms = self.frozen_phonons.randomize(atoms)
+        # The atoms are displaced along their own axes, before _generate_slices
+        # transforms them, while `directions` refers to the axes of the
+        # transformed atoms.
+        random_atoms = self.frozen_phonons._randomize_transformed(
+            atoms, directions_frame=_slice_axes_frame(atoms, self.plane, self.gpts)
+        )
 
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
