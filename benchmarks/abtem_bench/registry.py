@@ -226,19 +226,32 @@ def cases_package_dir() -> Path:
     return Path(abtem_bench.__file__).resolve().parent / "cases"
 
 
-_FORBIDDEN_KEYWORDS = {
-    "sampling": (
-        "pass explicit gpts, never sampling= "
-        "(grid.round-to-fast-fft changes derived grids between commits)"
-    ),
-}
+_SAMPLING_RULE = (
+    "pass explicit gpts, never sampling= "
+    "(grid.round-to-fast-fft changes derived grids between commits)"
+)
+# Calls whose ``sampling`` is not a simulation grid's and stays allowed: a scan's
+# sampling sets the probe positions, which grid rounding does not change.
+_SAMPLING_ALLOWED_CALLEES = {"GridScan", "LineScan"}
+
+
+def _callee_name(node) -> str | None:
+    import ast
+
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
 
 
 def validate_case_sources(package_dir: Path | None = None) -> None:
     """Static checks on the case sources; raise on the first violation.
 
-    Works on the syntax tree, so a mention in a comment or docstring is fine;
-    only a real ``sampling=`` keyword argument in a call is rejected.
+    Works on the syntax tree, so a mention in a comment or docstring is fine. A
+    ``sampling`` keyword is rejected in any call except a scan's, including one
+    spelled as ``**{"sampling": ...}``. This is a guard against accidents, not a
+    proof: a value built elsewhere and passed through ``**kwargs`` is not seen.
     """
     import ast
 
@@ -246,12 +259,23 @@ def validate_case_sources(package_dir: Path | None = None) -> None:
     for path in sorted(package_dir.glob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for kw in node.keywords:
-                    if kw.arg in _FORBIDDEN_KEYWORDS:
-                        raise CaseDefinitionError(
-                            f"{path.name}:{kw.lineno}: {_FORBIDDEN_KEYWORDS[kw.arg]}"
-                        )
+            if not isinstance(node, ast.Call):
+                continue
+            if _callee_name(node) in _SAMPLING_ALLOWED_CALLEES:
+                continue
+            for kw in node.keywords:
+                spelled = kw.arg == "sampling" or (
+                    kw.arg is None
+                    and isinstance(kw.value, ast.Dict)
+                    and any(
+                        isinstance(k, ast.Constant) and k.value == "sampling"
+                        for k in kw.value.keys
+                    )
+                )
+                if spelled:
+                    raise CaseDefinitionError(
+                        f"{path.name}:{kw.lineno}: {_SAMPLING_RULE}"
+                    )
 
 
 def load_cases() -> dict[str, Case]:
@@ -264,19 +288,49 @@ def load_cases() -> dict[str, Case]:
     return REGISTRY
 
 
-def case_hash(package_dir: Path | None = None) -> str:
-    """sha256 over the sorted case sources plus the harness version.
+# Harness modules that, besides the cases, decide what a capture computes and
+# stores: structures and keyword forwarding, pinned configuration, parameter
+# merging, and output extraction.
+_HASHED_MODULES = ("fixtures.py", "presets.py", "registry.py", "worker.py")
+
+
+def case_files() -> list[Path]:
+    """Every source file that defines what a case computes and stores."""
+    pkg = Path(abtem_bench.__file__).resolve().parent
+    return sorted(cases_package_dir().glob("*.py")) + [pkg / m for m in _HASHED_MODULES]
+
+
+def case_hash(files: Iterable[Path] | None = None) -> str:
+    """sha256 over the case-defining sources plus the harness version.
 
     Two bundles are only comparable when this matches: it is the proof that
-    both refs ran the same case code.
+    both refs ran the same case code. Covers the cases and the harness modules
+    that shape what they compute (``case_files``), not the comparison or
+    reporting code, so changing those does not orphan existing bundles.
     """
-    package_dir = package_dir or cases_package_dir()
+    files = case_files() if files is None else sorted(files)
+    root = Path(abtem_bench.__file__).resolve().parent
     h = hashlib.sha256()
     h.update(f"abtem_bench {abtem_bench.__version__}\n".encode())
-    for path in sorted(package_dir.glob("*.py")):
-        h.update(f"--- {path.name}\n".encode())
+    for path in files:
+        try:
+            label = path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            label = path.name
+        h.update(f"--- {label}\n".encode())
         h.update(path.read_bytes())
     return h.hexdigest()
+
+
+def glob_match(text: str, pattern: str) -> bool:
+    """fnmatch with ``[`` and ``]`` taken literally.
+
+    Case ids carry the variant in brackets (``x[order1]@quick/cpu``), which
+    plain fnmatch would read as a character class, so an exact id would not
+    match itself.
+    """
+    escaped = "".join({"[": "[[]", "]": "[]]"}.get(ch, ch) for ch in pattern)
+    return fnmatch.fnmatchcase(text, escaped)
 
 
 def select_ids(
@@ -295,8 +349,7 @@ def select_ids(
             continue
         for cid in c.ids(tier, devices):
             if only and not any(
-                fnmatch.fnmatchcase(str(cid), g) or fnmatch.fnmatchcase(c.name, g)
-                for g in only
+                glob_match(str(cid), g) or glob_match(c.name, g) for g in only
             ):
                 continue
             out.append(cid)
