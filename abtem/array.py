@@ -34,6 +34,7 @@ from abtem.core import config
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    EnergyAxis,
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
@@ -2698,7 +2699,17 @@ def stack(
 
     axis_metadata = validate_axis_metadata(axis_metadata)
 
-    return arrays[0]._stack(arrays, axis_metadata, axis)
+    stacked = arrays[0]._stack(arrays, axis_metadata, axis)
+    if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+        # The scalar energy of the first member would misrepresent the others
+        # and take precedence over the axis (resolve_energy); the axis carries
+        # every member's energy, as for a probe built with several energies,
+        # whose metadata["energy"] is None as well.
+        if getattr(stacked, "accelerator", None) is not None:
+            stacked.accelerator.energy = None
+        if "energy" in stacked._metadata:
+            stacked._metadata["energy"] = None
+    return stacked
 
 
 def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:

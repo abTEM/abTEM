@@ -600,8 +600,9 @@ class Waves(BaseWaves, ArrayObject):
             shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
             A dictionary defining wave function metadata. All items will be added to the
-            metadata of measurements derived from the waves. The metadata must contain
-            the electron energy [eV].
+            metadata of measurements derived from the waves. The electron energy [eV]
+            is read from the metadata; without it, or with None, the waves have no
+            scalar energy, as for a probe built with several energies.
 
         Returns
         -------
@@ -611,7 +612,7 @@ class Waves(BaseWaves, ArrayObject):
         if metadata is None:
             raise ValueError("metadata must be provided to create Waves")
 
-        energy = metadata["energy"]
+        energy = metadata.get("energy")
         reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
@@ -1535,11 +1536,6 @@ class Waves(BaseWaves, ArrayObject):
                     self[index].apply_ctf(member_ctf, max_batch=max_batch)
                 )
             waves = stack(members, energy_axis, axis=axis_idx)
-            # The stacked object must remain a genuine multi-energy ensemble:
-            # its scalar accelerator/metadata energy come from member[0] and
-            # would misrepresent the other members.
-            waves.accelerator.energy = None
-            waves._metadata.pop("energy", None)
             assert isinstance(waves, Waves)
             return waves
 
