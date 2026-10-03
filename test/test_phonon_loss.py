@@ -109,6 +109,45 @@ def _computed(measurement):
     return np.asarray(array.compute() if isinstance(array, da.core.Array) else array)
 
 
+def test_the_last_frozen_phonons_axis_is_reduced():
+    """With two FrozenPhononsAxis, the last one is reduced and the first is kept."""
+    rng = np.random.default_rng(0)
+    shape = (2, 3, 4, 16, 16)
+    array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
+    waves = Waves(
+        array,
+        energy=100e3,
+        sampling=0.1,
+        ensemble_axes_metadata=[
+            EnergyLossAxis(values=(0.02, 0.05)),
+            FrozenPhononsAxis(_ensemble_mean=False),
+            FrozenPhononsAxis(_ensemble_mean=False),
+        ],
+    )
+
+    result = phonon_loss_diffraction_patterns(waves)
+
+    assert result.shape[:2] == (2, 3)
+    assert [type(axis) for axis in result.ensemble_axes_metadata] == [
+        EnergyLossAxis,
+        FrozenPhononsAxis,
+    ]
+    for k in range(3):
+        alone = Waves(
+            array[:, k],
+            energy=100e3,
+            sampling=0.1,
+            ensemble_axes_metadata=[
+                EnergyLossAxis(values=(0.02, 0.05)),
+                FrozenPhononsAxis(_ensemble_mean=False),
+            ],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(result.array)[:, k],
+            np.asarray(phonon_loss_diffraction_patterns(alone).array),
+        )
+
+
 class TestThermalWeighting:
     def test_signed_axis_and_zero_bin_passthrough(self):
         e_values = [0.0, 0.02, 0.05, 0.10]

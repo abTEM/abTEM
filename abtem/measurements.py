@@ -7143,7 +7143,8 @@ def elastic_diffuse_diffraction_patterns(
         diffuse D(k) = T(k) − E(k)
 
     The ``FrozenPhononsAxis`` is removed; every other ensemble axis is kept, so
-    each of its members gets its own components.
+    each of its members gets its own components. With more than one
+    ``FrozenPhononsAxis``, the last one is reduced.
 
     Parameters
     ----------
@@ -7207,10 +7208,11 @@ def elastic_diffuse_diffraction_patterns(
     unbiased = bool(unbiased)
     reduction_dtype = _validate_reduction_dtype(reduction_dtype)
 
+    # With more than one FrozenPhononsAxis, the last one is reduced.
     fp_axis_idx = next(
         (
             i
-            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            for i, ax in reversed(list(enumerate(exit_waves.ensemble_axes_metadata)))
             if isinstance(ax, FrozenPhononsAxis)
         ),
         None,
