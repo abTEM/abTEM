@@ -45,6 +45,12 @@ BOUND_KEYS = {
     "max_intensity": "intensity",
     "max_abs_norm": "max_abs_norm",
 }
+#: How each bound is named in the report, as the metric it bounds.
+BOUND_LABELS = {
+    "max_rel": "rel",
+    "max_intensity": "intensity",
+    "max_abs_norm": "max_abs",
+}
 ENTRY_KEYS = {"case", "since", "reason", "pr", *BOUND_KEYS}
 
 #: Axis fields that only name or typeset an axis; differences are reported but
@@ -93,6 +99,8 @@ class Accepted:
     max_intensity: float | None = None
     max_abs_norm: float | None = None
     matched: list[str] = field(default_factory=list)
+    #: whether the entry's glob matches a case id both compared bundles hold
+    covers: bool = False
     exceeded: list[str] = field(default_factory=list)
     worst: dict[str, float] = field(default_factory=dict)
 
@@ -132,7 +140,9 @@ class Accepted:
                 if value is not None and key == "max_intensity":
                     value = abs(value)
                 if not _within(value, bound):
-                    out.append(f"{name} {key[4:]} {_sci(value)} > {_sci(bound)}")
+                    out.append(
+                        f"{name} {BOUND_LABELS[key]} {_sci(value)} > {_sci(bound)}"
+                    )
         return out
 
     def record(self, case_id: str, outputs: dict[str, dict[str, Any]]) -> None:
@@ -842,7 +852,9 @@ def _stale(accepted: list[Accepted], rows: list[Row]) -> list[Accepted]:
     tier) is not stale: nothing here could have matched it.
     """
     paired = [r.cand_id for r in rows if r.kind == SAME and r.ref_id and r.cand_id]
-    return [a for a in accepted if not a.matched and any(a.matches(c) for c in paired)]
+    for a in accepted:
+        a.covers = any(a.matches(c) for c in paired)
+    return [a for a in accepted if a.covers and not a.matched]
 
 
 def compare(
@@ -994,7 +1006,10 @@ def _worst(row: Row, key: str) -> str:
 
 
 def _bounds_text(a: Accepted) -> str:
-    return ", ".join(f"{k[4:]} ≤ {_sci(v)}" for k, v in a.bounds().items()) or "none"
+    return (
+        ", ".join(f"{BOUND_LABELS[k]} ≤ {_sci(v)}" for k, v in a.bounds().items())
+        or "none"
+    )
 
 
 def _measured_text(a: Accepted) -> str:
@@ -1108,11 +1123,13 @@ def to_markdown(report: Report) -> str:
             f"| {_cell('; '.join(notes_row))} |"
         )
     lines.append("")
-    if report.accepted:
+    changelog = [a for a in report.accepted if a.covers or a.matched]
+    if changelog:
         lines.append("## Accepted changes (changelog)")
         lines.append("")
         lines.append(
-            "Rows: accepted_changes.toml entries that apply to this reference. "
+            "Rows: accepted_changes.toml entries that apply to this reference and "
+            "cover a compared case. "
             "`bounds` = the largest drift the entry accepts per output; `matched` = "
             "drifting case ids the entry covers (in brackets: how many exceed a "
             "bound and stay DRIFT); `measured` = the largest drift over those ids."
@@ -1122,7 +1139,7 @@ def to_markdown(report: Report) -> str:
             "| case glob | since | PR | reason | bounds | matched | measured |"
         )
         lines.append("|---|---|---|---|---|---|---|")
-        for a in report.accepted:
+        for a in changelog:
             matched = str(len(a.matched))
             if a.exceeded:
                 matched += f" ({len(a.exceeded)} over bound)"
