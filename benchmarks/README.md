@@ -4,7 +4,7 @@ Runs a fixed matrix of user-facing abTEM workloads against a checkout and record
 
 ## Invariants
 
-- The harness (`abtem_bench/`) and the cases (`cases/`) always come from the checkout you invoke; only the `abtem` package is swapped per ref, via a git worktree under `.worktrees/bench/<sha>` placed on `PYTHONPATH` behind the harness directory. Both refs run byte-identical case code, and every bundle records a hash of the case sources.
+- The harness (`abtem_bench/`) and the cases (`abtem_bench/cases/`) always come from the checkout you invoke; only the `abtem` package is swapped per ref, via a git worktree under `.worktrees/bench/<sha>` placed on `PYTHONPATH` behind the harness directory. Both refs run byte-identical case code, and every bundle records a hash of the case sources.
 - Each case id runs in a fresh subprocess (`python -P -m abtem_bench.worker`). The worker prints and records which abtem it imported and aborts if it is not the requested worktree.
 - Peak host memory is `ru_maxrss` of that subprocess from `os.wait4`. VRAM is sampled from the CuPy pool and the driver. No meter runs code on the computation.
 - A case whose API is missing on a ref records `UNSUPPORTED` instead of failing the run.
@@ -47,12 +47,12 @@ A `DRIFT` fails `--fail-on drift` unless an entry in `accepted_changes.toml` mat
 
 ## Adding a case
 
-Decorate a function `(params, device) -> run` with `@case` in a module under `cases/`. Setup goes in the function body; `run()` is the only timed region and returns the output objects (an `ArrayObject`, a list matching `outputs`, or a dict). Declare all three tiers with explicit `gpts`, `max_batch` and chunk sizes; never pass `sampling=` (the registry rejects it). Import abtem inside the function. Use `fixtures.multislice_kwargs(params)` to forward the propagator order and chunk size only where the ref accepts them.
+Decorate a function `(params, device) -> run` with `@case` in a module under `abtem_bench/cases/`. Setup goes in the function body; `run()` is the only timed region and returns the output objects (an `ArrayObject`, a list matching `outputs`, or a dict). Declare all three tiers with explicit `gpts`, `max_batch` and chunk sizes; never pass `sampling=` (the registry rejects it). Import abtem inside the function. Use `fixtures.multislice_kwargs(params)` to forward the propagator order and chunk size only where the ref accepts them.
 
 ## Checks
 
 ```
-uvx ruff check benchmarks/abtem_bench benchmarks/cases abtem/core/testing.py
-uvx mypy --follow-imports=silent --ignore-missing-imports benchmarks/abtem_bench benchmarks/cases
+uvx ruff check benchmarks/abtem_bench benchmarks/tests abtem/core/testing.py
+uvx mypy --follow-imports=silent --ignore-missing-imports benchmarks/abtem_bench
 pytest benchmarks/tests
 ```
