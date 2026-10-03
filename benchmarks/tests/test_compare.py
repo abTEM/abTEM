@@ -471,7 +471,9 @@ def test_axis_labels_are_informational(tmp_path, registry_with_demo):
         ref, _with_axes(tmp_path, "cand", [AXIS, relabelled]), registry_with_demo
     ).rows[0]
     assert row.verdict == cmp.IDENTICAL
-    assert row.notes == ["out: axis metadata differs (3)"]
+    assert row.notes == [
+        "out: axis metadata differs (axis 1 _concatenate, axis 1 label, axis 1 novel)"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -504,7 +506,7 @@ def test_an_unknown_axis_field_on_one_side_is_informational(
         ref, _with_axes(tmp_path, "cand", [AXIS, extra]), registry_with_demo
     ).rows[0]
     assert row.verdict == cmp.IDENTICAL
-    assert row.notes == ["out: axis metadata differs (1)"]
+    assert row.notes == ["out: axis metadata differs (axis 1 novel)"]
 
 
 def test_nan_axis_values_on_both_sides_are_equal(tmp_path, registry_with_demo):
@@ -547,7 +549,7 @@ def test_output_metadata_is_informational_only(tmp_path, registry_with_demo):
         ref, _with_metadata(tmp_path, "c2", changed), registry_with_demo
     ).rows[0]
     assert row.verdict == cmp.IDENTICAL
-    assert row.notes == ["out: metadata differs (2)"]
+    assert row.notes == ["out: metadata differs (energy, new)"]
     assert row.outputs["out"]["metadata_info"] == [
         "energy 100000.0 → 200000.0",
         "new only in the candidate",
@@ -663,3 +665,38 @@ def test_to_json_replaces_non_finite_floats_with_strings():
         "d": "nan",
         "e": 3,
     }
+
+
+def test_a_structural_axis_field_set_to_none_on_one_side_is_informational(
+    tmp_path, registry_with_demo
+):
+    ref = _with_axes(tmp_path, "ref", [AXIS, AXIS])
+    cand = _with_axes(tmp_path, "cand", [AXIS, {**AXIS, "values": None}])
+    row = cmp.compare(ref, cand, registry_with_demo).rows[0]
+    assert row.verdict == cmp.IDENTICAL
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan"), -0.1])
+def test_a_noise_floor_must_be_finite_and_non_negative(value):
+    with pytest.raises(cmp.CompareError, match="finite"):
+        cmp.check_noise({CID: {"accuracy": value}}, "noise.json")
+
+
+def test_an_entry_for_a_case_that_failed_is_not_stale(tmp_path, registry_with_demo):
+    ref = bundle(tmp_path, "ref", {CID: (record(), {"out": (ARR, [], {})})}, label="v0")
+    cand = bundle(
+        tmp_path, "cand", {CID: (record(status=store.STATUS_ERROR, error="x"), None)}
+    )
+    toml = _toml(tmp_path, f'case = "demo.*"\nsince = "v0"\nreason = "r"\n{LOOSE}')
+    report = cmp.compare(ref, cand, registry_with_demo, accepted_path=toml)
+    assert report.stale_accepted == []
+
+
+def test_an_unjudged_memory_gate_warns(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cmp, "ACCEPTED_CHANGES_PATH", tmp_path / "none.toml")
+    ref, cand = one(tmp_path, "ref", ARR), one(tmp_path, "cand", ARR, rss=10**9)
+    noise = tmp_path / "noise.json"
+    noise.write_text('{"other.case@quick/cpu": {"memory": 0.01}}')
+    argv = ["compare", str(ref.path), str(cand.path), "--noise", str(noise)]
+    assert cli.main(argv + ["--fail-on", "memory"]) == 0
+    assert "did not judge 1 case id" in capsys.readouterr().err

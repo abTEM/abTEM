@@ -293,6 +293,17 @@ def run_case(
     return result
 
 
+def _is_bundle(bundle: store.Bundle) -> bool:
+    """Whether ``bundle.path`` holds a manifest this harness wrote."""
+    try:
+        manifest = bundle.read_manifest()
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and {"case_hash", "harness_version"} <= set(
+        manifest
+    )
+
+
 def new_bundle(
     out: Path,
     ref: Ref,
@@ -312,10 +323,10 @@ def new_bundle(
     """
     bundle = store.Bundle(out)
     if bundle.path.exists() and any(bundle.path.iterdir()):
-        if not bundle.exists():
+        if not _is_bundle(bundle):
             raise BundleExistsError(
-                f"{bundle.path} holds files but is not a bundle (no manifest.json); "
-                "refusing to delete it"
+                f"{bundle.path} holds files but is not a bundle (no manifest.json "
+                "with a case_hash and a harness_version); refusing to delete it"
             )
         if not overwrite:
             raise BundleExistsError(
