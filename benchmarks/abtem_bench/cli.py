@@ -29,6 +29,13 @@ def _at_least(minimum: int):
     return parse
 
 
+def _positive(text: str) -> float:
+    value = float(text)
+    if not (value > 0 and value != float("inf")):
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return value
+
+
 def _command() -> str:
     """The invocation as a command someone can run again."""
     return "python -P -m abtem_bench " + shlex.join(sys.argv[1:])
@@ -147,12 +154,14 @@ def cmd_self_check(args: argparse.Namespace) -> int:
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
+    gates = cmp.parse_fail_on(args.fail_on)
+    if "memory" in gates and not args.noise:
+        raise cmp.CompareError("--fail-on memory needs a noise floor (--noise)")
     reg = registry.load_cases()
     reference, candidate = store.Bundle(args.reference), store.Bundle(args.candidate)
     for b in (reference, candidate):
         if not b.exists():
-            print(f"not a bundle: {b.path}", file=sys.stderr)
-            return 2
+            raise cmp.CompareError(f"not a bundle: {b.path}")
     noise = None
     if args.noise:
         npath = Path(args.noise)
@@ -160,8 +169,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
             noise = cmp.noise_floor(
                 store.Bundle(npath / "a"), store.Bundle(npath / "b")
             )
-        else:
+        elif npath.is_file():
             noise = store.load_json(npath)
+        else:
+            raise cmp.CompareError(f"no self-check or noise.json at {npath}")
     report = cmp.compare(
         reference,
         candidate,
@@ -170,8 +181,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
         noise=noise,
         speed_threshold=args.speed_threshold,
         memory_threshold=args.memory_threshold,
+        min_delta=args.min_delta,
         allow_case_mismatch=args.allow_case_mismatch,
-        min_time=args.min_time,
+        allow_preset_mismatch=args.allow_preset_mismatch,
     )
     md = cmp.to_markdown(report)
     if args.md:
@@ -179,8 +191,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     if args.json:
         store.dump_json(Path(args.json), cmp.to_json(report))
     print(md)
-    fail_on = [f.strip() for f in (args.fail_on or "").split(",") if f.strip()]
-    failures = report.failures(fail_on)
+    failures = report.failures(gates)
     for f in failures:
         print(f"FAIL {f}", file=sys.stderr)
     return 1 if failures else 0
@@ -240,19 +251,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--accepted",
         help="accepted_changes.toml (default: benchmarks/accepted_changes.toml)",
     )
-    s.add_argument("--speed-threshold", type=float, default=0.10)
-    s.add_argument("--memory-threshold", type=float, default=0.05)
     s.add_argument(
-        "--min-time",
-        type=float,
-        default=0.5,
-        help="seconds; a speed ratio beyond threshold on a shorter run is marked "
-        "'short' instead of flagged",
+        "--speed-threshold",
+        type=_positive,
+        default=0.10,
+        help="fraction; flag time ratios beyond 1 +/- this (default 0.10)",
+    )
+    s.add_argument(
+        "--memory-threshold",
+        type=_positive,
+        default=0.05,
+        help="fraction; flag RSS and VRAM ratios beyond 1 +/- this (default 0.05); "
+        "memory is flagged only for cases with a noise floor",
+    )
+    s.add_argument(
+        "--min-delta",
+        type=_positive,
+        default=0.05,
+        help="seconds; a time ratio beyond threshold whose medians differ by "
+        "less than this is marked 'short' instead of flagged (default 0.05)",
     )
     s.add_argument("--allow-case-mismatch", action="store_true")
+    s.add_argument("--allow-preset-mismatch", action="store_true")
     s.add_argument("--md", help="write the Markdown report here")
     s.add_argument("--json", help="write the JSON report here")
-    s.add_argument("--fail-on", help="comma-separated: drift,shape,speed,memory,error")
+    s.add_argument(
+        "--fail-on",
+        help="comma-separated gates: drift, shape, error, missing, speed[:N%%], "
+        "memory[:N%%] (memory needs --noise); exit 1 if any fails",
+    )
     s.set_defaults(func=cmd_compare)
     return p
 
