@@ -239,10 +239,13 @@ def parse_fail_on(text: str | None) -> dict[str, float | None]:
     """``"drift,speed:10%"`` -> ``{"drift": None, "speed": 0.1}``.
 
     A gate's value is its threshold as a fraction, or None for the compare
-    default. Unknown gates and malformed thresholds raise CompareError.
+    default. Unknown gates and malformed thresholds raise CompareError, and so
+    does a given text that names no gate; None means no gates.
     """
     gates: dict[str, float | None] = {}
-    for token in (text or "").split(","):
+    if text is None:
+        return gates
+    for token in text.split(","):
         token = token.strip()
         if not token:
             continue
@@ -266,6 +269,8 @@ def parse_fail_on(text: str | None) -> dict[str, float | None]:
                 f"percentage, e.g. {name}:10%"
             )
         gates[name] = pct / 100
+    if not gates:
+        raise CompareError("--fail-on names no gate")
     return gates
 
 
@@ -427,6 +432,25 @@ def widened(
 # noise floor
 
 
+def check_noise(noise: Any, source: str) -> dict[str, dict[str, float]]:
+    """``noise`` if it is a dict of case id -> dict of numbers, else CompareError."""
+    ok = isinstance(noise, dict) and all(
+        isinstance(cid, str)
+        and isinstance(floor, dict)
+        and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool)
+            for v in floor.values()
+        )
+        for cid, floor in noise.items()
+    )
+    if not ok:
+        raise CompareError(
+            f"{source}: a noise file maps case ids to dicts of numbers "
+            '({"<case id>": {"memory": 0.01, ...}})'
+        )
+    return noise
+
+
 def _spread(a: Any, b: Any) -> float | None:
     if not a or not b:
         return None
@@ -514,6 +538,9 @@ class Row:
     #: whether speed and memory ratios of this row may be flagged at all
     flaggable: bool = False
     floors: dict[str, float] = field(default_factory=dict)
+    #: run status of each side's record, None where the side has no such id
+    ref_status: str | None = None
+    cand_status: str | None = None
 
     @property
     def case(self) -> str:
@@ -559,6 +586,8 @@ class Report:
     #: the accepted_changes.toml read (or looked for), and whether it exists
     accepted_path: Path | None = None
     accepted_exists: bool = True
+    #: paired cases whose memory was not judged for lack of a noise floor entry
+    memory_unjudged: int = 0
 
     def failures(self, gates: dict[str, float | None]) -> list[str]:
         """Messages for every gate that fails; empty when the comparison passes.
@@ -574,6 +603,15 @@ class Report:
         for r in self.rows:
             if "missing" in gates and r.verdict == ONLY_A:
                 out.append(f"{r.ref_id}: missing from the candidate")
+            if (
+                "missing" in gates
+                and r.kind == SAME
+                and r.cand_status == store.STATUS_UNSUPPORTED
+                and r.ref_status == store.STATUS_OK
+            ):
+                out.append(
+                    f"{r.case}: UNSUPPORTED on the candidate, OK on the reference"
+                )
             if r.kind == SAME and r.verdict == DRIFT and "drift" in gates:
                 out.append(f"{r.case}: DRIFT")
             if r.kind == SAME and r.verdict == SHAPE and "shape" in gates:
@@ -584,7 +622,9 @@ class Report:
                 and r.case not in errored
             ):
                 errored.add(r.case)
-                out.append(f"{r.case}: {r.verdict}")
+                out.append(
+                    f"{r.case}: {r.cand_status if r.verdict == ONLY_B else r.verdict}"
+                )
             if "speed" in gates and r.time_ratio is not None and r.time_ratio > 1:
                 limit = gates["speed"] if gates["speed"] is not None else t["speed"]
                 if _speed_flag(r, limit, t["min_delta"]) == "speed":
@@ -612,7 +652,14 @@ def _pair_row(
     thresholds: dict[str, float],
 ) -> Row:
     rr, rc = reference.read_case(ref_id), candidate.read_case(cand_id)
-    row = Row(ref_id, cand_id, IDENTICAL, kind=kind)
+    row = Row(
+        ref_id,
+        cand_id,
+        IDENTICAL,
+        kind=kind,
+        ref_status=rr["status"],
+        cand_status=rc["status"],
+    )
     if kind == ATTRIBUTION:
         row.notes.append(f"attribution: vs reference `{ref_id}`")
     if rr["status"] != store.STATUS_OK or rc["status"] != store.STATUS_OK:
@@ -702,6 +749,25 @@ def _pair_row(
     return row
 
 
+def _single_row(
+    bundle: store.Bundle, ref_id: str | None, cand_id: str | None, verdict: str
+) -> Row:
+    """A row for an id only one bundle holds; a failed run there is noted."""
+    row = Row(ref_id, cand_id, verdict)
+    side = "reference" if cand_id is None else "candidate"
+    rec = bundle.read_case(str(ref_id or cand_id))
+    status = rec["status"]
+    if side == "reference":
+        row.ref_status = status
+    else:
+        row.cand_status = status
+    if status in FAILED_STATUSES:
+        row.failed = side
+        note = _error_note(rec)
+        row.notes.append(f"{side} {status}" + (f": {note}" if note else ""))
+    return row
+
+
 def compare(
     reference: store.Bundle,
     candidate: store.Bundle,
@@ -763,9 +829,9 @@ def compare(
     rows: list[Row] = []
     for ref_id, cand_id, kind in pairs:
         if ref_id is None:
-            rows.append(Row(None, cand_id, ONLY_B))
+            rows.append(_single_row(candidate, None, cand_id, ONLY_B))
         elif cand_id is None:
-            rows.append(Row(ref_id, None, ONLY_A))
+            rows.append(_single_row(reference, ref_id, None, ONLY_A))
         else:
             rows.append(
                 _pair_row(
@@ -781,6 +847,7 @@ def compare(
                 )
             )
 
+    unjudged = sum(1 for r in rows if r.flaggable and "memory" not in r.floors)
     return Report(
         reference=man_r,
         candidate=man_c,
@@ -795,6 +862,7 @@ def compare(
         noise=noise,
         accepted_path=used_path,
         accepted_exists=used_path.exists(),
+        memory_unjudged=unjudged if noise else 0,
     )
 
 
@@ -869,12 +937,14 @@ def to_markdown(report: Report) -> str:
     lines.append("# abtem-bench comparison")
     lines.append("")
     for label, m in (("Reference", r), ("Candidate", c)):
+        ref = m.get("ref") or {}
+        host = (m.get("fingerprint") or {}).get("hostname", "?")
         lines.append(
-            f"{label}: `{m['ref']['label']}` ({m['ref']['describe']}, "
-            f"{m['ref']['sha'][:12]}), abtem {m.get('abtem_version', '?')}, "
-            f"preset `{m['preset']}`, tier `{m['tier']}`, captured "
-            f"{m['timestamp_utc']} on {m['fingerprint'].get('hostname')} "
-            f"(fingerprint {m.get('fingerprint_short')})."
+            f"{label}: `{ref.get('label', '?')}` ({ref.get('describe', '?')}, "
+            f"{str(ref.get('sha', '?'))[:12]}), abtem {m.get('abtem_version', '?')}, "
+            f"preset `{m.get('preset', '?')}`, tier `{m.get('tier', '?')}`, "
+            f"captured {m.get('timestamp_utc', '?')} on {host} "
+            f"(fingerprint {m.get('fingerprint_short', '?')})."
         )
     t = report.thresholds
     notes = []
@@ -899,6 +969,11 @@ def to_markdown(report: Report) -> str:
             "memory and VRAM flags use max(threshold, 3 x floor), and accuracy "
             "tolerances widen to 3 x the self-check's spread"
         )
+        if report.memory_unjudged:
+            notes.append(
+                f"memory not judged for {report.memory_unjudged} case ids without "
+                "a floor in the noise file"
+            )
     else:
         notes.append(
             "no noise floor: memory and VRAM ratios are shown but never flagged"
@@ -1025,9 +1100,9 @@ def _entry_json(a: Accepted) -> dict[str, Any]:
 def to_json(report: Report) -> dict[str, Any]:
     def side(m: dict[str, Any]) -> dict[str, Any]:
         return {
-            "ref": m["ref"],
-            "preset": m["preset"],
-            "tier": m["tier"],
+            "ref": m.get("ref"),
+            "preset": m.get("preset"),
+            "tier": m.get("tier"),
             "fingerprint_short": m.get("fingerprint_short"),
         }
 
@@ -1043,6 +1118,7 @@ def to_json(report: Report) -> dict[str, Any]:
         if report.accepted_path is None
         else str(report.accepted_path),
         "accepted_exists": report.accepted_exists,
+        "memory_unjudged": report.memory_unjudged,
         "rows": [
             {
                 "reference_id": r.ref_id,

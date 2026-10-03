@@ -213,10 +213,12 @@ def test_unpaired_and_failed_cases(tmp_path, registry_with_demo):
     assert verdicts[(CID, CID)] == store.STATUS_UNSUPPORTED
     assert verdicts[(None, "demo.case[auto]@quick/cpu")] == cmp.ONLY_B
     assert verdicts[("demo.case@quick/gpu", None)] == cmp.ONLY_A
-    # UNSUPPORTED is not a failed run; a case the candidate lacks is 'missing'
+    # UNSUPPORTED is not a failed run; a case the candidate lacks, or reports
+    # UNSUPPORTED where the reference has a result, is 'missing'
     assert report.failures({"error": None}) == []
     assert report.failures({"missing": None}) == [
-        "demo.case@quick/gpu: missing from the candidate"
+        f"{CID}: UNSUPPORTED on the candidate, OK on the reference",
+        "demo.case@quick/gpu: missing from the candidate",
     ]
 
 

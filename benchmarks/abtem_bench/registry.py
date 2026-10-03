@@ -354,3 +354,19 @@ def select_ids(
                 continue
             out.append(cid)
     return out
+
+
+def unmatched_patterns(
+    registry: Mapping[str, Case],
+    tier: str,
+    devices: Iterable[str],
+    only: Iterable[str],
+    tags: Iterable[str] = (),
+) -> list[str]:
+    """The ``only`` patterns that match no case id of the tier, devices and tags."""
+    ids = select_ids(registry, tier, devices, (), tags)
+    return [
+        g
+        for g in only
+        if not any(glob_match(str(cid), g) or glob_match(cid.name, g) for cid in ids)
+    ]

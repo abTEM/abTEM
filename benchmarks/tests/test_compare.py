@@ -290,6 +290,12 @@ def test_a_missing_default_accepted_file_is_reported(tmp_path, registry_with_dem
 # --fail-on and refusals
 
 
+@pytest.mark.parametrize("text", ["", " ", ",", " , ,"])
+def test_a_fail_on_that_names_no_gate_is_refused(text):
+    with pytest.raises(cmp.CompareError, match="--fail-on names no gate"):
+        cmp.parse_fail_on(text)
+
+
 def test_parse_fail_on():
     assert cmp.parse_fail_on(None) == {}
     assert cmp.parse_fail_on(" drift , speed:10% ,memory:2.5%") == {
@@ -324,6 +330,46 @@ def test_error_gate_counts_only_candidate_failures(tmp_path, registry_with_demo)
     assert rows[CID].notes == ["reference ERROR: ValueError: boom"]
     assert rows[gpu].failed == "candidate"
     assert report.failures({"error": None}) == [f"{gpu}: SKIPPED-MEMORY"]
+
+
+def test_candidate_only_and_reference_only_failures_fail_the_error_gate(
+    tmp_path, registry_with_demo
+):
+    ok = (record(), {"out": (ARR, [], {})})
+
+    def failed(status):
+        return (record(status=status, error="Traceback\nValueError: boom"), None)
+
+    ref_only, cand_only = "demo.case@quick/gpu", "demo.case[auto]@quick/cpu"
+    ref = bundle(tmp_path, "ref", {CID: ok, ref_only: failed(store.STATUS_OOM)})
+    cand = bundle(tmp_path, "cand", {CID: ok, cand_only: failed(store.STATUS_ERROR)})
+    report = cmp.compare(ref, cand, registry_with_demo)
+    rows = {r.case: r for r in report.rows}
+    assert rows[cand_only].verdict == cmp.ONLY_B
+    assert rows[cand_only].failed == "candidate"
+    assert rows[cand_only].notes == ["candidate ERROR: ValueError: boom"]
+    assert rows[ref_only].verdict == cmp.ONLY_A and rows[ref_only].failed == "reference"
+    assert rows[ref_only].notes == ["reference OOM: ValueError: boom"]
+    assert report.failures({"error": None}) == [f"{cand_only}: ERROR"]
+    # a reference-only failure is a missing result, not a candidate error
+    assert report.failures({"missing": None}) == [
+        f"{ref_only}: missing from the candidate"
+    ]
+
+
+def test_an_unsupported_candidate_fails_the_missing_gate(tmp_path, registry_with_demo):
+    ok = (record(), {"out": (ARR, [], {})})
+    unsupported = (record(status=store.STATUS_UNSUPPORTED), None)
+    ref = bundle(tmp_path, "ref", {CID: ok})
+    cand = bundle(tmp_path, "cand", {CID: unsupported})
+    report = cmp.compare(ref, cand, registry_with_demo)
+    assert report.failures({"missing": None}) == [
+        f"{CID}: UNSUPPORTED on the candidate, OK on the reference"
+    ]
+    assert report.failures({"error": None, "drift": None}) == []
+    # an unsupported reference is not a loss
+    report = cmp.compare(cand, ref, registry_with_demo)
+    assert report.failures({"missing": None}) == []
 
 
 def test_bundles_without_a_common_case_are_refused(tmp_path, registry_with_demo):
@@ -422,3 +468,58 @@ def test_worst_output_is_named_and_cells_are_escaped(tmp_path, registry_with_dem
     md = cmp.to_markdown(report)
     assert "| 5.0e-01 (b) |" in md
     assert "accepted: a \\| b" in md and "| a \\| b |" in md
+
+
+# ---------------------------------------------------------------------------
+# noise file, manifests, memory not judged
+
+
+@pytest.mark.parametrize(
+    "noise",
+    [[1, 2], {"a": 1}, {"a": [1]}, {"a": {"memory": "x"}}, {"a": {"memory": None}}],
+)
+def test_a_malformed_noise_file_is_refused(noise):
+    with pytest.raises(cmp.CompareError, match="noise"):
+        cmp.check_noise(noise, "noise.json")
+
+
+def test_a_well_formed_noise_file_passes():
+    noise = {CID: {"memory": 0.01, "speed": 0}}
+    assert cmp.check_noise(noise, "noise.json") == noise
+
+
+def test_the_report_renders_a_manifest_without_optional_fields(
+    tmp_path, registry_with_demo
+):
+    ref, cand = _drift(tmp_path)
+    report = cmp.compare(ref, cand, registry_with_demo)
+    for m in (report.reference, report.candidate):
+        m["ref"] = {"label": "x"}
+        for key in ("fingerprint", "timestamp_utc"):
+            m.pop(key)
+    md = cmp.to_markdown(report)
+    assert "`x` (?, ?)" in md and "captured ? on ?" in md
+    assert cmp.to_json(report)["reference"]["ref"] == {"label": "x"}
+
+
+def test_memory_is_reported_as_not_judged_for_cases_without_a_floor(
+    tmp_path, registry_with_demo
+):
+    arr = np.ones((4, 4))
+    other = "demo.case@standard/cpu"
+    cases = {
+        CID: (record(), {"out": (arr, [], {})}),
+        other: (record(), {"out": (arr, [], {})}),
+    }
+    ref, cand = bundle(tmp_path, "ref", cases), bundle(tmp_path, "cand", cases)
+    note = "memory not judged for 1 case ids without a floor in the noise file"
+    report = cmp.compare(ref, cand, registry_with_demo, noise={CID: {"memory": 0.01}})
+    assert report.memory_unjudged == 1 and note in cmp.to_markdown(report)
+    assert cmp.to_json(report)["memory_unjudged"] == 1
+    # every case has a floor, or there is no noise file at all: nothing to say
+    both = {CID: {"memory": 0.01}, other: {"memory": 0.01}}
+    report = cmp.compare(ref, cand, registry_with_demo, noise=both)
+    assert report.memory_unjudged == 0 and "not judged" not in cmp.to_markdown(report)
+    assert "not judged" not in cmp.to_markdown(
+        cmp.compare(ref, cand, registry_with_demo)
+    )

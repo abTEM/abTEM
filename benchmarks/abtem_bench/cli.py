@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
+import traceback
 from pathlib import Path
 
 from abtem_bench import compare as cmp
@@ -68,9 +69,39 @@ def _add_selection(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _select(reg: dict, args: argparse.Namespace) -> list[registry.CaseId]:
+    """The selected case ids; warns about every ``--only`` pattern matching none."""
+    for pattern in registry.unmatched_patterns(
+        reg, args.tier, args.device, args.only, args.tag
+    ):
+        print(f"warning: --only {pattern} matches no case id", file=sys.stderr)
+    return registry.select_ids(reg, args.tier, args.device, args.only, args.tag)
+
+
+def _failed_cases(bundles: list[store.Bundle]) -> list[str]:
+    """Ids of the cases that ended in a failed status in any of the bundles."""
+    failed: set[str] = set()
+    for b in bundles:
+        for cid in b.case_ids():
+            if b.read_case(cid).get("status") in cmp.FAILED_STATUSES:
+                failed.add(cid)
+    return sorted(failed)
+
+
+def _report_failed(bundles: list[store.Bundle]) -> bool:
+    """Print the failed cases of a capture to stderr; whether there were any."""
+    failed = _failed_cases(bundles)
+    if failed:
+        print(
+            f"capture: {len(failed)} case(s) failed: {', '.join(failed)}",
+            file=sys.stderr,
+        )
+    return bool(failed)
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     reg = registry.load_cases()
-    ids = registry.select_ids(reg, args.tier, args.device, args.only, args.tag)
+    ids = _select(reg, args)
     print(f"case_hash {registry.case_hash()}")
     for cid in ids:
         c = reg[cid.name]
@@ -81,7 +112,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_capture(args: argparse.Namespace) -> int:
     reg = registry.load_cases()
-    ids = registry.select_ids(reg, args.tier, args.device, args.only, args.tag)
+    ids = _select(reg, args)
     if not ids:
         print("no cases selected", file=sys.stderr)
         return 2
@@ -101,12 +132,12 @@ def cmd_capture(args: argparse.Namespace) -> int:
         overwrite=args.overwrite,
     )
     print(f"bundle: {bundles[0].path}")
-    return 0
+    return 1 if _report_failed(bundles) else 0
 
 
 def cmd_self_check(args: argparse.Namespace) -> int:
     reg = registry.load_cases()
-    ids = registry.select_ids(reg, args.tier, args.device, args.only, args.tag)
+    ids = _select(reg, args)
     if not ids:
         print("no cases selected", file=sys.stderr)
         return 2
@@ -126,6 +157,8 @@ def cmd_self_check(args: argparse.Namespace) -> int:
         command=_command(),
         overwrite=args.overwrite,
     )
+    if _report_failed(bundles):
+        return 1
     floors = cmp.noise_floor(bundles[0], bundles[1])
     store.dump_json(out / "noise.json", floors)
     report = cmp.compare(bundles[0], bundles[1], reg)
@@ -170,7 +203,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 store.Bundle(npath / "a"), store.Bundle(npath / "b")
             )
         elif npath.is_file():
-            noise = store.load_json(npath)
+            try:
+                noise = store.load_json(npath)
+            except ValueError as exc:
+                raise cmp.CompareError(f"{npath}: not JSON: {exc}") from exc
+            cmp.check_noise(noise, str(npath))
         else:
             raise cmp.CompareError(f"no self-check or noise.json at {npath}")
     report = cmp.compare(
@@ -316,4 +353,8 @@ def main(argv: list[str] | None = None) -> int:
     except (cmp.CompareError, runner.BundleExistsError, runner.RefError) as exc:
         # Input problems, not gate failures: exit 2, which --fail-on never uses.
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- 1 is reserved for a failed gate
+        traceback.print_exc()
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
