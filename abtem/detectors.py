@@ -1058,6 +1058,7 @@ class SpectralSlitDetector(BaseDetector):
                 )
             if len(corners) != 4:
                 raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
+            self._from_corners = True
             self._corners = tuple(float(c) for c in corners)
             # offset = start of q-sweep (left edge, ky-centre), consistent with
             # geometry mode where offset is the q=0 origin.
@@ -1069,6 +1070,7 @@ class SpectralSlitDetector(BaseDetector):
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
             self._q_min = 0.0
+            self._q_max = self._extent
             self._center = (
                 (corners[0] + corners[1]) / 2.0,
                 (corners[2] + corners[3]) / 2.0,
@@ -1080,7 +1082,9 @@ class SpectralSlitDetector(BaseDetector):
             q_max = float(q_max)
             if q_min < 0 or q_min >= q_max:
                 raise ValueError(f"q_min must satisfy 0 <= q_min < q_max, got q_min={q_min}, q_max={q_max}.")
+            self._from_corners = False
             self._q_min = q_min
+            self._q_max = q_max
             self._offset = tuple(float(v) for v in offset)
             self._angle = float(angle)
             # Physical slit extent and centre: spans from q_min to q_max along
@@ -1140,6 +1144,22 @@ class SpectralSlitDetector(BaseDetector):
     def corners(self) -> tuple[float, float, float, float]:
         """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
         return self._corners
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor takes the geometry either as corners or as the slit
+        # parameters, not both, so a copy (and every lazy block) is rebuilt from
+        # the form it was given in. A detector that did not record its form
+        # (one pickled by an earlier version) is rebuilt from the slit parameters,
+        # which describe the same rectangle in both forms.
+        if getattr(self, "_from_corners", False):
+            exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
+        else:
+            exclude = exclude + ("corners",)
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "q_max" in kwargs:
+            # as given, not q_min + extent, which can differ in the last bit
+            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+        return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
         """Radial bounds [mrad] of the acceptance region, for grid-sufficiency
@@ -1479,6 +1499,14 @@ class SpectralAnnularDetector(AnnularDetector):
         super().__init__(
             inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
         )
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor's `angle` is the sweep angle; a copy (and every lazy
+        # block) is rebuilt from it.
+        kwargs = super()._copy_kwargs(exclude=exclude + ("angle",), cls=cls)
+        if "angle" not in exclude:
+            kwargs["angle"] = self.sweep_angle
+        return kwargs
 
     @property
     def q_min(self) -> float:
@@ -2011,6 +2039,11 @@ class WavesDetector(BaseDetector):
     ):
         self._gpts = gpts
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def gpts(self) -> Optional[tuple[int, int]]:
+        """Number of grid points of the detected wave functions."""
+        return self._gpts
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves
