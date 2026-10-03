@@ -491,7 +491,9 @@ def _spread(a: Any, b: Any) -> float | None:
 
 
 def noise_floor(
-    bundle_a: store.Bundle, bundle_b: store.Bundle
+    bundle_a: store.Bundle,
+    bundle_b: store.Bundle,
+    reg: dict[str, registry.Case] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Per-case spreads between two captures of one ref (a self-check).
 
@@ -500,7 +502,9 @@ def noise_floor(
     measured them. ``accuracy``, ``accuracy_abs`` and ``accuracy_intensity``
     are the largest relative error, normalised maximum difference and
     integrated-intensity change over the case's outputs (0 when the two
-    captures are bit-identical); non-finite values are left out.
+    captures are bit-identical); non-finite values are left out. The relative
+    error ignores elements below the case's ``above_rel`` fraction of the
+    maximum (``reg``; 1e-6 for a case it does not hold).
     """
     for b in (bundle_a, bundle_b):
         if not b.exists():
@@ -537,7 +541,9 @@ def noise_floor(
                 continue
             a, ax_a, _ = bundle_a.load_output(cid, name)
             b, ax_b, _ = bundle_b.load_output(cid, name)
-            s = output_stats(a, b, ax_a, ax_b, 1e-6)
+            case = reg.get(registry.CaseId.parse(cid).name) if reg else None
+            above_rel = case.tolerance.above_rel if case else 1e-6
+            s = output_stats(a, b, ax_a, ax_b, above_rel)
             for key, stat in (
                 ("accuracy", "rel_above"),
                 ("accuracy_abs", "max_abs_norm"),

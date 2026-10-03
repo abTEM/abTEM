@@ -195,6 +195,32 @@ def test_noise_floor_records_accuracy_spreads(tmp_path, registry_with_demo):
     assert f["accuracy_intensity"] == pytest.approx(1e-9, rel=1e-3)
 
 
+def test_noise_floor_masks_with_the_cases_above_rel(tmp_path, registry_with_demo):
+    from abtem_bench import registry
+    from abtem_bench.registry import Tier, Tolerance
+
+    tiers = {t: Tier(gpts=(4, 4)) for t in registry.TIER_NAMES}
+    registry.case("demo.coarse", tiers=tiers, tolerance=Tolerance(above_rel=0.5))(
+        lambda p, d: lambda: None
+    )
+    coarse = "demo.coarse@quick/cpu"
+    arr = np.linspace(1.0, 2.0, 16).reshape(4, 4)
+    noisy = arr.copy()
+    noisy[0, 0] *= 1.1  # the smallest element, below half the maximum
+    cases = {cid: (record(), {"out": (arr, [], {})}) for cid in (CID, coarse)}
+    a = bundle(tmp_path, "a", cases)
+    b = bundle(
+        tmp_path,
+        "b",
+        {cid: (record(), {"out": (noisy, [], {})}) for cid in (CID, coarse)},
+    )
+    floors = cmp.noise_floor(a, b, registry_with_demo)
+    assert floors[CID]["accuracy"] == pytest.approx(0.1)
+    assert floors[coarse]["accuracy"] == 0.0
+    # without a registry every case uses the default fraction
+    assert cmp.noise_floor(a, b)[coarse]["accuracy"] == pytest.approx(0.1)
+
+
 def test_auto_variant_is_never_flagged(tmp_path, registry_with_demo):
     cid = "demo.case[auto]@quick/cpu"
     arr = np.ones((4, 4))

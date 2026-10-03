@@ -159,7 +159,7 @@ def cmd_self_check(args: argparse.Namespace) -> int:
     )
     if _report_failed(bundles):
         return 1
-    floors = cmp.noise_floor(bundles[0], bundles[1])
+    floors = cmp.noise_floor(bundles[0], bundles[1], reg)
     store.dump_json(out / "noise.json", floors)
     report = cmp.compare(bundles[0], bundles[1], reg)
     md = cmp.to_markdown(report)
@@ -200,7 +200,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         npath = Path(args.noise)
         if npath.is_dir():
             noise = cmp.noise_floor(
-                store.Bundle(npath / "a"), store.Bundle(npath / "b")
+                store.Bundle(npath / "a"), store.Bundle(npath / "b"), reg
             )
         elif npath.is_file():
             try:
