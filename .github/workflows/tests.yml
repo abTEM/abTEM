@@ -64,6 +64,14 @@ jobs:
       - name: Run tests
         run: uv run pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
+      # The benchmark harness (benchmarks/abtem_bench) reads peak memory from
+      # /proc and its tests kill a worker with a signal, so it is Linux-only.
+      - name: Run benchmark harness tests
+        if: runner.os == 'Linux'
+        run: uv run python -P -m pytest benchmarks/tests
+        env:
+          PYTHONPATH: benchmarks
+
   # A single, stable check to require in branch protection on main, that
   # exists (at all) only for a run that includes --runslow -- PRs into main,
   # and every push/schedule/workflow_dispatch trigger (see RUNSLOW above).
