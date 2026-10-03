@@ -38,8 +38,9 @@
 # (exit wave 2.8e-3 to 0.25, CBED 2.2e-3 to 7.7e-2), so each of the two tiers
 # has its own entry and the large tier none until it is measured. Where the
 # accepted drift is itself that large, no bound tells it from a corrupted
-# output of the same size; the [order1] variants, which share every code path
-# but the propagator and carry bounds near 1e-6, guard those cases.
+# output of the same size. The [order1] variants, which share every code path
+# but the propagator and bound max_abs_norm at 6e-7 to 7e-6, guard everything
+# except the exact propagator itself.
 
 [[accepted]]
 case = "hrtem.exitwave@quick/*"
