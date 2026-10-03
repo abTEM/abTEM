@@ -4,4 +4,4 @@ Compares a fixed matrix of workloads across abTEM checkouts for result
 consistency, wall time and peak memory. See benchmarks/README.md.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

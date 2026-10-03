@@ -39,6 +39,11 @@ def _identify(expected_root: str | None) -> dict[str, Any]:
     return info
 
 
+#: Names what ``peak_rss_bytes`` measures, so a compare never sets it against a
+#: figure from another meter (bundles without the field hold ``wait4``).
+RSS_METER = "VmHWM"
+
+
 def _last_line(text: str) -> str:
     """The last non-empty line of a traceback: the exception itself."""
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
@@ -174,6 +179,7 @@ def run(args: argparse.Namespace) -> int:
             n: _extract(o) for n, o in _name_outputs(case, _materialize(result)).items()
         }
         record["memory"]["peak_rss_bytes"] = meters.vm_hwm_bytes()
+        record["memory"]["rss_meter"] = RSS_METER
         record["status"] = store.STATUS_OK
         record["wall_total"] = time.perf_counter() - t_start
         bundle.write_case(args.case_id, record, outputs)
@@ -184,14 +190,20 @@ def run(args: argparse.Namespace) -> int:
         record["status"] = store.STATUS_OOM
         record["error"] = traceback.format_exc()
         record["error_summary"] = _last_line(record["error"])
-        record["memory"] = {"peak_rss_bytes": meters.vm_hwm_bytes()}
+        record["memory"] = {
+            "peak_rss_bytes": meters.vm_hwm_bytes(),
+            "rss_meter": RSS_METER,
+        }
         bundle.write_case(args.case_id, record)
         return 3
     except Exception:  # noqa: BLE001 -- the record is the error report
         record["status"] = store.STATUS_ERROR
         record["error"] = traceback.format_exc()
         record["error_summary"] = _last_line(record["error"])
-        record["memory"] = {"peak_rss_bytes": meters.vm_hwm_bytes()}
+        record["memory"] = {
+            "peak_rss_bytes": meters.vm_hwm_bytes(),
+            "rss_meter": RSS_METER,
+        }
         bundle.write_case(args.case_id, record)
         print(record["error"], file=sys.stderr)
         return 1
