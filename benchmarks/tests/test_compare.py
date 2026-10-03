@@ -423,12 +423,92 @@ def _with_axes(tmp_path, name, axes):
 
 def test_axis_labels_are_informational(tmp_path, registry_with_demo):
     ref = _with_axes(tmp_path, "ref", [AXIS, AXIS])
-    relabelled = {**AXIS, "label": "y", "_concatenate": False, "endpoint": False}
+    relabelled = {**AXIS, "label": "y", "_concatenate": False, "novel": False}
     row = cmp.compare(
         ref, _with_axes(tmp_path, "cand", [AXIS, relabelled]), registry_with_demo
     ).rows[0]
     assert row.verdict == cmp.IDENTICAL
     assert row.notes == ["out: axis metadata differs (3)"]
+
+
+@pytest.mark.parametrize(
+    "key", ["type", "sampling", "offset", "values", "units", "endpoint"]
+)
+def test_a_structural_axis_field_missing_on_one_side_is_a_mismatch(
+    tmp_path, registry_with_demo, key
+):
+    full = {**AXIS, "values": [0.0, 0.1], "endpoint": True}
+    ref = _with_axes(tmp_path, "ref", [full, full])
+    dropped = {k: v for k, v in full.items() if k != key}
+    row = cmp.compare(
+        ref, _with_axes(tmp_path, "cand", [full, dropped]), registry_with_demo
+    ).rows[0]
+    assert row.verdict == cmp.SHAPE
+    assert row.notes == [f"out: axis 1 {key} only in the reference"]
+    other = cmp.compare(
+        _with_axes(tmp_path, "ref2", [full, dropped]), ref, registry_with_demo
+    ).rows[0]
+    assert other.verdict == cmp.SHAPE
+    assert other.notes == [f"out: axis 1 {key} only in the candidate"]
+
+
+def test_an_unknown_axis_field_on_one_side_is_informational(
+    tmp_path, registry_with_demo
+):
+    ref = _with_axes(tmp_path, "ref", [AXIS, AXIS])
+    extra = {**AXIS, "novel": 3}
+    row = cmp.compare(
+        ref, _with_axes(tmp_path, "cand", [AXIS, extra]), registry_with_demo
+    ).rows[0]
+    assert row.verdict == cmp.IDENTICAL
+    assert row.notes == ["out: axis metadata differs (1)"]
+
+
+def test_nan_axis_values_on_both_sides_are_equal(tmp_path, registry_with_demo):
+    nan_axis = {**AXIS, "offset": float("nan"), "values": [float("nan"), 1.0]}
+    ref = _with_axes(tmp_path, "ref", [nan_axis, AXIS])
+    same = cmp.compare(
+        ref, _with_axes(tmp_path, "c1", [dict(nan_axis), AXIS]), registry_with_demo
+    ).rows[0]
+    assert same.verdict == cmp.IDENTICAL and same.notes == []
+    other = cmp.compare(
+        ref,
+        _with_axes(tmp_path, "c2", [{**nan_axis, "offset": 0.0}, AXIS]),
+        registry_with_demo,
+    ).rows[0]
+    assert other.verdict == cmp.SHAPE
+
+
+def _with_metadata(tmp_path, name, metadata):
+    return bundle(tmp_path, name, {CID: (record(), {"out": (ARR, [], metadata)})})
+
+
+def test_output_metadata_is_informational_only(tmp_path, registry_with_demo):
+    base = {"energy": 1.0e5, "label": "a", "units": "eV", "_x": 1, "type": "Waves"}
+    ref = _with_metadata(tmp_path, "ref", base)
+    # ignored keys and numbers within tolerance change nothing
+    quiet = {
+        **base,
+        "label": "b",
+        "units": "keV",
+        "_x": 2,
+        "energy": 1.0e5 * (1 + 1e-12),
+    }
+    row = cmp.compare(
+        ref, _with_metadata(tmp_path, "c1", quiet), registry_with_demo
+    ).rows[0]
+    assert row.verdict == cmp.IDENTICAL and row.notes == []
+    # a changed value, a missing key and an extra key are reported, not judged
+    changed = {"energy": 2.0e5, "type": "Waves", "new": 1}
+    row = cmp.compare(
+        ref, _with_metadata(tmp_path, "c2", changed), registry_with_demo
+    ).rows[0]
+    assert row.verdict == cmp.IDENTICAL
+    assert row.notes == ["out: metadata differs (2)"]
+    assert row.outputs["out"]["metadata_info"] == [
+        "energy 100000.0 → 200000.0",
+        "new only in the candidate",
+    ]
 
 
 def test_axis_numbers_compare_to_a_relative_tolerance(tmp_path, registry_with_demo):
