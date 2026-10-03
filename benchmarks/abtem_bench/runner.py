@@ -306,13 +306,26 @@ def new_bundle(
 
     An existing bundle there is refused unless ``overwrite`` is set, in which
     case it is deleted first: records of another ref or an earlier capture must
-    never mix into this one.
+    never mix into this one. A non-empty directory without a top-level
+    ``manifest.json`` is not a bundle and is refused either way, and the
+    current directory and its parents are never deleted.
     """
     bundle = store.Bundle(out)
     if bundle.path.exists() and any(bundle.path.iterdir()):
+        if not bundle.exists():
+            raise BundleExistsError(
+                f"{bundle.path} holds files but is not a bundle (no manifest.json); "
+                "refusing to delete it"
+            )
         if not overwrite:
             raise BundleExistsError(
                 f"{bundle.path} is not empty; choose another --out or pass --overwrite"
+            )
+        cwd = Path.cwd().resolve()
+        if bundle.path == cwd or bundle.path in cwd.parents:
+            raise BundleExistsError(
+                f"{bundle.path} is the current directory or one of its parents; "
+                "refusing to delete it"
             )
         shutil.rmtree(bundle.path)
     bundle.path.mkdir(parents=True, exist_ok=True)
