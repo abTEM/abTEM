@@ -56,6 +56,11 @@ TRANSFORMS = {
         _rotated(ase.build.graphene(vacuum=2), 17),
         {"periodic": False},
     ),
+    # a non-periodic cut of a cell rotated to another plane
+    "rotated_cell_plane_xz_non_periodic": (
+        _rectangular_rotated_about_y(3),
+        {"plane": "xz", "periodic": False},
+    ),
 }
 
 
@@ -92,7 +97,7 @@ def test_frame_is_the_map_the_transform_applies_to_positions(name):
     assert paired >= len(atoms)
     if "plane" in name:
         assert not np.allclose(frame, np.eye(3))
-    if name == "rotated_cell_plane_xz":
+    if name.startswith("rotated_cell_plane_xz"):
         # not a permutation: standardize_cell's rotation about z is included
         assert not np.allclose(np.abs(frame), np.round(np.abs(frame)))
 
@@ -104,19 +109,21 @@ def test_frame_of_a_rotated_cell_is_not_a_permutation():
     assert np.abs(frame[0, 1]) > 1e-3
 
 
+@pytest.mark.parametrize("periodic", [True, False], ids=["periodic", "non_periodic"])
 @pytest.mark.parametrize("directions", ["xyz", "xy"])
-def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(directions):
+def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(directions, periodic):
     """With plane="xz" the beam runs along the input y axis, the potential's z.
 
     The displacement drawn as sigmas * r along the input axes appears in the
     potential permuted by the frame, and `directions` drops components along the
-    potential's own axes. Sizes all differ, so a swapped axis cannot pass.
+    potential's own axes. Sizes all differ, so a swapped axis cannot pass. A
+    non-periodic potential displaces its atoms on a separate path, after padding.
     """
     sigmas, seed = (0.05, 0.10, 0.20), 11
     fp = abtem.FrozenPhonons(
         _single_atom(), num_configs=1, sigmas=sigmas, directions=directions, seed=seed
     )
-    potential = abtem.Potential(fp, sampling=0.1, plane="xz")
+    potential = abtem.Potential(fp, sampling=0.1, plane="xz", periodic=periodic)
 
     configuration = potential.to_atoms_ensemble().trajectory[0]
     undisplaced = potential.get_transformed_atoms()

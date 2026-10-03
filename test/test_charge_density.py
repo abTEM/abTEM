@@ -134,3 +134,28 @@ def test_build_from_frozen_phonons(
         np.testing.assert_allclose(
             built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
         )
+
+
+@pytest.mark.parametrize("plane", ["xz", "yz"])
+def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
+    charge_density_3d, plane
+):
+    """The point charges of frozen phonons in a potential rotated to another plane
+    are displaced along the axes of the input atoms."""
+    atoms = Atoms("C", positions=[(2.0, 2.5, 3.0)], cell=(5, 6, 7), pbc=True)
+    sigmas = (0.05, 0.10, 0.20)
+    frozen_phonons = FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=4)
+    r = np.random.default_rng(frozen_phonons.seed[0]).normal(size=(1, 3))
+    displaced = atoms.copy()
+    displaced.positions += np.array(sigmas, dtype=np.float32) * r
+
+    actual = ChargeDensityPotential(
+        frozen_phonons, charge_density_3d, sampling=0.2, plane=plane
+    ).build(lazy=False)
+    expected = ChargeDensityPotential(
+        displaced, charge_density_3d, sampling=0.2, plane=plane
+    ).build(lazy=False)
+
+    np.testing.assert_allclose(
+        actual.array[0], expected.array, rtol=0, atol=1e-5 * expected.array.max()
+    )
