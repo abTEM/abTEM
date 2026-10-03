@@ -19,6 +19,7 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    _rotate_atoms_to_plane,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
@@ -26,7 +27,6 @@ from abtem.atoms import (
     orthogonalize_cell,
     pad_atoms,
     plane_to_axes,
-    rotate_atoms_to_plane,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -751,9 +751,7 @@ class _FieldBuilder(BaseField):
         return output_potential
 
 
-def _plane_frame(
-    atoms: Atoms, plane, small_cell_components: float = 0.0
-) -> np.ndarray:
+def _plane_frame(atoms: Atoms, plane, small_cell_components: float = 0.0) -> np.ndarray:
     """The linear map `rotate_atoms_to_plane` applies to the positions of
     `atoms`, acting on row vectors. Cell components smaller than
     `small_cell_components` are zeroed first, as `orthogonalize_cell` does
@@ -765,7 +763,7 @@ def _plane_frame(
         cell = np.array(atoms.cell)
         cell[np.abs(cell) < small_cell_components] = 0.0
         atoms.set_cell(cell)
-    return rotate_atoms_to_plane(atoms, plane, return_transform_matrix=True)[1]
+    return _rotate_atoms_to_plane(atoms, plane)[1]
 
 
 def _pad_atoms_marking_images(
@@ -927,9 +925,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
 
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
-            atoms, frame = rotate_atoms_to_plane(
-                atoms, self.plane, return_transform_matrix=True
-            )
+            atoms, frame = _rotate_atoms_to_plane(atoms, self.plane)
             return atoms, False, frame
 
         # `diag(atoms.cell) == self.box` is not by itself proof the cell is

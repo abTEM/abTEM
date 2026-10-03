@@ -193,9 +193,7 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     return True
 
 
-def standardize_cell(
-    atoms: Atoms, tol: float = 1e-12, return_transform_matrix: bool = False
-) -> Atoms | tuple[Atoms, np.ndarray]:
+def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
     Standardize the cell of given atoms. The atoms are rotated so that one of the
     lattice vectors in the `xy`-plane is aligned with the `x`-axis, and then all the
@@ -208,17 +206,18 @@ def standardize_cell(
     tol : float
         Components of the lattice vectors whose magnitude is below this value are
         considered to be zero.
-    return_transform_matrix : bool
-        If true, also return the rotation applied to the positions, as a 3x3 matrix
-        acting on row vectors (default is False).
 
     Returns
     -------
     atoms : ase.Atoms
         The standardized atoms.
-    transform_matrix : np.ndarray
-        The rotation applied to the positions (only if `return_transform_matrix`).
     """
+    return _standardize_cell(atoms, tol)[0]
+
+
+def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarray]:
+    """`standardize_cell`, also returning the rotation it applies to the
+    positions, as a 3x3 matrix acting on row vectors."""
     atoms = atoms.copy()
 
     cell = np.array(atoms.cell)
@@ -234,9 +233,7 @@ def standardize_cell(
 
         atoms.pbc = True
         atoms.wrap()
-        if return_transform_matrix:
-            return atoms, np.eye(3)
-        return atoms
+        return atoms, np.eye(3)
 
     xy = np.delete(cell, vertical_vector[0], axis=0)
 
@@ -272,9 +269,7 @@ def standardize_cell(
             "This cell cannot be made orthogonal using currently implemented methods."
         )
 
-    if return_transform_matrix:
-        return atoms, rotation
-    return atoms
+    return atoms, rotation
 
 
 def rotation_matrix_to_euler(
@@ -678,8 +673,7 @@ def rotate_atoms(
 def rotate_atoms_to_plane(
     atoms: Atoms,
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
-    return_transform_matrix: bool = False,
-) -> Atoms | tuple[Atoms, np.ndarray]:
+) -> Atoms:
     """
     Rotate atoms so that their `xy` plane is rotated into a given plane.
 
@@ -689,21 +683,26 @@ def rotate_atoms_to_plane(
         Atoms to be rotated.
     plane : str or tuple of tuple
         Plane to be rotated into given as either a string or two tuples.
-    return_transform_matrix : bool
-        If true, also return the linear map applied to the positions, as a 3x3
-        matrix acting on row vectors (default is False).
 
     Returns
     -------
     rotated : ase.Atoms
         Rotated atoms.
-    transform_matrix : np.ndarray
-        The linear map applied to the positions (only if `return_transform_matrix`).
     """
     if plane == "xy":
-        if return_transform_matrix:
-            return atoms, np.eye(3)
         return atoms
+
+    return _rotate_atoms_to_plane(atoms, plane)[0]
+
+
+def _rotate_atoms_to_plane(
+    atoms: Atoms,
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+) -> tuple[Atoms, np.ndarray]:
+    """`rotate_atoms_to_plane`, also returning the linear map it applies to the
+    positions, as a 3x3 matrix acting on row vectors."""
+    if plane == "xy":
+        return atoms, np.eye(3)
 
     atoms = atoms.copy()
     if isinstance(plane, str):
@@ -712,11 +711,9 @@ def rotate_atoms_to_plane(
     atoms.positions[:] = atoms.positions[:][:, list(axes)]
     atoms.cell[:] = atoms.cell[:][:, list(axes)]
 
-    atoms, rotation = standardize_cell(atoms, return_transform_matrix=True)
+    atoms, rotation = _standardize_cell(atoms)
 
-    if return_transform_matrix:
-        return atoms, np.eye(3)[:, list(axes)] @ rotation
-    return atoms
+    return atoms, np.eye(3)[:, list(axes)] @ rotation
 
 
 def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
