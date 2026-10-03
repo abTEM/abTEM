@@ -223,7 +223,7 @@ def case(
 
 
 def cases_package_dir() -> Path:
-    return Path(abtem_bench.__file__).resolve().parents[1] / "cases"
+    return Path(abtem_bench.__file__).resolve().parent / "cases"
 
 
 _FORBIDDEN_KEYWORDS = {
@@ -257,10 +257,10 @@ def validate_case_sources(package_dir: Path | None = None) -> None:
 def load_cases() -> dict[str, Case]:
     """Import every module of the ``cases`` package, populating REGISTRY."""
     validate_case_sources()
-    import cases  # the sibling package under benchmarks/
+    import abtem_bench.cases as cases
 
     for info in pkgutil.iter_modules(cases.__path__):
-        importlib.import_module(f"cases.{info.name}")
+        importlib.import_module(f"abtem_bench.cases.{info.name}")
     return REGISTRY
 
 
