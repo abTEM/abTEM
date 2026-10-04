@@ -944,6 +944,10 @@ def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms
 # `_warn_if_box_is_strained`.
 BOX_STRAIN_WARNING_THRESHOLD = 1e-3
 
+# The most repetitions of the cell along a lattice vector that `best_orthogonal_cell`
+# and `orthogonalize_cell` try when no box is given.
+_DEFAULT_BOX_MAX_REPETITIONS = 5
+
 # Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
 # box was reported when the user gave it.
 _box_strain_warning_suppressed = contextvars.ContextVar(
@@ -1016,15 +1020,25 @@ def _stacklevel_outside_package() -> int:
     return level
 
 
-def _warn_if_box_is_strained(cell, box, plane="xy") -> None:
+def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
     """
     Raise a ValueError if `box` holds no whole repetition of `cell` (rotated to
     `plane`), and warn if the atoms are strained to fit it by more than
     `BOX_STRAIN_WARNING_THRESHOLD`: a stretch of a supercell vector, or a shear,
     the cosine of the angle between two supercell vectors, which the box turns into
     right angles. A box that is a whole supercell up to round-off is silent.
+
+    If `default` is true, `box` is the one abTEM chose because none was given: the
+    warning says so, names the ways to avoid the strain, and a box that holds no
+    whole repetition, or a cell that cannot be rotated to `plane`, is not an error
+    here but silent: the potential reports it when it places the atoms, if it does.
     """
-    strain = _box_strain(cell, box, plane)
+    try:
+        strain = _box_strain(cell, box, plane)
+    except (ValueError, RuntimeError):
+        if default:
+            return
+        raise
 
     if _box_strain_warning_suppressed.get():
         return
@@ -1047,16 +1061,33 @@ def _warn_if_box_is_strained(cell, box, plane="xy") -> None:
         nearest = f"the supercell is {lengths} Å, the nearest box that needs no strain"
     else:
         nearest = f"the supercell vectors are {lengths} Å long and not at right angles"
+    if default:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å, which abTEM chose because "
+            f"none was given (the closest orthogonal cell it finds with at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions of the atoms' cell along "
+            f"each lattice vector), is not a whole supercell of the atoms' cell, so "
+            f"the atoms are strained onto it."
+        )
+        remedy = (
+            " Pass a `box` that is a whole supercell of the atoms' cell, or repeat "
+            "the atoms' cell so that an orthogonal supercell of at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions exists."
+        )
+    else:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å is not a whole supercell of "
+            f"the atoms' cell, so the atoms are strained onto it."
+        )
+        remedy = ""
     warnings.warn(
-        f"The box {tuple(float(b) for b in box)} Å is not a whole supercell of the "
-        f"atoms' cell, so the atoms are strained onto it. It is filled with "
-        f"{periods}; {nearest}. Stretch along x, y, z: "
+        f"{opening} It is filled with {periods}; {nearest}. Stretch along x, y, z: "
         f"{', '.join(f'{100 * x:+.3f} %' for x in strain['stretch'])}. Angles "
         f"between the supercell vectors (y and z, x and z, x and y), which the "
         f"box turns into right angles: "
         f"{', '.join(f'{d:.3f}°' for d in degrees)} (shear, the cosine of the "
         f"angle: {', '.join(f'{c:.2e}' for c in strain['cosines'])}). A stretch "
-        f"or shear above {BOX_STRAIN_WARNING_THRESHOLD:.1e} is reported.",
+        f"or shear above {BOX_STRAIN_WARNING_THRESHOLD:.1e} is reported.{remedy}",
         UserWarning,
         stacklevel=_stacklevel_outside_package(),
     )

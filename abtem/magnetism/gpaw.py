@@ -7,7 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial.transform import Rotation as R  # type: ignore
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -676,21 +676,10 @@ def gpaw_magnetic_fields(
     if not lazy:
         potential = potential.compute()
 
-    vector_potential = (
-        GPAWVectorPotential(
-            magnetic_calculator,
-            rotate_field=rotate_field,
-            **shared,
-            **field_kwargs,
-        )
-        .build()
-        .compute()
-    )
-
-    magnetic_field = None
-    if include_magnetic_field:
-        magnetic_field = (
-            GPAWMagneticField(
+    # A default box that strains the atoms was reported by the potential above.
+    with _box_strain_warning_silenced():
+        vector_potential = (
+            GPAWVectorPotential(
                 magnetic_calculator,
                 rotate_field=rotate_field,
                 **shared,
@@ -699,6 +688,19 @@ def gpaw_magnetic_fields(
             .build()
             .compute()
         )
+
+        magnetic_field = None
+        if include_magnetic_field:
+            magnetic_field = (
+                GPAWMagneticField(
+                    magnetic_calculator,
+                    rotate_field=rotate_field,
+                    **shared,
+                    **field_kwargs,
+                )
+                .build()
+                .compute()
+            )
 
     return GPAWMagneticFields(
         potential=potential,

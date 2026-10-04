@@ -17,7 +17,11 @@ from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
 from scipy.interpolate import interp1d
 
-from abtem.atoms import is_cell_orthogonal, plane_to_axes
+from abtem.atoms import (
+    _box_strain_warning_silenced,
+    is_cell_orthogonal,
+    plane_to_axes,
+)
 from abtem.core.axes import AxisMetadata
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
@@ -212,14 +216,16 @@ def _generate_slices(
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-        potential = Potential(
-            gpts=gpts,
-            atoms=atoms[i : i + 1],
-            parametrization=parametrization,
-            slice_thickness=slice_thickness,
-            projection="finite",
-            plane=plane,
-        )
+        # The default box was reported when the GPAWPotential was constructed.
+        with _box_strain_warning_silenced():
+            potential = Potential(
+                gpts=gpts,
+                atoms=atoms[i : i + 1],
+                parametrization=parametrization,
+                slice_thickness=slice_thickness,
+                projection="finite",
+                plane=plane,
+            )
         potential_generators.append(potential.generate_slices())
 
     transform_valence_potential = None
@@ -518,7 +524,9 @@ class GPAWPotential(_PotentialBuilder):
     def ensemble_shape(self):
         return self._frozen_phonons.ensemble_shape
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _gpaw_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):

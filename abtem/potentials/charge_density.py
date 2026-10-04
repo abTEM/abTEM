@@ -522,7 +522,9 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         return (array,)
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):

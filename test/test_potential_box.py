@@ -691,7 +691,7 @@ def test_boxes_that_are_whole_supercells_up_to_round_off_are_silent():
         assert records == [], (box, [str(r.message)[:80] for r in records])
 
 
-def test_default_box_of_a_non_orthogonal_cell_is_not_checked():
+def test_exact_default_box_of_a_non_orthogonal_cell_is_silent():
     _, records = _construct(bulk("Si", "diamond", a=5.431), sampling=0.2)
     assert records == []
 
@@ -782,10 +782,11 @@ def test_strain_warning_is_not_repeated_by_a_crystal_potential():
     assert len(_strain_warnings(records)) == 1
 
 
-@pytest.mark.parametrize("repetitions", [(2, 3, 2), (3, 1, 1)])
-def test_charge_density_potential_does_not_report_its_own_box(repetitions):
-    # The Ewald potential it builds from its own default box, which for BN x
-    # (3, 1, 1) is itself reached by a strain, is not a box the user gave.
+@pytest.mark.parametrize("repetitions, reported", [((2, 3, 2), 0), ((3, 1, 1), 1)])
+def test_charge_density_potential_reports_its_default_box_once(repetitions, reported):
+    # The default box of BN x (3, 1, 1) is reached by a strain; the potential
+    # reports it when it is constructed, and the Ewald potential it builds from
+    # its own box does not repeat it.
     atoms = graphene(formula="BN", a=2.5, vacuum=2.0)
     atoms.pbc = True
     with warnings.catch_warnings(record=True) as records:
@@ -799,4 +800,4 @@ def test_charge_density_potential_does_not_report_its_own_box(repetitions):
         )
         potential.build(lazy=False)
         potential.build(lazy=True).compute()
-    assert _strain_warnings(records) == []
+    assert len(_strain_warnings(records)) == reported

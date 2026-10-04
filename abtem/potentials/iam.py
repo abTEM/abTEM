@@ -645,6 +645,8 @@ class _FieldBuilder(BaseField):
 
         origin = _validate_origin(origin)
 
+        box_given = box is not None
+
         if not self._supports_box_and_origin:
             self._check_default_box_and_origin(cell, box, plane, origin)
             box = None
@@ -657,6 +659,8 @@ class _FieldBuilder(BaseField):
                 raise NotImplementedError
             if box is None:
                 box = _default_box(cell, plane)
+                if periodic and not box_given:
+                    _warn_if_box_is_strained(cell, box, plane, default=True)
             elif periodic and box != _default_box(cell, plane):
                 _warn_if_box_is_strained(cell, box, plane)
 
@@ -1259,7 +1263,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         frozen_phonons = frozen_phonons_partial(*args)
         frozen_phonons = frozen_phonons.item()
 
-        # The box was reported when the user gave it.
+        # The box was reported when the potential was constructed.
         with _box_strain_warning_silenced():
             new_potential = cls(frozen_phonons, **kwargs)
 
@@ -1406,10 +1410,10 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         least one period of the atoms' cell along each direction (about half the cell
         or more), and is otherwise rejected with a `ValueError`; the atoms are strained
         to fit the box, however large the strain, and a `UserWarning` quotes the stretch
-        of each axis and the shear when either exceeds 0.1 % (the default box of a
-        non-orthogonal cell, however it is spelled, is not checked). The box is filled
-        with repetitions of the atoms' cell whatever their `pbc`; it never adds
-        vacuum.
+        of each axis and the shear when either exceeds 0.1 %. The same warning is given
+        for the box chosen for a non-orthogonal cell when none is given (a box given
+        and equal to it is not checked). The box is filled with repetitions of the
+        atoms' cell whatever their `pbc`; it never adds vacuum.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the Atoms
@@ -2554,7 +2558,7 @@ class CrystalPotential(_PotentialBuilder):
             seed=int(member_seed) if reseed else int(fp.seed[0]),
         )
         kwargs = unit._copy_kwargs(exclude=("atoms",))
-        # The unit's box was reported when the user gave it.
+        # The unit's box was reported when the potential was constructed.
         with _box_strain_warning_silenced():
             return type(unit)(new_fp, **kwargs)
 
