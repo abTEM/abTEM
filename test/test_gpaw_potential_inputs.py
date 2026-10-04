@@ -1,9 +1,15 @@
-"""``GPAWPotential`` built or simulated eagerly, from every kind of input.
+"""``GPAWPotential`` built or simulated from every kind of input.
 
 A ``.gpw`` path is read lazily: the potential holds a ``dask.delayed`` read in place
 of the calculator. A lazy build resolves it as a task argument; an eager build
 reads it first. Each eager result is compared with the lazy build of the same
 potential on the synchronous scheduler.
+
+A potential from one calculator is one configuration with no ensemble axis, like
+``abtem.Potential(atoms)``, whose ``DummyFrozenPhonons`` has ``num_configs=None``
+and ``num_configurations == 1``. The built ``GPAWPotential`` (a ``PotentialArray``)
+follows it, and every simulation of the unbuilt potential must give the built
+potential's result.
 
 The tests that use ``fake_gpaw`` replace GPAW with a minimal stand-in, so they run
 where GPAW is not installed (CI). The last test needs GPAW.
@@ -20,6 +26,7 @@ from scipy.interpolate import interp1d
 import abtem
 import abtem.potentials.gpaw as gpaw_module
 from abtem.potentials.gpaw import GPAWPotential, _DummyGPAW
+from utils import synthetic_transition_potential
 
 GPTS = (16, 16)
 
@@ -152,6 +159,121 @@ def test_a_single_path_builds_eagerly(fake_gpaw):
     )
 
 
+def _single_calculator(kind):
+    return "single.gpw" if kind == "path" else _loaded("single.gpw")
+
+
+def _simulate(wave, potential, lazy):
+    if wave == "PlaneWave":
+        result = abtem.PlaneWave(energy=100e3).multislice(potential, lazy=lazy)
+    elif wave == "Probe":
+        result = abtem.Probe(energy=100e3, semiangle_cutoff=20).multislice(
+            potential, lazy=lazy
+        )
+    else:
+        result = abtem.Probe(energy=100e3, semiangle_cutoff=20).scan(
+            potential,
+            scan=abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 2)),
+            detectors=abtem.AnnularDetector(inner=20, outer=60),
+            lazy=lazy,
+        )
+    return result.compute() if lazy else result
+
+
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_one_calculator_is_one_configuration(fake_gpaw, kind):
+    potential = GPAWPotential(_single_calculator(kind), gpts=GPTS)
+    reference = abtem.Potential(_atoms(), gpts=GPTS)
+
+    assert potential.num_configurations == reference.num_configurations == 1
+    assert potential.num_frozen_phonons == 1
+    assert potential.ensemble_shape == reference.ensemble_shape == ()
+    assert potential.ensemble_axes_metadata == []
+
+
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_the_number_of_frozen_phonons_is_the_number_of_configurations(fake_gpaw, kind):
+    potential = GPAWPotential(
+        _single_calculator(kind),
+        gpts=GPTS,
+        frozen_phonons=abtem.FrozenPhonons(_atoms(), 3, sigmas=0.05, seed=1),
+    )
+
+    assert potential.num_configurations == potential.num_frozen_phonons == 3
+
+
+def test_a_list_of_calculators_has_one_configuration_each(fake_gpaw):
+    potential = GPAWPotential(["a.gpw", _loaded("b.gpw")], gpts=GPTS)
+
+    assert potential.num_configurations == potential.num_frozen_phonons == 2
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("wave", ["PlaneWave", "Probe", "scan"])
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_one_calculator_simulates_like_its_built_potential(fake_gpaw, kind, wave, lazy):
+    built = GPAWPotential(_single_calculator(kind), gpts=GPTS).build(lazy=False)
+    expected = _simulate(wave, built, lazy=False)
+
+    result = _simulate(wave, GPAWPotential(_single_calculator(kind), gpts=GPTS), lazy)
+
+    _assert_equal(result, expected)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_one_calculator_in_a_core_loss_scan(fake_gpaw, kind, lazy):
+    def scan(potential):
+        result = abtem.Probe(
+            energy=100e3, semiangle_cutoff=20
+        ).transition_potential_scan(
+            potential=potential,
+            transition_potentials=synthetic_transition_potential(
+                Z=6, gpts=GPTS, extent=(2.0, 2.0), n_transitions=2
+            ),
+            scan=abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 2)),
+            detectors=abtem.AnnularDetector(inner=0, outer=40),
+            double_channel=False,
+            sites=_atoms(),
+            lazy=lazy,
+        )
+        return result.compute() if lazy else result
+
+    expected = scan(
+        GPAWPotential(_single_calculator(kind), gpts=GPTS).build(lazy=False)
+    )
+    result = scan(GPAWPotential(_single_calculator(kind), gpts=GPTS))
+
+    assert result.shape == expected.shape == (3, 2)
+    _assert_equal(result, expected)
+
+
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_tiling_one_calculator_into_an_ensemble_warns_like_potential(fake_gpaw, kind):
+    with pytest.warns(UserWarning, match="does not have frozen phonons"):
+        abtem.CrystalPotential(
+            abtem.Potential(_atoms(), gpts=GPTS), (2, 1, 1), num_frozen_phonons=2
+        )
+
+    with pytest.warns(UserWarning, match="does not have frozen phonons"):
+        abtem.CrystalPotential(
+            GPAWPotential(_single_calculator(kind), gpts=GPTS),
+            (2, 1, 1),
+            num_frozen_phonons=2,
+        )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_a_one_element_list_keeps_its_ensemble_axis(fake_gpaw, lazy):
+    potential = GPAWPotential(["single.gpw"], gpts=GPTS)
+
+    assert potential.num_configurations == 1
+    assert potential.ensemble_shape == (1,)
+
+    result = _simulate("PlaneWave", potential, lazy)
+    assert result.shape == (1,) + GPTS
+
+
 @pytest.fixture(scope="module")
 def gpw_paths(tmp_path_factory):
     gpaw = pytest.importorskip("gpaw")
@@ -193,5 +315,24 @@ def test_gpaw_eager_build_of_gpw_files(gpw_paths, case):
     result = potential().build(lazy=False)
 
     assert result.shape == expected.shape
+    scale = np.abs(expected.array).max()
+    np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("wave", ["PlaneWave", "Probe"])
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+def test_gpaw_single_calculator_multislice(gpw_paths, kind, wave, lazy):
+    from gpaw import GPAW
+
+    def potential():
+        source = gpw_paths[0] if kind == "path" else GPAW(gpw_paths[0], txt=None)
+        return GPAWPotential(source, gpts=(32, 32))
+
+    expected = _simulate(wave, potential().build(lazy=False), lazy=False)
+    result = _simulate(wave, potential(), lazy)
+
+    assert potential().num_configurations == 1
+    assert result.shape == expected.shape == (32, 32)
     scale = np.abs(expected.array).max()
     np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)

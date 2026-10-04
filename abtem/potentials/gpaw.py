@@ -447,8 +447,9 @@ class GPAWPotential(_PotentialBuilder):
         return self._frozen_phonons
 
     @property
-    def num_configurations(self):
-        return self.frozen_phonons.num_configs
+    def num_configurations(self) -> int:
+        """Number of potential configurations; 1 when there is no ensemble axis."""
+        return len(self.frozen_phonons)
 
     @property
     def repetitions(self):
@@ -545,7 +546,7 @@ class GPAWPotential(_PotentialBuilder):
 
     @property
     def num_frozen_phonons(self):
-        return len(self.calculators)
+        return self.num_configurations
 
     @property
     def ensemble_shape(self):
