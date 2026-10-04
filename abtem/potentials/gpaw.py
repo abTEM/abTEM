@@ -210,7 +210,7 @@ def _generate_slices(
     first_slice=0,
     last_slice=None,
 ):
-    potential_generators = []
+    potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
         potential = Potential(
@@ -221,7 +221,14 @@ def _generate_slices(
             projection="finite",
             plane=plane,
         )
-        potential_generators.append(potential.generate_slices())
+        potentials.append(potential)
+
+    if last_slice is None:
+        last_slice = len(potential)
+
+    potential_generators = [
+        potential.generate_slices(first_slice, last_slice) for potential in potentials
+    ]
 
     transform_valence_potential = None
     if potential.plane != "xy":
@@ -240,9 +247,6 @@ def _generate_slices(
         transform_valence_potential = False
     elif transform_valence_potential is None:
         transform_valence_potential = True
-
-    if last_slice is None:
-        last_slice = len(potential)
 
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
