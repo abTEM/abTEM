@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
@@ -48,6 +49,23 @@ if GPAW is not None:
     from gpaw.mpi import SerialCommunicator
 
 
+# GPAW keeps one FFT plan per grid shape and dtype for the whole process
+# (``gpaw.fftw.create_plans`` caches them in a module-level dict), and each plan
+# owns the scratch arrays (``tmp_R``, ``tmp_Q``) that every transform writes its
+# input to and reads its output from. All calculators on the same grid share
+# these arrays, so two threads evaluating GPAW at once overwrite each other's
+# transforms: a read gives a wrong potential without an error, and concurrent
+# ``_DummyGPAW.setups`` calls can make GPAW itself fail. Dask's threaded
+# scheduler runs the tasks of a multi-file ``GPAWPotential`` in parallel, and
+# tasks of an earlier build can still be running when the caller's thread
+# returns to GPAW. Every abTEM call that makes a GPAW calculator compute on its
+# grids (reading a ``.gpw`` file, initializing, evaluating a density or
+# potential) therefore holds this lock; attribute reads, and GPAW's radial atom
+# solvers, which create no FFT plans, do not. The lock is re-entrant because
+# ``_read_gpw`` calls ``_DummyGPAW.from_gpaw``.
+_GPAW_LOCK = threading.RLock()
+
+
 def _get_gpaw_setups(atoms, mode, xc):
     gpaw = GPAW(txt=None, mode=mode, xc=xc)
     gpaw.initialize(atoms)
@@ -71,15 +89,21 @@ class _DummyGPAW:
 
     @property
     def setups(self):
-        gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
-        gpaw.initialize(self.atoms)
-        return gpaw.setups
+        with _GPAW_LOCK:
+            gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
+            gpaw.initialize(self.atoms)
+            return gpaw.setups
 
     @classmethod
     def from_gpaw(cls, gpaw, lazy: bool = True):
         # if lazy:
         #    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
 
+        with _GPAW_LOCK:
+            return cls._from_gpaw(gpaw)
+
+    @classmethod
+    def _from_gpaw(cls, gpaw):
         atoms = gpaw.atoms.copy()
         atoms.calc = None
 
@@ -120,11 +144,9 @@ class _DummyGPAW:
     @classmethod
     def from_file(cls, path: str, lazy: bool = True):
         if lazy:
-            return dask.delayed(cls.from_file)(path, lazy=False)
+            return dask.delayed(_read_gpw)(path)
 
-        calc = GPAW(path)
-
-        return cls.from_gpaw(calc)
+        return _read_gpw(path)
 
     @classmethod
     def from_generic(cls, calculator, lazy: bool = True):
@@ -136,6 +158,14 @@ class _DummyGPAW:
             return calculator
         else:
             raise RuntimeError()
+
+
+def _read_gpw(path: str) -> _DummyGPAW:
+    # Module level, so that a task calling it pickles it by reference; a
+    # classmethod in a task is pickled by value together with the globals it
+    # uses, and the lock cannot be pickled.
+    with _GPAW_LOCK:
+        return _DummyGPAW.from_gpaw(GPAW(path))
 
 
 def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
