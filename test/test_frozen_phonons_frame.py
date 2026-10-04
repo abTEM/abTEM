@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.core.axes import FrozenPhononsAxis
+from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     DummyFrozenPhonons,
@@ -532,6 +532,63 @@ def test_potential_to_atoms_ensemble_keeps_an_energy_resolved_ensemble():
     np.testing.assert_array_equal(
         rebuilt.build().compute().array, potential.build().compute().array
     )
+
+
+def _energy_resolved_snapshots(shape):
+    base = ase.build.mx2("WSe2", vacuum=2)
+    rng = np.random.default_rng(0)
+    snapshots = np.empty(shape, dtype=object)
+    for index in np.ndindex(shape):
+        snapshot = base.copy()
+        snapshot.positions += rng.normal(scale=0.05, size=snapshot.positions.shape)
+        snapshots[index] = snapshot
+    return snapshots
+
+
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_potential_to_atoms_ensemble_keeps_the_ensemble_mean_of_energy_resolved(
+    ensemble_mean,
+):
+    ensemble = EnergyResolvedAtomsEnsemble(
+        _energy_resolved_snapshots((2, 3)),
+        energies=[0.0, 0.02],
+        ensemble_mean=ensemble_mean,
+    )
+    configurations = abtem.Potential(ensemble, sampling=0.2).to_atoms_ensemble()
+
+    assert isinstance(configurations, EnergyResolvedAtomsEnsemble)
+    assert configurations.ensemble_mean is ensemble_mean
+
+
+def test_potential_to_atoms_ensemble_keeps_the_axes_of_an_energy_resolved_ensemble():
+    """The returned ensemble carries the axes metadata of the original, not the
+    default ones, as copies."""
+    axes = [
+        EnergyLossAxis(values=(0.0, 0.02), units="meV", label="Custom loss"),
+        FrozenPhononsAxis(label="Snapshot", _ensemble_mean=True),
+    ]
+    ensemble = EnergyResolvedAtomsEnsemble(
+        _energy_resolved_snapshots((2, 3)),
+        energies=[0.0, 0.02],
+        ensemble_axes_metadata=axes,
+    )
+    configurations = abtem.Potential(ensemble, sampling=0.2).to_atoms_ensemble()
+
+    assert configurations.ensemble_axes_metadata == axes
+    for returned, original in zip(configurations.ensemble_axes_metadata, axes):
+        assert returned is not original
+
+
+def test_potential_to_atoms_ensemble_keeps_the_axes_of_a_one_axis_ensemble():
+    base = ase.build.bulk("Si", cubic=True)
+    ensemble = abtem.AtomsEnsemble(
+        [base, base.copy(), base.copy()],
+        ensemble_axes_metadata=[FrozenPhononsAxis(label="Snapshot")],
+    )
+    configurations = abtem.Potential(ensemble, sampling=0.2).to_atoms_ensemble()
+
+    assert configurations.ensemble_axes_metadata == ensemble.ensemble_axes_metadata
+    assert configurations.ensemble_axes_metadata[0].label == "Snapshot"
 
 
 @pytest.mark.parametrize("ensemble_mean", [True, False])
