@@ -2,9 +2,10 @@
 
 GPAW shares FFT scratch arrays between all calculators on the same grid, so two
 threads inside GPAW corrupt each other's results. These tests replace GPAW with a
-fake whose methods wait at a two-party barrier: if two threads are ever inside
-GPAW together, the barrier opens and the overlap is recorded. They need no GPAW
-installation.
+fake whose methods count the threads inside them: each call registers as active,
+sleeps briefly, and deregisters, and an overlap is recorded whenever two calls
+are active at once, so a lock that leaves any of the faked GPAW calls uncovered
+is detected too. They need no GPAW installation.
 """
 
 import threading
@@ -20,23 +21,25 @@ import abtem.potentials.gpaw as gpaw_module
 from abtem.magnetism.gpaw import get_vector_potential_from_gpaw
 from abtem.potentials.gpaw import _DummyGPAW
 
-# Long enough that a second dask thread reaches the barrier on a slow runner;
-# with the lock in place the first thread waits this long once, then the
-# barrier is broken and every later wait returns at once.
-_BARRIER_TIMEOUT = 2.0
+# Long enough that a second dask thread enters a fake call while the first is
+# still inside one, short enough that the tests take a fraction of a second.
+_CALL_DURATION = 0.03
 
 
 class _OverlapProbe:
     def __init__(self):
-        self._barrier = threading.Barrier(2, timeout=_BARRIER_TIMEOUT)
+        self._lock = threading.Lock()
+        self._active = 0
         self.overlapped = False
 
     def __call__(self):
-        try:
-            self._barrier.wait()
-        except threading.BrokenBarrierError:
-            return
-        self.overlapped = True
+        with self._lock:
+            self._active += 1
+            if self._active > 1:
+                self.overlapped = True
+        time.sleep(_CALL_DURATION)
+        with self._lock:
+            self._active -= 1
 
 
 @pytest.fixture
