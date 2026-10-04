@@ -322,7 +322,10 @@ class ChargeDensityPotential(_PotentialBuilder):
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
     charge_density : numpy.ndarray
-        Charge density as a 3D NumPy array [electrons / Å^3].
+        Charge density as a 3D NumPy array [electrons / Å^3], shared by every
+        configuration. A 4D array stacks charge densities along its first axis: one
+        for each configuration, or a single one (a first axis of length one) shared by
+        all of them. Any other number of charge densities raises a `ValueError`.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
         calculated by specifying either `sampling` or `gpts`.

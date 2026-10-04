@@ -342,9 +342,10 @@ class GPAWPotential(_PotentialBuilder):
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
         Approximates frozen phonons for a single GPAW calculator by displacing only the
         nuclear core potentials. Supercedes the atoms from the calculator. The atoms are
-        displaced along their own axes before they are transformed to `plane`, `box`
-        and `origin`, so every displacement gets the linear map of that transform:
-        anisotropic ones as in :class:`~abtem.potentials.iam.Potential`, and isotropic
+        displaced along their own axes before the slices transform them to `plane`
+        (with the default box and origin; `box` and `origin` do not move the atoms),
+        so every displacement gets the linear map of that transform: anisotropic ones
+        as in :class:`~abtem.potentials.iam.Potential`, and isotropic
         ones too, which therefore get the small strain of a non-orthogonal cell's
         orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
         isotropic displacements without it. `directions` refers to the axes of the

@@ -1058,8 +1058,8 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         its plane, origin and box, displaced by the frozen phonons, and wrapped
         into the box when the potential is periodic. A potential built from a
         configuration alone, with this potential's `gpts` (as
-        ``gpts=potential.gpts``; a `sampling` from which the grid is derived from
-        the atoms, such as ``"auto"``, may give the displaced atoms another grid)
+        ``gpts=potential.gpts``; a `sampling` that derives the grid from the atoms,
+        such as ``"auto"``, may give the displaced atoms another grid)
         and the same slicing, projection and `periodic`, and the default plane,
         origin and box, reproduces that configuration's member of this
         potential's ensemble.
