@@ -2166,17 +2166,34 @@ class CrystalPotential(_PotentialBuilder):
     def gpts(self, gpts: tuple[int, int]):
         if not (
             (gpts[0] % self.repetitions[0] == 0)
-            and (gpts[1] % self.repetitions[0] == 0)
+            and (gpts[1] % self.repetitions[1] == 0)
         ):
             raise ValueError(
                 "Number of grid points must be divisible by the number of potential"
-                "repetitions."
+                " repetitions."
             )
-        self.grid.gpts = gpts
-        self._potential_unit.gpts = (
+        unit_gpts = (
             gpts[0] // self._repetitions[0],
             gpts[1] // self._repetitions[1],
         )
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(unit_gpts, self._potential_unit.gpts)
+            return
+        self.grid.gpts = gpts
+        self._potential_unit.gpts = unit_gpts
+
+    @staticmethod
+    def _require_the_grid_of_a_built_unit(requested, current):
+        """
+        A built `PotentialArray` has the grid of its data. Setting the grid it has
+        changes nothing; any other grid raises, with the unit left untouched.
+        """
+        if not np.allclose(requested, current):
+            raise RuntimeError(
+                "The grid of a built PotentialArray unit is that of its data and "
+                "cannot be changed; set the gpts or sampling of the unit before "
+                "building it."
+            )
 
     @property
     def sampling(self) -> tuple[float, float] | None:
@@ -2184,8 +2201,24 @@ class CrystalPotential(_PotentialBuilder):
 
     @sampling.setter
     def sampling(self, sampling: tuple[float, float]):
-        self.sampling = sampling
+        validated = self.grid._validate(sampling, dtype=float)
+        if validated is None or not np.all(np.isfinite(validated)):
+            raise ValueError(f"The sampling must be positive, got {sampling}.")
+        if not np.all(np.array(validated) > 0):
+            raise ValueError(f"The sampling must be positive, got {sampling}.")
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(
+                validated, self._potential_unit.sampling
+            )
+            return
+        # The unit rounds its own gpts up for the requested sampling, and the
+        # crystal takes whole units, so its gpts follow the unit's.
         self._potential_unit.sampling = sampling
+        unit_gpts = self._potential_unit._valid_gpts
+        self.grid.gpts = (
+            unit_gpts[0] * self._repetitions[0],
+            unit_gpts[1] * self._repetitions[1],
+        )
 
     @property
     def repetitions(self) -> tuple[int, int, int]:
