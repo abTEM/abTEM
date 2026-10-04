@@ -67,13 +67,6 @@ if GPAW is not None:
 _GPAW_LOCK = threading.RLock()
 
 
-def _get_gpaw_setups(atoms, mode, xc):
-    gpaw = GPAW(txt=None, mode=mode, xc=xc)
-    gpaw.initialize(atoms)
-
-    return gpaw.setups
-
-
 @dataclass
 class _DummyGPAW:
     setup_mode: str
