@@ -252,8 +252,6 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
-    atoms.positions[np.diag(cell) < 0.0, :] *= -1
-
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
     atoms.pbc = True

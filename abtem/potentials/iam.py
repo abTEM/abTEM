@@ -19,6 +19,7 @@ from ase.data import chemical_symbols
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
+    _cell_in_plane_frame,
     _warn_if_box_is_strained,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
@@ -610,10 +611,18 @@ def _validate_origin(origin) -> tuple[float, float, float]:
 def _default_box(cell, plane) -> tuple[float, float, float]:
     """
     The box of a potential that needs a cell transform and was given no box: the
-    best orthogonal cell of the atoms rotated to `plane`.
+    best orthogonal cell of the atoms' cell rotated to `plane`, as
+    `orthogonalize_cell` rotates it (axes permuted, then the rotation about the new
+    z that `standardize_cell` applies). A cell that cannot be rotated to `plane`
+    gets the best orthogonal cell of its permuted, unrotated lattice vectors.
     """
     if not isinstance(plane, str):
         raise NotImplementedError
+    if plane != "xy":
+        try:
+            return tuple(best_orthogonal_cell(_cell_in_plane_frame(cell, plane)))
+        except RuntimeError:
+            pass
     axes = plane_to_axes(plane)
     return tuple(best_orthogonal_cell(np.array(cell)[:, list(axes)]))
 
