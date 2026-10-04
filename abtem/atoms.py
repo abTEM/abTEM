@@ -934,6 +934,21 @@ def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms
     return _wrapped_supercell(atoms, vectors)
 
 
+def _check_box_holds_a_period(cell, box, plane="xy") -> None:
+    """
+    Raise a ValueError unless `box` holds a whole repetition of `cell`, rotated to
+    `plane`, along each direction: the condition under which `orthogonalize_cell`
+    can preserve the periodicity of atoms in `cell` within `box`.
+    """
+    cell = np.array(cell, dtype=float)
+    cell[np.abs(cell) < 1e-6] = 0.0
+    atoms = Atoms(cell=cell)
+    if plane != "xy":
+        atoms = rotate_atoms_to_plane(atoms, plane)
+
+    _box_repetitions(atoms.cell, box)
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -1026,7 +1041,7 @@ def orthogonalize_cell(
     atoms.set_cell(cell)
     atoms.wrap()
 
-    if origin != (0.0, 0.0, 0.0):
+    if tuple(origin) != (0.0, 0.0, 0.0):
         atoms.translate(-np.array(origin))
         atoms.wrap()
 

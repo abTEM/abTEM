@@ -1,13 +1,17 @@
 """A potential's `box`, `origin` and auto grid follow the arguments given."""
 
+import pickle
+
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.build import graphene
+from ase.build import bulk, graphene
 
 import abtem
-from abtem.atoms import best_orthogonal_cell, orthogonalize_cell
+from abtem.atoms import best_orthogonal_cell, cut_cell, orthogonalize_cell
 from abtem.magnetism.gpaw import GPAWMagneticField, GPAWVectorPotential
+from abtem.inelastic.phonons import FrozenPhonons
+from abtem.magnetism.iam import MagneticField
 from abtem.potentials.charge_density import ChargeDensityPotential
 
 GRID = dict(sampling=0.1, slice_thickness=1.0)
@@ -30,10 +34,29 @@ def _two_atoms():
     )
 
 
+def _permuted_two_atoms():
+    # `_two_atoms()` with the y and z axes exchanged, as plane="xz" sees it.
+    atoms = _two_atoms()
+    return Atoms(
+        atoms.numbers,
+        positions=atoms.positions[:, [0, 2, 1]],
+        cell=[4.0, 5.0, 3.0],
+        pbc=True,
+    )
+
+
+def _array(atoms, **kwargs):
+    return abtem.Potential(atoms, **kwargs).build(lazy=False).array
+
+
 def _assert_same(actual, expected):
     assert actual.shape == expected.shape
     scale = np.abs(expected).max()
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-10 * scale)
+
+
+def _integral(potential):
+    return potential.build(lazy=False).array.sum() * np.prod(potential.sampling)
 
 
 def _charge_density():
@@ -172,3 +195,380 @@ class TestRejectingBuildersValidateTheirArguments:
     def test_invalid_box_raises(self, build, box):
         with pytest.raises(ValueError, match="box"):
             build(box=box)
+
+
+def _supercell_cases():
+    atoms = _two_atoms()
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    orthogonal_graphene = orthogonalize_cell(graphene(vacuum=2.0))
+    return [
+        ("orthogonal 2x3x2", atoms, (2, 3, 2)),
+        ("cubic Si 2x3x1", si, (2, 3, 1)),
+        ("graphene 3x1x1", graphene(vacuum=2.0), (3, 1, 1), orthogonal_graphene),
+    ]
+
+
+@pytest.mark.parametrize("projection", ["infinite", "finite"])
+@pytest.mark.parametrize("periodic", [True, False])
+@pytest.mark.parametrize("case", _supercell_cases(), ids=lambda c: c[0])
+def test_supercell_box_matches_repeated_atoms(case, periodic, projection):
+    name, atoms, repetitions, *orthogonal = case
+    repeated = (orthogonal[0] if orthogonal else atoms) * repetitions
+    box = tuple(np.diag(repeated.cell))
+
+    potential = abtem.Potential(
+        atoms, box=box, periodic=periodic, projection=projection, **GRID
+    )
+
+    assert potential.box == pytest.approx(box, rel=1e-12)
+    _assert_same(
+        potential.build(lazy=False).array,
+        _array(repeated, projection=projection, **GRID),
+    )
+
+
+@pytest.mark.parametrize("projection", ["infinite", "finite"])
+@pytest.mark.parametrize("periodic", [True, False])
+@pytest.mark.parametrize("box, cells", [((8.0, 9.0, 10.0), 12), ((12.0, 3.0, 5.0), 3)])
+def test_projected_potential_integral_counts_the_cells_in_the_box(
+    box, cells, periodic, projection
+):
+    # Each atom's projected potential integrates to the same value wherever it
+    # sits, so the integral over a box that holds whole cells counts them.
+    atoms = _two_atoms()
+    one_cell = abtem.Potential(atoms, projection=projection, **GRID)
+    in_box = abtem.Potential(
+        atoms, box=box, periodic=periodic, projection=projection, **GRID
+    )
+
+    assert _integral(in_box) / _integral(one_cell) == pytest.approx(cells, rel=1e-9)
+
+
+def test_projected_potential_integral_of_a_strained_box_counts_its_periods():
+    # A 9 A box holds 2 periods of the 4 A axis and 3 of the 3 A axis, strained
+    # onto the box, so the integral counts 2 x 3 x 2 cells. The infinite
+    # projection does not depend on where the strain puts an atom relative to a
+    # slice boundary.
+    atoms = _two_atoms()
+    one_cell = abtem.Potential(atoms, **GRID)
+    in_box = abtem.Potential(atoms, box=(9.0, 9.0, 10.0), **GRID)
+
+    assert _integral(in_box) / _integral(one_cell) == pytest.approx(12, rel=1e-9)
+
+
+def test_box_that_is_not_a_supercell_strains_the_atoms_onto_it():
+    atoms = _two_atoms()
+    box = (9.0, 9.0, 10.0)
+    potential = abtem.Potential(atoms, box=box, **GRID)
+    assert potential.extent == pytest.approx(box[:2])
+    _assert_same(
+        potential.build(lazy=False).array,
+        _array(orthogonalize_cell(atoms, box=box), **GRID),
+    )
+
+
+def test_box_with_one_period_compresses_the_cell_onto_it():
+    atoms = _two_atoms()
+    box = (2.1, 3.0, 5.0)
+    potential = abtem.Potential(atoms, box=box, **GRID)
+    assert potential.box == pytest.approx(box)
+    assert potential.get_transformed_atoms().cell.lengths() == pytest.approx(box)
+    _assert_same(
+        potential.build(lazy=False).array,
+        _array(orthogonalize_cell(atoms, box=box), **GRID),
+    )
+
+
+@pytest.mark.parametrize("box", [None, (4.0, 3.0, 5.0)])
+@pytest.mark.parametrize("kind", [tuple, list, np.array])
+def test_origin_translates_an_orthogonal_cell(box, kind):
+    atoms = _two_atoms()
+    origin = (1.0, 0.5, 0.0)
+    translated = atoms.copy()
+    translated.translate(-np.array(origin))
+    translated.wrap()
+
+    _assert_same(
+        _array(atoms, origin=kind(origin), box=box, **GRID),
+        _array(translated, **GRID),
+    )
+
+
+def test_origin_with_a_plane_translates_the_permuted_atoms():
+    atoms = _two_atoms()
+    origin = (1.0, 0.5, 0.25)
+    # The origin is given relative to the atoms as provided: they are translated
+    # first, then the plane is mapped to xy.
+    translated = atoms.copy()
+    translated.translate(-np.array(origin))
+    translated.wrap()
+    permuted = Atoms(
+        translated.numbers,
+        positions=translated.positions[:, [0, 2, 1]],
+        cell=[4.0, 5.0, 3.0],
+        pbc=True,
+    )
+
+    _assert_same(
+        _array(atoms, plane="xz", origin=origin, **GRID), _array(permuted, **GRID)
+    )
+
+
+def test_zero_origin_given_as_a_list_changes_nothing():
+    atoms = _two_atoms()
+    _assert_same(_array(atoms, origin=[0.0, 0.0, 0.0], **GRID), _array(atoms, **GRID))
+
+
+def test_plane_and_box_together():
+    atoms = _two_atoms()
+    potential = abtem.Potential(atoms, plane="xz", box=(8.0, 10.0, 3.0), **GRID)
+    assert potential.box == (8.0, 10.0, 3.0)
+    _assert_same(
+        potential.build(lazy=False).array,
+        _array(_permuted_two_atoms() * (2, 2, 1), **GRID),
+    )
+
+
+def test_box_equal_to_the_rotated_cell_with_a_plane_changes_nothing():
+    # The box that a plane gives by default describes the rotated cell, not the
+    # cell as it is given.
+    atoms = _two_atoms()
+    _assert_same(
+        _array(atoms, plane="xz", box=(4.0, 5.0, 3.0), **GRID),
+        _array(atoms, plane="xz", **GRID),
+    )
+
+
+def test_box_equal_to_the_unrotated_cell_with_a_plane_strains_the_rotated_cell():
+    # (4, 3, 5) is the cell's own diagonal, but with plane="xz" the potential's
+    # axes are the cell's x, z, y: the rotated 4 x 5 x 3 A cell is strained onto
+    # it.
+    atoms = _two_atoms()
+    box = (4.0, 3.0, 5.0)
+    potential = abtem.Potential(atoms, plane="xz", box=box, **GRID)
+    assert potential.box == box
+    _assert_same(
+        potential.build(lazy=False).array,
+        _array(orthogonalize_cell(_permuted_two_atoms(), box=box), **GRID),
+    )
+
+
+def test_box_equal_to_the_cell_changes_nothing():
+    atoms = _two_atoms()
+    _assert_same(_array(atoms, box=(4.0, 3.0, 5.0), **GRID), _array(atoms, **GRID))
+
+
+def test_auto_sampling_and_slice_thickness_follow_the_box():
+    atoms = _two_atoms()
+    repeated = atoms * (2, 3, 2)
+    in_box = abtem.Potential(
+        atoms, box=(8.0, 9.0, 10.0), sampling="auto", slice_thickness="auto"
+    )
+    reference = abtem.Potential(repeated, sampling="auto", slice_thickness="auto")
+    assert in_box.extent == pytest.approx((8.0, 9.0))
+    assert in_box.gpts == reference.gpts
+    assert in_box.slice_thickness == pytest.approx(reference.slice_thickness)
+
+
+def test_auto_sampling_follows_the_box_of_a_strained_cell():
+    atoms = _two_atoms()
+    box = (9.0, 9.0, 10.0)
+    in_box = abtem.Potential(atoms, box=box, sampling="auto", slice_thickness="auto")
+    reference = abtem.Potential(
+        orthogonalize_cell(atoms, box=box), sampling="auto", slice_thickness="auto"
+    )
+    assert in_box.gpts == reference.gpts
+    assert in_box.slice_thickness == pytest.approx(reference.slice_thickness)
+    assert sum(in_box.slice_thickness) == pytest.approx(box[2])
+
+
+def test_auto_slice_thickness_follows_the_plane():
+    atoms = _two_atoms()
+    potential = abtem.Potential(atoms, plane="xz", sampling=0.1, slice_thickness="auto")
+    reference = abtem.Potential(
+        _permuted_two_atoms(), sampling=0.1, slice_thickness="auto"
+    )
+    assert potential.slice_thickness == pytest.approx(reference.slice_thickness)
+
+
+def test_auto_slice_thickness_of_a_primitive_fcc_cell_fills_its_box():
+    # The primitive cell is non-orthogonal; the slices fill the best orthogonal
+    # cell the potential is built in.
+    atoms = bulk("Si", "diamond", a=5.431)
+    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness="auto")
+    assert sum(potential.slice_thickness) == pytest.approx(potential.box[2])
+
+
+@pytest.mark.parametrize(
+    "box", [(8.0, 9.0), (8.0, 0.0, 10.0), (8.0, -9.0, 10.0), (8.0, np.nan, 10.0), "abc"]
+)
+def test_invalid_box_raises(box):
+    with pytest.raises(ValueError):
+        abtem.Potential(_two_atoms(), box=box, **GRID)
+
+
+@pytest.mark.parametrize("sampling", [0.1, "auto"])
+def test_periodic_box_with_no_whole_period_raises_at_construction(sampling):
+    with pytest.raises(ValueError, match="no whole repetition"):
+        abtem.Potential(_two_atoms(), box=(1.5, 3.0, 5.0), sampling=sampling)
+
+
+def test_whole_period_of_a_box_is_counted_in_the_frame_of_the_plane():
+    # With plane="xz" the potential's axes are the cell's x, z, y (4, 5, 3 A), so
+    # the 2 A along y holds no period of the 5 A axis it is laid over; in the
+    # unrotated frame it holds a period of the 3 A axis.
+    atoms = _two_atoms()
+    box = (4.0, 2.0, 3.0)
+    with pytest.raises(ValueError, match="no whole repetition"):
+        abtem.Potential(atoms, plane="xz", box=box, **GRID)
+    assert abtem.Potential(atoms, box=box, **GRID).box == box
+
+
+def test_non_periodic_box_with_no_whole_period_is_cut_out():
+    atoms = _two_atoms()
+    box = (1.5, 3.0, 5.0)
+    potential = abtem.Potential(atoms, box=box, periodic=False, **GRID)
+    array = potential.build(lazy=False).array
+    assert array.shape == (5, 15, 30)
+    _assert_same(array, _array(cut_cell(atoms, cell=box), **GRID))
+
+
+@pytest.mark.parametrize("box", [(1.5, 3.0, 5.0), (9.0, 9.0, 10.0), (8.0, 9.0, 10.0)])
+def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_box(box):
+    # The cut-out atoms are not strained, so the grid commensurate with them is
+    # the one of the atoms cut out of the repeated structure.
+    atoms = _two_atoms()
+    potential = abtem.Potential(
+        atoms, box=box, periodic=False, sampling="auto", slice_thickness="auto"
+    )
+    reference = abtem.Potential(
+        cut_cell(atoms, cell=box), sampling="auto", slice_thickness="auto"
+    )
+    assert potential.gpts == reference.gpts
+    assert potential.sampling == pytest.approx(reference.sampling)
+    assert potential.slice_thickness == pytest.approx(reference.slice_thickness)
+
+
+def test_invalid_origin_raises():
+    for origin in [(1.0, 0.5), ("1", "0", "0"), (np.nan, 0.0, 0.0)]:
+        with pytest.raises(ValueError, match="origin"):
+            abtem.Potential(_two_atoms(), origin=origin, **GRID)
+
+
+def test_origin_none_is_the_zero_origin():
+    atoms = _two_atoms()
+    _assert_same(_array(atoms, origin=None, **GRID), _array(atoms, **GRID))
+
+
+def test_box_of_strings_raises():
+    with pytest.raises(ValueError, match="box"):
+        abtem.Potential(_two_atoms(), box=("8", "9", "10"), **GRID)
+
+
+def test_plane_box_and_origin_together():
+    atoms = _two_atoms()
+    origin = (1.0, 0.5, 0.25)
+    # The origin translates the atoms as provided, then the plane maps y and z.
+    translated = atoms.copy()
+    translated.translate(-np.array(origin))
+    translated.wrap()
+    permuted = Atoms(
+        translated.numbers,
+        positions=translated.positions[:, [0, 2, 1]],
+        cell=[4.0, 5.0, 3.0],
+        pbc=True,
+    )
+
+    potential = abtem.Potential(
+        atoms, plane="xz", box=(8.0, 10.0, 3.0), origin=origin, **GRID
+    )
+    assert potential.box == (8.0, 10.0, 3.0)
+    _assert_same(
+        potential.build(lazy=False).array, _array(permuted * (2, 2, 1), **GRID)
+    )
+
+
+def test_frozen_phonons_through_a_box():
+    atoms = _two_atoms()
+    frozen_phonons = FrozenPhonons(atoms, 3, sigmas=0.1, seed=1)
+    potential = abtem.Potential(frozen_phonons, box=(8.0, 9.0, 10.0), **GRID)
+
+    eager = potential.build(lazy=False).array
+    lazy = potential.build(lazy=True).compute().array
+
+    assert eager.shape == (3, 10, 80, 90)
+    _assert_same(lazy, eager)
+    assert not np.allclose(eager[0], eager[1])
+
+    # Each configuration holds the 12 cells of the box, displaced.
+    cell = abtem.Potential(atoms, **GRID)
+    for configuration in eager:
+        integral = configuration.sum() * np.prod(potential.sampling)
+        assert integral / _integral(cell) == pytest.approx(12, rel=1e-9)
+
+
+def test_crystal_potential_of_a_unit_with_a_box():
+    atoms = _two_atoms()
+    kwargs = dict(sampling=0.2, slice_thickness=1.0)
+    unit = abtem.Potential(atoms, box=(8.0, 9.0, 10.0), **kwargs)
+    crystal = abtem.CrystalPotential(unit, repetitions=(2, 1, 1))
+    reference = abtem.Potential(atoms * (4, 3, 2), **kwargs)
+
+    assert crystal.box == pytest.approx((16.0, 9.0, 10.0))
+    _assert_same(crystal.build(lazy=False).array, reference.build(lazy=False).array)
+
+
+def test_non_periodic_box_is_cut_out_of_the_repeated_atoms():
+    potential = abtem.Potential(
+        _two_atoms(),
+        box=(8.0, 9.0, 10.0),
+        periodic=False,
+        projection="finite",
+        **GRID,
+    )
+    assert potential.box == (8.0, 9.0, 10.0)
+    assert potential.get_transformed_atoms().cell.lengths() == pytest.approx(
+        (8.0, 9.0, 10.0)
+    )
+
+
+def test_multislice_through_a_box_matches_the_repeated_atoms():
+    atoms = _two_atoms()
+    kwargs = dict(sampling=0.2, slice_thickness=1.0)
+    in_box = abtem.Potential(atoms, box=(8.0, 9.0, 10.0), **kwargs)
+    repeated = abtem.Potential(atoms * (2, 3, 2), **kwargs)
+    wave = abtem.PlaneWave(energy=100e3)
+    _assert_same(
+        wave.multislice(in_box, lazy=False).array,
+        wave.multislice(repeated, lazy=False).array,
+    )
+
+
+def test_magnetic_field_box_matches_repeated_atoms():
+    atoms = _two_atoms()
+    atoms.set_chemical_symbols(["Fe", "O"])
+    atoms.set_array("magnetic_moments", np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 0.0]]))
+    kwargs = dict(sampling=0.2, slice_thickness=1.0)
+    _assert_same(
+        MagneticField(atoms, box=(8.0, 9.0, 10.0), **kwargs).build(lazy=False).array,
+        MagneticField(atoms * (2, 3, 2), **kwargs).build(lazy=False).array,
+    )
+
+
+@pytest.mark.parametrize("stored", [None, [0.0, 0.0, 0.0], np.zeros(3)])
+def test_potential_restored_with_the_origin_as_it_was_passed_builds(stored):
+    # A potential restored from a pickle skips `__init__`, so it may hold the
+    # origin exactly as the user passed it.
+    atoms = _two_atoms()
+    potential = abtem.Potential(atoms, **GRID)
+    restored = pickle.loads(pickle.dumps(potential))
+    restored._origin = stored
+
+    _assert_same(restored.build(lazy=False).array, _array(atoms, **GRID))
+
+
+def test_potential_restored_with_an_invalid_origin_raises_on_build():
+    restored = pickle.loads(pickle.dumps(abtem.Potential(_two_atoms(), **GRID)))
+    restored._origin = (1.0, 0.0)
+    with pytest.raises(ValueError, match="origin"):
+        restored.build(lazy=False)
