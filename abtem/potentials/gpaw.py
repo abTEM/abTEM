@@ -181,10 +181,30 @@ def _same_elements_and_cell(atoms, other):
     )
 
 
+# Slice limits are cumulative float sums, so a limit that is a whole number of planes
+# can lie a few units of roundoff below it. A limit within this fraction of a plane
+# below a plane boundary counts as on the boundary.
+_PLANE_TOLERANCE = 1e-6
+
+
 def integrate_slice(array, gpts, a, b, thickness):
-    dz = thickness / array.shape[2]
-    na = int(np.floor(a / dz))
-    nb = int(np.floor(b / dz))
+    """
+    Integrate the planes of `array` along its last axis between the heights `a`
+    and `b`, and Fourier interpolate the result to `gpts`.
+
+    Plane k covers the heights from k * dz to (k + 1) * dz, with dz the plane
+    spacing. A slice takes the planes from floor(a / dz) up to, not including,
+    floor(b / dz), so consecutive slices share their limit and every plane belongs
+    to exactly one slice. A slice that contains no plane gets zero.
+    """
+    nz = array.shape[2]
+    dz = thickness / nz
+    na = int(np.floor(a / dz + _PLANE_TOLERANCE))
+    nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
+
+    if nb <= na:
+        return np.zeros(gpts, dtype=array.dtype)
+
     slice_array = np.sum(array[..., na:nb], axis=-1) * dz
     new_shape = (nb - na,) + gpts
     old_shape = (nb - na,) + slice_array.shape
