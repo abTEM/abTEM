@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from numbers import Number
 from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
 
@@ -842,6 +843,97 @@ def _box_repetitions(cell, box) -> np.ndarray:
     return vectors
 
 
+def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding each atom once for every
+    cell of `atoms` the supercell contains.
+
+    Two lattice translations of `atoms` give the same atom in the supercell
+    exactly when they differ by a lattice vector of the supercell. The
+    translations are therefore sorted into |det(vectors)| classes by an integer
+    key, which is exact, and one translation of each class is used for every atom.
+    The images are wrapped into the supercell in its own fractional coordinates,
+    so that no atom depends on which side of a face round-off puts it: a
+    fractional coordinate within 1e-9 of 1 is 0. The result carries the per-atom
+    arrays of `atoms`.
+
+    Raises
+    ------
+    RuntimeError
+        If the translations do not fall into exactly |det(vectors)| classes.
+    """
+    cell = np.array(atoms.cell)
+    vectors = np.rint(vectors).astype(np.int64)
+    newcell = vectors @ cell
+    num_images = int(round(abs(np.linalg.det(vectors))))
+
+    # adjugate * det = |det| * inverse(vectors), exactly, for an integer matrix
+    adjugate = np.rint(np.linalg.inv(vectors) * np.linalg.det(vectors)).astype(np.int64)
+    determinant = int(np.rint(np.linalg.det(vectors)))
+    if not np.array_equal(vectors @ adjugate, determinant * np.eye(3, dtype=np.int64)):
+        raise RuntimeError(
+            f"The matrix {vectors.tolist()} is not invertible as an integer matrix; "
+            "please report this cell."
+        )
+
+    corners = np.array(list(itertools.product((0, 1), repeat=3)), dtype=float)
+    scaled_corners = np.linalg.solve(cell.T, (corners @ newcell).T).T
+    lower = np.floor(scaled_corners.min(axis=0)).astype(int) - 1
+    upper = np.ceil(scaled_corners.max(axis=0)).astype(int) + 1
+    shifts = np.stack(
+        np.meshgrid(*[np.arange(l, u) for l, u in zip(lower, upper)], indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    keys = (shifts @ adjugate) % abs(determinant)
+    _, first = np.unique(keys, axis=0, return_index=True)
+    shifts = shifts[np.sort(first)]
+    if len(shifts) != num_images:
+        raise RuntimeError(
+            f"The translations of the cell fall into {len(shifts)} classes in the "
+            f"supercell, expected {num_images}; please report this cell."
+        )
+
+    inverse = np.linalg.inv(newcell)
+    fractional = (atoms.positions @ inverse)[:, None, :] + (
+        (shifts @ adjugate) / determinant
+    )
+    fractional -= np.floor(fractional)
+    fractional[np.isclose(fractional, 1.0, atol=1e-9, rtol=0.0)] = 0.0
+
+    index = np.repeat(np.arange(len(atoms)), num_images)
+    supercell = atoms[index]
+    supercell.set_cell(newcell)
+    supercell.positions[:] = fractional.reshape(-1, 3) @ newcell
+    return supercell
+
+
+def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding every atom once.
+
+    `ase.build.cut` keeps the atoms whose scaled position in the supercell is in
+    [-0.1 * tolerance, 1 - 0.1 * tolerance) and generates images only above the
+    lower face. An atom whose image lies in the band below the upper face is
+    therefore lost, because its image in the supercell is the one below the lower
+    face: a scaled coordinate of -3.6e-16 wraps to 1 - 3.6e-16, and in a
+    supercell of 100 A every atom within 0.1 A of an upper face is in the band.
+    The number of atoms is checked, and the supercell is built by
+    `_wrapped_supercell` when it is wrong, which leaves every cut that was right
+    unchanged.
+    """
+    expected = len(atoms) * int(round(abs(np.linalg.det(vectors))))
+    supercell = cut(
+        atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance
+    )
+    if len(supercell) == expected:
+        return supercell
+
+    return _wrapped_supercell(atoms, vectors)
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -1013,7 +1105,7 @@ def orthogonalize_cell(
 
     vectors = _box_repetitions(atoms.cell, box)
 
-    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
+    atoms = _cut_supercell(atoms, vectors, tolerance)
 
     A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
