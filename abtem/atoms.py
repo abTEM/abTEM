@@ -816,6 +816,32 @@ def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> N
     atoms.set_scaled_positions(scaled % 1.0)
 
 
+def _box_repetitions(cell, box) -> np.ndarray:
+    """
+    The lattice vectors of the repetition of `cell` that fills `box`, as an integer
+    matrix in units of the lattice vectors of `cell`.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction, i.e.
+        the integer matrix is singular. A direction shorter than about half a period
+        rounds to no repetition.
+    """
+    vectors = np.round(np.dot(np.diag(box), np.linalg.inv(cell)))
+
+    if np.round(abs(np.linalg.det(vectors))) == 0:
+        raise ValueError(
+            f"The box {tuple(float(b) for b in box)} holds no whole repetition of "
+            "the atoms' cell along at least one direction (it is shorter than "
+            "about half a period), so the periodicity cannot be preserved. Use a "
+            "larger box, or cut the box out of the repeated structure (`cut_cell`, "
+            "or `periodic=False` in a potential)."
+        )
+
+    return vectors
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -873,7 +899,10 @@ def orthogonalize_cell(
         The extent of the potential in `x`, `y` and `z`. If not given this is determined
         from the atoms' cell. If the box size does not match an integer number of the
         atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword.
+        periodicity, determined by the `periodic` keyword. The box must hold at least
+        one repetition of the atoms' cell along each direction (about half a period
+        or more); the repetition is rounded to the nearest whole number, and the
+        atoms are strained to fit the box.
     tolerance : float
         Determines what is defined as a plane. All atoms within a distance equal to
         tolerance [Å] from a given plane will be considered to belong to that plane.
@@ -884,6 +913,11 @@ def orthogonalize_cell(
         The orthogonal atoms.
     transform : tuple of arrays, optional
         The applied transform given as Euler angles (by default not returned).
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the atoms' cell along some direction.
     """
 
     # Copy once, up front, rather than at each mutating call below. Three
@@ -977,9 +1011,7 @@ def orthogonalize_cell(
 
     _snap_scaled_positions_to_cell_boundary(atoms, tolerance)
 
-    inv = np.linalg.inv(atoms.cell)
-    vectors = np.dot(np.diag(box), inv)
-    vectors = np.round(vectors)
+    vectors = _box_repetitions(atoms.cell, box)
 
     atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
 
