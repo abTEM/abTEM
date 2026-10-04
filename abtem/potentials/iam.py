@@ -1494,8 +1494,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # constrains the grid here, so rounding is free).
                 from abtem.core.fft import next_fast_fft_size
 
+                # The extent the builder gives the potential: the box, else the
+                # cell rotated to the plane and made orthogonal when it needs a
+                # transform, else the cell itself.
                 if box is not None:
                     extent = box[:2]
+                elif _require_cell_transform(
+                    cell, box=None, plane=plane, origin=origin
+                ):
+                    extent = _default_box(cell, plane)[:2]
                 else:
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
                 gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
