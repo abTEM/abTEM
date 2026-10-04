@@ -172,6 +172,15 @@ def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
     return interpolators
 
 
+def _same_elements_and_cell(atoms, other):
+    """Whether two atoms have the same elements in the same order and cell."""
+    return (
+        len(atoms) == len(other)
+        and np.array_equal(atoms.numbers, other.numbers)
+        and np.allclose(np.array(atoms.cell), np.array(other.cell))
+    )
+
+
 def integrate_slice(array, gpts, a, b, thickness):
     dz = thickness / array.shape[2]
     na = int(np.floor(a / dz))
@@ -382,6 +391,12 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
+                raise ValueError(
+                    "The frozen phonons must have the calculator's atoms: the same "
+                    "elements in the same order and the same cell, with positions "
+                    "that may differ. Repeat the cell with `repetitions`."
+                )
 
         self._calculators = calculators
         self._frozen_phonons = frozen_phonons

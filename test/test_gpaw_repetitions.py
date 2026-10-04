@@ -251,3 +251,71 @@ def test_repetitions_over_a_calculator_list(calculator):
         np.testing.assert_allclose(
             built.array[config], tiled, rtol=0, atol=1e-10 * np.abs(tiled).max()
         )
+
+
+def test_frozen_phonons_of_a_supercell_are_rejected(calculator):
+    # The calculator's interpolators and valence potential are those of one cell:
+    # the atoms of a supercell belong in `repetitions`.
+    frozen_phonons = FrozenPhonons(
+        calculator.atoms * (2, 1, 1), num_configs=1, sigmas=0.0
+    )
+
+    with pytest.raises(ValueError, match="repetitions"):
+        GPAWPotential(
+            calculator,
+            gpts=(64, 28),
+            slice_thickness=0.9,
+            frozen_phonons=frozen_phonons,
+        )
+
+
+def test_frozen_phonons_of_the_calculators_atoms_with_repetitions_are_accepted(
+    calculator,
+):
+    unit = GPAWPotential(calculator, gpts=GPTS, slice_thickness=0.9).build(lazy=False)
+    frozen_phonons = FrozenPhonons(calculator.atoms, num_configs=1, sigmas=0.0)
+
+    built = _repeated(calculator, (2, 1, 1), 0.9, frozen_phonons=frozen_phonons).build(
+        lazy=False
+    )
+
+    tiled = np.tile(unit.array, (1, 1, 2, 1))
+    np.testing.assert_allclose(
+        built.array, tiled, rtol=0, atol=1e-10 * np.abs(tiled).max()
+    )
+
+
+def _reordered(atoms):
+    return atoms[[1, 0]]
+
+
+def _doubled_in_z(atoms):
+    atoms = atoms.copy()
+    atoms.set_cell(atoms.cell * (1, 1, 2), scale_atoms=False)
+    return atoms
+
+
+@pytest.mark.parametrize("make_atoms", [_reordered, _doubled_in_z])
+def test_frozen_phonons_of_other_elements_or_cell_are_rejected(calculator, make_atoms):
+    # The same two atoms in the other order take each other's core corrections;
+    # the same atoms in a doubled cell stretch the one valence cell.
+    frozen_phonons = FrozenPhonons(
+        make_atoms(calculator.atoms), num_configs=1, sigmas=0.0
+    )
+
+    with pytest.raises(ValueError, match="calculator's atoms"):
+        GPAWPotential(
+            calculator, gpts=GPTS, slice_thickness=0.9, frozen_phonons=frozen_phonons
+        )
+
+
+def test_frozen_phonons_with_other_positions_are_accepted(calculator):
+    atoms = calculator.atoms.copy()
+    atoms.positions += (0.05, -0.04, 0.03)
+    frozen_phonons = FrozenPhonons(atoms, num_configs=1, sigmas=0.0)
+
+    potential = GPAWPotential(
+        calculator, gpts=GPTS, slice_thickness=0.9, frozen_phonons=frozen_phonons
+    )
+
+    assert potential.build(lazy=False).array.shape == (1, 4) + GPTS
