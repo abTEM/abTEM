@@ -17,6 +17,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
+from dask.delayed import Delayed
 from scipy.interpolate import interp1d
 
 from abtem.atoms import is_cell_orthogonal, plane_to_axes
@@ -166,6 +167,16 @@ def _read_gpw(path: str) -> _DummyGPAW:
     # uses, and the lock cannot be pickled.
     with _GPAW_LOCK:
         return _DummyGPAW.from_gpaw(GPAW(path))
+
+
+def _read_placeholders(calculators):
+    # ``from_file`` leaves each ``.gpw`` path as a ``Delayed`` read. A lazy
+    # graph resolves it as a task argument; eager code needs the calculator.
+    if isinstance(calculators, list):
+        return [_read_placeholders(calculator) for calculator in calculators]
+    if isinstance(calculators, Delayed):
+        return calculators.compute()
+    return calculators
 
 
 def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
@@ -582,6 +593,9 @@ class GPAWPotential(_PotentialBuilder):
             return arr
 
         calculators = self.calculators
+
+        if not lazy:
+            calculators = _read_placeholders(calculators)
 
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
