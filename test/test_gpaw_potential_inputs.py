@@ -2,7 +2,8 @@
 
 A ``.gpw`` path is read lazily: the potential holds a ``dask.delayed`` read in place
 of the calculator. A lazy build resolves it as a task argument; an eager build
-reads it first. Each eager result is compared with the lazy build of the same
+reads it when it makes the block that needs it, keeping only the calculator read
+last. Each eager result is compared with the lazy build of the same
 potential on the synchronous scheduler.
 
 A potential from one calculator is one configuration with no ensemble axis, like
@@ -15,9 +16,12 @@ The tests that use ``fake_gpaw`` replace GPAW with a minimal stand-in, so they r
 where GPAW is not installed (CI). The last test needs GPAW.
 """
 
+import gc
 import os
+import weakref
 from types import SimpleNamespace
 
+import dask
 import numpy as np
 import pytest
 from ase import Atoms
@@ -272,6 +276,154 @@ def test_a_one_element_list_keeps_its_ensemble_axis(fake_gpaw, lazy):
 
     result = _simulate("PlaneWave", potential, lazy)
     assert result.shape == (1,) + GPTS
+
+
+class _CountReads:
+    """Counts ``.gpw`` reads and the calculators they return that are still alive.
+
+    ``alive_while_slicing`` is sampled each time slices are generated from a
+    calculator, after a garbage collection, so it counts what an eager build
+    holds while it works, not objects waiting to be collected.
+    """
+
+    def __init__(self, monkeypatch):
+        self.reads = 0
+        self.alive_while_slicing = []
+        self._alive = set()
+        read_gpw = gpaw_module._read_gpw
+        generate_slices = gpaw_module._generate_slices
+
+        def counting_read(path):
+            self.reads += 1
+            calculator = read_gpw(path)
+            # _DummyGPAW is an unhashable dataclass, so track ids.
+            self._alive.add(id(calculator))
+            weakref.finalize(calculator, self._alive.discard, id(calculator))
+            return calculator
+
+        def sampling_generate_slices(*args, **kwargs):
+            gc.collect()
+            self.alive_while_slicing.append(len(self._alive))
+            yield from generate_slices(*args, **kwargs)
+
+        # Set before the potential is made: ``from_file`` looks ``_read_gpw`` up
+        # when it creates the placeholder.
+        monkeypatch.setattr(gpaw_module, "_read_gpw", counting_read)
+        monkeypatch.setattr(gpaw_module, "_generate_slices", sampling_generate_slices)
+
+    def alive(self):
+        gc.collect()
+        return len(self._alive)
+
+
+def _eager(entry_point, potential):
+    if entry_point == "build":
+        return potential.build(lazy=False)
+    if entry_point == "PlaneWave":
+        return abtem.PlaneWave(energy=100e3).multislice(potential, lazy=False)
+    if entry_point == "scan":
+        return _simulate("scan", potential, lazy=False)
+    if entry_point == "PRISM":
+        return abtem.SMatrix(
+            potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
+        ).scan(
+            scan=abtem.GridScan(start=(0, 0), end=(2, 2), gpts=(3, 2)),
+            detectors=abtem.AnnularDetector(inner=20, outer=60),
+            lazy=False,
+        )
+    raise ValueError(entry_point)
+
+
+_PATHS = ["a.gpw", "b.gpw", "c.gpw", "d.gpw"]
+
+
+@pytest.mark.parametrize("entry_point", ["build", "PlaneWave", "scan", "PRISM"])
+def test_an_eager_build_holds_one_read_calculator_at_a_time(
+    fake_gpaw, monkeypatch, entry_point
+):
+    counter = _CountReads(monkeypatch)
+
+    _eager(entry_point, GPAWPotential(_PATHS, gpts=GPTS))
+
+    assert counter.reads == len(_PATHS)
+    assert counter.alive_while_slicing
+    assert max(counter.alive_while_slicing) == 1
+    assert counter.alive() == 0
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [["a.gpw", "b.gpw", "a.gpw"], ["a.gpw", "a.gpw"]],
+    ids=["returns to a file", "repeats a file"],
+)
+def test_each_list_entry_is_read_once(fake_gpaw, monkeypatch, paths):
+    # Every entry of a list is its own read, in the lazy graph as in an eager
+    # build; only one is held at a time.
+    counter = _CountReads(monkeypatch)
+
+    GPAWPotential(paths, gpts=GPTS).build(lazy=False)
+
+    assert counter.reads == len(paths)
+    assert max(counter.alive_while_slicing) == 1
+
+
+@pytest.mark.parametrize("entry_point", ["build", "PlaneWave", "scan", "PRISM"])
+def test_frozen_phonons_of_one_path_read_it_once(fake_gpaw, monkeypatch, entry_point):
+    counter = _CountReads(monkeypatch)
+    frozen_phonons = abtem.FrozenPhonons(_atoms(), num_configs=4, sigmas=0.1, seed=1)
+
+    _eager(
+        entry_point,
+        GPAWPotential("a.gpw", gpts=GPTS, frozen_phonons=frozen_phonons),
+    )
+
+    assert counter.reads == 1
+    assert len(counter.alive_while_slicing) >= 4
+    assert max(counter.alive_while_slicing) == 1
+
+
+def test_loaded_calculators_between_paths(fake_gpaw, monkeypatch):
+    counter = _CountReads(monkeypatch)
+    potential = GPAWPotential(
+        ["a.gpw", _loaded("b.gpw"), "c.gpw", _loaded("d.gpw")], gpts=GPTS
+    )
+
+    potential.build(lazy=False)
+
+    assert counter.reads == 2
+    assert max(counter.alive_while_slicing) == 1
+
+
+def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypatch):
+    counter = _CountReads(monkeypatch)
+    crystal = abtem.CrystalPotential(
+        GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS),
+        (1, 1, 2),
+        num_frozen_phonons=3,
+        seeds=(1, 2, 3),
+    )
+
+    abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=False)
+
+    # Each member may build the unit again (two reads per member).
+    assert counter.reads <= 6
+    assert max(counter.alive_while_slicing) == 1
+
+
+@pytest.mark.parametrize("entry_point", ["build", "PlaneWave", "scan", "PRISM"])
+def test_eager_reads_of_a_path_list_do_not_use_the_configured_scheduler(
+    fake_gpaw, entry_point
+):
+    # A read of a path list or of a path with frozen phonons inside an eager
+    # build runs where the build runs: it starts no thread pool inside a
+    # caller's task and sends nothing to a distributed client set as the
+    # default scheduler. A single path without an ensemble is read by
+    # generate_slices on the configured scheduler.
+    def refuse(*args, **kwargs):
+        raise AssertionError("an eager read used the configured scheduler")
+
+    with dask.config.set(scheduler=refuse):
+        _eager(entry_point, GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS))
 
 
 @pytest.fixture(scope="module")

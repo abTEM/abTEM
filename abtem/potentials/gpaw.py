@@ -169,13 +169,58 @@ def _read_gpw(path: str) -> _DummyGPAW:
         return _DummyGPAW.from_gpaw(GPAW(path))
 
 
-def _read_placeholders(calculators):
+class _LastRead:
+    # Reads the ``.gpw`` placeholders of one eager ``_partition_args`` call and
+    # keeps only the calculator read last. Consecutive blocks that share a
+    # placeholder (one path with ``FrozenPhonons``) reuse it; a block with
+    # another placeholder drops it before reading. An eager build therefore
+    # holds one read calculator while it generates slices, and two while it
+    # reads the next file, since the caller still holds the previous block's
+    # potential. The object lives in that call's block array and goes with
+    # it, so no calculator outlives the build.
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._placeholder = None
+        self._calculator = None
+
+    def read(self, placeholder: Delayed) -> "_DummyGPAW":
+        with self._lock:
+            if placeholder is not self._placeholder:
+                self._placeholder = None
+                self._calculator = None
+                # Synchronous: one task, and no thread pool started from
+                # inside a caller's task. ``_read_gpw`` takes the GPAW lock.
+                self._calculator = placeholder.compute(scheduler="synchronous")
+                self._placeholder = placeholder
+            return self._calculator
+
+
+class _PendingRead:
+    # A ``.gpw`` placeholder in an eager block, read when the block's potential
+    # is made (``GPAWPotential._gpaw_potential``), not when the blocks are.
+    __slots__ = ("placeholder", "reads")
+
+    def __init__(self, placeholder: Delayed, reads: _LastRead):
+        self.placeholder = placeholder
+        self.reads = reads
+
+
+def _defer_placeholders(calculators, reads: _LastRead):
     # ``from_file`` leaves each ``.gpw`` path as a ``Delayed`` read. A lazy
-    # graph resolves it as a task argument; eager code needs the calculator.
+    # graph resolves it as a task argument; eager blocks read it one block at
+    # a time through ``reads``.
     if isinstance(calculators, list):
-        return [_read_placeholders(calculator) for calculator in calculators]
+        return [_defer_placeholders(calculator, reads) for calculator in calculators]
     if isinstance(calculators, Delayed):
-        return calculators.compute()
+        return _PendingRead(calculators, reads)
+    return calculators
+
+
+def _read_pending(calculators):
+    if isinstance(calculators, list):
+        return [_read_pending(calculator) for calculator in calculators]
+    if isinstance(calculators, _PendingRead):
+        return calculators.reads.read(calculators.placeholder)
     return calculators
 
 
@@ -564,7 +609,7 @@ class GPAWPotential(_PotentialBuilder):
         else:
             frozen_phonons = None
 
-        calculators = args["calculators"]
+        calculators = _read_pending(args["calculators"])
 
         new_potential = GPAWPotential(
             calculators, frozen_phonons=frozen_phonons, **kwargs
@@ -596,7 +641,7 @@ class GPAWPotential(_PotentialBuilder):
         calculators = self.calculators
 
         if not lazy:
-            calculators = _read_placeholders(calculators)
+            calculators = _defer_placeholders(calculators, _LastRead())
 
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
