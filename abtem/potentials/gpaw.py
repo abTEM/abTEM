@@ -482,10 +482,21 @@ class GPAWPotential(_PotentialBuilder):
         # array = self._get_all_electron_density()
         # array = calculator.valence_potential
 
+        valence_potential = calculator.valence_potential
+
+        if tuple(self.repetitions) != (1, 1, 1):
+            # `atoms * repetitions` lists whole copies of the calculator's atoms
+            # one after another, so atom j of the repeated atoms is atom
+            # j % len(calculator atoms) of the calculator and takes its core
+            # correction. The valence potential is periodic with the calculator's
+            # cell, so it is tiled over the repeated cell.
+            interpolators = interpolators * int(np.prod(self.repetitions))
+            valence_potential = np.tile(valence_potential, self.repetitions)
+
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
-            valence_potential=calculator.valence_potential,
+            valence_potential=valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
             slice_thickness=self.slice_thickness,
