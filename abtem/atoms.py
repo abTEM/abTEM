@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import itertools
+import os
+import sys
+import warnings
 from numbers import Number
 from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
 
@@ -934,19 +939,127 @@ def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms
     return _wrapped_supercell(atoms, vectors)
 
 
-def _check_box_holds_a_period(cell, box, plane="xy") -> None:
-    """
-    Raise a ValueError unless `box` holds a whole repetition of `cell`, rotated to
-    `plane`, along each direction: the condition under which `orthogonalize_cell`
-    can preserve the periodicity of atoms in `cell` within `box`.
-    """
+# A box that strains the atoms by more than this (a relative stretch of a supercell
+# vector, or the cosine of an angle between two of them) is reported by
+# `_warn_if_box_is_strained`.
+BOX_STRAIN_WARNING_THRESHOLD = 1e-3
+
+# Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
+# box was reported when the user gave it.
+_box_strain_warning_suppressed = contextvars.ContextVar(
+    "abtem_box_strain_warning_suppressed", default=False
+)
+
+
+@contextlib.contextmanager
+def _box_strain_warning_silenced():
+    """Construct builders inside this context to leave a box they were given
+    unreported: it is reported where the user gave it."""
+    token = _box_strain_warning_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _box_strain_warning_suppressed.reset(token)
+
+
+def _cell_in_plane_frame(cell, plane="xy") -> np.ndarray:
+    """The cell as `orthogonalize_cell` sees it: small components zeroed and the
+    axes permuted to `plane`."""
     cell = np.array(cell, dtype=float)
     cell[np.abs(cell) < 1e-6] = 0.0
     atoms = Atoms(cell=cell)
     if plane != "xy":
         atoms = rotate_atoms_to_plane(atoms, plane)
+    return np.array(atoms.cell)
 
-    _box_repetitions(atoms.cell, box)
+
+def _box_strain(cell, box, plane="xy") -> dict:
+    """
+    How `orthogonalize_cell` deforms the supercell of `cell` that fills `box`.
+
+    Returns the lattice vectors of the supercell in units of the lattice vectors
+    of the cell (`vectors`), the supercell vectors (`supercell`) and their
+    lengths (`lengths`), the relative stretch of each onto the matching box length
+    (`stretch`, box length over supercell length minus one), and the cosines of
+    the angles between the supercell vectors (`cosines`, for the pairs (y, z),
+    (x, z) and (x, y)), which the box makes right angles. A rotation of the
+    supercell is not a strain and is not counted.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction.
+    """
+    cell = _cell_in_plane_frame(cell, plane)
+    vectors = _box_repetitions(cell, box)
+    supercell = vectors @ cell
+    lengths = np.linalg.norm(supercell, axis=1)
+    unit = supercell / lengths[:, None]
+    cosines = np.array([unit[1] @ unit[2], unit[0] @ unit[2], unit[0] @ unit[1]])
+    return {
+        "vectors": vectors,
+        "supercell": supercell,
+        "lengths": lengths,
+        "stretch": np.asarray(box, dtype=float) / lengths - 1.0,
+        "cosines": cosines,
+    }
+
+
+def _stacklevel_outside_package() -> int:
+    """The stack level of the first caller outside the abtem package."""
+    package = os.path.dirname(os.path.abspath(__file__)) + os.sep
+    frame, level = sys._getframe(1), 1
+    while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(
+        package
+    ):
+        frame, level = frame.f_back, level + 1
+    return level
+
+
+def _warn_if_box_is_strained(cell, box, plane="xy") -> None:
+    """
+    Raise a ValueError if `box` holds no whole repetition of `cell` (rotated to
+    `plane`), and warn if the atoms are strained to fit it by more than
+    `BOX_STRAIN_WARNING_THRESHOLD`: a stretch of a supercell vector, or a shear,
+    the cosine of the angle between two supercell vectors, which the box turns into
+    right angles. A box that is a whole supercell up to round-off is silent.
+    """
+    strain = _box_strain(cell, box, plane)
+
+    if _box_strain_warning_suppressed.get():
+        return
+
+    if (
+        np.abs(strain["stretch"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+        and np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+    ):
+        return
+
+    vectors = np.rint(strain["vectors"]).astype(int)
+    if np.count_nonzero(vectors - np.diag(np.diag(vectors))) == 0:
+        periods = f"{tuple(int(n) for n in np.diag(vectors))} periods along x, y, z"
+    else:
+        periods = f"the lattice vectors {vectors.tolist()} (rows: x, y, z)"
+
+    degrees = np.degrees(np.arccos(strain["cosines"]))
+    lengths = tuple(round(float(n), 6) for n in strain["lengths"])
+    if np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD:
+        nearest = f"the supercell is {lengths} Å, the nearest box that needs no strain"
+    else:
+        nearest = f"the supercell vectors are {lengths} Å long and not at right angles"
+    warnings.warn(
+        f"The box {tuple(float(b) for b in box)} Å is not a whole supercell of the "
+        f"atoms' cell, so the atoms are strained onto it. It is filled with "
+        f"{periods}; {nearest}. Stretch along x, y, z: "
+        f"{', '.join(f'{100 * x:+.3f} %' for x in strain['stretch'])}. Angles "
+        f"between the supercell vectors (y and z, x and z, x and y), which the "
+        f"box turns into right angles: "
+        f"{', '.join(f'{d:.3f}°' for d in degrees)} (shear, the cosine of the "
+        f"angle: {', '.join(f'{c:.2e}' for c in strain['cosines'])}). A stretch "
+        f"or shear above {BOX_STRAIN_WARNING_THRESHOLD:.1e} is reported.",
+        UserWarning,
+        stacklevel=_stacklevel_outside_package(),
+    )
 
 
 def orthogonalize_cell(

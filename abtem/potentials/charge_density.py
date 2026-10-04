@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
@@ -574,6 +574,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
+    # The box it is given is this potential's own, not one the user gave.
+    @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
 

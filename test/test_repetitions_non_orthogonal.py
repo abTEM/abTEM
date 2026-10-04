@@ -85,3 +85,16 @@ def test_charge_density_potential_repetitions_lazy_equals_eager_on_bn():
     eager = potential.build(lazy=False).array
     lazy = potential.build(lazy=True).compute().array
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
+
+
+def test_charge_density_potential_with_an_approximate_default_box_builds_silently():
+    # The default box of BN x (3, 1, 1) is reached by a strain of about 1 %; it
+    # is the potential's own box, and the Ewald potential it builds from it does
+    # not report it (the test suite turns warnings into errors).
+    atoms, rho = _bn(), _charge_density()
+    potential = ChargeDensityPotential(
+        atoms, rho, sampling=0.2, slice_thickness=1.0, repetitions=(3, 1, 1)
+    )
+    eager = potential.build(lazy=False).array
+    lazy = potential.build(lazy=True).compute().array
+    np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())

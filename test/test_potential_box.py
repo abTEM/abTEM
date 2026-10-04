@@ -1,6 +1,7 @@
 """A potential's `box`, `origin` and auto grid follow the arguments given."""
 
 import pickle
+import warnings
 
 import numpy as np
 import pytest
@@ -8,13 +9,23 @@ from ase import Atoms
 from ase.build import bulk, graphene
 
 import abtem
-from abtem.atoms import best_orthogonal_cell, cut_cell, orthogonalize_cell
+from abtem.atoms import (
+    best_orthogonal_cell,
+    cut_cell,
+    orthogonalize_cell,
+)
 from abtem.magnetism.gpaw import GPAWMagneticField, GPAWVectorPotential
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.magnetism.iam import MagneticField
 from abtem.potentials.charge_density import ChargeDensityPotential
 
 GRID = dict(sampling=0.1, slice_thickness=1.0)
+
+# The strained boxes of these tests are reported by a warning, which the tests of
+# the warning itself collect; the others do not look at it.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:The box .* is not a whole supercell:UserWarning"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -572,3 +583,220 @@ def test_potential_restored_with_an_invalid_origin_raises_on_build():
     restored._origin = (1.0, 0.0)
     with pytest.raises(ValueError, match="origin"):
         restored.build(lazy=False)
+
+
+def _strain_warnings(records):
+    return [r for r in records if str(r.message).startswith("The box")]
+
+
+def _construct(*args, **kwargs):
+    """The potential, and the box-strain warnings its construction gave."""
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        potential = abtem.Potential(*args, **kwargs)
+    return potential, _strain_warnings(records)
+
+
+def _strain_from_the_transform(atoms, box):
+    """Stretch of each supercell vector onto the box, and the cosines of the angles
+    between them, from the affine map `orthogonalize_cell` applies: it takes the
+    supercell vectors v to the box edges, v @ A = diag(box)."""
+    _, transform = orthogonalize_cell(atoms, box=box, return_transform_matrix=True)
+    supercell = np.diag(box) @ np.linalg.inv(transform)
+    lengths = np.linalg.norm(supercell, axis=1)
+    unit = supercell / lengths[:, None]
+    cosines = [unit[1] @ unit[2], unit[0] @ unit[2], unit[0] @ unit[1]]
+    return np.asarray(box) / lengths - 1.0, np.array(cosines), lengths
+
+
+def test_strain_warning_threshold_is_a_tenth_of_a_percent():
+    assert abtem.atoms.BOX_STRAIN_WARNING_THRESHOLD == 1e-3
+
+
+def test_box_that_strains_the_atoms_warns_with_the_numbers():
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    potential, records = _construct(si, box=(20.0, 5.431, 5.431), sampling=0.2)
+
+    assert len(records) == 1
+    assert issubclass(records[0].category, UserWarning)
+    assert records[0].filename == __file__
+    message = str(records[0].message)
+    # 4 periods of 5.431 A make 21.724 A; 20 A compresses them.
+    stretch = 100 * (20.0 / (4 * 5.431) - 1.0)
+    assert f"{stretch:+.3f} %" in message
+    assert "-7.936 %" in message
+    assert "+0.000 %" in message
+    assert "(4, 1, 1) periods" in message
+    assert "21.724" in message
+    assert "20.0" in message
+    assert potential.box == (20.0, 5.431, 5.431)
+
+
+@pytest.mark.parametrize(
+    "factor, warns",
+    [(1.0011, True), (0.9989, True), (1.0009, False), (0.9991, False), (1.0, False)],
+)
+def test_strain_warning_threshold_applies_to_the_stretch(factor, warns):
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    box = (4 * 5.431 * factor, 5.431, 5.431)
+    _, records = _construct(si, box=box, sampling=0.2)
+    assert bool(records) == warns
+    if warns:
+        assert f"{100 * (factor - 1):+.3f} %" in str(records[0].message)
+
+
+def test_a_slightly_off_box_of_four_periods_is_silent():
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    _, records = _construct(si, box=(21.72, 5.431, 5.431), sampling=0.2)
+    assert records == []
+
+
+def test_strain_warning_quotes_the_shear_of_a_hexagonal_supercell():
+    graphene_cell = graphene(vacuum=2.0)
+    box = (20.0, 20.0, 4.0)
+    _, records = _construct(graphene_cell, box=box, sampling=0.2)
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    stretch, cosines, lengths = _strain_from_the_transform(graphene_cell, box)
+    assert cosines[2] == pytest.approx(0.064, abs=1e-3)
+    for value in stretch:
+        assert f"{100 * value:+.3f} %" in message
+    for value in cosines:
+        assert f"{value:.2e}" in message
+    for value in np.degrees(np.arccos(cosines)):
+        assert f"{value:.3f}°" in message
+    assert str(round(float(lengths[0]), 6)) in message
+    assert "[[8, 0, 0], [5, 9, 0], [0, 0, 1]]" in message
+
+
+def test_boxes_that_are_whole_supercells_up_to_round_off_are_silent():
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    hexagonal = graphene(vacuum=2.0)
+    a = 2.46
+    cases = [(si, (n * 5.431, m * 5.431, 5.431)) for n in (1, 2, 3, 7) for m in (1, 3)]
+    # Boxes of hexagonal supercells computed in floating point.
+    cases += [
+        (hexagonal, (n * a, m * a * np.sqrt(3.0), 4.0))
+        for n in (1, 2, 3, 5)
+        for m in (1, 2, 3)
+    ]
+    cases += [
+        (hexagonal, (n * a, m * 3.0 * a / np.sqrt(3.0), 4.0))
+        for n in (2, 4)
+        for m in (1, 3)
+    ]
+    for atoms, box in cases:
+        _, records = _construct(atoms, box=box, sampling=0.5)
+        assert records == [], (box, [str(r.message)[:80] for r in records])
+
+
+def test_default_box_of_a_non_orthogonal_cell_is_not_checked():
+    _, records = _construct(bulk("Si", "diamond", a=5.431), sampling=0.2)
+    assert records == []
+
+
+def test_default_box_given_explicitly_is_not_checked():
+    # The default box of this supercell is itself reached by a strain of 1.4 %,
+    # 0.7 % and a shear of 0.11; it is the default, however it is spelled.
+    atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (3, 1, 1)
+    default = abtem.Potential(atoms, sampling=0.2).box
+    assert abs(100 * (default[0] / 7.5 - 1)) > 0.5
+
+    _, records = _construct(atoms, box=default, sampling=0.2)
+    assert records == []
+
+    _, records = _construct(atoms, box=(default[0] * 1.01, default[1], 4.0))
+    assert len(records) == 1
+
+
+def test_non_periodic_box_is_not_strained_and_is_silent():
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    _, records = _construct(si, box=(20.0, 5.431, 5.431), periodic=False, sampling=0.2)
+    assert records == []
+
+
+@pytest.mark.parametrize("builder", [abtem.Potential, MagneticField])
+def test_strain_warning_is_given_once_per_construction(builder):
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    si.set_array("magnetic_moments", np.zeros((len(si), 3)))
+    kwargs = dict(box=(20.0, 5.431, 5.431), sampling=0.2, slice_thickness=2.0)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        potential = builder(si, **kwargs)
+        potential.copy()
+        potential.build(lazy=False)
+        potential.build(lazy=True).compute()
+    assert len(_strain_warnings(records)) == 1
+
+
+def test_strain_warning_is_not_repeated_by_frozen_phonons_or_lazy_blocks():
+    si = bulk("Si", "diamond", a=5.431, cubic=True)
+    frozen_phonons = FrozenPhonons(si, 3, sigmas=0.05, seed=1)
+    kwargs = dict(box=(20.0, 5.431, 5.431), sampling=0.2, slice_thickness=2.0)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        potential = abtem.Potential(frozen_phonons, **kwargs)
+        assert len(_strain_warnings(records)) == 1
+        lazy = potential.build(lazy=True).compute()
+        eager = potential.build(lazy=False)
+        wave = abtem.PlaneWave(energy=100e3)
+        wave.multislice(potential, lazy=True).compute()
+    assert len(_strain_warnings(records)) == 1
+    assert lazy.array.shape == eager.array.shape
+    assert lazy.array.shape[:3] == (3, 3, 100)
+
+
+def test_strain_warning_does_not_hide_an_error_for_a_box_with_no_whole_period():
+    with pytest.raises(ValueError, match="no whole repetition"):
+        abtem.Potential(_two_atoms(), box=(1.5, 3.0, 5.0), **GRID)
+
+
+def test_strain_warning_is_not_repeated_by_a_crystal_potential():
+    # CrystalPotential rebuilds its unit with its own frozen-phonon pool per
+    # member and per enlarged pool; the unit's box was reported when it was made.
+    two = _two_atoms()
+    kwargs = dict(sampling=0.2, slice_thickness=1.0)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        unit = abtem.Potential(
+            FrozenPhonons(two, 2, sigmas=0.1, seed=1), box=(9.0, 9.0, 10.0), **kwargs
+        )
+        assert len(_strain_warnings(records)) == 1
+
+        # The pool (2) is smaller than the 4 lateral tiles and is enlarged.
+        tiled = abtem.CrystalPotential(unit, (2, 2, 1))
+        tiled.build(lazy=False)
+        tiled.build(lazy=True).compute()
+
+        # An ensemble of members, each with its own pool.
+        members = abtem.CrystalPotential(
+            unit, (1, 1, 2), num_frozen_phonons=2, seeds=(5, 6)
+        )
+        members.build(lazy=False)
+        members.build(lazy=True).compute()
+
+    assert len(_strain_warnings(records)) == 1
+
+
+@pytest.mark.parametrize("repetitions", [(2, 3, 2), (3, 1, 1)])
+def test_charge_density_potential_does_not_report_its_own_box(repetitions):
+    # The Ewald potential it builds from its own default box, which for BN x
+    # (3, 1, 1) is itself reached by a strain, is not a box the user gave.
+    atoms = graphene(formula="BN", a=2.5, vacuum=2.0)
+    atoms.pbc = True
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        potential = ChargeDensityPotential(
+            atoms,
+            _charge_density(),
+            sampling=0.2,
+            slice_thickness=1.0,
+            repetitions=repetitions,
+        )
+        potential.build(lazy=False)
+        potential.build(lazy=True).compute()
+    assert _strain_warnings(records) == []

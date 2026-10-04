@@ -18,7 +18,8 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
-    _check_box_holds_a_period,
+    _box_strain_warning_silenced,
+    _warn_if_box_is_strained,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
@@ -656,8 +657,8 @@ class _FieldBuilder(BaseField):
                 raise NotImplementedError
             if box is None:
                 box = _default_box(cell, plane)
-            elif periodic:
-                _check_box_holds_a_period(cell, box, plane)
+            elif periodic and box != _default_box(cell, plane):
+                _warn_if_box_is_strained(cell, box, plane)
 
         elif box is None:
             box = tuple(np.diag(cell))
@@ -1258,7 +1259,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         frozen_phonons = frozen_phonons_partial(*args)
         frozen_phonons = frozen_phonons.item()
 
-        new_potential = cls(frozen_phonons, **kwargs)
+        # The box was reported when the user gave it.
+        with _box_strain_warning_silenced():
+            new_potential = cls(frozen_phonons, **kwargs)
 
         ndims = max(len(new_potential.ensemble_shape), 1)
         new_potential = _wrap_with_array(new_potential, ndims)
@@ -1402,8 +1405,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         periodicity, determined by the `periodic` keyword. A periodic box must hold at
         least one period of the atoms' cell along each direction (about half the cell
         or more), and is otherwise rejected with a `ValueError`; the atoms are strained
-        to fit the box, however large the strain. The box is filled with repetitions of
-        the atoms' cell whatever their `pbc`; it never adds vacuum.
+        to fit the box, however large the strain, and a `UserWarning` quotes the stretch
+        of each axis and the shear when either exceeds 0.1 % (the default box of a
+        non-orthogonal cell, however it is spelled, is not checked). The box is filled
+        with repetitions of the atoms' cell whatever their `pbc`; it never adds
+        vacuum.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the Atoms
@@ -2541,7 +2547,9 @@ class CrystalPotential(_PotentialBuilder):
             seed=int(member_seed) if reseed else int(fp.seed[0]),
         )
         kwargs = unit._copy_kwargs(exclude=("atoms",))
-        return type(unit)(new_fp, **kwargs)
+        # The unit's box was reported when the user gave it.
+        with _box_strain_warning_silenced():
+            return type(unit)(new_fp, **kwargs)
 
     def generate_slices(
         self,
