@@ -161,6 +161,8 @@ class GPAW(Protocol):
 
 
 class _GPAWMagnetics(_FieldBuilder):
+    _supports_box_and_origin = False
+
     def __init__(
         self,
         calculators: GPAW | list[GPAW] | list[str] | str,

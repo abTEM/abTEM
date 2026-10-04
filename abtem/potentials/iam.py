@@ -563,7 +563,64 @@ def _require_cell_transform(cell, box, plane, origin):
     return False
 
 
+def _three_floats(values, name) -> tuple[float, float, float]:
+    """`values` as three finite floats; strings are not numbers."""
+    try:
+        if isinstance(values, (str, bytes)) or any(
+            isinstance(value, (str, bytes)) for value in values
+        ):
+            raise TypeError
+        floats = tuple(float(value) for value in values)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be three numbers [Å], got {values!r}") from None
+
+    if len(floats) != 3:
+        raise ValueError(
+            f"{name} must have three elements, got {len(floats)}: {values!r}"
+        )
+
+    if not np.all(np.isfinite(floats)):
+        raise ValueError(f"{name} must be finite, got {values!r}")
+
+    return floats
+
+
+def _validate_box(box) -> tuple[float, float, float]:
+    """The given box as three positive, finite lengths [Å]."""
+    lengths = _three_floats(box, "box")
+
+    if min(lengths) <= 0.0:
+        raise ValueError(f"box must be three positive lengths [Å], got {box!r}")
+
+    return lengths
+
+
+def _validate_origin(origin) -> tuple[float, float, float]:
+    """The given origin as three finite floats [Å]; None is the zero origin."""
+    if origin is None:
+        return (0.0, 0.0, 0.0)
+
+    return _three_floats(origin, "origin")
+
+
+def _default_box(cell, plane) -> tuple[float, float, float]:
+    """
+    The box of a potential that needs a cell transform and was given no box: the
+    best orthogonal cell of the atoms rotated to `plane`.
+    """
+    if not isinstance(plane, str):
+        raise NotImplementedError
+    axes = plane_to_axes(plane)
+    return tuple(best_orthogonal_cell(np.array(cell)[:, list(axes)]))
+
+
 class _FieldBuilder(BaseField):
+    # False for builders whose slices are interpolated from a calculator's grid of
+    # the atoms' own cell rather than computed from transformed atoms: they place
+    # their field in the default box at the default origin only, and reject any
+    # other box or origin instead of ignoring it.
+    _supports_box_and_origin: bool = True
+
     def __init__(
         self,
         array_object: Type[FieldArray],
@@ -581,12 +638,17 @@ class _FieldBuilder(BaseField):
         device: Optional[str] = None,
     ):
         self._array_object = array_object
+
+        if not self._supports_box_and_origin:
+            origin = _validate_origin(origin)
+            self._check_default_box_and_origin(cell, box, plane, origin)
+            box = None
+            origin = (0.0, 0.0, 0.0)
+
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
             if not isinstance(plane, str):
                 raise NotImplementedError
-            axes = plane_to_axes(plane)
-            cell = np.array(cell)[:, list(axes)]
-            box = tuple(best_orthogonal_cell(cell))
+            box = _default_box(cell, plane)
 
         elif box is None:
             box = tuple(np.diag(cell))
@@ -607,6 +669,25 @@ class _FieldBuilder(BaseField):
         self._exit_planes = _validate_exit_planes(
             exit_planes, len(self._slice_thickness)
         )
+
+    def _check_default_box_and_origin(self, cell, box, plane, origin):
+        """Raise unless `box` is the default box and `origin` is zero."""
+        if _require_cell_transform(cell, box=None, plane=plane, origin=(0.0,) * 3):
+            default_box = _default_box(cell, plane)
+        else:
+            default_box = tuple(np.diag(cell))
+
+        given_box = None if box is None else _validate_box(box)
+
+        if origin != (0.0, 0.0, 0.0) or (
+            given_box is not None
+            and not np.allclose(given_box, default_box, rtol=1e-9, atol=0.0)
+        ):
+            raise NotImplementedError(
+                f"{type(self).__name__} supports only its default box "
+                f"{tuple(float(b) for b in default_box)} and origin (0, 0, 0), "
+                f"got box={given_box} and origin={origin}."
+            )
 
     @property
     def slice_thickness(self) -> tuple[float, ...]:

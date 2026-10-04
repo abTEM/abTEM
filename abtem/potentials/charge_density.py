@@ -353,13 +353,14 @@ class ChargeDensityPotential(_PotentialBuilder):
         ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
-        This is equivalent to translating the atoms.
-        The default is (0., 0., 0.).
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the valence part is interpolated from the
+        charge density of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms. If the box size does not match an integer number of the atoms'
-        cell, an affine transformation may be necessary to preserve periodicity,
-        determined by the `periodic` keyword.
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the atoms
@@ -373,6 +374,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         The device used for calculating the potential. The default is determined by the
         user configuration file.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
