@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.atoms import best_orthogonal_cell, rotate_atoms_to_plane
+from abtem.atoms import best_orthogonal_cell, cut_cell, rotate_atoms_to_plane
 
 CELL = (4.0, 4.6, 5.3)
 # plane: the axis that becomes the beam direction, and the permutation of the axes
@@ -160,3 +160,26 @@ def test_default_box_in_plane_xy_is_unchanged(atoms):
         warnings.simplefilter("ignore")
         box = abtem.Potential(atoms, sampling=0.1).box
     assert box == tuple(best_orthogonal_cell(np.array(atoms.cell)))
+
+
+@pytest.mark.parametrize("plane", list(PLANES))
+@pytest.mark.parametrize("angle", [0.0, 30.0])
+@pytest.mark.parametrize("num_atoms", [2, 5])
+def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(
+    num_atoms, angle, plane
+):
+    """cut_cell without a cell fits the atoms into the best orthogonal cell of the
+    cell in the frame of the plane, the cell the atoms are cut from."""
+    atoms = _rotated(num_atoms, angle, plane)
+
+    cut = cut_cell(atoms, plane=plane)
+
+    lengths = _lengths(plane)
+    np.testing.assert_allclose(cut.cell[:], np.diag(lengths), rtol=0, atol=1e-12)
+    assert len(cut) == num_atoms
+    expected = _unrotated(num_atoms).positions[:, list(PLANES[plane][1])]
+    # the atoms of the cut are in any order: each expected atom has one of them
+    difference = cut.positions[None, :, :] - expected[:, None, :]
+    difference -= lengths * np.round(difference / lengths)
+    nearest = np.linalg.norm(difference, axis=-1).min(axis=1)
+    np.testing.assert_allclose(nearest, 0.0, rtol=0, atol=1e-10)

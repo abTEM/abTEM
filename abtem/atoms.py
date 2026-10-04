@@ -1335,8 +1335,9 @@ def cut_cell(
     ----------
     atoms : ase.Atoms
         Atoms to be fit.
-    cell : tuple of floats
-        Cell to be fit into.
+    cell : tuple of floats, optional
+        Cell to be fit into. By default the best orthogonal cell of the atoms' cell
+        after it is rotated into `plane`.
     plane : str or tuple of tuples
         Plane to be rotated into given as either a string or two tuples (by default `xy`
         which results in no rotation for a standardized cell).
@@ -1351,9 +1352,6 @@ def cut_cell(
     cut : ase.Atoms
        Atoms fit into the cell.
     """
-    if cell is None:
-        cell = tuple(best_orthogonal_cell(atoms.cell))
-
     if isinstance(margin, SupportsFloat):
         margin = (float(margin), float(margin), float(margin))
 
@@ -1363,6 +1361,9 @@ def cut_cell(
         atoms.wrap()
 
     atoms = rotate_atoms_to_plane(atoms, plane)
+
+    if cell is None:
+        cell = tuple(best_orthogonal_cell(atoms.cell))
 
     new_cell = np.diag(np.array(cell) + 2 * np.array(margin))
     new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
