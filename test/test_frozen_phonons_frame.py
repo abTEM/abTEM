@@ -292,6 +292,9 @@ def test_a_frame_off_the_identity_by_rounding_is_the_identity():
     )
 
 
+@pytest.mark.filterwarnings(
+    "ignore:The box .*, which abTEM chose because none was given:UserWarning"
+)
 def test_anisotropic_sigmas_follow_the_strain_of_an_orthogonalization():
     """A sheared cell that orthogonalize_cell straightens without repeating it:
     anisotropic displacements get the same linear map as the positions, so the
@@ -792,6 +795,9 @@ def test_gpaw_potential_drops_the_directions_of_the_potential(
     np.testing.assert_array_equal(displaced.positions, expected)
 
 
+@pytest.mark.filterwarnings(
+    "ignore:The box .*, which abTEM chose because none was given:UserWarning"
+)
 @pytest.mark.parametrize(
     "sigmas", [0.1, (0.05, 0.10, 0.20)], ids=["isotropic", "anisotropic"]
 )
