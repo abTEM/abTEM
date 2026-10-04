@@ -1082,36 +1082,34 @@ def orthogonalize_cell(
         # sits in the first vector (whose direction seeds the process), the
         # result is a valid orthogonal box rotated slightly off the
         # coordinate axes, which is not what the rest of this function
-        # assumes. Since reaching this branch already means every
-        # off-diagonal component is at or below float64's ~2e-8 relative
-        # rounding floor (see above), zeroing them directly is both simpler
-        # and correct; anything larger is guarded against below rather than
-        # silently discarded.
+        # assumes. Zeroing the off-diagonal components directly is both
+        # simpler and correct when they are noise.
+        #
+        # A sheared cell is not noise, though its diagonal can equal its best
+        # orthogonal box too: the shortest lattice vector along an axis has the
+        # length of the cell's own diagonal entry when an off-diagonal
+        # component is a whole multiple of the matching component of another
+        # vector (a hexagonal cell repeated an even number of times along its
+        # second vector, a monoclinic cell whose c vector leans by a whole a
+        # vector). Such a cell goes through the repeat-and-cut path below like
+        # any other non-orthogonal cell.
         cell = np.array(atoms.cell, dtype=float)
         off_diagonal = cell[~np.eye(3, dtype=bool)]
         max_off_diagonal = np.max(np.abs(off_diagonal))
         relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
-        if relative_off_diagonal > 1e-6:
-            raise RuntimeError(
-                "Cell is not orthogonal and the off-diagonal components "
-                f"({max_off_diagonal:.3e} A, {relative_off_diagonal:.3e} "
-                "relative to the cell size) are too large to be numerical "
-                "noise; refusing to silently drop them. This should not "
-                "normally happen; please report this cell."
-            )
+        if relative_off_diagonal <= 1e-6:
+            orthogonal_cell = np.diag(np.diag(cell))
 
-        orthogonal_cell = np.diag(np.diag(cell))
+            atoms = atoms.copy()
+            atoms.set_cell(orthogonal_cell)
+            atoms.wrap()
 
-        atoms = atoms.copy()
-        atoms.set_cell(orthogonal_cell)
-        atoms.wrap()
-
-        if return_transform:
-            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
-        elif return_transform_matrix:
-            return atoms, np.eye(3)
-        else:
-            return atoms
+            if return_transform:
+                return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            elif return_transform_matrix:
+                return atoms, np.eye(3)
+            else:
+                return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
