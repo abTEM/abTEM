@@ -387,7 +387,12 @@ class GPAWPotential(_PotentialBuilder):
         self._gridrefinement = gridrefinement
         self._repetitions = repetitions
 
-        cell = frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
         frozen_phonons.atoms.calc = None
 
         super().__init__(
