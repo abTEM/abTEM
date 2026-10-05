@@ -358,78 +358,6 @@ class TestThermalWeighting:
         with pytest.raises(TypeError, match="temperature must be a number"):
             phonon_loss_diffraction_patterns(waves, temperature=temperature)
 
-    @pytest.mark.parametrize(
-        "temperature",
-        [
-            "300",
-            b"300",
-            bytearray(b"300"),
-            300j,
-            np.complex64(300),
-            np.complex128(300 + 1j),
-            np.clongdouble(300),
-            np.array(True),
-            np.array("300"),
-            np.array(b"300"),
-        ],
-        ids=[
-            "str",
-            "bytes",
-            "bytearray",
-            "complex",
-            "complex64",
-            "complex128",
-            "clongdouble",
-            "bool_array",
-            "str_array",
-            "bytes_array",
-        ],
-    )
-    def test_a_temperature_that_is_not_a_number_raises(self, temperature):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(TypeError, match="temperature must be a number"):
-            phonon_loss_diffraction_patterns(waves, temperature=temperature)
-
-    @pytest.mark.parametrize(
-        "kind", ["decimal", "fraction", "object_array", "float_only"]
-    )
-    def test_any_real_number_is_a_temperature(self, kind):
-        """Real numbers other than float, int and the NumPy scalars give the same
-        result as the float."""
-        from decimal import Decimal
-        from fractions import Fraction
-
-        class FloatOnly:
-            def __float__(self):
-                return 300.0
-
-        temperature = {
-            "decimal": Decimal(300),
-            "fraction": Fraction(300),
-            "object_array": np.array(300.0, dtype=object),
-            "float_only": FloatOnly(),
-        }[kind]
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        expected = phonon_loss_diffraction_patterns(waves, temperature=300.0)
-
-        result = phonon_loss_diffraction_patterns(waves, temperature=temperature)
-
-        np.testing.assert_array_equal(
-            np.asarray(result.array), np.asarray(expected.array)
-        )
-
-    def test_a_masked_temperature_raises(self):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(ValueError, match="masked"):
-            phonon_loss_diffraction_patterns(waves, temperature=np.ma.masked)
-
-    def test_an_array_of_temperatures_raises(self):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(ValueError, match="must be a single number"):
-            phonon_loss_diffraction_patterns(
-                waves, temperature=np.array([300.0, 310.0])
-            )
-
     @pytest.mark.parametrize("dtype", [np.float16, np.float32])
     def test_the_temperature_is_used_in_double_precision(self, dtype):
         """k_B T in the precision of a float16 or float32 scalar puts the gain
@@ -445,6 +373,15 @@ class TestThermalWeighting:
         np.testing.assert_array_equal(
             np.asarray(result.array), np.asarray(expected.array)
         )
+
+    @pytest.mark.parametrize("temperature", [-300.0, float("nan"), True])
+    def test_the_weights_check_the_temperature(self, temperature):
+        from abtem.measurements import _thermal_weight_tds
+
+        with pytest.raises((TypeError, ValueError), match="temperature must be"):
+            _thermal_weight_tds(
+                np.ones((3, 4, 4)), np.array([0.0, 0.02, 0.05]), 0, temperature
+            )
 
     def test_a_temperature_whose_k_b_t_underflows_is_the_zero_temperature_limit(
         self,

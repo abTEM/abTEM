@@ -6936,6 +6936,20 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         return fig, ax
 
 
+def _validate_temperature(temperature) -> float:
+    """The temperature [K] as a Python float, so that k_B T is formed in double
+    precision. A bool, and a negative or non-finite value, raise; a negative
+    temperature would swap the loss and gain weights."""
+    if isinstance(temperature, (bool, np.bool_)):
+        raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+    temperature = float(temperature)
+    if not (np.isfinite(temperature) and temperature >= 0.0):
+        raise ValueError(
+            f"temperature must be finite and non-negative [K], got {temperature!r}"
+        )
+    return temperature
+
+
 def _thermal_weight_tds(
     I_tds: np.ndarray,
     e_values: np.ndarray,
@@ -6973,7 +6987,7 @@ def _thermal_weight_tds(
     flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
-    k_t = units.kB * temperature
+    k_t = units.kB * _validate_temperature(temperature)
     if k_t == 0.0:
         # The limit T -> 0, also where k_B T underflows: no thermal phonons
         # (n = 0), so the whole signal is loss.
@@ -7400,42 +7414,7 @@ def phonon_loss_diffraction_patterns(
             "temperature-based loss/gain unfolding requires components='diffuse'."
         )
     if temperature is not None:
-        # Only a single real number: bools, complex numbers and text, as scalars
-        # or 0-d arrays, raise rather than being converted, and so does a masked
-        # value.
-        if np.ma.is_masked(temperature):
-            raise ValueError("temperature must be a number [K], got a masked value")
-        value = temperature
-        if isinstance(value, (list, tuple, np.ndarray)):
-            array = np.asarray(value)
-            if array.ndim != 0:
-                raise ValueError(
-                    "temperature must be a single number [K], got an array of "
-                    f"shape {array.shape}"
-                )
-            if array.dtype.kind not in "iufO":
-                raise TypeError(
-                    f"temperature must be a number [K], got {temperature!r}"
-                )
-            value = array.item()
-        if isinstance(
-            value,
-            (bool, np.bool_, str, bytes, bytearray, complex, np.complexfloating),
-        ):
-            raise TypeError(f"temperature must be a number [K], got {temperature!r}")
-        try:
-            # A Python float, so that k_B T is formed in double precision
-            # whatever the precision of the number given.
-            temperature = float(value)
-        except (TypeError, ValueError) as error:
-            raise TypeError(
-                f"temperature must be a number [K], got {temperature!r}"
-            ) from error
-        # A negative temperature would swap the loss and gain weights.
-        if not (np.isfinite(temperature) and temperature >= 0.0):
-            raise ValueError(
-                f"temperature must be finite and non-negative [K], got {temperature!r}"
-            )
+        temperature = _validate_temperature(temperature)
 
     result = elastic_diffuse_diffraction_patterns(
         exit_waves,
