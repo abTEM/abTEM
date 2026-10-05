@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
@@ -2415,6 +2416,14 @@ class CrystalPotential(_PotentialBuilder):
             ensemble_mean=fp.ensemble_mean,
             seed=int(member_seed) if reseed else int(fp.seed[0]),
         )
+        if "frozen_phonons" in unit._arg_keys(type(unit)):
+            # ``GPAWPotential`` takes its frozen phonons next to its calculators,
+            # which may be unread ``.gpw`` paths that its constructor cannot take
+            # back. Only the frozen phonons differ, so the calculators are shared.
+            pool_unit = copy.copy(unit)
+            pool_unit._frozen_phonons = new_fp
+            return pool_unit
+
         kwargs = unit._copy_kwargs(exclude=("atoms",))
         return type(unit)(new_fp, **kwargs)
 
