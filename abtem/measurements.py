@@ -4969,7 +4969,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             margin = True
 
         if margin:
-            radius += max(self.angular_sampling)
+            radius = radius + max(self.angular_sampling)
 
         return self.bandlimit(radius, outer=np.inf)
 
