@@ -598,12 +598,8 @@ class TestFftCropInterpolateEmptyNewShape:
     `new_shape == ()` (every dimension is a batch dimension, none are being
     resized), `-len(new_shape)` is `-0`, which collapses to the wrong end.
 
-    Reachable from public API: `WavesDetector(gpts=())` builds `new_shape =
-    waves.shape[:-2] + gpts`, which is `()` for a plain 2D `Waves` with no
-    ensemble axes, since `gpts` itself contributes nothing. Before the fix
-    this crashed inside `fft_crop` with an opaque
-    `TypeError: only length-1 arrays can be converted to Python scalars`,
-    three frames below the `gpts=()` that caused it.
+    `WavesDetector(gpts=())` asks for no resampling, the same as `gpts=None`;
+    `test_wavesdetector_empty_gpts_matches_none` checks that end to end.
     """
 
     @staticmethod
@@ -634,11 +630,8 @@ class TestFftCropInterpolateEmptyNewShape:
         assert np.allclose(out, array)
 
     def test_wavesdetector_empty_gpts_matches_none(self):
-        """The end-to-end case: `gpts=()` is falsy but `is not None`, so it
-        reaches `_calculate_new_array`'s `if self._gpts is not None:` guard
-        and used to crash there. It now degenerates to the same no-resample
-        behaviour as the documented `gpts=None` default, rather than either
-        crashing or silently returning something else."""
+        """`WavesDetector(gpts=())` gives the waves unchanged, the same as the
+        documented `gpts=None` default."""
         import numpy as np
 
         import abtem

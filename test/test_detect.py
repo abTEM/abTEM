@@ -455,3 +455,82 @@ def test_segmented_detector_without_outer_refuses_multi_energy(lazy):
 
     with pytest.raises(RuntimeError, match="cannot auto-size"):
         probe.scan(potential, scan=scan, detectors=_segmented(None), lazy=lazy)
+
+
+def _waves_detector_setup():
+    import ase.build
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+    probe = abtem.Probe(energy=60e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(
+        (0, 0), (0.5, 1), fractional=True, potential=potential, gpts=(3, 4)
+    )
+    return potential, probe, scan
+
+
+def _run_waves_detector(entry, potential, probe, scan, detector, lazy):
+    if entry == "detect":
+        waves = probe.scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        if lazy:
+            waves = waves.copy().ensure_lazy()
+        return detector.detect(waves)
+    if entry == "scan":
+        return probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    if entry == "multislice":
+        return probe.multislice(potential, detectors=detector, lazy=lazy)
+    if entry == "prism":
+        s_matrix = abtem.SMatrix(potential=potential, energy=60e3, semiangle_cutoff=20)
+        return s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
+    raise ValueError(entry)
+
+
+# (32, 48) crops, (80, 128) pads the (64, 111) exit-wave grid; both differ along
+# x and y and from the (3, 4) scan, so a swapped or misplaced axis changes the shape
+@pytest.mark.parametrize("gpts", [(32, 48), (80, 128)])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("entry", ["detect", "scan", "multislice", "prism"])
+def test_waves_detector_gpts_matches_downsample(entry, lazy, gpts):
+    """`WavesDetector(gpts)` gives what `Waves.downsample(gpts)` gives on the
+    full-grid waves: `gpts` points over the unchanged extent."""
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+        potential, probe, scan = _waves_detector_setup()
+        full = _run_waves_detector(
+            entry, potential, probe, scan, abtem.WavesDetector(), lazy
+        )
+        full = full.compute() if lazy else full
+        expected = full.downsample(gpts=gpts)
+
+        result = _run_waves_detector(
+            entry, potential, probe, scan, abtem.WavesDetector(gpts=gpts), lazy
+        )
+        declared_shape = result.shape
+        result = result.compute() if lazy else result
+
+    assert declared_shape == result.shape == expected.shape
+    assert np.allclose(result.sampling, expected.sampling, rtol=1e-12, atol=0)
+    assert np.allclose(result.extent, full.extent, rtol=1e-12, atol=0)
+    assert result.antialias_cutoff_gpts == expected.antialias_cutoff_gpts
+    scale = np.abs(expected.array).max()
+    np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-12 * scale)
+
+
+@pytest.mark.parametrize("gpts", [None, ()])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
+    """No `gpts`, as `None` or an empty tuple, leaves ensemble waves as they are."""
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+        potential, probe, scan = _waves_detector_setup()
+        waves = probe.scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        source = waves.copy().ensure_lazy() if lazy else waves
+        result = abtem.WavesDetector(gpts=gpts).detect(source)
+        result = result.compute() if lazy else result
+
+    assert result.shape == waves.shape
+    assert np.array_equal(result.sampling, waves.sampling)
+    assert np.array_equal(result.array, waves.array)
