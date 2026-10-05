@@ -7316,7 +7316,6 @@ def phonon_loss_diffraction_patterns(
     *,
     unbiased: bool = False,
     reduction_dtype=None,
-    **kwargs,
 ) -> "DiffractionPatterns":
     """
     Energy-resolved phonon-loss diffraction patterns from frozen-phonon exit
@@ -7381,18 +7380,6 @@ def phonon_loss_diffraction_patterns(
     """
     from abtem.core.axes import EnergyLossAxis
 
-    # A "component" keyword raises a TypeError that names "components".
-    if "component" in kwargs:
-        raise TypeError(
-            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
-            "'component': it is now 'components'"
-        )
-    if kwargs:
-        raise TypeError(
-            "phonon_loss_diffraction_patterns() got an unexpected keyword argument "
-            f"{next(iter(kwargs))!r}"
-        )
-
     energy_axis_idx = next(
         (
             i
@@ -7418,7 +7405,7 @@ def phonon_loss_diffraction_patterns(
 
     result = elastic_diffuse_diffraction_patterns(
         exit_waves,
-        components=components,
+        components=names if stacked else names[0],
         max_angle=max_angle,
         parity=parity,
         # A per-pixel mask, so blocking before the temperature unfolding below
