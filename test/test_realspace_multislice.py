@@ -1,4 +1,5 @@
 import ase
+import ase.build
 import numpy as np
 import pytest
 from utils import devices, gpu, to_host_array
@@ -464,6 +465,128 @@ class TestBackscattering:
 
         # Forward and backward should have same spatial dimensions
         assert forward.array.shape[-2:] == backward.array.shape[-2:]
+
+
+def _multislice_arrays(
+    potential, lazy, scan=None, backscattered=True, potential_chunk_size="auto"
+):
+    """The arrays of a full-expansion real-space multislice: the transmitted
+    waves, and with `backscattered` also the backscattered waves."""
+    algorithm = RealSpaceMultislice(expansion_scope="full")
+    kwargs = dict(
+        lazy=lazy,
+        return_backscattered=backscattered,
+        potential_chunk_size=potential_chunk_size,
+        algorithm=algorithm,
+    )
+    if scan is None:
+        result = abtem.PlaneWave(energy=100e3).multislice(potential, **kwargs)
+    else:
+        result = abtem.Probe(energy=100e3, semiangle_cutoff=20).multislice(
+            potential, scan=scan, **kwargs
+        )
+    result = result if backscattered else [result]
+    if lazy:
+        result = [
+            r.compute(scheduler="synchronous", progress_bar=False) for r in result
+        ]
+    return [r.array for r in result]
+
+
+class TestBackscatteringEnsemble:
+    """The backscattered waves of an ensemble potential are those of each
+    configuration run on its own."""
+
+    @pytest.mark.parametrize(
+        "num_configs, slices_per_cell, scan, lazy",
+        [
+            pytest.param(
+                *case,
+                lazy,
+                marks=[pytest.mark.slow] if lazy and case[0] == 3 else [],
+            )
+            for case in [
+                (2, 2, None),  # 3 exit planes
+                (3, 2, None),  # as many configurations as exit planes
+                (2, 3, None),  # 4 exit planes
+                (3, 2, [(1.0, 1.0), (2.0, 3.0)]),  # two probe positions
+            ]
+            for lazy in (False, True)
+        ],
+    )
+    def test_frozen_phonons(self, num_configs, slices_per_cell, scan, lazy):
+        atoms = ase.build.bulk("Si", cubic=True)
+        frozen_phonons = abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1)
+        kwargs = dict(
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / slices_per_cell,
+            exit_planes=1,
+        )
+
+        members = [
+            _multislice_arrays(abtem.Potential(config, **kwargs), False, scan)
+            for config in frozen_phonons
+        ]
+        result = _multislice_arrays(
+            abtem.Potential(frozen_phonons, **kwargs), lazy, scan
+        )
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    @pytest.mark.parametrize(
+        "num_frozen_phonons, lazy",
+        [
+            pytest.param(
+                num_frozen_phonons,  # 5 exit planes
+                lazy,
+                marks=[pytest.mark.slow] if lazy and num_frozen_phonons == 5 else [],
+            )
+            for num_frozen_phonons in (2, 5)
+            for lazy in (False, True)
+        ],
+    )
+    def test_crystal_potential(self, num_frozen_phonons, lazy):
+        atoms = ase.build.bulk("Si", cubic=True)
+
+        def crystal():
+            unit = abtem.Potential(
+                abtem.FrozenPhonons(atoms, 4, sigmas=0.1, seed=1),
+                gpts=(24, 20),
+                slice_thickness=atoms.cell[2, 2] / 2,
+            )
+            return abtem.CrystalPotential(
+                unit,
+                (2, 1, 2),
+                num_frozen_phonons=num_frozen_phonons,
+                seeds=tuple(range(1, num_frozen_phonons + 1)),
+                exit_planes=1,
+            )
+
+        members = []
+        for _, _, member in crystal().generate_blocks():
+            member = member.item()
+            chunks = list(member.generate_chunked_slices())
+            slices = abtem.PotentialArray(
+                np.concatenate([chunk.array for chunk in chunks]),
+                slice_thickness=[t for chunk in chunks for t in chunk.slice_thickness],
+                sampling=member.sampling,
+                exit_planes=1,
+            )
+            members.append(_multislice_arrays(slices, False))
+
+        result = _multislice_arrays(crystal(), lazy)
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
 
 
 class TestAlgorithmComparison:
