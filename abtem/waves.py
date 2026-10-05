@@ -600,8 +600,9 @@ class Waves(BaseWaves, ArrayObject):
             shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
             A dictionary defining wave function metadata. All items will be added to the
-            metadata of measurements derived from the waves. The metadata must contain
-            the electron energy [eV].
+            metadata of measurements derived from the waves. The electron energy [eV]
+            is read from the metadata; without it, or with None, the waves have no
+            scalar energy, as for a probe built with several energies.
 
         Returns
         -------
@@ -611,7 +612,7 @@ class Waves(BaseWaves, ArrayObject):
         if metadata is None:
             raise ValueError("metadata must be provided to create Waves")
 
-        energy = metadata["energy"]
+        energy = metadata.get("energy")
         reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
@@ -1407,12 +1408,30 @@ class Waves(BaseWaves, ArrayObject):
         diffraction_patterns : DiffractionPatterns
             The diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-
         if max_angle is None:
             max_angle = "full"
 
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        diffraction_patterns = self._diffraction_patterns(
+            new_gpts,
+            fftshift=fftshift,
+            return_complex=return_complex,
+            renormalize=renormalize,
+        )
+
+        return diffraction_patterns._apply_block_direct(block_direct)
+
+    def _diffraction_patterns(
+        self,
+        new_gpts: tuple[int, int],
+        fftshift: bool = True,
+        return_complex: bool = False,
+        renormalize: bool = True,
+    ) -> DiffractionPatterns:
+        """The diffraction patterns cropped to `new_gpts` pixels around the zero
+        frequency, without blocking the direct beam (see `diffraction_patterns`).
+        """
+        xp = get_array_module(self.array)
 
         metadata = copy(self.metadata)
         metadata["label"] = "intensity"
@@ -1470,7 +1489,7 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        return diffraction_patterns._apply_block_direct(block_direct)
+        return diffraction_patterns
 
     def elastic_diffuse_diffraction_patterns(self, **kwargs):
         """Elastic, diffuse and total diffraction intensity from frozen-phonon
@@ -1549,11 +1568,6 @@ class Waves(BaseWaves, ArrayObject):
                     self[index].apply_ctf(member_ctf, max_batch=max_batch)
                 )
             waves = stack(members, energy_axis, axis=axis_idx)
-            # The stacked object must remain a genuine multi-energy ensemble:
-            # its scalar accelerator/metadata energy come from member[0] and
-            # would misrepresent the other members.
-            waves.accelerator.energy = None
-            waves._metadata.pop("energy", None)
             assert isinstance(waves, Waves)
             return waves
 
@@ -2400,8 +2414,9 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy).
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):
@@ -2766,11 +2781,12 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
-        # Do this before _prebuild_reused_potential below, so it sees the true
-        # final chunk count (and therefore how many times the potential will
-        # actually be reused) rather than the pre-rechunk chunking.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy). Do this before
+        # _prebuild_reused_potential below, so it sees the true final chunk
+        # count (and therefore how many times the potential will actually be
+        # reused) rather than the pre-rechunk chunking.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):
