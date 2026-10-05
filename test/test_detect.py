@@ -361,3 +361,97 @@ def test_real_space_pixelated_detector_multi_energy(lazy):
             rtol=0,
             atol=1e-12 * expected.max(),
         )
+
+
+def _segmented(outer):
+    return abtem.SegmentedDetector(
+        nbins_radial=3, nbins_azimuthal=4, inner=20, outer=outer, rotation=0.3
+    )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize(
+    "entry_point",
+    [
+        "detect",
+        pytest.param(
+            "detect_lazy",
+            marks=pytest.mark.skipif(
+                not hasattr(abtem.SegmentedDetector, "offset"),
+                reason="lazy detect needs SegmentedDetector.offset",
+            ),
+        ),
+        "scan",
+        "scan_lazy",
+        "multislice",
+        "multislice_lazy",
+    ],
+)
+def test_segmented_detector_without_outer_matches_an_explicit_cutoff(entry_point):
+    """Without an outer angle the detector integrates up to the antialias cutoff
+    angle of the detected waves."""
+    potential, probe, scan = _real_space_setup(
+        sampling=0.1, scan_gpts=(3, 5), cells=(1, 1, 1)
+    )
+    lazy = entry_point.endswith("_lazy")
+
+    def detected(outer):
+        detector = _segmented(outer)
+        if entry_point.startswith("detect"):
+            waves = probe.scan(
+                potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+            )
+            result = detector.detect(waves.ensure_lazy() if lazy else waves)
+        elif entry_point.startswith("scan"):
+            result = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+        else:
+            result = probe.multislice(potential, detectors=detector, lazy=lazy)
+        return result.compute(scheduler="synchronous") if result.is_lazy else result
+
+    waves = probe.multislice(
+        potential, detectors=abtem.WavesDetector(), lazy=False
+    )
+    outer = min(waves.cutoff_angles)
+
+    result = detected(None)
+    expected = detected(outer)
+
+    np.testing.assert_array_equal(result.array, expected.array)
+    assert result.axes_metadata[-2].sampling == pytest.approx((outer - 20) / 3)
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+def test_segmented_detector_without_outer_follows_the_detected_waves():
+    """A detector without an outer angle is sized from the waves it detects, not
+    from waves an earlier call on the same object saw."""
+    potential, probe, scan = _real_space_setup(
+        sampling=0.1, scan_gpts=(3, 5), cells=(1, 1, 1)
+    )
+    detector = _segmented(None)
+    probe.scan(potential, scan=scan, detectors=detector, lazy=True)
+
+    probe_100 = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+    probe_100.grid.match(potential)
+    waves = probe_100.scan(
+        potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+    )
+    outer = min(waves.cutoff_angles)
+
+    result = detector.detect(waves)
+    expected = _segmented(outer).detect(waves)
+
+    np.testing.assert_array_equal(result.array, expected.array)
+    assert result.axes_metadata[-2].sampling == pytest.approx((outer - 20) / 3)
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_segmented_detector_without_outer_refuses_multi_energy(lazy):
+    potential, _, scan = _real_space_setup(
+        sampling=0.1, scan_gpts=(3, 5), cells=(1, 1, 1)
+    )
+    probe = abtem.Probe(energy=[50e3, 60e3, 70e3], semiangle_cutoff=20)
+    probe.grid.match(potential)
+
+    with pytest.raises(RuntimeError, match="cannot auto-size"):
+        probe.scan(potential, scan=scan, detectors=_segmented(None), lazy=lazy)

@@ -1666,7 +1666,8 @@ class SegmentedDetector(_AbstractRadialDetector):
     inner : float
         Inner integration limit of the bins [mrad].
     outer : float
-        Outer integration limit of the bins [mrad].
+        Outer integration limit of the bins [mrad]. If None, the antialias cutoff angle
+        of the detected waves.
     rotation : float
         Rotation of the bins around the origin [mrad].
     offset : two float
@@ -1687,7 +1688,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         nbins_radial: int,
         nbins_azimuthal: int,
         inner: float,
-        outer: float,
+        outer: Optional[float],
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = True,
@@ -1707,6 +1708,23 @@ class SegmentedDetector(_AbstractRadialDetector):
     @property
     def rotation(self):
         return self._rotation
+
+    def _matched(self, waves: WavesType) -> SegmentedDetector:
+        """This detector, or without an outer angle a copy whose outer angle is the
+        antialias cutoff angle of `waves` (see `_match_waves`)."""
+        if self._outer_is_explicit:
+            return self
+        matched = self.copy()
+        matched._match_waves(waves)
+        return matched
+
+    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
+        return self.inner, self._matched(waves).outer
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        return super(SegmentedDetector, self._matched(waves))._out_base_axes_metadata(
+            waves
+        )
 
     @property
     def radial_sampling(self):
