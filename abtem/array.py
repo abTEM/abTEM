@@ -38,10 +38,12 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
 )
 from abtem.core.backend import (
+    asnumpy,
     check_cupy_is_installed,
     copy_to_device,
     cp,
@@ -56,6 +58,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    get_dtype,
     interleave,
     itemset,
     normalize_axes,
@@ -411,6 +414,28 @@ def multi_output_blockwise(
 _MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
 
 
+def _json_safe(value):
+    """Convert a metadata value into something ``json`` can encode.
+
+    Metadata can carry array-backed values -- an accumulated defocus that was
+    computed on the device, for instance -- and both zarr attributes and the
+    JSON metadata export run through ``json.dumps``, which understands neither
+    a CuPy array nor a Metal one (nor, for that matter, a NumPy scalar). Bring
+    anything array-like back to the host and hand over plain Python types.
+    """
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+
+    if hasattr(value, "dtype") and hasattr(value, "shape"):
+        array = np.asarray(asnumpy(value))
+        return array.item() if array.ndim == 0 else array.tolist()
+
+    return value
+
+
 def _safe_zarr_chunks(
     shape: tuple[int, ...],
     itemsize: int,
@@ -608,12 +633,12 @@ class ComputableList(list):
 
                         for metadata_dict in metadata_list:
                             for key, value in metadata_dict.items():
-                                root.attrs[key] = value
+                                root.attrs[key] = _json_safe(value)
 
                         for i, computed_array in computed_arrays:
                             root.create_array(
                                 name=f"array{i}",
-                                data=computed_array,
+                                data=asnumpy(computed_array),
                                 chunks=_safe_zarr_chunks(
                                     computed_array.shape,
                                     computed_array.dtype.itemsize,
@@ -661,12 +686,12 @@ class ComputableList(list):
                 try:
                     for metadata_dict in metadata_list:
                         for key, value in metadata_dict.items():
-                            root.attrs[key] = value
+                            root.attrs[key] = _json_safe(value)
 
                     for i, computed_array in computed_arrays:
                         root.create_array(
                             name=f"array{i}",
-                            data=computed_array,
+                            data=asnumpy(computed_array),
                             chunks=_safe_zarr_chunks(
                                 computed_array.shape,
                                 computed_array.dtype.itemsize,
@@ -709,10 +734,15 @@ class ComputableList(list):
         is_gpu = config.get("device") == "gpu" or any(
             _is_gpu_array_object(obj) for obj in self
         )
+        is_mps = config.get("device") == "mps" or any(
+            _is_mps_array_object(obj) for obj in self
+        )
         _push_config_to_active_client()
 
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
+        elif is_mps:
+            kwargs = _resolve_mps_scheduler(dict(kwargs))
 
         arrays = [array for _, array in arrays_to_write]
         with _nested_compute_guard(kwargs), _keep_annotations_guard(
@@ -806,6 +836,47 @@ def _is_gpu_array_object(obj) -> bool:
     was GPU), so this correctly handles the to_cpu=True case.
     """
     return hasattr(obj, "device") and obj.device == "gpu"
+
+
+def _is_mps_array_object(obj) -> bool:
+    """Return True if obj's computation involves Metal (MPS) arrays."""
+    return hasattr(obj, "device") and obj.device == "mps"
+
+
+def _resolve_mps_scheduler(kwargs: dict) -> dict:
+    """Resolve the dask scheduler for a Metal computation.
+
+    A process holds a single Metal context, and PyTorch's MPS backend aborts
+    the process when several of dask's threaded-scheduler workers drive it at
+    once -- the same constraint that rules out the threaded scheduler for CuPy
+    in ``_resolve_gpu_scheduler``, and resolved the same way: a running
+    distributed client whose workers are each single-threaded is left in
+    charge, since the caller started it to run the computation, and anything
+    else gets the synchronous scheduler. (In-process workers then share the
+    one context, which the backend's own lock serializes.)
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments destined for ``dask.compute``. A ``scheduler`` key
+        set by the caller is always respected.
+
+    Returns
+    -------
+    dict
+        The keyword arguments, with ``scheduler="synchronous"`` injected when
+        no suitable client is available.
+    """
+    if "scheduler" in kwargs:
+        return kwargs
+
+    client = _active_client()
+    if is_gpu_dask_client(client):
+        push_config_to_workers(client)
+    else:
+        kwargs["scheduler"] = "synchronous"
+
+    return kwargs
 
 
 def _resolve_gpu_scheduler(kwargs: dict) -> dict:
@@ -990,11 +1061,16 @@ def _compute(
     is_gpu = config.get("device") == "gpu" or any(
         _is_gpu_array_object(obj) for obj in array_objects
     )
+    is_mps = config.get("device") == "mps" or any(
+        _is_mps_array_object(obj) for obj in array_objects
+    )
 
     _push_config_to_active_client()
 
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
+    elif is_mps:
+        kwargs = _resolve_mps_scheduler(kwargs)
 
     arrays = [wrapper.array for wrapper in array_objects]
     with _nested_compute_guard(kwargs), _keep_annotations_guard(
@@ -1372,6 +1448,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "mean")
         return self._reduction(
             "mean", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1401,6 +1478,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "sum")
         return self._reduction(
             "sum", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1496,6 +1574,115 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             "max", axes=axis, keepdims=keepdims, split_every=split_every
         )
 
+    def _weighted_axes(self, axes: tuple[int, ...]) -> dict[int, np.ndarray]:
+        """Normalized probability weights of the given (non-negative) axes, for the
+        axes that carry non-uniform weights."""
+        weights = {}
+        for axis in axes:
+            axis_weights = _normalized_axis_weights(
+                self.axes_metadata[axis], self.shape[axis]
+            )
+            if axis_weights is not None:
+                weights[axis] = axis_weights
+        return weights
+
+    def _warn_if_weighted_axes(
+        self, axes: Optional[int | tuple[int, ...]], reduction_func: str
+    ) -> None:
+        if axes is None:
+            # A reduction over all axes includes every ensemble axis.
+            axes = tuple(range(len(self.ensemble_shape)))
+        else:
+            axes = tuple(
+                axis if axis >= 0 else len(self.shape) + axis
+                for axis in number_to_tuple(axes)
+            )
+            if any(axis >= len(self.ensemble_shape) for axis in axes):
+                return  # _reduction raises for base axes
+
+        if self._weighted_axes(axes):
+            warnings.warn(
+                f"`{reduction_func}` over an ensemble axis carrying distribution "
+                "(probability) weights ignores the weights. The ensemble members "
+                "are unweighted and the distribution weights are applied when the "
+                "ensemble is reduced: use `reduce_ensemble(axis=...)` for the "
+                "probability-weighted mean.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _weighted_ensemble_mean(
+        self, axes: int | tuple[int, ...], split_every: int = 2
+    ) -> Self:
+        """Probability-weighted mean over ensemble axes.
+
+        Computes ``Σ_i p_i A_i / Σ_i p_i`` over each axis, where ``p_i`` are the
+        weights carried by the axis metadata (see :class:`OrdinalAxis`); axes
+        without (or with equal) weights are averaged with a plain mean. Over
+        several axes the weights are the outer product of the per-axis weights.
+        Works for NumPy, CuPy and lazy Dask arrays (the result stays lazy) and
+        preserves the array dtype.
+        """
+        axes = tuple(
+            axis if axis >= 0 else len(self.shape) + axis
+            for axis in number_to_tuple(axes)
+        )
+
+        if self._is_base_axis(axes):
+            raise RuntimeError("base axes cannot be reduced")
+
+        weights = self._weighted_axes(axes)
+
+        if not weights:
+            # Equal weights (e.g. frozen phonons): the plain mean is exact, and
+            # keeping it leaves such results bitwise unchanged.
+            return self._reduction("mean", axes=axes, split_every=split_every)
+
+        # Integer arrays (e.g. counts) take the configured float precision rather
+        # than truncating the weights.
+        array_object = self
+        if self.array.dtype.kind not in "fc":
+            array_object = self.__class__(
+                **{
+                    **self._copy_kwargs(exclude=("array",)),
+                    "array": self.array.astype(get_dtype(complex=False)),
+                }
+            )
+
+        # Average the equal-weight axes first: it shrinks the array before the
+        # weighted pass, and the outer-product weights factorize over the axes.
+        unweighted = tuple(axis for axis in axes if axis not in weights)
+        if unweighted:
+            array_object = array_object._reduction(
+                "mean", axes=unweighted, split_every=split_every
+            )
+            weights = {
+                axis - sum(other < axis for other in unweighted): axis_weights
+                for axis, axis_weights in weights.items()
+            }
+
+        # A single multiply by the outer product of the per-axis weights, a small
+        # host array spanning only the weighted axes. The real dtype matches the
+        # array's precision (complex64 -> float32, ...), so the weights never
+        # promote the result.
+        ndim = len(array_object.shape)
+        combined = np.ones((1,) * ndim)
+        for axis, axis_weights in weights.items():
+            shape = [1] * ndim
+            shape[axis] = len(axis_weights)
+            combined = combined * axis_weights.reshape(shape)
+
+        xp = get_array_module(array_object.array)
+        real_dtype = np.finfo(array_object.array.dtype).dtype
+        array = array_object.array * xp.asarray(combined, dtype=real_dtype)
+
+        weighted = array_object.__class__(
+            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
+        )
+        return weighted._reduction(
+            "sum", axes=tuple(weights), split_every=split_every
+        )
+
     def _reduction(
         self,
         reduction_func: str,
@@ -1551,7 +1738,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
+            cp is not None and isinstance(other, cp.ndarray)
+        ):
             other_array = other
         else:
             raise NotImplementedError(
@@ -1948,7 +2137,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         }
         metadata["data_origin"] = f"abTEM_v{__version__}"
         metadata["type"] = self.__class__.__name__
-        return json.dumps(metadata)
+        return json.dumps(_json_safe(metadata))
 
     def to_tiff(self, filename: str, **kwargs):
         """Write data to a tiff file.
@@ -2204,14 +2393,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
-            # When the source was on GPU but the output is CPU-resident
-            # Record the computation device on the output so _compute()
-            # selects the synchronous scheduler for GPU work.  Check
+            # When the source was on an accelerator but the output is
+            # CPU-resident, record the computation device on the output so
+            # _compute() selects the synchronous scheduler for the device work
+            # still in its graph -- CuPy and Metal both need it.  Check
             # self.device (which honours _device on lazy arrays) rather
             # than inspecting the dask-array module, which always returns
             # numpy for a not-yet-computed lazy array.
-            if self.device == "gpu":
-                output._device = "gpu"
+            if self.device in ("gpu", "mps"):
+                output._device = self.device
             outputs.append(output)
 
         if len(outputs) > 1:

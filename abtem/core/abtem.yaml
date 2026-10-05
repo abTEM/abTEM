@@ -7,7 +7,9 @@
 # ABTEM_-prefixed environment variables, e.g. ABTEM_DEVICE=gpu or
 # ABTEM_DASK__CHUNK_SIZE="256 MB".
 
-# The device can be either 'cpu' or 'gpu'
+# The device can be 'cpu', 'gpu' (CUDA, via CuPy) or 'mps' -- the experimental
+# Metal backend on Apple silicon, which needs PyTorch (https://pytorch.org)
+# and single precision. PyTorch is only imported once 'mps' is first used.
 device: cpu
 # The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw

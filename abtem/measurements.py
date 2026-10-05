@@ -31,7 +31,7 @@ from numba import jit  # type: ignore
 
 from abtem.atoms import is_cell_orthogonal
 from abtem.array import ArrayObject, _validate_array_items, stack
-from abtem.core import config
+from abtem.core import backend, config
 from abtem.core.axes import (
     AxisMetadata,
     LinearAxis,
@@ -65,6 +65,7 @@ from abtem.core.utils import (
     get_dtype,
     is_broadcastable,
     label_to_index,
+    number_to_tuple,
     safe_floor_int,
 )
 
@@ -436,8 +437,13 @@ def _radial_binning_device_arrays(
         wavelength,
     )
 
-    if get_array_module(array) is np:
+    xp = get_array_module(array)
+
+    if xp is np:
         device_key = "cpu"
+    elif backend.tp is not None and xp is backend.tp:
+        # Metal exposes a single device, so its identity needs no index.
+        device_key = "mps"
     else:
         # Key on the device the array actually lives on -- read off the array
         # itself, not the current-device context, which can differ from it
@@ -465,6 +471,9 @@ def _radial_binning_device_arrays_cached(key, device_key):
         flat_indices.flags.writeable = False
         separators.flags.writeable = False
         return flat_indices, separators
+
+    if device_key == "mps":
+        return backend.tp.asarray(flat_indices), backend.tp.asarray(separators)
 
     # Allocate on the keyed device, whatever device is current.
     # (CuPy arrays cannot be flagged read-only; shared by convention.)
@@ -851,17 +860,33 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     ) -> Self:
         pass
 
-    def reduce_ensemble(self) -> Self:
+    def reduce_ensemble(self, axis: Optional[int | tuple[int, ...]] = None) -> Self:
         """
-        Calculates the mean of an ensemble measurement (e.g. of frozen phonon
-        configurations).
+        Calculates the probability-weighted mean of an ensemble measurement.
 
+        Each ensemble axis may carry probability weights ``p_i`` in its metadata
+        (set from the weights of the distribution that generated it, e.g.
+        :func:`abtem.distributions.gaussian`); the reduction over the axis is then
+        ``Σ_i p_i I_i / Σ_i p_i``, where ``I_i`` is the measurement for the i'th
+        ensemble member. Axes without weights, such as frozen phonon configurations,
+        are reduced with a plain mean. Over several axes, the weights are the outer
+        product of the per-axis weights.
+
+        Parameters
+        ----------
+        axis : int or tuple of int, optional
+            The ensemble axes to reduce. By default, all axes flagged for ensemble
+            averaging (``ensemble_mean=True``) are reduced. Pass the axis explicitly
+            to reduce an ensemble kept with ``ensemble_mean=False``.
         """
-        axis = tuple(
-            i
-            for i, axis in enumerate(self.axes_metadata)
-            if hasattr(axis, "_ensemble_mean") and axis._ensemble_mean
-        )
+        if axis is None:
+            axis = tuple(
+                i
+                for i, axis_metadata in enumerate(self.axes_metadata)
+                if getattr(axis_metadata, "_ensemble_mean", False)
+            )
+        else:
+            axis = number_to_tuple(axis)
 
         if len(axis) == 0:
             return self
@@ -869,7 +894,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         if np.iscomplexobj(self.array):
             warnings.warn("a complex reducing a complex measurement")
 
-        return self.mean(axis=axis)
+        return self._weighted_ensemble_mean(axis)
 
     def _apply_element_wise_func(
         self, func: Callable | str, label: str, units: str
@@ -4523,6 +4548,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if xp is cp:
             sum_run_length_encoded_cuda(array, result, separators)
+
+        elif backend.tp is not None and xp is backend.tp:
+            from abtem.core._torch import sum_run_length_encoded
+
+            sum_run_length_encoded(array, result, separators)
 
         else:
             _sum_run_length_encoded(array, result, separators)

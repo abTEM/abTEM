@@ -5,6 +5,7 @@ from ase import Atoms
 from ase.build import bulk
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
+from utils import gpu
 
 import abtem
 from abtem.atoms import orthogonalize_cell
@@ -15,6 +16,7 @@ from abtem.bloch.utils import (
     relative_positions_for_centering,
     wrapped_is_close,
 )
+from abtem.core.backend import asnumpy
 from abtem.parametrizations import LobatoParametrization
 
 
@@ -301,3 +303,71 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+def _silicon_bloch_waves(device, g_max=4.0, sg_max=0.1):
+    structure_factor = StructureFactor(
+        bulk("Si", "diamond", a=5.43, cubic=True),
+        g_max=g_max,
+        parametrization="lobato",
+        thermal_sigma=0.0,
+        device=device,
+    )
+    return BlochWaves(
+        structure_factor=structure_factor, energy=200e3, sg_max=sg_max, device=device
+    )
+
+
+# The host reference is double precision whatever the 'precision' setting says:
+# the structure matrix comes out complex128 even at float32. An accelerator may
+# well be single precision -- Metal always is -- so the tolerances allow for
+# float32 against float64, not merely for a different order of operations.
+@pytest.mark.parametrize("device", [gpu])
+def test_bloch_wave_diffraction_patterns_match_cpu(device):
+    thicknesses = [50.0, 200.0, 1000.0]
+    reference = asnumpy(
+        _silicon_bloch_waves("cpu")
+        .calculate_diffraction_patterns(thicknesses=thicknesses)
+        .compute()
+        .array
+    )
+    result = asnumpy(
+        _silicon_bloch_waves(device)
+        .calculate_diffraction_patterns(thicknesses=thicknesses)
+        .compute()
+        .array
+    )
+
+    assert result.shape == reference.shape
+    np.testing.assert_allclose(result, reference, atol=1e-5 * np.abs(reference).max())
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_bloch_wave_scattering_matrix_matches_cpu(device):
+    reference = asnumpy(_silicon_bloch_waves("cpu").calculate_scattering_matrix(50.0))
+    result = asnumpy(_silicon_bloch_waves(device).calculate_scattering_matrix(50.0))
+
+    np.testing.assert_allclose(result, reference, atol=3e-5 * np.abs(reference).max())
+
+
+# 721 beams at 5000 Å put the norm of the exponent in the thousands, where
+# scaling and squaring breaks down at single precision. Exponentiated in
+# complex64, Metal's scattering matrix was off by 9e-3; the matrix exponential
+# is now done in double, leaving the 8e-4 that the single-precision structure
+# matrix alone accounts for.
+@pytest.mark.parametrize("device", [gpu])
+def test_many_beam_scattering_matrix_matches_cpu(device):
+    reference = asnumpy(
+        _silicon_bloch_waves("cpu", g_max=6.0, sg_max=0.3).calculate_scattering_matrix(
+            5000.0
+        )
+    )
+    result = asnumpy(
+        _silicon_bloch_waves(device, g_max=6.0, sg_max=0.3).calculate_scattering_matrix(
+            5000.0
+        )
+    )
+
+    assert reference.shape == (721, 721)
+    assert np.isfinite(result).all()
+    np.testing.assert_allclose(result, reference, atol=2e-3)
