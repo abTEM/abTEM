@@ -95,11 +95,15 @@ def test_add_subtract(data, measurement, method, lazy, device):
             "array": measurement.array * 2 + 1,
         }
     )
-    a = asnumpy(measurement.compute().array).copy()
-    b = asnumpy(other.compute().array)
+    # compute() replaces a lazy object's array in place, so take the oracle
+    # values from copies: computing the operands themselves would make the
+    # operation below run eagerly even when lazy=True.
+    a = asnumpy(measurement.copy().compute().array)
+    b = asnumpy(other.copy().compute().array)
 
     new_measurement = getattr(measurement, method)(other)
     assert new_measurement.array is not measurement.array
+    assert new_measurement.is_lazy == lazy
 
     # Oracle: the same elementwise operation on the plain numpy arrays.
     expected = getattr(np.asarray(a, dtype=np.float64), method)(b)
