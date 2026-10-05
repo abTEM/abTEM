@@ -603,8 +603,9 @@ class Waves(BaseWaves, ArrayObject):
             shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
             A dictionary defining wave function metadata. All items will be added to the
-            metadata of measurements derived from the waves. The metadata must contain
-            the electron energy [eV].
+            metadata of measurements derived from the waves. The electron energy [eV]
+            is read from the metadata; without it, or with None, the waves have no
+            scalar energy, as for a probe built with several energies.
 
         Returns
         -------
@@ -614,7 +615,7 @@ class Waves(BaseWaves, ArrayObject):
         if metadata is None:
             raise ValueError("metadata must be provided to create Waves")
 
-        energy = metadata["energy"]
+        energy = metadata.get("energy")
         reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
@@ -935,9 +936,12 @@ class Waves(BaseWaves, ArrayObject):
         Returns
         -------
         depth_profile : Images
-            2D image(s) with the depth (z) as the first base axis and the
-            remaining spatial axis as the second. Any additional ensemble axes
-            (e.g. scan positions) are preserved.
+            2D image(s) with the remaining spatial axis as the first base axis
+            and the depth (z) as the second, with one z row per exit plane.
+            The z sampling is the exit-plane spacing. Since images have no
+            coordinate offset, z is measured from the first exit plane (the
+            entrance surface, z = 0, for integer ``exit_planes``). Any
+            additional ensemble axes (e.g. scan positions) are preserved.
         """
         thickness_idx = None
         for i, ax in enumerate(self.ensemble_axes_metadata):
@@ -986,10 +990,26 @@ class Waves(BaseWaves, ArrayObject):
         else:
             array = xp.moveaxis(array, thickness_idx, -1)
 
-        thickness_values = self.ensemble_axes_metadata[thickness_idx].values
-        z_extent = max(thickness_values)
+        thickness_values = np.array(
+            self.ensemble_axes_metadata[thickness_idx].values, dtype=float
+        )
         n_z = len(thickness_values)
-        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+        if n_z > 1:
+            # One row per exit plane: n_z points spanning [t_0, t_{n_z-1}] are
+            # separated by n_z - 1 intervals. For uniformly spaced exit planes
+            # this is exactly their spacing.
+            z_sampling = (thickness_values[-1] - thickness_values[0]) / (n_z - 1)
+            if not np.allclose(np.diff(thickness_values), z_sampling):
+                warnings.warn(
+                    "The exit planes are not uniformly spaced (thicknesses "
+                    f"{np.round(thickness_values, 3).tolist()} Å), but the depth "
+                    "profile has a uniform z-axis with their mean spacing "
+                    f"({z_sampling:.3f} Å); intermediate rows are not drawn at "
+                    "their exact thickness. Use exit_planes that evenly divide "
+                    "the number of slices for an exact z-axis."
+                )
+        else:
+            z_sampling = thickness_values[0] if thickness_values[0] > 0 else 1.0
 
         remaining_metadata = [
             ax
@@ -1141,13 +1161,22 @@ class Waves(BaseWaves, ArrayObject):
         visualization.set_xlabel(f"{spatial_label} [Å]")
         visualization.set_ylabel("z [Å]")
 
-        z_sampling = profile.sampling[1]
+        # The profile's z-axis starts at 0 with row i centred on
+        # i * sampling; shift it so that row i is centred on the thickness of
+        # exit plane i, which need not start at 0 for explicit exit_planes.
+        z_offset = float(
+            next(
+                ax_meta.values[0]
+                for ax_meta in self.ensemble_axes_metadata
+                if isinstance(ax_meta, ThicknessAxis)
+            )
+        )
         for idx in np.ndindex(visualization.axes.shape):
             artist = visualization.artists[idx]
             xlim = artist.get_xlim()
             ylim = artist.get_ylim()
             artist.set_extent(
-                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+                (xlim[0], xlim[1], ylim[0] + z_offset, ylim[1] + z_offset)
             )
 
         visualization.adjust_coordinate_limits_to_artists()
@@ -1380,12 +1409,35 @@ class Waves(BaseWaves, ArrayObject):
         diffraction_patterns : DiffractionPatterns
             The diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-
         if max_angle is None:
             max_angle = "full"
 
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        diffraction_patterns = self._diffraction_patterns(
+            new_gpts,
+            fftshift=fftshift,
+            return_complex=return_complex,
+            renormalize=renormalize,
+        )
+
+        if block_direct:
+            diffraction_patterns = diffraction_patterns.block_direct(
+                radius=block_direct
+            )
+
+        return diffraction_patterns
+
+    def _diffraction_patterns(
+        self,
+        new_gpts: tuple[int, int],
+        fftshift: bool = True,
+        return_complex: bool = False,
+        renormalize: bool = True,
+    ) -> DiffractionPatterns:
+        """The diffraction patterns cropped to `new_gpts` pixels around the zero
+        frequency, without blocking the direct beam (see `diffraction_patterns`).
+        """
+        xp = get_array_module(self.array)
 
         metadata = copy(self.metadata)
         metadata["label"] = "intensity"
@@ -1434,11 +1486,6 @@ class Waves(BaseWaves, ArrayObject):
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=metadata,
         )
-
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
 
         return diffraction_patterns
 
@@ -1510,11 +1557,6 @@ class Waves(BaseWaves, ArrayObject):
                     self[index].apply_ctf(member_ctf, max_batch=max_batch)
                 )
             waves = stack(members, energy_axis, axis=axis_idx)
-            # The stacked object must remain a genuine multi-energy ensemble:
-            # its scalar accelerator/metadata energy come from member[0] and
-            # would misrepresent the other members.
-            waves.accelerator.energy = None
-            waves._metadata.pop("energy", None)
             assert isinstance(waves, Waves)
             return waves
 
@@ -2362,8 +2404,9 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy).
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):
@@ -2387,8 +2430,9 @@ class Probe(WavesBuilder):
     Parameters
     ----------
     semiangle_cutoff : float, optional
-        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is
-        given.
+        The cutoff semiangle of the aperture [mrad]. A cutoff of 0 gives a parallel
+        beam (a plane wave); scanning it needs an explicit scan `sampling` or `gpts`.
+        Ignored if a custom aperture is given.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -2727,11 +2771,12 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
-        # Do this before _prebuild_reused_potential below, so it sees the true
-        # final chunk count (and therefore how many times the potential will
-        # actually be reused) rather than the pre-rechunk chunking.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy). Do this before
+        # _prebuild_reused_potential below, so it sees the true final chunk
+        # count (and therefore how many times the potential will actually be
+        # reused) rather than the pre-rechunk chunking.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):

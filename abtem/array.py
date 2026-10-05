@@ -34,6 +34,7 @@ from abtem.core import config
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    EnergyAxis,
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
@@ -143,6 +144,11 @@ def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     return arr
 
 
+def _inverse_permutation(order: tuple[int, ...]) -> tuple[int, ...]:
+    """The permutation that undoes `order`."""
+    return tuple(int(i) for i in np.argsort(order))
+
+
 def _to_natural_order(
     shape: tuple[int, ...], order: tuple[int, ...]
 ) -> tuple[int, ...]:
@@ -150,14 +156,131 @@ def _to_natural_order(
     recovering the size each of the first `len(order)` (ensemble) axes would
     have in the array's own natural (undeclared) axis order. Any trailing
     (base) axes beyond that span are untouched."""
-    ensemble_len = len(order)
-    inverse = [0] * ensemble_len
-    for k, p in enumerate(order):
-        inverse[p] = k
-    return (
-        tuple(shape[inverse[p]] for p in range(ensemble_len))
-        + shape[ensemble_len:]
+    inverse = _inverse_permutation(order)
+    return tuple(shape[i] for i in inverse) + shape[len(order) :]
+
+
+def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
+    """The inverse of `_transpose_to_ensemble_source`: permute an array whose
+    first `len(order)` axes are in the declared order back into the natural
+    order, the one every `_calculate_new_array` returns."""
+    if order == tuple(range(len(order))):
+        return array
+    trailing = tuple(range(len(order), array.ndim))
+    return array.transpose(*_inverse_permutation(order), *trailing)
+
+
+def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
+    """The index of the ensemble axis holding more than one energy, if any."""
+    for i, axis in enumerate(array_object.ensemble_axes_metadata):
+        if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+            return i
+    return None
+
+
+def _copy_with_scalar_energy(array_object: "ArrayObject", energy: Optional[float]):
+    """A copy of `array_object` sharing its array, with `energy` as its scalar
+    energy: `accelerator.energy`, and `metadata["energy"]` where the key is
+    present."""
+    kwargs = array_object._copy_kwargs(exclude=("array",))
+    kwargs["array"] = array_object._array
+    if "energy" in kwargs:
+        kwargs["energy"] = energy
+    if "energy" in (kwargs.get("metadata") or {}):
+        kwargs["metadata"]["energy"] = energy
+    return array_object.__class__(**kwargs)
+
+
+def _with_the_energy_of_a_single_valued_energy_axis(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it carrying the energy of its single-valued
+    `EnergyAxis` in place of a different scalar energy.
+
+    A scalar energy (`accelerator.energy` or `metadata["energy"]`) takes
+    precedence over the axis in `resolve_energy`, so waves that carry both, with
+    an axis value that differs from the scalar, are evaluated at the wrong
+    wavelength. This is the state of a lazy block holding one energy of such
+    waves. The copy shares the array; the object itself is returned when it has
+    no such axis or no scalar energy that differs from the axis value.
+    """
+    axis = next(
+        (
+            axis
+            for axis in array_object.ensemble_axes_metadata
+            if isinstance(axis, EnergyAxis) and len(axis.values) == 1
+        ),
+        None,
     )
+    if axis is None:
+        return array_object
+
+    energy = float(axis.values[0])
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None or float(scalar) == energy for scalar in scalars):
+        return array_object
+
+    return _copy_with_scalar_energy(array_object, energy)
+
+
+def _without_scalar_energy(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it with no scalar energy, so that only its
+    `EnergyAxis` decides the energies (see `resolve_energy`). The copy shares the
+    array."""
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None for scalar in scalars):
+        return array_object
+    return _copy_with_scalar_energy(array_object, None)
+
+
+def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
+    """`transform._calculate_new_array(array_object)`, evaluated for each energy of
+    a multi-energy ensemble on its own when the transform depends on the
+    wavelength (`_splits_energy_ensembles`).
+
+    A detector or a multislice run uses one angular sampling and one wavelength
+    for the whole array it is given, which is right for one energy only. Each
+    energy member is therefore transformed separately and the results are
+    restacked where indexing removed the energy axis: after the transform's own
+    ensemble axes, among the array object's own axes in their natural order,
+    which is the order every `_calculate_new_array` returns. This runs on the
+    whole array of an eager call and on every block of a lazy one, whatever
+    energies the block holds. An array object with a single-valued energy axis,
+    such as a block holding one energy, is transformed at that energy even if it
+    carries a different scalar energy; one without such a scalar energy is
+    transformed as it is, not as a copy.
+    """
+    if not getattr(transform, "_splits_energy_ensembles", False):
+        return transform._calculate_new_array(array_object)
+
+    index = _multi_energy_axis(array_object)
+    if index is None:
+        return transform._calculate_new_array(
+            _with_the_energy_of_a_single_valued_energy_axis(array_object)
+        )
+
+    energies = array_object.ensemble_axes_metadata[index].values
+    members = []
+    for j, energy in enumerate(energies):
+        items = array_object.get_items((slice(None),) * index + (j,))
+        if items.get("energy") is not None:
+            # A scalar energy on the ensemble is not this member's.
+            items["energy"] = energy
+        members.append(transform._calculate_new_array(array_object.__class__(**items)))
+
+    axis = len(transform.ensemble_shape) + index
+    if isinstance(members[0], tuple):
+        return tuple(
+            get_array_module(outputs[0]).stack(outputs, axis=axis)
+            for outputs in zip(*members)
+        )
+    return get_array_module(members[0]).stack(members, axis=axis)
 
 
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
@@ -169,6 +292,26 @@ def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
         return array
     trailing = tuple(range(len(order), array.ndim))
     return array.transpose(*order, *trailing)
+
+
+# Scheduler priority of the tasks that pull each output out of a packed
+# multi-output block. A packed block (every detector's output of one multislice
+# task, exit waves included) is released only after all of its extracts have
+# run. Without a priority, the distributed scheduler can run an extract that
+# feeds only a final output long after its block was computed, so the packed
+# blocks accumulate; with it, each extract runs as soon as its block exists.
+#
+# Only a block with several outputs is annotated. Blockwise fusion gives a fused
+# layer the maximum priority of its parts, and a block with a single output has
+# a single dependent, so the multislice task fuses with its extract and with
+# everything downstream of it: annotating it would raise the priority of the
+# multislice work itself, and workers would start new multislice tasks before
+# combining the results of earlier ones. With several outputs the packed block
+# has several dependents and stays a task of its own.
+#
+# The priority survives graph optimisation only with low-level fusion off, see
+# _keep_annotations_guard.
+_EXTRACT_PRIORITY = 1
 
 
 def multi_output_blockwise(
@@ -245,14 +388,19 @@ def multi_output_blockwise(
                 drop_chunks.append(item)
         drop_chunks = tuple(drop_chunks)
 
-        new_output = da.map_blocks(
-            _extract_blockwise_multi_output,
-            out_array,
-            chunks=drop_chunks,
-            drop_axis=drop_axis,
-            index=i,
-            meta=out_meta,
-        )
+        with (
+            dask.annotate(priority=_EXTRACT_PRIORITY)
+            if len(out_metas) > 1
+            else nullcontext()
+        ):
+            new_output = da.map_blocks(
+                _extract_blockwise_multi_output,
+                out_array,
+                chunks=drop_chunks,
+                drop_axis=drop_axis,
+                index=i,
+                meta=out_meta,
+            )
         outputs += (new_output,)
     return outputs
 
@@ -568,10 +716,13 @@ class ComputableList(list):
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
-        with _nested_compute_guard(kwargs), _compute_context(
+        arrays = [array for _, array in arrays_to_write]
+        with _nested_compute_guard(kwargs), _keep_annotations_guard(
+            arrays, kwargs
+        ), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+            arrays = dask.compute(arrays, **kwargs)[0]
 
         output = write_func(
             [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
@@ -684,12 +835,7 @@ def _resolve_gpu_scheduler(kwargs: dict) -> dict:
     """
     check_cupy_is_installed()
 
-    from distributed import get_client
-
-    try:
-        client = get_client()
-    except ValueError:
-        client = None
+    client = _active_client()
 
     multi_gpu = config.get("dask.multi-gpu", False)
 
@@ -743,6 +889,84 @@ def _nested_compute_guard(kwargs: dict):
         yield
 
 
+def _active_client():
+    """The active distributed client, or None when there is none or distributed
+    is not installed."""
+    try:
+        from distributed import get_client
+
+        return get_client()
+    except (ImportError, ValueError):
+        return None
+
+
+def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
+    """Whether ``dask.compute(*arrays, **kwargs)`` would run on a distributed
+    client: an active default client, or one named by ``scheduler`` (the client
+    itself, its ``get``, or ``"distributed"``), unless a local scheduler is named
+    by ``scheduler`` or the ``scheduler`` configuration. ``arrays`` must all be
+    dask collections."""
+    try:
+        from distributed import Client
+    except ImportError:
+        return False
+
+    scheduler = dask.base.get_scheduler(
+        scheduler=kwargs.get("scheduler"), collections=arrays
+    )
+    return isinstance(getattr(scheduler, "__self__", None), Client)
+
+
+def _has_annotated_layer(arrays: list) -> bool:
+    """Whether any of the arrays' graphs has a layer with dask annotations.
+    ``arrays`` must all be dask collections."""
+    for array in arrays:
+        layers = getattr(array.__dask_graph__(), "layers", {})
+        if any(getattr(layer, "annotations", None) for layer in layers.values()):
+            return True
+    return False
+
+
+@contextmanager
+def _keep_annotations_guard(arrays: list, kwargs: dict):
+    """Keep dask annotations through graph optimisation when a distributed
+    client runs the compute.
+
+    dask's low-level task fusion (``optimization.fuse.active``, on by default
+    for arrays) discards layer annotations, so the priority that
+    multi_output_blockwise gives its extract tasks would not reach the
+    scheduler. Blockwise fusion keeps and merges annotations and stays on.
+    Only the distributed scheduler reads annotations, so low-level fusion is
+    switched off only while a distributed client runs a graph that carries
+    annotations; a local scheduler (named by ``scheduler`` or by the
+    ``scheduler`` configuration, e.g. the synchronous one forced on a single
+    GPU), a graph without annotations, and an explicit
+    ``optimization.fuse.active`` setting are left alone.
+
+    Only computes through abTEM's own ``compute`` and ``ComputableList``
+    (``compute`` and ``to_zarr``) pass through this guard. A graph computed any
+    other way -- ``dask.compute(measurement.array)``, ``client.compute``,
+    ``to_zarr(..., compute=False)``, ``to_tiff`` of a lazy array -- runs with
+    dask's default fusion, which drops the extract priority.
+
+    Items that are already computed (a ``ComputableList`` may mix them with lazy
+    ones) are passed through by ``dask.compute`` unchanged and play no part here.
+    """
+    lazy = [array for array in arrays if dask.is_dask_collection(array)]
+    if (
+        dask.config.get("optimization.fuse.active", None) is not None
+        or not _has_annotated_layer(lazy)
+        or not _runs_on_distributed_client(lazy, kwargs)
+    ):
+        yield
+        return
+
+    with dask.config.set(
+        {"optimization.fuse.active": False, "optimization.annotations.fuse": False}
+    ):
+        yield
+
+
 def _push_config_to_active_client():
     """Mirror the configuration onto an active distributed client's workers.
 
@@ -752,11 +976,8 @@ def _push_config_to_active_client():
     ``abtem.config.set``. Deduplicated inside push_config_to_workers, so
     calling this on every dispatch is cheap.
     """
-    try:
-        from distributed import get_client
-
-        client = get_client()
-    except (ImportError, ValueError):
+    client = _active_client()
+    if client is None:
         return
     push_config_to_workers(client)
 
@@ -777,10 +998,13 @@ def _compute(
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
 
-    with _nested_compute_guard(kwargs), _compute_context(
+    arrays = [wrapper.array for wrapper in array_objects]
+    with _nested_compute_guard(kwargs), _keep_annotations_guard(
+        arrays, kwargs
+    ), _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
-        arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
+        arrays = dask.compute(arrays, **kwargs)[0]
 
     for array, wrapper in zip(arrays, array_objects):
         wrapper._array = array
@@ -1041,8 +1265,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
         array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
+        # by keyword: not every subclass takes the array as its first argument
         kwargs = self._copy_kwargs(exclude=("array",))
-        return self.__class__(array, **kwargs)
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     @property
     def metadata(self) -> dict:
@@ -1475,7 +1701,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__truediv__")
 
     def __itruediv__(self, other: Self) -> Self:
-        return self._arithmetic(other, "__itruediv__")
+        return self._in_place_arithmetic(other, "__itruediv__")
+
+    def __rtruediv__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rtruediv__")
 
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
@@ -1493,7 +1722,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
-    __rtruediv__ = __truediv__
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
@@ -1672,10 +1900,40 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+        # by keyword: not every subclass takes the array as its first argument
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
 
     def lazy(self, chunks: str = "auto") -> Self:
         return self.ensure_lazy(chunks)
+
+    def ensure_computed(self, **kwargs) -> Self:
+        """Creates an equivalent in-memory version of the array object, leaving
+        this object unchanged.
+
+        The counterpart of `ensure_lazy`: an object already in memory is returned
+        as it is, and a lazy one is computed into a new object. `compute` works in
+        place, so this is the way to get an in-memory array while the caller's
+        object stays lazy.
+
+        Parameters
+        ----------
+        kwargs :
+            Keyword arguments passed to `compute`.
+
+        Returns
+        -------
+        computed_array_object : ArrayObject or subclass of ArrayObject
+            In-memory version of the array object.
+        """
+        if not self.is_lazy:
+            return self
+
+        # by keyword: not every subclass takes the array as its first argument
+        new_kwargs = self._copy_kwargs(exclude=("array",))
+        new_kwargs["array"] = self.array
+        return self.__class__(**new_kwargs).compute(**kwargs)
 
     def compute(
         self,
@@ -1875,6 +2133,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial: Callable,
         array_object_partial: Callable,
         base_ndims: int,
+        out_ndim: int,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
@@ -1888,13 +2147,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
 
-        out_arrays = transform._calculate_new_array(array_object)
+        out_arrays = _calculate_new_array_per_energy(transform, array_object)
 
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
-        ndims = len(transform_axes) + len(array.shape)
-        packing = np.zeros((1,) * ndims, dtype=object)
+        packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
 
@@ -1918,6 +2176,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObject
             The transformed array object.
         """
+
+        # A transform whose output size depends on the ensemble (a pixelated
+        # detector's crop of a multi-energy ensemble) is fixed against the whole
+        # ensemble here, before an eager call or a lazy block sees one energy.
+        transform = transform._match_ensemble(self)
 
         new_arrays: (
             da.core.Array
@@ -1960,6 +2223,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             new_axes = transform._partition_args(
                 validated_chunks[: len(transform.ensemble_shape)]
             )
+
+            # A block of multi_output_blockwise has one dimension per axis of
+            # this array plus one per dimension of each partitioned transform
+            # argument, not one per argument: MultisliceTransform passes a
+            # frozen-phonon potential with several exit planes as one 2D
+            # argument, and large constants as 0D arguments whose blocks can be
+            # bare objects, so the count comes from the declared arguments. A
+            # packed block with fewer dimensions breaks dask's concatenation
+            # over dropped axes (AnnularDetector drops the wave-function axes).
+            out_ndim = len(self.shape) + sum(len(axis.shape) for axis in new_axes)
 
             num_dropped_axes = tuple(
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
@@ -2017,9 +2290,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
+                out_ndim=out_ndim,
             )
         else:
-            new_arrays = transform._calculate_new_array(self)
+            new_arrays = _calculate_new_array_per_energy(transform, self)
             if not isinstance(new_arrays, tuple):
                 new_arrays = (new_arrays,)
             ensemble_sources = transform._out_ensemble_source(self)
@@ -2372,7 +2646,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 meta=np.array((), dtype=object),
             )
         else:
-            array = self.compute().array
+            # Partitioning (e.g. of a lazy potential for an eager multislice)
+            # leaves the caller's object lazy
+            array = self.ensure_computed().array
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((), dtype=object)
             else:
@@ -2658,7 +2934,17 @@ def stack(
 
     axis_metadata = validate_axis_metadata(axis_metadata)
 
-    return arrays[0]._stack(arrays, axis_metadata, axis)
+    stacked = arrays[0]._stack(arrays, axis_metadata, axis)
+    if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+        # The scalar energy of the first member would misrepresent the others
+        # and take precedence over the axis (resolve_energy); the axis carries
+        # every member's energy, as for a probe built with several energies,
+        # whose metadata["energy"] is None as well.
+        if getattr(stacked, "accelerator", None) is not None:
+            stacked.accelerator.energy = None
+        if "energy" in stacked._metadata:
+            stacked._metadata["energy"] = None
+    return stacked
 
 
 def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
@@ -2681,7 +2967,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
 
     xp = get_array_module(arrays[0].array)
 
-    if arrays[0].is_lazy:
+    if any(has_array.is_lazy for has_array in arrays):
         array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
         array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)

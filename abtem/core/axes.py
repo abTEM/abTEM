@@ -344,6 +344,20 @@ class ReciprocalSpaceAxis(LinearAxis):
     fftshift: bool = True
     _concatenate: bool = False
 
+    def coordinates(self, n: int) -> tuple[float, ...]:
+        """Spatial frequencies in storage order.
+
+        `offset` is the lowest frequency of the centred grid,
+        ``offset + sampling * arange(n)``. With ``fftshift=False`` the array is
+        stored in unshifted (``np.fft.fftfreq``) order, zero frequency first,
+        so the centred grid is ``ifftshift``-ed into that order (``ifftshift``,
+        not ``fftshift``: the two differ by one element for odd `n`).
+        """
+        coordinates = super().coordinates(n)
+        if self.fftshift:
+            return coordinates
+        return tuple(np.fft.ifftshift(np.array(coordinates)))
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScanAxis(RealSpaceAxis):

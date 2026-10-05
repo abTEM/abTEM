@@ -1041,6 +1041,14 @@ def test_upsample_blend_snapping():
     assert C._snapped_blend_angle(None, detectors) is None
     assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
 
+    # an offset detector's boundaries are the bounds of the angles it covers,
+    # widened by |offset| plus the rounding margin
+    offset_detector = abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
+    )
+    assert C._snapped_blend_angle(60.0, [offset_detector], margin=1.0) == 56.0
+    assert C._snapped_blend_angle(30.0, [offset_detector], margin=1.0) == 15.0
+
 
 @devices
 def test_upsample_blend_snaps_to_detector_boundary(device):
@@ -1291,3 +1299,45 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
                           blend_angle=1e4)
     assert np.allclose(beyond.angular_sampling, reference.angular_sampling)
+
+
+def test_upsample_offset_detectors_route_on_the_angles_they_cover():
+    # an offset region is an annulus about its offset centre, so it covers
+    # [max(inner - r, 0), outer + r] about k = 0, r = |offset| plus a pixel of
+    # the one-period window for the offset's nearest-pixel rounding; routing
+    # reads the band from those bounds, not from inner/outer alone
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+
+    cut = 60.0
+    offset = (3.0, 4.0)  # |offset| = 5 mrad
+    r = 5.0 + built._offset_rounding_margin
+
+    def sides(detector):
+        return built._routing_sides(cut, [detector])
+
+    # wholly below / above the cut, with or without an offset
+    below = abtem.AnnularDetector(inner=0, outer=cut - r - 1, offset=offset)
+    above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
+    assert sides(below) == ["low"]
+    assert sides(above) == ["high"]
+    assert sides(abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=cut + r + 1, outer=150,
+        offset=offset,
+    )) == ["high"]
+    # outer <= cut, but the offset region reaches across it
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
+    # inner >= cut, but the offset region reaches below it
+    assert sides(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
+    # a q-sweep of disks is not an angular band
+    assert sides(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
+
+    # snapping puts the cut on the covered bounds of an offset detector
+    detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
+    assert built._snapped_blend_angle(
+        40 + r + 1, [detector], built._offset_rounding_margin
+    ) == pytest.approx(40 + r)

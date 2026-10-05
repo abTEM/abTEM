@@ -168,10 +168,12 @@ class BaseTransferFunction(
         Parameters
         ----------
         max_angle : float, optional
-            The maximum diffraction angle in radians. If not provided, the maximum angle
-            will be determined based on the `self._max_semiangle_cutoff` attribute of
-            the instance. If neither `max_angle` nor `self._max_semiangle_cutoff` is
-            available, a `RuntimeError` will be raised.
+            The maximum diffraction angle [mrad]. If not provided, the maximum angle
+            is the semiangle cutoff of the instance (`self._max_semiangle_cutoff`),
+            or 50 mrad if that cutoff is infinite (no aperture). A zero cutoff (a
+            parallel beam) raises a `ValueError`, and so `max_angle` must be given.
+            If neither `max_angle` nor `self._max_semiangle_cutoff` is available, a
+            `RuntimeError` will be raised.
         gpts : int | tuple[int, int], optional
             The number of grid points in reciprocal space for performing Fourier
             Transform. If not provided, a default value of 128 will be used.
@@ -186,7 +188,15 @@ class BaseTransferFunction(
 
         if self.sampling is None or max_angle is not None:
             if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
+                _raise_if_parallel_beam(
+                    self._max_semiangle_cutoff,
+                    "The default angular range",
+                    "Pass `max_angle` explicitly.",
+                )
                 max_angle = self._max_semiangle_cutoff
+                if max_angle == np.inf:
+                    # no aperture: the same default range as CTF.profiles
+                    max_angle = 50.0
 
             elif max_angle is None:
                 raise RuntimeError()
@@ -210,7 +220,7 @@ class BaseTransferFunction(
             xp.fft.fftshift(array, axes=(-2, -1)),
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
-            fftshift=False,
+            fftshift=True,
             metadata={"energy": self.energy},
         )
         return diffraction_patterns
@@ -222,6 +232,11 @@ class BaseTransferFunction(
 class BaseAperture(BaseTransferFunction):
     """Base class for apertures. Documented in the subclasses."""
 
+    # Why a zero semiangle cutoff is invalid for this aperture type, or None where
+    # it is valid: an Aperture or CTF with a zero cutoff keeps the zero-angle pixel,
+    # i.e. a parallel beam.
+    _zero_semiangle_cutoff_error: Optional[str] = None
+
     def __init__(
         self,
         semiangle_cutoff: float | BaseDistribution = np.inf,
@@ -231,7 +246,7 @@ class BaseAperture(BaseTransferFunction):
         sampling: Optional[float | tuple[float, float]] = None,
         distributions: tuple[str, ...] = (),
     ):
-        self._semiangle_cutoff = semiangle_cutoff
+        self._semiangle_cutoff = self._validate_semiangle_cutoff(semiangle_cutoff)
         super().__init__(
             energy=energy,
             extent=extent,
@@ -267,7 +282,9 @@ class BaseAperture(BaseTransferFunction):
     @property
     def nyquist_sampling(self) -> float:
         """Nyquist sampling corresponding to the semiangle cutoff of the
-        aperture [Å]."""
+        aperture [Å]. Raises a ValueError for a zero semiangle cutoff (a parallel
+        beam)."""
+        _raise_if_parallel_beam(self._max_semiangle_cutoff, "The Nyquist sampling")
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
@@ -277,7 +294,36 @@ class BaseAperture(BaseTransferFunction):
 
     @semiangle_cutoff.setter
     def semiangle_cutoff(self, semiangle_cutoff: float | BaseDistribution) -> None:
-        self._semiangle_cutoff = semiangle_cutoff
+        self._semiangle_cutoff = self._validate_semiangle_cutoff(semiangle_cutoff)
+
+    def _validate_semiangle_cutoff(
+        self, semiangle_cutoff: float | BaseDistribution | None
+    ) -> float | BaseDistribution | None:
+        """Reject a negative (or NaN) semiangle cutoff, and a zero one where this
+        aperture type has no use for it. None (not set) passes through."""
+        if semiangle_cutoff is None:
+            return semiangle_cutoff
+
+        if isinstance(semiangle_cutoff, BaseDistribution):
+            values = np.asarray(semiangle_cutoff.values, dtype=float)
+            shown = f"a distribution with values {values.tolist()}"
+        else:
+            values = np.asarray(semiangle_cutoff, dtype=float)
+            shown = repr(semiangle_cutoff)
+
+        if np.any(np.isnan(values)) or np.any(values < 0.0):
+            raise ValueError(f"semiangle_cutoff must be non-negative, got {shown}.")
+
+        if self._zero_semiangle_cutoff_error is not None and np.any(values == 0.0):
+            name = type(self).__name__
+            article = "An" if name[0] in "AEIOU" else "A"
+            raise ValueError(
+                f"{article} {name} with semiangle_cutoff=0 "
+                f"{self._zero_semiangle_cutoff_error}; give a positive "
+                "semiangle_cutoff."
+            )
+
+        return semiangle_cutoff
 
     def _cropped_aperture(self) -> BaseAperture:
         if self._max_semiangle_cutoff == np.inf:
@@ -392,7 +438,8 @@ class Aperture(BaseAperture):
     ----------
     semiangle_cutoff : float or BaseDistribution
         The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of
-        angles may be provided.
+        angles may be provided. Must be non-negative; a cutoff of 0 keeps only the
+        zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     energy : float, optional
@@ -505,7 +552,7 @@ class Bullseye(BaseAperture):
         Open fraction of each radial ring period. Must be in the interval (0, 1],
         where 1 gives a fully open disk.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -521,6 +568,8 @@ class Bullseye(BaseAperture):
     corner_radius : float, optional
         Corner radius in mrads. Default value is 0.0
     """
+
+    _zero_semiangle_cutoff_error = "has no open area"
 
     def __init__(
         self,
@@ -715,7 +764,7 @@ class Vortex(BaseAperture):
     quantum_number : int
         Quantum number of vortex beam.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -727,6 +776,8 @@ class Vortex(BaseAperture):
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
         ignored.
     """
+
+    _zero_semiangle_cutoff_error = "has no open area"
 
     def __init__(
         self,
@@ -782,9 +833,10 @@ class AnnularAperture(BaseAperture):
     Parameters
     ----------
     inner_cutoff : float
-        The cutoff semiangle of inner radius of the aperture [mrad].
+        The cutoff semiangle of inner radius of the aperture [mrad]. Must be
+        non-negative and smaller than `semiangle_cutoff`.
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -797,6 +849,8 @@ class AnnularAperture(BaseAperture):
         ignored.
     """
 
+    _zero_semiangle_cutoff_error = "has no open area"
+
     def __init__(
         self,
         inner_cutoff: float,
@@ -806,6 +860,10 @@ class AnnularAperture(BaseAperture):
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
     ):
+        if not inner_cutoff >= 0.0:
+            raise ValueError(
+                f"inner_cutoff must be non-negative, got {inner_cutoff!r}."
+            )
         self._inner_cutoff = inner_cutoff
         super().__init__(
             energy=energy,
@@ -814,6 +872,31 @@ class AnnularAperture(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
+
+    def _validate_semiangle_cutoff(
+        self, semiangle_cutoff: float | BaseDistribution | None
+    ) -> float | BaseDistribution | None:
+        """Also reject a semiangle cutoff that does not exceed the inner cutoff,
+        for which the annulus is empty; run by __init__ and the setter alike."""
+        semiangle_cutoff = super()._validate_semiangle_cutoff(semiangle_cutoff)
+        if semiangle_cutoff is None:
+            return semiangle_cutoff
+
+        if isinstance(semiangle_cutoff, BaseDistribution):
+            smallest = float(np.min(semiangle_cutoff.values))
+            shown = f"a distribution with smallest value {smallest!r}"
+        else:
+            smallest = float(semiangle_cutoff)
+            shown = repr(semiangle_cutoff)
+
+        if self._inner_cutoff >= smallest:
+            raise ValueError(
+                f"inner_cutoff ({self._inner_cutoff!r}) must be smaller than "
+                f"semiangle_cutoff ({shown}); otherwise the AnnularAperture has "
+                "no open area."
+            )
+
+        return semiangle_cutoff
 
     @property
     def inner_cutoff(self) -> float:
@@ -847,11 +930,11 @@ class Zernike(BaseAperture):
     Parameters
     ----------
     center_hole_cutoff : float
-        Cutoff semiangle of aperture hole [mrad].
+        Cutoff semiangle of aperture hole [mrad]. Must be non-negative.
     phase_shift: float
         Phase shift of Zernike film [rad]
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. Must be positive.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -864,6 +947,8 @@ class Zernike(BaseAperture):
         ignored.
     """
 
+    _zero_semiangle_cutoff_error = "has no open area"
+
     def __init__(
         self,
         center_hole_cutoff: float,
@@ -874,6 +959,10 @@ class Zernike(BaseAperture):
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
     ):
+        if not center_hole_cutoff >= 0.0:
+            raise ValueError(
+                f"center_hole_cutoff must be non-negative, got {center_hole_cutoff!r}."
+            )
         self._center_hole_cutoff = center_hole_cutoff
         self._phase_shift = phase_shift
         super().__init__(
@@ -923,6 +1012,10 @@ class Zernike(BaseAperture):
 
 
 class RadialPhasePlate(BaseAperture):
+    _zero_semiangle_cutoff_error = (
+        "has a phase pattern of zero radius, so it does nothing"
+    )
+
     def __init__(
         self,
         num_flips: int,
@@ -1668,7 +1761,8 @@ class CTF(_HasAberrations, BaseAperture):
     ----------
     semiangle_cutoff: float, optional
         The semiangle cutoff describes the sharp reciprocal-space cutoff due to the
-        objective aperture [mrad] (default is no cutoff).
+        objective aperture [mrad] (default is no cutoff). Must be non-negative; a
+        cutoff of 0 keeps only the zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
@@ -1834,7 +1928,7 @@ class CTF(_HasAberrations, BaseAperture):
 
     @semiangle_cutoff.setter
     def semiangle_cutoff(self, value: float) -> None:
-        self._semiangle_cutoff = value
+        self._semiangle_cutoff = self._validate_semiangle_cutoff(value)
 
     @property
     def focal_spread(self) -> float | BaseDistribution:
@@ -1968,8 +2062,9 @@ class CTF(_HasAberrations, BaseAperture):
             Number of grid points along the line profiles.
         max_angle : float
             The maximum scattering angle included in the radial line profiles [mrad].
-            The default is 1.5 times the semiangle cutoff or 50 mrad if no semiangle
-            cutoff is set.
+            The default is 1.6 times the semiangle cutoff or 50 mrad if no semiangle
+            cutoff is set. A zero semiangle cutoff (a parallel beam) raises a
+            `ValueError`, and so `max_angle` must be given.
         phi : float
             The azimuthal angle of the radial line profiles [rad]. Default is 0.
 
@@ -1980,6 +2075,11 @@ class CTF(_HasAberrations, BaseAperture):
             represents the different
         """
         if max_angle is None:
+            _raise_if_parallel_beam(
+                self._max_semiangle_cutoff,
+                "The default angular range",
+                "Pass `max_angle` explicitly.",
+            )
             if self.semiangle_cutoff == np.inf:
                 max_angle = 50.0
             else:
@@ -2040,6 +2140,16 @@ class CTF(_HasAberrations, BaseAperture):
         return profiles
 
 
+def _raise_if_parallel_beam(semiangle_cutoff, quantity: str, remedy: str = "") -> None:
+    """Raise a ValueError for a zero semiangle cutoff (a parallel beam), for which
+    `quantity`, derived from the cutoff, is not defined."""
+    if np.ndim(semiangle_cutoff) == 0 and semiangle_cutoff == 0.0:
+        raise ValueError(
+            f"{quantity} is derived from the semiangle cutoff and is not defined for "
+            f"semiangle_cutoff=0 (a parallel beam). {remedy}".rstrip()
+        )
+
+
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
     """
     Calculate the Nyquist sampling.
@@ -2050,7 +2160,23 @@ def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
         Semiangle cutoff [mrad].
     energy: float
         Electron energy [eV].
+
+    Returns
+    -------
+    float
+        The Nyquist sampling [Å].
+
+    Raises
+    ------
+    ValueError
+        For a zero semiangle cutoff (a parallel beam), whose Nyquist sampling is not
+        defined.
     """
+    _raise_if_parallel_beam(semiangle_cutoff, "The Nyquist sampling")
+    if np.ndim(semiangle_cutoff) == 0 and not semiangle_cutoff > 0.0:
+        raise ValueError(
+            f"semiangle_cutoff must be positive, got {semiangle_cutoff!r}."
+        )
     wavelength = energy2wavelength(energy)
     return 1 / (4 * semiangle_cutoff / wavelength * 1e-3)
 
