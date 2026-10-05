@@ -381,7 +381,9 @@ def retrieve_structure_factor_values(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.loc[hkl_destination].to_numpy()
+    # copy=True: under pandas copy-on-write to_numpy() may return a read-only
+    # view, which torch.from_numpy (the Metal backend) will not wrap silently.
+    array = df.loc[hkl_destination].to_numpy(copy=True)
 
     if convert_to_numpy:
         array = cp.asarray(array)
