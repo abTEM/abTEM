@@ -693,7 +693,7 @@ class _FieldBuilder(BaseField):
 
             xp = get_array_module(self.device)
             chunks = validate_chunks(self.ensemble_shape, self._default_ensemble_chunks)
-            chunks = chunks + self.base_shape
+            chunks = chunks + (last_slice - first_slice,) + self.base_shape[1:]
 
             if self.ensemble_shape:
                 new_axis = tuple(
@@ -738,11 +738,23 @@ class _FieldBuilder(BaseField):
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
 
+        # The exit planes index the slices of the whole potential; the range keeps
+        # those inside it, counted from its first slice. With none left, the exit
+        # plane is the last slice of the range. A range starting at the first slice
+        # also keeps the entrance plane (-1, the incident wave) of the potential.
+        exit_planes = tuple(
+            plane - first_slice
+            for plane in self.exit_planes
+            if first_slice <= plane < last_slice
+        ) or (last_slice - first_slice - 1,)
+        if first_slice == 0 and -1 in self.exit_planes:
+            exit_planes = (-1,) + exit_planes
+
         output_potential = self._array_object(
             array,
             sampling=self._valid_sampling,
             slice_thickness=self.slice_thickness[first_slice:last_slice],
-            exit_planes=self.exit_planes,
+            exit_planes=exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
         return output_potential
