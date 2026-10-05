@@ -309,7 +309,7 @@ class BaseTransferFunction(
             xp.fft.fftshift(array, axes=(-2, -1)),
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
-            fftshift=False,
+            fftshift=True,
             metadata=self._energy_metadata,
         )
         return diffraction_patterns

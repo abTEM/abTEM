@@ -228,6 +228,35 @@ def test_waves_detector_keeps_data_on_device_by_default():
     assert WavesDetector().to_cpu is False
 
 
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(64, 65), (65, 64)])
+def test_annular_detector_region_is_centred_on_offset(fftshift, gpts):
+    # An annulus inner <= |alpha - offset| < outer is symmetric under reflection
+    # through `offset`; with `offset` on a grid point and the ring well inside
+    # the grid, the reflected grid coincides with itself, so the region's center
+    # of mass is exactly `offset`, in whichever storage order it was requested.
+    from abtem.measurements import DiffractionPatterns
+
+    base = DiffractionPatterns(
+        np.zeros(gpts, dtype=np.float32),
+        sampling=(0.02, 0.025),
+        fftshift=True,
+        metadata={"energy": 100e3},
+    )
+    ax, ay = base.angular_sampling
+    offset = (3 * ax, -2 * ay)
+    # Radii off-grid (x.3 pixels) so no pixel sits on a boundary; the ring
+    # reaches <= 13.3 px from the centre, inside the >= 32 px half-width.
+    detector = abtem.AnnularDetector(inner=2.3 * ax, outer=10.3 * ax, offset=offset)
+
+    region = detector.get_detector_region(base, fftshift=fftshift)
+
+    com = complex(region.center_of_mass(units="mrad").array)
+    # float32 angular coordinates: ~1e-7 relative; a one-pixel error is
+    # >= 1 / 3.6 of |offset|.
+    assert com == pytest.approx(offset[0] + 1.0j * offset[1], rel=1e-5)
+
+
 @pytest.mark.parametrize(
     "detector",
     [
