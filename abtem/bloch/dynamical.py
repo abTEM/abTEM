@@ -40,7 +40,7 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -983,7 +983,10 @@ def calculate_dynamical_scattering(
     if not thicknesses.shape:
         array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
     else:
-        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+        # C's own dtype, not a hard-coded complex128: Metal has no double
+        # precision, and on the host C is complex128 already, so nothing
+        # changes there.
+        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=C.dtype)
         for i, thickness in enumerate(thicknesses):
             array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
@@ -1009,8 +1012,18 @@ def expm(A: np.ndarray) -> np.ndarray:
 
     if xp == cp:
         return expm_cupy(A)
-    else:
+    elif xp is np:
         return expm_scipy(A)
+    else:
+        # Metal: exponentiate on the host, in double precision, and hand the
+        # result back in the device's complex64. Scaling and squaring breaks
+        # down at single precision for the norms of order 10^3 that realistic
+        # beam counts and thicknesses give (721 Si beams at 1000 Å: S off by
+        # 2.5e-3 exponentiated in complex64, by 3.5e-4 -- the share of the
+        # single-precision structure matrix -- in complex128), and torch's own
+        # matrix_exp, which runs on the device, is single precision too.
+        A = asnumpy(A)
+        return xp.asarray(expm_scipy(A.astype(np.complex128)).astype(A.dtype))
 
 
 def calculate_scattering_matrix(
