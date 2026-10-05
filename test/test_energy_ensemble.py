@@ -192,6 +192,46 @@ class TestWavesEnergyEnsemble:
         assert w.energy == 100e3
         assert w.ensemble_axes_metadata == []
 
+    def test_stack_along_an_energy_axis_leaves_no_scalar_energy(self):
+        """The axis carries each member's energy. A scalar energy taken from the
+        first member would take precedence over it for every member."""
+        members = [
+            Waves(np.ones((32, 32), dtype=complex), energy=energy, sampling=0.1)
+            for energy in ENERGIES
+        ]
+        stacked = abtem.stack(members, EnergyAxis(values=tuple(ENERGIES)))
+        assert stacked.accelerator.energy is None
+        # the key stays, as for a probe built with several energies
+        assert "energy" in stacked.metadata
+        assert stacked.metadata["energy"] is None
+
+        built = Waves(np.ones((3, 32, 32), dtype=complex), energy=ENERGIES, sampling=0.1)
+        assert stacked.angular_sampling == built.angular_sampling
+        for i, member in enumerate(members):
+            assert stacked[i].wavelength == member.wavelength
+
+    @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+    def test_waves_without_an_energy_metadata_key_can_be_detected(self, lazy):
+        """A producer that leaves out metadata["energy"] does not make a transform
+        that returns Waves raise."""
+        waves = Waves(
+            np.ones((3, 32, 32), dtype=complex),
+            sampling=0.1,
+            ensemble_axes_metadata=[EnergyAxis(values=tuple(ENERGIES))],
+        )
+        assert waves.accelerator.energy is None
+        assert "energy" not in waves.metadata
+        if lazy:
+            waves = waves.ensure_lazy()
+
+        detected = abtem.WavesDetector().detect(waves)
+        if lazy:
+            detected = detected.compute(progress_bar=False)
+
+        assert detected.array.shape == (3, 32, 32)
+        assert detected.metadata.get("energy") is None
+        assert [type(axis) for axis in detected.ensemble_axes_metadata] == [EnergyAxis]
+
     def test_per_chunk_valid_energy(self):
         """Single-element EnergyAxis in ensemble metadata resolves via _valid_energy."""
         arr = np.ones((1, 32, 32), dtype=complex)
@@ -366,6 +406,22 @@ class TestCTFEnergyEnsemble:
         assert dp.array.shape[0] == 3
         assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis)
 
+    def test_apply_ctf_on_multi_energy_waves_can_be_detected(self):
+        """The stacked result of a per-energy CTF stays a multi-energy ensemble that
+        a `WavesDetector` accepts."""
+        from abtem.transfer import CTF
+
+        waves = Probe(
+            sampling=0.1, extent=10, energy=[40e3, 60e3, 80e3], semiangle_cutoff=20
+        ).build(lazy=False)
+        applied = waves.apply_ctf(CTF(defocus=50))
+        assert applied.accelerator.energy is None
+        assert applied.metadata.get("energy") is None
+
+        detected = abtem.WavesDetector().detect(applied)
+        assert detected.array.shape == applied.array.shape
+        np.testing.assert_array_equal(detected.array, applied.array)
+
     def test_aperture_energy_ensemble(self):
         """Aperture also accepts energy as a distribution via the same path."""
         from abtem.transfer import Aperture
@@ -429,11 +485,31 @@ class TestTransferFunctionEnergyMatching:
         )
 
     def test_matches_ctf_without_energy(self):
-        """Matching the energies is equivalent to leaving the CTF energy unset."""
+        """Matching the energies is equivalent to leaving the CTF energy unset, and
+        neither CTF is left with the energy of a member."""
         waves = self._exit_waves(TEST_ENERGIES, lazy=False)
-        matched = waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS))
-        unset = waves.apply_ctf(abtem.CTF(**self.CTF_KWARGS))
+        matched_ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+        unset_ctf = abtem.CTF(**self.CTF_KWARGS)
+        matched = waves.apply_ctf(matched_ctf)
+        unset = waves.apply_ctf(unset_ctf)
         assert np.array_equal(matched.array, unset.array)
+        assert tuple(matched_ctf.energy.values) == tuple(TEST_ENERGIES)
+        assert unset_ctf.energy is None
+        # ... so both can be applied again
+        assert np.array_equal(waves.apply_ctf(unset_ctf).array, unset.array)
+
+    def test_lazy_block_holding_several_energies(self):
+        """A lazy block holding every energy is split into its energies too."""
+        waves = PlaneWave(energy=TEST_ENERGIES).multislice(self._potential())
+        waves = waves.rechunk((len(TEST_ENERGIES), -1, -1))
+        assert waves.array.chunks[0] == (len(TEST_ENERGIES),)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+        np.testing.assert_allclose(
+            waves.apply_ctf(ctf).intensity().compute().array,
+            self._oracle(),
+            rtol=1e-4,
+            atol=1e-6,
+        )
 
     def test_ensemble_mean(self):
         """The reported example: an ensemble-mean energy distribution on both."""

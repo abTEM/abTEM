@@ -60,6 +60,10 @@ class BaseTransferFunction(
 ):
     """Base class for transfer functions."""
 
+    # A transfer function depends on the wavelength: a multi-energy ensemble is
+    # transformed one energy at a time, each at its own wavelength.
+    _splits_energy_ensembles = True
+
     def __init__(
         self,
         energy: float | list | np.ndarray | BaseDistribution | None = None,
@@ -95,6 +99,75 @@ class BaseTransferFunction(
         if isinstance(self._energy_distribution, BaseDistribution):
             return [EnergyAxis(values=tuple(self._energy_distribution.values))]
         return []
+
+    def _match_ensemble(self, waves: Waves) -> BaseTransferFunction:
+        """This transfer function, matched to the energies of `waves`.
+
+        An energy distribution must be exactly the energies of a multi-energy
+        ensemble (the same values in the same order). It is matched to the
+        ensemble's EnergyAxis rather than adding a second one, so the returned
+        copy has no energy of its own: each member is then evaluated at its own
+        energy (see `abtem.array._calculate_new_array_per_energy`), and the
+        caller's transfer function is left without any member's energy.
+
+        Raises
+        ------
+        ValueError
+            If the energies of a distribution differ from those of the ensemble,
+            if a distribution is applied to wave functions that are not a
+            multi-energy ensemble, or if a fixed scalar energy is applied to one.
+        """
+        from abtem.array import _multi_energy_axis
+
+        index = _multi_energy_axis(waves)
+        name = type(self).__name__
+
+        if self._energy_distribution is not None:
+            energies = tuple(float(value) for value in self._energy_distribution.values)
+            if index is None:
+                raise ValueError(
+                    f"Cannot apply a {name} whose energy is a distribution "
+                    f"{energies} eV to wave functions that are not an energy "
+                    "ensemble. Its energies must match the EnergyAxis of a "
+                    "multi-energy ensemble; for single-energy wave functions use a "
+                    "scalar energy or leave it unset."
+                )
+            wave_energies = tuple(
+                float(value) for value in waves.ensemble_axes_metadata[index].values
+            )
+            if len(energies) != len(wave_energies) or not np.allclose(
+                energies, wave_energies, rtol=1e-9, atol=0.0
+            ):
+                raise ValueError(
+                    f"The energies of the {name} {energies} eV do not match the "
+                    f"energies of the wave function ensemble {wave_energies} eV. Use "
+                    "the same energies in the same order, or leave the energy unset "
+                    "so the per-member energies of the wave functions are used."
+                )
+        elif index is None:
+            return self
+        elif self.energy is not None:
+            raise ValueError(
+                f"Cannot apply a {name} with a fixed energy to a multi-energy "
+                "ensemble: each energy member requires its own wavelength. Pass a "
+                "transfer function without an energy so the per-member energies are "
+                "used."
+            )
+
+        matched = self.copy()
+        matched.energy = None
+        return matched
+
+    def _out_metadata(self, array_object: Waves) -> tuple[dict, ...]:
+        from abtem.array import _multi_energy_axis
+
+        metadata = super()._out_metadata(array_object)[0]
+        if _multi_energy_axis(array_object) is not None:
+            # The EnergyAxis carries every member's energy. A scalar energy, that
+            # of whichever member was evaluated last, would misrepresent the
+            # others and take precedence over the axis (see `resolve_energy`).
+            metadata.pop("energy", None)
+        return (metadata,)
 
     @property
     def _energy_metadata(self) -> dict:

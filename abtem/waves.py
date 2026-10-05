@@ -15,12 +15,17 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.array import ArrayObject, ComputableList, _expand_dims, validate_lazy
+from abtem.array import (
+    ArrayObject,
+    ComputableList,
+    _expand_dims,
+    _multi_energy_axis,
+    validate_lazy,
+)
 from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
-    EnergyAxis,
     FrozenPhononsAxis,
     OrdinalAxis,
     RealSpaceAxis,
@@ -73,11 +78,10 @@ from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.distributions import BaseDistribution, EnsembleFromDistributions, validate_distribution
 from abtem.tilt import TiltType2D, validate_tilt
-from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture, BaseTransferFunction
+from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
 from abtem.transform import WavesToWavesTransform
 
 if TYPE_CHECKING:
-    from abtem.transform import ArrayObjectTransform
     from abtem.visualize import Visualization
 
 
@@ -602,8 +606,9 @@ class Waves(BaseWaves, ArrayObject):
             shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
             A dictionary defining wave function metadata. All items will be added to the
-            metadata of measurements derived from the waves. The metadata must contain
-            the electron energy [eV].
+            metadata of measurements derived from the waves. The electron energy [eV]
+            is read from the metadata; without it, or with None, the waves have no
+            scalar energy, as for a probe built with several energies.
 
         Returns
         -------
@@ -613,7 +618,7 @@ class Waves(BaseWaves, ArrayObject):
         if metadata is None:
             raise ValueError("metadata must be provided to create Waves")
 
-        energy = metadata["energy"]
+        energy = metadata.get("energy")
         reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
@@ -1407,12 +1412,35 @@ class Waves(BaseWaves, ArrayObject):
         diffraction_patterns : DiffractionPatterns
             The diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-
         if max_angle is None:
             max_angle = "full"
 
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        diffraction_patterns = self._diffraction_patterns(
+            new_gpts,
+            fftshift=fftshift,
+            return_complex=return_complex,
+            renormalize=renormalize,
+        )
+
+        if block_direct:
+            diffraction_patterns = diffraction_patterns.block_direct(
+                radius=block_direct
+            )
+
+        return diffraction_patterns
+
+    def _diffraction_patterns(
+        self,
+        new_gpts: tuple[int, int],
+        fftshift: bool = True,
+        return_complex: bool = False,
+        renormalize: bool = True,
+    ) -> DiffractionPatterns:
+        """The diffraction patterns cropped to `new_gpts` pixels around the zero
+        frequency, without blocking the direct beam (see `diffraction_patterns`).
+        """
+        xp = get_array_module(self.array)
 
         metadata = copy(self.metadata)
         metadata["label"] = "intensity"
@@ -1462,11 +1490,6 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
         return diffraction_patterns
 
     def phonon_loss_diffraction_patterns(self, **kwargs):
@@ -1477,98 +1500,6 @@ class Waves(BaseWaves, ArrayObject):
         from abtem.measurements import phonon_loss_diffraction_patterns
 
         return phonon_loss_diffraction_patterns(self, **kwargs)
-
-    @property
-    def _multi_energy_axes(self) -> list[tuple[int, EnergyAxis]]:
-        """The ensemble axes describing more than one energy, with their indices."""
-        return [
-            (i, axis)
-            for i, axis in enumerate(self.ensemble_axes_metadata)
-            if isinstance(axis, EnergyAxis) and len(axis.values) > 1
-        ]
-
-    def apply_transform(
-        self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
-    ) -> ArrayObject | list[ArrayObject]:
-        if isinstance(transform, BaseTransferFunction) and (
-            self._multi_energy_axes or transform._energy_distribution is not None
-        ):
-            return self._apply_transfer_function_per_energy(transform, max_batch)
-
-        return super().apply_transform(transform, max_batch=max_batch)
-
-    def _apply_transfer_function_per_energy(
-        self, transfer_function: BaseTransferFunction, max_batch: int | str = "auto"
-    ) -> Waves:
-        """Apply a transfer function to a multi-energy ensemble of wave functions.
-
-        A transfer function depends on the wavelength, so a single evaluation
-        cannot represent several energies at once. Each energy member is
-        transformed at its own wavelength and the results are restacked along
-        the ensemble's EnergyAxis. A transfer function whose energy is a
-        distribution must describe exactly the energies of the ensemble: it is
-        matched to the existing EnergyAxis rather than adding another one.
-        """
-        energy_axes = self._multi_energy_axes
-        energy = transfer_function.energy
-
-        if isinstance(energy, BaseDistribution):
-            transfer_energies = tuple(float(value) for value in energy.values)
-            if not energy_axes:
-                raise ValueError(
-                    f"Cannot apply a {type(transfer_function).__name__} whose energy "
-                    f"is a distribution {transfer_energies} eV to wave functions "
-                    "that are not an energy ensemble. Its energies must match the "
-                    "EnergyAxis of a multi-energy ensemble; for single-energy wave "
-                    "functions use a scalar energy or leave it unset."
-                )
-            wave_energies = tuple(float(value) for value in energy_axes[0][1].values)
-            if len(transfer_energies) != len(wave_energies) or not np.allclose(
-                transfer_energies, wave_energies, rtol=1e-9, atol=0.0
-            ):
-                raise ValueError(
-                    f"The energies of the {type(transfer_function).__name__} "
-                    f"{transfer_energies} eV do not match the energies of the wave "
-                    f"function ensemble {wave_energies} eV. Use the same energies in "
-                    "the same order, or leave the energy unset so the per-member "
-                    "energies of the wave functions are used."
-                )
-        elif energy is not None:
-            raise ValueError(
-                f"Cannot apply a {type(transfer_function).__name__} with a fixed "
-                "energy to a multi-energy ensemble: each energy member requires its "
-                "own wavelength. Pass a transfer function without an energy so the "
-                "per-member energies are used."
-            )
-
-        axis_index, energy_axis = energy_axes[0]
-        members = []
-        for i, member_energy in enumerate(energy_axis.values):
-            index = tuple(
-                i if j == axis_index else slice(None)
-                for j in range(len(self.ensemble_shape))
-            )
-            member_transfer_function = transfer_function.copy()
-            # The setter also clears an energy distribution.
-            member_transfer_function.energy = float(member_energy)
-            members.append(
-                self[index].apply_transform(member_transfer_function, max_batch=max_batch)
-            )
-
-        # The transfer function's own ensemble axes are prepended to each
-        # member's; the energy axis is restored to its position among the
-        # ensemble axes of the input wave functions.
-        num_new_axes = len(members[0].ensemble_shape) - (len(self.ensemble_shape) - 1)
-        waves = stack_array_object(
-            members, energy_axis, axis=num_new_axes + axis_index
-        )
-        # The stacked object must remain a genuine multi-energy ensemble:
-        # its scalar accelerator/metadata energy come from member[0] and
-        # would misrepresent the other members.
-        waves.accelerator.energy = None
-        waves._metadata.pop("energy", None)
-        assert isinstance(waves, Waves)
-        return waves
 
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
@@ -1601,8 +1532,11 @@ class Waves(BaseWaves, ArrayObject):
             ctf = CTF(**kwargs)
 
         # A multi-energy ensemble, or a CTF whose energy is a distribution, is
-        # matched member by member (see `_apply_transfer_function_per_energy`).
-        if self._multi_energy_axes or ctf._energy_distribution is not None:
+        # evaluated one energy at a time (see `BaseTransferFunction._match_ensemble`).
+        if (
+            _multi_energy_axis(self) is not None
+            or ctf._energy_distribution is not None
+        ):
             return self.apply_transform(ctf, max_batch=max_batch)
 
         if not ctf.accelerator.energy:
@@ -2448,8 +2382,9 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy).
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):
@@ -2814,11 +2749,12 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-        # Ensure each energy value occupies its own dask chunk so that
-        # conventional_multislice_step receives a scalar energy via _valid_energy.
-        # Do this before _prebuild_reused_potential below, so it sees the true
-        # final chunk count (and therefore how many times the potential will
-        # actually be reused) rather than the pre-rechunk chunking.
+        # Give each energy its own dask chunk, so the energies are propagated as
+        # separate tasks rather than one after another within a task (see
+        # abtem.array._calculate_new_array_per_energy). Do this before
+        # _prebuild_reused_potential below, so it sees the true final chunk
+        # count (and therefore how many times the potential will actually be
+        # reused) rather than the pre-rechunk chunking.
         if waves.is_lazy:
             from abtem.core.axes import EnergyAxis
             for i, ax in enumerate(waves.ensemble_axes_metadata):
