@@ -761,14 +761,18 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         # 2-D measurement (e.g. Images) separately rather than each member.
         base_axes = tuple(range(-len(self.base_shape), 0))
 
+        def reduce(name):
+            # dask's ptp takes no keepdims, so ptp is spelled out as max - min.
+            if name == "ptp":
+                return reduce("max") - reduce("min")
+            return getattr(np, name)(self.array, axis=base_axes, keepdims=True)
+
         if shift != "none":
-            array = self.array - getattr(np, shift)(
-                self.array, axis=base_axes, keepdims=True
-            )
+            array = self.array - reduce(shift)
         else:
             array = self.array
 
-        array = array / getattr(np, scale)(self.array, axis=base_axes, keepdims=True)
+        array = array / reduce(scale)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 

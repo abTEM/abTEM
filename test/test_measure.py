@@ -1770,6 +1770,28 @@ class TestImagesNormalizeEnsemble:
         normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
         np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
 
+    @pytest.mark.parametrize("scale, shift", [("ptp", "min"), ("max", "ptp")])
+    def test_lazy_matches_eager(self, scale, shift):
+        """A lazy measurement, chunked along both base axes, normalizes to the
+        eager result for 'ptp' as scale and as shift."""
+        array = np.random.default_rng(0).random((3, 5, 7)) + 0.5
+        axes = [OrdinalAxis(values=(0, 1, 2))]
+        eager = Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+        lazy = Images(
+            da.from_array(array, chunks=(1, 3, 4)),
+            sampling=0.1,
+            ensemble_axes_metadata=axes,
+        )
+        expected = eager.normalize_ensemble(scale=scale, shift=shift).array
+        normalized = lazy.normalize_ensemble(scale=scale, shift=shift)
+        assert normalized.is_lazy
+        np.testing.assert_allclose(
+            normalized.array.compute(),
+            expected,
+            rtol=0,
+            atol=1e-12 * np.abs(expected).max(),
+        )
+
 
 class TestImagesScanNoise:
     def test_scan_noise_returns_images(self):
