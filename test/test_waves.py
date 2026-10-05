@@ -450,6 +450,68 @@ def test_diffraction_patterns_block_direct_true_of_a_plane_wave_blocks_one_pixel
     np.testing.assert_array_equal(blocked[keep], unblocked[keep])
 
 
+def _zero_frequency_pixel(shape, fftshift):
+    """The index of the zero frequency, from NumPy's FFT conventions alone."""
+    index = []
+    for n in shape:
+        frequencies = np.fft.fftfreq(n)
+        if fftshift:
+            frequencies = np.fft.fftshift(frequencies)
+        index.append(int(np.flatnonzero(frequencies == 0)[0]))
+    return tuple(index)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("fftshift", [True, False], ids=["shifted", "unshifted"])
+@pytest.mark.parametrize(
+    "semiangle_cutoff",
+    [None, 0.0, 1e-3, np.inf, np.array([10.0, 20.0])],
+    ids=["none", "zero", "1e-3", "infinite", "array"],
+)
+@pytest.mark.parametrize(
+    "gpts, extent",
+    [
+        ((45, 64), (20.0, 26.0)),
+        ((64, 45), (26.0, 20.0)),
+        ((45, 51), (20.0, 23.0)),
+        ((64, 80), (26.0, 32.0)),
+    ],
+    ids=["odd_even", "even_odd", "odd_odd", "even_even"],
+)
+def test_diffraction_patterns_block_direct_true_blocks_the_zero_frequency_pixel(
+    gpts, extent, semiangle_cutoff, fftshift, lazy, device
+):
+    """Without a scalar semiangle cutoff larger than half the angular sampling,
+    block_direct=True zeroes the zero-frequency pixel and nothing else, for every
+    pattern shape, with and without fftshift."""
+    from abtem.waves import Waves
+
+    rng = np.random.default_rng(0)
+    array = (5 + rng.normal(size=gpts) + 1j * rng.normal(size=gpts)).astype(
+        np.complex64
+    )
+    metadata = (
+        {} if semiangle_cutoff is None else {"semiangle_cutoff": semiangle_cutoff}
+    )
+    waves = Waves(array, energy=200e3, extent=extent, metadata=metadata)
+    waves = waves.copy_to_device(device)
+    if lazy:
+        waves = waves.ensure_lazy()
+    kwargs = dict(max_angle="full", parity="same", fftshift=fftshift)
+    unblocked = waves.diffraction_patterns(**kwargs).compute().to_cpu().array
+    assert unblocked.shape == gpts and np.all(unblocked > 0)
+
+    blocked = waves.diffraction_patterns(block_direct=True, **kwargs).compute()
+
+    blocked = blocked.to_cpu().array
+    pixel = _zero_frequency_pixel(gpts, fftshift)
+    assert blocked[pixel] == 0
+    keep = np.ones(gpts, dtype=bool)
+    keep[pixel] = False
+    np.testing.assert_array_equal(blocked[keep], unblocked[keep])
+
+
 @given(
     data=st.data(),
     repetitions=st.tuples(

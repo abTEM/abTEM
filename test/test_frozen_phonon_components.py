@@ -311,8 +311,9 @@ def _zeroed_pixels(blocked, unblocked):
         {"semiangle_cutoff": 1e-3},
         {"semiangle_cutoff": 1.0},
         {"semiangle_cutoff": np.inf},
+        {"semiangle_cutoff": np.array([10.0, 20.0])},
     ],
-    ids=["no_cutoff", "parallel_beam", "1e-6", "1e-3", "1.0", "no_aperture"],
+    ids=["no_cutoff", "parallel_beam", "1e-6", "1e-3", "1.0", "no_aperture", "array"],
 )
 def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
     metadata, block_direct
