@@ -2311,6 +2311,7 @@ class PlaneWave(WavesBuilder):
                     extent=waves_builder.extent,
                     metadata={**waves_builder.metadata, "energy": e_float},
                     reciprocal_space=False,
+                    cell=waves_builder.cell,
                 )
                 single_waves = waves_builder.tilt.apply(single_waves)
                 arrays.append(single_waves._eager_array)
@@ -2675,6 +2676,7 @@ class Probe(WavesBuilder):
                         metadata={**waves_builder.metadata, "energy": e_float},
                         reciprocal_space=True,
                         ensemble_axes_metadata=waves_builder.scan_positions.ensemble_axes_metadata,
+                        cell=waves_builder.cell,
                     )
                     single_waves = waves_builder.aperture.apply(single_waves)
                     single_waves = waves_builder.tilt.apply(single_waves)

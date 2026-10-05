@@ -536,6 +536,40 @@ def test_reused_wave_does_not_leak_cell_across_potentials():
     assert plane_wave.grid.cell is not None
 
 
+def test_multi_energy_build_keeps_the_skew_cell():
+    """Each energy of a multi-energy Probe is built on its own, and that per-energy
+    build must carry the grid's cell. Without it the members fall back to the
+    orthogonal (separable) reciprocal grid, so the aperture and aberrations are
+    evaluated at the wrong scattering angles on a skew cell -- a silent ~30% error
+    that the single-energy path does not have."""
+    import numpy as np
+
+    import abtem
+
+    a = 20.0
+    cell = np.array([[a, 0.0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))]])
+    extent = tuple(np.linalg.norm(cell, axis=1))
+    energies = [50e3, 60e3, 70e3]
+
+    def build(energy):
+        return abtem.Probe(
+            energy=energy,
+            semiangle_cutoff=20,
+            extent=extent,
+            gpts=(64, 64),
+            cell=cell,
+        ).build(lazy=False)
+
+    ensemble = build(energies)
+    assert ensemble.grid.cell is not None
+
+    for i, energy in enumerate(energies):
+        reference = build(energy)
+        assert np.array_equal(
+            np.asarray(ensemble.array[i]), np.asarray(reference.array)
+        )
+
+
 def _build_exit_plane_waves(device="cpu", exit_planes=1):
     import abtem
     import ase
