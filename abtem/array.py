@@ -1788,6 +1788,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
 
+    def __rsub__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rsub__")
+
     def __isub__(self, other: Self) -> Self:
         return self._in_place_arithmetic(other, "__isub__")
 
@@ -1800,7 +1803,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __pow__(self, other: Self) -> Self:
         return self._arithmetic(other, "__pow__")
 
+    __radd__ = __add__
     __rmul__ = __mul__
+
+    # NumPy scalars and arrays, dask arrays and CuPy arrays on the left of an
+    # operator defer to the reflected methods above, instead of coercing this
+    # object to an array through __len__ and __getitem__, because their priority
+    # is lower. __array_ufunc__ = None would also defer them, but dask treats any
+    # object with shape, dtype and __array_ufunc__ as array-like and then reads
+    # its ndim, which an ArrayObject lacks.
+    __array_priority__ = 1000
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [

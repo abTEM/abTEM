@@ -1,3 +1,4 @@
+import operator
 import warnings
 
 import ase
@@ -20,6 +21,7 @@ from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
@@ -117,25 +119,71 @@ def test_add_subtract(data, measurement, method, lazy, device):
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("scalar", [2.0, -0.5])
-def test_reflected_arithmetic_with_a_scalar(scalar, lazy, device):
-    # Oracle: numpy's own reflected operators on the plain array. The array is
-    # not symmetric under any of the operations, so e.g. `scalar / m` computed
-    # as `m / scalar` (as __rtruediv__ = __truediv__ used to do) fails.
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize(
+    "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
+)
+def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
+    # Oracle: the same operation with the scalar on the left of the plain array.
+    # The array is not symmetric under any of the operations, so a reflected
+    # operation computed in the forward order (`2 / m` as `m / 2`) fails.
+    if lazy and device == "mps" and scalar_type in ("numpy_float64", "0d_array"):
+        # On a lazy Metal measurement, dask's meta computation casts to float64,
+        # which Metal does not have, and dask defers to a TorchNDArray operand,
+        # leaving NotImplemented where an array is expected. The forward
+        # operation (`m op scalar`) fails the same way.
+        pytest.skip("float64 and device-array operands of a lazy Metal measurement")
+    xp = get_array_module(device)
+    host_scalar = {
+        "python": 2.0,
+        "numpy_float64": np.float64(-0.5),
+        "numpy_float32": np.float32(3.0),
+        "0d_array": np.asarray(2.0),
+    }[scalar_type]
+    scalar = xp.asarray(host_scalar) if scalar_type == "0d_array" else host_scalar
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
-    measurement = Images(array, sampling=(0.1, 0.2))
-    if lazy:
-        measurement = Images(da.from_array(array, chunks=(1, 3)), sampling=(0.1, 0.2))
-    measurement = measurement.copy_to_device(device)
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
 
-    for result, expected in (
-        (scalar / measurement, scalar / array),
-        (scalar * measurement, scalar * array),
-    ):
-        assert isinstance(result, Images)
-        np.testing.assert_allclose(
-            asnumpy(result.compute().array), expected, rtol=1e-6
-        )
+    result = getattr(operator, op)(scalar, measurement)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    expected = getattr(operator, op)(host_scalar, array)
+    np.testing.assert_allclose(
+        asnumpy(result.compute().array),
+        expected,
+        rtol=1e-6,
+        atol=1e-6 * np.abs(expected).max(),
+    )
+
+
+def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes():
+    # MeasurementsEnsemble has no base axes, so NumPy's coercion through
+    # __len__/__getitem__ would succeed and build an object array; a NumPy scalar
+    # on the left must defer to the reflected operators instead.
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]])
+    ensemble = MeasurementsEnsemble(
+        array,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            OrdinalAxis(values=(0, 1, 2)),
+        ],
+    )
+    for op in (operator.mul, operator.truediv, operator.add, operator.sub):
+        result = op(np.float64(2.0), ensemble)
+        assert isinstance(result, MeasurementsEnsemble)
+        np.testing.assert_allclose(result.array, op(2.0, array), rtol=1e-12)
+
+
+def test_measurement_as_a_map_blocks_keyword_argument():
+    # dask reads the ndim of any argument it takes for array-like, and a
+    # measurement must not look array-like to it.
+    x = da.ones((4, 4), chunks=2)
+    images = Images(np.ones((4, 4)), sampling=0.1)
+    result = x.map_blocks(lambda block, images=None: block * 2, images=images)
+    np.testing.assert_array_equal(result.compute(), 2 * np.ones((4, 4)))
 
 
 def test_in_place_true_division_refuses_lazy_measurements():
