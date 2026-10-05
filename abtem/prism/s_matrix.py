@@ -55,6 +55,7 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     PixelatedDetector,
     SegmentedDetector,
+    SpectralAnnularDetector,
     WavesDetector,
     validate_detectors,
 )
@@ -136,6 +137,26 @@ def _finalize_lazy_measurements(
         measurements.append(measurement)
 
     return measurements
+
+
+def _collected_angle_bounds(detector, margin: float = 0.0):
+    """Bounds (low, high) [mrad] on the angles a radial detector collects.
+
+    A centred detector collects ``inner <= alpha < outer``. An offset one
+    collects an annulus about its offset centre, which lies within
+    ``[max(inner - r, 0), outer + r]`` of k = 0 for ``r = |offset| + margin``,
+    where ``margin`` covers the nearest-pixel rounding of the offset. A bound
+    the detector does not have is None.
+    """
+    inner, outer = detector.inner, detector.outer
+    offset = getattr(detector, "_offset", None)
+    if offset is None or not np.any(np.asarray(offset) != 0.0):
+        return inner, outer
+
+    r = float(np.hypot(*offset)) + margin
+    low = None if inner is None else max(inner - r, 0.0)
+    high = None if outer is None else outer + r
+    return low, high
 
 
 def _round_gpts_to_multiple_of_interpolation(
@@ -1874,7 +1895,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
     @staticmethod
-    def _snapped_blend_angle(blend_angle, detectors):
+    def _snapped_blend_angle(blend_angle, detectors, margin: float = 0.0):
         """The blend angle lowered to a detector collection boundary.
 
         Above the blend angle the reduction is the plane-wave branch alone,
@@ -1884,6 +1905,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         come out worse than PRISM on a band. Snapping the angle down to the
         nearest boundary leaves every band wholly on one side: the bands above
         are PRISM, the bands below are the interpolated reduction.
+
+        The boundaries of an offset annular or segmented detector are the
+        bounds of the angles it covers (see `_collected_angle_bounds`, which
+        ``margin`` is passed to).
         """
         if blend_angle is None or isinstance(blend_angle, str):
             return blend_angle
@@ -1895,8 +1920,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         bounds = set()
         for detector in detectors:
-            for name in ("inner", "outer"):
-                value = getattr(detector, name, None)
+            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+                values = _collected_angle_bounds(detector, margin)
+            else:
+                values = tuple(
+                    getattr(detector, name, None) for name in ("inner", "outer")
+                )
+            for value in values:
                 if value is not None and np.isfinite(value):
                     bounds.add(float(value))
 
@@ -3218,6 +3248,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
 
+    @property
+    def _offset_rounding_margin(self) -> float:
+        """One pixel [mrad] of the one-period (PRISM) window, the coarsest grid
+        a detector is applied on: it bounds the shift of a detector offset by
+        its rounding to the nearest pixel."""
+        return max(
+            n * self.wavelength * 1e3 / e
+            for n, e in zip(self._interpolation, self.extent)
+        )
+
     def _routing_sides(self, cut, detectors, taper: float = 0.0):
         """Which branch each detector reads from, or None when not routable.
 
@@ -3232,9 +3272,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         sides = []
         for detector in detectors:
+            if isinstance(detector, SpectralAnnularDetector):
+                # a sweep of disks out to q_max: `inner`/`outer` are the disk's
+                return None
             if isinstance(detector, (AnnularDetector, SegmentedDetector)):
-                outer = detector.outer
-                inner = detector.inner
+                # an offset region is routed on the angles it covers, which
+                # reach outer + |offset|
+                inner, outer = _collected_angle_bounds(
+                    detector, self._offset_rounding_margin
+                )
                 if outer is not None and outer <= cut - taper:
                     sides.append("low")
                 elif inner is not None and inner >= cut:
@@ -3286,7 +3332,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         single = not isinstance(detectors, (list, tuple))
         detectors = [detectors] if single else list(detectors)
 
-        cut = self._snapped_blend_angle(blend_angle, detectors)
+        cut = self._snapped_blend_angle(
+            blend_angle, detectors, self._offset_rounding_margin
+        )
         sides = self._routing_sides(cut, detectors, taper=blend_taper)
         if sides is None:
             return None
@@ -3525,7 +3573,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # (PRISM) reduction exactly, or the interpolated one, or (inside the
         # taper zone) a convex combination of the two intensities
         if snap:
-            blend_angle = self._snapped_blend_angle(blend_angle, detectors)
+            blend_angle = self._snapped_blend_angle(
+                blend_angle, detectors, self._offset_rounding_margin
+            )
 
         low = self.reduce(
             scan=scan,
@@ -5593,6 +5643,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
+            # The S-matrix (potential) ensemble is averaged block by block
+            # above, but CTF ensemble axes flagged ensemble_mean were returned
+            # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
+            measurements = [
+                measurement.reduce_ensemble()
+                if hasattr(measurement, "reduce_ensemble")
+                else measurement
+                for measurement in ensure_list(measurements)
+            ]
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:

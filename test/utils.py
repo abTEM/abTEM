@@ -39,12 +39,26 @@ def ensure_is_tuple(x, length: int = 1):
 def array_is_close(
     a1,
     a2,
-    rel_tol=np.inf,
-    abs_tol=np.inf,
+    rel_tol=None,
+    abs_tol=None,
     check_above_abs=0.0,
     check_above_rel=0.0,
     mask=None,
 ):
+    """Whether ``a1`` is within ``rel_tol`` (relative to ``a2``) and/or
+    ``abs_tol`` of ``a2``. The caller must assert the result.
+
+    At least one tolerance is required. Both used to default to ``inf``,
+    which disables the check it controls, so a call with neither returned
+    True whatever the arrays held.
+    """
+    if rel_tol is None and abs_tol is None:
+        raise TypeError("array_is_close requires rel_tol and/or abs_tol")
+    if rel_tol is None:
+        rel_tol = np.inf
+    if abs_tol is None:
+        abs_tol = np.inf
+
     if mask is not None:
         a1 = a1[mask]
         a2 = a2[mask]
@@ -317,6 +331,107 @@ def to_host_array(measurement):
     if isinstance(array, da.core.Array):
         array = array.compute()
     return asnumpy(array)
+
+
+def _to_host_array_object(obj):
+    """A computed host-memory copy of ``obj``.
+
+    ``to_cpu`` first, since it returns a new object: ``compute`` works in
+    place and would otherwise turn the caller's lazy object eager.
+    """
+    obj = obj.to_cpu()
+    if obj.is_lazy:
+        obj.compute()
+    return obj
+
+
+def assert_array_objects_equal(
+    a,
+    b,
+    rtol: float = 0.0,
+    atol: float = 0.0,
+    check_dtype: bool = True,
+):
+    """Assert two ArrayObjects (Waves, measurements, ...) are equal in value.
+
+    ``a == b`` cannot be used for this: ``safe_equality`` skips any attribute
+    whose comparison is a dask value, so for lazy objects only the metadata
+    is ever compared and e.g. ``Images(da.zeros(...)) == Images(da.ones(...))``
+    is True (abTEM issue #413). This computes both sides, moves them to the
+    host and checks, in turn: type, shape, dtype, base and ensemble axes
+    metadata, the ``metadata`` dict, every other constructor attribute
+    (sampling, energy, ...) and finally the array values.
+
+    The default tolerance is exact, for comparing two objects that went
+    through the same code path (a round trip, a copy, a stack slice). For a
+    comparison across genuinely different paths (PRISM vs. multislice, lazy
+    vs. eager reductions) the caller must pass ``rtol``/``atol`` chosen for
+    the quantity being compared.
+
+    Lists/tuples of ArrayObjects (multi-detector output) are compared
+    element-wise.
+    """
+    from abtem.core.utils import safe_equality
+
+    if isinstance(a, (list, tuple)):
+        assert isinstance(b, (list, tuple)), f"{type(a)} vs {type(b)}"
+        assert len(a) == len(b), f"{len(a)} vs {len(b)} array objects"
+        for a_i, b_i in zip(a, b):
+            assert_array_objects_equal(
+                a_i, b_i, rtol=rtol, atol=atol, check_dtype=check_dtype
+            )
+        return
+
+    assert type(a) is type(b), f"{type(a).__name__} vs {type(b).__name__}"
+
+    a = _to_host_array_object(a)
+    b = _to_host_array_object(b)
+
+    assert a.shape == b.shape, f"shape {a.shape} vs {b.shape}"
+    if check_dtype:
+        assert a.dtype == b.dtype, f"dtype {a.dtype} vs {b.dtype}"
+
+    assert len(a.ensemble_axes_metadata) == len(b.ensemble_axes_metadata)
+    for i, (axis_a, axis_b) in enumerate(
+        zip(a.ensemble_axes_metadata, b.ensemble_axes_metadata)
+    ):
+        assert axis_a == axis_b, f"ensemble axis {i}: {axis_a!r} != {axis_b!r}"
+
+    assert len(a.base_axes_metadata) == len(b.base_axes_metadata)
+    for i, (axis_a, axis_b) in enumerate(
+        zip(a.base_axes_metadata, b.base_axes_metadata)
+    ):
+        assert axis_a == axis_b, f"base axis {i}: {axis_a!r} != {axis_b!r}"
+
+    assert set(a.metadata) == set(b.metadata), (
+        f"metadata keys differ: {sorted(set(a.metadata) ^ set(b.metadata))}"
+    )
+    np.testing.assert_equal(a.metadata, b.metadata, err_msg="metadata differs")
+
+    # Everything else the object carries (sampling, energy, extent, ...),
+    # with the array itself excluded: it is compared below, with tolerances.
+    exclude = ("_array", "_metadata", "_ensemble_axes_metadata")
+    exclude += tuple(getattr(a, "_eq_exclude", ()))
+    differing = [
+        key
+        for key in a.__dict__
+        if key not in exclude
+        and not safe_equality(
+            _AttributeHolder(a.__dict__[key]), _AttributeHolder(b.__dict__.get(key))
+        )
+    ]
+    assert not differing, f"attributes differ: {differing}"
+
+    np.testing.assert_allclose(
+        asnumpy(a.array), asnumpy(b.array), rtol=rtol, atol=atol
+    )
+
+
+class _AttributeHolder:
+    """Wraps one attribute so ``safe_equality`` compares just that value."""
+
+    def __init__(self, value):
+        self.value = value
 
 
 def si_cubic_atoms():

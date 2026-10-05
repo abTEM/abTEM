@@ -219,10 +219,11 @@ def test_slit_mask_area_matches_true_rectangle_at_any_angle(angle):
     mask = _slit_detector_mask(
         gpts,
         sampling,
-        center=det._center,
-        angle=det._angle,
-        extent=det._extent,
-        width=det._width,
+        origin=det.offset,
+        angle=det.angle,
+        q_min=det.q_min,
+        q_max=det.q_max,
+        width=det.width,
         fftshift=True,
     )
 

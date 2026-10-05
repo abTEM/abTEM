@@ -8,6 +8,7 @@ from ase import Atoms
 from hypothesis import given
 from utils import devices, gpu, si_cubic_atoms, si_diamond_atoms
 
+from abtem.core.backend import asnumpy
 from abtem.core.grid import disk_meshgrid
 from abtem.integrals import (
     QuadratureProjectionIntegrals,
@@ -790,6 +791,39 @@ def test_threaded_interpolation_matches_serial_kernel():
     )
 
     np.testing.assert_allclose(array_threaded, array_serial, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_finite_projection_smooths_only_the_elements_given_a_sigma(device):
+    """With a smoothing width for Mg only, the finite MgO slice is the smoothed Mg part
+    plus the unsmoothed O part; every element without a width used to be dropped."""
+    import ase.build
+
+    from abtem.parametrizations import LobatoParametrization
+
+    atoms = ase.build.bulk("MgO", "rocksalt", a=4.21, cubic=True)
+    symbols = np.array(atoms.get_chemical_symbols())
+
+    def build(atoms, sigmas):
+        parametrization = LobatoParametrization(sigmas=sigmas)
+        potential = Potential(
+            atoms,
+            sampling=0.1,
+            slice_thickness=2.105,
+            projection="finite",
+            parametrization=parametrization,
+            device=device,
+        )
+        return asnumpy(potential.build(lazy=False).array)
+
+    both = build(atoms, {"Mg": 0.05})
+    magnesium = build(atoms[symbols == "Mg"], {"Mg": 0.05})
+    oxygen = build(atoms[symbols == "O"], {})
+
+    np.testing.assert_allclose(
+        both, magnesium + oxygen, rtol=0, atol=1e-5 * np.abs(both).max()
+    )
+    assert np.abs(oxygen).max() > 0.1 * np.abs(both).max()
 
 
 def test_finite_projection_tolerance_matches_tight_reference():

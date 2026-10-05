@@ -63,6 +63,8 @@ from abtem.core.utils import (
     get_dtype,
     is_broadcastable,
     label_to_index,
+    number_to_tuple,
+    safe_floor_int,
 )
 
 # from abtem.distributions import BaseDistribution
@@ -277,18 +279,34 @@ def _annular_detector_mask(
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if np.any(np.array(offset) != 0.0):
-        offset = (
-            int(round(offset[0] / sampling[0])),
-            int(round(offset[1] / sampling[1])),
-        )
-
-        # if (abs(offset[0]) > bins[0]) or (abs(offset[1]) > bins[1]):
-        #     raise RuntimeError("Detector offset exceeds maximum detected angle.")
-
-        bins = np.roll(bins, offset, (0, 1))
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
 
     if fftshift:
         bins = xp.fft.fftshift(bins)
+
+    return bins
+
+
+def _shift_bins_without_wrap(bins, offset, sampling, fill):
+    """Shift a detector mask or bin map in unshifted FFT layout by ``offset``
+    [same units as ``sampling``], rounded to whole pixels.
+
+    ``np.roll`` alone carries the bins that pass the Nyquist frequency round
+    to the opposite side of the pattern, where they would collect pixels at
+    unrelated frequencies; those positions are set to ``fill`` instead.
+    """
+    xp = get_array_module(bins)
+    shifts = tuple(int(round(o / d)) for o, d in zip(offset, sampling))
+    bins = xp.roll(bins, shifts, (0, 1))
+
+    for axis, (n, shift) in enumerate(zip(bins.shape, shifts)):
+        frequencies = np.round(np.fft.fftfreq(n) * n).astype(int)
+        # position i now holds the bin from frequency index i - shift
+        wrapped = np.flatnonzero(np.roll(frequencies, shift) + shift != frequencies)
+        if len(wrapped):
+            index = [slice(None), slice(None)]
+            index[axis] = xp.asarray(wrapped)
+            bins[tuple(index)] = fill
 
     return bins
 
@@ -508,15 +526,7 @@ def _polar_detector_bins_uncached(
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
     if np.any(np.array(offset) != 0.0):
-        offset = (
-            int(round(offset[0] / sampling[0])),
-            int(round(offset[1] / sampling[1])),
-        )
-
-        # if (abs(offset[0]) > bins[0]) or (abs(offset[1]) > bins[1]):
-        #     raise RuntimeError("Detector offset exceeds maximum detected angle.")
-
-        bins = np.roll(bins, offset, (0, 1))
+        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=-1)
 
     if fftshift:
         bins = np.fft.fftshift(bins)
@@ -538,6 +548,24 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
+def _cupy_safe_coordinates(array, coordinates):
+    """Cast map_coordinates coordinates to the precision CuPy computes in.
+
+    For a float32 (or complex64) input, cupyx's spline kernel takes the
+    starting index from floor((float)c) but the weights from floor(c) on the
+    coordinate's own dtype. A float64 coordinate just below an integer,
+    k - 1e-12, then rounds to k for the index but not for the weights, and
+    the result is the value at node k + 1. Giving the coordinates the
+    kernel's precision keeps both floors consistent. SciPy computes in
+    float64 throughout and is left alone.
+    """
+    xp = get_array_module(array)
+    if xp is np:
+        return coordinates
+    float_dtype = xp.promote_types(array.real.dtype, xp.float32)
+    return coordinates.astype(float_dtype, copy=False)
+
+
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
@@ -548,10 +576,17 @@ def _interpolate_stack(
     positions = positions.reshape((-1, 2))
 
     old_shape = array.shape
+
+    if mode == "wrap":
+        # The periodic padding below only reaches 2 * order pixels beyond the
+        # array, and map_coordinates fills everything past it with zeros, so
+        # positions further outside must first be wrapped into the array.
+        positions = positions % xp.asarray(old_shape[-2:], dtype=positions.dtype)
+
     array = array.reshape((-1,) + array.shape[-2:])
     array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
-    positions = positions + 2 * order
+    positions = _cupy_safe_coordinates(array, positions + 2 * order)
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
@@ -706,23 +741,33 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def normalize_ensemble(self, scale: str = "max", shift: str = "mean"):
         """
-        Normalize the ensemble by shifting ad scaling each member.
+        Normalize the ensemble by shifting and scaling each member.
+
+        Each member (a single measurement, i.e. one entry along the ensemble
+        axes) is shifted by `shift` and divided by `scale`, both reduced over
+        the member's base axes and evaluated on the unshifted member.
 
         Parameters
         ----------
         scale : {'max', 'min', 'sum', 'mean', 'ptp'}
-        shift : {'max', 'min', 'sum', 'mean', 'ptp'}
+        shift : {'max', 'min', 'sum', 'mean', 'ptp', 'none'}
 
         Returns
         -------
         normalized_measurements : BaseMeasurements or subclass of _BaseMeasurement
         """
+        # Reduce over all base axes: axis=-1 alone normalised each *row* of a
+        # 2-D measurement (e.g. Images) separately rather than each member.
+        base_axes = tuple(range(-len(self.base_shape), 0))
+
         if shift != "none":
-            array = self.array - getattr(np, shift)(self.array, axis=-1, keepdims=True)
+            array = self.array - getattr(np, shift)(
+                self.array, axis=base_axes, keepdims=True
+            )
         else:
             array = self.array
 
-        array = array / getattr(np, scale)(self.array, axis=-1, keepdims=True)
+        array = array / getattr(np, scale)(self.array, axis=base_axes, keepdims=True)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 
@@ -736,17 +781,33 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     ) -> Self:
         pass
 
-    def reduce_ensemble(self) -> Self:
+    def reduce_ensemble(self, axis: Optional[int | tuple[int, ...]] = None) -> Self:
         """
-        Calculates the mean of an ensemble measurement (e.g. of frozen phonon
-        configurations).
+        Calculates the probability-weighted mean of an ensemble measurement.
 
+        Each ensemble axis may carry probability weights ``p_i`` in its metadata
+        (set from the weights of the distribution that generated it, e.g.
+        :func:`abtem.distributions.gaussian`); the reduction over the axis is then
+        ``Σ_i p_i I_i / Σ_i p_i``, where ``I_i`` is the measurement for the i'th
+        ensemble member. Axes without weights, such as frozen phonon configurations,
+        are reduced with a plain mean. Over several axes, the weights are the outer
+        product of the per-axis weights.
+
+        Parameters
+        ----------
+        axis : int or tuple of int, optional
+            The ensemble axes to reduce. By default, all axes flagged for ensemble
+            averaging (``ensemble_mean=True``) are reduced. Pass the axis explicitly
+            to reduce an ensemble kept with ``ensemble_mean=False``.
         """
-        axis = tuple(
-            i
-            for i, axis in enumerate(self.axes_metadata)
-            if hasattr(axis, "_ensemble_mean") and axis._ensemble_mean
-        )
+        if axis is None:
+            axis = tuple(
+                i
+                for i, axis_metadata in enumerate(self.axes_metadata)
+                if getattr(axis_metadata, "_ensemble_mean", False)
+            )
+        else:
+            axis = number_to_tuple(axis)
 
         if len(axis) == 0:
             return self
@@ -754,7 +815,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         if np.iscomplexobj(self.array):
             warnings.warn("a complex reducing a complex measurement")
 
-        return self.mean(axis=axis)
+        return self._weighted_ensemble_mean(axis)
 
     def _apply_element_wise_func(
         self, func: Callable | str, label: str, units: str
@@ -1282,9 +1343,16 @@ class _BaseMeasurement2D(BaseMeasurements):
             direction = direction / xp.linalg.norm(direction)
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            # The offsets are spaced by min(sampling) along the perpendicular
+            # direction in physical units (Å) and only then converted to
+            # pixels (`positions` is in pixels): applying the physical unit
+            # vector directly in pixel space tilts and stretches the offsets
+            # whenever the sampling is anisotropic.
             perpendicular_positions = (
                 xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                * min(self.sampling)
                 * perpendicular_direction[None]
+                / xp.asarray(self.sampling)
             )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
@@ -2000,8 +2068,8 @@ class Images(_BaseMeasurement2D):
     @property
     def coordinates(self) -> tuple[np.ndarray, np.ndarray]:
         """Coordinates of pixels in `x` and `y` [Å]."""
-        x = np.linspace(0.0, self.shape[-2] * self.sampling[0], self.shape[-2])
-        y = np.linspace(0.0, self.shape[-1] * self.sampling[1], self.shape[-1])
+        x = np.arange(self.shape[-2]) * self.sampling[0]
+        y = np.arange(self.shape[-1]) * self.sampling[1]
         return x, y
 
     @property
@@ -2360,6 +2428,7 @@ class Images(_BaseMeasurement2D):
         return DiffractionPatterns(
             array=array,
             sampling=sampling,
+            fftshift=True,  # _diffractograms fftshifts
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
@@ -2519,6 +2588,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         new_points = xp.linspace(3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint)[
             None
         ]
+        new_points = _cupy_safe_coordinates(array, new_points)
 
         # Follow the input dtype: hardcoding float32 downgrades a float64
         # profile and makes map_coordinates reject a complex one outright
@@ -3413,6 +3483,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                 sigma=padded_sigma,
                 mode="wrap",
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
@@ -3427,9 +3498,8 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
         )
 
         if measurements.is_lazy:
-            # No explicit `boundary=` here, matching the xp is np branch
-            # above (and the pre-existing behavior of this lazy path), which
-            # also lets dask's own default apply at true array edges.
+            # `boundary="periodic"` makes the overlap wrap at the true array
+            # edges, matching the eager path's `mode="wrap"`.
             array = measurements.array.map_overlap(
                 functools.partial(
                     _apply_convolve_2d_on_axes,
@@ -3440,6 +3510,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
                     cval=0.0,
                 ),
                 depth=depth,
+                boundary="periodic",
                 meta=xp.array((), dtype=measurements.array.dtype),
             )
         else:
@@ -3998,18 +4069,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
         """Scattering angle coordinates [mrad]."""
 
+        # Derived from `coordinates` so the storage order (shifted or
+        # unshifted, even or odd n) is handled in one place.
         xp = get_array_module(self.array)
-        limits = self.angular_limits
-        alpha_x = xp.linspace(
-            limits[0][0], limits[0][1], self.shape[-2], dtype=xp.float32
-        )
-        alpha_y = xp.linspace(
-            limits[1][0], limits[1][1], self.shape[-1], dtype=xp.float32
-        )
-        if self.fftshift:
-            return alpha_x, alpha_y
-        else:
-            return np.fft.fftshift(alpha_x), np.fft.fftshift(alpha_y)
+        wavelength = energy2wavelength(self._get_energy())
+        k_x, k_y = self.coordinates
+        alpha_x = xp.asarray(k_x, dtype=get_dtype()) * (wavelength * 1e3)
+        alpha_y = xp.asarray(k_y, dtype=get_dtype()) * (wavelength * 1e3)
+        return alpha_x, alpha_y
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
@@ -4399,7 +4466,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Outer integration limit of the bins [mrad]. If not specified, this is set to
             be the maximum detected angle of the diffraction pattern.
         rotation : float
-            Rotation of the bins around the origin [mrad] (default is 0.0).
+            Rotation of the bins around the origin [rad] (default is 0.0).
         offset : two float
             Offset of the bins from the origin in `x` and `y` [mrad].
             Default is (0.0, 0.0).
@@ -4487,7 +4554,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad]. Default is 0.0.
         outer : float, optional
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern.
+            be the maximum detected angle of the diffraction pattern. Every bin is
+            ``step_size`` wide, so if ``outer - inner`` is not a multiple of
+            ``step_size`` the trailing partial step is dropped and the last bin ends
+            at ``inner + n * step_size``.
 
         Returns
         -------
@@ -4498,8 +4568,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if outer is None:
             outer = min(self.max_angles)
 
-        nbins_radial = int((outer - inner) / step_size)
-        return self.polar_binning(nbins_radial, 1, inner, outer)
+        # Bins are step_size wide, as documented: the last partial step (if
+        # outer - inner is not a multiple of step_size) is dropped rather than
+        # spread over the others.
+        nbins_radial = safe_floor_int((outer - inner) / step_size)
+        return self.polar_binning(
+            nbins_radial, 1, inner, inner + nbins_radial * step_size
+        )
 
     @staticmethod
     def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):
@@ -4721,7 +4796,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
-    def _crop(array: np.ndarray, gpts: tuple[int, int]):
+    def _crop(array: np.ndarray, gpts: tuple[int, int], fftshift: bool = True):
+        # fft_crop keeps the corners of an *unshifted* spectrum (zero
+        # frequency at index 0), so only an fftshifted array needs shifting
+        # there and back.
+        if not fftshift:
+            return fft_crop(array, new_shape=gpts)
         xp = get_array_module(array)
         array = xp.fft.fftshift(
             fft_crop(xp.fft.ifftshift(array, axes=(-2, -1)), new_shape=gpts),
@@ -4780,11 +4860,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             array = self.array.map_blocks(
                 self._crop,
                 gpts=gpts,
+                fftshift=self.fftshift,
                 chunks=self.array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:
-            array = self._crop(self.array, gpts=gpts)
+            array = self._crop(self.array, gpts=gpts, fftshift=self.fftshift)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -5208,6 +5289,17 @@ class PolarMeasurements(BaseMeasurements):
         """
         Integrate polar regions to produce an image or line profiles.
 
+        Radial bin ``i`` spans ``[radial_offset + i * radial_sampling,
+        radial_offset + (i + 1) * radial_sampling)`` and azimuthal bin ``j`` spans
+        ``[azimuthal_offset + j * azimuthal_sampling,
+        azimuthal_offset + (j + 1) * azimuthal_sampling)``, as binned by
+        :meth:`DiffractionPatterns.polar_binning`. A bin is included if its *center*
+        lies in the half-open interval ``[lower, upper)`` of the limits. Limits on
+        bin edges therefore select exactly the bins between them, and a limit
+        inside a bin includes that bin if it covers at least half of it. Azimuthal
+        limits are periodic in 2 pi, so e.g. ``(-pi / 4, pi / 4)`` wraps around
+        0; limits spanning 2 pi or more include every azimuthal bin.
+
         Parameters
         ----------
         radial_limits : tuple of float
@@ -5236,25 +5328,36 @@ class PolarMeasurements(BaseMeasurements):
             if radial_limits is None:
                 radial_slice = slice(None)
             else:
-                inner_index = int(
-                    (radial_limits[0] - self.radial_offset) / self.radial_sampling
+                # Bin i is included iff its center, radial_offset + (i + 0.5) *
+                # radial_sampling, lies in [inner, outer).
+                inner_index, outer_index = (
+                    int(np.ceil((r - self.radial_offset) / self.radial_sampling - 0.5))
+                    for r in radial_limits
                 )
-                outer_index = int(
-                    (radial_limits[1] - self.radial_offset) / self.radial_sampling
-                )
-                radial_slice = slice(inner_index, outer_index)
+                radial_slice = slice(max(inner_index, 0), max(outer_index, 0))
 
                 if outer_index > self.shape[-2]:
                     raise RuntimeError("Integration limit exceeded.")
 
             if azimuthal_limits is None:
-                azimuthal_slice = slice(None)
+                azimuthal_indices = slice(None)
             else:
-                left_index = int(azimuthal_limits[0] / self.radial_sampling)
-                right_index = int(azimuthal_limits[1] / self.radial_sampling)
-                azimuthal_slice = slice(left_index, right_index)
+                # Bin j is included iff its center, azimuthal_offset + (j + 0.5) *
+                # azimuthal_sampling, lies in [lower, upper) modulo 2 pi.
+                lower, upper = azimuthal_limits
+                centers = (
+                    self.azimuthal_offset
+                    + (np.arange(self.shape[-1]) + 0.5) * self.azimuthal_sampling
+                )
+                if upper - lower >= 2 * np.pi:
+                    included = np.ones(len(centers), dtype=bool)
+                else:
+                    included = (centers - lower) % (2 * np.pi) < upper - lower
+                azimuthal_indices = [int(j) for j in np.flatnonzero(included)]
 
-            array = self.array[..., radial_slice, azimuthal_slice].sum(axis=(-2, -1))
+            array = self.array[..., radial_slice, :][..., azimuthal_indices].sum(
+                axis=(-2, -1)
+            )
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
