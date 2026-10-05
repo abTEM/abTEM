@@ -524,7 +524,11 @@ def validate_potential(
     #    raise ValueError()
 
     if waves is not None and potential is not None:
-        potential.grid.match(waves)
+        if isinstance(potential, ArrayObject):
+            # the grid of a built potential belongs to its data
+            potential.grid.check_match(waves)
+        else:
+            potential.grid.match(waves)
 
     return potential
 
@@ -1440,7 +1444,9 @@ class FieldArray(BaseField, ArrayObject):
         self._exit_planes = _validate_exit_planes(
             exit_planes, len(self._slice_thickness)
         )
-        self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling)
+        self._grid = Grid(
+            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
+        )
 
         super().__init__(
             array=array,
