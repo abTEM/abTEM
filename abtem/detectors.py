@@ -22,7 +22,7 @@ from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
-from abtem.core.utils import cos_sin_deg, get_dtype
+from abtem.core.utils import cos_sin_deg, get_dtype, safe_floor_int
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -101,7 +101,9 @@ def validate_detectors(
     Returns
     -------
     list of BaseDetector
-        A list of validated detectors.
+        A list of validated detectors. With `waves`, every detector that matches
+        itself to the waves (e.g. by auto-sizing its outer angle) is returned as a
+        matched copy, and the detectors that were passed in are not modified.
 
     Raises
     ------
@@ -121,9 +123,16 @@ def validate_detectors(
         raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
     if waves is not None:
+        matched = []
         for detector in detectors:
             if hasattr(detector, "_match_waves"):
+                # Matching writes the waves' cutoff angle onto the detector. Done on
+                # a copy, the caller's detector keeps no outer angle that a later,
+                # unrelated run (another energy, grid or algorithm) would reuse.
+                detector = detector.copy()
                 detector._match_waves(waves)
+            matched.append(detector)
+        detectors = matched
 
     return detectors
 
@@ -143,6 +152,8 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
     """
+
+    _splits_energy_ensembles = True
 
     def __init__(self, to_cpu: bool = True, url: Optional[str] = None):
         self._to_cpu = to_cpu
@@ -271,6 +282,11 @@ class _AbstractRadialDetector(BaseDetector):
         return self._rotation
 
     @property
+    def offset(self) -> tuple[float, float]:
+        """Offset of the detector centre from the origin in `x` and `y` [mrad]."""
+        return self._offset
+
+    @property
     @abstractmethod
     def radial_sampling(self):
         """Spacing between the radial detector bins [mrad]."""
@@ -327,14 +343,36 @@ class _AbstractRadialDetector(BaseDetector):
         )
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
-        inner = self.inner
+        return self.inner, self._binned_outer(self._outer_for(waves))
 
-        if self.outer is not None:
-            outer = self.outer
-        else:
-            outer = np.floor(min(waves.cutoff_angles))
+    def _binned_outer(self, outer: float) -> float:
+        """Outer edge of the outermost bin for a requested ``outer`` [mrad]."""
+        return outer
 
-        return inner, outer
+    def _nbins_within(self, outer: float) -> int:
+        """Number of radial bins for a requested ``outer`` [mrad]."""
+        return self.nbins_radial
+
+    def _outer_for(self, waves: WavesType) -> float:
+        """The ``outer`` used to detect ``waves`` [mrad]: the given one, or
+        else the antialias cutoff angle of ``waves`` (see `_match_waves`)."""
+        if self._outer_is_explicit:
+            return self.outer
+
+        if any(
+            isinstance(axis, EnergyAxis) and len(axis.values) > 1
+            for axis in waves.ensemble_axes_metadata
+        ):
+            raise RuntimeError(
+                f"{type(self).__name__} cannot auto-size its outer angle for "
+                "a multi-energy ensemble: each energy has its own antialias "
+                "cutoff angle (it scales with wavelength at fixed grid), so "
+                "no single radial axis fits every member. Pass an explicit "
+                "outer= (a value valid for every member), or run one energy "
+                "at a time and combine the results yourself."
+            )
+
+        return min(waves.cutoff_angles)
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         """
@@ -351,7 +389,21 @@ class _AbstractRadialDetector(BaseDetector):
         """
         inner, outer = self.angular_limits(waves)
 
-        measurement = waves.diffraction_patterns(max_angle=outer, parity="same")
+        # The pattern is cropped about k=0 and polar_binning then shifts the
+        # bins by the offset, so the crop reaches `outer` beyond the offset
+        # centre, plus a pixel for the nearest-pixel rounding of the offset.
+        # A detector reaching past the grid uses the full pattern: the bins
+        # shifted beyond the Nyquist frequency are dropped, not wrapped round.
+        max_angle: float | str = outer
+        if np.any(np.array(self._offset) != 0.0):
+            max_angle = (
+                outer + float(np.hypot(*self._offset)) + max(waves.angular_sampling)
+            )
+            gpts = waves._gpts_within_angle(max_angle, parity="same")
+            if any(g >= n for g, n in zip(gpts, waves._valid_gpts)):
+                max_angle = "full"
+
+        measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")
 
         measurement = measurement.polar_binning(
             nbins_radial=self.nbins_radial,
@@ -367,6 +419,19 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement._eager_array
 
+    def _match_ensemble(self, waves: WavesType) -> _AbstractRadialDetector:
+        """Refuse an auto-sized outer angle of a detector with radial bins for a
+        multi-energy ensemble.
+
+        Each energy is detected on its own, so without this an auto-sized outer
+        angle would follow each energy's cutoff (see `_match_waves`).
+        """
+        from abtem.array import _multi_energy_axis
+
+        if _multi_energy_axis(waves) is not None:
+            self._match_waves(waves)
+        return self
+
     def _match_waves(self, waves: WavesType) -> None:
         """Auto-size ``outer`` from ``waves``, unless the user gave one.
 
@@ -379,34 +444,23 @@ class _AbstractRadialDetector(BaseDetector):
         makes each call self-consistent, at the cost of being a no-op for
         the common case (repeated calls at one energy already agree).
 
-        A multi-member energy ensemble cannot be auto-sized at all: each
-        member has its own antialias cutoff angle (`waves.cutoff_angles`,
-        which scales with wavelength at a fixed grid -- it is not the
-        semiangle_cutoff/aperture, which does not enter it at all), so a
-        single radial axis cannot fit all of them (see the module docstring
+        A detector with radial bins (`FlexibleAnnularDetector`,
+        `SegmentedDetector`) cannot be auto-sized for a multi-member energy
+        ensemble at all: each member has its own antialias cutoff angle
+        (`waves.cutoff_angles`, which scales with wavelength at a fixed grid --
+        it is not the semiangle_cutoff/aperture, which does not enter it at all),
+        so a single radial axis cannot fit all of them (see the module docstring
         analogue: this is the `FlexibleAnnularDetector` gotcha; unlike a
         single-value cutoff, the two shortest-first / longest-first energy
         orders would otherwise silently size the bins differently). Refuse
         it instead of picking one member's cutoff (or lazy's own, different,
-        convention) silently.
+        convention) silently. `AnnularDetector` has no radial bins to share and
+        sizes an auto outer angle per energy instead (see its `_match_ensemble`).
         """
         if self._outer_is_explicit:
             return
 
-        if any(
-            isinstance(axis, EnergyAxis) and len(axis.values) > 1
-            for axis in waves.ensemble_axes_metadata
-        ):
-            raise RuntimeError(
-                f"{type(self).__name__} cannot auto-size its outer angle for "
-                "a multi-energy ensemble: each energy has its own antialias "
-                "cutoff angle (it scales with wavelength at fixed grid), so "
-                "no single radial axis fits every member. Pass an explicit "
-                "outer= (a value valid for every member), or run one energy "
-                "at a time and combine the results yourself."
-            )
-
-        self._outer = min(waves.cutoff_angles)
+        self._outer = self._outer_for(waves)
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
         """
@@ -425,9 +479,23 @@ class _AbstractRadialDetector(BaseDetector):
         assert isinstance(measurements, PolarMeasurements)
         return measurements
 
+    def _region_limits(self, waves: Optional[BaseWaves] = None):
+        """(inner, outer, nbins_radial) of the bins that detecting ``waves``
+        uses, or that the detector's own ``outer`` gives without waves."""
+        if waves is not None:
+            inner, outer = self.angular_limits(waves)
+        elif self.outer is None:
+            raise ValueError("provide the waves or the outer limit of the detector")
+        else:
+            inner, outer = self.inner, self._binned_outer(self.outer)
+        return inner, outer, self._nbins_within(outer)
+
     def get_detector_regions(self, waves: Optional[BaseWaves] = None):
         """
         Get the polar detector regions as a polar measurement.
+
+        The regions are labelled on polar axes about the detector centre; a
+        detector ``offset`` is not represented (``show`` draws it).
 
         Parameters
         ----------
@@ -438,9 +506,10 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         detector_region : PolarMeasurements
         """
+        inner, outer, nbins_radial = self._region_limits(waves)
 
-        bins = np.arange(0, self.nbins_radial * self.nbins_azimuthal)
-        bins = bins.reshape((self.nbins_radial, self.nbins_azimuthal))
+        bins = np.arange(0, nbins_radial * self.nbins_azimuthal)
+        bins = bins.reshape((nbins_radial, self.nbins_azimuthal))
 
         if waves is not None:
             metadata = copy(waves.metadata)
@@ -451,9 +520,9 @@ class _AbstractRadialDetector(BaseDetector):
 
         polar_measurements = PolarMeasurements(
             bins,
-            radial_sampling=self.radial_sampling,
+            radial_sampling=(outer - inner) / nbins_radial,
             azimuthal_sampling=self.azimuthal_sampling,
-            radial_offset=self.inner,
+            radial_offset=inner,
             metadata=metadata,
             azimuthal_offset=self._rotation,
         )
@@ -471,6 +540,9 @@ class _AbstractRadialDetector(BaseDetector):
         """
         Show the segmented detector regions as a polar plot.
 
+        The regions are drawn about the detector centre, including any
+        ``offset``, out to the bins that detecting the waves would use.
+
         Parameters
         ----------
         waves : BaseWaves
@@ -478,7 +550,8 @@ class _AbstractRadialDetector(BaseDetector):
         gpts : two int, optional
             Number of grid points describing the wave functions to be detected.
         sampling : two float, optional
-            Lateral sampling of the wave functions to be detected [1 / Å].
+            Lateral sampling of the wave functions to be detected [Å]. If not
+            given, the drawn grid extends 10 % beyond the detector.
         energy : float, optional
             Electron energy of the wave functions to be detected [eV].
         kwargs :
@@ -494,68 +567,72 @@ class _AbstractRadialDetector(BaseDetector):
                 raise ValueError(
                     "provide either waves or 'gpts', 'sampling' and 'energy'"
                 )
-            segmented_regions = self.get_detector_regions(waves)
-            diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
             energy = _energy_from_waves(waves)
+            if energy is None:
+                raise ValueError(
+                    "cannot show the detector for a multi-energy ensemble; "
+                    "select a single energy"
+                )
+            gpts = tuple(waves.gpts)
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
+        elif gpts is None:
+            gpts = 1024
+
+        if not isinstance(gpts, tuple):
+            gpts = (int(gpts),) * 2
+
+        inner, outer, nbins_radial = self._region_limits(waves)
+        offset = self._offset if self._offset is not None else (0.0, 0.0)
+        wavelength = energy2wavelength(energy) * 1e3
+
+        if sampling is None:
+            # the grid reaches 10 % beyond the outermost angle the region
+            # covers, about its (possibly offset) centre
+            reach = 1.1 * (outer + float(np.hypot(*offset)))
+            angular_sampling = (2 * reach / gpts[0], 2 * reach / gpts[1])
+            reciprocal_space_sampling = (
+                angular_sampling[0] / wavelength,
+                angular_sampling[1] / wavelength,
+            )
         else:
-            if gpts is None:
-                gpts = 1024
+            if not isinstance(sampling, tuple):
+                sampling = (float(sampling),) * 2
 
-            if not isinstance(gpts, tuple):
-                assert isinstance(gpts, int)
-                gpts = (gpts,) * 2
-
-            if sampling is None:
-                assert isinstance(self.outer, float)
-                angular_sampling = (
-                    self.outer / float(gpts[0] * 2 * 1.1),
-                    self.outer / float(gpts[1] * 2 * 1.1),
-                )
-                reciprocal_space_sampling = (
-                    angular_sampling[0] / (energy2wavelength(energy) * 1e3),
-                    angular_sampling[1] / (energy2wavelength(energy) * 1e3),
-                )
-            else:
-                if not isinstance(sampling, tuple):
-                    assert isinstance(sampling, float)
-                    sampling = (sampling,) * 2
-
-                reciprocal_space_sampling = (
-                    1 / (gpts[0] * sampling[0]),
-                    1 / (gpts[1] * sampling[1]),
-                )
-                angular_sampling = (
-                    reciprocal_space_sampling[0] * energy2wavelength(energy) * 1e3,
-                    reciprocal_space_sampling[1] * energy2wavelength(energy) * 1e3,
-                )
-
-            if self.outer is None:
-                raise ValueError("provide the outer limit of the detector")
-
-            regions = _polar_detector_bins(
-                gpts=gpts,
-                sampling=angular_sampling,
-                inner=self.inner,
-                outer=self.outer,
-                nbins_radial=self.nbins_radial,
-                nbins_azimuthal=self.nbins_azimuthal,
-                fftshift=True,
-                rotation=self.rotation,
-                offset=(0.0, 0.0),
-                return_indices=False,
+            reciprocal_space_sampling = (
+                1 / (gpts[0] * sampling[0]),
+                1 / (gpts[1] * sampling[1]),
             )
-            assert isinstance(regions, np.ndarray)
-
-            regions = regions.astype(get_dtype(complex=False))
-            regions[..., regions < 0] = np.nan
-
-            diffraction_patterns = DiffractionPatterns(
-                regions, sampling=reciprocal_space_sampling, metadata={"energy": energy}
+            angular_sampling = (
+                reciprocal_space_sampling[0] * wavelength,
+                reciprocal_space_sampling[1] * wavelength,
             )
 
-        n_bins_radial = self.nbins_radial
+        regions = _polar_detector_bins(
+            gpts=gpts,
+            sampling=angular_sampling,
+            inner=inner,
+            outer=outer,
+            nbins_radial=nbins_radial,
+            nbins_azimuthal=self.nbins_azimuthal,
+            fftshift=True,
+            rotation=self.rotation,
+            offset=offset,
+            return_indices=False,
+        )
+        assert isinstance(regions, np.ndarray)
+
+        regions = regions.astype(get_dtype(complex=False))
+        regions[..., regions < 0] = np.nan
+
+        diffraction_patterns = DiffractionPatterns(
+            regions,
+            sampling=reciprocal_space_sampling,
+            fftshift=True,
+            metadata={"energy": energy},
+        )
+
+        n_bins_radial = nbins_radial
         n_bins_azimuthal = self.nbins_azimuthal
         num_colors = n_bins_radial * n_bins_azimuthal
 
@@ -646,11 +723,6 @@ class AnnularDetector(_AbstractRadialDetector):
         self._outer_is_explicit = value is not None
 
     @property
-    def offset(self) -> tuple[float, float]:
-        """Center offset of the annular integration region [mrad]."""
-        return self._offset
-
-    @property
     def nbins_radial(self):
         return 1
 
@@ -727,6 +799,12 @@ class AnnularDetector(_AbstractRadialDetector):
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
+    def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
+        # An auto-sized outer angle follows each energy's cutoff, as a separate
+        # run of each energy would; the result has no radial axis to share. (The
+        # metadata of an AnnularDetector result never records an outer angle.)
+        return self
+
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
 
@@ -756,14 +834,26 @@ class AnnularDetector(_AbstractRadialDetector):
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
+        diffraction_patterns._check_integration_limits(self.inner, outer)
         offset = self.offset if self.offset is not None else (0.0, 0.0)
-        measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer, offset=offset,
+
+        # Integrated over the pattern axes only, so the result keeps the waves'
+        # own axis order, the one every _calculate_new_array returns;
+        # ArrayObject.apply_transform moves the scan axes to the end, as
+        # _out_ensemble_source declares, once for eager and lazy results alike.
+        intensity = DiffractionPatterns._integrate_fourier_space(
+            diffraction_patterns._eager_array,
+            sampling=diffraction_patterns.angular_sampling,
+            inner=self.inner,
+            outer=outer,
+            fftshift=False,
+            offset=offset,
         )
 
-        if self.to_cpu and hasattr(measurement, "to_cpu"):
-            measurement = measurement.to_cpu()
-        return measurement._eager_array
+        if self.to_cpu and hasattr(intensity, "get"):
+            intensity = intensity.get()
+
+        return intensity
 
     def detect(
         self, waves: WavesType
@@ -833,7 +923,10 @@ class AnnularDetector(_AbstractRadialDetector):
             "units": "%",
         }
         diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=reciprocal_space_sampling
+            array,
+            metadata=metadata,
+            sampling=reciprocal_space_sampling,
+            fftshift=fftshift,
         )
         return diffraction_patterns
 
@@ -841,22 +934,29 @@ class AnnularDetector(_AbstractRadialDetector):
 def _slit_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
-    center: tuple[float, float],
+    origin: tuple[float, float],
     angle: float,
-    extent: float,
+    q_min: float,
+    q_max: float,
     width: float,
     fftshift: bool = False,
     xp=np,
 ) -> np.ndarray:
     """Boolean mask for a rectangular slit in reciprocal space.
 
-    The rectangle is centred at *center*, with its long axis (full length
-    *extent*) rotated by *angle* from kx and full perpendicular width
-    *width*. Membership is tested by rotating the grid into the slit's local
-    frame (long axis along local x) rather than testing against an
-    axis-aligned bounding box, so this is correct for any *angle* — an
-    axis-aligned box only coincides with the true rotated rectangle when
-    *angle* is a multiple of 90 degrees.
+    The slit's long axis starts at the sweep *origin* and points along
+    ``d = (cos(angle), sin(angle))``; a pixel at ``k`` is inside when
+
+        q_min <= (k - origin) . d < q_max   and
+        -width / 2 <= (k - origin) . n < width / 2,   n = (-sin, cos).
+
+    Membership is tested in this frame, relative to the origin, rather than
+    to the slit centre: a pixel at the origin has local coordinates exactly
+    zero, so with ``q_min=0`` the q = 0 pixel (the direct beam, for the
+    default origin) is always inside. In the centre frame it sat on the
+    ``-extent / 2`` edge up to rounding, and was dropped at some angles.
+    Testing the rotated frame, not an axis-aligned bounding box, keeps the
+    mask correct for any *angle*.
 
     Parameters
     ----------
@@ -864,12 +964,12 @@ def _slit_detector_mask(
         Grid points.
     sampling : (float, float)
         Angular sampling [mrad/pixel].
-    center : (kx, ky)
-        Centre of the slit rectangle [mrad].
+    origin : (kx, ky)
+        Origin of the q-axis sweep [mrad].
     angle : float
         Rotation of the long axis [degrees, CCW from kx].
-    extent : float
-        Full length of the slit along its long axis [mrad].
+    q_min, q_max : float
+        Range of the long axis from the origin [mrad].
     width : float
         Full width of the slit perpendicular to its long axis [mrad].
     fftshift : bool
@@ -884,22 +984,19 @@ def _slit_detector_mask(
         False,
         xp,
     )
-    kx2d = kx[:, None] * xp.ones((1, gpts[1]))
-    ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
+    dx = kx[:, None] - origin[0]
+    dy = ky[None, :] - origin[1]
 
     cos_a, sin_a = cos_sin_deg(angle)
-    dx = kx2d - center[0]
-    dy = ky2d - center[1]
-    local_x = dx * cos_a + dy * sin_a
-    local_y = -dx * sin_a + dy * cos_a
+    along = dx * cos_a + dy * sin_a
+    across = -dx * sin_a + dy * cos_a
 
-    half_extent = extent / 2.0
     half_width = width / 2.0
     mask = (
-        (local_x >= -half_extent)
-        & (local_x < half_extent)
-        & (local_y >= -half_width)
-        & (local_y < half_width)
+        (along >= q_min)
+        & (along < q_max)
+        & (across >= -half_width)
+        & (across < half_width)
     )
 
     if fftshift:
@@ -1050,6 +1147,7 @@ class SpectralSlitDetector(BaseDetector):
                 )
             if len(corners) != 4:
                 raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
+            self._from_corners = True
             self._corners = tuple(float(c) for c in corners)
             # offset = start of q-sweep (left edge, ky-centre), consistent with
             # geometry mode where offset is the q=0 origin.
@@ -1061,10 +1159,7 @@ class SpectralSlitDetector(BaseDetector):
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
             self._q_min = 0.0
-            self._center = (
-                (corners[0] + corners[1]) / 2.0,
-                (corners[2] + corners[3]) / 2.0,
-            )
+            self._q_max = self._extent
         else:
             if q_max is None or width is None:
                 raise ValueError("Provide both 'q_max' and 'width' when not using 'corners'.")
@@ -1072,7 +1167,9 @@ class SpectralSlitDetector(BaseDetector):
             q_max = float(q_max)
             if q_min < 0 or q_min >= q_max:
                 raise ValueError(f"q_min must satisfy 0 <= q_min < q_max, got q_min={q_min}, q_max={q_max}.")
+            self._from_corners = False
             self._q_min = q_min
+            self._q_max = q_max
             self._offset = tuple(float(v) for v in offset)
             self._angle = float(angle)
             # Physical slit extent and centre: spans from q_min to q_max along
@@ -1084,9 +1181,8 @@ class SpectralSlitDetector(BaseDetector):
             )
             self._extent = q_max - q_min
             self._width = float(width)
-            self._center = slit_center
             # AABB retained only for introspection/display via the `corners`
-            # property; the detector mask itself uses _center/_angle directly
+            # property; the detector mask itself tests the rotated frame
             # (see _slit_detector_mask) so it is correct for any angle.
             self._corners = _corners_from_slit_params(
                 slit_center, self._angle, self._extent, self._width
@@ -1132,6 +1228,22 @@ class SpectralSlitDetector(BaseDetector):
     def corners(self) -> tuple[float, float, float, float]:
         """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
         return self._corners
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor takes the geometry either as corners or as the slit
+        # parameters, not both, so a copy (and every lazy block) is rebuilt from
+        # the form it was given in. A detector that did not record its form
+        # (one pickled by an earlier version) is rebuilt from the slit parameters,
+        # which describe the same rectangle in both forms.
+        if getattr(self, "_from_corners", False):
+            exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
+        else:
+            exclude = exclude + ("corners",)
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "q_max" in kwargs:
+            # as given, not q_min + extent, which can differ in the last bit
+            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+        return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
         """Radial bounds [mrad] of the acceptance region, for grid-sufficiency
@@ -1199,21 +1311,25 @@ class SpectralSlitDetector(BaseDetector):
     ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
         return (_scanned_measurement_type(waves),)
 
-    def _get_detector_region_array(
-        self, waves, fftshift: bool = True
-    ) -> np.ndarray:
-        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
-        xp = np
+    def _mask(self, gpts, sampling, fftshift: bool = False, xp=np) -> np.ndarray:
         return _slit_detector_mask(
             gpts=gpts,
-            sampling=angular_sampling,
-            center=self._center,
+            sampling=sampling,
+            origin=self._offset,
             angle=self._angle,
-            extent=self._extent,
+            q_min=self.q_min,
+            # as given, like _copy_kwargs: q_min + extent can differ in the last bit
+            q_max=getattr(self, "_q_max", self.q_max),
             width=self._width,
             fftshift=fftshift,
             xp=xp,
         )
+
+    def _get_detector_region_array(
+        self, waves, fftshift: bool = True
+    ) -> np.ndarray:
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+        return self._mask(gpts, angular_sampling, fftshift=fftshift)
 
     def get_detector_region(self, waves, fftshift: bool = True):
         """
@@ -1234,7 +1350,10 @@ class SpectralSlitDetector(BaseDetector):
             "units": "%",
         }
         return DiffractionPatterns(
-            array, metadata=metadata, sampling=reciprocal_space_sampling
+            array,
+            metadata=metadata,
+            sampling=reciprocal_space_sampling,
+            fftshift=fftshift,
         )
 
     @staticmethod
@@ -1361,16 +1480,7 @@ class SpectralSlitDetector(BaseDetector):
         gpts = diffraction_patterns.shape[-2:]
         sampling = diffraction_patterns.angular_sampling
 
-        mask = _slit_detector_mask(
-            gpts=gpts,
-            sampling=sampling,
-            center=self._center,
-            angle=self._angle,
-            extent=self._extent,
-            width=self._width,
-            fftshift=False,
-            xp=xp,
-        )
+        mask = self._mask(gpts, sampling, xp=xp)
         intensity = xp.sum(
             diffraction_patterns._eager_array * mask, axis=(-2, -1)
         )
@@ -1471,6 +1581,14 @@ class SpectralAnnularDetector(AnnularDetector):
         super().__init__(
             inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
         )
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The constructor's `angle` is the sweep angle; a copy (and every lazy
+        # block) is rebuilt from it.
+        kwargs = super()._copy_kwargs(exclude=exclude + ("angle",), cls=cls)
+        if "angle" not in exclude:
+            kwargs["angle"] = self.sweep_angle
+        return kwargs
 
     @property
     def q_min(self) -> float:
@@ -1593,7 +1711,11 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     inner : float, optional
         Inner integration limit of the bins [mrad].
     outer : float, optional
-        Outer integration limit of the bins [mrad].
+        Outer integration limit of the bins [mrad]. Every bin is ``step_size``
+        wide, so if ``outer - inner`` is not a multiple of ``step_size`` the
+        trailing partial step is dropped and the last bin ends at
+        ``inner + n * step_size``. If not given, the antialias cutoff angle of
+        the detected waves is used.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective
@@ -1623,13 +1745,22 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
             url=url,
         )
 
+    def _nbins_within(self, outer: float) -> int:
+        # Whole steps only: a trailing partial step is not binned.
+        return safe_floor_int((outer - self.inner) / self.step_size)
+
     @property
     def nbins_radial(self):
-        return int(np.floor(self.outer - self.inner) / self.step_size)
+        return self._nbins_within(self.outer)
 
     @property
     def nbins_azimuthal(self):
         return 1
+
+    def _binned_outer(self, outer: float) -> float:
+        # The binned range ends at the last whole step, so every bin is exactly
+        # step_size wide: bin i is [inner + i * step, inner + (i + 1) * step).
+        return self.inner + self._nbins_within(outer) * self.step_size
 
     @property
     def step_size(self) -> float:
@@ -1670,7 +1801,7 @@ class SegmentedDetector(_AbstractRadialDetector):
     outer : float
         Outer integration limit of the bins [mrad].
     rotation : float
-        Rotation of the bins around the origin [mrad].
+        Rotation of the bins around the origin [rad].
     offset : two float
         Offset of the bins from the origin in `x` and `y` [mrad].
     to_cpu : bool, optional
@@ -1758,6 +1889,9 @@ class PixelatedDetector(BaseDetector):
         ``full``
             Diffraction patterns will not be cropped and will include angles outside
             the antialiasing aperture.
+        For waves with several energies, every energy is cropped to the same
+        number of pixels, those of the highest energy, as
+        `Waves.diffraction_patterns` crops such waves.
     resample : str or False
         If 'uniform', the diffraction patterns from rectangular cells will be
         downsampled to a uniform angular sampling.
@@ -1776,6 +1910,15 @@ class PixelatedDetector(BaseDetector):
         memory.
     """
 
+    # Cropping and resampling work on pixels and 1/Å, the same for every energy
+    # once the crop is fixed for the whole ensemble (see _match_ensemble), so a
+    # multi-energy ensemble is detected at once.
+    _splits_energy_ensembles = False
+
+    # A detector without a recorded ensemble crop, such as one pickled by an
+    # earlier version, has none.
+    _ensemble_gpts: Optional[tuple[int, int]] = None
+
     def __init__(
         self,
         max_angle: str | float = "valid",
@@ -1783,11 +1926,50 @@ class PixelatedDetector(BaseDetector):
         reciprocal_space: bool = True,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
+        # The crop of a multi-energy ensemble before any resampling, set by
+        # _match_ensemble and kept through the constructor so that lazy blocks
+        # rebuild it.
+        self._ensemble_gpts = _ensemble_gpts
         super().__init__(to_cpu=to_cpu, url=url)
+
+    def _match_ensemble(self, waves: WavesType) -> PixelatedDetector:
+        """Fix the crop size of a multi-energy ensemble.
+
+        Cropped to `max_angle`, each energy has its own number of pixels, since
+        the angular sampling scales with the wavelength. Every energy is cropped
+        to the pixel count of the whole ensemble instead, before any resampling,
+        as `Waves.diffraction_patterns` crops an ensemble at once, so the members
+        stack, and their axes are labelled with the ensemble's sampling.
+        """
+        from abtem.array import _multi_energy_axis, _without_scalar_energy
+
+        if (
+            self._ensemble_gpts is not None
+            or not self.reciprocal_space
+            or _multi_energy_axis(waves) is None
+        ):
+            return self
+
+        # The highest energy of the axis decides, not a scalar energy that may
+        # have been left on the waves.
+        matched = self.copy()
+        matched._ensemble_gpts = self._crop_gpts(_without_scalar_energy(waves))
+        return matched
+
+    def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:
+        """The number of pixels the diffraction patterns are cropped to before any
+        resampling: those within `max_angle`, or the ensemble's (see
+        `_match_ensemble`)."""
+        if self._ensemble_gpts is not None:
+            return self._ensemble_gpts
+        if self.max_angle:
+            return waves._gpts_within_angle(self.max_angle)
+        return waves._valid_gpts
 
     @property
     def max_angle(self) -> str | float:
@@ -1842,7 +2024,7 @@ class PixelatedDetector(BaseDetector):
         """
         if self.resample:
             sampling = waves.reciprocal_space_sampling
-            gpts = waves._gpts_within_angle(self.max_angle)
+            gpts = self._crop_gpts(waves)
 
             gpts, sampling = _diffraction_pattern_resampling_gpts(
                 old_sampling=sampling,
@@ -1854,17 +2036,11 @@ class PixelatedDetector(BaseDetector):
 
             if self.max_angle:
                 gpts = tuple(
-                    min(g, g_max)
-                    for g, g_max in zip(
-                        gpts, waves._gpts_within_angle(self.max_angle)
-                    )
+                    min(g, g_max) for g, g_max in zip(gpts, self._crop_gpts(waves))
                 )
-        elif self.max_angle and not self.resample:
-            gpts = waves._gpts_within_angle(self.max_angle)
-            sampling = waves.reciprocal_space_sampling
         else:
             sampling = waves.reciprocal_space_sampling
-            gpts = waves._valid_gpts
+            gpts = self._crop_gpts(waves)
 
         return sampling, gpts
 
@@ -1937,7 +2113,9 @@ class PixelatedDetector(BaseDetector):
         """
         measurements: Images | DiffractionPatterns
 
-        if self.reciprocal_space:
+        if self.reciprocal_space and self._ensemble_gpts is not None:
+            measurements = waves._diffraction_patterns(self._ensemble_gpts)
+        elif self.reciprocal_space:
             measurements = waves.diffraction_patterns(
                 max_angle=self.max_angle, parity="same"
             )
@@ -1995,6 +2173,10 @@ class WavesDetector(BaseDetector):
        like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
+    # The wave functions do not depend on the wavelength once computed, so a
+    # multi-energy ensemble is passed on at once, without a copy.
+    _splits_energy_ensembles = False
+
     def __init__(
         self,
         gpts: Optional[tuple[int, int]] = None,
@@ -2003,6 +2185,11 @@ class WavesDetector(BaseDetector):
     ):
         self._gpts = gpts
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def gpts(self) -> Optional[tuple[int, int]]:
+        """Number of grid points of the detected wave functions."""
+        return self._gpts
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves

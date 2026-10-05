@@ -251,8 +251,8 @@ def test_oversized_plan_bypasses_cache():
 
 
 def test_unrelated_runtime_error_propagates():
-    pytest.importorskip("cupy")
-
+    # No CuPy needed: an unrelated error is re-raised before the fallback
+    # touches the CuPy plan cache.
     from abtem.core import fft as abtem_fft
 
     def fake_fft(x, **kwargs):
