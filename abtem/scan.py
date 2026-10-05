@@ -811,7 +811,13 @@ class LineScan(BaseScan):
             )
 
         if width:
-            rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
+            # Rectangle's xy is a corner, so shift it back by half the width
+            # along the perpendicular: the band is then centred on the line,
+            # matching the region interpolate_line averages over.
+            direction = self.direction
+            perpendicular = np.array([-direction[1], direction[0]])
+            anchor = np.array(self.start) - perpendicular * width / 2
+            rect = Rectangle(anchor, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
             return rect
         else:

@@ -43,6 +43,40 @@ def test_linescan_at_position(position, extent, angle):
     )
 
 
+@pytest.mark.parametrize("angle", [0.0, 30.0, 135.0, 250.0])
+def test_linescan_add_to_plot_width_is_centred_on_line(angle):
+    # interpolate_line averages over +-width/2 about the line, so the drawn
+    # band must be centred on it: its centre is the line's midpoint and its
+    # corners lie width/2 to either side of start and end.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    position, extent, width = (3.0, 2.0), 4.0, 1.0
+    linescan = LineScan.at_position(center=position, extent=extent, angle=angle)
+    fig, ax = plt.subplots()
+    try:
+        rect = linescan.add_to_plot(ax, width=width)
+        corners = rect.get_patch_transform().transform(
+            [(0, 0), (1, 0), (1, 1), (0, 1)]
+        )
+    finally:
+        plt.close(fig)
+
+    direction = np.array(linescan.direction)
+    perpendicular = np.array([-direction[1], direction[0]]) * width / 2
+    start, end = np.array(linescan.start), np.array(linescan.end)
+    expected = [
+        start - perpendicular,
+        end - perpendicular,
+        end + perpendicular,
+        start + perpendicular,
+    ]
+    assert np.allclose(corners, expected)
+    assert np.allclose(corners.mean(axis=0), position)
+
+
 # --- CustomScan tests ---
 
 
