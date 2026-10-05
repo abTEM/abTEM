@@ -25,13 +25,13 @@ license = "GPL-3.0-or-later"
 license-files = ["LICENCE"]
 
 dependencies = [
-    "numpy >= 2.0.0",
+    "numpy>=2.1",
     "pandas",
-    "matplotlib>=3.6",
+    "matplotlib>=3.8.4",
     "pyfftw",
     "scipy",
     "numba",
-    "dask>=2022.12.1,!=2025.12.*,!=2026.1.0,!=2026.1.1",
+    "dask>=2024.3.0,!=2025.12.*,!=2026.1.0,!=2026.1.1",
     "distributed",
     "zarr>=3.1",  # create_array(data=...) requires the 3.1 API
     "ase",
