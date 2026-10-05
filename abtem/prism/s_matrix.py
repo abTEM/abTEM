@@ -5643,6 +5643,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
+            # The S-matrix (potential) ensemble is averaged block by block
+            # above, but CTF ensemble axes flagged ensemble_mean were returned
+            # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
+            measurements = [
+                measurement.reduce_ensemble()
+                if hasattr(measurement, "reduce_ensemble")
+                else measurement
+                for measurement in ensure_list(measurements)
+            ]
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:

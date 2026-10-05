@@ -38,6 +38,7 @@ from abtem.core.axes import (
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
 )
@@ -57,6 +58,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    get_dtype,
     interleave,
     itemset,
     normalize_axes,
@@ -1446,6 +1448,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "mean")
         return self._reduction(
             "mean", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1475,6 +1478,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "sum")
         return self._reduction(
             "sum", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1570,6 +1574,115 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             "max", axes=axis, keepdims=keepdims, split_every=split_every
         )
 
+    def _weighted_axes(self, axes: tuple[int, ...]) -> dict[int, np.ndarray]:
+        """Normalized probability weights of the given (non-negative) axes, for the
+        axes that carry non-uniform weights."""
+        weights = {}
+        for axis in axes:
+            axis_weights = _normalized_axis_weights(
+                self.axes_metadata[axis], self.shape[axis]
+            )
+            if axis_weights is not None:
+                weights[axis] = axis_weights
+        return weights
+
+    def _warn_if_weighted_axes(
+        self, axes: Optional[int | tuple[int, ...]], reduction_func: str
+    ) -> None:
+        if axes is None:
+            # A reduction over all axes includes every ensemble axis.
+            axes = tuple(range(len(self.ensemble_shape)))
+        else:
+            axes = tuple(
+                axis if axis >= 0 else len(self.shape) + axis
+                for axis in number_to_tuple(axes)
+            )
+            if any(axis >= len(self.ensemble_shape) for axis in axes):
+                return  # _reduction raises for base axes
+
+        if self._weighted_axes(axes):
+            warnings.warn(
+                f"`{reduction_func}` over an ensemble axis carrying distribution "
+                "(probability) weights ignores the weights. The ensemble members "
+                "are unweighted and the distribution weights are applied when the "
+                "ensemble is reduced: use `reduce_ensemble(axis=...)` for the "
+                "probability-weighted mean.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _weighted_ensemble_mean(
+        self, axes: int | tuple[int, ...], split_every: int = 2
+    ) -> Self:
+        """Probability-weighted mean over ensemble axes.
+
+        Computes ``Σ_i p_i A_i / Σ_i p_i`` over each axis, where ``p_i`` are the
+        weights carried by the axis metadata (see :class:`OrdinalAxis`); axes
+        without (or with equal) weights are averaged with a plain mean. Over
+        several axes the weights are the outer product of the per-axis weights.
+        Works for NumPy, CuPy and lazy Dask arrays (the result stays lazy) and
+        preserves the array dtype.
+        """
+        axes = tuple(
+            axis if axis >= 0 else len(self.shape) + axis
+            for axis in number_to_tuple(axes)
+        )
+
+        if self._is_base_axis(axes):
+            raise RuntimeError("base axes cannot be reduced")
+
+        weights = self._weighted_axes(axes)
+
+        if not weights:
+            # Equal weights (e.g. frozen phonons): the plain mean is exact, and
+            # keeping it leaves such results bitwise unchanged.
+            return self._reduction("mean", axes=axes, split_every=split_every)
+
+        # Integer arrays (e.g. counts) take the configured float precision rather
+        # than truncating the weights.
+        array_object = self
+        if self.array.dtype.kind not in "fc":
+            array_object = self.__class__(
+                **{
+                    **self._copy_kwargs(exclude=("array",)),
+                    "array": self.array.astype(get_dtype(complex=False)),
+                }
+            )
+
+        # Average the equal-weight axes first: it shrinks the array before the
+        # weighted pass, and the outer-product weights factorize over the axes.
+        unweighted = tuple(axis for axis in axes if axis not in weights)
+        if unweighted:
+            array_object = array_object._reduction(
+                "mean", axes=unweighted, split_every=split_every
+            )
+            weights = {
+                axis - sum(other < axis for other in unweighted): axis_weights
+                for axis, axis_weights in weights.items()
+            }
+
+        # A single multiply by the outer product of the per-axis weights, a small
+        # host array spanning only the weighted axes. The real dtype matches the
+        # array's precision (complex64 -> float32, ...), so the weights never
+        # promote the result.
+        ndim = len(array_object.shape)
+        combined = np.ones((1,) * ndim)
+        for axis, axis_weights in weights.items():
+            shape = [1] * ndim
+            shape[axis] = len(axis_weights)
+            combined = combined * axis_weights.reshape(shape)
+
+        xp = get_array_module(array_object.array)
+        real_dtype = np.finfo(array_object.array.dtype).dtype
+        array = array_object.array * xp.asarray(combined, dtype=real_dtype)
+
+        weighted = array_object.__class__(
+            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
+        )
+        return weighted._reduction(
+            "sum", axes=tuple(weights), split_every=split_every
+        )
+
     def _reduction(
         self,
         reduction_func: str,
@@ -1625,7 +1738,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
+            cp is not None and isinstance(other, cp.ndarray)
+        ):
             other_array = other
         else:
             raise NotImplementedError(

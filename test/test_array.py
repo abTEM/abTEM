@@ -807,3 +807,30 @@ class TestBaseLessArrayObject:
             np.asarray(transformed.compute().array),
             np.asarray(m.compute().array) * 2,
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_arithmetic_with_array_of_own_device(device):
+    # A measurement on the GPU combined with a CuPy array (and on the CPU with a
+    # NumPy array) used to raise NotImplementedError for the CuPy case.
+    import numpy as np
+
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    xp = get_array_module(device)
+    host = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    images = abtem.Images(
+        xp.asarray(host),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    factor = np.array([2.0, 3.0], dtype=np.float32)[:, None, None]
+
+    for result, expected in (
+        (images * xp.asarray(factor), host * factor),
+        (images - xp.asarray(factor), host - factor),
+        (images / xp.asarray(factor), host / factor),
+    ):
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(result.to_cpu().array, expected)
