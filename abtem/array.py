@@ -1438,7 +1438,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
+            cp is not None and isinstance(other, cp.ndarray)
+        ):
             other_array = other
         else:
             raise NotImplementedError(
