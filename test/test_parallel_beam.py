@@ -128,6 +128,46 @@ def test_block_direct_remedy_blocks_only_the_zero_angle_pixel(parallel_beam_patt
     assert [tuple(index) for index in changed] == [center]
 
 
+@pytest.mark.parametrize("extent", [(19.525, 19.525), (10.0, 14.0)])
+def test_block_direct_of_radius_zero_blocks_the_zero_angle_pixel_on_every_grid(extent):
+    # The zero-angle coordinate of a float32 grid is on some grids a tiny number of
+    # either sign instead of 0, which a radius of exactly 0 does not reach.
+    missed = []
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 4)
+        patterns = abtem.measurements.DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=(1 / extent[0], 1 / extent[1]),
+            fftshift=True,
+            metadata={"energy": ENERGY},
+        )
+        blocked = patterns.block_direct(radius=0, margin=False).array
+        zeroed = [tuple(int(i) for i in z) for z in np.argwhere(blocked == 0)]
+        if zeroed != [(shape[0] // 2, shape[1] // 2)]:
+            missed.append(gpts)
+
+    assert missed == []
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_block_direct_of_a_small_radius_blocks_only_the_zero_angle_pixel(fftshift):
+    # 41 x 50 points at 1 / 10 and 1 / 7 per Angstrom: the zero pixel of the first
+    # axis is at a coordinate of 1e-14 rather than 0, and the two angular samplings
+    # differ.
+    patterns = abtem.measurements.DiffractionPatterns(
+        np.ones((41, 50), dtype=np.float32),
+        sampling=(1 / 10.0, 1 / 7.0),
+        fftshift=fftshift,
+        metadata={"energy": ENERGY},
+    )
+    center = (20, 25) if fftshift else (0, 0)
+
+    for radius in (0, 1e-6, 0.4 * min(patterns.angular_sampling)):
+        blocked = patterns.block_direct(radius=radius, margin=False).array
+        zeroed = [tuple(int(i) for i in z) for z in np.argwhere(blocked == 0)]
+        assert zeroed == [center]
+
+
 def test_block_direct_with_a_positive_cutoff_keeps_the_margin(potential):
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
     patterns = probe.multislice(potential).diffraction_patterns().compute()
