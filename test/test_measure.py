@@ -14,7 +14,7 @@ from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, re
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import asnumpy, copy_to_device
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype
 from abtem.measurements import (
@@ -1235,6 +1235,10 @@ def test_diffraction_patterns_polar_binning(data, device):
 @lazy_params
 @devices
 def test_diffraction_patterns_center_of_mass(data, lazy, device):
+    # Property: the center of mass is a physical quantity, so it cannot depend on
+    # the storage order of the pattern. Re-storing the same pattern in the other
+    # order (centred <-> unshifted; unshifted is by definition the ifftshift of
+    # centred) must give the same center of mass, in both units.
     measurement = data.draw(
         abtem_st.diffraction_patterns(
             lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
@@ -1242,33 +1246,196 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     )
     assume(len(_scan_sampling(measurement)) > 0)
 
-    print(measurement.shape, measurement.axes_metadata)
+    array = measurement.compute().array
+    xp = get_array_module(array)
+    if measurement.fftshift:
+        reordered = xp.fft.ifftshift(array, axes=(-2, -1))
+    else:
+        reordered = xp.fft.fftshift(array, axes=(-2, -1))
 
-    measurement.center_of_mass().compute()
+    other = DiffractionPatterns(
+        reordered,
+        sampling=measurement.sampling,
+        ensemble_axes_metadata=measurement.ensemble_axes_metadata,
+        metadata=measurement.metadata,
+        fftshift=not measurement.fftshift,
+    )
+
+    angular_limits = measurement.angular_limits
+    for units, scale in (
+        ("1/Å", max(abs(k) for limit in measurement.limits for k in limit)),
+        ("mrad", max(abs(a) for limit in angular_limits for a in limit)),
+    ):
+        com = asnumpy(measurement.center_of_mass(units=units).compute().array)
+        other_com = asnumpy(other.center_of_mass(units=units).array)
+        # Only the float32 summation order differs between the two (~1e-6 of
+        # the scale); a storage-order bug displaces the COM by whole pixels,
+        # i.e. by multiples of 1 / (n // 2) >= 1 / 16 of the scale (the
+        # strategy's base side is <= 32).
+        np.testing.assert_allclose(com, other_com, rtol=0, atol=1e-4 * scale)
+
+
+def _delta_diffraction_patterns(gpts, sampling, fftshift, index, device):
+    # A unit delta at integer frequency index `index` (fftfreq-style: negative
+    # values count from the end), i.e. at k = index * sampling. In centred storage
+    # the zero frequency sits at pixel n // 2 (np.fft.fftshift convention); in
+    # unshifted storage it sits at pixel 0 (np.fft.fftfreq convention).
+    array = np.zeros(gpts, dtype=np.float32)
+    if fftshift:
+        array[gpts[0] // 2 + index[0], gpts[1] // 2 + index[1]] = 1.0
+    else:
+        array[index[0] % gpts[0], index[1] % gpts[1]] = 1.0
+
+    return DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=sampling,
+        fftshift=fftshift,
+        metadata={"energy": 100e3},
+    )
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("units", ["1/Å", "mrad"])
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize(
+    "gpts, sampling",
+    [
+        ((32, 32), (0.1, 0.1)),
+        ((33, 33), (0.1, 0.1)),
+        # Non-square grid and anisotropic sampling: an x/y swap of the shape or
+        # of the sampling changes the answer.
+        ((32, 33), (0.1, 0.12)),
+    ],
+)
+def test_diffraction_patterns_center_of_mass_of_delta(
+    device, units, fftshift, gpts, sampling
+):
+    # The COM of a single delta is its own position: k = (3 * dkx, -2 * dky). In
+    # mrad, alpha = lambda * k * 1e3 (the convention of angular_sampling).
+    index = (3, -2)
+    measurement = _delta_diffraction_patterns(gpts, sampling, fftshift, index, device)
+
+    expected = index[0] * sampling[0] + 1.0j * index[1] * sampling[1]
+    if units == "mrad":
+        expected = expected * energy2wavelength(100e3) * 1e3
+
+    com = complex(asnumpy(measurement.center_of_mass(units=units).array))
+
+    # One nonzero pixel: the only error is float32 rounding of the coordinate
+    # (~6e-8 relative); 1e-6 is ~10 float32 ulps. A one-pixel error is >= 1/3.6
+    # relative.
+    assert com == pytest.approx(expected, rel=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("units", ["1/Å", "mrad"])
+@pytest.mark.parametrize("gpts", [(32, 33), (33, 32)])
+def test_diffractogram_of_plane_wave_peaks_at_its_frequency(device, units, gpts):
+    # |FFT|^2 of exp(2 pi i (kx x + ky y)), with k on the DFT grid, is a single
+    # delta at +k (numpy's forward-FFT sign convention), so the diffractogram's
+    # center of mass is k itself, and lambda * k * 1e3 in mrad.
+    sampling = (0.2, 0.25)
+    kx = 3 / (gpts[0] * sampling[0])
+    ky = -2 / (gpts[1] * sampling[1])
+    x = np.arange(gpts[0]) * sampling[0]
+    y = np.arange(gpts[1]) * sampling[1]
+    image = np.exp(2j * np.pi * (kx * x[:, None] + ky * y[None])).astype(np.complex64)
+
+    images = Images(
+        copy_to_device(image, device), sampling=sampling, metadata={"energy": 100e3}
+    )
+    com = complex(asnumpy(images.diffractograms().center_of_mass(units=units).array))
+
+    expected = kx + 1.0j * ky
+    if units == "mrad":
+        expected = expected * energy2wavelength(100e3) * 1e3
+
+    # float32 FFT leakage off the peak is ~1e-7 relative; a one-pixel error is
+    # >= 1 / 3.6 relative.
+    assert com == pytest.approx(expected, rel=1e-5)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(32, 32), (33, 33), (32, 33)])
+def test_diffraction_patterns_coordinates_match_fftfreq(device, fftshift, gpts):
+    # The frequencies of an n-point DFT with real-space spacing d are
+    # np.fft.fftfreq(n, d) in unshifted order, and np.fft.fftshift of that in
+    # centred order. A reciprocal sampling dk corresponds to d = 1 / (n * dk).
+    sampling = (0.1, 0.12)
+    measurement = DiffractionPatterns(
+        copy_to_device(np.zeros(gpts, dtype=np.float32), device),
+        sampling=sampling,
+        fftshift=fftshift,
+        metadata={"energy": 100e3},
+    )
+    wavelength_mrad = energy2wavelength(100e3) * 1e3
+
+    for i in range(2):
+        expected = np.fft.fftfreq(gpts[i], d=1 / (gpts[i] * sampling[i]))
+        if fftshift:
+            expected = np.fft.fftshift(expected)
+
+        # float64 coordinates: 1e-12 is ~1e4 ulps of |k| <= 2 1/Å.
+        np.testing.assert_allclose(
+            measurement.coordinates[i], expected, rtol=0, atol=1e-12
+        )
+        # Angular coordinates follow the configured precision (float32 by
+        # default, ~6e-8 relative); 1e-6 of a pixel is far below a 1-pixel error.
+        np.testing.assert_allclose(
+            asnumpy(measurement.angular_coordinates[i]),
+            expected * wavelength_mrad,
+            rtol=1e-6,
+            atol=1e-6 * wavelength_mrad * sampling[i],
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("units", ["1/Å", "mrad"])
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [64, 65])
 @pytest.mark.parametrize("captured_fraction", [1.0, 0.5, 0.1])
-def test_diffraction_patterns_center_of_mass_is_normalized(device, captured_fraction):
+def test_diffraction_patterns_center_of_mass_is_normalized(
+    device, units, fftshift, gpts, captured_fraction
+):
     # A center of mass is a normalized (intensity-weighted average) quantity, so
     # scaling the total intensity of a diffraction pattern must not change the
     # computed center of mass. This did not hold before the sum was normalized by
     # the total captured intensity: https://github.com/abTEM/abTEM/discussions/402
-    gpts = 33
+    #
+    # A Gaussian sampled symmetrically about pixel (n // 2 + shift) has its COM
+    # exactly at that pixel, i.e. at k = shift * sampling, provided it is neither
+    # truncated nor wrapped: the nearest edge is >= 32 - 10 = 22 px = 7.3 sigma
+    # away, where the tail is exp(-7.3**2 / 2) ~ 3e-12.
     sampling = 0.4436
-    shift = (-10, 10)
+    sigma = 3.0
+    shift = (-10, 7)
 
-    y, x = np.mgrid[0:gpts, 0:gpts]
-    disk = np.exp(-((y - gpts // 2) ** 2 + (x - gpts // 2) ** 2) / (2 * 3.0**2))
-    disk = np.roll(disk, shift, axis=(0, 1))
-    disk = copy_to_device((disk / disk.sum() * captured_fraction).astype(np.float32), device)
+    i, j = np.mgrid[0:gpts, 0:gpts]
+    disk = np.exp(
+        -((i - gpts // 2 - shift[0]) ** 2 + (j - gpts // 2 - shift[1]) ** 2)
+        / (2 * sigma**2)
+    )
+    if not fftshift:
+        # Unshifted storage is by definition the ifftshift of centred storage.
+        disk = np.fft.ifftshift(disk)
+    disk = copy_to_device(
+        (disk / disk.sum() * captured_fraction).astype(np.float32), device
+    )
 
-    measurement = DiffractionPatterns(disk, sampling=sampling, fftshift=True)
+    measurement = DiffractionPatterns(
+        disk, sampling=sampling, fftshift=fftshift, metadata={"energy": 100e3}
+    )
 
-    com = measurement.center_of_mass(units="1/Å").array
+    com = complex(asnumpy(measurement.center_of_mass(units=units).array))
 
     expected = (shift[0] * sampling) + 1.0j * (shift[1] * sampling)
-    assert abs(com - expected) < 0.1 * abs(expected)
+    if units == "mrad":
+        expected = expected * energy2wavelength(100e3) * 1e3
+
+    # float32 sums over ~4e3 pixels: ~1e-6 relative. A one-pixel error is
+    # 1 / |shift| = 1 / 12.2 ~ 8% relative.
+    assert abs(com - expected) < 1e-4 * abs(expected)
 
 
 @given(data=st.data())

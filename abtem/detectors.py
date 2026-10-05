@@ -578,7 +578,10 @@ class _AbstractRadialDetector(BaseDetector):
             regions[..., regions < 0] = np.nan
 
             diffraction_patterns = DiffractionPatterns(
-                regions, sampling=reciprocal_space_sampling, metadata={"energy": energy}
+                regions,
+                sampling=reciprocal_space_sampling,
+                fftshift=True,
+                metadata={"energy": energy},
             )
 
         n_bins_radial = self.nbins_radial
@@ -875,7 +878,10 @@ class AnnularDetector(_AbstractRadialDetector):
             "units": "%",
         }
         diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=reciprocal_space_sampling
+            array,
+            metadata=metadata,
+            sampling=reciprocal_space_sampling,
+            fftshift=fftshift,
         )
         return diffraction_patterns
 
@@ -1296,7 +1302,10 @@ class SpectralSlitDetector(BaseDetector):
             "units": "%",
         }
         return DiffractionPatterns(
-            array, metadata=metadata, sampling=reciprocal_space_sampling
+            array,
+            metadata=metadata,
+            sampling=reciprocal_space_sampling,
+            fftshift=fftshift,
         )
 
     @staticmethod
