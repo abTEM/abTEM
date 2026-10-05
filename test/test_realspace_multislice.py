@@ -616,7 +616,7 @@ def _full_expansion_potentials():
 
 
 class TestFullExpansionChunking:
-    @pytest.mark.parametrize("backscattered", [False])
+    @pytest.mark.parametrize("backscattered", [False, True])
     @pytest.mark.parametrize(
         "name, lazy",
         [
@@ -653,6 +653,40 @@ class TestFullExpansionChunking:
                     atol=1e-6 * np.abs(reference).max(),
                     err_msg=f"chunk size {chunk_size}",
                 )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_backscattering_between_identical_slices_is_zero(self, lazy):
+        # One slice per unit cell: every slice equals the next, so the correction
+        # term (the difference between consecutive slices) vanishes exactly.
+        atoms = ase.build.bulk("Si", cubic=True)
+        displaced = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        potential = abtem.Potential(
+            displaced * (1, 1, 3),
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2],
+            exit_planes=1,
+        )
+        transmitted, backscattered = _multislice_arrays(potential, lazy)
+        (alone,) = _multislice_arrays(potential, lazy, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        assert not np.any(backscattered)
+
+    def test_backscattering_of_a_slab_followed_by_vacuum(self):
+        atoms = ase.build.bulk("Si", cubic=True)
+        slab = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        slab.positions[:, 2] += 2.0
+        slab.cell[2, 2] = 3 * atoms.cell[2, 2]
+        potential = abtem.Potential(
+            slab, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3, exit_planes=1
+        )
+        transmitted, backscattered = _multislice_arrays(potential, False)
+        (alone,) = _multislice_arrays(potential, False, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        per_plane = np.abs(backscattered).max(axis=(-2, -1))
+        # nothing comes back from the vacuum behind the slab
+        assert per_plane[:5].all() and not per_plane[5:].any()
 
 
 class TestAlgorithmComparison:

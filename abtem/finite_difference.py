@@ -482,6 +482,11 @@ def _multislice_exponential_series(
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
+    if initial_amplitude == 0:
+        # Every term of the series is linear in the wave, so a zero wave is
+        # returned unchanged; the convergence ratio below would be 0 / 0.
+        return waves
+
     if fully_corrected:
         temp = full_series(
             waves, laplace, transmission_function, order, wavelength, thickness
