@@ -193,6 +193,27 @@ def test_aperture_to_diffraction_patterns():
     assert isinstance(dp, DiffractionPatterns)
 
 
+@pytest.mark.parametrize("gpts", [(64, 64), (65, 64)])
+@pytest.mark.parametrize("units", ["1/Å", "mrad"])
+def test_aperture_to_diffraction_patterns_is_centred_on_zero_frequency(gpts, units):
+    # A round aperture without aberrations is symmetric under k -> -k, so its
+    # center of mass is k = 0, and it transmits the zero frequency fully. Both
+    # only hold if the pattern's stored order matches its fftshift flag.
+    dp = Aperture(
+        30.0, energy=ENERGY, gpts=gpts, sampling=SAMPLING
+    ).to_diffraction_patterns()
+
+    com = complex(dp.center_of_mass(units=units).array)
+    # Exact symmetry: only float32 rounding remains; a misordering moves the
+    # COM by a sizeable fraction of the 30 mrad aperture.
+    scale = max(dp.angular_sampling) if units == "mrad" else max(dp.sampling)
+    assert abs(com) < 1e-5 * scale
+
+    kx, ky = dp.coordinates
+    zero = (int(np.argmin(np.abs(kx))), int(np.argmin(np.abs(ky))))
+    assert np.asarray(dp.array)[zero] == pytest.approx(np.asarray(dp.array).max())
+
+
 def test_aperture_distribution_semiangle():
     from abtem.distributions import from_values
     k = Aperture(
