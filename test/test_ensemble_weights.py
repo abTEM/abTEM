@@ -713,10 +713,18 @@ def test_weighted_and_unweighted_axes_reduced_together(lazy, device):
     reduced = images.reduce_ensemble()
     assert reduced.is_lazy == lazy
 
+    # The oracle sums the data as the device holds it: Metal stores this
+    # float64 host array in float32, and that rounding is not under test.
+    stored = _to_numpy(array)
     reference = np.einsum(
-        "i,j,k,ijklm->lm", w1 / w1.sum(), np.full(2, 0.5), w3 / w3.sum(), host
+        "i,j,k,ijklm->lm",
+        w1 / w1.sum(),
+        np.full(2, 0.5),
+        w3 / w3.sum(),
+        stored.astype(np.float64),
     )
-    _assert_close_to(reduced.array, reference, rtol=1e-12)
+    rtol = 1e-12 if stored.dtype == np.float64 else 1e-6
+    _assert_close_to(reduced.array, reference, rtol=rtol)
 
 
 def test_visualization_range_sum_applies_weights():

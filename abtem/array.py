@@ -30,7 +30,7 @@ from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 from tqdm.dask import TqdmCallback
 
 from abtem._version import __version__
-from abtem.core import config
+from abtem.core import backend, config
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
@@ -1738,8 +1738,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)) or (
-            cp is not None and isinstance(other, cp.ndarray)
+        elif (
+            isinstance(other, (np.ndarray, da.core.Array, Number))
+            or (cp is not None and isinstance(other, cp.ndarray))
+            or (
+                backend.TorchNDArray is not None
+                and isinstance(other, backend.TorchNDArray)
+            )
         ):
             other_array = other
         else:
