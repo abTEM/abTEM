@@ -26,6 +26,7 @@ from abtem.measurements import (
     _apply_convolve_2d_on_axes,
     _gaussian_kernel_2d,
     _gaussian_kernels_1d,
+    _interpolate_stack,
     _scan_sampling,
     _scan_shape,
 )
@@ -1033,6 +1034,27 @@ def test_images_interpolate_line_at_position(data, lazy, device):
         for a in (angle, other_angle)
     ]
     _assert_matches_reference(wide[0], wide[1], rel=1e-3)
+
+
+@devices
+@pytest.mark.parametrize("order", [1, 3])
+def test_interpolate_stack_just_below_grid_nodes(device, order):
+    """Coordinates a hair below a grid node must give that node's value. With
+    float64 coordinates on a float32 image, cupyx's spline kernel took the
+    index from the float32-rounded coordinate and the weights from the
+    float64 one, and returned the value at the next node instead."""
+    rng = np.random.default_rng(11)
+    array = rng.random((16, 24)).astype(np.float32)
+    k = np.arange(1, 15)
+    positions = np.stack([k - 1e-12, np.full(k.shape, 5.0)], axis=-1)
+    if device == "gpu":
+        cp = pytest.importorskip("cupy")
+        values = _interpolate_stack(
+            cp.asarray(array), cp.asarray(positions), mode="wrap", order=order
+        )
+    else:
+        values = _interpolate_stack(array, positions, mode="wrap", order=order)
+    np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
 
 
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():

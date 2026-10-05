@@ -530,6 +530,24 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
+def _cupy_safe_coordinates(array, coordinates):
+    """Cast map_coordinates coordinates to the precision CuPy computes in.
+
+    For a float32 (or complex64) input, cupyx's spline kernel takes the
+    starting index from floor((float)c) but the weights from floor(c) on the
+    coordinate's own dtype. A float64 coordinate just below an integer,
+    k - 1e-12, then rounds to k for the index but not for the weights, and
+    the result is the value at node k + 1. Giving the coordinates the
+    kernel's precision keeps both floors consistent. SciPy computes in
+    float64 throughout and is left alone.
+    """
+    xp = get_array_module(array)
+    if xp is np:
+        return coordinates
+    float_dtype = xp.promote_types(array.real.dtype, xp.float32)
+    return coordinates.astype(float_dtype, copy=False)
+
+
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
@@ -550,7 +568,7 @@ def _interpolate_stack(
     array = array.reshape((-1,) + array.shape[-2:])
     array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
-    positions = positions + 2 * order
+    positions = _cupy_safe_coordinates(array, positions + 2 * order)
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
@@ -2504,6 +2522,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         new_points = xp.linspace(3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint)[
             None
         ]
+        new_points = _cupy_safe_coordinates(array, new_points)
 
         # Follow the input dtype: hardcoding float32 downgrades a float64
         # profile and makes map_coordinates reject a complex one outright
