@@ -230,3 +230,19 @@ def test_gpaw_parametrization_reproduces_the_dft_atom(symbol, dft_atom):
     mask = V_dft > 0.01 * V_dft.max()
     error = np.abs(V_fit[mask] / V_dft[mask] - 1).max()
     assert error < 0.05, error
+
+
+@pytest.mark.parametrize("symbol", ["Sm", "Pu"])
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.slow
+def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
+    """GPAW's spin-polarized radial solver fails for some open-shell f-element
+    atoms; the density should then come from a non-spin-polarized calculation
+    (with a warning) rather than raising an AssertionError.
+    """
+    gpaw = GPAWParametrization()
+    with pytest.warns(UserWarning, match="non-spin-polarized"):
+        ae = gpaw._get_all_electron_atom(symbol)
+
+    assert ae.nspins == 1
+    assert np.isclose(ae.rgd.integrate(ae.n_sg.sum(0)), ae.Z, atol=1e-3)

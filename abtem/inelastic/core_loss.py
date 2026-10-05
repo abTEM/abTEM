@@ -29,9 +29,11 @@ except ImportError:
 
 
 from abtem.array import ArrayObject
+from abtem.core import backend
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
+    cp,
     get_array_module,
 )
 from abtem.core.chunks import _ceil_to_multiple, estimate_scan_batch_size, validate_chunks
@@ -1138,6 +1140,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        # The whole intensity is reduced to one host-side number: lazy waves are
+        # computed once, into a copy, rather than piecewise by the operations below
+        waves = waves.ensure_computed(progress_bar=False)
 
         array = abs2(waves.array)
 
@@ -1186,6 +1191,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         xp = get_array_module(like)
         if xp is np:
             device = "cpu"
+        elif backend.tp is not None and xp is backend.tp:
+            # Metal exposes a single device, so its identity needs no index --
+            # and a torch device carries neither an `id` nor a context to enter.
+            device = "mps"
         else:
             # One process can drive several GPUs (outside the dask-cuda
             # process-per-GPU layout); an array cached for one device must
@@ -1198,7 +1207,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if cache is not None and cache[0] == device:
             return cache[1]
 
-        if xp is np:
+        if xp is np or device == "mps":
             on_device = copy_to_device(self._local_potential, like)
         else:
             # Allocate on like's device, whatever device is current.
@@ -1243,15 +1252,19 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             if array_on_device is self.array:
                 local_potential_on_device = self._local_potential
             else:
-                if get_array_module(array_on_device) is np:
-                    local_potential_on_device = copy_to_device(
-                        self._local_potential, array_on_device
-                    )
-                else:
+                # Only a cupy array's .device is the context manager that
+                # pins the upload to the right card. A torch tensor has a
+                # .device too, but entering it would change torch's default
+                # device for the block rather than pin anything.
+                if cp is not None and get_array_module(array_on_device) is cp:
                     with array_on_device.device:
                         local_potential_on_device = copy_to_device(
                             self._local_potential, array_on_device
                         )
+                else:
+                    local_potential_on_device = copy_to_device(
+                        self._local_potential, array_on_device
+                    )
             cached = (array_on_device, local_potential_on_device)
             self._device_array_cache[key] = cached
 
@@ -1298,6 +1311,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
+        # As in absolute_threshold: the mask below needs the intensity in memory
+        waves = waves.ensure_computed(progress_bar=False)
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,
