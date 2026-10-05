@@ -686,6 +686,24 @@ def _slit_pixel_count(angle, width, q_min, q_max, offset):
     return np.count_nonzero(inside)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("corners", [(-10.3, 30.7, -4.1, 3.3), (5.2, 41.9, 7.7, 15.1)])
+def test_slit_detector_corners_count_pixels_in_rectangle(device, corners):
+    """Corner mode: the slit is the axis-aligned rectangle
+    kx_min <= kx < kx_max, ky_min <= ky < ky_max."""
+    kx_min, kx_max, ky_min, ky_max = corners
+    ax, ay = _pixel_angles()
+    _assert_clear_of_edges(ax, (kx_min, kx_max))
+    _assert_clear_of_edges(ay, (ky_min, ky_max))
+    expected = np.count_nonzero(
+        (ax >= kx_min) & (ax < kx_max) & (ay >= ky_min) & (ay < ky_max)
+    )
+    assert expected > 50
+
+    detector = abtem.SpectralSlitDetector(corners=corners)
+    assert _values(detector.detect(_delta_waves(device))) == expected
+
+
 SLIT_CASES = [
     # (angle [deg], width, q_min, q_max, offset [mrad])
     # q_min > 0 or an offset keeps the DC pixel off the slit's start edge (see
@@ -752,19 +770,14 @@ def test_slit_detector_rotation_sense(device, pixel, offset_pixels):
     assert captured(-angle) < 1e-9 * full
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SpectralSlitDetector puts the q=0 pixel exactly on the slit's start "
-    "edge when q_min=0 (the default), and _slit_detector_mask tests it in the "
-    "slit-centre frame: local_x = (0 - c) . d = -(q_min + q_max) / 2 * "
-    "(cos^2 + sin^2), which rounds either side of -extent / 2. The direct beam "
-    "is dropped for ~8% of (angle, q_max) pairs (e.g. angle=15, q_max=40.1; "
-    "angle=120, q_max=20), although q_min=0 is documented to include q=0.",
-)
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_slit_detector_q_min_zero_includes_direct_beam(device):
     """q_min=0 is documented to include q=0: a k=0 plane wave (all intensity
-    in the DC pixel) must be fully captured whatever the slit angle/length."""
+    in the DC pixel) must be fully captured whatever the slit angle/length.
+
+    The mask used to test membership relative to the slit centre, where the
+    q=0 pixel sat on the -extent/2 edge up to rounding: it was dropped for
+    12 of these 144 (angle, q_max) pairs, e.g. (15, 40.1) and (120, 20)."""
     waves = _plane_waves(0, 0, device)
     full = float(N_PIXELS) ** 2
     dropped = []

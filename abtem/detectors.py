@@ -884,22 +884,29 @@ class AnnularDetector(_AbstractRadialDetector):
 def _slit_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
-    center: tuple[float, float],
+    origin: tuple[float, float],
     angle: float,
-    extent: float,
+    q_min: float,
+    q_max: float,
     width: float,
     fftshift: bool = False,
     xp=np,
 ) -> np.ndarray:
     """Boolean mask for a rectangular slit in reciprocal space.
 
-    The rectangle is centred at *center*, with its long axis (full length
-    *extent*) rotated by *angle* from kx and full perpendicular width
-    *width*. Membership is tested by rotating the grid into the slit's local
-    frame (long axis along local x) rather than testing against an
-    axis-aligned bounding box, so this is correct for any *angle* — an
-    axis-aligned box only coincides with the true rotated rectangle when
-    *angle* is a multiple of 90 degrees.
+    The slit's long axis starts at the sweep *origin* and points along
+    ``d = (cos(angle), sin(angle))``; a pixel at ``k`` is inside when
+
+        q_min <= (k - origin) . d < q_max   and
+        -width / 2 <= (k - origin) . n < width / 2,   n = (-sin, cos).
+
+    Membership is tested in this frame, relative to the origin, rather than
+    to the slit centre: a pixel at the origin has local coordinates exactly
+    zero, so with ``q_min=0`` the q = 0 pixel (the direct beam, for the
+    default origin) is always inside. In the centre frame it sat on the
+    ``-extent / 2`` edge up to rounding, and was dropped at some angles.
+    Testing the rotated frame, not an axis-aligned bounding box, keeps the
+    mask correct for any *angle*.
 
     Parameters
     ----------
@@ -907,12 +914,12 @@ def _slit_detector_mask(
         Grid points.
     sampling : (float, float)
         Angular sampling [mrad/pixel].
-    center : (kx, ky)
-        Centre of the slit rectangle [mrad].
+    origin : (kx, ky)
+        Origin of the q-axis sweep [mrad].
     angle : float
         Rotation of the long axis [degrees, CCW from kx].
-    extent : float
-        Full length of the slit along its long axis [mrad].
+    q_min, q_max : float
+        Range of the long axis from the origin [mrad].
     width : float
         Full width of the slit perpendicular to its long axis [mrad].
     fftshift : bool
@@ -927,22 +934,19 @@ def _slit_detector_mask(
         False,
         xp,
     )
-    kx2d = kx[:, None] * xp.ones((1, gpts[1]))
-    ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
+    dx = kx[:, None] - origin[0]
+    dy = ky[None, :] - origin[1]
 
     cos_a, sin_a = cos_sin_deg(angle)
-    dx = kx2d - center[0]
-    dy = ky2d - center[1]
-    local_x = dx * cos_a + dy * sin_a
-    local_y = -dx * sin_a + dy * cos_a
+    along = dx * cos_a + dy * sin_a
+    across = -dx * sin_a + dy * cos_a
 
-    half_extent = extent / 2.0
     half_width = width / 2.0
     mask = (
-        (local_x >= -half_extent)
-        & (local_x < half_extent)
-        & (local_y >= -half_width)
-        & (local_y < half_width)
+        (along >= q_min)
+        & (along < q_max)
+        & (across >= -half_width)
+        & (across < half_width)
     )
 
     if fftshift:
@@ -1104,10 +1108,6 @@ class SpectralSlitDetector(BaseDetector):
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
             self._q_min = 0.0
-            self._center = (
-                (corners[0] + corners[1]) / 2.0,
-                (corners[2] + corners[3]) / 2.0,
-            )
         else:
             if q_max is None or width is None:
                 raise ValueError("Provide both 'q_max' and 'width' when not using 'corners'.")
@@ -1127,9 +1127,8 @@ class SpectralSlitDetector(BaseDetector):
             )
             self._extent = q_max - q_min
             self._width = float(width)
-            self._center = slit_center
             # AABB retained only for introspection/display via the `corners`
-            # property; the detector mask itself uses _center/_angle directly
+            # property; the detector mask itself tests the rotated frame
             # (see _slit_detector_mask) so it is correct for any angle.
             self._corners = _corners_from_slit_params(
                 slit_center, self._angle, self._extent, self._width
@@ -1242,21 +1241,24 @@ class SpectralSlitDetector(BaseDetector):
     ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
         return (_scanned_measurement_type(waves),)
 
-    def _get_detector_region_array(
-        self, waves, fftshift: bool = True
-    ) -> np.ndarray:
-        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
-        xp = np
+    def _mask(self, gpts, sampling, fftshift: bool = False, xp=np) -> np.ndarray:
         return _slit_detector_mask(
             gpts=gpts,
-            sampling=angular_sampling,
-            center=self._center,
+            sampling=sampling,
+            origin=self._offset,
             angle=self._angle,
-            extent=self._extent,
+            q_min=self.q_min,
+            q_max=self.q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
         )
+
+    def _get_detector_region_array(
+        self, waves, fftshift: bool = True
+    ) -> np.ndarray:
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+        return self._mask(gpts, angular_sampling, fftshift=fftshift)
 
     def get_detector_region(self, waves, fftshift: bool = True):
         """
@@ -1404,16 +1406,7 @@ class SpectralSlitDetector(BaseDetector):
         gpts = diffraction_patterns.shape[-2:]
         sampling = diffraction_patterns.angular_sampling
 
-        mask = _slit_detector_mask(
-            gpts=gpts,
-            sampling=sampling,
-            center=self._center,
-            angle=self._angle,
-            extent=self._extent,
-            width=self._width,
-            fftshift=False,
-            xp=xp,
-        )
+        mask = self._mask(gpts, sampling, xp=xp)
         intensity = xp.sum(
             diffraction_patterns._eager_array * mask, axis=(-2, -1)
         )
