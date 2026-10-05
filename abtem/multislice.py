@@ -781,51 +781,57 @@ def multislice_and_detect(
         depth = 0.0
         forward_slices = []
 
-        for potential_chunk in potential_configuration.generate_chunked_slices(
-            chunk_size=potential_chunk_size
-        ):
-            for potential_slice, next_slice in lookahead(
-                potential_chunk.generate_slices()
-            ):
-                if algorithm.expansion_scope == "full":
-                    waves, backscatter_waves = multislice_step(
-                        waves, potential_slice, next_slice=next_slice
-                    )
-                else:
-                    waves = multislice_step(waves, potential_slice, next_slice=None)
-                tqdm_pbar.update_if_exists(int(n_waves))
+        # One stream of slices across the chunks: the last slice of a chunk
+        # looks ahead to the first slice of the next one, so only the exit
+        # face is stepped without a next slice.
+        potential_slices = (
+            potential_slice
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
+            )
+            for potential_slice in potential_chunk.generate_slices()
+        )
 
-                if return_backscattered:
-                    forward_slices.append(potential_slice)
+        for potential_slice, next_slice in lookahead(potential_slices):
+            if algorithm.expansion_scope == "full":
+                waves, backscatter_waves = multislice_step(
+                    waves, potential_slice, next_slice=next_slice
+                )
+            else:
+                waves = multislice_step(waves, potential_slice, next_slice=None)
+            tqdm_pbar.update_if_exists(int(n_waves))
 
-                depth += potential_slice.axes_metadata[0].values[0]
+            if return_backscattered:
+                forward_slices.append(potential_slice)
 
-                _update_plasmon_axes(waves, depth)
+            depth += potential_slice.axes_metadata[0].values[0]
 
-                if potential_slice.exit_planes:
-                    measurement_index = _validate_potential_ensemble_indices(
-                        potential_index, exit_plane_index, potential
-                    )
+            _update_plasmon_axes(waves, depth)
 
-                    if measurements is not None:
-                        if algorithm.expansion_scope == "full" and return_backscattered:
-                            _update_measurements(
-                                waves,
-                                detectors[:-1],
-                                measurements[:-1],
-                                measurement_index,
-                            )
-                            _update_measurements(
-                                backscatter_waves,
-                                detectors[-1:],
-                                measurements[-1:],
-                                measurement_index,
-                            )
-                        else:
-                            _update_measurements(
-                                waves, detectors, measurements, measurement_index
-                            )
-                    exit_plane_index += 1
+            if potential_slice.exit_planes:
+                measurement_index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential
+                )
+
+                if measurements is not None:
+                    if algorithm.expansion_scope == "full" and return_backscattered:
+                        _update_measurements(
+                            waves,
+                            detectors[:-1],
+                            measurements[:-1],
+                            measurement_index,
+                        )
+                        _update_measurements(
+                            backscatter_waves,
+                            detectors[-1:],
+                            measurements[-1:],
+                            measurement_index,
+                        )
+                    else:
+                        _update_measurements(
+                            waves, detectors, measurements, measurement_index
+                        )
+                exit_plane_index += 1
 
         if return_backscattered:
             # The back-propagation of this configuration's backscattered waves

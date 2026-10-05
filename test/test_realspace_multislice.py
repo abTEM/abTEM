@@ -589,6 +589,72 @@ class TestBackscatteringEnsemble:
             )
 
 
+def _full_expansion_potentials():
+    atoms = ase.build.bulk("Si", cubic=True)
+    grid = dict(gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3)  # 6 slices
+
+    def displaced(atoms):
+        return list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+
+    return {
+        "potential": lambda: abtem.Potential(
+            displaced(atoms * (1, 1, 2)), exit_planes=1, **grid
+        ),
+        "frozen_phonons": lambda: abtem.Potential(
+            abtem.FrozenPhonons(atoms * (1, 1, 2), 4, sigmas=0.1, seed=1),
+            exit_planes=2,
+            **grid,
+        ),
+        "crystal_potential": lambda: abtem.CrystalPotential(
+            abtem.Potential(abtem.FrozenPhonons(atoms, 4, sigmas=0.1, seed=1), **grid),
+            (1, 1, 2),
+            num_frozen_phonons=3,
+            seeds=(1, 2, 3),
+            exit_planes=1,
+        ),
+    }
+
+
+class TestFullExpansionChunking:
+    @pytest.mark.parametrize("backscattered", [False])
+    @pytest.mark.parametrize(
+        "name, lazy",
+        [
+            pytest.param(
+                name,
+                lazy,
+                marks=[pytest.mark.slow] if lazy and name != "potential" else [],
+            )
+            for name in _full_expansion_potentials()
+            for lazy in (False, True)
+        ],
+    )
+    def test_independent_of_the_potential_chunk_size(self, name, backscattered, lazy):
+        make = _full_expansion_potentials()[name]
+
+        def arrays(chunk_size):
+            return _multislice_arrays(
+                make(),
+                lazy,
+                backscattered=backscattered,
+                potential_chunk_size=chunk_size,
+            )
+
+        expected = arrays(6)
+        # 4 does not divide the 6 slices; the lazy runs are slow, so skip chunk size 2
+        for chunk_size in (1, 4) if lazy else (1, 2, 4):
+            result = arrays(chunk_size)
+            for array, reference in zip(result, expected):
+                assert array.shape == reference.shape
+                np.testing.assert_allclose(
+                    array,
+                    reference,
+                    rtol=0,
+                    atol=1e-6 * np.abs(reference).max(),
+                    err_msg=f"chunk size {chunk_size}",
+                )
+
+
 class TestAlgorithmComparison:
     """Test that different algorithms produce reasonable results."""
 
