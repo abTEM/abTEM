@@ -84,7 +84,12 @@ def test_auto_detect_centering(data, cell, centering):
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
     sampling=abtem_st.sampling(min_value=0.02, max_value=0.1),
     thermal_sigma=st.floats(min_value=0.03, max_value=0.1),
-    g_max=st.floats(min_value=8, max_value=16),
+    # The structure factor is truncated at g_max, which leaves a systematic error
+    # versus the real-space potential that grows as thermal_sigma shrinks (less
+    # Debye-Waller damping at high g). At thermal_sigma=0.03 the error is ~3% for
+    # g_max=8, ~1.4% for g_max=10 and below 1% from g_max=11, so g_max < 10 would
+    # not test the implementation against the 2.5% tolerance below.
+    g_max=st.floats(min_value=10, max_value=16),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
 @pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
