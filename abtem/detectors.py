@@ -84,6 +84,18 @@ def _gpts_and_sampling_from_obj(obj):
     return gpts, angular_sampling, reciprocal_space_sampling, energy
 
 
+def _cell_from_obj(obj):
+    """The in-plane cell of waves *or* a DiffractionPatterns object, or ``None`` for
+    an orthogonal grid. A measurement has no grid of its own and carries the cell in
+    its metadata instead (see `Waves.metadata`)."""
+    grid = getattr(obj, "grid", None)
+    if grid is not None:
+        return grid.cell
+
+    cell = obj.metadata.get("cell", None)
+    return None if cell is None else np.array(cell, dtype=float)
+
+
 def validate_detectors(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     waves: Optional[BaseWaves] = None,
@@ -880,7 +892,12 @@ class AnnularDetector(_AbstractRadialDetector):
         self, waves, fftshift: bool = True
     ) -> np.ndarray:
         inner, outer = self.angular_limits(waves)
-        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+        gpts, angular_sampling, _, energy = _gpts_and_sampling_from_obj(waves)
+
+        # `waves` may be a DiffractionPatterns, which has no grid and no `energy`
+        # attribute; both only matter for a skewed cell, whose metric angles need
+        # the wavelength.
+        cell = _cell_from_obj(waves)
 
         array = _polar_detector_bins(
             gpts=gpts,
@@ -893,8 +910,8 @@ class AnnularDetector(_AbstractRadialDetector):
             rotation=0.0,
             offset=self.offset,
             return_indices=False,
-            cell=waves.grid.cell,
-            wavelength=energy2wavelength(waves.energy),
+            cell=cell,
+            wavelength=None if cell is None else energy2wavelength(energy),
         )
         assert isinstance(array, np.ndarray)
         return array >= 0
