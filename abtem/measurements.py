@@ -7179,18 +7179,10 @@ def elastic_diffuse_diffraction_patterns(
     parity : str
         Passed to ``Waves.diffraction_patterns``.
     block_direct : bool or float, optional
-        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
-        the metadata larger than half the smaller angular sampling, up to the
-        cutoff plus a margin of the larger angular sampling, as by
-        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
-        half the smaller angular sampling or an infinite one (a plane wave, a
-        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
-        records the same cutoff, so between half and the full sampling the margin
-        also blocks its dark nearest pixels. With an ensemble of cutoffs the
-        metadata has none, so only the zero-angle pixel is blocked and the
-        bright-field disks stay; pass a radius then. If given as a float, masks up
-        to that scattering angle [mrad], plus the same margin when the metadata has
-        a ``semiangle_cutoff``. Default is False.
+        If True, block the direct beam: the bright-field disk and a margin for a probe
+        with a semiangle cutoff, otherwise the zero-frequency pixel (the rule is in
+        ``DiffractionPatterns._apply_block_direct``). If given as a float, masks up to
+        that scattering angle [mrad]. Default is False.
     unbiased : bool, optional
         Correct the (N − 1)/N bias of the diffuse intensity, assuming independent
         configurations: D_u = N/(N − 1)·D and E_u = T − D_u; the total is
@@ -7356,18 +7348,10 @@ def phonon_loss_diffraction_patterns(
     parity : str
         Passed to ``Waves.diffraction_patterns``.
     block_direct : bool or float, optional
-        If True, the direct beam is blocked: with a finite ``semiangle_cutoff`` in
-        the metadata larger than half the smaller angular sampling, up to the
-        cutoff plus a margin of the larger angular sampling, as by
-        ``DiffractionPatterns.block_direct()``; without one, or with one of at most
-        half the smaller angular sampling or an infinite one (a plane wave, a
-        parallel beam, or no aperture), only the zero-angle pixel. A hard aperture
-        records the same cutoff, so between half and the full sampling the margin
-        also blocks its dark nearest pixels. With an ensemble of cutoffs the
-        metadata has none, so only the zero-angle pixel is blocked and the
-        bright-field disks stay; pass a radius then. If given as a float, masks up
-        to that scattering angle [mrad], plus the same margin when the metadata has
-        a ``semiangle_cutoff``. Default is False.
+        If True, block the direct beam: the bright-field disk and a margin for a probe
+        with a semiangle cutoff, otherwise the zero-frequency pixel (the rule is in
+        ``DiffractionPatterns._apply_block_direct``). If given as a float, masks up to
+        that scattering angle [mrad]. Default is False.
     temperature : float, optional
         Sample temperature [K]. If given, unfolds the diffuse signal — computed
         from a single frozen-phonon run per energy *magnitude* — into signed
