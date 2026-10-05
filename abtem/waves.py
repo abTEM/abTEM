@@ -64,7 +64,9 @@ from abtem.measurements import (
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
@@ -1613,6 +1615,8 @@ class Waves(BaseWaves, ArrayObject):
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
         **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
+        """Run the inelastic multislice algorithm from these wave functions; see
+        :meth:`Probe.transition_potential_scan` for the parameters."""
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
@@ -1622,6 +1626,9 @@ class Waves(BaseWaves, ArrayObject):
         # a dask traceback.
         if multislice_func_kwargs.get("detectors_elastic"):
             raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+        if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+            raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
         potential = validate_potential(potential, self)
 
@@ -2841,7 +2848,9 @@ class Probe(WavesBuilder):
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------

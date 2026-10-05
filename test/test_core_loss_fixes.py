@@ -2367,3 +2367,86 @@ class TestCeilToMultiple:
 
         assert _ceil_to_multiple(n, multiple) == expected
         assert _ceil_to_multiple(n, multiple) >= n
+
+
+def _expansion_scope_setup():
+    """Si cell with one seeded displacement and three slices."""
+    atoms = list(
+        abtem.FrozenPhonons(ase.build.bulk("Si", cubic=True), 1, sigmas=0.1, seed=1)
+    )[0]
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 3)
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    return atoms, potential, probe
+
+
+def _core_loss_scan(algorithm, lazy, double_channel):
+    atoms, potential, probe = _expansion_scope_setup()
+    kwargs = {} if algorithm is None else {"algorithm": algorithm}
+    return probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=synthetic_transition_potential(
+            gpts=potential.gpts, extent=potential.extent, n_transitions=2
+        ),
+        scan=np.array([[0.0, 0.0]]),
+        detectors=abtem.AnnularDetector(inner=0.0, outer=None),
+        double_channel=double_channel,
+        lazy=lazy,
+        sites=atoms,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("double_channel", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_full_expansion_scope_is_refused_at_call_time(lazy, double_channel):
+    """The core-loss multislice does not support ``expansion_scope="full"``.
+
+    The refusal happens when the measurement is built, not when it is computed:
+    a lazy call must not return an object that fails later inside a dask task.
+    """
+    from abtem.multislice import RealSpaceMultislice
+
+    with pytest.raises(NotImplementedError, match="expansion_scope='full'"):
+        _core_loss_scan(
+            RealSpaceMultislice(expansion_scope="full"), lazy, double_channel
+        )
+
+
+def test_full_expansion_scope_is_refused_by_the_driver():
+    """The public driver refuses it too, before any work."""
+    from abtem.multislice import (
+        RealSpaceMultislice,
+        transition_potential_multislice_and_detect,
+    )
+
+    atoms, potential, probe = _expansion_scope_setup()
+    with pytest.raises(NotImplementedError, match="expansion_scope='full'"):
+        transition_potential_multislice_and_detect(
+            probe.build(scan=np.array([[0.0, 0.0]]), lazy=False),
+            potential.build(),
+            synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
+            ),
+            detectors=[abtem.AnnularDetector(inner=0.0, outer=None)],
+            double_channel=False,
+            sites=atoms,
+            algorithm=RealSpaceMultislice(expansion_scope="full"),
+        )
+
+
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_propagator_expansion_scope_runs_in_the_core_loss_multislice(double_channel):
+    """``RealSpaceMultislice(expansion_scope="propagator")`` is the supported real-space choice."""
+    from abtem.multislice import RealSpaceMultislice
+
+    default = _core_loss_scan(None, False, double_channel)
+    realspace = _core_loss_scan(
+        RealSpaceMultislice(expansion_scope="propagator"), False, double_channel
+    )
+    reference = np.asarray(abtem.core.backend.asnumpy(default.array))
+    result = np.asarray(abtem.core.backend.asnumpy(realspace.array))
+    assert result.shape == reference.shape
+    # Both propagators solve the same equation; relative to the maximum they differ
+    # by 9e-5 (single channel) and 1e-3 (double channel).
+    assert np.abs(result - reference).max() < 1e-2 * np.abs(reference).max()

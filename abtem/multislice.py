@@ -935,6 +935,20 @@ _DETECTORS_ELASTIC_MESSAGE = (
 )
 
 
+_FULL_EXPANSION_SCOPE_MESSAGE = (
+    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
+    "core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice(expansion_scope='propagator')."
+)
+
+
+def _is_full_expansion_scope(algorithm) -> bool:
+    return (
+        isinstance(algorithm, RealSpaceMultislice)
+        and algorithm.expansion_scope == "full"
+    )
+
+
 def transition_potential_multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -963,7 +977,8 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
+        Algorithm used for multislice operator (default is FourierMultislice()). A
+        RealSpaceMultislice must have ``expansion_scope="propagator"``.
 
     Returns
     -------
@@ -975,6 +990,9 @@ def transition_potential_multislice_and_detect(
         # Belt and braces: Waves.transition_potential_multislice refuses this
         # before a graph is built, but the driver is also a public entry point.
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(algorithm):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
