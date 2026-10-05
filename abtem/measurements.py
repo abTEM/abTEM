@@ -530,6 +530,24 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
+def _cupy_safe_coordinates(array, coordinates):
+    """Cast map_coordinates coordinates to the precision CuPy computes in.
+
+    For a float32 (or complex64) input, cupyx's spline kernel takes the
+    starting index from floor((float)c) but the weights from floor(c) on the
+    coordinate's own dtype. A float64 coordinate just below an integer,
+    k - 1e-12, then rounds to k for the index but not for the weights, and
+    the result is the value at node k + 1. Giving the coordinates the
+    kernel's precision keeps both floors consistent. SciPy computes in
+    float64 throughout and is left alone.
+    """
+    xp = get_array_module(array)
+    if xp is np:
+        return coordinates
+    float_dtype = xp.promote_types(array.real.dtype, xp.float32)
+    return coordinates.astype(float_dtype, copy=False)
+
+
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
@@ -540,10 +558,17 @@ def _interpolate_stack(
     positions = positions.reshape((-1, 2))
 
     old_shape = array.shape
+
+    if mode == "wrap":
+        # The periodic padding below only reaches 2 * order pixels beyond the
+        # array, and map_coordinates fills everything past it with zeros, so
+        # positions further outside must first be wrapped into the array.
+        positions = positions % xp.asarray(old_shape[-2:], dtype=positions.dtype)
+
     array = array.reshape((-1,) + array.shape[-2:])
     array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
-    positions = positions + 2 * order
+    positions = _cupy_safe_coordinates(array, positions + 2 * order)
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
@@ -698,23 +723,33 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def normalize_ensemble(self, scale: str = "max", shift: str = "mean"):
         """
-        Normalize the ensemble by shifting ad scaling each member.
+        Normalize the ensemble by shifting and scaling each member.
+
+        Each member (a single measurement, i.e. one entry along the ensemble
+        axes) is shifted by `shift` and divided by `scale`, both reduced over
+        the member's base axes and evaluated on the unshifted member.
 
         Parameters
         ----------
         scale : {'max', 'min', 'sum', 'mean', 'ptp'}
-        shift : {'max', 'min', 'sum', 'mean', 'ptp'}
+        shift : {'max', 'min', 'sum', 'mean', 'ptp', 'none'}
 
         Returns
         -------
         normalized_measurements : BaseMeasurements or subclass of _BaseMeasurement
         """
+        # Reduce over all base axes: axis=-1 alone normalised each *row* of a
+        # 2-D measurement (e.g. Images) separately rather than each member.
+        base_axes = tuple(range(-len(self.base_shape), 0))
+
         if shift != "none":
-            array = self.array - getattr(np, shift)(self.array, axis=-1, keepdims=True)
+            array = self.array - getattr(np, shift)(
+                self.array, axis=base_axes, keepdims=True
+            )
         else:
             array = self.array
 
-        array = array / getattr(np, scale)(self.array, axis=-1, keepdims=True)
+        array = array / getattr(np, scale)(self.array, axis=base_axes, keepdims=True)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 
@@ -1274,9 +1309,16 @@ class _BaseMeasurement2D(BaseMeasurements):
             direction = direction / xp.linalg.norm(direction)
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            # The offsets are spaced by min(sampling) along the perpendicular
+            # direction in physical units (Å) and only then converted to
+            # pixels (`positions` is in pixels): applying the physical unit
+            # vector directly in pixel space tilts and stretches the offsets
+            # whenever the sampling is anisotropic.
             perpendicular_positions = (
                 xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                * min(self.sampling)
                 * perpendicular_direction[None]
+                / xp.asarray(self.sampling)
             )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
@@ -2511,6 +2553,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         new_points = xp.linspace(3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint)[
             None
         ]
+        new_points = _cupy_safe_coordinates(array, new_points)
 
         # Follow the input dtype: hardcoding float32 downgrades a float64
         # profile and makes map_coordinates reject a complex one outright
@@ -4709,7 +4752,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
-    def _crop(array: np.ndarray, gpts: tuple[int, int]):
+    def _crop(array: np.ndarray, gpts: tuple[int, int], fftshift: bool = True):
+        # fft_crop keeps the corners of an *unshifted* spectrum (zero
+        # frequency at index 0), so only an fftshifted array needs shifting
+        # there and back.
+        if not fftshift:
+            return fft_crop(array, new_shape=gpts)
         xp = get_array_module(array)
         array = xp.fft.fftshift(
             fft_crop(xp.fft.ifftshift(array, axes=(-2, -1)), new_shape=gpts),
@@ -4768,11 +4816,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             array = self.array.map_blocks(
                 self._crop,
                 gpts=gpts,
+                fftshift=self.fftshift,
                 chunks=self.array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=self.dtype),
             )
         else:
-            array = self._crop(self.array, gpts=gpts)
+            array = self._crop(self.array, gpts=gpts, fftshift=self.fftshift)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
