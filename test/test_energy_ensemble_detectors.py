@@ -3,7 +3,10 @@
 Each energy of a multi-energy result must equal a separate run at that energy alone.
 The sizes all differ (3 energies, 2 frozen-phonon configurations, a 4 x 7 scan, 5 exit
 planes), so a result whose axes are mislabelled or stacked in the wrong place shows up
-as a wrong shape or wrong values rather than passing by coincidence.
+as a wrong shape or wrong values rather than passing by coincidence. One test
+deliberately uses 3 configurations or 3 exit planes against the 3 energies: with equal
+sizes a mislabelled axis keeps the shape and passes silently unless the values are
+compared.
 """
 
 import ase.build
@@ -43,10 +46,10 @@ DETECTORS = {
 _references = {}
 
 
-def _potential(frozen_phonons, device, exit_planes=None):
+def _potential(frozen_phonons, device, exit_planes=None, num_configs=2):
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
     if frozen_phonons:
-        atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.08, seed=1)
+        atoms = abtem.FrozenPhonons(atoms, num_configs=num_configs, sigmas=0.08, seed=1)
     return abtem.Potential(
         atoms, sampling=0.1, slice_thickness=2, exit_planes=exit_planes, device=device
     )
@@ -206,6 +209,36 @@ def test_exit_planes_with_a_multi_energy_probe(detector, scan, device):
     _assert_each_energy_matches_a_single_energy_run(
         detector, True, scan, False, device, exit_planes=1
     )
+
+
+@pytest.mark.parametrize(
+    "frozen_phonons, exit_planes",
+    [(True, None), (False, 2)],
+    ids=["3-frozen-phonons", "3-exit-planes"],
+)
+@devices
+def test_a_leading_axis_as_long_as_the_energy_axis_keeps_its_values(
+    frozen_phonons, exit_planes, device
+):
+    """With as many configurations or exit planes as energies, an energy axis stacked
+    in the wrong place keeps the shape, so only the values tell."""
+    potential = _potential(frozen_phonons, device, exit_planes, num_configs=3)
+    num_leading = np.prod(potential.ensemble_shape) * potential.num_exit_planes
+    assert num_leading == len(ENERGIES)
+    probe = abtem.Probe(energy=ENERGIES, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    result = probe.multislice(potential, lazy=False)
+
+    energy_axis = [type(axis) for axis in result.axes_metadata].index(EnergyAxis)
+    for i, energy in enumerate(ENERGIES):
+        single = abtem.Probe(energy=energy, semiangle_cutoff=20, device=device)
+        single.grid.match(potential)
+        reference = asnumpy(single.multislice(potential, lazy=False).array)
+        member = np.take(asnumpy(result.array), i, axis=energy_axis)
+        assert member.shape == reference.shape
+        np.testing.assert_allclose(
+            member, reference, rtol=0, atol=1e-5 * np.abs(reference).max()
+        )
 
 
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
