@@ -4581,11 +4581,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         cell = self.metadata.get("cell", None)
-        wavelength = (
-            energy2wavelength(self.get_from_metadata("energy"))
-            if cell is not None
-            else None
-        )
+        wavelength = energy2wavelength(self._get_energy()) if cell is not None else None
 
         if self.is_lazy:
             array = self.array.map_blocks(
@@ -4841,11 +4837,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(self.array)
 
         cell = self.metadata.get("cell", None)
-        wavelength = (
-            energy2wavelength(self.get_from_metadata("energy"))
-            if cell is not None
-            else None
-        )
+        wavelength = energy2wavelength(self._get_energy()) if cell is not None else None
 
         if self.is_lazy:
             integrated_intensity = self.array.map_blocks(
@@ -4929,7 +4921,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 gpts=self.base_shape, sampling=sampling, cell=cell
             ).k_components(xp=xp)
             if units == "mrad":
-                wavelength = energy2wavelength(self.get_from_metadata("energy"))
+                wavelength = energy2wavelength(self._get_energy())
                 gx = gx * wavelength * 1e3
                 gy = gy * wavelength * 1e3
             # match array layout
@@ -5029,7 +5021,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             # _metric_polar_angles returns FFT-order; match array layout
             alpha, _ = _metric_polar_angles(
                 self.base_shape, cell,
-                energy2wavelength(self.get_from_metadata("energy")), xp,
+                energy2wavelength(self._get_energy()), xp,
             )
             if self.fftshift:
                 alpha = xp.fft.fftshift(alpha)
@@ -5205,7 +5197,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             # _metric_polar_angles returns FFT-order; match array layout
             alpha, _ = _metric_polar_angles(
                 self.base_shape, cell,
-                energy2wavelength(self.get_from_metadata("energy")), np,
+                energy2wavelength(self._get_energy()), np,
             )
             if self.fftshift:
                 alpha = np.fft.fftshift(alpha)
