@@ -539,3 +539,35 @@ def test_the_pool_unit_of_a_member_is_the_unit_with_the_seed_of_the_member(fake_
         np.testing.assert_array_equal(
             pool_unit.build(lazy=False).array, expected.build(lazy=False).array
         )
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (4, (2, 1, 2), dict(num_frozen_phonons=2, seeds=(5, 6), ensemble_mean=False)),
+        (2, (3, 1, 2), dict()),
+    ],
+    ids=["seeded", "enlarged"],
+)
+def test_a_crystal_of_a_frozen_phonon_gpaw_unit_simulates_as_it_builds(
+    fake_gpaw, monkeypatch, num_configs, repetitions, kwargs, lazy
+):
+    # An unseeded crystal draws its mosaic from fresh entropy in every call;
+    # fix it, so that the build and the simulation draw the same crystal.
+    default_rng = np.random.default_rng
+    monkeypatch.setattr(
+        np.random, "default_rng", lambda seed=None: default_rng(0 if seed is None else seed)
+    )
+
+    expected = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs).build(lazy=False),
+        lazy=False,
+    )
+    result = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs), lazy=lazy
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    _assert_equal(result, expected)

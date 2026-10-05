@@ -2495,7 +2495,7 @@ class CrystalPotential(_PotentialBuilder):
         # into ``n_configs * len(self.potential_unit)`` unique tile calls.
         # For the SrTiO3 tutorial (reps=(4,4,25), 2 unit slices, no FP) this
         # is 2 tiles instead of 50; the cache footprint is bounded by the
-        # tiled-unit byte size and freed when the generator is exhausted.
+        # tiled-unit byte size and released with the generator.
         tiled_cache: dict[tuple[int, int], PotentialArray] = {}
         unit_generators: dict[int, object] = {}
         tile_xy = self.repetitions[:2]
@@ -2648,16 +2648,20 @@ class CrystalPotential(_PotentialBuilder):
         """
         Generate potential slices in memory-budgeted chunks.
 
-        Unlike the base-class implementation, this override builds the unit
-        potential **once** (not once per chunk) and fills each output chunk
-        array in-place, slice by slice, using ``xp.tile``.  This avoids the
-        ~2× peak-memory spike that the base class incurs from accumulating
-        per-slice tiled arrays into a list before concatenating them.
+        The chunks hold exactly the slices of one ``generate_slices`` call (the
+        frozen-phonon pool is built and the mosaic drawn once for all chunks),
+        each written into one preallocated array rather than stacked from a
+        list of slices. The generator holds memory on top of the chunk budget:
+        for a single-configuration unit, ``len(potential_unit)`` tiled slices
+        for reuse across z-repetitions (about ``1 / repetitions[2]`` of the
+        crystal's slices; filling the chunks with ``xp.tile`` instead would
+        remove them); for a frozen-phonon unit, its pool (enlarged to the
+        number of lateral tiles when smaller), held for the whole call.
 
         The dtype of the output follows the unit potential's array dtype,
         which is set by the abtem ``precision`` config key (float32 / float64).
         """
-        from abtem.core.chunks import estimate_potential_chunk_size, generate_chunks
+        from abtem.core.chunks import estimate_potential_chunk_size
 
         if last_slice is None:
             last_slice = len(self)
@@ -2668,51 +2672,23 @@ class CrystalPotential(_PotentialBuilder):
 
         xp = get_array_module(self.device)
         exit_plane_after = self._exit_plane_after
-
-        # Build the unit potential once; the base class would re-build it on
-        # every chunk (one generate_slices() call per chunk).
-        if not isinstance(self.potential_unit, PotentialArray):
-            unit_built = self.potential_unit.build(lazy=False)
-        else:
-            unit_built = self.potential_unit
-
-        # A lazily-built PotentialArray unit (the default of Potential.build())
-        # carries a dask array here, which the device's tile below does not
-        # accept for CuPy. The unit cell is small; materialise it once, as in
-        # generate_slices.
-        unit_built = unit_built.ensure_computed(
-            scheduler="synchronous", progress_bar=False
-        )
-        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
-        if unit_arr.ndim == 3:
-            unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
-
-        rng = np.random.default_rng(self.seeds[0] if self.seeds is not None else None)
-        unit_slices = len(self.potential_unit)
-        n_configs = unit_arr.shape[0]
-
-        # Pre-draw frozen-phonon config indices — one per z-repetition —
-        # to match the sequence that generate_slices() would produce.
-        config_indices = rng.integers(0, n_configs, size=self.repetitions[2])
-
-        unit_st = self.potential_unit.slice_thickness
+        slices = self.generate_slices(first_slice, last_slice)
 
         for chunk_start, chunk_end in generate_chunks(
             last_slice - first_slice, chunks=chunk_size, start=first_slice
         ):
-            n = chunk_end - chunk_start
             out = None
             slice_thicknesses = []
 
-            for k, global_idx in enumerate(range(chunk_start, chunk_end)):
-                rep_i, unit_j = divmod(global_idx, unit_slices)
-                slc = unit_arr[config_indices[rep_i], unit_j]   # (h, w)
-                tiled = xp.tile(slc, self.repetitions[:2])       # (full_h, full_w)
-
+            for k in range(chunk_end - chunk_start):
+                slic = next(slices)
                 if out is None:
-                    out = xp.empty((n,) + tiled.shape, dtype=tiled.dtype)
-                out[k] = tiled
-                slice_thicknesses.append(unit_st[unit_j])
+                    out = xp.empty(
+                        (chunk_end - chunk_start,) + slic.array.shape[1:],
+                        dtype=slic.array.dtype,
+                    )
+                out[k] = slic.array[0]
+                slice_thicknesses.extend(slic.slice_thickness)
 
             exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
