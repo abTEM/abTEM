@@ -397,9 +397,7 @@ class _AbstractRadialDetector(BaseDetector):
         max_angle: float | str = outer
         if np.any(np.array(self._offset) != 0.0):
             max_angle = (
-                outer
-                + float(np.hypot(*self._offset))
-                + max(waves.angular_sampling)
+                outer + float(np.hypot(*self._offset)) + max(waves.angular_sampling)
             )
             gpts = waves._gpts_within_angle(max_angle, parity="same")
             if any(g >= n for g, n in zip(gpts, waves._valid_gpts)):
