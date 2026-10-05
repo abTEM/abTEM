@@ -250,3 +250,114 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
         return image
 
     np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
+
+
+@pytest.fixture
+def float64_numpy_fft():
+    with abtem.config.set({"precision": "float64", "fft": "numpy"}):
+        yield
+
+
+def _real_space_setup(sampling, energy=60e3, scan_gpts=(3, 4), cells=(2, 1, 1)):
+    import ase.build
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * cells
+    potential = abtem.Potential(atoms, sampling=sampling, slice_thickness=2)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(0.5, 1), fractional=True, potential=potential, gpts=scan_gpts
+    )
+    return potential, probe, scan
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("resample", [False, 0.1])
+@pytest.mark.parametrize("entry_point", ["detect", "detect_lazy", "scan", "scan_lazy"])
+def test_real_space_pixelated_detector_declares_what_it_returns(
+    entry_point, resample
+):
+    """PixelatedDetector(reciprocal_space=False) declares the shape and sampling
+    of the intensity image it returns, |psi|^2 on the waves' grid or on the grid
+    `resample` gives, through every entry point."""
+    potential, probe, scan = _real_space_setup(sampling=0.05)
+    waves = probe.scan(
+        potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+    )
+    detector = abtem.PixelatedDetector(reciprocal_space=False, resample=resample)
+
+    expected = np.abs(waves.array) ** 2
+    expected_sampling = waves.sampling
+    if resample:
+        gpts = tuple(int(np.ceil(e / resample)) for e in waves.extent)
+        expected_sampling = tuple(e / n for e, n in zip(waves.extent, gpts))
+        expected = waves.intensity().interpolate(sampling=resample).array
+        assert expected.shape[-2:] == gpts
+
+    if entry_point == "detect":
+        result = detector.detect(waves)
+    elif entry_point == "detect_lazy":
+        result = detector.detect(waves.copy().ensure_lazy())
+    else:
+        result = probe.scan(
+            potential, scan=scan, detectors=detector, lazy=entry_point == "scan_lazy"
+        )
+
+    assert result.shape == expected.shape
+    result = result.compute(scheduler="synchronous") if result.is_lazy else result
+    assert result.shape == expected.shape
+    np.testing.assert_allclose(
+        (result.axes_metadata[-2].sampling, result.axes_metadata[-1].sampling),
+        expected_sampling,
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+    )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_real_space_pixelated_detector_multislice(lazy):
+    potential, probe, _ = _real_space_setup(sampling=0.05)
+    waves = probe.multislice(potential, detectors=abtem.WavesDetector(), lazy=False)
+    expected = np.abs(waves.array) ** 2
+
+    result = probe.multislice(
+        potential,
+        detectors=abtem.PixelatedDetector(reciprocal_space=False),
+        lazy=lazy,
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    assert result.shape == expected.shape == (128, 221)
+    np.testing.assert_allclose(
+        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+    )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_real_space_pixelated_detector_multi_energy(lazy):
+    energies = [50e3, 60e3, 70e3, 80e3]
+    potential, probe, scan = _real_space_setup(
+        sampling=0.1, energy=energies, scan_gpts=(2, 3), cells=(1, 1, 1)
+    )
+    detector = abtem.PixelatedDetector(reciprocal_space=False)
+
+    result = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    energy_axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
+    assert result.shape[energy_axis] == len(energies)
+    for i, energy in enumerate(energies):
+        single = abtem.Probe(energy=energy, semiangle_cutoff=20).scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        expected = np.abs(single.array) ** 2
+        np.testing.assert_allclose(
+            np.take(result.array, i, axis=energy_axis),
+            expected,
+            rtol=0,
+            atol=1e-12 * expected.max(),
+        )
