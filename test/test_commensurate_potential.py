@@ -259,12 +259,20 @@ def _max_relative_spread(
     )
     array = pot.build(lazy=False).array.real.sum(axis=0)
     nx, ny = array.shape
-    lx, ly = pot.extent
-    sx, sy = lx / nx, ly / ny
 
     pos = sc.get_positions()
-    xi = np.round(pos[:, 0] / sx).astype(int) % nx
-    yi = np.round(pos[:, 1] / sy).astype(int) % ny
+    if pot.cell is not None:
+        # A skew-native (non-orthogonal) grid: pixel (i, j) sits at Cartesian
+        # i/nx * a1 + j/ny * a2, not (i*sx, j*sy) -- map through the inverse
+        # cell to fractional coordinates, as elsewhere in the codebase.
+        frac = pos[:, :2] @ np.linalg.inv(np.asarray(pot.cell))
+        xi = np.round(frac[:, 0] * nx).astype(int) % nx
+        yi = np.round(frac[:, 1] * ny).astype(int) % ny
+    else:
+        lx, ly = pot.extent
+        sx, sy = lx / nx, ly / ny
+        xi = np.round(pos[:, 0] / sx).astype(int) % nx
+        yi = np.round(pos[:, 1] / sy).astype(int) % ny
     values = array[xi, yi]
 
     ref_lx = float(np.linalg.norm(reference.cell[0]))

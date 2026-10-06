@@ -14,9 +14,11 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.core import config
-from abtem.core.axes import LinearAxis
+from abtem.core.axes import LinearAxis, ReciprocalSpaceAxis
 from abtem.core.colors import hsluv_cmap
+from abtem.core.grid import reciprocal_cell
 from abtem.core.units import get_conversion_factor
 
 if TYPE_CHECKING:
@@ -467,6 +469,65 @@ def get_extent(measurement, units=None):
     return (left, right, bottom, top)
 
 
+def _is_skew_cell(measurement):
+    """Return True if the measurement has a non-orthogonal in-plane cell."""
+    cell = measurement.metadata.get("cell", None)
+    if cell is None:
+        return False
+    return not is_cell_orthogonal(cell)
+
+
+def _build_skew_mesh(measurement, units=None):
+    """Build Cartesian (X, Y) coordinate meshes for ``pcolormesh`` on a skew grid.
+
+    Parameters
+    ----------
+    measurement : _BaseMeasurement2D
+        A measurement whose ``metadata["cell"]`` is a non-orthogonal 2×2 matrix.
+    units : str, optional
+        Display units (passed through to ``get_conversion_factor``).
+
+    Returns
+    -------
+    X, Y : ndarray, shape (Ny + 1, Nx + 1)
+        Pixel-edge coordinates in Cartesian space (in *units*).
+    """
+    cell = np.asarray(measurement.metadata["cell"])
+    Nx, Ny = measurement.base_shape
+    energy = measurement.metadata.get("energy", None)
+
+    ax0 = measurement.base_axes_metadata[0]
+    ax1 = measurement.base_axes_metadata[1]
+
+    # Edge positions in "along-axis" coordinates (Å or Å⁻¹)
+    u_edges = (ax0.offset - ax0.sampling / 2) + np.arange(Nx + 1) * ax0.sampling
+    v_edges = (ax1.offset - ax1.sampling / 2) + np.arange(Ny + 1) * ax1.sampling
+    U, V = np.meshgrid(u_edges, v_edges)  # shape (Ny+1, Nx+1)
+
+    # Direction vectors that convert (u, v) → Cartesian (x, y).
+    # Real space : û = â = a / |a|  (unit vector along lattice direction)
+    # Reciprocal : û = |a| · b      (maps the axis spacing 1/|a| to the
+    #                                 Cartesian reciprocal-vector components)
+    norms = np.linalg.norm(cell, axis=1)
+    if isinstance(ax0, ReciprocalSpaceAxis):
+        recip_cell = reciprocal_cell(cell)
+        hat1 = norms[0] * recip_cell[0]
+        hat2 = norms[1] * recip_cell[1]
+    else:
+        hat1 = cell[0] / norms[0]
+        hat2 = cell[1] / norms[1]
+
+    X = U * hat1[0] + V * hat2[0]
+    Y = U * hat1[1] + V * hat2[1]
+
+    # Unit conversion (Å → nm, or Å⁻¹ → mrad, etc.)
+    conversion = get_conversion_factor(units, ax0.units, energy=energy)
+    X *= conversion
+    Y *= conversion
+
+    return X, Y
+
+
 class ImageArtist(Artist2D):
     num_cbars = 1
 
@@ -489,20 +550,35 @@ class ImageArtist(Artist2D):
         if measurement.is_complex:
             raise ValueError("Complex measurements are not supported.")
 
-        extent = get_extent(measurement, units=units)
-
         cmap = validate_cmap(cmap, measurement)
+        self._is_skew = _is_skew_cell(measurement)
 
-        self._axes_image = ax.imshow(
-            measurement.array.T,
-            origin=origin,
-            cmap=cmap,
-            extent=extent,
-            interpolation=kwargs.pop("interpolation", "none"),
-            **kwargs,
-        )
-        norm = _get_norm(vmin, vmax, power, logscale)
-        self._axes_image.set_norm(norm)
+        if self._is_skew:
+            X, Y = _build_skew_mesh(measurement, units=units)
+            norm = _get_norm(vmin, vmax, power, logscale)
+            kwargs.pop("interpolation", None)
+            self._axes_image = ax.pcolormesh(
+                X,
+                Y,
+                measurement.array.T,
+                cmap=cmap,
+                norm=norm,
+                **kwargs,
+            )
+            ax.set_aspect("equal")
+        else:
+            extent = get_extent(measurement, units=units)
+            self._axes_image = ax.imshow(
+                measurement.array.T,
+                origin=origin,
+                cmap=cmap,
+                extent=extent,
+                interpolation=kwargs.pop("interpolation", "none"),
+                **kwargs,
+            )
+            norm = _get_norm(vmin, vmax, power, logscale)
+            self._axes_image.set_norm(norm)
+
         self._cbar = None
 
         xlabel = measurement.base_axes_metadata[0].format_label(units)
@@ -537,9 +613,13 @@ class ImageArtist(Artist2D):
         return [array.min(), array.max()]
 
     def get_xlim(self):
+        if self._is_skew:
+            return self._ax.get_xlim()
         return self.axes_image.get_extent()[:2]
 
     def get_ylim(self):
+        if self._is_skew:
+            return self._ax.get_ylim()
         return self.axes_image.get_extent()[2:]
 
     def set_cbars(self, caxes, **kwargs):
@@ -551,10 +631,14 @@ class ImageArtist(Artist2D):
         self.axes_image.set_cmap(cmap)
 
     def set_data(self, data):
-        self.axes_image.set_data(data.array.T)
+        if self._is_skew:
+            self.axes_image.set_array(data.array.T.ravel())
+        else:
+            self.axes_image.set_data(data.array.T)
 
     def set_extent(self, extent):
-        self.axes_image.set_extent(extent)
+        if not self._is_skew:
+            self.axes_image.set_extent(extent)
 
     def set_power(self, power: float = 1.0):
         self._update_norm(self.norm, power, self.axes_image)

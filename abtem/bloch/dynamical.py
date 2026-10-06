@@ -25,7 +25,7 @@ from scipy.linalg import expm as expm_scipy  # type: ignore
 from scipy.spatial.transform import Rotation  # type: ignore
 
 from abtem.array import ArrayObject
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import is_cell_orthogonal, is_cell_z_separable
 from abtem.bloch.utils import (
     auto_detect_centering,
     calculate_g_vec,
@@ -812,13 +812,24 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         PotentialArray
             The projected potential.
         """
-        if not is_cell_orthogonal(self.cell):
+        # The 3D potential lives on a fractional grid along (a, b, c); summing along
+        # axis 2 projects along the c-axis. For that to equal a projection along the
+        # Cartesian z-axis (which is the multislice beam direction), c must lie along
+        # z. The in-plane cell (a, b) may otherwise be non-orthogonal.
+        cell_arr = np.asarray(self.cell, dtype=float)
+        if not is_cell_z_separable(cell_arr):
             raise NotImplementedError(
-                "Converting structure factor to projected potential is not supported ",
-                "for non-orthogonal or rotated cells",
+                "Converting structure factor to projected potential is not supported "
+                "for cells with a tilted c-axis (c must lie along the beam direction; "
+                "the in-plane a, b cell may still be non-orthogonal)."
             )
 
-        extent = tuple(np.diag(self.cell)[:2])
+        # Use the lattice-vector lengths as the in-plane extent. For an orthogonal
+        # cell this reduces to ``np.diag(cell)[:2]``; for a non-orthogonal (skewed)
+        # in-plane cell it gives the correct lattice spacings so the resulting
+        # ``sampling`` is the standard ``norm(cell_i) / N_i`` that downstream
+        # ``Potential(..., sampling=potential_sf.sampling)`` consumes.
+        extent = tuple(np.linalg.norm(cell_arr[:2], axis=1))
 
         if sampling is not None:
             grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -882,10 +893,20 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             extent[1] / potential_sliced.shape[-1],
         )
 
+        # The potential is sampled on the fractional (a, b) grid, so a skewed in-plane
+        # cell must be carried by the grid; otherwise the pixels are treated as a
+        # rectangular |a| x |b| grid and multislice uses the orthogonal propagator.
+        # Mirror ``Potential``: only attach the cell when a and b are non-orthogonal.
+        cell_2d = cell_arr[:2, :2]
+        in_plane_orthogonal = abs(float(cell_2d[0] @ cell_2d[1])) <= 1e-9 * (
+            extent[0] * extent[1]
+        )
+
         potential_array = PotentialArray(
             potential_sliced,
             slice_thickness=tuple(validated_slice_thickness),
             sampling=sampling,
+            cell=None if in_plane_orthogonal else cell_2d,
         )
 
         return potential_array

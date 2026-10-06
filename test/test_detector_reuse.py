@@ -32,9 +32,14 @@ def _cpu_float64():
         yield
 
 
-def _potential():
+def _potential(non_orthogonal=None):
+    # mx2 builds a hexagonal cell, which Potential simulates on a skewed grid by
+    # default. C-PRISM (upsample=True) assumes an orthogonal grid and raises there,
+    # so its tests ask for the orthogonalising path, which is what dev always did.
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
-    return abtem.Potential(atoms, sampling=0.15, slice_thickness=2)
+    return abtem.Potential(
+        atoms, sampling=0.15, slice_thickness=2, non_orthogonal=non_orthogonal
+    )
 
 
 def _scan(potential):
@@ -92,7 +97,7 @@ def test_prism_scan_leaves_the_users_detector_unmatched(make, interpolation, laz
 
 @pytest.mark.parametrize("upsample", [False, True])
 def test_s_matrix_array_reduce_leaves_the_users_detector_unmatched(upsample):
-    potential = _potential()
+    potential = _potential(non_orthogonal=False if upsample else None)
     kwargs = dict(upsample=True, blend_angle="auto") if upsample else {}
     s_matrix = abtem.SMatrix(
         potential=potential,
@@ -164,7 +169,7 @@ def test_prism_multi_energy_lazy_equals_eager_for_an_auto_outer():
     ids=["interpolation_1", "interpolation_2", "interpolation_2_upsampled"],
 )
 def test_prism_auto_outer_is_the_dummy_probes_cutoff(kwargs):
-    potential = _potential()
+    potential = _potential(non_orthogonal=False if kwargs.get("upsample") else None)
     s_matrix = abtem.SMatrix(
         potential=potential, energy=60e3, semiangle_cutoff=20, **kwargs
     )

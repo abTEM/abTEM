@@ -20,7 +20,10 @@ if TYPE_CHECKING:
 
 
 def antialias_aperture(
-    gpts: tuple[int, int], sampling: tuple[float, float], xp=None
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    xp=None,
+    cell: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Array defining a Fourier-space antialiasing aperture.
@@ -32,6 +35,13 @@ def antialias_aperture(
     sampling : two float, optional
         Reciprocal-space sampling in `x` and `y` of the antialiasing aperture. Units
         are arbitrary.
+    cell : np.ndarray, optional
+        Optional 2x2 real-space cell (rows are the in-plane lattice vectors) for a
+        non-orthogonal grid. When given, the aperture is an isotropic disk in physical
+        reciprocal space (a metric ellipse in index space) rather than a circle in the
+        oblique index coordinates. ``None`` (default) is the orthogonal case. The cutoff
+        ``1/(2*max(sampling))`` is the inscribed-circle radius of the Nyquist
+        parallelogram, so it is correct for both cases.
 
     Returns
     -------
@@ -40,8 +50,14 @@ def antialias_aperture(
     cutoff = config.get("antialias.cutoff") / max(sampling) / 2
     taper = config.get("antialias.taper") / max(sampling)
 
-    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
-    r = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+    if cell is None:
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        r = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+    else:
+        # physical |g| from the reciprocal metric -> a disk in physical reciprocal space
+        from abtem.core.grid import Grid
+
+        r = xp.sqrt(Grid(gpts=gpts, sampling=sampling, cell=cell).k_squared(xp=xp))
 
     if taper > 0.0:
         array = 0.5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
@@ -66,6 +82,7 @@ class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
             x.sampling,
             x.energy,
             x.device,
+            getattr(x.grid, "_cell", None),
         )
 
         if key == self._key:
@@ -75,6 +92,7 @@ class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
             x._valid_gpts,
             x._valid_sampling,
             get_array_module(x.device),
+            cell=x.cell,
         )
         self._key = key
 

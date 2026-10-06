@@ -146,7 +146,12 @@ def test_zernike_rejects_a_negative_center_hole():
 @pytest.fixture(scope="module")
 def potential():
     atoms = ase.build.mx2("WSe2", vacuum=2)
-    return abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+    # the orthogonalising path: mx2 builds a hexagonal cell, which Potential would
+    # otherwise simulate on a skewed grid, where C-PRISM (upsample=True) is not
+    # supported
+    return abtem.Potential(
+        atoms, sampling=0.1, slice_thickness=2, non_orthogonal=False
+    )
 
 
 def _with_cutoff(obj, cls, semiangle_cutoff):
