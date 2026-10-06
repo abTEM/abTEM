@@ -2541,6 +2541,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             array = self.array
 
+        if backend.tp is not None and xp is backend.tp:
+            # HyperSpy holds NumPy, dask or CuPy data, not torch backend arrays.
+            array = asnumpy(array)
+
         s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
 
         if self.is_lazy:
