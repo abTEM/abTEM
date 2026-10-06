@@ -10,6 +10,7 @@ from typing import (
     Any,
     Callable,
     Iterable,
+    Literal,
     Optional,
     Sequence,
     SupportsFloat,
@@ -37,6 +38,7 @@ from abtem.bloch.utils import (
     reciprocal_cell,
     reciprocal_space_gpts,
     retrieve_structure_factor_values,
+    validate_use_wave_eq,
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
@@ -953,7 +955,7 @@ def calculate_structure_matrix(
     cell: Cell | np.ndarray,
     energy: float,
     gpts: tuple[int, int, int],
-    use_wave_eq: bool = False,
+    use_wave_eq: bool | Literal["exact"] = False,
 ) -> np.ndarray:
     """Calculate the structure matrix for a given set of reciprocal space vectors.
 
@@ -973,9 +975,13 @@ def calculate_structure_matrix(
         The energy of the electrons [eV].
     gpts : tuple of ints
         The number of grid points in the 3D structure factor.
-    use_wave_eq : bool
-        If True, the Bloch wave equation derived from the wave equation is used.
-        Otherwise standard Bloch wave is used.
+    use_wave_eq : bool or 'exact'
+        If True, the Bloch wave equation derived from the paraxial wave equation is
+        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
+        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
+        (converging to it needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
+        is used. See :func:`abtem.bloch.utils.excitation_errors`.
 
     Returns
     -------
@@ -1371,9 +1377,13 @@ class BlochWaves:
         Lattice centering.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
-    use_wave_eq : bool
-        If True, the Bloch wave equation derived from the wave equation is used.
-        Otherwise standard Bloch wave is used.
+    use_wave_eq : bool or 'exact'
+        If True, the Bloch wave equation derived from the paraxial wave equation is
+        used, matching multislice with ``FourierMultislice(order=1)``. If 'exact',
+        its non-paraxial counterpart, matching ``FourierMultislice(order="exact")``
+        (converging to it needs an `sg_max` large enough to include the beams whose
+        paraxial and exact excitation errors differ). Otherwise standard Bloch wave
+        is used. See :func:`abtem.bloch.utils.excitation_errors`.
     """
 
     def __init__(
@@ -1385,7 +1395,7 @@ class BlochWaves:
         orientation_matrix: Optional[np.ndarray] = None,
         centering: str = "auto",
         device: Optional[str] = None,
-        use_wave_eq: bool = False,
+        use_wave_eq: bool | Literal["exact"] = False,
     ):
         if isinstance(structure_factor, Atoms):
             if g_max is None:
@@ -1408,7 +1418,7 @@ class BlochWaves:
         self._g_max = g_max
         self._cell = cell
         self._centering = centering
-        self._use_wave_eq = use_wave_eq
+        self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
 
         energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
@@ -1533,7 +1543,7 @@ class BlochWaves:
         return np.linalg.norm(self.g_vec, axis=1)
 
     @property
-    def use_wave_eq(self) -> bool:
+    def use_wave_eq(self) -> bool | Literal["exact"]:
         return self._use_wave_eq
 
     @property
@@ -2189,7 +2199,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         g_max: float,
         centering: str = "P",
         device: Optional[str] = None,
-        use_wave_eq: bool = False,
+        use_wave_eq: bool | Literal["exact"] = False,
         use_degrees: bool = False,
     ):
         axes = args[::2]
@@ -2223,7 +2233,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._centering = centering
         self._sg_max = sg_max
         self._g_max = g_max
-        self._use_wave_eq = use_wave_eq
+        self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
 
     def get_ensemble_hkl_mask(self) -> np.ndarray:
@@ -2303,7 +2313,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return self._g_max
 
     @property
-    def use_wave_eq(self) -> bool:
+    def use_wave_eq(self) -> bool | Literal["exact"]:
         return self._use_wave_eq
 
     @property
