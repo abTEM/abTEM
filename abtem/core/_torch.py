@@ -31,6 +31,9 @@ except ModuleNotFoundError:
     torch = None  # type: ignore[assignment]
 
 
+# The torch device the arrays live on: "mps", or "cpu" to run this layer on any
+# machine. Set from the ``torch.device`` configuration key when the backend loads
+# (``backend.check_mps_is_available``).
 DEVICE = "mps"
 
 
@@ -115,8 +118,14 @@ if torch is not None:
 
 
 def is_available() -> bool:
-    """Whether PyTorch is installed and its Metal (MPS) backend is usable."""
-    return torch is not None and torch.backends.mps.is_available()
+    """Whether PyTorch is installed and the configured device is usable.
+
+    The Metal (MPS) backend must be usable when :data:`DEVICE` is ``"mps"``;
+    torch's CPU device only needs torch to import.
+    """
+    if torch is None:
+        return False
+    return DEVICE == "cpu" or torch.backends.mps.is_available()
 
 
 def _check_available() -> None:
@@ -125,7 +134,7 @@ def _check_available() -> None:
             "PyTorch is not installed, Metal (MPS) calculations are disabled. "
             "Install it from https://pytorch.org, or change the device to 'cpu'."
         )
-    if not torch.backends.mps.is_available():
+    if DEVICE == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError(
             "The Metal (MPS) backend is not available in this PyTorch build. "
             "Metal requires macOS on Apple silicon; change the device to 'cpu'."
