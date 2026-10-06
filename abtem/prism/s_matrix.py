@@ -3648,10 +3648,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
 
-        See :meth:`.CompressedSMatrixArray.reduce`.
+        Unlike :meth:`.CompressedSMatrixArray.reduce`, the detectors default to the
+        :class:`FlexibleAnnularDetector` and the scan defaults to a
+        :class:`GridScan`. To obtain the exit wave functions, pass
+        :class:`WavesDetector`. See :meth:`.CompressedSMatrixArray.reduce` for the
+        parameters.
         """
         if scan is None:
             scan = GridScan()
+
+        if detectors is None:
+            detectors = [FlexibleAnnularDetector()]
 
         return self.reduce(
             scan=scan,
