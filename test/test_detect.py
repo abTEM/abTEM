@@ -5,6 +5,8 @@ import strategies as abtem_st
 from hypothesis import assume, given
 
 import abtem
+from utils import gpu
+from abtem.core.backend import asnumpy
 
 
 @given(data=st.data())
@@ -228,7 +230,7 @@ def test_waves_detector_keeps_data_on_device_by_default():
     assert WavesDetector().to_cpu is False
 
 
-def _finite_crystallite_exit_waves():
+def _finite_crystallite_exit_waves(device="cpu"):
     """A small, non-periodic crystallite disk in a vacuum box, illuminated by
     a plane wave -- the 3DED-style setup PixelatedDetector/WavesDetector's
     margin/window_func are for: real-space exit waves with hard edges at the
@@ -239,8 +241,10 @@ def _finite_crystallite_exit_waves():
 
     bulk_atoms = bulk("Si", "diamond", a=5.43, cubic=True)
     disk = cut_disk(bulk_atoms, box=(16.0, 16.0, 16.0))
-    potential = abtem.Potential(disk, gpts=96, slice_thickness=2.0)
-    waves = abtem.PlaneWave(energy=200e3, extent=potential.extent, gpts=potential.gpts)
+    potential = abtem.Potential(disk, gpts=96, slice_thickness=2.0, device=device)
+    waves = abtem.PlaneWave(
+        energy=200e3, extent=potential.extent, gpts=potential.gpts, device=device
+    )
     return waves.build(lazy=False).multislice(potential, detectors=abtem.WavesDetector())
 
 
@@ -251,17 +255,18 @@ def _finite_crystallite_exit_waves():
         (abtem.WavesDetector, dict()),
     ],
 )
-def test_margin_window_defaults_reproduce_unmodified_detector(detector_cls, kwargs):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_margin_window_defaults_reproduce_unmodified_detector(detector_cls, kwargs, device):
     """margin=0.0 and window_func=None (the defaults) must reproduce exactly
     what the detector returned before these parameters existed."""
-    exit_waves = _finite_crystallite_exit_waves()
+    exit_waves = _finite_crystallite_exit_waves(device)
 
     plain = detector_cls(**kwargs).detect(exit_waves)
     explicit_defaults = detector_cls(**kwargs, margin=0.0, window_func=None).detect(
         exit_waves
     )
 
-    np.testing.assert_array_equal(plain.array, explicit_defaults.array)
+    np.testing.assert_array_equal(asnumpy(plain.array), asnumpy(explicit_defaults.array))
 
 
 @pytest.mark.parametrize(
@@ -271,12 +276,13 @@ def test_margin_window_defaults_reproduce_unmodified_detector(detector_cls, kwar
         (abtem.WavesDetector, dict()),
     ],
 )
-def test_margin_crops_output_shape(detector_cls, kwargs):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_margin_crops_output_shape(detector_cls, kwargs, device):
     """Non-zero margin must shrink the output shape, and _out_base_shape must
     predict the actual shape -- the failure mode a mismatch here would cause
     is a ValueError from a pre-allocated array that doesn't match during
     multislice, not just a wrong-looking result."""
-    exit_waves = _finite_crystallite_exit_waves()
+    exit_waves = _finite_crystallite_exit_waves(device)
 
     plain = detector_cls(**kwargs).detect(exit_waves)
     cropped_detector = detector_cls(**kwargs, margin=1.0)
@@ -288,7 +294,8 @@ def test_margin_crops_output_shape(detector_cls, kwargs):
     assert expected_shape[1] < plain.base_shape[1]
 
 
-def test_pixelated_detector_window_reduces_diffuse_background():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_pixelated_detector_window_reduces_diffuse_background(device):
     """Windowing a finite, non-periodic crystallite's exit wave before
     detecting should measurably suppress the diffuse background between
     Bragg spots -- the truncation-rod streaks a hard-edged box produces --
@@ -298,10 +305,10 @@ def test_pixelated_detector_window_reduces_diffuse_background():
     windowing effect the renormalization is not meant to undo."""
     from abtem.detectors import _window_power_gain
 
-    exit_waves = _finite_crystallite_exit_waves()
+    exit_waves = _finite_crystallite_exit_waves(device)
 
-    plain = abtem.PixelatedDetector(max_angle="full").detect(exit_waves).array
-    windowed = (
+    plain = asnumpy(abtem.PixelatedDetector(max_angle="full").detect(exit_waves).array)
+    windowed = asnumpy(
         abtem.PixelatedDetector(max_angle="full", window_func="hann")
         .detect(exit_waves)
         .array
@@ -316,7 +323,8 @@ def test_pixelated_detector_window_reduces_diffuse_background():
     assert windowed_raw[..., mask].mean() < plain[..., mask].mean()
 
 
-def test_pixelated_detector_window_matches_manual_renormalization():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_pixelated_detector_window_matches_manual_renormalization(device):
     """Pins down the exact renormalization convention: PixelatedDetector's
     windowed output must equal manually windowing the waves, taking the
     diffraction pattern, and rescaling by 1 / mean(taper**2) -- the window's
@@ -324,7 +332,7 @@ def test_pixelated_detector_window_matches_manual_renormalization():
     analysis tools apply by hand for a Hann window."""
     from abtem.detectors import _window_power_gain
 
-    exit_waves = _finite_crystallite_exit_waves()
+    exit_waves = _finite_crystallite_exit_waves(device)
 
     detected = abtem.PixelatedDetector(
         max_angle="full", window_func="hann", margin=0.5
@@ -342,23 +350,26 @@ def test_pixelated_detector_window_matches_manual_renormalization():
     )
     renorm = _window_power_gain("hann", cropped.base_shape)
 
-    np.testing.assert_allclose(detected.array, manual.array * renorm, rtol=1e-6)
+    np.testing.assert_allclose(
+        asnumpy(detected.array), asnumpy(manual.array) * renorm, rtol=1e-6
+    )
 
 
-def test_windowed_pixelated_detector_alias_matches_pixelated_detector():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_windowed_pixelated_detector_alias_matches_pixelated_detector(device):
     """WindowedPixelatedDetector exists only so code written against py3DED's
     own WindowedPixelatedDetector (same margin/window_func signature) runs
     unmodified against abTEM directly -- it must produce identical output to
     the equivalent PixelatedDetector call."""
     from abtem.detectors import WindowedPixelatedDetector
 
-    exit_waves = _finite_crystallite_exit_waves()
+    exit_waves = _finite_crystallite_exit_waves(device)
 
     kwargs = dict(max_angle="full", margin=0.5, window_func="hann")
     reference = abtem.PixelatedDetector(**kwargs).detect(exit_waves)
     alias = WindowedPixelatedDetector(**kwargs).detect(exit_waves)
 
-    np.testing.assert_array_equal(reference.array, alias.array)
+    np.testing.assert_array_equal(asnumpy(reference.array), asnumpy(alias.array))
 
 
 @pytest.mark.parametrize("fftshift", [True, False])
@@ -498,10 +509,10 @@ def test_margin_window_with_an_energy_ensemble(lazy):
     ensemble = abtem.PlaneWave(energy=energies).multislice(
         potential, detectors=detector, lazy=lazy
     )
-    ensemble = np.asarray(ensemble.compute().array if lazy else ensemble.array)
+    ensemble = asnumpy(ensemble.compute().array if lazy else ensemble.array)
 
     for member, energy in zip(ensemble, energies):
-        single = np.asarray(
+        single = asnumpy(
             abtem.PlaneWave(energy=energy)
             .multislice(potential, detectors=detector, lazy=False)
             .array

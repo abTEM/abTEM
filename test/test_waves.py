@@ -464,7 +464,7 @@ def test_crop(data, lazy, device):
     # cropping to the full extent is a no-op on the array contents
     full = waves.crop(old_extent, centered=True)
     np.testing.assert_array_equal(
-        np.asarray(full.compute().array), np.asarray(waves.compute().array)
+        asnumpy(full.compute().array), asnumpy(waves.compute().array)
     )
 
 
@@ -505,7 +505,7 @@ def test_window_boxcar_is_a_no_op(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     windowed = waves.window("boxcar")
     np.testing.assert_array_equal(
-        np.asarray(windowed.compute().array), np.asarray(waves.compute().array)
+        asnumpy(windowed.compute().array), asnumpy(waves.compute().array)
     )
 
 
@@ -515,7 +515,7 @@ def test_window_boxcar_is_a_no_op(data, lazy, device):
 def test_window_hann_tapers_to_the_edges(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
     windowed = waves.compute().window("hann")
-    array = np.asarray(windowed.array)
+    array = asnumpy(windowed.array)
     assert windowed.array.dtype == waves.array.dtype
     assert windowed.energy == waves.energy
     # a Hann window is exactly zero at its first and last sample
@@ -536,7 +536,7 @@ def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
     ).window("hann")
 
     np.testing.assert_allclose(
-        np.asarray(combined.compute().array), np.asarray(separate.compute().array)
+        asnumpy(combined.compute().array), asnumpy(separate.compute().array)
     )
 
 
@@ -547,7 +547,7 @@ def test_window_none_only_crops():
         np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
     )
     windowed = waves.window(None, margin=0.4)
-    np.testing.assert_array_equal(np.asarray(windowed.array), 1.0)
+    np.testing.assert_array_equal(asnumpy(windowed.array), 1.0)
     assert windowed.array.shape == (8, 8)
 
 
