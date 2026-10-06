@@ -169,7 +169,7 @@ def validate_use_wave_eq(use_wave_eq: bool | str) -> bool | Literal["exact"]:
 
 
 def excitation_errors(
-    g: np.ndarray, energy: float, use_wave_eq: bool | Literal["exact"] = False
+    g: np.ndarray, energy: float, use_wave_eq: bool | Literal["exact"] = "exact"
 ) -> np.ndarray:
     """
     Calculate excitation errors for a set of reciprocal space vectors.
@@ -181,14 +181,15 @@ def excitation_errors(
     energy : float
         Electron energy [eV].
     use_wave_eq : bool or 'exact', optional
-        If False (default), the standard excitation errors, from the Ewald sphere.
-        If True, the excitation errors derived from the paraxial wave equation,
-        ``-g_z - λ g_⊥² / 2``; Bloch waves then solve the same equation as
-        multislice with the first-order (Fresnel) propagator,
-        ``FourierMultislice(order=1)``. If 'exact', the non-paraxial form,
+        If 'exact' (default), the non-paraxial form,
         ``-g_z + k (sqrt(1 - λ² g_⊥²) - 1)`` with ``k = 1 / λ``, the counterpart of
         ``FourierMultislice(order="exact")``; to first order in ``λ² g_⊥²`` it
         equals the paraxial form. Requires ``λ g_⊥ < 1`` (no evanescent beams).
+        If True, the excitation errors derived from the paraxial wave equation,
+        ``-g_z - λ g_⊥² / 2``; Bloch waves then solve the same equation as
+        multislice with the first-order (Fresnel) propagator,
+        ``FourierMultislice(order=1)``. If False, the standard excitation errors,
+        ``-g_z - λ |g|² / 2``, from the Ewald sphere.
 
     Returns
     -------

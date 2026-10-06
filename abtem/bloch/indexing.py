@@ -52,7 +52,7 @@ def _find_projected_pixel_index(
 
 def estimate_necessary_excitation_error(energy: float, k_max: float) -> float:
     hkl_corner = np.array([[np.sqrt(k_max), np.sqrt(k_max), 0]])
-    sg = np.abs(excitation_errors(hkl_corner, energy).item())
+    sg = np.abs(excitation_errors(hkl_corner, energy, use_wave_eq=False).item())
     return sg
 
 
@@ -283,7 +283,7 @@ def index_diffraction_spots(
 
     nm = _find_projected_pixel_index(g_vec, shape, sampling)
 
-    sg = np.abs(excitation_errors(g_vec, energy))
+    sg = np.abs(excitation_errors(g_vec, energy, use_wave_eq=False))
 
     if radius is not None:
         # a, b = tuple(int(np.round(radius / d)) for d in sampling)
@@ -291,7 +291,7 @@ def index_diffraction_spots(
     else:
         intensities = array[..., nm[..., 0], nm[..., 1]]
 
-    sg = excitation_errors(g_vec, energy)
+    sg = excitation_errors(g_vec, energy, use_wave_eq=False)
 
     mask = overlapping_spots_mask(nm, sg)
 

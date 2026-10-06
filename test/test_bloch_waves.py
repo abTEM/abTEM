@@ -344,6 +344,127 @@ def test_invalid_use_wave_eq_is_rejected_at_construction(use_wave_eq):
         assert bloch_waves.use_wave_eq == valid
 
 
+def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
+    from abtem.bloch.dynamical import BlochwaveEnsemble
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    bloch_waves = BlochWaves(structure_factor, energy=100e3, sg_max=0.1)
+    assert bloch_waves.use_wave_eq == "exact"
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor,
+            energy=[80e3, 100e3],
+            sg_max=0.1,
+            use_wave_eq=use_wave_eq,
+        )
+        assert bloch_waves._with_energy(0, 80e3).use_wave_eq == use_wave_eq
+        assert bloch_waves.rotate("x", 0.01).use_wave_eq == use_wave_eq
+        ensemble = bloch_waves.rotate("x", np.array([0.0, 0.01]))
+        assert isinstance(ensemble, BlochwaveEnsemble)
+        assert ensemble.use_wave_eq == use_wave_eq
+        assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
+
+
+def test_exact_form_excludes_evanescent_beams_with_a_warning():
+    # Beams are selected by their Ewald-sphere excitation error, which at low
+    # energy with a large g_max admits beams with lambda |g_perp| >= 1. The
+    # 'exact' form has no real excitation error for them (they are evanescent,
+    # as in exact multislice): they are dropped with a warning, not an error.
+    from abtem.core.energy import energy2wavelength
+
+    energy = 1e3
+    atoms = Atoms("C", positions=[(0, 0, 0)], cell=[2.0, 2.0, 2.0], pbc=True)
+    structure_factor = StructureFactor(
+        atoms, g_max=8.0, parametrization="lobato", centering="P"
+    )
+    kwargs = dict(energy=energy, sg_max=0.2, g_max=4.0)
+
+    standard = BlochWaves(structure_factor, use_wave_eq=False, **kwargs)
+    g = standard.g_vec
+    evanescent = energy2wavelength(energy) * np.hypot(g[:, 0], g[:, 1]) >= 1
+    assert evanescent.any()
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        exact = BlochWaves(structure_factor, use_wave_eq="exact", **kwargs)
+    np.testing.assert_array_equal(exact.hkl, standard.hkl[~evanescent])
+
+    psi = np.asarray(
+        exact.calculate_diffraction_patterns(
+            [20.0], return_complex=True, lazy=False
+        ).array
+    )
+    np.testing.assert_allclose((np.abs(psi) ** 2).sum(), 1.0, atol=1e-5)
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        BlochWaves(
+            structure_factor, use_wave_eq="exact", **{**kwargs, "energy": [1e3, 1.5e3]}
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_weights_follow_use_wave_eq(device):
+    # get_kinematical_diffraction_pattern weights |F_g|^2 with a Gaussian in the
+    # excitation error of the form use_wave_eq selects; beam selection (sg_max)
+    # keeps the Ewald-sphere form for all three.
+    from abtem.bloch.utils import excitation_errors
+
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        bulk("Si", cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        centering="F",
+        device=device,
+    )
+    sg_max = 0.5
+    patterns = {}
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor=structure_factor,
+            energy=100e3,
+            sg_max=sg_max,
+            orientation_matrix=orientation_matrix,
+            use_wave_eq=use_wave_eq,
+            device=device,
+        )
+        sg = excitation_errors(
+            bloch_waves.g_vec, bloch_waves.energy, use_wave_eq=use_wave_eq
+        )
+        np.testing.assert_array_equal(bloch_waves.excitation_errors(), sg)
+
+        f_squared = (
+            np.abs(
+                asnumpy(bloch_waves._get_structure_factor_array().array)[
+                    bloch_waves.hkl_mask
+                ]
+            )
+            ** 2
+        )
+        expected = f_squared * np.exp(-(sg**2) / (2 * (sg_max / 3) ** 2))
+        pattern = asnumpy(bloch_waves.get_kinematical_diffraction_pattern().array)
+        np.testing.assert_allclose(pattern, expected, rtol=1e-5, atol=0)
+        patterns[use_wave_eq] = pattern
+
+    # the same beams, but different weights off zone axis
+    difference = np.abs(patterns["exact"] - patterns[False]).sum()
+    assert difference > 1e-3 * patterns[False].sum()
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_scattering_matrix_matches_eager(device):
+    import dask.array as da
+
+    bloch_waves = _silicon_bloch_waves(device)
+    lazy = bloch_waves.calculate_scattering_matrix(50.0, lazy=True)
+    assert isinstance(lazy, da.Array)
+    eager = bloch_waves.calculate_scattering_matrix(50.0)
+    assert not isinstance(eager, da.Array)
+    np.testing.assert_allclose(
+        asnumpy(lazy.compute()), asnumpy(eager), rtol=0, atol=1e-6
+    )
+
+
 @pytest.mark.slow
 # order=1 at 10 keV is used deliberately, as the paraxial reference
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
@@ -414,6 +535,118 @@ def test_exact_bloch_waves_pair_with_exact_multislice():
         matched = r_factor(ms[order], bw[use_wave_eq])
         assert matched < 0.03
         assert r_factor(ms[order], bw[other]) > 3 * matched
+
+
+@pytest.fixture
+def float64():
+    with abtem.config.set({"precision": "float64"}):
+        yield
+
+
+def _tilted_si_bloch_waves(use_wave_eq):
+    # beam || [018] of cubic Si, 7.1 degrees from [001]: g_z != 0 for most beams,
+    # so the (1 + g_z / K) metric of the standard form matters
+    atoms = bulk("Si", cubic=True)
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="F"
+    )
+    return BlochWaves(
+        structure_factor=structure_factor,
+        energy=100e3,
+        sg_max=0.5,
+        use_wave_eq=use_wave_eq,
+        orientation_matrix=orientation_matrix,
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_eigendecomposition_matches_scattering_matrix_when_tilted(use_wave_eq):
+    # Both solution paths must map the symmetrized eigenproblem back to beam
+    # amplitudes with the same metric (they used not to, off zone axis).
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    thickness = 300.0
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [thickness], return_complex=True, lazy=False
+        ).array
+    )[0]
+    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
+    S = np.asarray(bloch_waves.calculate_scattering_matrix(thickness))
+    np.testing.assert_allclose(psi, S[:, direct_beam], atol=1e-10)
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
+    # The wave-equation forms, like multislice, are unitary: sum |psi_g|^2 = 1.
+    # The standard form conserves the current along z instead:
+    # sum (1 + g_z / K) |psi_g|^2 = 1.
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [100.0, 300.0, 600.0], return_complex=True, lazy=False
+        ).array
+    )
+    if use_wave_eq:
+        weights = 1.0
+    else:
+        weights = 1 + bloch_waves.g_vec[:, 2] * energy2wavelength(bloch_waves.energy)
+    np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
+    if not use_wave_eq:
+        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
+    # The standard form (use_wave_eq=False; Helmholtz with only gamma**2 dropped)
+    # is the generalized eigenproblem A C = 2 K gamma B C, with
+    # A = 2 K diag(s_g) + U, U_ij = U_{g_i - g_j} and B = diag(1 + g_z / K). The
+    # wave-equation forms have B = 1. Compare the eigenvalues and the propagated
+    # beams with scipy's generalized Hermitian solver. (Conservation of
+    # sum B |psi_g|^2 alone cannot tell the right metric from a wrong one.)
+    import scipy.linalg
+
+    from abtem.bloch.utils import excitation_errors
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    energy = bloch_waves.energy
+    k = 1 / energy2wavelength(energy)
+    g = bloch_waves.g_vec
+    metric = 1 + g[:, 2] / k if use_wave_eq is False else np.ones(len(g))
+    assert use_wave_eq or np.ptp(metric) > 0.02  # the metric matters
+
+    # U from the paraxial form, which carries no metric
+    paraxial = _tilted_si_bloch_waves(True)
+    assert np.array_equal(paraxial.hkl, bloch_waves.hkl)
+    A = np.asarray(paraxial.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.diag(A).real, 2 * k * excitation_errors(g, energy, use_wave_eq=True)
+    )
+    np.fill_diagonal(A, 2 * k * excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+
+    eigenvalues, C = scipy.linalg.eigh(A, np.diag(metric))  # 2 K gamma; C^H B C = 1
+    structure_matrix = np.asarray(bloch_waves.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.linalg.eigvalsh(structure_matrix), eigenvalues, rtol=0, atol=1e-9
+    )
+
+    # psi(0) = C alpha = e_0, so alpha = C^H B e_0
+    initial = np.all(bloch_waves.hkl == 0, axis=1) * metric
+    alpha = C.conj().T @ initial
+    z = np.array([100.0, 300.0])
+    phases = np.exp(2j * np.pi * z[:, None] * eigenvalues[None] / (2 * k))
+    expected = (phases * alpha) @ C.T
+    psi = bloch_waves.calculate_diffraction_patterns(
+        z, return_complex=True, lazy=False
+    ).array
+    np.testing.assert_allclose(np.asarray(psi), expected, rtol=0, atol=1e-9)
 
 
 # --- abTEM/abTEM#455 --------------------------------------------------------
