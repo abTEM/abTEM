@@ -347,7 +347,7 @@ class BaseAperture(BaseTransferFunction):
     def __init__(
         self,
         semiangle_cutoff: float | BaseDistribution = np.inf,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -549,8 +549,10 @@ class Aperture(BaseAperture):
         zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -565,7 +567,7 @@ class Aperture(BaseAperture):
         self,
         semiangle_cutoff: float | BaseDistribution,
         soft: bool = True,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -660,8 +662,10 @@ class Bullseye(BaseAperture):
         where 1 gives a fully open disk.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -685,7 +689,7 @@ class Bullseye(BaseAperture):
         num_rings: int,
         ring_width: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -872,8 +876,10 @@ class Vortex(BaseAperture):
         Quantum number of vortex beam.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -890,7 +896,7 @@ class Vortex(BaseAperture):
         self,
         quantum_number: int,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -944,8 +950,10 @@ class AnnularAperture(BaseAperture):
         non-negative and smaller than `semiangle_cutoff`.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -962,7 +970,7 @@ class AnnularAperture(BaseAperture):
         self,
         inner_cutoff: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1042,8 +1050,10 @@ class Zernike(BaseAperture):
         Phase shift of Zernike film [rad]
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1061,7 +1071,7 @@ class Zernike(BaseAperture):
         center_hole_cutoff: float,
         phase_shift: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1130,7 +1140,7 @@ class RadialPhasePlate(BaseAperture):
         phase_shift: float = np.pi,
         power_law: float = 2.0,
         shift_central_semiangle: float = 0.0,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1213,8 +1223,10 @@ class TemporalEnvelope(BaseTransferFunction):
         lens current instability [Å]. Note: this uses the 1/e width convention (as in
         Kirkland), not the standard deviation; to convert, use focal_spread = sqrt(2)*sigma.
         Alternatively, a distribution of values may be provided.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1228,7 +1240,7 @@ class TemporalEnvelope(BaseTransferFunction):
     def __init__(
         self,
         focal_spread: float | BaseDistribution,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1515,8 +1527,10 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1535,7 +1549,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         aberration_coefficients: Optional[
             Mapping[str, str | float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1702,8 +1716,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1721,7 +1737,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         aberration_coefficients: Optional[
             Mapping[str, str | float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1888,6 +1904,9 @@ class CTF(_HasAberrations, BaseAperture):
         Several energies give an energy-ensemble CTF, with a leading EnergyAxis;
         applied to a multi-energy ensemble of wave functions, its energies must
         match the ensemble's, and each member is evaluated at its own energy.
+        Only the energy values are matched: the weights of the wave functions'
+        ensemble decide its ensemble mean, and those of this distribution are
+        not used.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1922,7 +1941,7 @@ class CTF(_HasAberrations, BaseAperture):
         aberration_coefficients: Optional[
             Mapping[str, float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,

@@ -1517,7 +1517,9 @@ class Waves(BaseWaves, ArrayObject):
             Contrast transfer function to be applied. For a multi-energy ensemble
             of wave functions it is evaluated for each energy member at its own
             wavelength; its energy must then be unset, or a distribution of
-            exactly the ensemble's energies.
+            exactly the ensemble's energies. Only the energy values are matched:
+            the ensemble's own weights decide its ensemble mean, and those of the
+            CTF's distribution are not used.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto'
             (default), the batch size is automatically chosen based on the abtem user

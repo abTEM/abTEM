@@ -677,6 +677,33 @@ class TestTransferFunctionEnergyMatching:
         )
 
     @devices
+    def test_weighted_ensemble_mean(self, device):
+        """The weights of the wave functions decide the ensemble mean; those of the
+        CTF's distribution are not used."""
+        weights = [0.2, 0.7, 0.1]
+        waves = self._exit_waves(
+            abtem.distributions.from_values(
+                TEST_ENERGIES, weights=weights, ensemble_mean=True
+            ),
+            lazy=True,
+            device=device,
+        )
+        ctf = abtem.CTF(
+            energy=abtem.distributions.from_values(
+                TEST_ENERGIES, weights=[0.6, 0.2, 0.2], ensemble_mean=True
+            ),
+            **self.CTF_KWARGS,
+        )
+        intensity = waves.apply_ctf(ctf).intensity().reduce_ensemble().compute()
+        assert intensity.ensemble_shape == ()
+        np.testing.assert_allclose(
+            intensity.to_cpu().array,
+            np.tensordot(weights, self._oracle(), axes=1),
+            rtol=1e-4,
+            atol=1e-6,
+        )
+
+    @devices
     @lazy_params
     def test_with_defocus_series(self, lazy, device):
         """The CTF's other ensemble axes precede the matched energy axis, as for
