@@ -527,7 +527,8 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
-        Lattice centering.
+        Lattice centering, or several combined, such as 'FI' (see
+        `get_reflection_condition`). 'auto' detects it from the atoms.
     """
 
     def __init__(
@@ -822,7 +823,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
         slice_thickness: Optional[float | Sequence[float]] = 0.5,
         sampling: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
-        lazy: bool = True,
+        lazy: Optional[bool] = None,
     ) -> PotentialArray:
         """Calculate the projected potential from the structure factors.
 
@@ -834,15 +835,22 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
             The sampling of the projected potential [Å].
         gpts : int or tuple of ints
             The grid points of the projected potential.
-        lazy : bool
+        lazy : bool, optional
             If True, the calculation is done lazily using dask. If False, the
-             calculation is done eagerly.
+            calculation is done eagerly. If None (default), the calculation is lazy
+            if the structure factors are lazy.
 
         Returns
         -------
         PotentialArray
             The projected potential.
         """
+        if lazy is not None and lazy != self.is_lazy:
+            structure_factor = self.ensure_lazy() if lazy else self.ensure_computed()
+            return structure_factor.get_projected_potential(
+                slice_thickness, sampling, gpts
+            )
+
         if not is_cell_orthogonal(self.cell):
             raise NotImplementedError(
                 "Converting structure factor to projected potential is not supported ",
@@ -1444,7 +1452,8 @@ class BlochWaves:
         cell is rotated.
         Instead of providing an orientation matrix, the `.rotate` method can be used.
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
-        Lattice centering.
+        Lattice centering, or several combined, such as 'FI' (see
+        `get_reflection_condition`). 'auto' detects it from the atoms.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     use_wave_eq : bool or 'exact', optional
@@ -2233,7 +2242,6 @@ class BlochWaves:
         BlochWavesEnsemble
             The rotated Bloch waves ensemble.
         """
-
         all_axes, all_rotations = validate_rotations(args)
 
         bloch_waves: BlochWaves | BlochwaveEnsemble
@@ -2242,6 +2250,17 @@ class BlochWaves:
             is_rotations_ensemble(axes, rotations)
             for axes, rotations in zip(all_axes, all_rotations)
         ):
+            if len(self._energies) > 1:
+                # BlochwaveEnsemble holds a single energy, so a multi-energy
+                # BlochWaves used to lose all but its first energy here.
+                energies = ", ".join(f"{e:g}" for e in self._energies)
+                raise NotImplementedError(
+                    "BlochWaves.rotate does not support a rotation ensemble with "
+                    f"multiple energies, but this BlochWaves has "
+                    f"{len(self._energies)} ({energies} eV); select one with "
+                    "select_energy(energy) first"
+                )
+
             bloch_waves = BlochwaveEnsemble(
                 *args,
                 structure_factor=self.structure_factor,
@@ -2262,7 +2281,7 @@ class BlochWaves:
 
             bloch_waves = BlochWaves(
                 structure_factor=self.structure_factor,
-                energy=self.energy,
+                energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
                 centering=self._centering,
