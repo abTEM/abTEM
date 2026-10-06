@@ -2238,9 +2238,11 @@ class BlochWaves:
         Returns
         -------
         BlochWaves
-            The rotated Bloch waves.
-        BlochWavesEnsemble
-            The rotated Bloch waves ensemble.
+            The rotated Bloch waves, for fixed angles.
+        BlochwaveEnsemble
+            The rotated Bloch waves ensemble, for distributions of angles. With
+            several energies, its results have an energy axis after the rotation
+            axes, each energy and orientation with its own beams.
         """
         all_axes, all_rotations = validate_rotations(args)
 
@@ -2250,21 +2252,10 @@ class BlochWaves:
             is_rotations_ensemble(axes, rotations)
             for axes, rotations in zip(all_axes, all_rotations)
         ):
-            if len(self._energies) > 1:
-                # BlochwaveEnsemble holds a single energy, so a multi-energy
-                # BlochWaves used to lose all but its first energy here.
-                energies = ", ".join(f"{e:g}" for e in self._energies)
-                raise NotImplementedError(
-                    "BlochWaves.rotate does not support a rotation ensemble with "
-                    f"multiple energies, but this BlochWaves has "
-                    f"{len(self._energies)} ({energies} eV); select one with "
-                    "select_energy(energy) first"
-                )
-
             bloch_waves = BlochwaveEnsemble(
                 *args,
                 structure_factor=self.structure_factor,
-                energy=self.energy,
+                energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
                 centering=self._centering,
@@ -2304,7 +2295,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self,
         *args: str | BaseDistribution | np.ndarray | SupportsFloat,
         structure_factor: BaseStructureFactor,
-        energy: float,
+        energy: float | Sequence[float] | np.ndarray,
         sg_max: float,
         g_max: float,
         centering: str = "P",
@@ -2339,12 +2330,41 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         self._use_degrees = use_degrees
         self._structure_factor = structure_factor
-        self._energy = energy
+        # Mirrors BlochWaves.__init__: a list/array of energies runs the
+        # calculation at each energy, with an EnergyAxis after the rotation
+        # axes of the results. self._energy stays a scalar for backward
+        # compatibility.
+        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        self._energy = float(energies[0])
+        self._energies = energies
         self._centering = centering
         self._sg_max = sg_max
         self._g_max = g_max
         self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        # The base implementation reads each __init__ kwarg back off `self`
+        # via getattr, which for "energy" would return the scalar
+        # backward-compat `.energy` property -- silently dropping every
+        # energy but the first whenever a block (one per dask chunk of the
+        # rotation ensemble, see _partial_transform) gets reconstructed.
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "energy" in kwargs:
+            kwargs["energy"] = self._energies.copy()
+        return kwargs
+
+    @property
+    def _energy_shape(self) -> tuple[int, ...]:
+        # the energy axis of the results, between the rotation axes and the
+        # thickness axis; none for a single energy
+        return (len(self._energies),) if len(self._energies) > 1 else ()
+
+    @property
+    def _energy_axes_metadata(self) -> list[AxisMetadata]:
+        if len(self._energies) > 1:
+            return [EnergyAxis(values=tuple(float(e) for e in self._energies))]
+        return []
 
     def get_ensemble_hkl_mask(self) -> np.ndarray:
         """Get the mask selecting all the reciprocal space vectors included in the
@@ -2356,15 +2376,23 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             The mask selecting the reciprocal space vectors.
         """
         hkl = self._structure_factor.hkl
-        mask = filter_reciprocal_space_vectors(
-            hkl=hkl,
-            cell=self._structure_factor.cell,
-            energy=self.energy,
-            sg_max=self.sg_max,
-            g_max=self.g_max,
-            centering=self.centering,
-            orientation_matrices=self.get_orientation_matrices().reshape(-1, 3, 3),
-        )
+        orientation_matrices = self.get_orientation_matrices().reshape(-1, 3, 3)
+
+        # Union across energies too, mirroring BlochWaves.__init__'s
+        # per-energy union mask -- each energy admits a different set of
+        # beams, and every energy in the ensemble must share the same
+        # reciprocal-space basis for the results to stack.
+        mask = np.zeros(len(hkl), dtype=bool)
+        for energy in self._energies:
+            mask |= filter_reciprocal_space_vectors(
+                hkl=hkl,
+                cell=self._structure_factor.cell,
+                energy=float(energy),
+                sg_max=self.sg_max,
+                g_max=self.g_max,
+                centering=self.centering,
+                orientation_matrices=orientation_matrices,
+            )
         return mask
 
     def get_orientation_matrices(self) -> np.ndarray:
@@ -2556,9 +2584,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         orientation_matrices = self.get_orientation_matrices()
 
-        shape = orientation_matrices.shape[:-2] + (
-            len(thicknesses),
-            hkl_mask.sum(),
+        # An energy ensemble inserts one more axis, between the rotation
+        # ensemble and (thickness, hkl) -- the axis order
+        # BlochWaves.calculate_diffraction_patterns's multi-energy branch
+        # produces per orientation.
+        shape = (
+            orientation_matrices.shape[:-2]
+            + self._energy_shape
+            + (len(thicknesses), hkl_mask.sum())
         )
 
         pbar_obj = TqdmWrapper(
@@ -2575,7 +2608,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         for i in np.ndindex(orientation_matrices.shape[:-2]):
             bw = BlochWaves(
                 structure_factor=self._structure_factor,
-                energy=self.energy,
+                energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
                 orientation_matrix=orientation_matrices[i],
@@ -2633,14 +2666,21 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         hkl_mask = self.get_ensemble_hkl_mask()
 
-        shape = self.ensemble_shape + (
-            len(thicknesses),
-            int(hkl_mask.sum()),
+        shape = (
+            self.ensemble_shape
+            + self._energy_shape
+            + (len(thicknesses), int(hkl_mask.sum()))
         )
 
         out_ind = tuple(range(len(shape)))
 
         xp = get_array_module(self.device)
+
+        # Every axis past the (chunked) rotation-ensemble axes is new to
+        # da.blockwise -- not derived from `blocks` -- so each needs its full
+        # size declared in new_axes, energy included when present.
+        n = len(self.ensemble_shape)
+        new_axes = dict(zip(out_ind[n:], shape[n:]))
 
         out = da.blockwise(
             self._run_calculate_diffraction_patterns,
@@ -2649,7 +2689,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             tuple(range(len(self.ensemble_shape))),
             da.from_array(hkl_mask),
             (-1,),
-            new_axes={out_ind[-2]: shape[-2], out_ind[-1]: shape[-1]},
+            new_axes=new_axes,
             thicknesses=thicknesses,
             return_complex=return_complex,
             pbar=pbar,
@@ -2730,6 +2770,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             np.swapaxes(orientation_matrices, -2, -1),
         )
 
+        # reciprocal_lattice_vectors never depends on energy -- the Ewald
+        # sphere does, but the rotated lattice itself doesn't -- so it gets a
+        # size-1 placeholder for the energy axis, in the position the array
+        # has it: __getitem__ zips the two positionally.
+        if self._energy_shape:
+            reciprocal_lattice_vectors = reciprocal_lattice_vectors[..., None, :, :]
+
         if squeeze_thickness_dim:
             array = array[..., 0, :]
             ensemble_axes_metadata = ensemble_axes_metadata[:-1]
@@ -2742,12 +2789,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=[
                 *self.ensemble_axes_metadata,
+                *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
             metadata={
                 "label": "intensity",
                 "units": "arb. unit",
-                "energy": self.energy,
+                "energy": list(self._energies) if self._energy_shape else self.energy,
                 "sg_max": self.sg_max,
                 "g_max": self.g_max,
             },
@@ -2766,7 +2814,12 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     ) -> np.ndarray:
         orientation_matrices = self.get_orientation_matrices()
 
-        shape = orientation_matrices.shape[:-2] + (len(thicknesses),) + gpts
+        shape = (
+            orientation_matrices.shape[:-2]
+            + self._energy_shape
+            + (len(thicknesses),)
+            + gpts
+        )
 
         pbar_obj = TqdmWrapper(
             enabled=pbar,
@@ -2780,7 +2833,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         for i in np.ndindex(orientation_matrices.shape[:-2]):
             bw = BlochWaves(
                 structure_factor=self._structure_factor,
-                energy=self.energy,
+                energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
                 orientation_matrix=orientation_matrices[i],
@@ -2835,21 +2888,21 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     ) -> da.core.Array:
         blocks = self.ensemble_blocks(1)
 
-        shape = self.ensemble_shape + (len(thicknesses),) + gpts
+        shape = self.ensemble_shape + self._energy_shape + (len(thicknesses),) + gpts
         out_ind = tuple(range(len(shape)))
 
         xp = get_array_module(self.device)
+
+        # the energy, thickness and grid axes are new to da.blockwise
+        n = len(self.ensemble_shape)
+        new_axes = dict(zip(out_ind[n:], shape[n:]))
 
         out = da.blockwise(
             self._run_calculate_exit_waves,
             out_ind,
             blocks,
             tuple(range(len(self.ensemble_shape))),
-            new_axes={
-                out_ind[-3]: shape[-3],
-                out_ind[-2]: shape[-2],
-                out_ind[-1]: shape[-1],
-            },
+            new_axes=new_axes,
             thicknesses=thicknesses,
             gpts=gpts,
             extent=extent,
@@ -2965,9 +3018,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         waves = Waves(
             array=array,
             extent=extent,
-            energy=self.energy,
+            # an energy ensemble carries its energies on the EnergyAxis
+            energy=None if self._energy_shape else self.energy,
             ensemble_axes_metadata=[
                 *self.ensemble_axes_metadata,
+                *self._energy_axes_metadata,
                 *ensemble_axes_metadata,
             ],
             metadata={"normalization": normalization},
