@@ -7,7 +7,6 @@ Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
 """
 
-import os
 import subprocess
 import sys
 import textwrap
@@ -26,6 +25,12 @@ from abtem.core.backend import (
 )
 
 pytestmark = requires_mps
+
+# Loading torch's OpenMP runtime ahead of pyfftw's is only done on macOS on Apple
+# silicon (`_preload_torch_openmp`), so nothing can be asserted of it elsewhere.
+macos_only = pytest.mark.skipif(
+    sys.platform != "darwin", reason="concerns macOS's libomp.dylib handling"
+)
 
 
 @pytest.fixture
@@ -411,11 +416,9 @@ def _run_isolated(script, hang="the script hung"):
     Library load order is fixed once per process, and a crash or deadlock here
     would take the test session down with it.
     """
-    environment = {k: v for k, v in os.environ.items() if k != "ABTEM_ENABLE_MPS"}
     try:
         return subprocess.run(
             [sys.executable, "-c", textwrap.dedent(script)],
-            env=environment,
             capture_output=True,
             text=True,
             timeout=60,
@@ -438,6 +441,7 @@ def test_importing_abtem_does_not_import_torch():
     assert completed.returncode == 0, completed.stderr
 
 
+@macos_only
 def test_torch_openmp_runtime_is_loaded_ahead_of_pyfftws():
     # torch and pyfftw each bundle libomp.dylib, and torch's has to initialize
     # first; importing abTEM loads it, without torch, before pyfftw.
@@ -490,6 +494,7 @@ def test_metal_after_threaded_cpu_ffts():
     assert completed.returncode == 0, (completed.returncode, completed.stderr)
 
 
+@macos_only
 def test_pyfftw_imported_before_abtem_is_refused_rather_than_crashing():
     # Too late to load torch's runtime first: refuse with a reason instead of
     # importing torch into a process where its operations would segfault.
