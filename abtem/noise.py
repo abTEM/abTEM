@@ -61,11 +61,45 @@ def _poisson_sample(
     return xp.asarray(counts)
 
 
-def _poisson_sample_block(block, block_info=None, **kwargs):
-    base_dims = kwargs["base_dims"]
+def _block_offset(block_info: dict, base_dims: int) -> tuple[int, ...]:
+    """Global index of a dask block's first entry along each ensemble axis."""
     location = block_info[None]["array-location"]
-    offset = tuple(start for start, _ in location[: len(location) - base_dims])
+    return tuple(start for start, _ in location[: len(location) - base_dims])
+
+
+def _poisson_sample_block(block, block_info=None, **kwargs):
+    offset = _block_offset(block_info, kwargs["base_dims"])
     return _poisson_sample(block, offset=offset, **kwargs)
+
+
+def _map_whole_base_arrays(array_object: ArrayObject, func, **kwargs) -> ArrayObject:
+    """
+    Apply `func(block, block_info=..., **kwargs)` to a lazy array object, with
+    every base array (image, diffraction pattern, ...) held whole in one block.
+
+    A block inside `apply_transform` does not know its global position, which
+    the chunk-independent noise draws need; dask's `map_blocks` provides it.
+    """
+    array = array_object.array
+    ensemble_dims = array.ndim - len(array_object.base_shape)
+    array = array.rechunk(
+        array.chunks[:ensemble_dims]
+        + tuple((n,) for n in array.shape[ensemble_dims:])
+    )
+    xp = get_array_module(array)
+    dtype = kwargs.pop("dtype", array.dtype)
+    array = array.map_blocks(
+        func, dtype=dtype, meta=xp.array((), dtype=dtype), **kwargs
+    )
+
+    new_array_object = array_object.__class__.from_array_and_metadata(
+        array,
+        axes_metadata=array_object.axes_metadata,
+        metadata=array_object.metadata,
+    )
+    if array_object.device != "cpu":
+        new_array_object._device = array_object.device
+    return new_array_object
 
 
 class NoiseTransform(EnsembleTransform):
@@ -188,32 +222,18 @@ class NoiseTransform(EnsembleTransform):
                 assert isinstance(new_array_object, self.__class__)
             return new_array_object
 
-        # A block of a lazy array does not know its global position, which the
-        # chunk-independent draw needs: build the expected counts through the
-        # ensemble machinery, then sample them with dask, which does.
+        # build the expected counts through the ensemble machinery, then draw
+        # them with their global positions, see _map_whole_base_arrays
         expected = array_object.apply_transform(
             _PoissonExpectedCounts(**self._copy_kwargs()), max_batch=max_batch
         )
-        array = expected.array
         base_dims = len(expected.base_shape)
-        array = array.rechunk(
-            array.chunks[: array.ndim - base_dims]
-            + tuple((n,) for n in array.shape[array.ndim - base_dims :])
-        )
-        xp = get_array_module(array)
-        array = array.map_blocks(
+        return _map_whole_base_arrays(
+            expected,
             _poisson_sample_block,
             dtype=get_dtype(),
-            meta=xp.array((), dtype=get_dtype()),
             **self._sampling_kwargs(base_dims),
         )
-
-        new_array_object = expected.__class__.from_array_and_metadata(
-            array, axes_metadata=expected.axes_metadata, metadata=expected.metadata
-        )
-        if expected.device == "gpu":
-            new_array_object._device = "gpu"
-        return new_array_object
 
 
 class _PoissonExpectedCounts(NoiseTransform):
@@ -393,6 +413,68 @@ def _apply_displacement_field(
     return warped.reshape(image.shape)
 
 
+def _scan_distort(
+    images: np.ndarray,
+    offset: tuple[int, ...],
+    dwell_time: float,
+    flyback_time: float,
+    max_frequency: float,
+    num_components: int,
+    rms_powers: np.ndarray,
+    rms_axis: Optional[int],
+    seeds: int | tuple[int, ...],
+    sample_axis: Optional[int],
+) -> np.ndarray:
+    """
+    Distort each image of `images` with its own scan-noise displacement field.
+
+    Parameters
+    ----------
+    images : np.ndarray
+        Images, held whole; a block of the full array when evaluated lazily.
+    offset : tuple of int
+        Global index of the first entry of the block along each ensemble axis.
+    rms_powers : np.ndarray
+        The rms powers, indexed along `rms_axis` if given, else a single value.
+    seeds : int or tuple of int
+        One seed per entry of `sample_axis`, which is then shared by all images
+        of that sample; without a sample axis, entropy from which each image
+        gets its own seed, keyed on its global index.
+    """
+    xp = get_array_module(images)
+    # the distortion is interpolated with scipy, which requires CPU arrays;
+    # move back to the original device afterwards
+    images = asnumpy(images)
+    distorted = np.zeros_like(images)
+    time = _pixel_times(dwell_time, flyback_time, images.shape[-2:])
+
+    for index in np.ndindex(images.shape[:-2]):
+        global_index = tuple(i + o for i, o in zip(index, offset))
+        rms_power = rms_powers[0 if rms_axis is None else global_index[rms_axis]]
+
+        if sample_axis is None:
+            seed = int(
+                np.random.SeedSequence(seeds, spawn_key=global_index).generate_state(
+                    1
+                )[0]
+            )
+        else:
+            seed = seeds[global_index[sample_axis]]
+
+        displacement_x, displacement_y = _make_displacement_field(
+            time, max_frequency, num_components, rms_power, seed=seed
+        )
+        distorted[index] = _apply_displacement_field(
+            images[index], displacement_x, displacement_y
+        )
+
+    return xp.asarray(distorted)
+
+
+def _scan_distort_block(block, block_info=None, **kwargs):
+    return _scan_distort(block, offset=_block_offset(block_info, 2), **kwargs)
+
+
 class ScanNoiseTransform(EnsembleTransform):
     # `samples` is implied by `seeds` (one seed per sample), so it is not passed
     # on when the transform is rebuilt for a chunk: a chunk receives a sub-block
@@ -485,57 +567,76 @@ class ScanNoiseTransform(EnsembleTransform):
     def metadata(self) -> dict:
         return {"units": "electrons", "label": "Counts"}
 
+    def _tile_ensemble(self, array: np.ndarray) -> np.ndarray:
+        # the sample axis, then the rms-power axis in front of it
+        xp = get_array_module(array)
+        if isinstance(self.seeds, BaseDistribution):
+            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+        if isinstance(self.rms_power, BaseDistribution):
+            array = xp.tile(
+                array[None], (len(self.rms_power.values),) + (1,) * len(array.shape)
+            )
+        return array
+
+    def _distortion_kwargs(self) -> dict:
+        if isinstance(self.rms_power, BaseDistribution):
+            rms_powers = np.array(self.rms_power.values, dtype=get_dtype())
+            rms_axis = 0
+        else:
+            rms_powers = np.array([self.rms_power], dtype=get_dtype())
+            rms_axis = None
+
+        if isinstance(self.seeds, BaseDistribution):
+            seeds = tuple(int(seed) for seed in self.seeds.values)
+            sample_axis = 0 if rms_axis is None else 1
+        else:
+            # unseeded: draw entropy once, so that recomputing a lazy result
+            # gives the same images and each image still gets its own field
+            seeds = np.random.SeedSequence().entropy
+            sample_axis = None
+
+        return {
+            "dwell_time": self.dwell_time,
+            "flyback_time": self.flyback_time,
+            "max_frequency": self.max_frequency,
+            "num_components": self.num_components,
+            "rms_powers": rms_powers,
+            "rms_axis": rms_axis,
+            "seeds": seeds,
+            "sample_axis": sample_axis,
+        }
+
+    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
+        # called on the whole (eager) array, which starts at the global origin;
+        # lazy arrays are distorted per block in `apply`
+        assert len(array_object.base_shape) == 2
+        array = self._tile_ensemble(array_object._eager_array)
+        return _scan_distort(
+            array, offset=(0,) * (array.ndim - 2), **self._distortion_kwargs()
+        )
+
     def apply(
         self, array_object: ArrayObject, max_batch: int | str = "auto"
     ) -> ArrayObject:
-        return array_object.apply_transform(self, max_batch=max_batch)
+        if not array_object.is_lazy:
+            return array_object.apply_transform(self)
+
+        # Pixel times, the magnification normalisation and the periodic wrap
+        # all span the whole frame, so each image must be distorted whole and
+        # know its global position: tile the ensemble through the ensemble
+        # machinery, then distort, see _map_whole_base_arrays.
+        tiled = array_object.apply_transform(
+            _ScanNoiseTiling(**self._copy_kwargs()), max_batch=max_batch
+        )
+        return _map_whole_base_arrays(
+            tiled, _scan_distort_block, **self._distortion_kwargs()
+        )
+
+
+class _ScanNoiseTiling(ScanNoiseTransform):
+    """The ensemble part of `ScanNoiseTransform`: tiling over samples and rms
+    powers, without the distortion. `ScanNoiseTransform.apply` uses it for
+    lazy arrays."""
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
-        array = array_object._eager_array
-        xp = get_array_module(array)
-        # the distortion is interpolated with scipy, which requires CPU arrays;
-        # move back to the original device afterwards
-        array = asnumpy(array)
-        base_shape = array_object.base_shape
-        assert len(base_shape) == 2
-
-        if isinstance(self.seeds, BaseDistribution):
-            array = np.tile(array[None], (self.samples,) + (1,) * len(array.shape))
-
-        time = _pixel_times(self.dwell_time, self.flyback_time, base_shape)
-
-        if isinstance(self.rms_power, BaseDistribution):
-            rms_powers = np.array(self.rms_power.values, dtype=get_dtype())
-        else:
-            rms_powers = np.array([self.rms_power], dtype=get_dtype())
-
-        arrays = []
-        for rms_power in rms_powers:
-            inner_array = np.zeros_like(array)
-            for i in np.ndindex(array.shape[:-2]):
-                # the leading axis is the sample axis; each sample uses its own seed
-                if self.seeds is not None:
-                    seed = int(self.seeds.values[i[0]])
-                else:
-                    seed = None
-
-                displacement_x, displacement_y = _make_displacement_field(
-                    time,
-                    self.max_frequency,
-                    self.num_components,
-                    rms_power,
-                    seed=seed,
-                )
-
-                inner_array[i] = _apply_displacement_field(
-                    array[i], displacement_x, displacement_y
-                )
-
-            arrays.append(inner_array)
-
-        if isinstance(self.rms_power, BaseDistribution):
-            array = np.stack(arrays, axis=0)
-        else:
-            array = arrays[0]
-
-        return xp.asarray(array)
+        return self._tile_ensemble(array_object._eager_array)

@@ -3,8 +3,9 @@
 import numpy as np
 import pytest
 
-from abtem.core.axes import ScanAxis
-from abtem.measurements import DiffractionPatterns
+from abtem.core.axes import ScanAxis, UnknownAxis
+from abtem.detectors import AnnularDetector
+from abtem.measurements import DiffractionPatterns, Images
 from abtem.noise import (
     NoiseTransform,
     ScanNoiseTransform,
@@ -13,8 +14,11 @@ from abtem.noise import (
     _pixel_times,
     _single_axis_distortion,
 )
+from abtem.potentials.iam import Potential
+from abtem.scan import GridScan
+from abtem.waves import Probe
 from test_measure import make_images
-from utils import gpu
+from utils import gpu, si_cubic_atoms
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +246,12 @@ def _assert_poisson(counts, lam):
 
 
 def _to_device(measurement, device):
-    return measurement.to_gpu() if device == "gpu" else measurement
+    # `gpu` resolves to whichever accelerator is present ("gpu" or "mps")
+    return measurement if device == "cpu" else measurement.copy_to_device(device)
 
 
 def _to_cpu_array(measurement):
-    array = measurement.compute().array
-    return array.get() if hasattr(array, "get") else array
+    return measurement.compute().to_cpu().array
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -418,7 +422,9 @@ class TestLazyScanNoise:
         return _to_device(make_images((16, 24)), device)
 
     def test_ensemble_shape(self, device):
-        snt = ScanNoiseTransform(rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS)
+        snt = ScanNoiseTransform(
+            rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS
+        )
         assert snt.ensemble_shape == (3,)
         snt = ScanNoiseTransform(
             rms_power=np.array([2.0, 5.0]), seeds=0, samples=3, **_SCAN_NOISE_KWARGS
@@ -428,7 +434,9 @@ class TestLazyScanNoise:
     def test_images_scan_noise_lazy_equals_eager(self, device):
         images = self._images(device)
         eager = images.scan_noise(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
-        lazy = images.ensure_lazy().scan_noise(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
+        lazy = images.ensure_lazy().scan_noise(
+            rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS
+        )
         assert lazy.is_lazy and not eager.is_lazy
         oracle = _scan_noise_oracle(_to_cpu_array(images), [5.0], [7])[0]
         np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
@@ -437,7 +445,9 @@ class TestLazyScanNoise:
     @pytest.mark.parametrize("max_batch", ["auto", 1])
     def test_samples_lazy_equals_eager(self, device, max_batch):
         images = self._images(device)
-        snt = ScanNoiseTransform(rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS)
+        snt = ScanNoiseTransform(
+            rms_power=5.0, seeds=0, samples=3, **_SCAN_NOISE_KWARGS
+        )
 
         eager = snt.apply(images)
         lazy = snt.apply(images.ensure_lazy(), max_batch=max_batch)
@@ -458,15 +468,81 @@ class TestLazyScanNoise:
         )
 
         eager = snt.apply(images)
-        lazy = snt.apply(images.ensure_lazy(), max_batch=max_batch)
+        # the image axes are split as well
+        lazy = snt.apply(images.ensure_lazy(chunks=(8, 12)), max_batch=max_batch)
         assert lazy.shape == eager.shape == (2, 3, 16, 24)
-        if max_batch != "auto":
+        if max_batch == 1:
             # the sample axis is split across chunks
             assert len(lazy.array.chunks[1]) > 1
 
         oracle = _scan_noise_oracle(_to_cpu_array(images), rms_powers, snt.seeds.values)
         np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
         np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+    @pytest.mark.parametrize(
+        "chunks",
+        [(8, 12), (8, 24), (16, 12), (15, 12)],
+        ids=["both-split", "x-split", "y-split", "size-1-chunk"],
+    )
+    def test_image_axes_split_lazy_equals_eager(self, device, chunks):
+        # Pixel times, the magnification normalisation and the periodic wrap
+        # all span the whole frame, so chunking the image itself must not
+        # change the result (it distorted each chunk as a separate frame, and
+        # a size-1 chunk raised in np.gradient).
+        images = self._images(device)
+        kwargs = dict(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
+        eager = images.scan_noise(**kwargs)
+        lazy = images.ensure_lazy(chunks=chunks).scan_noise(**kwargs)
+        assert lazy.is_lazy
+
+        oracle = _scan_noise_oracle(_to_cpu_array(images), [5.0], [7])[0]
+        np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
+        np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+    def test_lazy_grid_scan_images(self, device):
+        # A lazy scan returns images chunked along their own (scan) axes; this
+        # one includes a size-1 chunk.
+        potential = Potential(
+            si_cubic_atoms(), gpts=64, slice_thickness=2.0, device=device
+        )
+        probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+        lazy_images = probe.scan(
+            potential,
+            scan=GridScan(gpts=(12, 9)),
+            detectors=AnnularDetector(50, 150),
+            max_batch=24,
+            lazy=True,
+        )
+        assert lazy_images.array.chunks == ((5, 5, 2), (4, 4, 1))
+        eager_images = lazy_images.copy().compute()
+
+        kwargs = dict(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
+        eager = eager_images.scan_noise(**kwargs)
+        lazy = lazy_images.scan_noise(**kwargs)
+
+        oracle = _scan_noise_oracle(_to_cpu_array(eager_images), [5.0], [7])[0]
+        np.testing.assert_array_equal(_to_cpu_array(eager), oracle)
+        np.testing.assert_array_equal(_to_cpu_array(lazy), oracle)
+
+    def test_unseeded_lazy_recompute_is_stable(self, device):
+        # the entropy is drawn once when the graph is built, not in each task;
+        # each image of a stack still gets its own distortion
+        stack = _to_device(
+            Images(
+                np.random.default_rng(0).random((2, 16, 24)),
+                sampling=0.1,
+                ensemble_axes_metadata=[UnknownAxis()],
+            ),
+            device,
+        )
+        lazy = stack.ensure_lazy(chunks=(1, 8, 12)).scan_noise(
+            rms_power=5.0, **_SCAN_NOISE_KWARGS
+        )
+        first = _to_cpu_array(lazy.copy())
+        np.testing.assert_array_equal(first, _to_cpu_array(lazy.copy()))
+        undistorted = _to_cpu_array(stack)
+        assert not np.allclose(first, undistorted)
+        assert not np.allclose(first[0] - undistorted[0], first[1] - undistorted[1])
 
 
 # ---------------------------------------------------------------------------
@@ -554,3 +630,12 @@ class TestLazyPoissonNoise:
         b = noisy[2:4, 2:4].ravel() - lam
         assert abs(np.corrcoef(a, b)[0, 1]) < 5 / np.sqrt(a.size)
         _assert_poisson(noisy, lam)
+
+    def test_unseeded_lazy_recompute_is_stable(self, device):
+        patterns = _to_device(_scan_patterns(), device).ensure_lazy(
+            chunks=(2, 3, -1, -1)
+        )
+        lazy = NoiseTransform(dose=1.0).apply(patterns)
+        np.testing.assert_array_equal(
+            _to_cpu_array(lazy.copy()), _to_cpu_array(lazy.copy())
+        )
