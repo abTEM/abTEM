@@ -265,7 +265,7 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
 
 
 def radial_schroedinger_equation(ef, l, r, vr):
-    return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
+    return l * (l + 1) / r**2 - vr(r) / r - ef
 
 
 # Radial step of the continuum integration grid [Bohr], and the largest grid we
@@ -408,7 +408,27 @@ def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
     return float(np.median(envelope))
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+# GPAW's xc kernels clamp the density from below at this value (measured: an
+# LDA/PBE atom's vxc is exactly constant wherever n < 1e-10).
+_GPAW_XC_DENSITY_FLOOR = 1e-10
+
+
+def _atomic_rv(Z, xc="PBE"):
+    """r*V(r) of the neutral ground-state atom [Rydberg * Bohr], from a scalar-
+    relativistic GPAW all-electron calculation. The potential the continuum
+    states are solved in.
+
+    GPAW evaluates the xc potential at a floored density, so in the vacuum
+    beyond ~17 Bohr (LDA) / ~27 Bohr (PBE) its vxc sits at a constant
+    -8.5e-4 Hartree instead of vanishing -- the same for every element, and
+    however far the radial grid extends. That constant made r*V grow
+    linearly to the edge of the grid and, extrapolated beyond it, shifted
+    the continuum's asymptotic wavenumber (q/k = 1.012 at 1 eV). Below the
+    floor vxc is scaled as n^(1/3), the low-density limit of LDA exchange and
+    correlation, which is continuous at the floor and vanishes in vacuum; r*V
+    of the neutral atom then goes to ~0 by the edge of the grid and is held
+    constant beyond it.
+    """
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
@@ -417,21 +437,35 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     AllElectronAtom.log = f
 
-    check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
-
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
     # ae.f_j[subshell_index] -= 0.0
     ae.run()
     ae.scalar_relativistic = True
     ae.refine()
 
-    vr = interp1d(
-        ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
+    r = ae.rgd.r_g
+    n = ae.n_sg.sum(0)
+    vr = ae.vr_sg[0].copy()  # r * (vxc + vH) - Z [Hartree * Bohr]
+    below_floor = n < _GPAW_XC_DENSITY_FLOOR
+    vxc = ae.vxc_sg[0][below_floor]
+    vr[below_floor] -= r[below_floor] * vxc * (
+        1 - np.cbrt(n[below_floor] / _GPAW_XC_DENSITY_FLOOR)
     )
+
+    # -2: to the sign and Rydberg units of radial_schroedinger_equation.
+    rv = -2 * vr
+
+    return interp1d(r, rv, fill_value=(rv[0], rv[-1]), bounds_error=False)
+
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+    check_valid_quantum_number(Z, n, l)
+    # config_tuples = config_str_to_config_tuples(
+    #     electron_configurations[chemical_symbols[Z]]
+    # )
+    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
+
+    vr = _atomic_rv(Z, xc=xc)
 
     ef = epsilon / units.Rydberg
 
@@ -1135,6 +1169,16 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return self[included]
 
     def absolute_threshold(self, waves: Waves, threshold: float = 1.0):
+        """The overlap cut that ``filter_sites`` applies for a relative
+        ``threshold``: ranking the overlap of a site placed at every pixel
+        with ``waves``, the most-overlapping pixels that together carry the
+        fraction ``threshold`` of the total overlap all lie above the cut.
+        Evaluate it on the waves that the sites are then filtered against
+        -- applied to a different (e.g. further propagated) wave, a group of
+        symmetry-tied sites at the cut falls below it all at once.
+
+        Returns 0.0, which disables filtering, for ``threshold >= 1``.
+        """
         if threshold >= 1.0:
             return 0.0
 
@@ -1146,9 +1190,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         array = abs2(waves.array)
 
-        # This runs once per task; reuse the local potential computed in
-        # __init__ and its cached device copy instead of re-deriving and
-        # re-uploading both on every call.
+        # This runs once per scattering slice; reuse the local potential
+        # computed in __init__ and its cached device copy instead of
+        # re-deriving and re-uploading both on every call.
         local_potential = self._local_potential_on_device(array)
 
         complex_dtype = get_dtype(complex=True)
@@ -1157,13 +1201,36 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             fft2(array.astype(complex_dtype)),
         ).real
 
-        overlap = copy_to_device(overlap, "cpu")
+        # Rank on a CUDA device, where only the cut itself then comes back to
+        # the host; any other backend (e.g. torch/MPS, whose NumPy layer this
+        # sort/reverse/searchsorted chain is not verified on) ranks on the host.
+        if cp is None or get_array_module(overlap) is not cp:
+            overlap = copy_to_device(overlap, "cpu")
+        xp = get_array_module(overlap)
+        overlap = xp.sort(overlap.ravel())[::-1]
 
-        overlap = np.sort(overlap.ravel())[::-1]
+        cumulative = xp.cumsum(overlap)
+        cumulative /= cumulative[-1]
 
-        cumulative = np.cumsum(overlap) / overlap.sum()
+        # The pixels ranked 0..index together carry at least the fraction
+        # ``threshold`` of the overlap, so the cut is the overlap of pixel
+        # ``index`` itself -- not of pixel ``index - 1``, which stopped the
+        # retained set short of the requested fraction (and, for a threshold
+        # below the largest single-pixel fraction, wrapped to -1, i.e. the
+        # *smallest* overlap, keeping almost every site).
+        index = min(
+            int(xp.searchsorted(cumulative, threshold, side="left")),
+            len(overlap) - 1,
+        )
 
-        return overlap[np.searchsorted(cumulative, threshold, side="left") - 1]
+        # filter_sites keeps sites whose overlap is strictly greater than the
+        # returned value, recomputing it by direct summation, which differs
+        # from this FFT convolution by float round-off (~1 ulp of the largest
+        # overlap). Lower the cut by a few such ulps so that the pixel at the
+        # cut -- and any group of (symmetry-)tied pixels with it -- is kept
+        # whole rather than partly lost to round-off.
+        tolerance = 8 * np.finfo(overlap.dtype).eps * float(overlap[0])
+        return max(float(overlap[index]) - tolerance, 0.0)
 
     def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):

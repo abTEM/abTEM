@@ -1081,10 +1081,6 @@ def transition_potential_multislice_and_detect(
             f"{transition_potential.Z}"
         )
 
-    absolute_threshold = transition_potential.absolute_threshold(
-        waves, threshold=threshold
-    )
-
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
 
@@ -1168,6 +1164,16 @@ def transition_potential_multislice_and_detect(
 
             if len(sites_slice) == 0:
                 continue
+
+            # The overlap cut is ranked on the very waves the sites of this
+            # slice scatter. A cut ranked once on the entrance wave and
+            # applied at every depth drifted as the probe propagated: a
+            # symmetry-tied group of sites at the cut fell below it together
+            # (in one 1 A vacuum slice, threshold=0.1 kept 4.8% of the signal),
+            # and as the probe spreads with depth it dropped ever more sites.
+            absolute_threshold = transition_potential.absolute_threshold(
+                waves, threshold=threshold
+            )
 
             for (
                 included_sites,
