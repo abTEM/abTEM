@@ -160,6 +160,9 @@ class TestContinuumNormalisation:
     @pytest.mark.parametrize("epsilon", [1.0, 25.0, 400.0])
     @pytest.mark.parametrize("lprime", [0, 1, 2, 3])
     def test_asymptotic_amplitude_is_one_over_sqrt_pi_k(self, epsilon, lprime):
+        """Two checks on one wavefunction (each costs a GPAW all-electron run
+        and a Numerov integration on up to ~7.5e6 points, so it is computed
+        once): the envelope amplitude, and an independent WKB fit."""
         from ase import units
 
         from abtem.inelastic.core_loss import (
@@ -171,7 +174,8 @@ class TestContinuumNormalisation:
         )
         r = wavefunction.radial_grid
         u = wavefunction._radial_values
-        k = np.sqrt(epsilon / units.Rydberg)
+        ef = epsilon / units.Rydberg
+        k = np.sqrt(ef)
 
         outer = r > 0.75 * r[-1]
         du = np.gradient(u, r)
@@ -179,28 +183,22 @@ class TestContinuumNormalisation:
 
         assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
 
+        self._assert_outer_region_fits_an_energy_normalised_wkb_wave(
+            r, u, ef, lprime
+        )
+
     @staticmethod
     @functools.lru_cache(maxsize=1)
     def _si_rv():
-        """r*V(r) of the Si atom [Rydberg * Bohr], built from GPAW exactly as
-        calculate_continuum_radial_wavefunction builds it (the physical
+        """r*V(r) of the Si atom [Rydberg * Bohr]: the very potential
+        calculate_continuum_radial_wavefunction solves in (the physical
         input to the problem, not the code under test)."""
-        from gpaw.atom.aeatom import AllElectronAtom
-        from scipy.interpolate import interp1d
+        from abtem.inelastic.core_loss import _atomic_rv
 
-        ae = AllElectronAtom("Si", xc="PBE", log=None)
-        ae.run()
-        ae.scalar_relativistic = True
-        ae.refine()
-        return interp1d(
-            ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate",
-            bounds_error=False,
-        )
+        return _atomic_rv(14, xc="PBE")
 
-    @pytest.mark.parametrize("epsilon", [1.0, 25.0, 400.0])
-    @pytest.mark.parametrize("lprime", [0, 1, 2, 3])
-    def test_outer_region_fits_an_energy_normalised_wkb_wave(
-        self, epsilon, lprime
+    def _assert_outer_region_fits_an_energy_normalised_wkb_wave(
+        self, r, u, ef, lprime
     ):
         """Independent of ``_asymptotic_amplitude``'s envelope estimator:
         least-squares fit the outer region to the WKB form of the solution.
@@ -216,6 +214,11 @@ class TestContinuumNormalisation:
         solved (``radial_schroedinger_equation``, which defines the
         problem). A = hypot(a, b) is then the r -> infinity amplitude.
 
+        Because q(r) comes from that same equation, this checks the
+        normalisation of whatever equation is solved; it cannot tell whether
+        the equation itself is right (e.g. its unexplained 1.02 factor on
+        the centrifugal and potential terms).
+
         Energy normalisation, derived: u -> A sin(kr + delta) gives
         integral u_k u_k' dr = A^2 (pi/2) delta(k - k'), and with E = k^2
         (Rydberg units), delta(k - k') = 2k delta(E - E'), so
@@ -224,20 +227,10 @@ class TestContinuumNormalisation:
         Measured |A sqrt(pi k) - 1| <= 1.1e-3 (l'=3, 25 eV, the case the
         WKB form describes worst: 1% fit residual); <= 2e-4 elsewhere.
         """
-        from ase import units
         from scipy.integrate import cumulative_trapezoid
 
-        from abtem.inelastic.core_loss import (
-            calculate_continuum_radial_wavefunction,
-            radial_schroedinger_equation,
-        )
+        from abtem.inelastic.core_loss import radial_schroedinger_equation
 
-        wavefunction = calculate_continuum_radial_wavefunction(
-            Z=14, n=1, l=0, lprime=lprime, epsilon=epsilon
-        )
-        r = wavefunction.radial_grid
-        u = wavefunction._radial_values
-        ef = epsilon / units.Rydberg
         k = np.sqrt(ef)
 
         # Outer 40% of the grid, and outside the Si atom.

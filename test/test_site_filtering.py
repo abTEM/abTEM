@@ -94,8 +94,11 @@ def test_results_are_independent_of_the_chunk_size(setup):
     fine = _run(setup, scatter_max_batch=1)
 
     # Two all-zero results (e.g. a filter that drops every site) would agree
-    # trivially; threshold=0.9 must keep the sites carrying 90% of the
-    # overlap, so the signal cannot vanish.
+    # trivially. This only rules that out for this setup, which is known to
+    # keep signal at threshold=0.9; the threshold does not guarantee that
+    # the kept sites carry 90% of the overlap (the cut is ranked over every
+    # pixel, not over the sites, and falls short -- see
+    # test_threshold_retains_requested_fraction_of_overlap).
     assert np.abs(coarse).max() > 0
 
     tolerance = 1e-5 if coarse.dtype == np.float32 else 1e-10

@@ -259,8 +259,9 @@ def test_threaded_and_synchronous_schedulers_agree():
         lazy.compute(progress_bar=False, scheduler="synchronous").to_cpu().array
     )
 
-    # threshold=0.5 still keeps the sites carrying half the overlap; two
-    # all-zero results (every site filtered away) would agree trivially.
+    # Two all-zero results (every site filtered away) would agree
+    # trivially; this setup is known to keep signal at threshold=0.5 (which
+    # does not by itself guarantee any retained fraction of the overlap).
     # Exact equality is kept deliberately: stricter than any atol, and the
     # scheduler must not change the summation order within a task.
     assert np.abs(synchronous).max() > 0

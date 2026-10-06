@@ -406,7 +406,10 @@ def _asymptotic_amplitude(r: np.ndarray, u: np.ndarray, k: float) -> float:
     return float(np.median(envelope))
 
 
-def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+def _atomic_rv(Z, xc="PBE"):
+    """r*V(r) of the neutral ground-state atom [Rydberg * Bohr], from a scalar-
+    relativistic GPAW all-electron calculation, linearly extrapolated beyond
+    the radial grid. The potential the continuum states are solved in."""
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
@@ -415,21 +418,25 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     AllElectronAtom.log = f
 
-    check_valid_quantum_number(Z, n, l)
-    # config_tuples = config_str_to_config_tuples(
-    #     electron_configurations[chemical_symbols[Z]]
-    # )
-    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
-
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
     # ae.f_j[subshell_index] -= 0.0
     ae.run()
     ae.scalar_relativistic = True
     ae.refine()
 
-    vr = interp1d(
+    return interp1d(
         ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
     )
+
+
+def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
+    check_valid_quantum_number(Z, n, l)
+    # config_tuples = config_str_to_config_tuples(
+    #     electron_configurations[chemical_symbols[Z]]
+    # )
+    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
+
+    vr = _atomic_rv(Z, xc=xc)
 
     ef = epsilon / units.Rydberg
 
@@ -1158,7 +1165,14 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         cumulative = np.cumsum(overlap) / overlap.sum()
 
-        return overlap[np.searchsorted(cumulative, threshold, side="left") - 1]
+        # filter_sites keeps sites whose overlap is strictly greater than the
+        # returned value. For a threshold below the largest single-pixel
+        # fraction the index used to wrap to -1, i.e. the *smallest* overlap,
+        # silently keeping (almost) every site; clamp it so that at least the
+        # top-ranked site survives instead.
+        index = np.searchsorted(cumulative, threshold, side="left") - 1
+        index = min(max(index, 1), len(overlap) - 1)
+        return overlap[index]
 
     def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):
