@@ -563,6 +563,38 @@ class TestTransferFunctionEnergyMatching:
         with pytest.raises(ValueError, match="not an energy ensemble"):
             waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, defocus=50))
 
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
+    def test_reused_after_single_energy_waves(self, apply):
+        """Applying a CTF to single-energy wave functions leaves it without their
+        energy, so it can then be applied to a multi-energy ensemble."""
+        ctf = abtem.CTF(**self.CTF_KWARGS)
+        for energy in (200e3, TEST_ENERGIES):
+            waves = self._exit_waves(energy, lazy=False)
+            if apply == "apply_ctf":
+                result = waves.apply_ctf(ctf)
+            else:
+                result = ctf.apply(waves)
+            assert ctf.energy is None
+        np.testing.assert_allclose(
+            result.intensity().array, self._oracle(), rtol=1e-4, atol=1e-6
+        )
+
+    @lazy_params
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
+    def test_fixed_energy_on_mismatched_member_raises(self, lazy, apply):
+        """A fixed energy is checked against an indexed member's own energy."""
+        member = PlaneWave(energy=TEST_ENERGIES, extent=5, gpts=32).build(lazy=lazy)[1]
+        ctf = abtem.CTF(energy=TEST_ENERGIES[0], **self.CTF_KWARGS)
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            member.apply_ctf(ctf) if apply == "apply_ctf" else ctf.apply(member)
+        assert ctf.energy == TEST_ENERGIES[0]
+
+        matching = abtem.CTF(energy=TEST_ENERGIES[1], **self.CTF_KWARGS)
+        result = member.apply_ctf(matching) if apply == "apply_ctf" else (
+            matching.apply(member)
+        )
+        assert result.metadata["energy"] == TEST_ENERGIES[1]
+
     def test_single_valued_energy_distribution_is_scalar(self):
         ctf = abtem.CTF(energy=[200e3], defocus=50)
         assert ctf.energy == 200e3

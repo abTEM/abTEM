@@ -15,13 +15,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.array import (
-    ArrayObject,
-    ComputableList,
-    _expand_dims,
-    _multi_energy_axis,
-    validate_lazy,
-)
+from abtem.array import ArrayObject, ComputableList, _expand_dims, validate_lazy
 from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
@@ -1531,26 +1525,9 @@ class Waves(BaseWaves, ArrayObject):
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        # A multi-energy ensemble, or a CTF whose energy is a distribution, is
-        # evaluated one energy at a time (see `BaseTransferFunction._match_ensemble`).
-        if (
-            _multi_energy_axis(self) is not None
-            or ctf._energy_distribution is not None
-        ):
-            return self.apply_transform(ctf, max_batch=max_batch)
-
-        if not ctf.accelerator.energy:
-            # Single energy: resolve the wavelength from the wave functions
-            # (ordinary waves, or an indexed ensemble member whose per-member
-            # energy lives in metadata) without mutating ``self``.
-            ctf.accelerator.energy = self._valid_energy
-        else:
-            # CTF fixes the energy: verify it does not disagree with a concrete
-            # wave energy, but do not overwrite ``self``.
-            self.accelerator.check_match(ctf.accelerator)
-
-        ctf.accelerator.check_is_defined()
-
+        # The energies are matched and checked in
+        # `BaseTransferFunction._match_ensemble`; a multi-energy ensemble is then
+        # evaluated one energy at a time, each at its own wavelength.
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
