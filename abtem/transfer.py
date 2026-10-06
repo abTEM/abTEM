@@ -36,10 +36,33 @@ if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
 
 
+def _split_energy(
+    energy: float | list | tuple | np.ndarray | BaseDistribution | None,
+) -> tuple[float | None, BaseDistribution | None]:
+    """Split an energy argument into a scalar energy and an energy distribution,
+    exactly one of which may be set.
+
+    A list/array of energies becomes an energy-ensemble distribution, consistent
+    with PlaneWave/Probe/SMatrix accepting a list of energies. A single-valued
+    distribution is a plain scalar energy, as for :class:`.EnergyEnsemble`.
+    """
+    if isinstance(energy, (list, tuple, np.ndarray)):
+        energy = validate_distribution(energy)
+    if isinstance(energy, BaseDistribution):
+        if len(energy.values) == 1:
+            return float(energy.values[0]), None
+        return None, energy
+    return energy, None
+
+
 class BaseTransferFunction(
     ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGrid2DMixin
 ):
     """Base class for transfer functions."""
+
+    # A transfer function depends on the wavelength: a multi-energy ensemble is
+    # transformed one energy at a time, each at its own wavelength.
+    _splits_energy_ensembles = True
 
     def __init__(
         self,
@@ -52,15 +75,7 @@ class BaseTransferFunction(
         # Unwrap EnergyEnsemble (passed from Probe.ctf / SMatrix with ensemble energy)
         if hasattr(energy, "energy"):
             energy = energy.energy  # EnergyEnsemble → scalar or BaseDistribution
-        # A list/array of energies becomes an energy-ensemble distribution,
-        # consistent with PlaneWave/Probe/SMatrix accepting a list of energies.
-        if isinstance(energy, (list, tuple, np.ndarray)):
-            energy = validate_distribution(energy)
-        if isinstance(energy, BaseDistribution):
-            self._energy_distribution = energy
-            energy = None
-        else:
-            self._energy_distribution = None
+        energy, self._energy_distribution = _split_energy(energy)
         self._accelerator = Accelerator(energy=energy)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         super().__init__(distributions=("energy",) + tuple(distributions))
@@ -76,14 +91,8 @@ class BaseTransferFunction(
     def energy(self, value: float | BaseDistribution | None) -> None:
         if hasattr(value, "energy"):
             value = value.energy  # unwrap EnergyEnsemble
-        if isinstance(value, (list, tuple, np.ndarray)):
-            value = validate_distribution(value)
-        if isinstance(value, BaseDistribution):
-            self._energy_distribution = value
-            self._accelerator.energy = None
-        else:
-            self._energy_distribution = None
-            self._accelerator.energy = value
+        value, self._energy_distribution = _split_energy(value)
+        self._accelerator.energy = value
 
     @property
     def _energy_ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -96,11 +105,108 @@ class BaseTransferFunction(
             ]
         return []
 
+    def _match_ensemble(self, waves: Waves) -> BaseTransferFunction:
+        """This transfer function, matched to the energies of `waves`.
+
+        A fixed scalar energy must be that of single-energy wave functions,
+        including an indexed member of an ensemble, whose energy is resolved from
+        its metadata or ensemble axes. An energy distribution must be exactly the
+        energies of a multi-energy ensemble (the same values in the same order).
+        It is matched to the ensemble's EnergyAxis rather than adding a second
+        one, so the returned copy has no energy of its own: each member is then
+        evaluated at its own energy (see
+        `abtem.array._calculate_new_array_per_energy`).
+
+        Raises
+        ------
+        RuntimeError
+            If a fixed scalar energy differs from that of single-energy wave
+            functions.
+        EnergyUndefinedError
+            If neither the transfer function nor single-energy wave functions
+            define an energy.
+        ValueError
+            If the energies of a distribution differ from those of the ensemble,
+            if a distribution is applied to wave functions that are not a
+            multi-energy ensemble, or if a fixed scalar energy is applied to one.
+        """
+        from abtem.array import _multi_energy_axis
+        from abtem.core.energy import _resolve_other_energy
+
+        index = _multi_energy_axis(waves)
+        name = type(self).__name__
+
+        if self._energy_distribution is None:
+            if index is None:
+                self.accelerator.check_match(waves)
+                if _resolve_other_energy(waves) is None:
+                    self.accelerator.check_is_defined()
+            elif self.energy is not None:
+                raise ValueError(
+                    f"Cannot apply a {name} with a fixed energy to a multi-energy "
+                    "ensemble: each energy member requires its own wavelength. Pass "
+                    "a transfer function without an energy so the per-member "
+                    "energies are used."
+                )
+            return self
+
+        energies = tuple(float(value) for value in self._energy_distribution.values)
+        if index is None:
+            raise ValueError(
+                f"Cannot apply a {name} whose energy is a distribution "
+                f"{energies} eV to wave functions that are not an energy "
+                "ensemble. Its energies must match the EnergyAxis of a "
+                "multi-energy ensemble; for single-energy wave functions use a "
+                "scalar energy or leave it unset."
+            )
+        wave_energies = tuple(
+            float(value) for value in waves.ensemble_axes_metadata[index].values
+        )
+        if len(energies) != len(wave_energies) or not np.allclose(
+            energies, wave_energies, rtol=1e-9, atol=0.0
+        ):
+            raise ValueError(
+                f"The energies of the {name} {energies} eV do not match the "
+                f"energies of the wave function ensemble {wave_energies} eV. Use "
+                "the same energies in the same order, or leave the energy unset "
+                "so the per-member energies of the wave functions are used."
+            )
+
+        matched = self.copy()
+        matched.energy = None
+        return matched
+
+    def _energy_members(self) -> list[BaseTransferFunction]:
+        """A copy of this transfer function at each energy of its energy
+        distribution, in the order of its leading EnergyAxis."""
+        members = []
+        for energy in self._energy_distribution.values:
+            member = self.copy()
+            member.energy = float(energy)
+            members.append(member)
+        return members
+
+    @property
+    def _energy_metadata(self) -> dict:
+        """Energy metadata of measurements evaluated from the transfer function.
+
+        Only a scalar energy is recorded: an energy distribution is described by
+        the leading EnergyAxis, whose items carry each member's energy.
+        """
+        if self._energy_distribution is not None:
+            return {}
+        return {"energy": self.energy}
+
     @property
     def _valid_wavelength(self) -> float:
-        """Wavelength [Å], using first ensemble energy when energy is a distribution."""
+        """Wavelength [Å]; the shortest one when energy is a distribution.
+
+        On a common spatial-frequency grid the highest energy (shortest
+        wavelength) reaches the smallest scattering angle, so a grid sized for
+        it covers a given angle for every member of the energy ensemble.
+        """
         if isinstance(self._energy_distribution, BaseDistribution):
-            return energy2wavelength(float(self._energy_distribution.values[0]))
+            return energy2wavelength(float(np.max(self._energy_distribution.values)))
         return self.wavelength
 
     @abstractmethod
@@ -138,25 +244,26 @@ class BaseTransferFunction(
         kernel : numpy.ndarray or dask.array.Array
         """
         if isinstance(self._energy_distribution, BaseDistribution):
-            arrays = []
-            for e in self._energy_distribution.values:
-                member = self.copy()
-                member.energy = float(e)
-                arrays.append(member._evaluate_kernel(waves))
-            return np.stack(arrays, axis=0)
+            arrays = [
+                member._evaluate_kernel(waves) for member in self._energy_members()
+            ]
+            return get_array_module(arrays[0]).stack(arrays, axis=0)
 
         if waves is None:
-            device = "cpu"
+            transfer_function, device = self, "cpu"
         else:
-            self.accelerator.match(waves)
-            self.grid.match(waves)
+            # Match a copy, so that evaluating against `waves` does not leave this
+            # transfer function with their energy or grid.
+            transfer_function = self.copy()
+            transfer_function.accelerator.match(waves)
+            transfer_function.grid.match(waves)
             device = waves.device
 
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
+        transfer_function.grid.check_is_defined()
+        transfer_function.accelerator.check_is_defined()
 
-        alpha, phi = self._angular_grid(device)
-        return self._evaluate_from_angular_grid(alpha, phi)
+        alpha, phi = transfer_function._angular_grid(device)
+        return transfer_function._evaluate_from_angular_grid(alpha, phi)
 
     def to_diffraction_patterns(
         self,
@@ -221,7 +328,7 @@ class BaseTransferFunction(
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
             fftshift=True,
-            metadata={"energy": self.energy},
+            metadata=self._energy_metadata,
         )
         return diffraction_patterns
 
@@ -240,7 +347,7 @@ class BaseAperture(BaseTransferFunction):
     def __init__(
         self,
         semiangle_cutoff: float | BaseDistribution = np.inf,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -442,8 +549,10 @@ class Aperture(BaseAperture):
         zero-angle beam, i.e. a parallel beam.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -458,7 +567,7 @@ class Aperture(BaseAperture):
         self,
         semiangle_cutoff: float | BaseDistribution,
         soft: bool = True,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -553,8 +662,10 @@ class Bullseye(BaseAperture):
         where 1 gives a fully open disk.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -578,7 +689,7 @@ class Bullseye(BaseAperture):
         num_rings: int,
         ring_width: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -765,8 +876,10 @@ class Vortex(BaseAperture):
         Quantum number of vortex beam.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -783,7 +896,7 @@ class Vortex(BaseAperture):
         self,
         quantum_number: int,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -837,8 +950,10 @@ class AnnularAperture(BaseAperture):
         non-negative and smaller than `semiangle_cutoff`.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -855,7 +970,7 @@ class AnnularAperture(BaseAperture):
         self,
         inner_cutoff: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -935,8 +1050,10 @@ class Zernike(BaseAperture):
         Phase shift of Zernike film [rad]
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad]. Must be positive.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -954,7 +1071,7 @@ class Zernike(BaseAperture):
         center_hole_cutoff: float,
         phase_shift: float,
         semiangle_cutoff: float,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1023,7 +1140,7 @@ class RadialPhasePlate(BaseAperture):
         phase_shift: float = np.pi,
         power_law: float = 2.0,
         shift_central_semiangle: float = 0.0,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1106,8 +1223,10 @@ class TemporalEnvelope(BaseTransferFunction):
         lens current instability [Å]. Note: this uses the 1/e width convention (as in
         Kirkland), not the standard deviation; to convert, use focal_spread = sqrt(2)*sigma.
         Alternatively, a distribution of values may be provided.
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1121,7 +1240,7 @@ class TemporalEnvelope(BaseTransferFunction):
     def __init__(
         self,
         focal_spread: float | BaseDistribution,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1408,8 +1527,10 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1428,7 +1549,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         aberration_coefficients: Optional[
             Mapping[str, str | float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1595,8 +1716,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies must be those of a multi-energy ensemble of wave
+        functions, as for :class:`.CTF`.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1614,7 +1737,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         aberration_coefficients: Optional[
             Mapping[str, str | float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -1776,8 +1899,14 @@ class CTF(_HasAberrations, BaseAperture):
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration
         magnitudes should be given in [Å] and angles should be given in [radian].
-    energy : float, optional
+    energy : float, list of float or BaseDistribution, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+        Several energies give an energy-ensemble CTF, with a leading EnergyAxis;
+        applied to a multi-energy ensemble of wave functions, its energies must
+        match the ensemble's, and each member is evaluated at its own energy.
+        Only the energy values are matched: the weights of the wave functions'
+        ensemble decide its ensemble mean, and those of this distribution are
+        not used.
     extent : float or two float, optional
         Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
         float is given, both are set equal.
@@ -1812,7 +1941,7 @@ class CTF(_HasAberrations, BaseAperture):
         aberration_coefficients: Optional[
             Mapping[str, float | BaseDistribution]
         ] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | BaseDistribution | None = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
@@ -2073,6 +2202,14 @@ class CTF(_HasAberrations, BaseAperture):
         ctf_profiles : ReciprocalSpaceLineProfiles
             Ensemble of reciprocal space line profiles. The first ensemble dimension
             represents the different
+
+        Notes
+        -----
+        If the energy is a distribution, the profiles of all energies share one
+        spatial-frequency grid along a leading :class:`.EnergyAxis`, so the same
+        position along the profile is a different scattering angle for each
+        energy. The grid reaches `max_angle` at the highest energy, so every
+        energy covers at least `max_angle`.
         """
         if max_angle is None:
             _raise_if_parallel_beam(
@@ -2085,30 +2222,31 @@ class CTF(_HasAberrations, BaseAperture):
             else:
                 max_angle = self._max_semiangle_cutoff * 1.6
 
-        self.accelerator.check_is_defined()
+        if gpts < 2:
+            raise ValueError(f"A profile needs at least 2 points, got gpts={gpts}.")
 
-        sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
-        alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(get_dtype(complex=False))
+        if self._energy_distribution is None:
+            self.accelerator.check_is_defined()
+
+        # Spatial frequencies [1/Å] of the profile points
+        k = np.linspace(0, max_angle * 1e-3 / self._valid_wavelength, gpts)
+        sampling = k[1] - k[0]
 
         phi = np.array(phi)
 
-        components = dict()
-        components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
-
-        if self._spatial_envelope.angular_spread != 0.0:
-            components["spatial envelope"] = self._evaluate_to_match(
-                self._spatial_envelope, alpha, phi
-            )
-
-        if self._temporal_envelope.focal_spread != 0.0:
-            components["temporal envelope"] = self._evaluate_to_match(
-                self._temporal_envelope, alpha, phi
-            )
-
-        if self._aperture.semiangle_cutoff != np.inf:
-            components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
-
-        components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
+        if self._energy_distribution is None:
+            components = self._profile_components(k * self.wavelength, phi)
+        else:
+            # Evaluate each energy at its own wavelength and stack the members
+            # along the leading energy axis of `ensemble_axes_metadata`.
+            members = [
+                member._profile_components(k * member.wavelength, phi)
+                for member in self._energy_members()
+            ]
+            components = {
+                key: np.stack([member[key] for member in members], axis=0)
+                for key in members[0]
+            }
 
         ensemble_axes_metadata: list[AxisMetadata] = self.ensemble_axes_metadata
         if len(components) > 1:
@@ -2128,7 +2266,7 @@ class CTF(_HasAberrations, BaseAperture):
         else:
             profiles = components["ctf"]
 
-        metadata = {"energy": self.energy}
+        metadata = self._energy_metadata
 
         profiles = ReciprocalSpaceLineProfiles(
             profiles,
@@ -2138,6 +2276,32 @@ class CTF(_HasAberrations, BaseAperture):
         )
 
         return profiles
+
+    def _profile_components(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """The radial line profiles of each CTF component, and of their product
+        under the key "ctf", at a single energy."""
+        alpha = alpha.astype(get_dtype(complex=False))
+
+        components = dict()
+        components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
+
+        if self._spatial_envelope.angular_spread != 0.0:
+            components["spatial envelope"] = self._evaluate_to_match(
+                self._spatial_envelope, alpha, phi
+            )
+
+        if self._temporal_envelope.focal_spread != 0.0:
+            components["temporal envelope"] = self._evaluate_to_match(
+                self._temporal_envelope, alpha, phi
+            )
+
+        if self._aperture.semiangle_cutoff != np.inf:
+            components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
+
+        components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
+        return components
 
 
 def _raise_if_parallel_beam(semiangle_cutoff, quantity: str, remedy: str = "") -> None:

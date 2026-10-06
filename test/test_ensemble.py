@@ -134,6 +134,9 @@ def test_array_waves_transform(data, ensemble, chunks):
 def test_apply_waves_transform(data, ensemble, lazy):
     ensemble = data.draw(ensemble())
     waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)
+    if getattr(ensemble, "energy", None) is not None:
+        # A fixed energy must be that of the wave functions.
+        ensemble.energy = waves.energy
 
     ensemble_shape = ensemble._out_ensemble_shape(waves)[0]
     waves = ensemble.apply(waves)
