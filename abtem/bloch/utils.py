@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import warnings
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -10,7 +10,7 @@ from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
-from abtem.core.backend import cp
+from abtem.core.backend import cp, get_array_module
 from abtem.core.energy import energy2wavelength
 
 
@@ -159,8 +159,17 @@ def make_hkl_grid(
     return hkl
 
 
+def validate_use_wave_eq(use_wave_eq: bool | str) -> bool | Literal["exact"]:
+    """Check that use_wave_eq is True, False or 'exact', and return it."""
+    if isinstance(use_wave_eq, (bool, np.bool_)):
+        return bool(use_wave_eq)
+    if isinstance(use_wave_eq, str) and use_wave_eq == "exact":
+        return "exact"
+    raise ValueError(f"use_wave_eq must be True, False or 'exact', not {use_wave_eq!r}")
+
+
 def excitation_errors(
-    g: np.ndarray, energy: float, use_wave_eq: bool = False
+    g: np.ndarray, energy: float, use_wave_eq: bool | Literal["exact"] = "exact"
 ) -> np.ndarray:
     """
     Calculate excitation errors for a set of reciprocal space vectors.
@@ -171,9 +180,16 @@ def excitation_errors(
         Reciprocal space vectors [1/Å], as an array of shape (N, 3).
     energy : float
         Electron energy [eV].
-    use_wave_eq : bool, optional
-        Whether to use the excitation errors derived from the wave equation.
-        Default is False.
+    use_wave_eq : bool or 'exact', optional
+        If 'exact' (default), the non-paraxial form,
+        ``-g_z + k (sqrt(1 - λ² g_⊥²) - 1)`` with ``k = 1 / λ``, the counterpart of
+        ``FourierMultislice(order="exact")``; to first order in ``λ² g_⊥²`` it
+        equals the paraxial form. Requires ``λ g_⊥ < 1`` (no evanescent beams).
+        If True, the excitation errors derived from the paraxial wave equation,
+        ``-g_z - λ g_⊥² / 2``; Bloch waves then solve the same equation as
+        multislice with the first-order (Fresnel) propagator,
+        ``FourierMultislice(order=1)``. If False, the standard excitation errors,
+        ``-g_z - λ |g|² / 2``, from the Ewald sphere.
 
     Returns
     -------
@@ -182,7 +198,19 @@ def excitation_errors(
     """
     assert g.shape[-1] == 3
     wavelength = energy2wavelength(energy)
-    if use_wave_eq:
+    use_wave_eq = validate_use_wave_eq(use_wave_eq)
+    if use_wave_eq == "exact":
+        xp = get_array_module(g)
+        x = wavelength**2 * (g[..., 0] ** 2 + g[..., 1] ** 2)
+        if x.size and float(x.max()) >= 1.0:
+            raise ValueError(
+                "use_wave_eq='exact' requires wavelength * |g_perp| < 1 for every "
+                "beam; reduce g_max or sg_max"
+            )
+        # k (sqrt(1 - x) - 1), evaluated stably as -k x / (sqrt(1 - x) + 1), the
+        # same form as the exact multislice propagator
+        sg = -g[..., 2] - x / (wavelength * (xp.sqrt(1.0 - x) + 1.0))
+    elif use_wave_eq:
         sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
     else:
         sg = (-2 * g[..., 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
@@ -353,7 +381,9 @@ def retrieve_structure_factor_values(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.loc[hkl_destination].to_numpy()
+    # copy=True: under pandas copy-on-write to_numpy() may return a read-only
+    # view, which torch.from_numpy (the Metal backend) will not wrap silently.
+    array = df.loc[hkl_destination].to_numpy(copy=True)
 
     if convert_to_numpy:
         array = cp.asarray(array)

@@ -26,7 +26,11 @@ def write_config(directory, text):
 
 @pytest.fixture
 def fresh_config():
-    """An isolated config dict seeded from abTEM's own defaults."""
+    """An empty, isolated config dict, not the global one.
+
+    It holds nothing until ``refresh_into`` (``config.refresh``) clears it and
+    fills it from abTEM's defaults and the given paths.
+    """
     return {}
 
 

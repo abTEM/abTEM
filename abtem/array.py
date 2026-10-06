@@ -30,17 +30,20 @@ from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 from tqdm.dask import TqdmCallback
 
 from abtem._version import __version__
-from abtem.core import config
+from abtem.core import backend, config
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    EnergyAxis,
     LinearAxis,
     OrdinalAxis,
     UnknownAxis,
+    _normalized_axis_weights,
     axis_from_dict,
     axis_to_dict,
 )
 from abtem.core.backend import (
+    asnumpy,
     check_cupy_is_installed,
     copy_to_device,
     cp,
@@ -55,6 +58,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
+    get_dtype,
     interleave,
     itemset,
     normalize_axes,
@@ -141,6 +145,11 @@ def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     return arr
 
 
+def _inverse_permutation(order: tuple[int, ...]) -> tuple[int, ...]:
+    """The permutation that undoes `order`."""
+    return tuple(int(i) for i in np.argsort(order))
+
+
 def _to_natural_order(
     shape: tuple[int, ...], order: tuple[int, ...]
 ) -> tuple[int, ...]:
@@ -148,14 +157,131 @@ def _to_natural_order(
     recovering the size each of the first `len(order)` (ensemble) axes would
     have in the array's own natural (undeclared) axis order. Any trailing
     (base) axes beyond that span are untouched."""
-    ensemble_len = len(order)
-    inverse = [0] * ensemble_len
-    for k, p in enumerate(order):
-        inverse[p] = k
-    return (
-        tuple(shape[inverse[p]] for p in range(ensemble_len))
-        + shape[ensemble_len:]
+    inverse = _inverse_permutation(order)
+    return tuple(shape[i] for i in inverse) + shape[len(order) :]
+
+
+def _transpose_from_ensemble_source(array, order: tuple[int, ...]):
+    """The inverse of `_transpose_to_ensemble_source`: permute an array whose
+    first `len(order)` axes are in the declared order back into the natural
+    order, the one every `_calculate_new_array` returns."""
+    if order == tuple(range(len(order))):
+        return array
+    trailing = tuple(range(len(order), array.ndim))
+    return array.transpose(*_inverse_permutation(order), *trailing)
+
+
+def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
+    """The index of the ensemble axis holding more than one energy, if any."""
+    for i, axis in enumerate(array_object.ensemble_axes_metadata):
+        if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+            return i
+    return None
+
+
+def _copy_with_scalar_energy(array_object: "ArrayObject", energy: Optional[float]):
+    """A copy of `array_object` sharing its array, with `energy` as its scalar
+    energy: `accelerator.energy`, and `metadata["energy"]` where the key is
+    present."""
+    kwargs = array_object._copy_kwargs(exclude=("array",))
+    kwargs["array"] = array_object._array
+    if "energy" in kwargs:
+        kwargs["energy"] = energy
+    if "energy" in (kwargs.get("metadata") or {}):
+        kwargs["metadata"]["energy"] = energy
+    return array_object.__class__(**kwargs)
+
+
+def _with_the_energy_of_a_single_valued_energy_axis(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it carrying the energy of its single-valued
+    `EnergyAxis` in place of a different scalar energy.
+
+    A scalar energy (`accelerator.energy` or `metadata["energy"]`) takes
+    precedence over the axis in `resolve_energy`, so waves that carry both, with
+    an axis value that differs from the scalar, are evaluated at the wrong
+    wavelength. This is the state of a lazy block holding one energy of such
+    waves. The copy shares the array; the object itself is returned when it has
+    no such axis or no scalar energy that differs from the axis value.
+    """
+    axis = next(
+        (
+            axis
+            for axis in array_object.ensemble_axes_metadata
+            if isinstance(axis, EnergyAxis) and len(axis.values) == 1
+        ),
+        None,
     )
+    if axis is None:
+        return array_object
+
+    energy = float(axis.values[0])
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None or float(scalar) == energy for scalar in scalars):
+        return array_object
+
+    return _copy_with_scalar_energy(array_object, energy)
+
+
+def _without_scalar_energy(array_object: "ArrayObject"):
+    """`array_object`, or a copy of it with no scalar energy, so that only its
+    `EnergyAxis` decides the energies (see `resolve_energy`). The copy shares the
+    array."""
+    accelerator = getattr(array_object, "accelerator", None)
+    scalars = (
+        None if accelerator is None else accelerator.energy,
+        array_object._metadata.get("energy"),
+    )
+    if all(scalar is None for scalar in scalars):
+        return array_object
+    return _copy_with_scalar_energy(array_object, None)
+
+
+def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
+    """`transform._calculate_new_array(array_object)`, evaluated for each energy of
+    a multi-energy ensemble on its own when the transform depends on the
+    wavelength (`_splits_energy_ensembles`).
+
+    A detector or a multislice run uses one angular sampling and one wavelength
+    for the whole array it is given, which is right for one energy only. Each
+    energy member is therefore transformed separately and the results are
+    restacked where indexing removed the energy axis: after the transform's own
+    ensemble axes, among the array object's own axes in their natural order,
+    which is the order every `_calculate_new_array` returns. This runs on the
+    whole array of an eager call and on every block of a lazy one, whatever
+    energies the block holds. An array object with a single-valued energy axis,
+    such as a block holding one energy, is transformed at that energy even if it
+    carries a different scalar energy; one without such a scalar energy is
+    transformed as it is, not as a copy.
+    """
+    if not getattr(transform, "_splits_energy_ensembles", False):
+        return transform._calculate_new_array(array_object)
+
+    index = _multi_energy_axis(array_object)
+    if index is None:
+        return transform._calculate_new_array(
+            _with_the_energy_of_a_single_valued_energy_axis(array_object)
+        )
+
+    energies = array_object.ensemble_axes_metadata[index].values
+    members = []
+    for j, energy in enumerate(energies):
+        items = array_object.get_items((slice(None),) * index + (j,))
+        if items.get("energy") is not None:
+            # A scalar energy on the ensemble is not this member's.
+            items["energy"] = energy
+        members.append(transform._calculate_new_array(array_object.__class__(**items)))
+
+    axis = len(transform.ensemble_shape) + index
+    if isinstance(members[0], tuple):
+        return tuple(
+            get_array_module(outputs[0]).stack(outputs, axis=axis)
+            for outputs in zip(*members)
+        )
+    return get_array_module(members[0]).stack(members, axis=axis)
 
 
 def _transpose_to_ensemble_source(array, order: tuple[int, ...]):
@@ -286,6 +412,28 @@ def multi_output_blockwise(
 # under it (also a more sensible chunk size for parallel IO in general) by
 # halving the largest axis of the chunk shape until it fits the budget.
 _MAX_ZARR_CHUNK_BYTES = 512 * 1024**2
+
+
+def _json_safe(value):
+    """Convert a metadata value into something ``json`` can encode.
+
+    Metadata can carry array-backed values -- an accumulated defocus that was
+    computed on the device, for instance -- and both zarr attributes and the
+    JSON metadata export run through ``json.dumps``, which understands neither
+    a CuPy array nor a Metal one (nor, for that matter, a NumPy scalar). Bring
+    anything array-like back to the host and hand over plain Python types.
+    """
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+
+    if hasattr(value, "dtype") and hasattr(value, "shape"):
+        array = np.asarray(asnumpy(value))
+        return array.item() if array.ndim == 0 else array.tolist()
+
+    return value
 
 
 def _safe_zarr_chunks(
@@ -485,12 +633,12 @@ class ComputableList(list):
 
                         for metadata_dict in metadata_list:
                             for key, value in metadata_dict.items():
-                                root.attrs[key] = value
+                                root.attrs[key] = _json_safe(value)
 
                         for i, computed_array in computed_arrays:
                             root.create_array(
                                 name=f"array{i}",
-                                data=computed_array,
+                                data=asnumpy(computed_array),
                                 chunks=_safe_zarr_chunks(
                                     computed_array.shape,
                                     computed_array.dtype.itemsize,
@@ -538,12 +686,12 @@ class ComputableList(list):
                 try:
                     for metadata_dict in metadata_list:
                         for key, value in metadata_dict.items():
-                            root.attrs[key] = value
+                            root.attrs[key] = _json_safe(value)
 
                     for i, computed_array in computed_arrays:
                         root.create_array(
                             name=f"array{i}",
-                            data=computed_array,
+                            data=asnumpy(computed_array),
                             chunks=_safe_zarr_chunks(
                                 computed_array.shape,
                                 computed_array.dtype.itemsize,
@@ -586,10 +734,15 @@ class ComputableList(list):
         is_gpu = config.get("device") == "gpu" or any(
             _is_gpu_array_object(obj) for obj in self
         )
+        is_mps = config.get("device") == "mps" or any(
+            _is_mps_array_object(obj) for obj in self
+        )
         _push_config_to_active_client()
 
         if is_gpu:
             kwargs = _resolve_gpu_scheduler(dict(kwargs))
+        elif is_mps:
+            kwargs = _resolve_mps_scheduler(dict(kwargs))
 
         arrays = [array for _, array in arrays_to_write]
         with _nested_compute_guard(kwargs), _keep_annotations_guard(
@@ -683,6 +836,47 @@ def _is_gpu_array_object(obj) -> bool:
     was GPU), so this correctly handles the to_cpu=True case.
     """
     return hasattr(obj, "device") and obj.device == "gpu"
+
+
+def _is_mps_array_object(obj) -> bool:
+    """Return True if obj's computation involves Metal (MPS) arrays."""
+    return hasattr(obj, "device") and obj.device == "mps"
+
+
+def _resolve_mps_scheduler(kwargs: dict) -> dict:
+    """Resolve the dask scheduler for a Metal computation.
+
+    A process holds a single Metal context, and PyTorch's MPS backend aborts
+    the process when several of dask's threaded-scheduler workers drive it at
+    once -- the same constraint that rules out the threaded scheduler for CuPy
+    in ``_resolve_gpu_scheduler``, and resolved the same way: a running
+    distributed client whose workers are each single-threaded is left in
+    charge, since the caller started it to run the computation, and anything
+    else gets the synchronous scheduler. (In-process workers then share the
+    one context, which the backend's own lock serializes.)
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments destined for ``dask.compute``. A ``scheduler`` key
+        set by the caller is always respected.
+
+    Returns
+    -------
+    dict
+        The keyword arguments, with ``scheduler="synchronous"`` injected when
+        no suitable client is available.
+    """
+    if "scheduler" in kwargs:
+        return kwargs
+
+    client = _active_client()
+    if is_gpu_dask_client(client):
+        push_config_to_workers(client)
+    else:
+        kwargs["scheduler"] = "synchronous"
+
+    return kwargs
 
 
 def _resolve_gpu_scheduler(kwargs: dict) -> dict:
@@ -867,11 +1061,16 @@ def _compute(
     is_gpu = config.get("device") == "gpu" or any(
         _is_gpu_array_object(obj) for obj in array_objects
     )
+    is_mps = config.get("device") == "mps" or any(
+        _is_mps_array_object(obj) for obj in array_objects
+    )
 
     _push_config_to_active_client()
 
     if is_gpu:
         kwargs = _resolve_gpu_scheduler(kwargs)
+    elif is_mps:
+        kwargs = _resolve_mps_scheduler(kwargs)
 
     arrays = [wrapper.array for wrapper in array_objects]
     with _nested_compute_guard(kwargs), _keep_annotations_guard(
@@ -1249,6 +1448,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "mean")
         return self._reduction(
             "mean", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1278,6 +1478,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         reduced_array : ArrayObject or subclass of ArrayObject
             The reduced array object.
         """
+        self._warn_if_weighted_axes(axis, "sum")
         return self._reduction(
             "sum", axes=axis, keepdims=keepdims, split_every=split_every
         )
@@ -1373,6 +1574,115 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             "max", axes=axis, keepdims=keepdims, split_every=split_every
         )
 
+    def _weighted_axes(self, axes: tuple[int, ...]) -> dict[int, np.ndarray]:
+        """Normalized probability weights of the given (non-negative) axes, for the
+        axes that carry non-uniform weights."""
+        weights = {}
+        for axis in axes:
+            axis_weights = _normalized_axis_weights(
+                self.axes_metadata[axis], self.shape[axis]
+            )
+            if axis_weights is not None:
+                weights[axis] = axis_weights
+        return weights
+
+    def _warn_if_weighted_axes(
+        self, axes: Optional[int | tuple[int, ...]], reduction_func: str
+    ) -> None:
+        if axes is None:
+            # A reduction over all axes includes every ensemble axis.
+            axes = tuple(range(len(self.ensemble_shape)))
+        else:
+            axes = tuple(
+                axis if axis >= 0 else len(self.shape) + axis
+                for axis in number_to_tuple(axes)
+            )
+            if any(axis >= len(self.ensemble_shape) for axis in axes):
+                return  # _reduction raises for base axes
+
+        if self._weighted_axes(axes):
+            warnings.warn(
+                f"`{reduction_func}` over an ensemble axis carrying distribution "
+                "(probability) weights ignores the weights. The ensemble members "
+                "are unweighted and the distribution weights are applied when the "
+                "ensemble is reduced: use `reduce_ensemble(axis=...)` for the "
+                "probability-weighted mean.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _weighted_ensemble_mean(
+        self, axes: int | tuple[int, ...], split_every: int = 2
+    ) -> Self:
+        """Probability-weighted mean over ensemble axes.
+
+        Computes ``Σ_i p_i A_i / Σ_i p_i`` over each axis, where ``p_i`` are the
+        weights carried by the axis metadata (see :class:`OrdinalAxis`); axes
+        without (or with equal) weights are averaged with a plain mean. Over
+        several axes the weights are the outer product of the per-axis weights.
+        Works for NumPy, CuPy and lazy Dask arrays (the result stays lazy) and
+        preserves the array dtype.
+        """
+        axes = tuple(
+            axis if axis >= 0 else len(self.shape) + axis
+            for axis in number_to_tuple(axes)
+        )
+
+        if self._is_base_axis(axes):
+            raise RuntimeError("base axes cannot be reduced")
+
+        weights = self._weighted_axes(axes)
+
+        if not weights:
+            # Equal weights (e.g. frozen phonons): the plain mean is exact, and
+            # keeping it leaves such results bitwise unchanged.
+            return self._reduction("mean", axes=axes, split_every=split_every)
+
+        # Integer arrays (e.g. counts) take the configured float precision rather
+        # than truncating the weights.
+        array_object = self
+        if self.array.dtype.kind not in "fc":
+            array_object = self.__class__(
+                **{
+                    **self._copy_kwargs(exclude=("array",)),
+                    "array": self.array.astype(get_dtype(complex=False)),
+                }
+            )
+
+        # Average the equal-weight axes first: it shrinks the array before the
+        # weighted pass, and the outer-product weights factorize over the axes.
+        unweighted = tuple(axis for axis in axes if axis not in weights)
+        if unweighted:
+            array_object = array_object._reduction(
+                "mean", axes=unweighted, split_every=split_every
+            )
+            weights = {
+                axis - sum(other < axis for other in unweighted): axis_weights
+                for axis, axis_weights in weights.items()
+            }
+
+        # A single multiply by the outer product of the per-axis weights, a small
+        # host array spanning only the weighted axes. The real dtype matches the
+        # array's precision (complex64 -> float32, ...), so the weights never
+        # promote the result.
+        ndim = len(array_object.shape)
+        combined = np.ones((1,) * ndim)
+        for axis, axis_weights in weights.items():
+            shape = [1] * ndim
+            shape[axis] = len(axis_weights)
+            combined = combined * axis_weights.reshape(shape)
+
+        xp = get_array_module(array_object.array)
+        real_dtype = np.finfo(array_object.array.dtype).dtype
+        array = array_object.array * xp.asarray(combined, dtype=real_dtype)
+
+        weighted = array_object.__class__(
+            **{**array_object._copy_kwargs(exclude=("array",)), "array": array}
+        )
+        return weighted._reduction(
+            "sum", axes=tuple(weights), split_every=split_every
+        )
+
     def _reduction(
         self,
         reduction_func: str,
@@ -1428,7 +1738,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(other, self.__class__):
             self._check_is_compatible(other)
             other_array = other.array
-        elif isinstance(other, (np.ndarray, da.core.Array, Number)):
+        elif (
+            isinstance(other, (np.ndarray, da.core.Array, Number))
+            or (cp is not None and isinstance(other, cp.ndarray))
+            or (
+                backend.TorchNDArray is not None
+                and isinstance(other, backend.TorchNDArray)
+            )
+        ):
             other_array = other
         else:
             raise NotImplementedError(
@@ -1463,7 +1780,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__truediv__")
 
     def __itruediv__(self, other: Self) -> Self:
-        return self._arithmetic(other, "__itruediv__")
+        return self._in_place_arithmetic(other, "__itruediv__")
+
+    def __rtruediv__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rtruediv__")
 
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
@@ -1481,7 +1801,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
-    __rtruediv__ = __truediv__
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
@@ -1823,7 +2142,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         }
         metadata["data_origin"] = f"abTEM_v{__version__}"
         metadata["type"] = self.__class__.__name__
-        return json.dumps(metadata)
+        return json.dumps(_json_safe(metadata))
 
     def to_tiff(self, filename: str, **kwargs):
         """Write data to a tiff file.
@@ -1893,6 +2212,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial: Callable,
         array_object_partial: Callable,
         base_ndims: int,
+        out_ndim: int,
     ) -> np.ndarray:
         axes = unpack_blockwise_args(args)
 
@@ -1906,13 +2226,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array_object = array_object_partial((array, list(ensemble_axes))).item()
         transform = transform_partial(*transform_axes).item()
 
-        out_arrays = transform._calculate_new_array(array_object)
+        out_arrays = _calculate_new_array_per_energy(transform, array_object)
 
         if not isinstance(out_arrays, tuple):
             out_arrays = (out_arrays,)
 
-        ndims = len(transform_axes) + len(array.shape)
-        packing = np.zeros((1,) * ndims, dtype=object)
+        packing = np.zeros((1,) * out_ndim, dtype=object)
         itemset(packing, 0, out_arrays)
         return packing
 
@@ -1936,6 +2255,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObject
             The transformed array object.
         """
+
+        # A transform whose output size depends on the ensemble (a pixelated
+        # detector's crop of a multi-energy ensemble) is fixed against the whole
+        # ensemble here, before an eager call or a lazy block sees one energy.
+        transform = transform._match_ensemble(self)
 
         new_arrays: (
             da.core.Array
@@ -1978,6 +2302,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             new_axes = transform._partition_args(
                 validated_chunks[: len(transform.ensemble_shape)]
             )
+
+            # A block of multi_output_blockwise has one dimension per axis of
+            # this array plus one per dimension of each partitioned transform
+            # argument, not one per argument: MultisliceTransform passes a
+            # frozen-phonon potential with several exit planes as one 2D
+            # argument, and large constants as 0D arguments whose blocks can be
+            # bare objects, so the count comes from the declared arguments. A
+            # packed block with fewer dimensions breaks dask's concatenation
+            # over dropped axes (AnnularDetector drops the wave-function axes).
+            out_ndim = len(self.shape) + sum(len(axis.shape) for axis in new_axes)
 
             num_dropped_axes = tuple(
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
@@ -2035,9 +2369,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array_object_partial=array_object_partial,
                 transform_partial=transform_partial,
                 base_ndims=len(self.base_shape),
+                out_ndim=out_ndim,
             )
         else:
-            new_arrays = transform._calculate_new_array(self)
+            new_arrays = _calculate_new_array_per_energy(transform, self)
             if not isinstance(new_arrays, tuple):
                 new_arrays = (new_arrays,)
             ensemble_sources = transform._out_ensemble_source(self)
@@ -2063,14 +2398,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
-            # When the source was on GPU but the output is CPU-resident
-            # Record the computation device on the output so _compute()
-            # selects the synchronous scheduler for GPU work.  Check
+            # When the source was on an accelerator but the output is
+            # CPU-resident, record the computation device on the output so
+            # _compute() selects the synchronous scheduler for the device work
+            # still in its graph -- CuPy and Metal both need it.  Check
             # self.device (which honours _device on lazy arrays) rather
             # than inspecting the dask-array module, which always returns
             # numpy for a not-yet-computed lazy array.
-            if self.device == "gpu":
-                output._device = "gpu"
+            if self.device in ("gpu", "mps"):
+                output._device = self.device
             outputs.append(output)
 
         if len(outputs) > 1:
@@ -2678,7 +3014,17 @@ def stack(
 
     axis_metadata = validate_axis_metadata(axis_metadata)
 
-    return arrays[0]._stack(arrays, axis_metadata, axis)
+    stacked = arrays[0]._stack(arrays, axis_metadata, axis)
+    if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+        # The scalar energy of the first member would misrepresent the others
+        # and take precedence over the axis (resolve_energy); the axis carries
+        # every member's energy, as for a probe built with several energies,
+        # whose metadata["energy"] is None as well.
+        if getattr(stacked, "accelerator", None) is not None:
+            stacked.accelerator.energy = None
+        if "energy" in stacked._metadata:
+            stacked._metadata["energy"] = None
+    return stacked
 
 
 def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:

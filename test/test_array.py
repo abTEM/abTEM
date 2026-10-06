@@ -2,18 +2,20 @@ import os
 from numbers import Number
 
 import hypothesis.extra.numpy as numpy_st
+import numpy as np
 import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
-                   devices, gpu, lazy_params, remove_dummy_dimensions,
-                   requires_gpu, si_cubic_atoms)
+                   assert_array_objects_equal, devices, gpu, lazy_params,
+                   remove_dummy_dimensions, si_cubic_atoms)
 
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy
 
 # The full set of `has_array` strategies exercised by most array-object tests.
 ALL_HAS_ARRAY = [
@@ -140,35 +142,12 @@ def test_ensure_lazy(data, has_array, lazy, device):
 @lazy_params
 @devices
 @pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_to_zarr(data, has_array, url, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    waves.to_zarr(url)
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@lazy_params
-@devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_to_zarr_zip(data, has_array, url, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    waves.to_zarr(url)
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
-@lazy_params
-@devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
-    has_array_from_zarr = (
-        has_array.from_zarr(url).copy_to_device(has_array.device).compute()
-    )
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
-    has_array_from_zarr.compute()
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
+    has_array_from_zarr = has_array.from_zarr(url)
+    assert has_array_from_zarr.is_lazy
+    assert_array_objects_equal(has_array_from_zarr, has_array)
 
 
 @settings(max_examples=5)
@@ -179,12 +158,9 @@ def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
 def test_to_zarr_from_zarr_zip(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
-    has_array_from_zarr = (
-        has_array.from_zarr(url).copy_to_device(has_array.device).compute()
-    )
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
-    has_array_from_zarr.compute()
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
+    has_array_from_zarr = has_array.from_zarr(url)
+    assert has_array_from_zarr.is_lazy
+    assert_array_objects_equal(has_array_from_zarr, has_array)
 
 
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
@@ -215,7 +191,7 @@ def test_from_zarr_legacy_format(data, has_array, url):
     root.attrs["type0"] = has_array.__class__.__name__
 
     has_array_from_zarr = from_zarr(url).compute()
-    assert has_array_from_zarr == has_array
+    assert_array_objects_equal(has_array_from_zarr, has_array)
 
 
 # ---- large-array zarr chunking (regression: whole-array single chunk hit a
@@ -445,18 +421,46 @@ def test_to_cpu(data, has_array, lazy, device, destination):
     assert_array_matches_device(has_array.array, destination)
 
 
+def _with_array(array_object, array):
+    """A copy of ``array_object`` with every attribute but the array kept."""
+    kwargs = array_object._copy_kwargs(exclude=("array",))
+    kwargs["array"] = array
+    return array_object.__class__(**kwargs)
+
+
+def _distinct_twin(array_object):
+    """Same type, shape, axes and metadata as ``array_object``, but different
+    values everywhere -- so a stack or concatenation that drops, duplicates
+    or reorders an operand cannot go unnoticed."""
+    return _with_array(array_object, array_object.array * 2 + 1)
+
+
 @given(data=st.data())
 @lazy_params
 @devices
 @pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_stacks_with_self(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    stacked = stack(
-        (has_array, has_array), axis_metadata=OrdinalAxis(values=(1, 1)), axis=0
-    )
-    stacked.compute()
-    has_array._metadata = stacked[1].metadata
-    assert stacked[0].to_cpu() == stacked[1].to_cpu() == has_array.to_cpu()
+def test_stacks_two_objects(data, has_array, lazy, device):
+    first = data.draw(has_array(lazy=lazy, device=device))
+    second = _distinct_twin(first)
+
+    stack_axis = OrdinalAxis(label="_test_stack", values=(10, 20))
+    stacked = stack((first, second), axis_metadata=stack_axis, axis=0)
+
+    assert stacked.is_lazy == lazy
+    assert stacked.shape == (2,) + first.shape
+    # stack() keeps the operands' metadata and prepends the new axis.
+    assert stacked.metadata == first.metadata
+    assert stacked.ensemble_axes_metadata[0] == stack_axis
+    assert stacked.ensemble_axes_metadata[1:] == first.ensemble_axes_metadata
+
+    # Indexing an OrdinalAxis adds {label: value} to the metadata.
+    for i, original in enumerate((first, second)):
+        expected = _with_array(original, original.array)
+        expected._metadata = {
+            **original.metadata,
+            "_test_stack": stack_axis.values[i],
+        }
+        assert_array_objects_equal(stacked[i], expected)
 
 
 @given(data=st.data())
@@ -468,25 +472,50 @@ def test_from_array_and_metadata(data, has_array, lazy, device):
     new = has_array.__class__.from_array_and_metadata(
         has_array.array, has_array.axes_metadata, has_array.metadata
     )
-    assert new.to_cpu() == has_array.to_cpu()
+    assert_array_objects_equal(new, has_array)
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True])
+@lazy_params
 @devices
 @pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL)
-def test_concatenates_with_self(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
+def test_concatenate_matches_its_parts(data, has_array, lazy, device):
+    first = data.draw(has_array(lazy=lazy, device=device))
 
-    axis = data.draw(st.integers(min_value=0, max_value=len(has_array.ensemble_shape)))
-    assume(has_array.axes_metadata[axis]._concatenate)
+    # Draw only among the axes that can be concatenated, instead of drawing
+    # any axis and rejecting with assume() (which threw away most draws).
+    # An object without one gets a concatenable length-1 ensemble axis.
+    concatenable = [
+        i
+        for i, axis_metadata in enumerate(first.ensemble_axes_metadata)
+        if axis_metadata._concatenate
+    ]
+    if not concatenable:
+        first = first.expand_dims((0,), axis_metadata=[OrdinalAxis(values=(0,))])
+        concatenable = [0]
+    axis = data.draw(st.sampled_from(concatenable))
 
-    concatenated = concatenate((has_array, has_array), axis=axis)
-    concatenated.compute()
+    second = _distinct_twin(first)
+    concatenated = concatenate((first, second), axis=axis)
 
-    assume(axis < len(has_array.ensemble_shape))
-    indices = (slice(None),) * axis + (slice(0, has_array.shape[axis]),)
-    assert concatenated[indices].to_cpu() == has_array.to_cpu()
+    assert concatenated.is_lazy == lazy
+    n = first.shape[axis]
+    expected_shape = list(first.shape)
+    expected_shape[axis] = 2 * n
+    assert concatenated.shape == tuple(expected_shape)
+
+    head = (slice(None),) * axis + (slice(0, n),)
+    tail = (slice(None),) * axis + (slice(n, 2 * n),)
+    assert_array_objects_equal(concatenated[head], first)
+
+    # The tail's axis metadata legitimately differs from `second`'s (a
+    # concatenated LinearAxis continues its offset), so only the values and
+    # the metadata dict are compared for it.
+    tail = concatenated[tail].compute().to_cpu()
+    assert tail.metadata == second.metadata
+    np.testing.assert_array_equal(
+        asnumpy(tail.array), asnumpy(second.compute().to_cpu().array)
+    )
 
 
 # @given(data=st.data())
@@ -527,7 +556,7 @@ class TestStackAndHyperspyTrustTheRealArrayType:
     """
 
     @staticmethod
-    def _stale_label_measurement():
+    def _stale_label_measurement(device):
         import ase
 
         import abtem
@@ -536,9 +565,9 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
             pbc=True,
         )
-        with abtem.config.set({"device": "gpu"}):
+        with abtem.config.set({"device": device}):
             pot = abtem.Potential(
-                atoms, gpts=(32, 32), slice_thickness=2.0, device="gpu"
+                atoms, gpts=(32, 32), slice_thickness=2.0, device=device
             )
             probe = abtem.Probe(
                 semiangle_cutoff=20, energy=60e3, extent=(8.0, 8.0), gpts=(32, 32)
@@ -555,22 +584,25 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 lazy=False,
             )
 
-    @requires_gpu
-    def test_precondition_device_label_disagrees_with_array_type(self):
+    # Parametrized over the accelerator rather than gated on CUDA: Metal
+    # results carry the same stale label, for the same reason, and the
+    # consumers below must not trust it there either.
+    @pytest.mark.parametrize("device", [gpu])
+    def test_precondition_device_label_disagrees_with_array_type(self, device):
         """Pins down the setup every test below depends on, so a future fix
         to the underlying label inconsistency (out of scope here) doesn't
         silently turn these into tests of nothing."""
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         assert isinstance(m.array, np.ndarray)
-        assert m.device == "gpu"
+        assert m.device == device
 
-    @requires_gpu
-    def test_stack_does_not_crash_on_a_stale_device_label(self):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_stack_does_not_crash_on_a_stale_device_label(self, device):
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         stacked = stack(
             (m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0
         )
@@ -578,8 +610,10 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             np.asarray(stacked.array), np.stack([np.asarray(m.array)] * 2, axis=0)
         )
 
-    @requires_gpu
-    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(self, monkeypatch):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(
+        self, monkeypatch, device
+    ):
         """hyperspy isn't installed in every environment this suite runs
         in; stubbing its two signal classes lets this test exercise the
         real to_hyperspy code path -- including the line that crashed --
@@ -609,7 +643,7 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 )
             ),
         )
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         sig = m.to_hyperspy()
         # transpose=True (the default) is what exercises the crashing line
         # (xp.moveaxis); for this measurement -- base_dims=2, no ensemble
@@ -619,15 +653,15 @@ class TestStackAndHyperspyTrustTheRealArrayType:
     def test_get_array_module_receives_the_array_not_the_device_label(
         self, monkeypatch
     ):
-        """CPU-runnable complement to the two GPU-only tests above. Those
-        need get_array_module("gpu") to actually resolve to cupy to
-        reproduce the crash, so (like every @requires_gpu test) they never
+        """CPU-runnable complement to the two accelerator tests above. Those
+        need get_array_module(device) to actually resolve to cupy or torch
+        to reproduce the crash, so (like every accelerator test) they never
         run in CI -- no GPU runner is configured -- and only ever execute
-        on a workstation with cupy. This doesn't reproduce the crash, but
-        it runs everywhere and directly asserts the fix's actual invariant
-        -- _stack and to_hyperspy call get_array_module with the real
-        array, never with .device -- independent of cupy or a GPU being
-        present at all.
+        on a workstation with CUDA or Apple silicon. This doesn't reproduce
+        the crash, but it runs everywhere and directly asserts the fix's
+        actual invariant -- _stack and to_hyperspy call get_array_module
+        with the real array, never with .device -- independent of cupy or
+        a GPU being present at all.
 
         Deliberately does not use _stale_label_measurement: that needs a
         real GPU to produce a genuine numpy/cupy mismatch, but the
@@ -773,3 +807,30 @@ class TestBaseLessArrayObject:
             np.asarray(transformed.compute().array),
             np.asarray(m.compute().array) * 2,
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_arithmetic_with_array_of_own_device(device):
+    # A measurement on the GPU combined with a CuPy array (and on the CPU with a
+    # NumPy array) used to raise NotImplementedError for the CuPy case.
+    import numpy as np
+
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    xp = get_array_module(device)
+    host = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    images = abtem.Images(
+        xp.asarray(host),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    factor = np.array([2.0, 3.0], dtype=np.float32)[:, None, None]
+
+    for result, expected in (
+        (images * xp.asarray(factor), host * factor),
+        (images - xp.asarray(factor), host - factor),
+        (images / xp.asarray(factor), host / factor),
+    ):
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(result.to_cpu().array, expected)

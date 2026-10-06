@@ -9,6 +9,7 @@ the module under test, so they catch this without a GPU. The GPU tests run the s
 paths on real CuPy chunks.
 """
 
+import gc
 import pickle
 import types
 
@@ -627,6 +628,21 @@ class TestLazyCuPy:
         np.testing.assert_allclose(
             _to_numpy(result.array), expected, rtol=1e-6, atol=1e-6
         )
+
+    def test_lazy_abs_after_an_eager_abs(self):
+        # The eager abs compiles cupy.abs for complex64 first, so a pickled copy of
+        # the ufunc would carry that kernel's module; cupy.abs must still work
+        # afterwards, lazily and eagerly.
+        import cupy as cp
+
+        eager = _complex_diffraction_patterns(xp=cp, lazy=False)
+        expected = _to_numpy(eager.abs().array)
+
+        lazy = _complex_diffraction_patterns(xp=cp).abs()
+        gc.collect()
+
+        np.testing.assert_allclose(_to_numpy(lazy.array), expected, rtol=1e-6)
+        np.testing.assert_array_equal(_to_numpy(eager.abs().array), expected)
 
     def test_tile_scan(self):
         patterns = _scan(abtem.PixelatedDetector(max_angle=30, to_cpu=False), "gpu")

@@ -40,6 +40,7 @@ from abtem import (
 )
 from abtem.antialias import AntialiasAperture
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import copy_to_device
 from abtem.core.fft import (
     get_shared_diffraction_pattern_fft,
     share_diffraction_pattern_fft,
@@ -225,8 +226,7 @@ def _make_transition_potential(potential, device, n_transitions=4, seed=0):
         rng.standard_normal((n_transitions, *potential.gpts))
         + 1j * rng.standard_normal((n_transitions, *potential.gpts))
     ).astype(np.complex64)
-    if device == "gpu":
-        array = cp.asarray(array)
+    array = copy_to_device(array, device)
     return TransitionPotentialArray(
         Z=14,
         array=array,

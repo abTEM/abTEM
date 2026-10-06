@@ -28,6 +28,7 @@ from abtem.core.backend import (
     asnumpy,
     copy_to_device,
     cp,
+    device_name_from_array_module,
     get_array_module,
     validate_device,
 )
@@ -54,6 +55,7 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     PixelatedDetector,
     SegmentedDetector,
+    SpectralAnnularDetector,
     WavesDetector,
     validate_detectors,
 )
@@ -135,6 +137,26 @@ def _finalize_lazy_measurements(
         measurements.append(measurement)
 
     return measurements
+
+
+def _collected_angle_bounds(detector, margin: float = 0.0):
+    """Bounds (low, high) [mrad] on the angles a radial detector collects.
+
+    A centred detector collects ``inner <= alpha < outer``. An offset one
+    collects an annulus about its offset centre, which lies within
+    ``[max(inner - r, 0), outer + r]`` of k = 0 for ``r = |offset| + margin``,
+    where ``margin`` covers the nearest-pixel rounding of the offset. A bound
+    the detector does not have is None.
+    """
+    inner, outer = detector.inner, detector.outer
+    offset = getattr(detector, "_offset", None)
+    if offset is None or not np.any(np.asarray(offset) != 0.0):
+        return inner, outer
+
+    r = float(np.hypot(*offset)) + margin
+    low = None if inner is None else max(inner - r, 0.0)
+    high = None if outer is None else outer + r
+    return low, high
 
 
 def _round_gpts_to_multiple_of_interpolation(
@@ -1410,7 +1432,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector`.
             See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
@@ -1430,11 +1454,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurements
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
         if scan is None:
             scan = GridScan()
@@ -1873,7 +1895,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
     @staticmethod
-    def _snapped_blend_angle(blend_angle, detectors):
+    def _snapped_blend_angle(blend_angle, detectors, margin: float = 0.0):
         """The blend angle lowered to a detector collection boundary.
 
         Above the blend angle the reduction is the plane-wave branch alone,
@@ -1883,6 +1905,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         come out worse than PRISM on a band. Snapping the angle down to the
         nearest boundary leaves every band wholly on one side: the bands above
         are PRISM, the bands below are the interpolated reduction.
+
+        The boundaries of an offset annular or segmented detector are the
+        bounds of the angles it covers (see `_collected_angle_bounds`, which
+        ``margin`` is passed to).
         """
         if blend_angle is None or isinstance(blend_angle, str):
             return blend_angle
@@ -1894,8 +1920,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         bounds = set()
         for detector in detectors:
-            for name in ("inner", "outer"):
-                value = getattr(detector, name, None)
+            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+                values = _collected_angle_bounds(detector, margin)
+            else:
+                values = tuple(
+                    getattr(detector, name, None) for name in ("inner", "outer")
+                )
+            for value in values:
                 if value is not None and np.isfinite(value):
                     bounds.add(float(value))
 
@@ -2802,11 +2833,21 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # the positions are grouped by their fractional pixel offset
                 # rounded to 1e-4 pixels, which single-precision positions of a
                 # large cell cannot resolve
-                pixel_positions = positions.astype(np.float64) / sampling
+                if device_name_from_array_module(xp) == "mps":
+                    # Metal has no double precision. This is one row per probe
+                    # position, and the grouping already finishes on the host
+                    # anyway, so do all of it there and send back only the
+                    # snapped pixels, which index on the device below.
+                    pixel_positions = asnumpy(positions).astype(np.float64) / asnumpy(
+                        sampling
+                    )
+                else:
+                    pixel_positions = positions.astype(np.float64) / sampling
 
                 snapped, unique_offsets, inverse = self._group_by_fractional_offset(
                     pixel_positions
                 )
+                snapped = xp.asarray(snapped)
 
                 waves_array = xp.zeros(
                     (len(positions),) + self.window_gpts,
@@ -3207,6 +3248,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
 
+    @property
+    def _offset_rounding_margin(self) -> float:
+        """One pixel [mrad] of the one-period (PRISM) window, the coarsest grid
+        a detector is applied on: it bounds the shift of a detector offset by
+        its rounding to the nearest pixel."""
+        return max(
+            n * self.wavelength * 1e3 / e
+            for n, e in zip(self._interpolation, self.extent)
+        )
+
     def _routing_sides(self, cut, detectors, taper: float = 0.0):
         """Which branch each detector reads from, or None when not routable.
 
@@ -3221,9 +3272,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         sides = []
         for detector in detectors:
+            if isinstance(detector, SpectralAnnularDetector):
+                # a sweep of disks out to q_max: `inner`/`outer` are the disk's
+                return None
             if isinstance(detector, (AnnularDetector, SegmentedDetector)):
-                outer = detector.outer
-                inner = detector.inner
+                # an offset region is routed on the angles it covers, which
+                # reach outer + |offset|
+                inner, outer = _collected_angle_bounds(
+                    detector, self._offset_rounding_margin
+                )
                 if outer is not None and outer <= cut - taper:
                     sides.append("low")
                 elif inner is not None and inner >= cut:
@@ -3275,7 +3332,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         single = not isinstance(detectors, (list, tuple))
         detectors = [detectors] if single else list(detectors)
 
-        cut = self._snapped_blend_angle(blend_angle, detectors)
+        cut = self._snapped_blend_angle(
+            blend_angle, detectors, self._offset_rounding_margin
+        )
         sides = self._routing_sides(cut, detectors, taper=blend_taper)
         if sides is None:
             return None
@@ -3514,7 +3573,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # (PRISM) reduction exactly, or the interpolated one, or (inside the
         # taper zone) a convex combination of the two intensities
         if snap:
-            blend_angle = self._snapped_blend_angle(blend_angle, detectors)
+            blend_angle = self._snapped_blend_angle(
+                blend_angle, detectors, self._offset_rounding_margin
+            )
 
         low = self.reduce(
             scan=scan,
@@ -3587,10 +3648,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
 
-        See :meth:`.CompressedSMatrixArray.reduce`.
+        Unlike :meth:`.CompressedSMatrixArray.reduce`, the detectors default to the
+        :class:`FlexibleAnnularDetector` and the scan defaults to a
+        :class:`GridScan`. To obtain the exit wave functions, pass
+        :class:`WavesDetector`. See :meth:`.CompressedSMatrixArray.reduce` for the
+        parameters.
         """
         if scan is None:
             scan = GridScan()
+
+        if detectors is None:
+            detectors = [FlexibleAnnularDetector()]
 
         return self.reduce(
             scan=scan,
@@ -4607,25 +4675,40 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # to ~1e-3 relative, well above the smallest supported tolerance. The
         # eigenvalues near the round-off floor (the coarse expansion is rank
         # deficient) are dropped.
-        gram = xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
+        # Metal has no double precision at all, so this one accumulation cannot
+        # run on the device. It streams to the host instead of dropping to
+        # single precision, which would cost exactly the spectral resolution the
+        # paragraph above explains this step exists to keep. The Gram matrix is
+        # (n_beams, n_beams) and the transfer is one pass over a matrix the
+        # build has already streamed several times.
+        gram_xp = np if device_name_from_array_module(xp) == "mps" else xp
+
+        gram = gram_xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
         pixel_batch = self._expansion_batch_size(len(matrix))
         for start in range(0, matrix.shape[1], pixel_batch):
-            chunk = matrix[:, start : start + pixel_batch].astype(np.complex128)
+            chunk = matrix[:, start : start + pixel_batch]
+            if gram_xp is np:
+                chunk = asnumpy(chunk)
+            chunk = chunk.astype(np.complex128)
             gram += chunk @ chunk.T.conj()
 
-        eigenvalues, eigenvectors = xp.linalg.eigh(gram)
-        eigenvalues = xp.clip(eigenvalues[::-1], 0.0, None)
+        eigenvalues, eigenvectors = gram_xp.linalg.eigh(gram)
+        eigenvalues = gram_xp.clip(eigenvalues[::-1], 0.0, None)
         eigenvectors = eigenvectors[:, ::-1]
 
         # a round-off floor only: the tolerance must not truncate here, or the
         # row space of the built beams is already incomplete before the
         # interpolation and the plane-wave branch stops being exact
         keep = max(1, int((eigenvalues > eigenvalues[0] * 1e-14).sum()))
-        singular_values = xp.sqrt(eigenvalues[:keep])
+        singular_values = gram_xp.sqrt(eigenvalues[:keep])
 
         # L = V diag(s) and Q = diag(1 / s) V^H T, with T = L Q exact on the
         # retained subspace
         beam_factor = (eigenvectors[:, :keep] * singular_values[None]).astype(dtype)
+
+        if gram_xp is not xp:
+            # back to the device now that the double-precision part is done
+            beam_factor = xp.asarray(beam_factor)
 
         dense_indices = self._dense_indices()
 
@@ -4961,7 +5044,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         compress_array = s_matrix_array.array
         if s_matrix_array.is_lazy:
-            compress_array = compress_array.compute()
+            # Compute through the ArrayObject rather than the bare dask array:
+            # that is what resolves the device-appropriate scheduler. Computing
+            # the raw array takes dask's default threaded scheduler, which
+            # drives a single CUDA or Metal context from several threads --
+            # unsupported on both, and on Metal it corrupts PyTorch's shader
+            # cache and hangs the process.
+            compress_array = s_matrix_array.compute().array
 
         metadata = dict(s_matrix_array.metadata)
 
@@ -5022,7 +5111,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector`.
             See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
             Contrast transfer function from used for calculating the expansion
@@ -5054,11 +5145,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurements
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s)
-            given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:
@@ -5561,6 +5650,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
+            # The S-matrix (potential) ensemble is averaged block by block
+            # above, but CTF ensemble axes flagged ensemble_mean were returned
+            # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
+            measurements = [
+                measurement.reduce_ensemble()
+                if hasattr(measurement, "reduce_ensemble")
+                else measurement
+                for measurement in ensure_list(measurements)
+            ]
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:
