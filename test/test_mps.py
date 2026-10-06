@@ -1,7 +1,21 @@
 """Tests for the experimental Metal (MPS) backend on Apple silicon.
 
-Skipped unless PyTorch is installed on Apple silicon. Nothing needs enabling:
-PyTorch is imported on the first use of the 'mps' device.
+Skipped unless PyTorch is installed on Apple silicon, or the backend is pointed
+at torch's CPU device. Nothing needs enabling on a Mac: PyTorch is imported on
+the first use of the 'mps' device.
+
+On any other machine with PyTorch installed, ``ABTEM_TORCH__DEVICE=cpu`` runs the
+backend's layer (array wrapper, dispatch registries, dtype narrowing, the lock)
+on torch's CPU device. Select every test that exercises the backend, here and in
+the device-parametrized tests of the other files (their ``[torch]`` cases), with
+``-m torch``::
+
+    ABTEM_TORCH__DEVICE=cpu pytest test -m torch
+
+CuPy takes precedence where both are present, so hide the GPU
+(``CUDA_VISIBLE_DEVICES=``) on a machine that has one. Metal's rules still apply
+on the CPU device (single precision only), so most failures there also fail on a
+Mac; Metal kernel numerics and its thread safety are not exercised.
 
 Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
