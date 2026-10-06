@@ -1017,7 +1017,8 @@ class TestBlochwaveEnsembleEnergyEnsemble:
         return cls._rotated_ensemble(BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES)
 
     @pytest.fixture(scope="class")
-    def dp_multi(self, rotated_multi_energy):
+    @classmethod
+    def dp_multi(cls, rotated_multi_energy):
         """Cached multi-thickness diffraction patterns, shared by the tests
         that only read the result rather than re-triggering the bug."""
         return rotated_multi_energy.calculate_diffraction_patterns(
