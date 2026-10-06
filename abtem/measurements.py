@@ -542,10 +542,17 @@ def _polar_detector_bins_uncached(
 
 @jit(nopython=True, nogil=True, fastmath=True)
 def _sum_run_length_encoded(array, result, separators):
+    # Accumulate in a local, not in result[i, x]: a store to ``result`` inside
+    # the loop makes LLVM guard the vectorised (under fastmath, reassociated)
+    # sum with a runtime check that ``result`` does not overlap ``array``, and
+    # run the scalar loop, which rounds differently, when the check fails --
+    # so a bin's sum would depend on where ``result`` happens to be allocated.
     for x in range(result.shape[1]):
         for i in range(result.shape[0]):
+            total = result[i, x]
             for j in range(separators[x], separators[x + 1]):
-                result[i, x] += array[i, j]
+                total += array[i, j]
+            result[i, x] = total
 
 
 def _cupy_safe_coordinates(array, coordinates):
