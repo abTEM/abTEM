@@ -188,11 +188,20 @@ _ACCELERATOR = _accelerator_device()
 #
 # It carries the `gpu` marker, like requires_gpu, so `pytest -m "not gpu"`
 # deselects the accelerator half of these tests on a machine that has one.
+#
+# The torch backend's case is shown as `[torch]`, and carries the markers `torch`,
+# `mps` and `metal`, aliases of each other: the value passed to the test stays
+# "mps", and `-k` matches marker names, so `-k` and `-m` with any of the three
+# select it, and `not` deselects it.
+_TORCH_MARKS = (pytest.mark.torch, pytest.mark.mps, pytest.mark.metal)
+
 gpu = pytest.param(
     _ACCELERATOR or "gpu",
+    id="torch" if _ACCELERATOR == "mps" else None,
     marks=(
         pytest.mark.gpu,
         pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+        *(_TORCH_MARKS if _ACCELERATOR == "mps" else ()),
     ),
 )
 
@@ -271,15 +280,20 @@ requires_multigpu = _GpuRequirement(
 )
 
 
-# Skip marker for the Metal backend, which -- like CUDA -- is exercised whenever
-# the machine has it. Deselect it with -k "not mps".
-requires_mps = pytest.mark.skipif(
-    not _mps_is_usable(),
-    reason=(
-        "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
-        "installed"
+# Marks for the torch backend, which -- like CUDA -- is exercised whenever the
+# machine has it: Metal on Apple silicon, or torch's CPU device with
+# ABTEM_TORCH__DEVICE=cpu. A list, for `pytestmark = requires_mps`, with the
+# same markers as the `gpu` parameter above.
+requires_mps = [
+    pytest.mark.skipif(
+        not _mps_is_usable(),
+        reason=(
+            "requires the torch backend: Metal on macOS on Apple silicon, or "
+            "ABTEM_TORCH__DEVICE=cpu, with PyTorch installed"
+        ),
     ),
-)
+    *_TORCH_MARKS,
+]
 
 
 def synthetic_transition_potential(

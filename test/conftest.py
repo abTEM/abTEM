@@ -68,6 +68,12 @@ def pytest_configure(config):
         "device parameter and by requires_gpu/requires_multigpu, not meant "
         "to be applied directly. Deselect with -m 'not gpu'.",
     )
+    for name in ("torch", "mps", "metal"):
+        config.addinivalue_line(
+            "markers",
+            f"{name}: the torch backend (device 'mps'): Apple Metal, or torch's CPU "
+            "device with ABTEM_TORCH__DEVICE=cpu; see `gpu` in test/utils.py.",
+        )
 
 
 # Metal is a single-precision backend -- torch refuses a float64 tensor on the
