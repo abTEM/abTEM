@@ -1,3 +1,4 @@
+import operator
 import warnings
 
 import ase
@@ -144,6 +145,64 @@ def test_reflected_arithmetic_with_a_scalar(scalar, lazy, device):
         np.testing.assert_allclose(
             asnumpy(result.compute().array), expected, rtol=1e-6
         )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize(
+    "operand_type",
+    [
+        "numpy_float64",
+        "numpy_int64",
+        "0d_numpy_array",
+        "0d_device_array",
+        "numpy_float64_array",
+    ],
+)
+def test_arithmetic_with_a_numpy_or_device_operand(
+    operand_type, op, in_place, lazy, device
+):
+    # Oracle: the same operation on the plain arrays in double precision. NumPy
+    # promotes a single-precision measurement to double with any of these
+    # operands; the torch backend holds single precision only and must give the
+    # single-precision result instead, eager and lazy alike. An in-place
+    # operation keeps single precision on every backend.
+    if in_place and lazy:
+        pytest.skip("in-place arithmetic refuses lazy measurements")
+    xp = get_array_module(device)
+    host_operand = {
+        "numpy_float64": np.float64(-0.5),
+        "numpy_int64": np.int64(3),
+        "0d_numpy_array": np.asarray(2.0),
+        "0d_device_array": np.asarray(2.0, dtype=get_dtype()),
+        # Broadcasts along the last axis, which is 3 long and the other 2.
+        "numpy_float64_array": np.array([0.5, 2.0, 4.0]),
+    }[operand_type]
+    operand = (
+        xp.asarray(host_operand) if operand_type == "0d_device_array" else host_operand
+    )
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+        sampling=(0.1, 0.2),
+    ).copy_to_device(device)
+
+    result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    computed = result.compute().array
+    assert_array_matches_device(computed, device)
+    if in_place or device == "mps":
+        assert asnumpy(computed).dtype == get_dtype()
+    expected = getattr(operator, op)(
+        array.astype(np.float64), np.asarray(host_operand, dtype=np.float64)
+    )
+    np.testing.assert_allclose(
+        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
 
 
 def test_in_place_true_division_refuses_lazy_measurements():

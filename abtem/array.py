@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import operator
 import warnings
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager, nullcontext
@@ -1752,8 +1753,30 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
+        if backend.tp is not None and get_array_module(self.array) is backend.tp:
+            # dask infers a lazy result's dtype with NumPy's rules, under which a
+            # NumPy scalar or array is strongly typed (float32 times np.float64(2)
+            # is float64), and Metal holds no double precision. A Python scalar
+            # is weakly typed to NumPy and torch alike, and a device array is
+            # single precision.
+            if isinstance(other_array, (np.generic, np.ndarray)):
+                if other_array.ndim == 0:
+                    other_array = other_array.item()
+                else:
+                    other_array = backend.tp.asarray(other_array)
+
+        # Through the operator module rather than a direct call of the method
+        # named by func, so that an operand that returns NotImplemented hands
+        # over to the other operand's reflected method, and a pair neither side
+        # supports raises TypeError.
+        name = func.strip("_")
+        if hasattr(operator, name):
+            array = getattr(operator, name)(self.array, other_array)
+        else:  # a reflected operation: "__rtruediv__" is other / self
+            array = getattr(operator, name[1:])(other_array, self.array)
+
         kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = getattr(self.array, func)(other_array)
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(
