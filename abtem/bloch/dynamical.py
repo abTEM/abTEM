@@ -40,7 +40,13 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import (
+    asnumpy,
+    cp,
+    device_name_from_array_module,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -67,6 +73,56 @@ from abtem.waves import Waves
 
 if TYPE_CHECKING:
     pass
+
+
+class BlochWavePrecisionWarning(UserWarning):
+    """Bloch waves are being computed in single precision.
+
+    Filter it with ``warnings.filterwarnings("ignore",
+    category=BlochWavePrecisionWarning)`` once a float32 result has been checked
+    against a float64 one.
+    """
+
+
+# Messages already shown in this process. Python's own once-per-location
+# registry cannot do this job: it is invalidated whenever the warning filters
+# change, which abTEM (catch_warnings in ArrayObject) and dask do on every
+# call, so the warning would repeat for every call, energy, orientation and
+# dask block.
+_issued_precision_warnings: set[str] = set()
+
+
+def _warn_if_single_precision(device: str) -> None:
+    # The eigendecomposition and the propagation phases carry an absolute error
+    # of roughly 1e-7 to 3e-5 of the strongest beam in float32, growing with
+    # thickness and beam count (Si and Au, 490-850 beams, 1000-20000 Å). Beams
+    # above 1e-3 of the strongest agree with float64 to within about 2e-4
+    # relative, but a weaker reflection can be off by a large fraction of
+    # itself. The matrix exponential adds nothing: it is always taken in double.
+    if np.dtype(get_dtype()) != np.float32:
+        return
+
+    if device_name_from_array_module(get_array_module(device)) == "mps":
+        reason = "the Metal (MPS) device supports single precision only"
+        check = "the 'cpu' or 'gpu' device with precision 'float64'"
+    else:
+        reason = "the 'precision' setting is 'float32'"
+        check = "precision 'float64'"
+
+    message = (
+        f"Bloch waves are computed in single precision because {reason}. Beams "
+        "down to 1e-3 of the strongest typically agree with double precision to "
+        "within about 2e-4 relative, but weaker diffraction intensities may be "
+        "inaccurate, increasingly so for thick samples and many beams "
+        "(scattering matrices are exponentiated in double precision "
+        f"regardless). Check the result against {check}, e.g. with "
+        "abtem.config.set({'precision': 'float64'})."
+    )
+    if message in _issued_precision_warnings:
+        return
+
+    _issued_precision_warnings.add(message)
+    warnings.warn(message, BlochWavePrecisionWarning, stacklevel=3)
 
 
 def calculate_scattering_factors(
@@ -228,7 +284,9 @@ def calculate_structure_factors(
             f_e * xp.exp(2.0j * np.pi * positions @ hkl),
             axis=0,
         )
-        / atoms.cell.volume
+        # A Python float, not ASE's np.float64: under NEP 50 a NumPy scalar
+        # widens a single-precision array to double.
+        / float(atoms.cell.volume)
     )
 
     return struct_factors
@@ -309,6 +367,35 @@ def equal_slice_thicknesses(
     n_per_slice = equal_sized_chunks(num_items=num_gpts_z, num_chunks=n_slices)
     slice_thicknesses = tuple(n * dz for n in n_per_slice)
     return slice_thicknesses, n_per_slice
+
+
+def _snap_slice_thicknesses(
+    slice_thicknesses: Sequence[float], num_gpts_z: int, depth: float
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """Slice thicknesses given as a sequence, snapped to the z grid.
+
+    Each slice boundary (the cumulative thickness) is moved to the nearest z
+    grid plane, so the slices tile the cell exactly whenever the thicknesses
+    add up to its depth (to within half a z sample). Returns the thicknesses
+    actually used and the number of z grid points in each slice.
+    """
+    sampling_z = depth / num_gpts_z
+    thicknesses = np.asarray([float(dz) for dz in slice_thicknesses])
+    if abs(thicknesses.sum() - depth) > sampling_z / 2:
+        raise ValueError(
+            f"the slice thicknesses must add up to the cell depth, {depth:g} Å "
+            f"(to within half the z sampling, {sampling_z / 2:.3g} Å); they add up "
+            f"to {thicknesses.sum():g} Å"
+        )
+    boundaries = np.round(np.cumsum(thicknesses) / sampling_z).astype(int)
+    boundaries[-1] = num_gpts_z
+    chunks = np.diff(np.concatenate(([0], boundaries)))
+    if chunks.min() < 1:
+        raise ValueError(
+            f"every slice must span at least one z grid point ({sampling_z:.3g} Å "
+            "here); increase the thinnest slice thicknesses or `g_max`"
+        )
+    return tuple(float(n * sampling_z) for n in chunks), tuple(int(n) for n in chunks)
 
 
 def slice_potential(
@@ -762,37 +849,38 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
 
         extent = tuple(np.diag(self.cell)[:2])
 
-        if sampling is not None:
-            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-            validated_gpts = grid._valid_gpts
-
         potential_3d = self.get_potential_3d()
-        depth = np.array(self.cell)[2, 2]
-        sampling_z = depth / potential_3d.shape[-1]
+        depth = float(np.array(self.cell)[2, 2])
+        num_gpts_z = potential_3d.shape[-1]
+        sampling_z = depth / num_gpts_z
+
+        # the lateral grid, resolved once from gpts (int or pair) or sampling
+        if gpts is None and sampling is None:
+            validated_gpts = tuple(potential_3d.shape[:2])
+        else:
+            if isinstance(gpts, int):
+                gpts = (gpts, gpts)
+            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+            validated_gpts = tuple(int(n) for n in grid._valid_gpts)
 
         if slice_thickness is None:
             slice_thickness = min(1.0, depth)
 
         if isinstance(slice_thickness, (float, int)):
             validated_slice_thickness, slice_chunks = equal_slice_thicknesses(
-                num_gpts_z=potential_3d.shape[-1],
+                num_gpts_z=num_gpts_z,
                 slice_thickness=slice_thickness,
                 depth=depth,
             )
         elif isinstance(slice_thickness, Sequence):
-            validated_slice_thickness = tuple(float(dz) for dz in slice_thickness)
+            validated_slice_thickness, slice_chunks = _snap_slice_thicknesses(
+                slice_thickness, num_gpts_z=num_gpts_z, depth=depth
+            )
         else:
             raise ValueError(
                 "Invalid `slice_thickness` argument type, must be float or sequence ",
                 "of floats",
             )
-
-        if gpts is None:
-            validated_gpts = potential_3d.shape[:2]
-        else:
-            assert isinstance(gpts, tuple)
-            assert len(gpts) == 2
-            validated_gpts = gpts
 
         if min(validated_slice_thickness) < sampling_z:
             raise RuntimeError(
@@ -807,7 +895,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
                 chunks=(len(slice_chunks),) + validated_gpts,
                 meta=xp.array((), dtype=potential_3d.dtype),
             )
@@ -816,7 +904,7 @@ class StructureFactorArray(ArrayObject, BaseStructureFactor):
                 potential_3d,
                 slice_chunks=slice_chunks,
                 slice_thicknesses=validated_slice_thickness,
-                gpts=gpts,
+                gpts=validated_gpts,
             )
 
         sampling = (
@@ -896,7 +984,7 @@ def calculate_structure_matrix(
     """
     xp = get_array_module(structure_factor)
 
-    g = xp.asarray(calculate_g_vec(hkl_selected, cell))
+    g = calculate_g_vec(hkl_selected, cell)
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
 
     hkl_selected = np.asarray(hkl_selected)
@@ -905,7 +993,7 @@ def calculate_structure_matrix(
     gmh = gmh.reshape(-1, 3)
 
     A = retrieve_structure_factor_values(structure_factor, hkl, gmh, gpts)
-    A = A.reshape((len(hkl_selected),) * 2)
+    A = xp.asarray(A.reshape((len(hkl_selected),) * 2), dtype=get_dtype(complex=True))
 
     # structure_factor_dict = {
     #     (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
@@ -915,21 +1003,22 @@ def calculate_structure_matrix(
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
-    Mii = xp.asarray(Mii)
+    # The geometry is computed in double precision on the host and only then
+    # cast to the working precision: a float64 Mii or diagonal would otherwise
+    # widen a single-precision structure matrix to complex128.
+    sg = excitation_errors(g, energy, use_wave_eq=use_wave_eq)
+    diag = xp.asarray(2 * 1 / energy2wavelength(energy) * sg * Mii, dtype=get_dtype())
+    Mii = xp.asarray(Mii, dtype=get_dtype())
 
     A = A * prefactor * Mii[None] * Mii[:, None]
-
-    sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
-    diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
 
 
 def plane_wave_coefficients(hkl: np.ndarray, xp) -> np.ndarray:
-    array = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
-    array = xp.asarray(array)
+    array = np.all(hkl == [0, 0, 0], axis=1)
+    array = xp.asarray(array, dtype=get_dtype(complex=True))
     return array
 
 
@@ -966,7 +1055,7 @@ def calculate_dynamical_scattering(
 
     thicknesses = np.asarray(thicknesses)
 
-    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy), dtype=get_dtype())
 
     v, C = xp.linalg.eigh(structure_matrix)
     # v, C = scipy.linalg.eigh(structure_matrix)
@@ -980,11 +1069,13 @@ def calculate_dynamical_scattering(
     initial = plane_wave_coefficients(hkl, xp)
 
     alpha = C_inv @ initial
+    # Thicknesses enter as Python floats: a NumPy float64 scalar would widen a
+    # single-precision result to complex128 (NEP 50).
     if not thicknesses.shape:
-        array = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * alpha)
+        array = C @ (xp.exp(2.0j * xp.pi * float(thicknesses) * gamma) * alpha)
     else:
-        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
-        for i, thickness in enumerate(thicknesses):
+        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=C.dtype)
+        for i, thickness in enumerate(thicknesses.tolist()):
             array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
     return array
@@ -1009,8 +1100,18 @@ def expm(A: np.ndarray) -> np.ndarray:
 
     if xp == cp:
         return expm_cupy(A)
-    else:
+    elif xp is np:
         return expm_scipy(A)
+    else:
+        # Metal: exponentiate on the host, in double precision, and hand the
+        # result back in the device's complex64. Scaling and squaring breaks
+        # down at single precision for the norms of order 10^3 that realistic
+        # beam counts and thicknesses give (721 Si beams at 1000 Å: S off by
+        # 2.5e-3 exponentiated in complex64, by 3.5e-4 -- the share of the
+        # single-precision structure matrix -- in complex128), and torch's own
+        # matrix_exp, which runs on the device, is single precision too.
+        A = asnumpy(A)
+        return xp.asarray(expm_scipy(A.astype(np.complex128)).astype(A.dtype))
 
 
 def calculate_scattering_matrix(
@@ -1050,13 +1151,23 @@ def calculate_scattering_matrix(
     xp = get_array_module(A)
 
     if method == "expm":
-        S = expm(1.0j * xp.pi * z * A * energy2wavelength(energy))
+        # Bloch waves are accurate enough in single precision, but the matrix
+        # exponential is the exception: scaling and squaring breaks down at
+        # single precision for the norms of order 10^3 that realistic beam
+        # counts and thicknesses give (721 Si beams at 1000 Å come out NaN in
+        # complex64). The exponent is therefore formed and exponentiated in
+        # double, and only the result follows the 'precision' setting. Metal
+        # has no double precision; expm takes it to the host instead.
+        if xp is np or xp == cp:
+            A = A.astype(xp.complex128)
+        S = expm(1.0j * xp.pi * float(z) * A * energy2wavelength(energy))
+        S = S.astype(get_dtype(complex=True), copy=False)
     else:
         raise NotImplementedError("Only 'expm' method is implemented")
 
     Mii = calculate_M_matrix(hkl, cell, energy)
-    M = xp.asarray(np.diag(Mii))
-    M_inv = xp.asarray(np.diag(1 / Mii))
+    M = xp.asarray(np.diag(Mii), dtype=get_dtype())
+    M_inv = xp.asarray(np.diag(1 / Mii), dtype=get_dtype())
 
     S = xp.dot(M, xp.dot(S, M_inv))
     return S
@@ -1129,6 +1240,7 @@ def plane_wave_basis(
     numpy.ndarray
         The plane wave basis at the given positions.
     """
+    g = get_array_module(x).asarray(g)  # on the device of the positions
     plane_waves_x = complex_exponential(
         2 * np.pi * g[None, :, 0, None, None] * x[None, None, :, None]
     )
@@ -1150,9 +1262,14 @@ def reduce_plane_wave_expansion(values, plane_waves):
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
     xp = get_array_module(amplitudes)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False)
-    z = xp.array(thicknesses)
+    g_vec = xp.asarray(g_vec, dtype=get_dtype())
+    x = xp.asarray(
+        np.linspace(0, extent[0], gpts[0], endpoint=False), dtype=get_dtype()
+    )
+    y = xp.asarray(
+        np.linspace(0, extent[1], gpts[1], endpoint=False), dtype=get_dtype()
+    )
+    z = xp.asarray(thicknesses, dtype=get_dtype())
 
     basis = plane_wave_basis(g_vec, x, y, z)
     wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
@@ -1206,7 +1323,9 @@ def validate_rotations(
 
 
 def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
-    if isinstance(rotations, Iterable):
+    if isinstance(rotations, BaseDistribution):
+        ensemble = True
+    elif isinstance(rotations, Iterable):
         rotations = np.array(rotations)
         if rotations.ndim == 1 and len(axes) > 1:
             assert len(axes) == len(rotations)
@@ -1333,6 +1452,42 @@ class BlochWaves:
                 [m[union_mask] for m in per_energy], axis=0
             )
 
+    def _require_single_energy(self, method: str) -> None:
+        # The structure and scattering matrices of different energies span
+        # different beam sets (different sizes), so they have no common array
+        # to stack; with several energies these methods used to answer silently
+        # for the first one.
+        if len(self._energies) > 1:
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise ValueError(
+                f"BlochWaves.{method} is defined for a single energy, but this "
+                f"BlochWaves has {len(self._energies)} ({energies} eV); select "
+                "one with select_energy(energy)"
+            )
+
+    def select_energy(self, energy: float) -> "BlochWaves":
+        """The Bloch waves at one of this object's energies.
+
+        Parameters
+        ----------
+        energy : float
+            One of the energies of this BlochWaves [eV].
+
+        Returns
+        -------
+        BlochWaves
+            Single-energy Bloch waves, with the beams selected for that energy:
+            the same as constructing BlochWaves with that energy alone.
+        """
+        matches = np.flatnonzero(np.isclose(self._energies, float(energy)))
+        if len(matches) == 0:
+            energies = ", ".join(f"{e:g}" for e in self._energies)
+            raise ValueError(f"energy {energy:g} eV is not one of {energies} eV")
+        if len(self._energies) == 1:
+            return self
+        idx = int(matches[0])
+        return self._with_energy(idx, float(self._energies[idx]))
+
     def _with_energy(self, idx: int, e: float) -> "BlochWaves":
         """Return a single-energy clone using only the beams valid at energy *e*.
 
@@ -1412,7 +1567,18 @@ class BlochWaves:
         return energy2wavelength(self.energy)
 
     def excitation_errors(self) -> np.ndarray:
-        """Excitation errors for the Bloch waves."""
+        """Excitation errors for the Bloch waves [1/Å].
+
+        The standard excitation errors (the ``use_wave_eq=False`` form),
+        whatever `use_wave_eq` is: they select the beams (`sg_max`). The
+        structure matrix uses the form `use_wave_eq` selects.
+
+        With several energies, an array of shape (energies, beams) over the
+        union of the energies' beam sets (``hkl``); otherwise shape (beams,).
+        """
+        if len(self._energies) > 1:
+            # one row per energy, over the union of the energies' beams
+            return np.stack([excitation_errors(self.g_vec, e) for e in self._energies])
         return excitation_errors(self.g_vec, self.energy)
 
     @property
@@ -1447,6 +1613,10 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The kinematical diffraction pattern.
         """
+        if len(self._energies) > 1:
+            return self._multi_energy_kinematical_diffraction_pattern(
+                excitation_error_sigma
+            )
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array()
@@ -1459,7 +1629,9 @@ class BlochWaves:
         if excitation_error_sigma is None:
             excitation_error_sigma = self._sg_max / 3.0
 
-        intensity = S_array * np.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
+        xp = get_array_module(S_array)
+        sg = xp.asarray(sg)
+        intensity = S_array * xp.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
 
         metadata = {"energy": self.energy, "sg_max": self._sg_max, "g_max": self.g_max}
 
@@ -1472,6 +1644,37 @@ class BlochWaves:
             metadata=metadata,
         )
 
+    def _multi_energy_kinematical_diffraction_pattern(
+        self, excitation_error_sigma: Optional[float]
+    ) -> IndexedDiffractionPatterns:
+        # each energy on its own beams, embedded into the union beam set (zero
+        # where an energy does not include a beam), as for the dynamical
+        # calculate_diffraction_patterns
+        n_union = int(self._hkl_mask.sum())
+        members = []
+        for i, e in enumerate(self._energies):
+            pattern = self._with_energy(i, float(e)).get_kinematical_diffraction_pattern(
+                excitation_error_sigma
+            )
+            xp = get_array_module(pattern.array)
+            padded = xp.zeros((n_union,), dtype=pattern.array.dtype)
+            padded[self._energy_hkl_masks[i]] = pattern.array
+            members.append(padded)
+        xp = get_array_module(members[0])
+        return IndexedDiffractionPatterns(
+            miller_indices=self.hkl,
+            array=xp.stack(members),
+            reciprocal_lattice_vectors=reciprocal_cell(self.cell),
+            ensemble_axes_metadata=[
+                EnergyAxis(values=tuple(float(e) for e in self._energies))
+            ],
+            metadata={
+                "energy": list(self._energies),
+                "sg_max": self._sg_max,
+                "g_max": self.g_max,
+            },
+        )
+
     def calculate_structure_matrix(self, lazy: bool = True) -> np.ndarray:
         """Calculate the structure matrix.
 
@@ -1481,6 +1684,7 @@ class BlochWaves:
             If True, the calculation is done lazily using dask. If False, the
             calculation is done eagerly.
         """
+        self._require_single_energy("calculate_structure_matrix")
         hkl = self.hkl
 
         structure_factor = self._get_structure_factor_array(lazy=lazy)
@@ -1525,7 +1729,11 @@ class BlochWaves:
         numpy.ndarray
             The scattering matrix.
         """
-        A = self.calculate_structure_matrix()
+        self._require_single_energy("calculate_scattering_matrix")
+        _warn_if_single_precision(self._device)
+        # Eager: the result feeds xp.asarray, and CuPy refuses to convert a
+        # dask array implicitly (Metal and NumPy happen to accept one).
+        A = self.calculate_structure_matrix(lazy=False)
         hkl = self.hkl
         cell = self.cell
 
@@ -1541,6 +1749,7 @@ class BlochWaves:
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
         assert isinstance(thicknesses, np.ndarray)
+        _warn_if_single_precision(self._device)
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -1607,7 +1816,17 @@ class BlochWaves:
 
             def _embed_beams(arr, active_mask, n_total):
                 """Embed (..., n_active) array into (..., n_total) with zeros."""
-                out = np.zeros(arr.shape[:-1] + (n_total,), dtype=arr.dtype)
+                # arr is a GPU (cupy) array whenever this ensemble runs on
+                # device="gpu" -- both here (the lazy=False, eager path) and
+                # per-block inside the map_blocks call below (the lazy path,
+                # where the block itself is cupy-backed). A bare np.zeros(...)
+                # always allocates on host, and cupy refuses the implicit
+                # device->host copy that assigning it into a numpy array's
+                # boolean-masked slice would require, raising a TypeError
+                # instead of doing the transfer silently. Allocate `out` on
+                # whichever device `arr` is actually on.
+                xp = get_array_module(arr)
+                out = xp.zeros(arr.shape[:-1] + (n_total,), dtype=arr.dtype)
                 out[..., active_mask] = arr
                 return out
 
@@ -1621,17 +1840,33 @@ class BlochWaves:
                 if first_result is None:
                     first_result = res
                 active = self._energy_hkl_masks[i]
-                new_chunks = res.array.chunks[:-1] + ((n_union,),)
-                padded = res.array.map_blocks(
-                    _embed_beams,
-                    active_mask=active,
-                    n_total=n_union,
-                    dtype=res.array.dtype,
-                    chunks=new_chunks,
-                )
+                if lazy:
+                    new_chunks = res.array.chunks[:-1] + ((n_union,),)
+                    padded = res.array.map_blocks(
+                        _embed_beams,
+                        active_mask=active,
+                        n_total=n_union,
+                        dtype=res.array.dtype,
+                        chunks=new_chunks,
+                    )
+                else:
+                    # lazy=False -- res.array is a plain numpy/cupy array with
+                    # no .chunks to preserve, so pad it directly instead of
+                    # going through the dask-only map_blocks path above.
+                    padded = _embed_beams(res.array, active, n_union)
                 padded_arrays.append(padded)
 
-            stacked = da.stack(padded_arrays, axis=0)
+            if lazy:
+                stacked = da.stack(padded_arrays, axis=0)
+            else:
+                # Same device concern as _embed_beams above: np.stack on a
+                # list of cupy arrays happens to work today via cupy's
+                # __array_function__ dispatch, but that's an implementation
+                # detail of cupy's NEP-18 support, not something this file
+                # should depend on implicitly elsewhere. Stack on whichever
+                # device the padded arrays are actually on.
+                xp = get_array_module(padded_arrays[0])
+                stacked = xp.stack(padded_arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             rlv = first_result.reciprocal_lattice_vectors
             if rlv.ndim == 3:
@@ -1688,10 +1923,10 @@ class BlochWaves:
     @staticmethod
     def _calculate_exit_waves(amplitudes, g_vec, x, y, z):
         xp = get_array_module(amplitudes)
-        g_vec = xp.asarray(g_vec)
-        x = xp.asarray(x)
-        y = xp.asarray(y)
-        z = xp.asarray(z)
+        g_vec = xp.asarray(g_vec, dtype=get_dtype())
+        x = xp.asarray(x, dtype=get_dtype())
+        y = xp.asarray(y, dtype=get_dtype())
+        z = xp.asarray(z, dtype=get_dtype())
 
         basis = plane_wave_basis(g_vec, x, y, z)
 
@@ -1746,7 +1981,12 @@ class BlochWaves:
                 )
                 for i, e in enumerate(energies)
             ]
-            stacked = da.stack([r.array for r in results], axis=0)
+            arrays = [r.array for r in results]
+            if lazy:
+                stacked = da.stack(arrays, axis=0)
+            else:
+                # da.stack would wrap the eager per-energy arrays in dask
+                stacked = get_array_module(arrays[0]).stack(arrays, axis=0)
             energy_ax = EnergyAxis(values=tuple(float(e) for e in energies))
             return Waves(
                 array=stacked,
@@ -1966,10 +2206,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             validate_distribution(rotation) for rotation in rotations
         )
 
-        if not is_base_distribution_tuple(validated_rotations):
+        if not all(
+            isinstance(rotation, (BaseDistribution, Number))
+            for rotation in validated_rotations
+        ):
             raise ValueError(
-                "The rotations must be given as a tuple of BaseDistribution or sequence"
-                "of angles"
+                "The rotations must be given as a tuple of BaseDistribution, sequence "
+                "of angles or single angles"
             )
 
         self._rotations = validated_rotations
@@ -2015,12 +2258,17 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
             if hasattr(rotation, "values"):
+                # SciPy >= 1.18 requires an explicit (N, len(axes)) shape, even for
+                # a single-axis sequence.
+                values = np.asarray(rotation.values, dtype=float).reshape(-1, len(axes))
                 R = Rotation.from_euler(
-                    axes, rotation.values, degrees=self._use_degrees
+                    axes, values, degrees=self._use_degrees
                 ).as_matrix()
                 R = R[(slice(None),) + (None,) * (orientation_matrices.ndim - 2)]
             else:
-                R = Rotation.from_euler(axes, rotation).as_matrix()
+                R = Rotation.from_euler(
+                    axes, rotation, degrees=self._use_degrees
+                ).as_matrix()
 
             orientation_matrices = orientation_matrices @ R
 
@@ -2116,7 +2364,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
-        return tuple(len(self._ensemble_rotations[i]) for i in self._ensemble_args)
+        return tuple(len(rotation) for rotation in self._ensemble_rotations)
 
     def _partition_args(
         self,
@@ -2126,8 +2374,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         assert chunks is not None
         chunks = validate_chunks(self.ensemble_shape, chunks)
         blocks = tuple(
-            self._ensemble_rotations[i].divide(n, lazy=lazy)
-            for i, n in zip(self._ensemble_args, chunks)
+            rotation.divide(n, lazy=lazy)
+            for rotation, n in zip(self._ensemble_rotations, chunks)
         )
         return blocks
 
@@ -2228,7 +2476,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 lazy=False,
             )
 
-            array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
+            array[i][..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
             pbar_obj.update_if_exists(1)
 
@@ -2330,6 +2578,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
@@ -2561,6 +2810,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 )
             ]
 
+        _warn_if_single_precision(self.device)
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
