@@ -782,6 +782,9 @@ class AnnularDetector(_AbstractRadialDetector):
     # an AnnularDetector result never records an outer angle.)
     _sizes_outer_per_energy = True
 
+    # Returns `self`, not a matched copy: a copy is rebuilt for each lazy block
+    # through `_copy_kwargs`, which makes its outer angle explicit, so matching a
+    # multi-energy ensemble here would pin every energy to the one angle.
     def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
         return self
 
@@ -1753,6 +1756,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     @property
     def azimuthal_sampling(self) -> float:
         return 2 * np.pi
+
 
 class SegmentedDetector(_AbstractRadialDetector):
     """

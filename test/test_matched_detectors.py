@@ -51,7 +51,6 @@ def _plane_waves(device="cpu"):
     return Waves(xp.ones((64, 64), "complex128"), energy=100e3, sampling=0.1)
 
 
-
 def _close(a, b, atol=1e-12):
     np.testing.assert_allclose(a, b, rtol=0, atol=atol * np.abs(b).max())
 
@@ -98,8 +97,7 @@ def test_show_regions_and_detect_do_not_write_the_outer_angle(detector):
     waves = _plane_waves()
     detector.show(waves)
     detector.get_detector_regions(waves)
-    if not isinstance(detector, abtem.SegmentedDetector):
-        detector.detect(waves)
+    detector.detect(waves)
     assert detector.outer is None
 
 
@@ -112,14 +110,38 @@ def test_matched_is_sized_again_by_other_waves():
 
 
 def test_annular_detector_integrates_to_the_outer_angle_that_show_draws():
-    waves = _plane_waves()
+    # Plane waves diffract into a delta at k=0, which no annulus contains; the
+    # exit waves of a potential scatter into the annulus.
+    waves = abtem.PlaneWave(energy=60e3, sampling=0.15).multislice(
+        _potential(), lazy=False
+    )
     detector = abtem.AnnularDetector(20)
     outer = detector.angular_limits(waves)[1]
+    explicit = abtem.AnnularDetector(20, outer).detect(waves).array
 
-    _close(
-        detector.detect(waves).array,
-        abtem.AnnularDetector(20, outer).detect(waves).array,
+    assert explicit > 0
+    _close(detector.detect(waves).array, explicit, atol=1e-10)
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: abtem.FlexibleAnnularDetector(),
+        lambda: abtem.SegmentedDetector(2, 4, 30, None),
+    ],
+    ids=["flexible_annular", "segmented"],
+)
+def test_probe_scan_does_not_write_the_outer_angle(make, lazy):
+    potential = _potential()
+    detector = make()
+    measurement = abtem.Probe(energy=60e3, semiangle_cutoff=20).scan(
+        scan=_scan(potential), detectors=detector, potential=potential, lazy=lazy
     )
+    assert detector.outer is None
+    if lazy:
+        measurement.compute()
+        assert detector.outer is None
 
 
 def test_prism_match_does_not_pin_the_first_outer_angle(monkeypatch):
