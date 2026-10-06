@@ -1597,6 +1597,8 @@ _ARRAY_FUNCTIONS.update(
         np.sum: torch_numpy.sum,
         np.prod: torch_numpy.prod,
         np.mean: torch_numpy.mean,
+        np.max: torch_numpy.max,
+        np.min: torch_numpy.min,
         np.abs: torch_numpy.abs,
         np.conjugate: torch_numpy.conjugate,
         np.angle: torch_numpy.angle,
