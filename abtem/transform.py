@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Generic, Mapping, Optional, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Mapping,
+    Optional,
+    Self,
+    TypeVar,
+)
 
 import numpy as np
 
@@ -49,10 +58,21 @@ class ArrayObjectTransform(
     metaclass=ABCMeta,
 ):
     _allow_base_chunks: bool = False
+    # Whether the output depends on the wavelength, so that a multi-energy
+    # ensemble must be transformed one energy at a time (see
+    # abtem.array._calculate_new_array_per_energy).
+    _splits_energy_ensembles: bool = False
 
     @property
     def _num_outputs(self) -> int:
         return 1
+
+    def _match_ensemble(self, array_object: ArrayObjectType) -> Self:
+        """This transform, with anything that depends on the whole ensemble of
+        `array_object` fixed, before the ensemble is split into its energies or
+        into lazy blocks. The default has nothing to fix and returns the
+        transform itself."""
+        return self
 
     @property
     def metadata(self) -> dict:
@@ -163,13 +183,17 @@ class ArrayObjectTransform(
         self, array_object: ArrayObjectType
     ) -> tuple[tuple[int, ...], ...]:
         """
-        For each output, maps `array_object`'s own ensemble axes, as they
-        appear in this transform's output ensemble shape/metadata, back to
-        their position in `array_object.ensemble_shape`. Identity unless a
-        transform reorders `array_object`'s ensemble axes (see
-        `AnnularDetector`/`SpectralSlitDetector`, which move the scan axes
-        to the end); used to keep dask chunk bookkeeping in the same axis
-        order as the declared output shape.
+        For each output, the permutation from the natural order of its
+        leading ensemble axes, the one `_calculate_new_array` returns (this
+        transform's own ensemble axes, then `array_object`'s), to the order
+        its declared shape and metadata use. Entry `k` is the natural
+        position of the axis declared at position `k`; axes past the end of
+        the tuple keep their place, so the identity may be shorter than the
+        output's ensemble axes. `AnnularDetector` and `SpectralSlitDetector`
+        move the scan axes to the end, and `MultisliceTransform` shifts its
+        detectors' permutations past the potential's ensemble axes, which it
+        prepends. `ArrayObject.apply_transform` applies the permutation once
+        to every output, eager or lazy.
         """
         return (tuple(range(len(array_object.ensemble_shape))),)
 
@@ -271,11 +295,7 @@ class EnsembleTransform(
             distribution = getattr(self, name)
             if isinstance(distribution, BaseDistribution):
                 ensemble_axes_metadata += [
-                    ParameterAxis(
-                        values=tuple(distribution),
-                        _ensemble_mean=distribution.ensemble_mean,
-                        **value,
-                    )
+                    ParameterAxis.from_distribution(distribution, **value)
                 ]
 
         return ensemble_axes_metadata

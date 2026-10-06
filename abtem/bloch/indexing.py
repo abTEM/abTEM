@@ -52,7 +52,7 @@ def _find_projected_pixel_index(
 
 def estimate_necessary_excitation_error(energy: float, k_max: float) -> float:
     hkl_corner = np.array([[np.sqrt(k_max), np.sqrt(k_max), 0]])
-    sg = np.abs(excitation_errors(hkl_corner, energy).item())
+    sg = np.abs(excitation_errors(hkl_corner, energy, use_wave_eq=False).item())
     return sg
 
 
@@ -283,7 +283,7 @@ def index_diffraction_spots(
 
     nm = _find_projected_pixel_index(g_vec, shape, sampling)
 
-    sg = np.abs(excitation_errors(g_vec, energy))
+    sg = np.abs(excitation_errors(g_vec, energy, use_wave_eq=False))
 
     if radius is not None:
         # a, b = tuple(int(np.round(radius / d)) for d in sampling)
@@ -291,7 +291,7 @@ def index_diffraction_spots(
     else:
         intensities = array[..., nm[..., 0], nm[..., 1]]
 
-    sg = excitation_errors(g_vec, energy)
+    sg = excitation_errors(g_vec, energy, use_wave_eq=False)
 
     mask = overlapping_spots_mask(nm, sg)
 
@@ -302,23 +302,23 @@ def index_diffraction_spots(
 
 def miller_to_miller_bravais(hkl: tuple[int, int, int]) -> tuple[int, int, int, int]:
     """
-    Convert Miller indices to Miller-Bravais indices.
+    Convert the Miller indices of a plane to Miller-Bravais indices.
+
+    For a plane (h k l) of a hexagonal lattice the four-index form is
+    (h k i l) with the redundant index i = -(h + k), since the third basal
+    axis is a3 = -(a1 + a2). (Directions [UVW] convert differently, to
+    [(2U - V)/3, (2V - U)/3, -(U + V)/3, W]; this function is for planes.)
 
     Parameters
     ----------
     hkl : tuple
-        The Miller indices (h, k, l).
+        The Miller indices (h, k, l) of a plane.
 
     Returns
     -------
     tuple
-        The Miller-Bravais indices (H, K, I, L).
+        The Miller-Bravais indices (h, k, i, l) of the same plane.
     """
     h, k, l = hkl  # noqa: E741
 
-    H = 2 * h - k
-    K = 2 * k - h
-    I = -H - K  # noqa: E741
-    L = l
-
-    return H, K, I, L
+    return h, k, -(h + k), l
