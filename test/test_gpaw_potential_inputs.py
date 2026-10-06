@@ -39,8 +39,13 @@ def _atoms():
     return Atoms("C", positions=[(0.6, 0.8, 1.0)], cell=(2.0, 2.0, 2.0), pbc=True)
 
 
+#: The valence potential's shape. GPAW puts it on the "fine" grid, which has twice
+#: the resolution of the density grid `gd` in each direction.
+_FINE_SHAPE = (12, 10, 8)
+
+
 def _valence_potential(seed):
-    return np.random.default_rng(seed).standard_normal((12, 10, 8))
+    return np.random.default_rng(seed).standard_normal(_FINE_SHAPE)
 
 
 @pytest.fixture
@@ -55,7 +60,13 @@ def fake_gpaw(monkeypatch):
             self.density = SimpleNamespace(
                 Q_aL={0: np.zeros(1)},
                 nt_sG=np.zeros((1, 2, 2, 2)),
-                gd=SimpleNamespace(new_descriptor=lambda comm: None),
+                # GPAWPotential reads gd.N_c to size the refined grid, so the
+                # stand-in descriptor carries the coarse grid _FINE_SHAPE implies.
+                gd=SimpleNamespace(
+                    new_descriptor=lambda comm: SimpleNamespace(
+                        N_c=tuple(n // 2 for n in _FINE_SHAPE)
+                    )
+                ),
                 D_asp={0: np.zeros((1, 1))},
             )
             self.setups = None
