@@ -123,16 +123,10 @@ def validate_detectors(
         raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
     if waves is not None:
-        matched = []
-        for detector in detectors:
-            if hasattr(detector, "_match_waves"):
-                # Matching writes the waves' cutoff angle onto the detector. Done on
-                # a copy, the caller's detector keeps no outer angle that a later,
-                # unrelated run (another energy, grid or algorithm) would reuse.
-                detector = detector.copy()
-                detector._match_waves(waves)
-            matched.append(detector)
-        detectors = matched
+        detectors = [
+            detector._matched(waves) if hasattr(detector, "_matched") else detector
+            for detector in detectors
+        ]
 
     return detectors
 
@@ -235,6 +229,11 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         return measurements
 
 class _AbstractRadialDetector(BaseDetector):
+    # Whether an automatic outer angle is sized for each energy of a multi-energy
+    # ensemble on its own. A detector with radial bins has one radial axis for the
+    # whole ensemble, which no single outer angle fits.
+    _sizes_outer_per_energy = False
+
     def __init__(
         self,
         inner: float,
@@ -246,12 +245,11 @@ class _AbstractRadialDetector(BaseDetector):
     ):
         self._inner = inner
         self._outer = outer
-        # Whether `outer` was ever given explicitly (constructor or the
-        # setter below), as opposed to auto-matched from waves in
-        # `_match_waves`. `outer is None` alone cannot tell these apart once
-        # a value has been auto-matched, which is exactly what made
-        # `_match_waves` latch onto the first waves it ever saw and ignore
-        # every later one (see `_match_waves`'s own docstring).
+        # Whether `outer` was given explicitly (constructor or the setter
+        # below), as opposed to sized from the detected waves by `_matched`.
+        # `outer is None` alone cannot tell these apart on a matched copy, which
+        # holds its sized value but must be sized again by the next waves it
+        # detects (see `_matched`).
         self._outer_is_explicit = outer is not None
         self._rotation = rotation
         self._offset = offset
@@ -310,8 +308,8 @@ class _AbstractRadialDetector(BaseDetector):
         return (get_dtype(complex=False),)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
-        self._match_waves(waves)
-        return ((self.nbins_radial, self.nbins_azimuthal),)
+        matched = self._matched(waves)
+        return ((matched.nbins_radial, matched.nbins_azimuthal),)
 
     def _out_type(self, waves: WavesType) -> tuple[Type[PolarMeasurements]]:
         return (PolarMeasurements,)
@@ -323,19 +321,20 @@ class _AbstractRadialDetector(BaseDetector):
         return (metadata,)
 
     def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        matched = self._matched(waves)
         return (
             [
                 LinearAxis(
                     label="Radial scattering angle",
                     offset=self.inner,
-                    sampling=self.radial_sampling,
+                    sampling=matched.radial_sampling,
                     _concatenate=False,
                     units="mrad",
                 ),
                 LinearAxis(
                     label="Azimuthal scattering angle",
                     offset=self.rotation,
-                    sampling=self.azimuthal_sampling,
+                    sampling=matched.azimuthal_sampling,
                     _concatenate=False,
                     units="rad",
                 ),
@@ -355,11 +354,11 @@ class _AbstractRadialDetector(BaseDetector):
 
     def _outer_for(self, waves: WavesType) -> float:
         """The ``outer`` used to detect ``waves`` [mrad]: the given one, or
-        else the antialias cutoff angle of ``waves`` (see `_match_waves`)."""
+        else the antialias cutoff angle of ``waves`` (see `_matched`)."""
         if self._outer_is_explicit:
             return self.outer
 
-        if any(
+        if not self._sizes_outer_per_energy and any(
             isinstance(axis, EnergyAxis) and len(axis.values) > 1
             for axis in waves.ensemble_axes_metadata
         ):
@@ -387,7 +386,8 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        inner, outer = self.angular_limits(waves)
+        detector = self._matched(waves)
+        inner, outer = detector.angular_limits(waves)
 
         # The pattern is cropped about k=0 and polar_binning then shifts the
         # bins by the offset, so the crop reaches `outer` beyond the offset
@@ -406,8 +406,8 @@ class _AbstractRadialDetector(BaseDetector):
         measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")
 
         measurement = measurement.polar_binning(
-            nbins_radial=self.nbins_radial,
-            nbins_azimuthal=self.nbins_azimuthal,
+            nbins_radial=detector.nbins_radial,
+            nbins_azimuthal=detector.nbins_azimuthal,
             inner=inner,
             outer=outer,
             rotation=self._rotation,
@@ -420,47 +420,35 @@ class _AbstractRadialDetector(BaseDetector):
         return measurement._eager_array
 
     def _match_ensemble(self, waves: WavesType) -> _AbstractRadialDetector:
-        """Refuse an auto-sized outer angle of a detector with radial bins for a
-        multi-energy ensemble.
+        """This detector sized for ``waves`` (see `_matched`), before the ensemble
+        is split into energies or lazy blocks. An automatic outer angle is
+        refused for a multi-energy ensemble."""
+        return self._matched(waves)
 
-        Each energy is detected on its own, so without this an auto-sized outer
-        angle would follow each energy's cutoff (see `_match_waves`).
-        """
-        from abtem.array import _multi_energy_axis
+    def _matched(self, waves: WavesType) -> _AbstractRadialDetector:
+        """This detector with its outer angle sized for ``waves``.
 
-        if _multi_energy_axis(waves) is not None:
-            self._match_waves(waves)
-        return self
-
-    def _match_waves(self, waves: WavesType) -> None:
-        """Auto-size ``outer`` from ``waves``, unless the user gave one.
-
-        Previously guarded by ``if self.outer is None``, which conflated
-        "the user never gave an outer" with "not matched yet": once matched,
-        this would latch onto whichever waves it saw *first* for the rest of
-        this detector's life, including a later, unrelated call with
-        different waves (e.g. this same detector instance reused for a
-        second scan at a different energy). Re-matching every call instead
-        makes each call self-consistent, at the cost of being a no-op for
-        the common case (repeated calls at one energy already agree).
+        An explicit ``outer`` is returned as it is, as the detector itself. Else the
+        outer angle is the antialias cutoff angle of ``waves``, held by a copy:
+        sizing never writes onto the detector the caller holds, which another run
+        (other energy, grid or algorithm) would otherwise reuse with the first
+        run's angle. The copy is not explicit, so it is sized again by the next
+        waves it is matched with, as the S-matrix reduction does twice.
 
         A detector with radial bins (`FlexibleAnnularDetector`,
-        `SegmentedDetector`) cannot be auto-sized for a multi-member energy
-        ensemble at all: each member has its own antialias cutoff angle
-        (`waves.cutoff_angles`, which scales with wavelength at a fixed grid --
-        it is not the semiangle_cutoff/aperture, which does not enter it at all),
-        so a single radial axis cannot fit all of them (see the module docstring
-        analogue: this is the `FlexibleAnnularDetector` gotcha; unlike a
-        single-value cutoff, the two shortest-first / longest-first energy
-        orders would otherwise silently size the bins differently). Refuse
-        it instead of picking one member's cutoff (or lazy's own, different,
-        convention) silently. `AnnularDetector` has no radial bins to share and
-        sizes an auto outer angle per energy instead (see its `_match_ensemble`).
+        `SegmentedDetector`) cannot be sized for a multi-energy ensemble: each
+        energy has its own cutoff angle (`waves.cutoff_angles`, which scales with
+        wavelength at a fixed grid; the semiangle cutoff of the probe does not
+        enter it), so no single radial axis fits all of them. Picking one energy's
+        cutoff would silently depend on the order of the energies, so this raises.
+        `AnnularDetector` has no radial bins and sizes each energy on its own.
         """
         if self._outer_is_explicit:
-            return
+            return self
 
-        self._outer = self._outer_for(waves)
+        matched = self.copy()
+        matched._outer = self._outer_for(waves)
+        return matched
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
         """
@@ -748,16 +736,6 @@ class AnnularDetector(_AbstractRadialDetector):
         metadata["units"] = "arb. unit"
         return (metadata,)
 
-    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
-        inner = self.inner
-
-        if self.outer is not None:
-            outer = self.outer
-        else:
-            outer = min(waves.cutoff_angles)
-
-        return inner, outer
-
     def _out_ensemble_axes_metadata(
         self, waves: WavesType
     ) -> tuple[list[AxisMetadata]]:
@@ -799,10 +777,12 @@ class AnnularDetector(_AbstractRadialDetector):
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
+    # An auto-sized outer angle follows each energy's cutoff, as a separate run of
+    # each energy would; the result has no radial axis to share. (The metadata of
+    # an AnnularDetector result never records an outer angle.)
+    _sizes_outer_per_energy = True
+
     def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
-        # An auto-sized outer angle follows each energy's cutoff, as a separate
-        # run of each energy would; the result has no radial axis to share. (The
-        # metadata of an AnnularDetector result never records an outer angle.)
         return self
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
@@ -826,10 +806,7 @@ class AnnularDetector(_AbstractRadialDetector):
         -------
         measurement : DiffractionPatterns
         """
-        if self.outer is None:
-            outer = np.floor(min(waves.cutoff_angles))
-        else:
-            outer = self.outer
+        outer = self._outer_for(waves)
 
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
@@ -1777,11 +1754,6 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     def azimuthal_sampling(self) -> float:
         return 2 * np.pi
 
-    def detect(self, waves: Waves) -> PolarMeasurements:
-        self._match_waves(waves)
-        return super().detect(waves)
-
-
 class SegmentedDetector(_AbstractRadialDetector):
     """
     The segmented detector covers an annular angular range, and is partitioned into
@@ -1839,23 +1811,6 @@ class SegmentedDetector(_AbstractRadialDetector):
     @property
     def rotation(self):
         return self._rotation
-
-    def _matched(self, waves: WavesType) -> SegmentedDetector:
-        """This detector, or without an outer angle a copy whose outer angle is the
-        antialias cutoff angle of `waves` (see `_match_waves`)."""
-        if self._outer_is_explicit:
-            return self
-        matched = self.copy()
-        matched._match_waves(waves)
-        return matched
-
-    def angular_limits(self, waves: WavesType) -> tuple[float, float]:
-        return self.inner, self._matched(waves).outer
-
-    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
-        return super(SegmentedDetector, self._matched(waves))._out_base_axes_metadata(
-            waves
-        )
 
     @property
     def radial_sampling(self):
