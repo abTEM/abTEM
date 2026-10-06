@@ -273,19 +273,124 @@ def test_rotate_forwards_multiple_energies():
         )
 
 
-def test_rotate_ensemble_rejects_multiple_energies():
-    # Regression: BlochwaveEnsemble holds a single energy, so rotate silently
-    # dropped all but the first energy of a multi-energy BlochWaves.
-    atoms = bulk("Si", cubic=True)
-    rotations = np.linspace(0.0, 0.01, 3)
-    bloch_waves = BlochWaves(atoms, energy=[100e3, 200e3], sg_max=0.05, g_max=3.0)
+def _assert_energy_slice_matches(ensemble_result, single_result, atol):
+    # one energy of an energy ensemble against the single-energy result: the
+    # ensemble's union beam set includes the single energy's beams, and every
+    # other beam is zero
+    ensemble = _intensities_by_hkl(ensemble_result)
+    single = _intensities_by_hkl(single_result)
+    assert set(single) <= set(ensemble)
+    for hkl, value in ensemble.items():
+        np.testing.assert_allclose(
+            value, single.get(hkl, np.zeros_like(value)), rtol=0, atol=atol
+        )
 
-    with pytest.raises(NotImplementedError, match="100000, 200000 eV"):
-        bloch_waves.rotate("x", rotations)
 
-    ensemble = bloch_waves.select_energy(200e3).rotate("x", rotations)
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_rotation_ensemble_with_multiple_energies(device, lazy):
+    # A multi-energy BlochWaves rotated over a distribution of angles gives
+    # results with an EnergyAxis after the rotation axes, as for a multislice
+    # rotation series; each energy equals the single-energy rotation ensemble
+    # (rotate used to drop all but the first energy, and then to raise).
+    from abtem.core.axes import EnergyAxis, NonLinearAxis
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
+    energies = [100e3, 200e3]
+    rotations = ("x", np.array([0.0, 0.02, 0.05]))
+    thicknesses = [50.0, 100.0]
+    multi = BlochWaves(structure_factor, energy=energies, sg_max=0.1, device=device)
+
+    ensemble = multi.rotate(*rotations)
     assert isinstance(ensemble, BlochwaveEnsemble)
-    assert ensemble.energy == 200e3
+    assert ensemble.ensemble_shape == (3,)
+    np.testing.assert_array_equal(ensemble._copy_kwargs()["energy"], energies)
+
+    patterns = ensemble.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.shape[:3] == (3, 2, 2)
+    assert isinstance(patterns.ensemble_axes_metadata[0], NonLinearAxis)
+    assert isinstance(patterns.ensemble_axes_metadata[1], EnergyAxis)
+    assert patterns.ensemble_axes_metadata[1].values == tuple(energies)
+    assert patterns.metadata["energy"] == energies
+    waves = ensemble.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=lazy)
+    assert waves.shape == (3, 2, 2, 16, 16)
+    assert isinstance(waves.ensemble_axes_metadata[1], EnergyAxis)
+    waves = asnumpy(waves.compute().array if lazy else waves.array)
+
+    for k, energy in enumerate(energies):
+        single = BlochWaves(
+            structure_factor, energy=energy, sg_max=0.1, device=device
+        ).rotate(*rotations)
+        expected = single.calculate_diffraction_patterns(thicknesses, lazy=False)
+        _assert_energy_slice_matches(patterns[:, k], expected, atol=1e-6)
+
+        expected_waves = asnumpy(
+            single.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=False).array
+        )
+        np.testing.assert_allclose(
+            waves[:, k],
+            expected_waves,
+            rtol=0,
+            atol=1e-5 * np.abs(expected_waves).max(),
+        )
+
+    # indexing an orientation and an energy carries the energy into the metadata
+    member = patterns[0, 1]
+    assert member.metadata["energy"] == 200e3
+    assert member.shape == patterns.shape[2:]
+
+
+def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
+    # energies, a fixed rotation and a distributed two-axis rotation together,
+    # with a scalar thickness
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+    energies = [80e3, 120e3, 200e3]
+    angles = np.array([[0.0, 0.0], [0.01, 0.02], [0.03, 0.0]])
+    rotations = ("z", 0.1, "xy", angles)
+
+    ensemble = BlochWaves(structure_factor, energy=energies, sg_max=0.1).rotate(
+        *rotations
+    )
+    patterns = ensemble.calculate_diffraction_patterns(50.0, lazy=True)
+    assert patterns.shape[:2] == (3, 3)
+    assert np.shape(patterns.reciprocal_lattice_vectors) == (3, 1, 3, 3)
+    assert patterns[1].shape == patterns.shape[1:]
+    assert patterns.crop(k_max=1.0).shape[:2] == (3, 3)
+
+    for k, energy in enumerate(energies):
+        expected = (
+            BlochWaves(structure_factor, energy=energy, sg_max=0.1)
+            .rotate(*rotations)
+            .calculate_diffraction_patterns(50.0, lazy=False)
+        )
+        _assert_energy_slice_matches(patterns[:, k], expected, atol=1e-6)
+
+
+def test_energy_ensemble_blocks_keep_every_energy():
+    # The ensemble is split into blocks of rotations for dask; each block is
+    # rebuilt from _copy_kwargs and must keep every energy (getattr(self,
+    # "energy") alone gives the first).
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+    ensemble = BlochWaves(structure_factor, energy=[100e3, 200e3], sg_max=0.1).rotate(
+        "x", np.array([0.0, 0.02])
+    )
+    assert ensemble.energy == 100e3  # backward compatible
+    blocks = ensemble.ensemble_blocks(1).compute()
+    assert blocks.shape == (2,)
+    np.testing.assert_array_equal(blocks[1]._energies, [100e3, 200e3])
+
+    # one energy given as a list behaves like a scalar energy, as in BlochWaves
+    single = BlochwaveEnsemble(
+        "x",
+        np.array([0.0, 0.02]),
+        structure_factor=structure_factor,
+        energy=[200e3],
+        sg_max=0.1,
+        g_max=2.0,
+    )
+    patterns = single.calculate_diffraction_patterns([50.0], lazy=False)
+    assert patterns.shape[:2] == (2, 1)
+    assert patterns.metadata["energy"] == 200e3
 
 
 @pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
@@ -586,10 +691,11 @@ def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
         )
         assert bloch_waves._with_energy(0, 80e3).use_wave_eq == use_wave_eq
         assert bloch_waves.rotate("x", 0.01).use_wave_eq == use_wave_eq
-        ensemble = bloch_waves.select_energy(80e3).rotate("x", np.array([0.0, 0.01]))
+        ensemble = bloch_waves.rotate("x", np.array([0.0, 0.01]))
         assert isinstance(ensemble, BlochwaveEnsemble)
         assert ensemble.use_wave_eq == use_wave_eq
         assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
+        np.testing.assert_array_equal(ensemble._copy_kwargs()["energy"], [80e3, 100e3])
 
 
 def test_exact_form_excludes_evanescent_beams_with_a_warning():
