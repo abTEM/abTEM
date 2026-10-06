@@ -557,10 +557,11 @@ def _cupy_safe_coordinates(array, coordinates):
     k - 1e-12, then rounds to k for the index but not for the weights, and
     the result is the value at node k + 1. Giving the coordinates the
     kernel's precision keeps both floors consistent. SciPy computes in
-    float64 throughout and is left alone.
+    float64 throughout and is left alone -- on the CPU, and on Metal, whose
+    map_coordinates is SciPy's run on the host.
     """
     xp = get_array_module(array)
-    if xp is np:
+    if cp is None or xp is not cp:
         return coordinates
     float_dtype = xp.promote_types(array.real.dtype, xp.float32)
     return coordinates.astype(float_dtype, copy=False)
@@ -3594,6 +3595,28 @@ def _interpolate_bilinear(x, v, u, vw, uw):
     return y.reshape((B, out_H, out_W))
 
 
+def _interpolate_bilinear_gather(x, v, u, vw, uw):
+    """Device counterpart of :func:`_interpolate_bilinear` for Metal.
+
+    The NumPy routine writes panel by panel into host buffers through ``out=``,
+    which the Metal namespace does not offer; CuPy has its own kernel. This
+    computes the same weighted sum of the four neighbors with whole-array
+    gathers instead.
+    """
+    xp = get_array_module(x)
+    H, W = x.shape[-2:]
+    v1 = xp.minimum(v + 1, H - 1)
+    u1 = xp.minimum(u + 1, W - 1)
+    vw = vw.astype(x.dtype, copy=False)
+    uw = uw.astype(x.dtype, copy=False)
+    return (
+        (1 - vw) * (1 - uw) * x[:, v, u]
+        + (1 - vw) * uw * x[:, v, u1]
+        + vw * (1 - uw) * x[:, v1, u]
+        + vw * uw * x[:, v1, u1]
+    )
+
+
 def _diffraction_pattern_resampling_gpts(
     old_sampling: tuple[float, float],
     old_gpts: tuple[int, int],
@@ -4092,8 +4115,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         if xp is cp:
             array = interpolate_bilinear_cuda(array, v, u, vw, uw)
-        else:
+        elif xp is np:
             array = _interpolate_bilinear(array, v, u, vw, uw)
+        else:
+            array = _interpolate_bilinear_gather(array, v, u, vw, uw)
 
         array = array / array.sum((-2, -1), keepdims=True) * old_sums
 
