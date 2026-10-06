@@ -372,8 +372,12 @@ class GPAWPotential(_PotentialBuilder):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer a
-        measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If string,

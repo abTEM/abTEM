@@ -295,11 +295,7 @@ class EnsembleTransform(
             distribution = getattr(self, name)
             if isinstance(distribution, BaseDistribution):
                 ensemble_axes_metadata += [
-                    ParameterAxis(
-                        values=tuple(distribution),
-                        _ensemble_mean=distribution.ensemble_mean,
-                        **value,
-                    )
+                    ParameterAxis.from_distribution(distribution, **value)
                 ]
 
         return ensemble_axes_metadata
