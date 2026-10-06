@@ -18,7 +18,7 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
-from utils import lazy_params, si_cubic_atoms
+from utils import devices, lazy_params, si_cubic_atoms
 
 ENERGIES = [80e3, 200e3, 300e3]
 
@@ -441,15 +441,20 @@ class TestTransferFunctionEnergyMatching:
     CTF_KWARGS = dict(defocus=50.0, Cs=-20e4, semiangle_cutoff=20.0, focal_spread=20.0)
 
     @staticmethod
-    def _potential():
+    def _potential(device="cpu"):
         atoms = ase.Atoms(
             "CSi", positions=[(1.5, 2.0, 1.0), (3.5, 3.0, 2.0)], cell=(5, 5, 3)
         )
-        return abtem.Potential(atoms, gpts=48, slice_thickness=1.0)
+        return abtem.Potential(atoms, gpts=48, slice_thickness=1.0, device=device)
 
-    def _exit_waves(self, energy, lazy):
-        waves = PlaneWave(energy=energy).multislice(self._potential(), lazy=lazy)
-        return waves.compute() if lazy else waves
+    def _exit_waves(self, energy, lazy, device="cpu"):
+        return PlaneWave(energy=energy, device=device).multislice(
+            self._potential(device), lazy=lazy
+        )
+
+    @staticmethod
+    def _intensity(waves):
+        return waves.intensity().compute().to_cpu().array
 
     def _oracle(self, ctf_kwargs=None):
         ctf_kwargs = self.CTF_KWARGS if ctf_kwargs is None else ctf_kwargs
@@ -463,10 +468,11 @@ class TestTransferFunctionEnergyMatching:
             ]
         )
 
+    @devices
     @lazy_params
     @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply", "apply_transform"])
-    def test_matches_single_energy_simulations(self, lazy, apply):
-        waves = self._exit_waves(TEST_ENERGIES, lazy)
+    def test_matches_single_energy_simulations(self, lazy, apply, device):
+        waves = self._exit_waves(TEST_ENERGIES, lazy, device)
         ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
 
         if apply == "apply_ctf":
@@ -481,7 +487,7 @@ class TestTransferFunctionEnergyMatching:
         assert result.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
         assert result.accelerator.energy is None
         np.testing.assert_allclose(
-            result.intensity().compute().array, self._oracle(), rtol=1e-4, atol=1e-6
+            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
         )
 
     def test_matches_ctf_without_energy(self):
@@ -498,44 +504,53 @@ class TestTransferFunctionEnergyMatching:
         # ... so both can be applied again
         assert np.array_equal(waves.apply_ctf(unset_ctf).array, unset.array)
 
-    def test_lazy_block_holding_several_energies(self):
+    @devices
+    def test_lazy_block_holding_several_energies(self, device):
         """A lazy block holding every energy is split into its energies too."""
-        waves = PlaneWave(energy=TEST_ENERGIES).multislice(self._potential())
+        waves = self._exit_waves(TEST_ENERGIES, lazy=True, device=device)
         waves = waves.rechunk((len(TEST_ENERGIES), -1, -1))
         assert waves.array.chunks[0] == (len(TEST_ENERGIES),)
         ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
         np.testing.assert_allclose(
-            waves.apply_ctf(ctf).intensity().compute().array,
+            self._intensity(waves.apply_ctf(ctf)),
             self._oracle(),
             rtol=1e-4,
             atol=1e-6,
         )
 
-    def test_ensemble_mean(self):
+    @devices
+    def test_ensemble_mean(self, device):
         """The reported example: an ensemble-mean energy distribution on both."""
         distribution = abtem.distributions.from_values(
             TEST_ENERGIES, ensemble_mean=True
         )
-        waves = PlaneWave(energy=distribution).multislice(self._potential())
+        waves = self._exit_waves(distribution, lazy=True, device=device)
         ctf = abtem.CTF(energy=distribution, **self.CTF_KWARGS)
         intensity = waves.apply_ctf(ctf).intensity().reduce_ensemble().compute()
         assert intensity.ensemble_shape == ()
         np.testing.assert_allclose(
-            intensity.array, self._oracle().mean(0), rtol=1e-4, atol=1e-6
+            intensity.to_cpu().array, self._oracle().mean(0), rtol=1e-4, atol=1e-6
         )
 
-    def test_with_defocus_series(self):
+    @devices
+    @lazy_params
+    def test_with_defocus_series(self, lazy, device):
         """The CTF's other ensemble axes precede the matched energy axis, as for
-        a single energy, and each (defocus, energy) member is the oracle's."""
+        a single energy, and each (defocus, energy) member is the oracle's, also
+        when each lazy block holds one energy."""
         defocus = abtem.distributions.from_values([0.0, 40.0, 80.0])
-        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        waves = self._exit_waves(TEST_ENERGIES, lazy, device)
+        if lazy:
+            assert waves.array.chunks[0] == (1,) * len(TEST_ENERGIES)
         ctf = abtem.CTF(energy=TEST_ENERGIES, defocus=defocus, semiangle_cutoff=20.0)
         result = waves.apply_ctf(ctf)
 
         assert result.ensemble_shape == (3, len(TEST_ENERGIES))
         assert isinstance(result.ensemble_axes_metadata[1], EnergyAxis)
+        if lazy:
+            assert result.array.chunks[1] == (1,) * len(TEST_ENERGIES)
 
-        intensity = result.intensity().array
+        intensity = self._intensity(result)
         for i, value in enumerate(defocus.values):
             oracle = self._oracle(dict(defocus=float(value), semiangle_cutoff=20.0))
             np.testing.assert_allclose(intensity[i], oracle, rtol=1e-4, atol=1e-6)
@@ -563,20 +578,21 @@ class TestTransferFunctionEnergyMatching:
         with pytest.raises(ValueError, match="not an energy ensemble"):
             waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, defocus=50))
 
+    @devices
     @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
-    def test_reused_after_single_energy_waves(self, apply):
+    def test_reused_after_single_energy_waves(self, apply, device):
         """Applying a CTF to single-energy wave functions leaves it without their
         energy, so it can then be applied to a multi-energy ensemble."""
         ctf = abtem.CTF(**self.CTF_KWARGS)
         for energy in (200e3, TEST_ENERGIES):
-            waves = self._exit_waves(energy, lazy=False)
+            waves = self._exit_waves(energy, lazy=False, device=device)
             if apply == "apply_ctf":
                 result = waves.apply_ctf(ctf)
             else:
                 result = ctf.apply(waves)
             assert ctf.energy is None
         np.testing.assert_allclose(
-            result.intensity().array, self._oracle(), rtol=1e-4, atol=1e-6
+            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
         )
 
     @lazy_params
@@ -625,6 +641,28 @@ class TestTransferFunctionEnergyMatching:
                 profiles.array[i], oracle.array, rtol=1e-4, atol=1e-6
             )
             assert profiles[i].metadata["energy"] == energy
+
+    def test_profiles_require_two_points(self):
+        with pytest.raises(ValueError, match="at least 2 points"):
+            abtem.CTF(energy=200e3, semiangle_cutoff=20).profiles(gpts=1)
+
+    def test_to_diffraction_patterns_grid(self):
+        """The default grid is sized from the highest energy, so that it reaches
+        the semiangle cutoff for every member; each member is the single-energy
+        aperture on that grid."""
+        aperture = abtem.Aperture(semiangle_cutoff=20, energy=TEST_ENERGIES)
+        patterns = aperture.to_diffraction_patterns()
+        assert patterns.ensemble_shape == (len(TEST_ENERGIES),)
+        assert isinstance(patterns.ensemble_axes_metadata[0], EnergyAxis)
+        assert "energy" not in patterns.metadata
+
+        highest = abtem.Aperture(
+            semiangle_cutoff=20, energy=max(TEST_ENERGIES)
+        ).to_diffraction_patterns()
+        assert np.allclose(patterns.sampling, highest.sampling)
+        np.testing.assert_allclose(
+            patterns.array[TEST_ENERGIES.index(max(TEST_ENERGIES))], highest.array
+        )
 
 
 # ---------------------------------------------------------------------------

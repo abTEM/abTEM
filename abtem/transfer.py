@@ -171,6 +171,16 @@ class BaseTransferFunction(
         matched.energy = None
         return matched
 
+    def _energy_members(self) -> list[BaseTransferFunction]:
+        """A copy of this transfer function at each energy of its energy
+        distribution, in the order of its leading EnergyAxis."""
+        members = []
+        for energy in self._energy_distribution.values:
+            member = self.copy()
+            member.energy = float(energy)
+            members.append(member)
+        return members
+
     @property
     def _energy_metadata(self) -> dict:
         """Energy metadata of measurements evaluated from the transfer function.
@@ -229,12 +239,10 @@ class BaseTransferFunction(
         kernel : numpy.ndarray or dask.array.Array
         """
         if isinstance(self._energy_distribution, BaseDistribution):
-            arrays = []
-            for e in self._energy_distribution.values:
-                member = self.copy()
-                member.energy = float(e)
-                arrays.append(member._evaluate_kernel(waves))
-            return np.stack(arrays, axis=0)
+            arrays = [
+                member._evaluate_kernel(waves) for member in self._energy_members()
+            ]
+            return get_array_module(arrays[0]).stack(arrays, axis=0)
 
         if waves is None:
             transfer_function, device = self, "cpu"
@@ -2193,6 +2201,9 @@ class CTF(_HasAberrations, BaseAperture):
             else:
                 max_angle = self._max_semiangle_cutoff * 1.6
 
+        if gpts < 2:
+            raise ValueError(f"A profile needs at least 2 points, got gpts={gpts}.")
+
         if self._energy_distribution is None:
             self.accelerator.check_is_defined()
 
@@ -2207,11 +2218,10 @@ class CTF(_HasAberrations, BaseAperture):
         else:
             # Evaluate each energy at its own wavelength and stack the members
             # along the leading energy axis of `ensemble_axes_metadata`.
-            members = []
-            for energy in self._energy_distribution.values:
-                member = self.copy()
-                member.energy = float(energy)
-                members.append(member._profile_components(k * member.wavelength, phi))
+            members = [
+                member._profile_components(k * member.wavelength, phi)
+                for member in self._energy_members()
+            ]
             components = {
                 key: np.stack([member[key] for member in members], axis=0)
                 for key in members[0]
