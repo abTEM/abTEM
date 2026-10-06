@@ -12,13 +12,14 @@ from utils import gpu, requires_gpu
 import abtem
 from abtem.atoms import orthogonalize_cell
 from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
-from abtem.bloch.dynamical import calculate_structure_factors
+from abtem.bloch.dynamical import BlochwaveEnsemble, calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
     relative_positions_for_centering,
     wrapped_is_close,
 )
 from abtem.core.backend import asnumpy
+from abtem.core.fft import fft_interpolate
 from abtem.parametrizations import LobatoParametrization
 
 
@@ -111,9 +112,28 @@ def test_potential_from_structure_factor(
 
     parametrization = abtem.parametrizations.LobatoParametrization(sigmas=thermal_sigma)
 
+    # Compare the two on the requested grid, band-limited the same way:
+    #
+    # - The structure-factor potential there is the exact potential, Fourier
+    #   cropped to the grid. Potential's infinite projection is not: it
+    #   deposits each atom bilinearly onto the four nearest grid points and
+    #   only divides out the average (sinc) response of that, an inexact
+    #   sub-pixel shift whose error grows with the sampling relative to the
+    #   width of the thermally smeared atomic potential (up to ~5% at 0.1 Å
+    #   with the sharpest potentials here, ~0.05% with the atoms on grid
+    #   points). So the reference is built on a grid fine enough for that to
+    #   be negligible and Fourier cropped to the requested grid.
+    # - The structure factors stop at g_max (a steep taper at 0.95 g_max), but
+    #   a fine grid holds frequencies far beyond it (Nyquist 25 1/Å at
+    #   0.02 Å), which the reference keeps: up to ~2.5% with the sharpest
+    #   potentials and the smallest g_max. So both are low-passed to within
+    #   g_max, below the taper.
+    #
+    # They then agree to ~0.1% at worst (over 1500 examples), against up to
+    # ~5% without either step.
     potential = abtem.Potential(
         atoms,
-        gpts=structure_factor_potential.gpts,
+        sampling=0.01,
         slice_thickness=structure_factor_potential.slice_thickness,
         parametrization=parametrization,
         projection="infinite",
@@ -122,13 +142,22 @@ def test_potential_from_structure_factor(
     structure_factor_potential = structure_factor_potential.project().compute()
     potential = potential.build(lazy=lazy).project().compute()
 
+    # sampling is honoured (to within fitting the grid to the cell)
+    assert np.allclose(structure_factor_potential.sampling, sampling, rtol=0.05)
+
     array1 = structure_factor_potential.array
-    array2 = potential.array
+    array2 = fft_interpolate(potential.array, array1.shape).real
+
+    grid_sampling = structure_factor_potential.sampling
+    kx, ky = (np.fft.fftfreq(n, d) for n, d in zip(array1.shape, grid_sampling))
+    within = kx[:, None] ** 2 + ky[None] ** 2 <= (0.9 * g_max) ** 2
+    array1 = np.fft.ifft2(np.fft.fft2(array1) * within).real
+    array2 = np.fft.ifft2(np.fft.fft2(array2) * within).real
     array1 -= array1.min()
     array2 -= array2.min()
 
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
-    assert error < 2.5
+    assert error < 0.5
 
 
 def test_structure_factor_potential_requests_the_slow_fft_diagnostic():
@@ -518,6 +547,358 @@ def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
         z, return_complex=True, lazy=False
     ).array
     np.testing.assert_allclose(np.asarray(psi), expected, rtol=0, atol=1e-9)
+
+
+# --- abTEM/abTEM#455 --------------------------------------------------------
+
+
+def _si_structure_factor():
+    return StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+
+
+# With sg_max=0.02 these energies select 21 and 37 beams of Si (at sg_max=0.1
+# both select the same 97, so each energy's beams embedded into the union beam
+# set would go untested); _multi_energy_bloch_waves checks that they differ.
+ENERGIES = (100e3, 200e3)
+SG_MAX = 0.02
+
+
+def _multi_energy_bloch_waves(sf):
+    multi = BlochWaves(sf, energy=list(ENERGIES), sg_max=SG_MAX)
+    beam_sets = {frozenset(map(tuple, multi.select_energy(e).hkl)) for e in ENERGIES}
+    assert len(beam_sets) == len(ENERGIES), "the energies select the same beams"
+    return multi
+
+
+@pytest.mark.parametrize(
+    "method, args",
+    [("calculate_structure_matrix", ()), ("calculate_scattering_matrix", (50.0,))],
+)
+def test_matrix_methods_need_a_single_energy(method, args):
+    # the energies' beam sets differ in size, so there is no common matrix to
+    # stack; they used to answer silently for the first energy
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    with pytest.raises(ValueError, match="select_energy"):
+        getattr(multi, method)(*args)
+    getattr(multi.select_energy(200e3), method)(*args)
+
+
+def test_select_energy_equals_single_energy_bloch_waves():
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    for energy in ENERGIES:
+        selected = multi.select_energy(energy)
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
+        assert selected.energy == energy
+        np.testing.assert_array_equal(selected.hkl, single.hkl)
+        np.testing.assert_allclose(
+            selected.calculate_structure_matrix(lazy=False),
+            single.calculate_structure_matrix(lazy=False),
+        )
+    with pytest.raises(ValueError, match="not one of"):
+        multi.select_energy(300e3)
+    single = BlochWaves(sf, energy=100e3, sg_max=SG_MAX)
+    assert single.select_energy(100e3) is single
+
+
+def _per_energy_rows(multi_hkl, single_hkl):
+    index = {tuple(h): i for i, h in enumerate(multi_hkl)}
+    return np.array([index[tuple(h)] for h in single_hkl])
+
+
+def test_excitation_errors_with_several_energies():
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    sg = multi.excitation_errors()
+    assert sg.shape == (len(ENERGIES), len(multi.hkl))
+    for row, energy in zip(sg, ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        np.testing.assert_allclose(row[rows], single.excitation_errors())
+    assert not np.allclose(sg[0], sg[1])  # really per energy
+
+
+def test_kinematical_pattern_with_several_energies():
+    from abtem.core.axes import EnergyAxis
+
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    pattern = multi.get_kinematical_diffraction_pattern()
+    assert isinstance(pattern.ensemble_axes_metadata[0], EnergyAxis)
+    assert pattern.array.shape == (len(ENERGIES), len(multi.hkl))
+    for member, energy in zip(np.asarray(pattern.array), ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        np.testing.assert_allclose(
+            member[rows], single.get_kinematical_diffraction_pattern().array
+        )
+        others = np.setdiff1d(np.arange(len(multi.hkl)), rows)
+        assert np.all(member[others] == 0)
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+def test_diffraction_patterns_with_several_energies(lazy):
+    # each energy on its own beams, embedded into the union beam set
+    sf = _si_structure_factor()
+    multi = _multi_energy_bloch_waves(sf)
+    thicknesses = [10.0, 20.0]
+    patterns = multi.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.array.shape == (len(ENERGIES), len(thicknesses), len(multi.hkl))
+    for member, energy in zip(np.asarray(patterns.compute().array), ENERGIES):
+        single = BlochWaves(sf, energy=energy, sg_max=SG_MAX)
+        rows = _per_energy_rows(multi.hkl, single.hkl)
+        expected = single.calculate_diffraction_patterns(thicknesses, lazy=False)
+        np.testing.assert_allclose(member[:, rows], expected.array, atol=1e-12)
+        others = np.setdiff1d(np.arange(len(multi.hkl)), rows)
+        assert np.all(member[:, others] == 0)
+
+
+def test_several_energies_honor_lazy_false():
+    bloch_waves = _multi_energy_bloch_waves(_si_structure_factor())
+    thicknesses = [10.0, 20.0]
+
+    eager = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
+    lazy = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=True).compute()
+    assert not eager.is_lazy
+    np.testing.assert_allclose(eager.array, lazy.array)
+
+    eager = bloch_waves.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=False)
+    lazy = bloch_waves.calculate_exit_waves(thicknesses, gpts=(16, 16)).compute()
+    assert not eager.is_lazy
+    np.testing.assert_allclose(eager.array, lazy.array)
+
+
+@pytest.mark.parametrize("criterion", ["intensity", "distance"])
+def test_sort_indexed_diffraction_patterns(criterion):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns([10.0, 20.0], lazy=False)
+
+    sorted_spots = spots.sort(criterion)
+
+    if criterion == "intensity":
+        key = np.asarray(sorted_spots.array).max(axis=0)
+    else:
+        key = np.linalg.norm(sorted_spots.positions, axis=-1).max(axis=0)
+    assert np.all(np.diff(key) <= 1e-12)  # descending
+    np.testing.assert_array_equal(
+        sorted_spots.reciprocal_lattice_vectors, spots.reciprocal_lattice_vectors
+    )
+    # the same spots, reordered
+    before = dict(zip(map(tuple, spots.miller_indices), np.asarray(spots.array).T))
+    for hkl, values in zip(
+        map(tuple, sorted_spots.miller_indices), np.asarray(sorted_spots.array).T
+    ):
+        np.testing.assert_array_equal(values, before[hkl])
+
+    with pytest.raises(RuntimeError, match="lazy"):
+        bloch_waves.calculate_diffraction_patterns(10.0, lazy=True).sort(criterion)
+
+
+@pytest.mark.parametrize("thicknesses", [10.0, [10.0, 20.0]])
+def test_positions_dict_maps_every_spot_to_its_position(thicknesses):
+    bloch_waves = BlochWaves(_si_structure_factor(), energy=100e3, sg_max=0.1)
+    spots = bloch_waves.calculate_diffraction_patterns(thicknesses, lazy=False)
+    positions = spots.positions_dict
+    assert len(positions) == len(spots.miller_indices)
+    for hkl, position in zip(
+        map(tuple, spots.miller_indices), np.moveaxis(spots.positions, -2, 0)
+    ):
+        np.testing.assert_array_equal(positions[hkl], position)
+    np.testing.assert_array_equal(positions[(0, 0, 0)], 0.0)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sequence_slice_thickness(lazy):
+    sf = _si_structure_factor()
+    depth = sf.cell[2, 2]
+    potential = sf.get_projected_potential(
+        slice_thickness=[2.0, 2.0, depth - 4.0], lazy=lazy
+    )
+    assert len(potential.slice_thickness) == 3
+    assert np.isclose(sum(potential.slice_thickness), depth)
+    # slicing only redistributes the potential along z
+    reference = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    np.testing.assert_allclose(
+        np.asarray(potential.compute().array).sum(0),
+        np.asarray(reference.compute().array).sum(0),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    with pytest.raises(ValueError, match="add up"):
+        sf.get_projected_potential(slice_thickness=[2.0, 2.0], lazy=lazy)
+    with pytest.raises(ValueError, match="at least one z grid point"):
+        sf.get_projected_potential(slice_thickness=[depth - 1e-3, 1e-3], lazy=lazy)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_sampling_and_integer_gpts(lazy):
+    sf = _si_structure_factor()
+    default = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)
+    sampled = sf.get_projected_potential(slice_thickness=2.0, sampling=0.05, lazy=lazy)
+    assert sampled.gpts != default.gpts
+    np.testing.assert_allclose(sampled.sampling, 0.05, rtol=0.01)
+    assert sf.get_projected_potential(slice_thickness=2.0, gpts=64, lazy=lazy).gpts == (
+        64,
+        64,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
+    # NumPy excitation errors / reciprocal vectors used to meet CuPy data
+    from abtem.core.backend import asnumpy
+
+    sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
+    reference_sf = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device="cpu")
+    for method, kwargs in (
+        ("get_kinematical_diffraction_pattern", {}),
+        ("calculate_exit_waves", dict(thicknesses=[10.0], gpts=(16, 16), lazy=False)),
+    ):
+        result = getattr(
+            BlochWaves(sf, energy=100e3, sg_max=0.1, device=device), method
+        )(**kwargs)
+        expected = getattr(BlochWaves(reference_sf, energy=100e3, sg_max=0.1), method)(
+            **kwargs
+        )
+        np.testing.assert_allclose(
+            asnumpy(result.array), asnumpy(expected.array), rtol=1e-5, atol=1e-7
+        )
+
+
+def _intensities_by_hkl(diffraction_patterns):
+    # map each Miller index to its intensities; ensembles and single orientations
+    # generally include different sets of beams
+    diffraction_patterns = diffraction_patterns.to_cpu().compute()
+    array = np.asarray(diffraction_patterns.array)
+    return {
+        tuple(int(i) for i in hkl): array[..., j]
+        for j, hkl in enumerate(diffraction_patterns.miller_indices)
+    }
+
+
+def _assert_matches_single_orientation(ensemble_pattern, single_pattern):
+    ensemble = _intensities_by_hkl(ensemble_pattern)
+    single = _intensities_by_hkl(single_pattern)
+    assert set(single) <= set(ensemble)
+    for hkl, value in ensemble.items():
+        np.testing.assert_allclose(
+            value, single.get(hkl, np.zeros_like(value)), atol=1e-6
+        )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_zero_width_rotation_ensemble_diffraction_matches_unrotated(lazy):
+    silicon_bloch_waves = _silicon_bloch_waves("cpu")
+    thicknesses = [50.0, 100.0]
+    ensemble = silicon_bloch_waves.rotate("x", abtem.distributions.uniform(0.0, 0.0, 2))
+    assert isinstance(ensemble, BlochwaveEnsemble)
+
+    patterns = ensemble.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.is_lazy == lazy
+    assert [axis.label for axis in patterns.ensemble_axes_metadata] == [
+        "x_rotation",
+        "z",
+    ]
+    patterns = patterns.compute()
+
+    reference = silicon_bloch_waves.calculate_diffraction_patterns(
+        thicknesses, lazy=False
+    )
+    assert patterns.shape == (2,) + reference.shape
+    np.testing.assert_array_equal(patterns.miller_indices, reference.miller_indices)
+    for i in range(2):
+        np.testing.assert_allclose(patterns.array[i], reference.array, atol=1e-6)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_zero_width_rotation_ensemble_exit_waves_match_unrotated(lazy):
+    silicon_bloch_waves = _silicon_bloch_waves("cpu")
+    ensemble = silicon_bloch_waves.rotate("x", abtem.distributions.uniform(0.0, 0.0, 2))
+
+    exit_waves = ensemble.calculate_exit_waves([50.0], gpts=(32, 32), lazy=lazy)
+    assert exit_waves.is_lazy == lazy
+    exit_waves = exit_waves.compute()
+
+    reference = silicon_bloch_waves.calculate_exit_waves(
+        [50.0], gpts=(32, 32), lazy=False
+    )
+    assert exit_waves.shape == (2,) + reference.shape
+    for i in range(2):
+        np.testing.assert_allclose(exit_waves.array[i], reference.array, atol=1e-6)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_rotation_ensemble_matches_individually_rotated_bloch_waves(lazy):
+    silicon_bloch_waves = _silicon_bloch_waves("cpu")
+    # Regression test for SciPy >= 1.18, which rejects 1-D angle arrays for a
+    # single-axis Euler sequence. Two distributions also check that the ensemble
+    # composes the rotations in the same order as a non-ensemble rotate call.
+    x_angles = np.array([0.0, 0.01])
+    y_angles = np.array([-0.005, 0.0, 0.008])
+    ensemble = silicon_bloch_waves.rotate(
+        "x",
+        abtem.distributions.from_values(x_angles),
+        "y",
+        abtem.distributions.from_values(y_angles),
+    )
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0], lazy=lazy).compute()
+    assert patterns.shape[:3] == (2, 3, 1)
+    # with extent=None the ensemble uses the largest rotated-cell bounds of all its
+    # members, so fix the extent to compare with single orientations
+    exit_wave_kwargs = {"gpts": (32, 32), "extent": (5.43, 5.43)}
+    exit_waves = ensemble.calculate_exit_waves(
+        [50.0], lazy=lazy, **exit_wave_kwargs
+    ).compute()
+    assert exit_waves.shape == (2, 3, 1, 32, 32)
+
+    for i, x in enumerate(x_angles):
+        for j, y in enumerate(y_angles):
+            single = silicon_bloch_waves.rotate("x", x, "y", y)
+            _assert_matches_single_orientation(
+                patterns[i, j], single.calculate_diffraction_patterns([50.0])
+            )
+            np.testing.assert_allclose(
+                exit_waves.array[i, j],
+                single.calculate_exit_waves([50.0], **exit_wave_kwargs).compute().array,
+                atol=1e-5,
+            )
+
+
+def test_rotation_ensemble_with_multi_axis_sequence():
+    silicon_bloch_waves = _silicon_bloch_waves("cpu")
+    angles = np.array([[0.0, 0.01], [0.01, -0.005]])
+    ensemble = silicon_bloch_waves.rotate("xy", angles)
+    assert isinstance(ensemble, BlochwaveEnsemble)
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+    assert patterns.shape[:2] == (2, 1)
+
+    for i, (x, y) in enumerate(angles):
+        single = silicon_bloch_waves.rotate("xy", np.array([x, y]))
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
+
+
+def test_rotation_ensemble_with_fixed_and_distributed_rotations():
+    silicon_bloch_waves = _silicon_bloch_waves("cpu")
+    y_angles = np.array([0.0, 0.3, 0.5])
+    ensemble = silicon_bloch_waves.rotate(
+        "x", 0.4, "y", abtem.distributions.from_values(y_angles), degrees=True
+    )
+    assert ensemble.ensemble_shape == (3,)
+
+    patterns = ensemble.calculate_diffraction_patterns([50.0]).compute()
+    assert patterns.shape[:2] == (3, 1)
+
+    for i, y in enumerate(y_angles):
+        single = silicon_bloch_waves.rotate("x", 0.4, "y", y, degrees=True)
+        _assert_matches_single_orientation(
+            patterns[i], single.calculate_diffraction_patterns([50.0])
+        )
 
 
 def _silicon_bloch_waves(device, g_max=4.0, sg_max=0.1):

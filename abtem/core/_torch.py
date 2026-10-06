@@ -791,9 +791,14 @@ def where(condition, x=None, y=None):
 
 
 def _creation_like(name: str):
-    """Build ``zeros_like``/``ones_like``/``empty_like`` over a device array."""
+    """Build ``zeros_like``/``ones_like``/``empty_like`` over a device array.
 
-    def func(x, dtype=None, shape=None):
+    NumPy's ``order`` and ``subok`` are accepted and ignored: a tensor has one
+    memory layout and no subclasses. dask passes ``order="C"`` whenever it
+    builds a uniform chunk from an array's meta (``da.ones_like``, ...).
+    """
+
+    def func(x, dtype=None, order="K", subok=True, shape=None):
         tensor = _unwrap(x)
         torch_dtype = to_torch_dtype(dtype) if dtype is not None else tensor.dtype
         if shape is not None:
@@ -814,6 +819,29 @@ def _creation_like(name: str):
 
 
 zeros_like = _creation_like("zeros_like")
+
+
+@_serialized
+def full_like(x, fill_value, dtype=None, order="K", subok=True, shape=None):
+    """``numpy.full_like``; ``order`` and ``subok`` as in :func:`_creation_like`.
+
+    dask reaches this through the array's meta whenever it builds a uniform
+    chunk -- ``map_overlap`` with a constant boundary pads with such chunks.
+    Without it the call raises ``TypeError``, which dask's curried creation
+    wrapper mistakes for missing arguments: the chunk silently becomes a
+    partial function and the graph fails later, far from the cause.
+    """
+    tensor = _unwrap(x)
+    torch_dtype = to_torch_dtype(dtype) if dtype is not None else tensor.dtype
+    if shape is None:
+        shape = tensor.shape
+    elif isinstance(shape, (int, np.integer)):
+        shape = (shape,)
+    return TorchNDArray(
+        torch.full(
+            tuple(shape), _unwrap(fill_value), dtype=torch_dtype, device=tensor.device
+        )
+    )
 
 
 @_serialized
@@ -1075,12 +1103,19 @@ def _pad_indices(length: int, before: int, after: int, mode: str):
         folded = positions % period
         return torch.where(folded >= length, period - folded, folded)
 
+    if mode == "symmetric":
+        # As "reflect", but the edge sample is repeated: a period of
+        # 2 * length, the second half running backwards.
+        period = 2 * length
+        folded = positions % period
+        return torch.where(folded >= length, period - 1 - folded, folded)
+
     raise RuntimeError(f"pad mode {mode!r} is not implemented for Metal (MPS)")
 
 
 @_serialized
 def pad(array, pad_width, mode: str = "constant", constant_values=0):
-    """``numpy.pad`` for the modes abTEM uses: constant, wrap and reflect."""
+    """``numpy.pad`` for the modes abTEM uses: constant, wrap, reflect and symmetric."""
     tensor = _unwrap(array)
     ndim = tensor.ndim
 
@@ -1123,7 +1158,11 @@ def pad(array, pad_width, mode: str = "constant", constant_values=0):
 
 
 def _binary_ufunc(name: str):
-    """Build a binary ufunc that brings both operands onto the device first."""
+    """Build a binary ufunc that brings both operands onto the device first.
+
+    That also covers a scalar operand, ``xp.minimum(indices, n - 1)``, which
+    NumPy accepts and torch's binary functions refuse.
+    """
 
     def func(a, b, **kwargs):
         return _wrap(
@@ -1257,6 +1296,32 @@ def roll(x, shift, axis=None):
 
 
 @_serialized
+def flip(x, axis=None):
+    """``numpy.flip``, whose ``axis`` torch spells ``dims`` and requires."""
+    tensor = _unwrap(x)
+    if axis is None:
+        axis = tuple(range(tensor.ndim))
+    elif isinstance(axis, (int, np.integer)):
+        axis = (int(axis),)
+    return _wrap(torch.flip(tensor, dims=tuple(axis)))
+
+
+@_serialized
+def broadcast_to(x, shape):
+    """``numpy.broadcast_to``: a view, as NumPy's is, though not a read-only one."""
+    if isinstance(shape, (int, np.integer)):
+        shape = (shape,)
+    return _wrap(torch.broadcast_to(_unwrap(asarray(x)), tuple(shape)))
+
+
+@_serialized
+def broadcast_arrays(*arrays):
+    """``numpy.broadcast_arrays``, returning a tuple of views as NumPy 2 does."""
+    tensors = torch.broadcast_tensors(*(_unwrap(asarray(a)) for a in arrays))
+    return tuple(_wrap(t) for t in tensors)
+
+
+@_serialized
 def angle(z, deg=False):
     """``numpy.angle``, whose second argument torch does not take at all.
 
@@ -1368,16 +1433,6 @@ def allclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False) -> bool:
     )
 
 
-def _binary(name: str):
-    """Build a binary ufunc (``maximum``, ``minimum``, ...) over two arrays."""
-
-    def func(x, y, **kwargs):
-        return _wrap(getattr(torch, name)(_unwrap(x), _unwrap(y), **kwargs))
-
-    func.__name__ = name
-    return _serialized(func)
-
-
 class _TorchNumpyNamespace:
     """The ``numpy``-module stand-in for arrays living on the Metal device.
 
@@ -1403,6 +1458,7 @@ class _TorchNumpyNamespace:
     ones = staticmethod(_creation("ones"))
     empty = staticmethod(_creation("empty"))
     zeros_like = staticmethod(zeros_like)
+    full_like = staticmethod(full_like)
     ones_like = staticmethod(_creation_like("ones_like"))
     empty_like = staticmethod(_creation_like("empty_like"))
     full = staticmethod(full)
@@ -1426,6 +1482,9 @@ class _TorchNumpyNamespace:
     moveaxis = staticmethod(_elementwise("moveaxis"))
     swapaxes = staticmethod(_elementwise("swapaxes"))
     roll = staticmethod(roll)
+    flip = staticmethod(flip)
+    broadcast_to = staticmethod(broadcast_to)
+    broadcast_arrays = staticmethod(broadcast_arrays)
 
     # elementwise
     exp = staticmethod(_elementwise("exp"))
@@ -1453,9 +1512,9 @@ class _TorchNumpyNamespace:
     real = staticmethod(_elementwise("real"))
     imag = staticmethod(_elementwise("imag"))
     clip = staticmethod(clip)
-    maximum = staticmethod(_binary("maximum"))
-    minimum = staticmethod(_binary("minimum"))
-    arctan2 = staticmethod(_binary("atan2"))
+    maximum = staticmethod(_binary_ufunc("maximum"))
+    minimum = staticmethod(_binary_ufunc("minimum"))
+    arctan2 = staticmethod(_binary_ufunc("atan2"))
 
     # reductions
     sum = staticmethod(_reduction("sum"))
@@ -1520,6 +1579,10 @@ _ARRAY_FUNCTIONS.update(
         np.where: where,
         np.clip: clip,
         np.zeros_like: zeros_like,
+        np.full_like: full_like,
+        np.broadcast_to: broadcast_to,
+        np.broadcast_arrays: broadcast_arrays,
+        np.flip: flip,
         np.ones_like: torch_numpy.ones_like,
         np.empty_like: torch_numpy.empty_like,
         np.sum: torch_numpy.sum,
