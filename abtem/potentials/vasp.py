@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Dict, Union
 
 import numpy as np
+from ase.data import atomic_numbers
 from scipy.interpolate import interp1d
 
 from abtem.core.ensemble import _wrap_with_array
@@ -319,9 +320,40 @@ class VASPPotential(ChargeDensityPotential):
         device: str = None,
         subtract_min: bool = False,
     ):
+        # POTCAR is parsed before the base class runs so that its exact valence
+        # counts (Z - Nc per species) drive ChargeDensityPotential's consistency
+        # check, instead of the conventional frozen-core table that check falls back
+        # to. The table is wrong for semicore pseudopotentials, which POTCAR knows
+        # about and it does not.
+        base_atoms = atoms.atoms if hasattr(atoms, "atoms") else atoms
+
+        if isinstance(potcar, (str, Path)):
+            elements = parse_potcar(potcar)
+        elif potcar is None:
+            raise ValueError("potcar must be given -- a path to a POTCAR file")
+        else:
+            elements = potcar
+
+        symbols = set(base_atoms.get_chemical_symbols())
+        missing = symbols - set(elements)
+        if missing:
+            raise ValueError(
+                f"potcar is missing the element(s) {sorted(missing)} present in atoms"
+            )
+
+        interpolators = {
+            symbol: get_core_density_fourier_interpolator(symbol, elements)
+            for symbol in symbols
+        }
+        valence_electrons = {
+            symbol: atomic_numbers[symbol] - core
+            for symbol, (_, core) in interpolators.items()
+        }
+
         super().__init__(
             atoms=atoms,
             charge_density=charge_density,
+            valence_electrons=valence_electrons,
             gpts=gpts,
             sampling=sampling,
             slice_thickness=slice_thickness,
@@ -335,73 +367,9 @@ class VASPPotential(ChargeDensityPotential):
             subtract_min=subtract_min,
         )
 
-        if isinstance(potcar, (str, Path)):
-            elements = parse_potcar(potcar)
-        elif potcar is None:
-            raise ValueError("potcar must be given -- a path to a POTCAR file")
-        else:
-            elements = potcar
-
-        symbols = set(self.frozen_phonons.atoms.get_chemical_symbols())
-        missing = symbols - set(elements)
-        if missing:
-            raise ValueError(
-                f"potcar is missing the element(s) {sorted(missing)} present in atoms"
-            )
-
         self._potcar = elements
-        interpolators = {
-            symbol: get_core_density_fourier_interpolator(symbol, elements)
-            for symbol in symbols
-        }
+        # replace the base class's analytic Slater core with POTCAR's tabulated one
         self._core_density_correction = {s: i for s, (i, _) in interpolators.items()}
-        self._core_electrons = {s: nc for s, (_, nc) in interpolators.items()}
-
-        if isinstance(self._charge_density, np.ndarray):
-            # Unlike ChargeDensityPotential's generic heuristic, POTCAR tells us
-            # exactly how many valence electrons the density must integrate to
-            # (Z - Nc per species), so this can be checked outright. Skipped for a
-            # lazy (dask) charge_density, as the generic check is.
-            self._warn_if_electron_count_unexpected()
-
-    def _warn_if_electron_count_unexpected(self, rtol: float = 0.1):
-        """
-        Warn if `charge_density` does not integrate to the valence-electron count
-        `POTCAR` implies.
-
-        Each species contributes `Z - Nc` valence electrons, with `Nc` read from its
-        `POTCAR` core charge-density. A density integrating to much more than that
-        usually means an all-electron density covering core *and* valence was passed
-        (e.g. the `AECCAR0+AECCAR2` sum), whose core electrons this class would then
-        double-count; much less usually means a mismatched `POTCAR` or a density
-        written for a different structure.
-        """
-        atoms = self._frozen_phonons.atoms
-        expected = float(
-            sum(
-                number - self._core_electrons[symbol]
-                for number, symbol in zip(atoms.numbers, atoms.get_chemical_symbols())
-            )
-        )
-        if expected <= 0:
-            return
-
-        voxel_volume = atoms.cell.volume / np.prod(self._charge_density.shape[-3:])
-        total = float(np.sum(self._charge_density)) * voxel_volume
-
-        if abs(total - expected) > rtol * expected:
-            warnings.warn(
-                f"charge_density integrates to ~{total:.2f} electrons, but the given "
-                f"POTCAR implies {expected:.2f} valence electrons for these atoms "
-                f"(sum of Z - Nc over all atoms). VASPPotential adds the core "
-                f"contribution itself from POTCAR, so charge_density must be "
-                f"valence-only -- VASP's AECCAR2 (written when LAECHG = .TRUE.) or a "
-                f"plain CHGCAR, not the AECCAR0+AECCAR2 sum. A large excess usually "
-                f"means the core electrons are already included and will be "
-                f"double-counted; a shortfall usually means the POTCAR does not match "
-                f"the density.",
-                stacklevel=3,
-            )
 
     @property
     def potcar(self):
