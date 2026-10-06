@@ -365,6 +365,106 @@ def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
         assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
 
 
+def test_exact_form_excludes_evanescent_beams_with_a_warning():
+    # Beams are selected by their Ewald-sphere excitation error, which at low
+    # energy with a large g_max admits beams with lambda |g_perp| >= 1. The
+    # 'exact' form has no real excitation error for them (they are evanescent,
+    # as in exact multislice): they are dropped with a warning, not an error.
+    from abtem.core.energy import energy2wavelength
+
+    energy = 1e3
+    atoms = Atoms("C", positions=[(0, 0, 0)], cell=[2.0, 2.0, 2.0], pbc=True)
+    structure_factor = StructureFactor(
+        atoms, g_max=8.0, parametrization="lobato", centering="P"
+    )
+    kwargs = dict(energy=energy, sg_max=0.2, g_max=4.0)
+
+    standard = BlochWaves(structure_factor, use_wave_eq=False, **kwargs)
+    g = standard.g_vec
+    evanescent = energy2wavelength(energy) * np.hypot(g[:, 0], g[:, 1]) >= 1
+    assert evanescent.any()
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        exact = BlochWaves(structure_factor, use_wave_eq="exact", **kwargs)
+    np.testing.assert_array_equal(exact.hkl, standard.hkl[~evanescent])
+
+    psi = np.asarray(
+        exact.calculate_diffraction_patterns(
+            [20.0], return_complex=True, lazy=False
+        ).array
+    )
+    np.testing.assert_allclose((np.abs(psi) ** 2).sum(), 1.0, atol=1e-5)
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        BlochWaves(
+            structure_factor, use_wave_eq="exact", **{**kwargs, "energy": [1e3, 1.5e3]}
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_weights_follow_use_wave_eq(device):
+    # get_kinematical_diffraction_pattern weights |F_g|^2 with a Gaussian in the
+    # excitation error of the form use_wave_eq selects; beam selection (sg_max)
+    # keeps the Ewald-sphere form for all three.
+    from abtem.bloch.utils import excitation_errors
+
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        bulk("Si", cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        centering="F",
+        device=device,
+    )
+    sg_max = 0.5
+    patterns = {}
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor=structure_factor,
+            energy=100e3,
+            sg_max=sg_max,
+            orientation_matrix=orientation_matrix,
+            use_wave_eq=use_wave_eq,
+            device=device,
+        )
+        sg = excitation_errors(
+            bloch_waves.g_vec, bloch_waves.energy, use_wave_eq=use_wave_eq
+        )
+        np.testing.assert_array_equal(bloch_waves.excitation_errors(), sg)
+
+        f_squared = (
+            np.abs(
+                asnumpy(bloch_waves._get_structure_factor_array().array)[
+                    bloch_waves.hkl_mask
+                ]
+            )
+            ** 2
+        )
+        expected = f_squared * np.exp(-(sg**2) / (2 * (sg_max / 3) ** 2))
+        pattern = asnumpy(bloch_waves.get_kinematical_diffraction_pattern().array)
+        np.testing.assert_allclose(pattern, expected, rtol=1e-5, atol=0)
+        patterns[use_wave_eq] = pattern
+
+    # the same beams, but different weights off zone axis
+    difference = np.abs(patterns["exact"] - patterns[False]).sum()
+    assert difference > 1e-3 * patterns[False].sum()
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_scattering_matrix_matches_eager(device):
+    import dask.array as da
+
+    bloch_waves = _silicon_bloch_waves(device)
+    lazy = bloch_waves.calculate_scattering_matrix(50.0, lazy=True)
+    assert isinstance(lazy, da.Array)
+    eager = bloch_waves.calculate_scattering_matrix(50.0)
+    assert not isinstance(eager, da.Array)
+    np.testing.assert_allclose(
+        asnumpy(lazy.compute()), asnumpy(eager), rtol=0, atol=1e-6
+    )
+
+
 @pytest.mark.slow
 # order=1 at 10 keV is used deliberately, as the paraxial reference
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error")

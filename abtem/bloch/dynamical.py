@@ -972,6 +972,32 @@ def _metric(
     return calculate_M_matrix(hkl, cell, energy)
 
 
+def _exclude_evanescent_beams(
+    mask: np.ndarray, hkl: np.ndarray, cell: np.ndarray | Cell, energy: float
+) -> np.ndarray:
+    """Drop the beams of `mask` that cannot propagate in the 'exact' form.
+
+    The non-paraxial excitation error has no real value for lambda |g_perp| >= 1:
+    such a beam is evanescent, as in exact multislice. Beam selection uses the
+    Ewald-sphere excitation error, which can admit these beams at low energies
+    with a large g_max; they are excluded with a warning instead of failing in
+    the structure matrix.
+    """
+    g = hkl @ reciprocal_cell(cell)
+    evanescent = mask & (
+        energy2wavelength(energy) * np.sqrt(g[:, 0] ** 2 + g[:, 1] ** 2) >= 1.0
+    )
+    if evanescent.any():
+        warnings.warn(
+            f"use_wave_eq='exact': {int(evanescent.sum())} of {int(mask.sum())} "
+            f"selected beams at {energy:g} eV have lambda * |g_perp| >= 1 and "
+            "cannot propagate (evanescent); they are excluded. Reduce g_max or "
+            "sg_max to select only propagating beams.",
+            stacklevel=4,
+        )
+    return mask & ~evanescent
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
@@ -1472,33 +1498,30 @@ class BlochWaves:
         energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
         self._energy = float(energies[0])  # always scalar; .energy property is backward-compat
         self._energies = energies          # full array for multi-energy paths
-        if len(energies) == 1:
-            # Scalar path — unchanged behaviour
-            self._hkl_mask = filter_reciprocal_space_vectors(
+
+        def select_beams(e: float) -> np.ndarray:
+            mask = filter_reciprocal_space_vectors(
                 hkl=structure_factor.hkl,
                 cell=cell,
-                energy=float(energies[0]),
+                energy=e,
                 sg_max=sg_max,
                 g_max=self._g_max,
                 centering=centering,
             )
+            if self._use_wave_eq == "exact":
+                mask = _exclude_evanescent_beams(mask, structure_factor.hkl, cell, e)
+            return mask
+
+        if len(energies) == 1:
+            # Scalar path — unchanged behaviour
+            self._hkl_mask = select_beams(float(energies[0]))
             self._energy_hkl_masks: np.ndarray | None = None
         else:
             # Compute per-energy masks, then take their union so all energies
             # share the same reciprocal-space basis (higher energy → more beams,
             # so the union equals the mask at the highest energy, but OR-ing is
             # more rigorous and mirrors BlochwaveEnsemble.get_ensemble_hkl_mask).
-            per_energy = [
-                filter_reciprocal_space_vectors(
-                    hkl=structure_factor.hkl,
-                    cell=cell,
-                    energy=float(e),
-                    sg_max=sg_max,
-                    g_max=self._g_max,
-                    centering=centering,
-                )
-                for e in energies
-            ]
+            per_energy = [select_beams(float(e)) for e in energies]
             union_mask = per_energy[0].copy()
             for m in per_energy[1:]:
                 union_mask |= m
@@ -1777,39 +1800,49 @@ class BlochWaves:
             )
         return A
 
-    def calculate_scattering_matrix(self, z: float) -> np.ndarray:
+    def calculate_scattering_matrix(
+        self, z: float, lazy: bool = False
+    ) -> np.ndarray | da.core.Array:
         """Calculate the scattering matrix for a given thickness.
 
         Parameters
         ----------
         z : float
             The thickness of the sample [Å].
+        lazy : bool
+            If True, the scattering matrix is returned as a dask array, built
+            from the lazy structure matrix. If False (default), it is computed
+            eagerly.
 
         Returns
         -------
-        numpy.ndarray
+        numpy.ndarray or dask.array.Array
             The scattering matrix.
         """
         self._require_single_energy("calculate_scattering_matrix")
         _warn_if_single_precision(self._device)
-        # Eager: the result feeds xp.asarray, and CuPy refuses to convert a
-        # dask array implicitly (Metal and NumPy happen to accept one).
-        A = self.calculate_structure_matrix(lazy=False)
-        hkl = self.hkl
-        cell = self.cell
+        A = self.calculate_structure_matrix(lazy=lazy)
 
-        xp = get_array_module(self._device)
-        A = xp.asarray(A)
-
-        S = calculate_scattering_matrix(
-            A=A,
-            hkl=hkl,
-            cell=cell,
+        kwargs = dict(
+            hkl=self.hkl,
+            cell=self.cell,
             z=z,
             energy=self.energy,
             use_wave_eq=self.use_wave_eq,
         )
-        return S
+
+        xp = get_array_module(self._device)
+        if lazy:
+            # the structure matrix is a single (n, n) block; expm maps it to
+            # one block of the same shape, on the structure matrix's device
+            return da.map_blocks(
+                calculate_scattering_matrix,
+                A,
+                **kwargs,
+                meta=xp.array((), dtype=get_dtype(complex=True)),
+            )
+
+        return calculate_scattering_matrix(A=xp.asarray(A), **kwargs)
 
     def _calculate_array(
         self, thicknesses: np.ndarray, lazy: bool = True
