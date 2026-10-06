@@ -303,6 +303,7 @@ class BaseSMatrix(BaseWaves):
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
+        energy = kwargs.pop("energy", self.energy)
         kwargs = {**default_kwargs, **kwargs}
 
         if downsample:
@@ -317,7 +318,7 @@ class BaseSMatrix(BaseWaves):
             extent=self.window_extent,
             gpts=window_gpts,
             ctf=ctf,
-            energy=self.energy,
+            energy=energy,
             **kwargs,
         )
 
@@ -5591,6 +5592,21 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if scan is None:
                 scan = (self.extent[0] / 2, self.extent[1] / 2)
             scan = validate_scan(scan, self)
+
+            # Fix whatever depends on the whole ensemble, as `apply_transform`
+            # does before it splits a multi-energy ensemble: each energy is then
+            # reduced with the same detectors, whose measurements stack. The
+            # reduction detects on the waves of `dummy_probes`, downsampled only
+            # for the compressed (upsampled) reduction.
+            ensemble = self.dummy_probes(
+                downsample=self._upsample_enabled,
+                energy=self._energies,
+                metadata={k: v for k, v in self.metadata.items() if k != "energy"},
+            ).build(lazy=True)
+            detectors = [
+                detector._match_ensemble(ensemble)
+                for detector in validate_detectors(detectors)
+            ]
 
             results = [
                 self._with_energy(float(e)).reduce(

@@ -3671,6 +3671,38 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _per_energy(method):
+    """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
+    ensemble on its own, and restack the results along the energy axis.
+
+    The angular sampling of diffraction patterns scales with the wavelength, and
+    an `EnergyAxis` of several energies has no single wavelength: the sampling of
+    the ensemble as a whole is that of its highest energy (see
+    `BaseMeasurements._get_energy`). A method that takes or returns scattering
+    angles must therefore see one energy at a time.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        from abtem.array import _multi_energy_axis
+
+        index = _multi_energy_axis(self)
+        if index is None:
+            return method(self, *args, **kwargs)
+
+        axis = self.ensemble_axes_metadata[index]
+        members = [
+            method(self[(slice(None),) * index + (j,)], *args, **kwargs)
+            for j in range(len(axis.values))
+        ]
+        # A method may move ensemble axes into the base (the scan axes of a
+        # center of mass), which can only be ones that follow the energy axis.
+        position = min(index, len(members[0].ensemble_shape))
+        return stack(members, axis, axis=position)
+
+    return wrapper
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -4556,6 +4588,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return result.reshape(new_shape)
 
+    @_per_energy
     def polar_binning(
         self,
         nbins_radial: int,
@@ -4656,6 +4689,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
+    @_per_energy
     def radial_binning(
         self, step_size: float = 1.0, inner: float = 0.0, outer: Optional[float] = None
     ) -> PolarMeasurements:
@@ -4713,6 +4747,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return xp.sum(array * bins, axis=(-2, -1))
 
+    @_per_energy
     def integrate_radial(
         self,
         inner: float,
@@ -4817,6 +4852,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com = com_x + 1.0j * com_y
         return com
 
+    @_per_energy
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
         """
         Calculate center-of-mass images or line profiles from diffraction patterns.
@@ -4880,6 +4916,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array * block
 
+    @_per_energy
     def bandlimit(
         self, inner: float = 0.0, outer: float = np.inf
     ) -> DiffractionPatterns:
@@ -5132,6 +5169,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     #     )
     #     return fsc
 
+    @_per_energy
     def block_direct(
         self, radius: Optional[float] = None, margin: Optional[bool] = None
     ) -> DiffractionPatterns:
