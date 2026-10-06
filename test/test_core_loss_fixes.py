@@ -154,6 +154,86 @@ class TestContinuumGrid:
 
 
 @requires_gpaw
+class TestRadialEquation:
+    """``radial_schroedinger_equation`` is the operator the continuum states
+    are solved with; it must be the one GPAW's own bound states solve."""
+
+    @staticmethod
+    def _bound_eigenvalue(n, l, rv, rmax=25.0, h=2e-4):
+        """Shooting with node counting: the eigenvalue [Rydberg] of the state
+        with n - l - 1 radial nodes, by bisection on the energy."""
+        from abtem.inelastic.core_loss import numerov, radial_schroedinger_equation
+
+        # u(0) = 0 at the origin itself (r = 0 would divide by zero).
+        r = np.arange(int(rmax / h) + 1) * h
+        r[0] = 1e-12
+        inner = int(0.9 * len(r))  # ignore the divergent tail's last node
+        lower, upper = -1.2 * 14**2, -1e-4
+        for _ in range(80):
+            energy = 0.5 * (lower + upper)
+            u = numerov(radial_schroedinger_equation(energy, l, r, rv), 0.0, 1e-12, h)
+            signs = np.sign(u[:inner])
+            signs = signs[signs != 0]
+            if np.sum(signs[1:] != signs[:-1]) > n - l - 1:
+                upper = energy
+            else:
+                lower = energy
+        return 0.5 * (lower + upper)
+
+    @pytest.mark.parametrize("n, l", [(2, 1), (3, 0), (3, 1)])
+    def test_reproduces_gpaw_bound_eigenvalues(self, n, l):
+        """In the potential of a non-relativistic GPAW atom (whose kinetic
+        operator is the same non-relativistic one) the equation must give
+        GPAW's eigenvalues. It did not: both the centrifugal and the
+        potential term were multiplied by an unexplained 1.02, which put
+        these eigenvalues 4-10% off. Measured without it: <= 1e-5."""
+        from gpaw.atom.aeatom import AllElectronAtom
+        from scipy.interpolate import interp1d
+
+        AllElectronAtom.log = lambda self, *args, **kwargs: None
+        ae = AllElectronAtom("Si", xc="PBE", scalar_relativistic=False)
+        ae.run()
+        ae.refine()
+        rv = interp1d(
+            ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value=(28.0, 0.0), bounds_error=False
+        )
+        expected = 2 * ae.channels[l].e_n[n - l - 1]  # Hartree -> Rydberg
+
+        assert self._bound_eigenvalue(n, l, rv) == pytest.approx(expected, rel=1e-4)
+
+
+@requires_gpaw
+class TestAtomicPotentialTail:
+    """GPAW evaluates vxc at a floored density (1e-10), so in vacuum it sat
+    at a constant -8.5e-4 Hartree: r*V grew linearly to the edge of the grid
+    (r*V = 0.083 Ry Bohr at 49 Bohr for every element) and, extrapolated,
+    left a constant potential that shifted the continuum's asymptotic
+    wavenumber (q/k = 1.012 at 1 eV). Extending GPAW's grid did not help --
+    the constant was the same at rcut = 150 Bohr."""
+
+    @pytest.mark.parametrize("xc", ["LDA", "PBE"])
+    def test_potential_vanishes_in_vacuum_and_is_unchanged_inside(self, xc):
+        from gpaw.atom.aeatom import AllElectronAtom
+
+        from abtem.inelastic.core_loss import _atomic_rv
+
+        rv = _atomic_rv(14, xc=xc)
+        for r in (40.0, 49.0, 100.0, 150.0):
+            # Was 1.7e-3 Ry; measured <= 2e-7 Ry now.
+            assert abs(rv(r) / r) < 1e-6, f"V({r} Bohr) = {rv(r) / r:.2e} Ry"
+
+        AllElectronAtom.log = lambda self, *args, **kwargs: None
+        ae = AllElectronAtom("Si", xc=xc)
+        ae.run()
+        ae.scalar_relativistic = True
+        ae.refine()
+        dense = ae.n_sg.sum(0) >= 1e-10
+        np.testing.assert_allclose(
+            rv(ae.rgd.r_g[dense]), -2 * ae.vr_sg[0][dense], rtol=1e-12, atol=0
+        )
+
+
+@requires_gpaw
 class TestContinuumNormalisation:
     """The continuum state must be energy-normalised: u -> sin(kr+d)/sqrt(pi k)."""
 
@@ -204,28 +284,28 @@ class TestContinuumNormalisation:
         least-squares fit the outer region to the WKB form of the solution.
 
         The potential is the neutral ground-state atom's (no core hole), so
-        there is no Coulomb log-phase term -- but it is not negligible in
-        the outer region either: the PBE tail and the linear extrapolation
-        of r*V beyond GPAW's ~49 Bohr grid leave the local wavenumber q(r)
-        up to ~1% away from k (1 eV). A bare free-wave fit (Riccati-Bessel
-        functions at fixed k) leaves residuals of several percent, so fit
+        there is no Coulomb log-phase term, and it vanishes in vacuum (see
+        TestAtomicPotentialTail) -- but not by the start of the outer region
+        at every energy, so rather than a bare free-wave fit (Riccati-Bessel
+        functions at fixed k), fit
         u = A sqrt(k/q) [a sin(phi) + b cos(phi)], phi = int q dr, with
         q(r)^2 = -f(r) from the very radial equation u'' = f u that is
         solved (``radial_schroedinger_equation``, which defines the
         problem). A = hypot(a, b) is then the r -> infinity amplitude.
 
         Because q(r) comes from that same equation, this checks the
-        normalisation of whatever equation is solved; it cannot tell whether
-        the equation itself is right (e.g. its unexplained 1.02 factor on
-        the centrifugal and potential terms).
+        normalisation of whatever equation is solved; whether the equation
+        itself is right is TestRadialEquation's job.
 
         Energy normalisation, derived: u -> A sin(kr + delta) gives
         integral u_k u_k' dr = A^2 (pi/2) delta(k - k'), and with E = k^2
         (Rydberg units), delta(k - k') = 2k delta(E - E'), so
         <E|E'> = delta(E - E') requires A = 1/sqrt(pi k).
 
-        Measured |A sqrt(pi k) - 1| <= 1.1e-3 (l'=3, 25 eV, the case the
-        WKB form describes worst: 1% fit residual); <= 2e-4 elsewhere.
+        Measured |A sqrt(pi k) - 1| <= 4e-4 (l'=3, 25 eV, the case the WKB
+        form describes worst: 0.2% fit residual); <= 2.4e-4 elsewhere. (With
+        the potential's spurious vacuum constant, before TestAtomicPotential
+        Tail's fix: 1.1e-3, and a 1% residual.)
         """
         from scipy.integrate import cumulative_trapezoid
 
@@ -244,9 +324,9 @@ class TestContinuumNormalisation:
 
         # The WKB form must actually describe the wave out there ...
         residual = np.abs(u[outer] - basis @ np.array([a, b])).max()
-        assert residual < 2e-2 * amplitude
+        assert residual < 1e-2 * amplitude
         # ... with the energy-normalised amplitude.
-        assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=2e-3)
+        assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
 
 
 class TestPrecisionConfig:

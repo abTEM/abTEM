@@ -1237,16 +1237,6 @@ def _oracle_overlaps(tp, waves, ij):
     return np.array([(np.roll(V, tuple(s), (0, 1)) * psi2).sum() for s in ij])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "absolute_threshold picks overlap[searchsorted(cum, t, 'left') - 1] "
-        "and filter_sites keeps sites with overlap strictly greater than it, "
-        "so the retained set stops ~2 pixels short of the requested fraction "
-        "(t=0.5 retains ~0.487 of the overlap; t=0.1 retains ~0.088)."
-    ),
-)
 @devices
 def test_threshold_retains_requested_fraction_of_overlap(device):
     """``threshold=t`` means: keep the sites that together carry at least a
@@ -1255,7 +1245,14 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
     cuts where the cumulative fraction reaches t). With a site on every
     pixel the retained sites are exactly those ranked pixels, so their
     summed overlap must be >= t of the total, and for t < 1 some must be
-    dropped."""
+    dropped.
+
+    The cut used to be the overlap of the pixel *before* the one where the
+    cumulative fraction reaches t, kept strictly above, so the retained set
+    stopped ~2 pixels short (t=0.5 retained 0.487, t=0.1 retained 0.088);
+    and float32 round-off between the FFT ranking and filter_sites' direct
+    sum split groups of symmetry-tied pixels at the cut (t=0.99 ~1e-4
+    short). 0.99 and 0.999 cover that tie handling."""
     gpts, extent = (32, 32), (8.0, 8.0)
     tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
     waves = _probe_waves(gpts=gpts, extent=extent, device=device)
@@ -1263,7 +1260,7 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
     overlaps = _oracle_overlaps(tp, waves, ij)
     total = overlaps.sum()
 
-    for t in (0.001, 0.1, 0.5, 0.9):
+    for t in (0.001, 0.1, 0.5, 0.9, 0.99, 0.999):
         kept = tp.filter_sites(
             waves, sites, threshold=tp.absolute_threshold(waves, t)
         )
@@ -1278,10 +1275,9 @@ def test_threshold_retains_requested_fraction_of_overlap(device):
 @devices
 def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     """A threshold below the largest single-pixel overlap fraction asks for
-    (at most) the single most-overlapping site. The cut index used to wrap
-    to -1 there -- the *smallest* overlap -- so filter_sites kept 1023 of
-    1024 sites, silently running the full unfiltered cost. It must keep the
-    top-ranked site (and, the threshold being tiny, little else)."""
+    exactly the single most-overlapping site. The cut index used to wrap to
+    -1 there -- the *smallest* overlap -- so filter_sites kept 1023 of 1024
+    sites, silently running the full unfiltered cost."""
     gpts, extent = (32, 32), (8.0, 8.0)
     tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
     waves = _probe_waves(gpts=gpts, extent=extent, device=device)
@@ -1294,27 +1290,31 @@ def test_threshold_below_the_top_pixel_fraction_keeps_the_top_site(device):
     )
     kept_ij = np.rint(kept / np.array(tp.sampling)).astype(int)
     kept_flat = kept_ij[:, 0] * gpts[1] + kept_ij[:, 1]
-    # The top-ranked site survives. The cut sits at the next-ranked overlap,
-    # a symmetric group of near-tied pixels around the probe; float32
-    # round-off between absolute_threshold's FFT ranking and filter_sites'
-    # direct sum can let a few of those through as well (one, measured).
-    assert np.argmax(overlaps) in kept_flat
-    assert len(kept) <= 5, f"kept {len(kept)} of {len(ij)} sites"
+    # The top pixel is unique (the next-ranked group of four ties sits ~15%
+    # below it), so it survives alone.
+    top_two = np.sort(overlaps)[::-1][:2]
+    assert top_two[1] < top_two[0] * (1 - 1e-3)
+    np.testing.assert_array_equal(kept_flat, [np.argmax(overlaps)])
 
 
 @devices
 def test_threshold_drops_sites_and_bounds_the_eels_signal(device):
     """End-to-end purpose of ``threshold``: through the EELS driver, t < 1
     must actually drop sites (a smaller integrated signal), dropping more
-    as t decreases, while t = 1 (the driver's default) is the unfiltered
-    result.
+    as t decreases, yet retain at least the fraction t of the signal, while
+    t = 1 (the driver's default) is the unfiltered result.
 
     Setup: one slice of vacuum, a B site on every pixel, a centrosymmetric
     Gaussian transition potential. With one slice and single-channel, each
     site's integrated EELS intensity is sum_q |FT[H(r - s) psi(r)]|^2, i.e.
     by Parseval its overlap sum_r |H(r - s)|^2 |psi(r)|^2 (up to the
     antialias aperture), so the retained signal fraction tracks the
-    retained-overlap fraction and should be of order t.
+    retained-overlap fraction, which is >= t.
+
+    The driver used to rank the cut once on the entrance wave and apply it
+    to the wave at the slice; even one 1 A vacuum slice of propagation then
+    pushed the symmetry-tied group of sites at the cut below it together:
+    t=0.1 retained 0.048 of the signal, t=0.5 0.446, and t=0.001 nothing.
     """
     gpts, extent = (32, 32), (8.0, 8.0)
     tp = _symmetric_gaussian_transition_potential(gpts, extent, device=device)
@@ -1352,18 +1352,13 @@ def test_threshold_drops_sites_and_bounds_the_eels_signal(device):
     unfiltered = integrated(threshold=1.0)
     assert unfiltered > 0
 
-    ratios = {t: integrated(threshold=t) / unfiltered for t in (0.5, 0.9, 0.99)}
-    assert 0 < ratios[0.5] < ratios[0.9] < ratios[0.99] < 1
-    for t, ratio in ratios.items():
-        # The dropped fraction is of order (1 - t), not a multiple of it.
-        # It is not bounded by exactly (1 - t): besides the off-by-one
-        # recorded in test_threshold_retains_requested_fraction_of_overlap,
-        # the cut is ranked on the entrance wave but applied to the wave at
-        # the slice (a symmetric tie group of sites at the cut can fall
-        # below it), and the detected intensity is the overlap only up to
-        # the antialias aperture. Measured: 1 - ratio = 0.554, 0.098,
-        # 0.0097 for t = 0.5, 0.9, 0.99.
-        assert 1 - ratio <= 1.25 * (1 - t), f"t={t}: dropped {1 - ratio:.3f}"
+    thresholds = (0.001, 0.1, 0.5, 0.9, 0.99)
+    ratios = [integrated(threshold=t) / unfiltered for t in thresholds]
+    assert 0 < ratios[0] and all(np.diff(ratios) > 0) and ratios[-1] < 1
+    for t, ratio in zip(thresholds, ratios):
+        # Measured: ratio = 0.048, 0.210, 0.613, 0.902, 0.990, each within
+        # ~1e-3 (the antialias aperture) of the retained-overlap fraction.
+        assert ratio >= t, f"t={t}: retained only {ratio:.4f} of the signal"
 
 
 def test_local_potential_device_cache_survives_use_but_not_pickle():
