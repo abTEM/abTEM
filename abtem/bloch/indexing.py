@@ -7,6 +7,7 @@ from ase import Atoms
 from ase.cell import Cell
 
 from abtem.bloch.utils import excitation_errors, reciprocal_cell
+from abtem.core.backend import get_array_module
 from abtem.core.grid import polar_spatial_frequencies
 
 
@@ -191,7 +192,8 @@ def integrate_ellipse_around_pixels(
     numpy.ndarray
         The integrated intensities around the pixels.
     """
-    weights = antialiased_disk(r, sampling)
+    # on the array's device: the weights multiply slices of it
+    weights = get_array_module(array).asarray(antialiased_disk(r, sampling))
     a, b = weights.shape[0] // 2, weights.shape[1] // 2
     intensities = np.zeros_like(array, shape=array.shape[:-2] + (nm.shape[-2],))
 
@@ -293,7 +295,7 @@ def index_diffraction_spots(
 
     mask = overlapping_spots_mask(nm, sg)
 
-    intensities = intensities * mask
+    intensities = intensities * get_array_module(intensities).asarray(mask)
 
     return intensities
 

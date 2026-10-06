@@ -301,6 +301,110 @@ def test_diag_and_fill_diagonal_match_numpy():
     assert np.array_equal(asnumpy(on_device), expected)
 
 
+def test_flip_and_broadcasting_match_numpy():
+    xp = get_array_module("mps")
+    array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    on_device = copy_to_device(array, "mps")
+
+    for axis in (None, 0, -1, (0, 2)):
+        assert np.array_equal(
+            asnumpy(xp.flip(on_device, axis=axis)), np.flip(array, axis)
+        )
+        assert np.array_equal(asnumpy(np.flip(on_device, axis)), np.flip(array, axis))
+
+    column = np.arange(3, dtype=np.float32)[:, None]
+    row = np.arange(4, dtype=np.int64)[None, :]
+    expected = np.broadcast_arrays(column, row)
+    for result in (
+        xp.broadcast_arrays(xp.asarray(column), xp.asarray(row)),
+        np.broadcast_arrays(xp.asarray(column), xp.asarray(row)),
+    ):
+        assert len(result) == len(expected)
+        for got, want in zip(result, expected):
+            assert get_array_module(got) is xp
+            assert np.array_equal(asnumpy(got), want)
+
+    assert np.array_equal(
+        asnumpy(np.broadcast_to(xp.asarray(column), (3, 5))),
+        np.broadcast_to(column, (3, 5)),
+    )
+
+
+@pytest.mark.parametrize("mode", ["constant", "wrap", "reflect", "symmetric"])
+def test_pad_matches_numpy(mode):
+    xp = get_array_module("mps")
+    array = np.arange(15, dtype=np.float32).reshape(3, 5)
+    # widths beyond the axis length exercise the folding of each mode
+    pad_width = ((4, 1), (0, 7))
+
+    result = xp.pad(xp.asarray(array), pad_width, mode=mode)
+
+    assert np.array_equal(asnumpy(result), np.pad(array, pad_width, mode=mode))
+
+
+def test_minimum_and_maximum_take_a_scalar():
+    # NumPy accepts a scalar on either side; torch's binary functions do not.
+    xp = get_array_module("mps")
+    indices = np.array([0, 3, 7, 9])
+    on_device = xp.asarray(indices)
+
+    assert np.array_equal(
+        asnumpy(xp.minimum(on_device + 1, 8)), np.minimum(indices + 1, 8)
+    )
+    assert np.array_equal(asnumpy(xp.maximum(2, on_device)), np.maximum(2, indices))
+
+
+def test_dask_constant_boundary_overlap_stays_on_device():
+    # A constant boundary pads with chunks dask builds from the array's meta
+    # through np.full_like. Unimplemented, that raised TypeError, which dask's
+    # curried creation wrapper took for missing arguments and returned a
+    # partial function as the chunk.
+    import dask.array as da
+
+    xp = get_array_module("mps")
+    array = np.random.RandomState(5).rand(2, 8, 8).astype(np.float32)
+    lazy = da.from_array(xp.asarray(array), chunks=(1, 4, 8))
+
+    result = da.overlap.overlap(
+        lazy, depth={0: 0, 1: 2, 2: 2}, boundary={0: 1.5, 1: 1.5, 2: 1.5}
+    ).compute(scheduler="synchronous")
+    expected = da.overlap.overlap(
+        da.from_array(array, chunks=(1, 4, 8)),
+        depth={0: 0, 1: 2, 2: 2},
+        boundary={0: 1.5, 1: 1.5, 2: 1.5},
+    ).compute()
+
+    assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(result), expected)
+
+    filled = np.full_like(xp.asarray(array), 2.0, shape=(3, 1), order="C")
+    assert get_array_module(filled) is xp
+    assert np.array_equal(asnumpy(filled), np.full((3, 1), 2.0, np.float32))
+
+
+def test_diffraction_pattern_bilinear_resampling_matches_cpu():
+    # The CPU routine writes into host buffers through `out=`; Metal has its
+    # own gather-based path.
+    patterns = []
+    for device in ("cpu", "mps"):
+        # a rectangular cell, so the two axes resample by different factors
+        probe = abtem.Probe(
+            energy=100e3,
+            semiangle_cutoff=20,
+            gpts=(64, 80),
+            extent=(10, 13),
+            device=device,
+        )
+        diffraction = probe.build().diffraction_patterns(max_angle=None)
+        resampled = diffraction.interpolate(sampling=0.137)
+        patterns.append(asnumpy(resampled.array))
+
+    assert patterns[1].shape == patterns[0].shape
+    np.testing.assert_allclose(
+        patterns[1], patterns[0], rtol=0, atol=1e-5 * np.abs(patterns[0]).max()
+    )
+
+
 def _run_isolated(script, hang="the script hung"):
     """Run ``script`` in a fresh interpreter, for what only a new process shows.
 
