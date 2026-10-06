@@ -28,7 +28,7 @@ from abtem.visualize.artists import (
     validate_cmap,
 )
 from abtem.visualize.axes_grid import AxesCollection, AxesGrid
-from abtem.visualize.widgets import slider_from_axes_metadata
+from abtem.visualize.widgets import default_ensemble_index, slider_from_axes_metadata
 
 if TYPE_CHECKING:
     from abtem.measurements import BaseMeasurements
@@ -346,7 +346,12 @@ class Visualization:
         for i in range(len(self._measurement.ensemble_shape)):
             if i in self.indexing_axes:
                 if j >= len(indices):
-                    validated_indices += (0,)
+                    validated_indices += (
+                        default_ensemble_index(
+                            self._measurement.axes_metadata[i],
+                            self._measurement.shape[i],
+                        ),
+                    )
                 elif isinstance(indices[j], int):
                     validated_indices += (indices[j],)
                     removed_axes += 1

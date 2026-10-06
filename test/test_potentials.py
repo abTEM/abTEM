@@ -899,6 +899,27 @@ def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
     assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
 
 
+@pytest.mark.parametrize(
+    "exit_planes, expected",
+    [
+        (10, (-1, 9, 19)),
+        (19, (-1, 18, 19)),
+        # every integer up to the number of slices includes the entrance plane
+        (20, (-1, 19)),
+        (21, (19,)),
+        (None, (19,)),
+    ],
+)
+def test_integer_exit_planes_include_entrance_plane_up_to_num_slices(
+    exit_planes, expected
+):
+    # issue #515: exit_planes == num_slices used to drop the thickness axis while
+    # exit_planes == num_slices - 1 kept it
+    from abtem.potentials.iam import _validate_exit_planes
+
+    assert _validate_exit_planes(exit_planes, 20) == expected
+
+
 def test_potential_array_slicing_maps_exit_planes():
     # slicing a potential array must map its exit planes into the sliced range,
     # otherwise the exit plane can fall outside the slices and the multislice
