@@ -250,7 +250,7 @@ def _make_displacement_field(
     frame_mag_deviation = (1 + x_mag_deviation) * (1 + y_mag_deviation) - 1
     frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation**2))
 
-    # 235.5 = 2.355 * 100 %; 2.355 converts from 1/e width to FWHM
+    # 235.5 = 2.355 * 100 %; 2.355 converts a standard deviation to a FWHM
 
     profile_x *= rms_power / (2.355 * 100 * frame_mag_deviation)
     profile_y *= rms_power / (2.355 * 100 * frame_mag_deviation)
