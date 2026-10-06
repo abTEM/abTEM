@@ -782,18 +782,8 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
     exactly, for every energy and in either order.
 
     Uses a 2-position CustomScan rather than GridScan to isolate this test to
-    defect B alone. A separate, independent defect used to affect the
-    GridScan combination specifically: MultisliceTransform._calculate_new_
-    array's eager per-energy split (abtem/multislice.py) stacked each
-    member's result at the position the energy axis happened to occupy
-    within the *input* waves' own combined ensemble axes, rather than where
-    the *output* measurement's own axes_metadata says it belongs -- correct
-    by coincidence for CustomScan (whose single, non-2D PositionsAxis is
-    never reclassified as base shape, so energy's relative position is
-    unaffected) but not for GridScan (whose two ScanAxis entries get moved
-    into base shape, which the stacking axis did not account for). See
-    TestScanEnergyEnsembleAxisOrder below, which exercises GridScan and
-    LineScan directly now that this is fixed.
+    defect B alone: where the energy axis lands among a GridScan's or a
+    LineScan's axes is TestScanEnergyEnsembleAxisOrder's job below.
 
     The lazy case also covers a second, separate mechanism for this exact
     combination: any waves ensemble spanning more than one dask block,

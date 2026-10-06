@@ -531,7 +531,7 @@ def validate_potential(
 
 def _validate_exit_planes(exit_planes, num_slices):
     if isinstance(exit_planes, int):
-        if exit_planes >= num_slices:
+        if exit_planes > num_slices:
             return (num_slices - 1,)
 
         exit_planes = list(range(exit_planes - 1, num_slices, exit_planes))
@@ -1249,7 +1249,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If string,
@@ -1814,8 +1818,12 @@ class PotentialArray(BasePotential, FieldArray):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer a
-        measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -2001,12 +2009,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
+        transmission = self.array[0]
         if conjugate:
-            waves._array *= xp.conjugate(self.array[0])
-        else:
-            waves._array *= self.array[0]
+            # the method, not xp.conjugate: a CuPy function rejects a dask array
+            transmission = transmission.conj()
+
+        lazy_waves = isinstance(waves._array, da.Array)
+        if isinstance(transmission, da.Array) and not lazy_waves:
+            # The waves are transmitted in place, and an in-place NumPy or CuPy
+            # product cannot take a dask operand. Keep eager waves eager: compute
+            # the (single-slice) transmission function, synchronously so CuPy
+            # tasks never run concurrently.
+            transmission = transmission.compute(scheduler="synchronous")
+
+        waves._array *= transmission
 
         return waves
 
@@ -2048,7 +2064,11 @@ class CrystalPotential(_PotentialBuilder):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     seeds: int or sequence of int
         Seed for the random number generator (RNG), or one seed for each RNG in the
         frozen phonon ensemble.
@@ -2283,7 +2303,26 @@ class CrystalPotential(_PotentialBuilder):
         else:
             old_chunks = chunks
 
+        potential_unit = self.potential_unit
+        # A lazily built PotentialArray unit is computed once, here, for all
+        # ensemble members. Left lazy, every member's generate_slices would
+        # compute it again, as a nested compute inside that member's task.
+        unit_is_lazy = (
+            isinstance(potential_unit, PotentialArray) and potential_unit.is_lazy
+        )
+
         if lazy:
+            if unit_is_lazy:
+                # one task of this graph, which every block depends on
+                lazy_unit = dask.delayed(
+                    partial(
+                        potential_unit.__class__,
+                        **potential_unit._copy_kwargs(exclude=("array",)),
+                    )
+                )(potential_unit.array)
+            else:
+                lazy_unit = dask.delayed(potential_unit)
+
             arrays = []
 
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2292,8 +2331,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                lazy_atoms = dask.delayed(self.potential_unit)
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_unit, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
@@ -2303,7 +2341,8 @@ class CrystalPotential(_PotentialBuilder):
                 array = array[0]
 
         else:
-            potential_unit = self.potential_unit
+            if unit_is_lazy:
+                potential_unit = potential_unit.ensure_computed(progress_bar=False)
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2422,6 +2461,19 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy. Blocks from _partition_args already receive it in
+        # memory; this covers direct calls. The synchronous scheduler keeps a
+        # compute that runs inside a task from starting a nested thread pool,
+        # and CuPy kernels from running concurrently.
+        potentials = potentials.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
+
         rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
@@ -2448,14 +2500,9 @@ class CrystalPotential(_PotentialBuilder):
         n_configs = potentials.shape[0]
 
         # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
-        # per-tile access into the pool, so materialise the (small unit-cell)
-        # pool array once. A lazily-built PotentialArray unit carries a dask
-        # array here; compute it so per-tile fancy indexing works and stays on
-        # the target device.
+        # per-tile access into the pool; the pool array is eager (see above).
         xp = get_array_module(self.device)
         _pool_array = potentials.array
-        if n_configs > 1 and hasattr(_pool_array, "compute"):
-            _pool_array = _pool_array.compute()
 
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
@@ -2626,6 +2673,13 @@ class CrystalPotential(_PotentialBuilder):
         else:
             unit_built = self.potential_unit
 
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array here, which the device's tile below does not
+        # accept for CuPy. The unit cell is small; materialise it once, as in
+        # generate_slices.
+        unit_built = unit_built.ensure_computed(
+            scheduler="synchronous", progress_bar=False
+        )
         unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
         if unit_arr.ndim == 3:
             unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)

@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 import numba
 import pytest
 
@@ -10,7 +13,20 @@ class TestCapNumbaThreadsToOmpNumThreads:
     directly rather than reimporting the module -- reimporting would not
     even exercise a fresh call in the same process, since Python caches
     modules after their first import.
+
+    Every test pins numba's launch-time ceiling, ``numba.config.NUMBA_NUM_THREADS``,
+    via the ``ceiling`` fixture: the real value is fixed when numba is first
+    imported and depends on the test process's own environment -- e.g. an
+    inherited ``OMP_NUM_THREADS=1`` (which some GPAW versions set on import,
+    and which pytest-xdist workers then inherit from the controller) makes
+    ``abtem.core._numba_threads`` seed a ceiling of 1, which would clamp the
+    value under test.
     """
+
+    @pytest.fixture(autouse=True)
+    def ceiling(self, monkeypatch):
+        monkeypatch.setattr(numba.config, "NUMBA_NUM_THREADS", 8)
+        return 8
 
     def test_applies_omp_num_threads_when_numba_num_threads_is_unset(
         self, monkeypatch
@@ -66,14 +82,14 @@ class TestCapNumbaThreadsToOmpNumThreads:
         assert calls == []
 
     def test_omp_num_threads_above_numbas_launch_ceiling_is_clamped(
-        self, monkeypatch
+        self, monkeypatch, ceiling
     ):
         """set_num_threads raises ValueError above numba.config.NUMBA_NUM_THREADS
         (the launch-time ceiling derived from the visible CPU count) -- a
         larger OMP_NUM_THREADS, plausible on a misconfigured or constrained
         allocation, must be clamped rather than crash the abtem import.
         """
-        monkeypatch.setenv("OMP_NUM_THREADS", str(numba.config.NUMBA_NUM_THREADS + 100))
+        monkeypatch.setenv("OMP_NUM_THREADS", str(ceiling + 100))
         monkeypatch.delenv("NUMBA_NUM_THREADS", raising=False)
         calls = []
         monkeypatch.setattr(
@@ -82,4 +98,66 @@ class TestCapNumbaThreadsToOmpNumThreads:
 
         _cap_numba_threads_to_omp_num_threads()
 
-        assert calls == [numba.config.NUMBA_NUM_THREADS]
+        assert calls == [ceiling]
+
+
+# Functions in the Metal backend that touch torch without taking _TORCH_LOCK,
+# each for a reason that keeps it safe: it launches no Metal work, or it is
+# only ever called from inside a function that already holds the lock.
+_UNLOCKED_BY_DESIGN = {
+    "is_available": "queries the backend, launches nothing",
+    "_check_available": "queries the backend, launches nothing",
+    "_wrap": "an isinstance check",
+    "iscomplexobj": "a dtype query",
+    "_unwrap_key": "only called under the lock, from __getitem__/__setitem__",
+    "_resolve_reversed_slices": "only called under the lock, from __getitem__",
+    "_common_dtype": "only called under the lock, from the contractions",
+}
+
+
+def test_metal_backend_serializes_every_torch_call():
+    """PyTorch's MPS backend is not thread-safe, and dask's threaded scheduler
+    reaches it from several threads at once, so every function that launches
+    Metal work has to hold _TORCH_LOCK. A missing @_serialized is invisible
+    to any single-threaded test, and in a threaded run shows up only as an
+    intermittent abort or hang -- so check the source for it instead.
+
+    Needs neither torch nor Apple silicon: it only parses the module.
+    """
+    source_path = Path(__file__).parents[1] / "abtem" / "core" / "_torch.py"
+    source = source_path.read_text()
+    tree = ast.parse(source)
+
+    def is_serialized(function):
+        return any(
+            isinstance(decorator, ast.Name) and decorator.id == "_serialized"
+            for decorator in function.decorator_list
+        )
+
+    def calls_torch(function):
+        return any(
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "torch"
+            for node in ast.walk(function)
+        )
+
+    def returns_serialized_closure(function):
+        # the factories (_elementwise, _fft_func, ...) wrap what they build
+        return "return _serialized(" in ast.get_source_segment(source, function)
+
+    unlocked = sorted(
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and calls_torch(node)
+        and not is_serialized(node)
+        and not returns_serialized_closure(node)
+        and node.name not in _UNLOCKED_BY_DESIGN
+    )
+
+    assert not unlocked, (
+        f"these functions reach torch without @_serialized: {unlocked}. "
+        "Decorate them, or add them to _UNLOCKED_BY_DESIGN with the reason "
+        "they are safe."
+    )

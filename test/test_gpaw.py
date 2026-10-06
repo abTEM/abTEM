@@ -139,6 +139,7 @@ def assert_psae_matches_abtem(calc):
     assert np.allclose(ps2ae_potential[1:], gpaw_potential[1:], rtol=1e-2, atol=1)
 
 
+@pytest.mark.slow
 def test_compare_ps2ae_to_abtem_no_bonding(gpaw_calculator_no_bonding):
     assert_psae_matches_abtem(gpaw_calculator_no_bonding)
 
