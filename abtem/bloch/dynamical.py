@@ -527,7 +527,8 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
-        Lattice centering.
+        Lattice centering, or several combined, such as 'FI' (see
+        `get_reflection_condition`). 'auto' detects it from the atoms.
     """
 
     def __init__(
@@ -1451,7 +1452,8 @@ class BlochWaves:
         cell is rotated.
         Instead of providing an orientation matrix, the `.rotate` method can be used.
     centering : {'auto', 'P', 'I', 'A', 'B', 'C', 'F'}
-        Lattice centering.
+        Lattice centering, or several combined, such as 'FI' (see
+        `get_reflection_condition`). 'auto' detects it from the atoms.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     use_wave_eq : bool or 'exact', optional
@@ -2240,16 +2242,6 @@ class BlochWaves:
         BlochWavesEnsemble
             The rotated Bloch waves ensemble.
         """
-        if len(self._energies) > 1:
-            # Both branches below build their result from a single energy, so a
-            # multi-energy BlochWaves used to lose all but its first energy.
-            energies = ", ".join(f"{e:g}" for e in self._energies)
-            raise NotImplementedError(
-                "BlochWaves.rotate does not support multiple energies, but this "
-                f"BlochWaves has {len(self._energies)} ({energies} eV); rotate "
-                "BlochWaves constructed with one energy each instead"
-            )
-
         all_axes, all_rotations = validate_rotations(args)
 
         bloch_waves: BlochWaves | BlochwaveEnsemble
@@ -2258,6 +2250,17 @@ class BlochWaves:
             is_rotations_ensemble(axes, rotations)
             for axes, rotations in zip(all_axes, all_rotations)
         ):
+            if len(self._energies) > 1:
+                # BlochwaveEnsemble holds a single energy, so a multi-energy
+                # BlochWaves used to lose all but its first energy here.
+                energies = ", ".join(f"{e:g}" for e in self._energies)
+                raise NotImplementedError(
+                    "BlochWaves.rotate does not support a rotation ensemble with "
+                    f"multiple energies, but this BlochWaves has "
+                    f"{len(self._energies)} ({energies} eV); select one with "
+                    "select_energy(energy) first"
+                )
+
             bloch_waves = BlochwaveEnsemble(
                 *args,
                 structure_factor=self.structure_factor,
@@ -2278,7 +2281,7 @@ class BlochWaves:
 
             bloch_waves = BlochWaves(
                 structure_factor=self.structure_factor,
-                energy=self.energy,
+                energy=self._energies,
                 sg_max=self.sg_max,
                 g_max=self.g_max,
                 centering=self._centering,

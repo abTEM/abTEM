@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import itertools
-import warnings
-from typing import Literal, Optional, Sequence
+from typing import Iterable, Literal, Optional, Sequence
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -227,29 +226,34 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     hkl : numpy.ndarray
         Array of shape (N, 3) representing the Miller indices of reflections.
     centering : str
-        The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
+        The lattice centering type: one of "P", "I", "F", "A", "B" or "C", or several
+        of them combined, such as "FI", for a cell with the lattice translations of
+        each. A reflection must then satisfy all of their conditions.
 
     Returns
     -------
     numpy.ndarray
         Boolean mask indicating which reflections satisfy the reflection condition.
     """
-    if centering.lower() == "f":
-        all_even = (hkl % 2 == 0).all(axis=1)
-        all_odd = (hkl % 2 == 1).all(axis=1)
-        return all_even + all_odd
-    elif centering.lower() == "i":
-        return hkl.sum(axis=1) % 2 == 0
-    elif centering.lower() == "a":
-        return hkl[:, [1, 2]].sum(axis=1) % 2 == 0
-    elif centering.lower() == "b":
-        return hkl[:, [0, 2]].sum(axis=1) % 2 == 0
-    elif centering.lower() == "c":
-        return hkl[:, [0, 1]].sum(axis=1) % 2 == 0
-    elif centering.lower() == "p":
-        return np.ones(len(hkl), dtype=bool)
-    else:
+    centering = centering.lower()
+    if not centering or set(centering) - set("pifabc"):
         raise ValueError("Invalid crystal centering type.")
+
+    mask = np.ones(len(hkl), dtype=bool)
+    for letter in centering:
+        if letter == "f":
+            all_even = (hkl % 2 == 0).all(axis=1)
+            all_odd = (hkl % 2 == 1).all(axis=1)
+            mask &= all_even | all_odd
+        elif letter == "i":
+            mask &= hkl.sum(axis=1) % 2 == 0
+        elif letter == "a":
+            mask &= hkl[:, [1, 2]].sum(axis=1) % 2 == 0
+        elif letter == "b":
+            mask &= hkl[:, [0, 2]].sum(axis=1) % 2 == 0
+        elif letter == "c":
+            mask &= hkl[:, [0, 1]].sum(axis=1) % 2 == 0
+    return mask
 
 
 @njit(nogil=True)
@@ -391,56 +395,6 @@ def retrieve_structure_factor_values(
     return array
 
 
-def are_vectors_orthogonal(v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:
-    """
-    Check if two vectors are orthogonal within a given tolerance.
-
-    Parameters
-    ----------
-    v1 : numpy.ndarray
-        The first vector.
-    v2 : numpy.ndarray
-        The second vector.
-    tol : float
-        The tolerance for floating-point comparison.
-
-    Returns
-    --------
-    bool
-        True if the vectors are orthogonal within the given tolerance, False otherwise.
-    """
-    dot_product = np.dot(v1, v2)
-    return bool(np.isclose(dot_product, 0, atol=tol))
-
-
-def check_orthogonality(vectors: np.ndarray, tol: float = 1e-9) -> bool:
-    """
-    Check if three vectors are pairwise orthogonal within a given tolerance.
-
-    Parameters
-    ----------
-    vectors : numpy.ndarray
-        A 2D array where each row is a vector.
-    tol : float
-        The tolerance for floating-point comparison.
-
-    Returns
-    --------
-    bool
-        True if all pairs of vectors are orthogonal within the given tolerance, False
-        otherwise.
-    """
-    if vectors.shape[1] != 3:
-        raise ValueError("Each vector must be 3-dimensional.")
-
-    num_vectors = vectors.shape[0]
-    for i in range(num_vectors):
-        for j in range(i + 1, num_vectors):
-            if not are_vectors_orthogonal(vectors[i], vectors[j], tol):
-                return False
-    return True
-
-
 def relative_positions_for_centering() -> dict[str, np.ndarray]:
     """
     Returns the relative positions for each lattice centering type.
@@ -532,67 +486,59 @@ def all_positions_have_relative_periodic_pair(
 
 
 def auto_detect_centering(
-    atoms: Atoms, centerings_to_check: Optional[set] = None
+    atoms: Atoms, centerings_to_check: Optional[Iterable[str]] = None
 ) -> str:
     """
     Automatically detect the lattice centering of a crystal structure.
+
+    A centering is detected when every atom has a periodic image of the same species
+    at each of its lattice translations (see `relative_positions_for_centering`). The
+    reflection conditions these translations imply depend only on the fractional
+    translations, not on the cell metric, so any cell can be centered.
+
+    A cell can have the translations of several centerings: a 2x2x2 supercell has
+    those of both F and I, for example. All of them are then returned together, here
+    "FI", and `get_reflection_condition` applies each of their conditions.
 
     Parameters
     ----------
     atoms : Atoms
         The crystal structure.
-    centerings_to_check : set, optional
+    centerings_to_check : iterable of str, optional
         The centering types to check. If None, all centering types are checked.
 
     Returns
     --------
     str
-        The detected lattice centering type.
+        The detected lattice centering: "P" if none is found, otherwise those found
+        among "F", "I", "A", "B" and "C", in that order.
     """
-    if centerings_to_check is None:
-        centerings_to_check = set(relative_positions_for_centering().keys())
-
-    if "P" in centerings_to_check:
-        centerings_to_check.remove("P")
-
-    if not check_orthogonality(atoms.cell):
-        centerings_to_check.remove("F")
-        centerings_to_check.remove("I")
-
-    # A-, B- and C-centering add a lattice point at the center of the bc, ac and ab
-    # faces, respectively.
-    if not check_orthogonality(atoms.cell[[1, 2]]):
-        centerings_to_check.remove("A")
-
-    if not check_orthogonality(atoms.cell[[0, 2]]):
-        centerings_to_check.remove("B")
-
-    if not check_orthogonality(atoms.cell[[0, 1]]):
-        centerings_to_check.remove("C")
-
-    positions = atoms.get_scaled_positions()
     relative_positions = relative_positions_for_centering()
 
-    for number in np.unique(atoms.numbers):
-        centerings_to_check = {
-            centering
-            for centering in centerings_to_check
-            if all_positions_have_relative_periodic_pair(
+    if centerings_to_check is None:
+        centerings_to_check = relative_positions.keys()
+    else:
+        centerings_to_check = {centering.upper() for centering in centerings_to_check}
+        unknown = centerings_to_check - relative_positions.keys()
+        if unknown:
+            raise ValueError(f"Invalid crystal centering types: {sorted(unknown)}")
+
+    positions = atoms.get_scaled_positions()
+
+    detected = [
+        centering
+        for centering in "FIABC"
+        if centering in centerings_to_check
+        and all(
+            all_positions_have_relative_periodic_pair(
                 positions[atoms.numbers == number], relative_positions[centering]
             )
-        }
+            for number in np.unique(atoms.numbers)
+        )
+    ]
 
     # The F-centering translations include those of A-, B- and C-centering.
-    if "F" in centerings_to_check:
-        centerings_to_check -= {"A", "B", "C"}
+    if "F" in detected:
+        detected = [centering for centering in detected if centering not in "ABC"]
 
-    if len(centerings_to_check) == 1:
-        return next(iter(centerings_to_check))
-    elif len(centerings_to_check) == 0:
-        return "P"
-    else:
-        warnings.warn(
-            "Something went wrong with the centering detection"
-            " using primitive. Set manually to mute warning."
-        )
-        return "P"
+    return "".join(detected) or "P"

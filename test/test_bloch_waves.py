@@ -63,7 +63,6 @@ def basis_match_templates(basis):
 
 @settings(max_examples=5)
 @pytest.mark.parametrize("centering", ["P", "F", "I", "A", "B", "C"])
-@pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @given(
     data=basis_and_positions(),
     cell=st.tuples(st.floats(1, 2), st.floats(1, 2), st.floats(1, 2)),
@@ -112,21 +111,30 @@ def test_reflection_condition_matches_crystallographic_rules(centering):
     np.testing.assert_array_equal(mask, REFLECTION_CONDITIONS[centering](*hkl.T))
 
 
+OBLIQUE_CELLS = {
+    "orthorhombic": [3.1, 3.7, 4.3],
+    "monoclinic": [[3.1, 0.0, 0.0], [0.0, 3.7, 0.0], [1.1, 0.0, 4.3]],
+    "triclinic": [[3.1, 0.0, 0.0], [0.8, 3.7, 0.0], [1.1, -0.6, 4.3]],
+}
+
+
+@pytest.mark.parametrize("cell", OBLIQUE_CELLS.values(), ids=OBLIQUE_CELLS.keys())
 @pytest.mark.parametrize("centering", ["A", "B", "C", "I", "F"])
-def test_centering_templates_are_consistent_with_reflection_conditions(centering):
+def test_centering_templates_are_consistent_with_reflection_conditions(centering, cell):
     # A crystal built from the centering translations returned by
     # relative_positions_for_centering must be auto-detected as that centering, and
     # exactly the reflections removed by get_reflection_condition must be
     # systematically absent. The A, B and C templates previously encoded
     # half-translations along a single lattice vector, so the reflection
-    # conditions would have removed allowed reflections.
+    # conditions would have removed allowed reflections. The absences depend only on
+    # the fractional translations, so they hold in oblique cells too.
     basis = np.array([[0.1, 0.2, 0.3], [0.27, 0.13, 0.41]])
     lattice = relative_positions_for_centering()[centering]
     scaled_positions = (lattice[:, None] + basis[None]).reshape((-1, 3)) % 1.0
     atoms = Atoms(
         np.tile([6, 8], len(lattice)),
         scaled_positions=scaled_positions,
-        cell=[3.1, 3.7, 4.3],
+        cell=cell,
         pbc=True,
     )
     assert auto_detect_centering(atoms) == centering
@@ -174,19 +182,110 @@ def test_structure_factor_auto_centering_keeps_allowed_reflections():
 
 
 @pytest.mark.parametrize(
-    "rotation", [0.01, np.linspace(0.0, 0.01, 3)], ids=["scalar", "ensemble"]
+    "atoms, expected_centering",
+    [
+        (bulk("Si", cubic=True).repeat(2), "FI"),
+        (bulk("Si", cubic=True).repeat((1, 1, 2)), "IC"),
+        (bulk("Cu", cubic=True).repeat((2, 1, 1)), "IA"),
+    ],
+    ids=["Si-2x2x2", "Si-1x1x2", "Cu-2x1x1"],
 )
-def test_rotate_rejects_multiple_energies(rotation):
+def test_supercell_with_several_centerings_combines_reflection_conditions(
+    atoms, expected_centering
+):
+    # Regression: a cell with the translations of several centerings (common for
+    # supercells) fell back to "P" with a "Something went wrong" warning. Each
+    # translation forces its own absences, so all their conditions apply at once.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        centering = auto_detect_centering(atoms)
+    assert centering == expected_centering
+
+    hkl = _hkl_cube()
+    allowed = get_reflection_condition(hkl, centering)
+    expected = np.ones(len(hkl), dtype=bool)
+    for letter in centering:
+        expected &= REFLECTION_CONDITIONS[letter](*hkl.T)
+    np.testing.assert_array_equal(allowed, expected)
+
+    F = calculate_structure_factors(
+        hkl,
+        atoms,
+        parametrization="lobato",
+        g_max=10.0,
+        thermal_sigma=0.0,
+        occupancy=1.0,
+        device="cpu",
+    )
+    assert np.abs(F[~allowed]).max() < 1e-6 * np.abs(F).max()
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    assert structure_factor.centering == centering
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+    expected_hkl = structure_factor_p.hkl[
+        get_reflection_condition(structure_factor_p.hkl, centering)
+    ]
+    np.testing.assert_array_equal(structure_factor.hkl, expected_hkl)
+
+
+def test_auto_detect_centering_in_hexagonal_supercell():
+    # Regression: the C-centering gate required a perpendicular to b, so the C
+    # translation of an in-plane 2x2 supercell of a hexagonal cell was missed.
+    assert auto_detect_centering(graphene(vacuum=2.0).repeat((2, 2, 1))) == "C"
+
+
+def test_auto_detect_centering_with_a_subset_of_centerings():
+    # Regression: the orthogonality gates called set.remove on the caller's set,
+    # which raised KeyError when a centering was missing and mutated the set.
+    atoms = bulk("Si", cubic=True).repeat(2)
+    centerings = {"P", "I", "c"}
+    assert auto_detect_centering(atoms, centerings) == "IC"
+    assert centerings == {"P", "I", "c"}
+    assert auto_detect_centering(atoms, {"A"}) == "A"
+    assert auto_detect_centering(atoms, set()) == "P"
+    with pytest.raises(ValueError, match="X"):
+        auto_detect_centering(atoms, {"X"})
+
+
+@pytest.mark.parametrize("centering", ["", "Q", "FX"])
+def test_reflection_condition_rejects_invalid_centering(centering):
+    with pytest.raises(ValueError, match="Invalid crystal centering"):
+        get_reflection_condition(_hkl_cube(1), centering)
+
+
+def test_rotate_forwards_multiple_energies():
     # Regression: rotate passed energy=self.energy (the first energy) to the
-    # BlochWaves or BlochwaveEnsemble it built, silently dropping the others.
+    # BlochWaves it built, silently dropping the others.
     atoms = bulk("Si", cubic=True)
+    energies = [100e3, 200e3]
+    bloch_waves = BlochWaves(atoms, energy=energies, sg_max=0.05, g_max=3.0)
+
+    rotated = bloch_waves.rotate("x", 0.01)
+
+    np.testing.assert_array_equal(rotated._energies, energies)
+    for energy in energies:
+        expected = bloch_waves.select_energy(energy).rotate("x", 0.01)
+        selected = rotated.select_energy(energy)
+        np.testing.assert_array_equal(selected.hkl, expected.hkl)
+        np.testing.assert_allclose(
+            selected.calculate_structure_matrix(lazy=False),
+            expected.calculate_structure_matrix(lazy=False),
+        )
+
+
+def test_rotate_ensemble_rejects_multiple_energies():
+    # Regression: BlochwaveEnsemble holds a single energy, so rotate silently
+    # dropped all but the first energy of a multi-energy BlochWaves.
+    atoms = bulk("Si", cubic=True)
+    rotations = np.linspace(0.0, 0.01, 3)
     bloch_waves = BlochWaves(atoms, energy=[100e3, 200e3], sg_max=0.05, g_max=3.0)
 
     with pytest.raises(NotImplementedError, match="100000, 200000 eV"):
-        bloch_waves.rotate("x", rotation)
+        bloch_waves.rotate("x", rotations)
 
-    single_energy = BlochWaves(atoms, energy=200e3, sg_max=0.05, g_max=3.0)
-    assert single_energy.rotate("x", rotation).energy == 200e3
+    ensemble = bloch_waves.select_energy(200e3).rotate("x", rotations)
+    assert isinstance(ensemble, BlochwaveEnsemble)
+    assert ensemble.energy == 200e3
 
 
 @pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
@@ -226,7 +325,6 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     g_max=st.floats(min_value=10, max_value=16),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
-@pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 def test_potential_from_structure_factor(
     atoms, sampling, thermal_sigma, g_max, slice_thickness, lazy
@@ -488,7 +586,7 @@ def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
         )
         assert bloch_waves._with_energy(0, 80e3).use_wave_eq == use_wave_eq
         assert bloch_waves.rotate("x", 0.01).use_wave_eq == use_wave_eq
-        ensemble = bloch_waves.rotate("x", np.array([0.0, 0.01]))
+        ensemble = bloch_waves.select_energy(80e3).rotate("x", np.array([0.0, 0.01]))
         assert isinstance(ensemble, BlochwaveEnsemble)
         assert ensemble.use_wave_eq == use_wave_eq
         assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
