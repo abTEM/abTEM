@@ -531,7 +531,7 @@ def validate_potential(
 
 def _validate_exit_planes(exit_planes, num_slices):
     if isinstance(exit_planes, int):
-        if exit_planes >= num_slices:
+        if exit_planes > num_slices:
             return (num_slices - 1,)
 
         exit_planes = list(range(exit_planes - 1, num_slices, exit_planes))
@@ -1249,7 +1249,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If string,
@@ -1814,8 +1818,12 @@ class PotentialArray(BasePotential, FieldArray):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer a
-        measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -2056,7 +2064,11 @@ class CrystalPotential(_PotentialBuilder):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     seeds: int or sequence of int
         Seed for the random number generator (RNG), or one seed for each RNG in the
         frozen phonon ensemble.
