@@ -185,10 +185,14 @@ def test_orthogonalize_cell_near_orthorhombic_fallback_removes_all_noise(noise):
     assert np.allclose(np.diag(orthogonalized.cell), (5000.0, 6000.0, 7000.0))
 
 
-def test_orthogonalize_cell_near_orthorhombic_fallback_raises_for_real_shear(monkeypatch):
+def test_orthogonalize_cell_near_orthorhombic_fallback_maps_a_real_shear_affinely(
+    monkeypatch,
+):
     # If a genuinely large (non-noise) shear ever coincides with `diag(cell)
-    # == box`, the fallback must refuse to silently discard it rather than
-    # returning a structure with the wrong periodicity.
+    # == box`, it must not be discarded as noise (that would return a structure
+    # with the wrong periodicity): the cell goes through the general
+    # repeat-and-cut path, which maps it affinely onto the box, so the shear is
+    # strained away and the fractional positions are kept.
     import abtem.atoms as atoms_module
 
     monkeypatch.setattr(
@@ -199,8 +203,12 @@ def test_orthogonalize_cell_near_orthorhombic_fallback_raises_for_real_shear(mon
     cell = np.array([[5.0, 0.0, 0.0], [0.5, 6.0, 0.0], [0.0, 0.0, 7.0]])
     atoms = Atoms("H", positions=[[1.0, 1.0, 1.0]], cell=cell, pbc=True)
 
-    with pytest.raises(RuntimeError):
-        orthogonalize_cell(atoms)
+    orthogonalized = orthogonalize_cell(atoms)
+
+    assert np.allclose(np.array(orthogonalized.cell), np.diag([5.0, 6.0, 7.0]))
+    assert np.allclose(
+        orthogonalized.get_scaled_positions(), atoms.get_scaled_positions()
+    )
 
 
 # ---------------------------------------------------------------------------

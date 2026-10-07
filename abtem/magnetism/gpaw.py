@@ -7,7 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial.transform import Rotation as R  # type: ignore
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -19,7 +19,7 @@ from abtem.magnetism.iam import (
 )
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
-from abtem.potentials.gpaw import GPAWPotential
+from abtem.potentials.gpaw import _GPAW_LOCK, GPAWPotential
 from abtem.potentials.iam import PotentialArray, _FieldBuilder
 
 
@@ -79,7 +79,8 @@ def calculate_magnetic_vector_potential(spin_density, cell):
 def get_vector_potential_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
     if not assume_colinear:
         raise NotImplementedError("Non-collinear calculations not supported.")
-    n = calc.get_all_electron_density(spin=True, gridrefinement=gridrefinement)
+    with _GPAW_LOCK:
+        n = calc.get_all_electron_density(spin=True, gridrefinement=gridrefinement)
     rho = n[0][0] - n[0][1]
     A = calculate_magnetic_vector_potential(rho, calc.atoms.cell)
     return A
@@ -161,6 +162,8 @@ class GPAW(Protocol):
 
 
 class _GPAWMagnetics(_FieldBuilder):
+    _supports_box_and_origin = False
+
     def __init__(
         self,
         calculators: GPAW | list[GPAW] | list[str] | str,
@@ -674,21 +677,10 @@ def gpaw_magnetic_fields(
     if not lazy:
         potential = potential.compute()
 
-    vector_potential = (
-        GPAWVectorPotential(
-            magnetic_calculator,
-            rotate_field=rotate_field,
-            **shared,
-            **field_kwargs,
-        )
-        .build()
-        .compute()
-    )
-
-    magnetic_field = None
-    if include_magnetic_field:
-        magnetic_field = (
-            GPAWMagneticField(
+    # A default box that strains the atoms was reported by the potential above.
+    with _box_strain_warning_silenced():
+        vector_potential = (
+            GPAWVectorPotential(
                 magnetic_calculator,
                 rotate_field=rotate_field,
                 **shared,
@@ -697,6 +689,19 @@ def gpaw_magnetic_fields(
             .build()
             .compute()
         )
+
+        magnetic_field = None
+        if include_magnetic_field:
+            magnetic_field = (
+                GPAWMagneticField(
+                    magnetic_calculator,
+                    rotate_field=rotate_field,
+                    **shared,
+                    **field_kwargs,
+                )
+                .build()
+                .compute()
+            )
 
     return GPAWMagneticFields(
         potential=potential,

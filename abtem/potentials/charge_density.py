@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
@@ -342,8 +342,12 @@ class ChargeDensityPotential(_PotentialBuilder):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer,
-        a measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to the `xy` plane of the
         potential, i.e. the propagation direction will be perpendicular to the provided
@@ -356,13 +360,14 @@ class ChargeDensityPotential(_PotentialBuilder):
         ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
-        This is equivalent to translating the atoms.
-        The default is (0., 0., 0.).
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the valence part is interpolated from the
+        charge density of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms. If the box size does not match an integer number of the atoms'
-        cell, an affine transformation may be necessary to preserve periodicity,
-        determined by the `periodic` keyword.
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the atoms
@@ -376,6 +381,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         The device used for calculating the potential. The default is determined by the
         user configuration file.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
@@ -418,7 +425,12 @@ class ChargeDensityPotential(_PotentialBuilder):
                     "for each configuration."
                 )
 
-        cell = self._frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(self._frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
 
         super().__init__(
             array_object=PotentialArray,
@@ -541,7 +553,9 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         return (array,)
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
@@ -594,6 +608,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
+    # The box it is given is this potential's own, not one the user gave.
+    @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
 

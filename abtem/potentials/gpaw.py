@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
@@ -16,9 +17,14 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
+from dask.delayed import Delayed
 from scipy.interpolate import interp1d
 
-from abtem.atoms import is_cell_orthogonal, plane_to_axes
+from abtem.atoms import (
+    _box_strain_warning_silenced,
+    is_cell_orthogonal,
+    plane_to_axes,
+)
 from abtem.core.axes import AxisMetadata
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
@@ -49,11 +55,21 @@ if GPAW is not None:
     from gpaw.mpi import SerialCommunicator
 
 
-def _get_gpaw_setups(atoms, mode, xc):
-    gpaw = GPAW(txt=None, mode=mode, xc=xc)
-    gpaw.initialize(atoms)
-
-    return gpaw.setups
+# GPAW keeps one FFT plan per grid shape and dtype for the whole process
+# (``gpaw.fftw.create_plans`` caches them in a module-level dict), and each plan
+# owns the scratch arrays (``tmp_R``, ``tmp_Q``) that every transform writes its
+# input to and reads its output from. All calculators on the same grid share
+# these arrays, so two threads evaluating GPAW at once overwrite each other's
+# transforms: a read gives a wrong potential without an error, and concurrent
+# ``_DummyGPAW.setups`` calls can make GPAW itself fail. Dask's threaded
+# scheduler runs the tasks of a multi-file ``GPAWPotential`` in parallel, and
+# tasks of an earlier build can still be running when the caller's thread
+# returns to GPAW. Every abTEM call that makes a GPAW calculator compute on its
+# grids (reading a ``.gpw`` file, initializing, evaluating a density or
+# potential) therefore holds this lock; attribute reads, and GPAW's radial atom
+# solvers, which create no FFT plans, do not. The lock is re-entrant because
+# ``_read_gpw`` calls ``_DummyGPAW.from_gpaw``.
+_GPAW_LOCK = threading.RLock()
 
 
 @dataclass
@@ -72,15 +88,21 @@ class _DummyGPAW:
 
     @property
     def setups(self):
-        gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
-        gpaw.initialize(self.atoms)
-        return gpaw.setups
+        with _GPAW_LOCK:
+            gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
+            gpaw.initialize(self.atoms)
+            return gpaw.setups
 
     @classmethod
     def from_gpaw(cls, gpaw, lazy: bool = True):
         # if lazy:
         #    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
 
+        with _GPAW_LOCK:
+            return cls._from_gpaw(gpaw)
+
+    @classmethod
+    def _from_gpaw(cls, gpaw):
         atoms = gpaw.atoms.copy()
         atoms.calc = None
 
@@ -121,11 +143,9 @@ class _DummyGPAW:
     @classmethod
     def from_file(cls, path: str, lazy: bool = True):
         if lazy:
-            return dask.delayed(cls.from_file)(path, lazy=False)
+            return dask.delayed(_read_gpw)(path)
 
-        calc = GPAW(path)
-
-        return cls.from_gpaw(calc)
+        return _read_gpw(path)
 
     @classmethod
     def from_generic(cls, calculator, lazy: bool = True):
@@ -137,6 +157,69 @@ class _DummyGPAW:
             return calculator
         else:
             raise RuntimeError()
+
+
+def _read_gpw(path: str) -> _DummyGPAW:
+    # Module level, so that a task calling it pickles it by reference; a
+    # classmethod in a task is pickled by value together with the globals it
+    # uses, and the lock cannot be pickled.
+    with _GPAW_LOCK:
+        return _DummyGPAW.from_gpaw(GPAW(path))
+
+
+class _LastRead:
+    # Reads the ``.gpw`` placeholders of one eager ``_partition_args`` call and
+    # keeps only the calculator read last. Consecutive blocks that share a
+    # placeholder (one path with ``FrozenPhonons``) reuse it; a block with
+    # another placeholder drops it before reading. An eager build therefore
+    # holds one read calculator while it generates slices, and two while it
+    # reads the next file, since the caller still holds the previous block's
+    # potential. The object lives in that call's block array and goes with
+    # it, so no calculator outlives the build.
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._placeholder = None
+        self._calculator = None
+
+    def read(self, placeholder: Delayed) -> "_DummyGPAW":
+        with self._lock:
+            if placeholder is not self._placeholder:
+                self._placeholder = None
+                self._calculator = None
+                # Synchronous: one task, and no thread pool started from
+                # inside a caller's task. ``_read_gpw`` takes the GPAW lock.
+                self._calculator = placeholder.compute(scheduler="synchronous")
+                self._placeholder = placeholder
+            return self._calculator
+
+
+class _PendingRead:
+    # A ``.gpw`` placeholder in an eager block, read when the block's potential
+    # is made (``GPAWPotential._gpaw_potential``), not when the blocks are.
+    __slots__ = ("placeholder", "reads")
+
+    def __init__(self, placeholder: Delayed, reads: _LastRead):
+        self.placeholder = placeholder
+        self.reads = reads
+
+
+def _defer_placeholders(calculators, reads: _LastRead):
+    # ``from_file`` leaves each ``.gpw`` path as a ``Delayed`` read. A lazy
+    # graph resolves it as a task argument; eager blocks read it one block at
+    # a time through ``reads``.
+    if isinstance(calculators, list):
+        return [_defer_placeholders(calculator, reads) for calculator in calculators]
+    if isinstance(calculators, Delayed):
+        return _PendingRead(calculators, reads)
+    return calculators
+
+
+def _read_pending(calculators):
+    if isinstance(calculators, list):
+        return [_read_pending(calculator) for calculator in calculators]
+    if isinstance(calculators, _PendingRead):
+        return calculators.reads.read(calculators.placeholder)
+    return calculators
 
 
 def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
@@ -231,14 +314,16 @@ def _generate_slices(
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-        potential = Potential(
-            gpts=gpts,
-            atoms=atoms[i : i + 1],
-            parametrization=parametrization,
-            slice_thickness=slice_thickness,
-            projection="finite",
-            plane=plane,
-        )
+        # The default box was reported when the GPAWPotential was constructed.
+        with _box_strain_warning_silenced():
+            potential = Potential(
+                gpts=gpts,
+                atoms=atoms[i : i + 1],
+                parametrization=parametrization,
+                slice_thickness=slice_thickness,
+                projection="finite",
+                plane=plane,
+            )
         potential_generators.append(potential.generate_slices())
 
     transform_valence_potential = None
@@ -312,8 +397,12 @@ class GPAWPotential(_PotentialBuilder):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer a
-        measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If string,
@@ -327,12 +416,14 @@ class GPAWPotential(_PotentialBuilder):
         providing 'xy'.
     origin : three float, optional
         The origin relative to the provided Atoms mapped to the origin of the Potential.
-        This is equivalent to translating the atoms. The default is (0., 0., 0.)
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the potential is interpolated from the
+        calculator's grid of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms' cell. If the box size does not match an integer number of the
-        atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True (default), the periodicity of
@@ -361,6 +452,8 @@ class GPAWPotential(_PotentialBuilder):
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
@@ -410,7 +503,12 @@ class GPAWPotential(_PotentialBuilder):
         self._gridrefinement = gridrefinement
         self._repetitions = repetitions
 
-        cell = frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
         frozen_phonons.atoms.calc = None
 
         super().__init__(
@@ -432,8 +530,9 @@ class GPAWPotential(_PotentialBuilder):
         return self._frozen_phonons
 
     @property
-    def num_configurations(self):
-        return self.frozen_phonons.num_configs
+    def num_configurations(self) -> int:
+        """Number of potential configurations; 1 when there is no ensemble axis."""
+        return len(self.frozen_phonons)
 
     @property
     def repetitions(self):
@@ -542,13 +641,15 @@ class GPAWPotential(_PotentialBuilder):
 
     @property
     def num_frozen_phonons(self):
-        return len(self.calculators)
+        return self.num_configurations
 
     @property
     def ensemble_shape(self):
         return self._frozen_phonons.ensemble_shape
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _gpaw_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
@@ -560,7 +661,7 @@ class GPAWPotential(_PotentialBuilder):
         else:
             frozen_phonons = None
 
-        calculators = args["calculators"]
+        calculators = _read_pending(args["calculators"])
 
         new_potential = GPAWPotential(
             calculators, frozen_phonons=frozen_phonons, **kwargs
@@ -590,6 +691,9 @@ class GPAWPotential(_PotentialBuilder):
             return arr
 
         calculators = self.calculators
+
+        if not lazy:
+            calculators = _defer_placeholders(calculators, _LastRead())
 
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)

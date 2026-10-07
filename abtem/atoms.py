@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import itertools
+import os
+import sys
+import warnings
 from numbers import Number
 from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
 
@@ -256,8 +262,6 @@ def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarr
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
-
-    atoms.positions[np.diag(cell) < 0.0, :] *= -1
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
@@ -839,6 +843,277 @@ def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> N
     atoms.set_scaled_positions(scaled % 1.0)
 
 
+def _box_repetitions(cell, box) -> np.ndarray:
+    """
+    The lattice vectors of the repetition of `cell` that fills `box`, as an integer
+    matrix in units of the lattice vectors of `cell`.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction, i.e.
+        the integer matrix is singular. A direction shorter than about half a period
+        rounds to no repetition.
+    """
+    vectors = np.round(np.dot(np.diag(box), np.linalg.inv(cell)))
+
+    if np.round(abs(np.linalg.det(vectors))) == 0:
+        raise ValueError(
+            f"The box {tuple(float(b) for b in box)} holds no whole repetition of "
+            "the atoms' cell along at least one direction (it is shorter than "
+            "about half a period), so the periodicity cannot be preserved. Use a "
+            "larger box, or cut the box out of the repeated structure (`cut_cell`, "
+            "or `periodic=False` in a potential)."
+        )
+
+    return vectors
+
+
+def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding each atom once for every
+    cell of `atoms` the supercell contains.
+
+    Two lattice translations of `atoms` give the same atom in the supercell
+    exactly when they differ by a lattice vector of the supercell. The
+    translations are therefore sorted into |det(vectors)| classes by an integer
+    key, which is exact, and one translation of each class is used for every atom.
+    The images are wrapped into the supercell in its own fractional coordinates,
+    so that no atom depends on which side of a face round-off puts it: a
+    fractional coordinate within 1e-9 of 1 is 0. The result carries the per-atom
+    arrays of `atoms`.
+
+    Raises
+    ------
+    RuntimeError
+        If the translations do not fall into exactly |det(vectors)| classes.
+    """
+    cell = np.array(atoms.cell)
+    vectors = np.rint(vectors).astype(np.int64)
+    newcell = vectors @ cell
+    num_images = int(round(abs(np.linalg.det(vectors))))
+
+    # adjugate * det = |det| * inverse(vectors), exactly, for an integer matrix
+    adjugate = np.rint(np.linalg.inv(vectors) * np.linalg.det(vectors)).astype(np.int64)
+    determinant = int(np.rint(np.linalg.det(vectors)))
+    if not np.array_equal(vectors @ adjugate, determinant * np.eye(3, dtype=np.int64)):
+        raise RuntimeError(
+            f"The matrix {vectors.tolist()} is not invertible as an integer matrix; "
+            "please report this cell."
+        )
+
+    corners = np.array(list(itertools.product((0, 1), repeat=3)), dtype=float)
+    scaled_corners = np.linalg.solve(cell.T, (corners @ newcell).T).T
+    lower = np.floor(scaled_corners.min(axis=0)).astype(int) - 1
+    upper = np.ceil(scaled_corners.max(axis=0)).astype(int) + 1
+    shifts = np.stack(
+        np.meshgrid(*[np.arange(l, u) for l, u in zip(lower, upper)], indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    keys = (shifts @ adjugate) % abs(determinant)
+    _, first = np.unique(keys, axis=0, return_index=True)
+    shifts = shifts[np.sort(first)]
+    if len(shifts) != num_images:
+        raise RuntimeError(
+            f"The translations of the cell fall into {len(shifts)} classes in the "
+            f"supercell, expected {num_images}; please report this cell."
+        )
+
+    inverse = np.linalg.inv(newcell)
+    fractional = (atoms.positions @ inverse)[:, None, :] + (
+        (shifts @ adjugate) / determinant
+    )
+    fractional -= np.floor(fractional)
+    fractional[np.isclose(fractional, 1.0, atol=1e-9, rtol=0.0)] = 0.0
+
+    index = np.repeat(np.arange(len(atoms)), num_images)
+    supercell = atoms[index]
+    supercell.set_cell(newcell)
+    supercell.positions[:] = fractional.reshape(-1, 3) @ newcell
+    return supercell
+
+
+def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding every atom once.
+
+    `ase.build.cut` keeps the atoms whose scaled position in the supercell is in
+    [-0.1 * tolerance, 1 - 0.1 * tolerance) and generates images only above the
+    lower face. An atom whose image lies in the band below the upper face is
+    therefore lost, because its image in the supercell is the one below the lower
+    face: a scaled coordinate of -3.6e-16 wraps to 1 - 3.6e-16, and in a
+    supercell of 100 A every atom within 0.1 A of an upper face is in the band.
+    The number of atoms is checked, and the supercell is built by
+    `_wrapped_supercell` when it is wrong, which leaves every cut that was right
+    unchanged.
+    """
+    expected = len(atoms) * int(round(abs(np.linalg.det(vectors))))
+    supercell = cut(
+        atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance
+    )
+    if len(supercell) == expected:
+        return supercell
+
+    return _wrapped_supercell(atoms, vectors)
+
+
+# A box that strains the atoms by more than this (a relative stretch of a supercell
+# vector, or the cosine of an angle between two of them) is reported by
+# `_warn_if_box_is_strained`.
+BOX_STRAIN_WARNING_THRESHOLD = 1e-3
+
+# The most repetitions of the cell along a lattice vector that `best_orthogonal_cell`
+# and `orthogonalize_cell` try when no box is given.
+_DEFAULT_BOX_MAX_REPETITIONS = 5
+
+# Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
+# box was reported when the user gave it.
+_box_strain_warning_suppressed = contextvars.ContextVar(
+    "abtem_box_strain_warning_suppressed", default=False
+)
+
+
+@contextlib.contextmanager
+def _box_strain_warning_silenced():
+    """Construct builders inside this context to leave a box they were given
+    unreported: it is reported where the user gave it."""
+    token = _box_strain_warning_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _box_strain_warning_suppressed.reset(token)
+
+
+def _cell_in_plane_frame(cell, plane="xy") -> np.ndarray:
+    """The cell as `orthogonalize_cell` sees it: small components zeroed and the
+    axes permuted to `plane`."""
+    cell = np.array(cell, dtype=float)
+    cell[np.abs(cell) < 1e-6] = 0.0
+    atoms = Atoms(cell=cell)
+    if plane != "xy":
+        atoms = rotate_atoms_to_plane(atoms, plane)
+    return np.array(atoms.cell)
+
+
+def _box_strain(cell, box, plane="xy") -> dict:
+    """
+    How `orthogonalize_cell` deforms the supercell of `cell` that fills `box`.
+
+    Returns the lattice vectors of the supercell in units of the lattice vectors
+    of the cell (`vectors`), the supercell vectors (`supercell`) and their
+    lengths (`lengths`), the relative stretch of each onto the matching box length
+    (`stretch`, box length over supercell length minus one), and the cosines of
+    the angles between the supercell vectors (`cosines`, for the pairs (y, z),
+    (x, z) and (x, y)), which the box makes right angles. A rotation of the
+    supercell is not a strain and is not counted.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction.
+    """
+    cell = _cell_in_plane_frame(cell, plane)
+    vectors = _box_repetitions(cell, box)
+    supercell = vectors @ cell
+    lengths = np.linalg.norm(supercell, axis=1)
+    unit = supercell / lengths[:, None]
+    cosines = np.array([unit[1] @ unit[2], unit[0] @ unit[2], unit[0] @ unit[1]])
+    return {
+        "vectors": vectors,
+        "supercell": supercell,
+        "lengths": lengths,
+        "stretch": np.asarray(box, dtype=float) / lengths - 1.0,
+        "cosines": cosines,
+    }
+
+
+def _stacklevel_outside_package() -> int:
+    """The stack level of the first caller outside the abtem package."""
+    package = os.path.dirname(os.path.abspath(__file__)) + os.sep
+    frame, level = sys._getframe(1), 1
+    while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(
+        package
+    ):
+        frame, level = frame.f_back, level + 1
+    return level
+
+
+def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
+    """
+    Raise a ValueError if `box` holds no whole repetition of `cell` (rotated to
+    `plane`), and warn if the atoms are strained to fit it by more than
+    `BOX_STRAIN_WARNING_THRESHOLD`: a stretch of a supercell vector, or a shear,
+    the cosine of the angle between two supercell vectors, which the box turns into
+    right angles. A box that is a whole supercell up to round-off is silent.
+
+    If `default` is true, `box` is the one abTEM chose because none was given: the
+    warning says so, names the ways to avoid the strain, and a box that holds no
+    whole repetition, or a cell that cannot be rotated to `plane`, is not an error
+    here but silent: the potential reports it when it places the atoms, if it does.
+    """
+    try:
+        strain = _box_strain(cell, box, plane)
+    except (ValueError, RuntimeError):
+        if default:
+            return
+        raise
+
+    if _box_strain_warning_suppressed.get():
+        return
+
+    if (
+        np.abs(strain["stretch"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+        and np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+    ):
+        return
+
+    vectors = np.rint(strain["vectors"]).astype(int)
+    if np.count_nonzero(vectors - np.diag(np.diag(vectors))) == 0:
+        periods = f"{tuple(int(n) for n in np.diag(vectors))} periods along x, y, z"
+    else:
+        periods = f"the lattice vectors {vectors.tolist()} (rows: x, y, z)"
+
+    degrees = np.degrees(np.arccos(strain["cosines"]))
+    lengths = tuple(round(float(n), 6) for n in strain["lengths"])
+    if np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD:
+        nearest = f"the supercell is {lengths} Å, the nearest box that needs no strain"
+    else:
+        nearest = f"the supercell vectors are {lengths} Å long and not at right angles"
+    if default:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å, which abTEM chose because "
+            f"none was given (the closest orthogonal cell it finds with at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions of the atoms' cell along "
+            f"each lattice vector), is not a whole supercell of the atoms' cell, so "
+            f"the atoms are strained onto it."
+        )
+        remedy = (
+            " Pass a `box` that is a whole supercell of the atoms' cell, or repeat "
+            "the atoms' cell so that an orthogonal supercell of at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions exists."
+        )
+    else:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å is not a whole supercell of "
+            f"the atoms' cell, so the atoms are strained onto it."
+        )
+        remedy = ""
+    warnings.warn(
+        f"{opening} It is filled with {periods}; {nearest}. Stretch along x, y, z: "
+        f"{', '.join(f'{100 * x:+.3f} %' for x in strain['stretch'])}. Angles "
+        f"between the supercell vectors (y and z, x and z, x and y), which the "
+        f"box turns into right angles: "
+        f"{', '.join(f'{d:.3f}°' for d in degrees)} (shear, the cosine of the "
+        f"angle: {', '.join(f'{c:.2e}' for c in strain['cosines'])}). A stretch "
+        f"or shear above {BOX_STRAIN_WARNING_THRESHOLD:.1e} is reported.{remedy}",
+        UserWarning,
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -896,7 +1171,10 @@ def orthogonalize_cell(
         The extent of the potential in `x`, `y` and `z`. If not given this is determined
         from the atoms' cell. If the box size does not match an integer number of the
         atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword.
+        periodicity, determined by the `periodic` keyword. The box must hold at least
+        one repetition of the atoms' cell along each direction (about half a period
+        or more); the repetition is rounded to the nearest whole number, and the
+        atoms are strained to fit the box.
     tolerance : float
         Determines what is defined as a plane. All atoms within a distance equal to
         tolerance [Å] from a given plane will be considered to belong to that plane.
@@ -907,6 +1185,11 @@ def orthogonalize_cell(
         The orthogonal atoms.
     transform : tuple of arrays, optional
         The applied transform given as Euler angles (by default not returned).
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the atoms' cell along some direction.
     """
 
     # Copy once, up front, rather than at each mutating call below. Three
@@ -923,7 +1206,7 @@ def orthogonalize_cell(
     atoms.set_cell(cell)
     atoms.wrap()
 
-    if origin != (0.0, 0.0, 0.0):
+    if tuple(origin) != (0.0, 0.0, 0.0):
         atoms.translate(-np.array(origin))
         atoms.wrap()
 
@@ -964,47 +1247,43 @@ def orthogonalize_cell(
         # sits in the first vector (whose direction seeds the process), the
         # result is a valid orthogonal box rotated slightly off the
         # coordinate axes, which is not what the rest of this function
-        # assumes. Since reaching this branch already means every
-        # off-diagonal component is at or below float64's ~2e-8 relative
-        # rounding floor (see above), zeroing them directly is both simpler
-        # and correct; anything larger is guarded against below rather than
-        # silently discarded.
+        # assumes. Zeroing the off-diagonal components directly is both
+        # simpler and correct when they are noise.
+        #
+        # A sheared cell is not noise, though its diagonal can equal its best
+        # orthogonal box too: the shortest lattice vector along an axis has the
+        # length of the cell's own diagonal entry when an off-diagonal
+        # component is a whole multiple of the matching component of another
+        # vector (a hexagonal cell repeated an even number of times along its
+        # second vector, a monoclinic cell whose c vector leans by a whole a
+        # vector). Such a cell goes through the repeat-and-cut path below like
+        # any other non-orthogonal cell.
         cell = np.array(atoms.cell, dtype=float)
         off_diagonal = cell[~np.eye(3, dtype=bool)]
         max_off_diagonal = np.max(np.abs(off_diagonal))
         relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
-        if relative_off_diagonal > 1e-6:
-            raise RuntimeError(
-                "Cell is not orthogonal and the off-diagonal components "
-                f"({max_off_diagonal:.3e} A, {relative_off_diagonal:.3e} "
-                "relative to the cell size) are too large to be numerical "
-                "noise; refusing to silently drop them. This should not "
-                "normally happen; please report this cell."
-            )
+        if relative_off_diagonal <= 1e-6:
+            orthogonal_cell = np.diag(np.diag(cell))
 
-        orthogonal_cell = np.diag(np.diag(cell))
+            atoms = atoms.copy()
+            atoms.set_cell(orthogonal_cell)
+            atoms.wrap()
 
-        atoms = atoms.copy()
-        atoms.set_cell(orthogonal_cell)
-        atoms.wrap()
-
-        if return_transform:
-            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
-        elif return_transform_matrix:
-            return atoms, np.eye(3)
-        else:
-            return atoms
+            if return_transform:
+                return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            elif return_transform_matrix:
+                return atoms, np.eye(3)
+            else:
+                return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
 
     _snap_scaled_positions_to_cell_boundary(atoms, tolerance)
 
-    inv = np.linalg.inv(atoms.cell)
-    vectors = np.dot(np.diag(box), inv)
-    vectors = np.round(vectors)
+    vectors = _box_repetitions(atoms.cell, box)
 
-    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
+    atoms = _cut_supercell(atoms, vectors, tolerance)
 
     A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
@@ -1079,8 +1358,9 @@ def cut_cell(
     ----------
     atoms : ase.Atoms
         Atoms to be fit.
-    cell : tuple of floats
-        Cell to be fit into.
+    cell : tuple of floats, optional
+        Cell to be fit into. By default the best orthogonal cell of the atoms' cell
+        after it is rotated into `plane`.
     plane : str or tuple of tuples
         Plane to be rotated into given as either a string or two tuples (by default `xy`
         which results in no rotation for a standardized cell).
@@ -1095,9 +1375,6 @@ def cut_cell(
     cut : ase.Atoms
        Atoms fit into the cell.
     """
-    if cell is None:
-        cell = tuple(best_orthogonal_cell(atoms.cell))
-
     if isinstance(margin, SupportsFloat):
         margin = (float(margin), float(margin), float(margin))
 
@@ -1107,6 +1384,9 @@ def cut_cell(
         atoms.wrap()
 
     atoms = rotate_atoms_to_plane(atoms, plane)
+
+    if cell is None:
+        cell = tuple(best_orthogonal_cell(atoms.cell))
 
     new_cell = np.diag(np.array(cell) + 2 * np.array(margin))
     new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)

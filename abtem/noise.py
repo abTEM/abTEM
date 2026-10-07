@@ -140,7 +140,16 @@ def _pixel_times(
     flyback_time : float
         Flyback time for the scanning probe at the end of each scan line in s.
     shape : two ints
-        Dimensions of a scan in pixels.
+        Dimensions of a scan in pixels. The first axis (x) is the fast scan axis,
+        i.e. a scan line runs along axis 0, and the second axis (y) is the slow
+        axis indexing the scan lines.
+
+    Returns
+    -------
+    times : np.ndarray
+        Time at each pixel. Consecutive pixels along a line are separated by
+        `dwell_time`, and consecutive lines by `shape[0] * dwell_time +
+        flyback_time`.
     """
 
     line_time = (dwell_time * shape[0]) + flyback_time
@@ -149,9 +158,7 @@ def _pixel_times(
     )
 
     fast_time = np.tile(
-        np.linspace(
-            (line_time - flyback_time) / shape[1], line_time - flyback_time, shape[0]
-        )[:, None],
+        np.linspace(dwell_time, line_time - flyback_time, shape[0])[:, None],
         (1, shape[1]),
     )
     return slow_time + fast_time
@@ -209,18 +216,41 @@ def _make_displacement_field(
        Number of frequency components.
     rms_power : float
        Root-mean-square power of the distortion.
+    seed : int, optional
+       Seed for the random distortions. The x and y distortions are drawn
+       independently of each other.
+
+    Returns
+    -------
+    profile_x, profile_y : np.ndarray
+       Displacements in pixels along axis 0 (x) and axis 1 (y).
     """
 
-    profile_x = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
-    profile_y = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
+    if seed is None:
+        seed_x = seed_y = None
+    else:
+        seed_x, seed_y = (
+            int(child.generate_state(1)[0])
+            for child in np.random.SeedSequence(seed).spawn(2)
+        )
 
-    x_mag_deviation = np.gradient(profile_x, axis=1)
-    y_mag_deviation = np.gradient(profile_y, axis=0)
+    profile_x = _single_axis_distortion(
+        time, max_frequency, num_components, seed=seed_x
+    )
+    profile_y = _single_axis_distortion(
+        time, max_frequency, num_components, seed=seed_y
+    )
+
+    # profile_x (profile_y) displaces the image along axis 0 (axis 1), see
+    # _apply_displacement_field, so its magnification deviation is the
+    # derivative along that same axis
+    x_mag_deviation = np.gradient(profile_x, axis=0)
+    y_mag_deviation = np.gradient(profile_y, axis=1)
 
     frame_mag_deviation = (1 + x_mag_deviation) * (1 + y_mag_deviation) - 1
     frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation**2))
 
-    # 235.5 = 2.355 * 100 %; 2.355 converts from 1/e width to FWHM
+    # 235.5 = 2.355 * 100 %; 2.355 converts a standard deviation to a FWHM
 
     profile_x *= rms_power / (2.355 * 100 * frame_mag_deviation)
     profile_y *= rms_power / (2.355 * 100 * frame_mag_deviation)
@@ -283,7 +313,8 @@ class ScanNoiseTransform(EnsembleTransform):
         if samples is None and seeds is None:
             samples = 1
 
-        if seeds is not None:
+        # one seed per sample; unseeded samples > 1 get random per-sample seeds
+        if seeds is not None or samples > 1:
             seeds_distribution = validate_distribution(validate_seeds(seeds, samples))
         else:
             seeds_distribution = None
@@ -369,15 +400,16 @@ class ScanNoiseTransform(EnsembleTransform):
         else:
             rms_powers = np.array([self.rms_power], dtype=get_dtype())
 
-        if self.seeds is not None:
-            seed = sum(self.seeds.values)
-        else:
-            seed = None
-
         arrays = []
         for rms_power in rms_powers:
             inner_array = np.zeros_like(array)
             for i in np.ndindex(array.shape[:-2]):
+                # the leading axis is the sample axis; each sample uses its own seed
+                if self.seeds is not None:
+                    seed = int(self.seeds.values[i[0]])
+                else:
+                    seed = None
+
                 displacement_x, displacement_y = _make_displacement_field(
                     time,
                     self.max_frequency,

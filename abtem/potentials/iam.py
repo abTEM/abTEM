@@ -19,7 +19,10 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    _box_strain_warning_silenced,
+    _cell_in_plane_frame,
     _rotate_atoms_to_plane,
+    _warn_if_box_is_strained,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
@@ -534,7 +537,7 @@ def validate_potential(
 
 def _validate_exit_planes(exit_planes, num_slices):
     if isinstance(exit_planes, int):
-        if exit_planes >= num_slices:
+        if exit_planes > num_slices:
             return (num_slices - 1,)
 
         exit_planes = list(range(exit_planes - 1, num_slices, exit_planes))
@@ -548,25 +551,92 @@ def _validate_exit_planes(exit_planes, num_slices):
 
 
 def _require_cell_transform(cell, box, plane, origin):
-    if box == tuple(np.diag(cell)):
-        return False
-
+    """
+    Whether atoms with the given cell must be transformed (rotated, translated,
+    repeated or strained) to fill a potential with the given `box`, `plane` and
+    `origin`. A `box` of None stands for the default box.
+    """
     if not is_cell_orthogonal(cell):
-        return True
-
-    if box is not None:
         return True
 
     if plane != "xy":
         return True
 
-    if origin != (0.0, 0.0, 0.0):
+    if tuple(origin) != (0.0, 0.0, 0.0):
+        return True
+
+    if box is not None and tuple(box) != tuple(np.diag(cell)):
         return True
 
     return False
 
 
+def _three_floats(values, name) -> tuple[float, float, float]:
+    """`values` as three finite floats; strings are not numbers."""
+    try:
+        if isinstance(values, (str, bytes)) or any(
+            isinstance(value, (str, bytes)) for value in values
+        ):
+            raise TypeError
+        floats = tuple(float(value) for value in values)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be three numbers [Å], got {values!r}") from None
+
+    if len(floats) != 3:
+        raise ValueError(
+            f"{name} must have three elements, got {len(floats)}: {values!r}"
+        )
+
+    if not np.all(np.isfinite(floats)):
+        raise ValueError(f"{name} must be finite, got {values!r}")
+
+    return floats
+
+
+def _validate_box(box) -> tuple[float, float, float]:
+    """The given box as three positive, finite lengths [Å]."""
+    lengths = _three_floats(box, "box")
+
+    if min(lengths) <= 0.0:
+        raise ValueError(f"box must be three positive lengths [Å], got {box!r}")
+
+    return lengths
+
+
+def _validate_origin(origin) -> tuple[float, float, float]:
+    """The given origin as three finite floats [Å]; None is the zero origin."""
+    if origin is None:
+        return (0.0, 0.0, 0.0)
+
+    return _three_floats(origin, "origin")
+
+
+def _default_box(cell, plane) -> tuple[float, float, float]:
+    """
+    The box of a potential that needs a cell transform and was given no box: the
+    best orthogonal cell of the atoms' cell rotated to `plane`, as
+    `orthogonalize_cell` rotates it (axes permuted, then the rotation about the new
+    z that `standardize_cell` applies). A cell that cannot be rotated to `plane`
+    gets the best orthogonal cell of its permuted, unrotated lattice vectors.
+    """
+    if not isinstance(plane, str):
+        raise NotImplementedError
+    if plane != "xy":
+        try:
+            return tuple(best_orthogonal_cell(_cell_in_plane_frame(cell, plane)))
+        except RuntimeError:
+            pass
+    axes = plane_to_axes(plane)
+    return tuple(best_orthogonal_cell(np.array(cell)[:, list(axes)]))
+
+
 class _FieldBuilder(BaseField):
+    # False for builders whose slices are interpolated from a calculator's grid of
+    # the atoms' own cell rather than computed from transformed atoms: they place
+    # their field in the default box at the default origin only, and reject any
+    # other box or origin instead of ignoring it.
+    _supports_box_and_origin: bool = True
+
     def __init__(
         self,
         array_object: Type[FieldArray],
@@ -584,12 +654,27 @@ class _FieldBuilder(BaseField):
         device: Optional[str] = None,
     ):
         self._array_object = array_object
+
+        origin = _validate_origin(origin)
+
+        box_given = box is not None
+
+        if not self._supports_box_and_origin:
+            self._check_default_box_and_origin(cell, box, plane, origin)
+            box = None
+
+        if box is not None:
+            box = _validate_box(box)
+
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
             if not isinstance(plane, str):
                 raise NotImplementedError
-            axes = plane_to_axes(plane)
-            cell = np.array(cell)[:, list(axes)]
-            box = tuple(best_orthogonal_cell(cell))
+            if box is None:
+                box = _default_box(cell, plane)
+                if periodic and not box_given:
+                    _warn_if_box_is_strained(cell, box, plane, default=True)
+            elif periodic and box != _default_box(cell, plane):
+                _warn_if_box_is_strained(cell, box, plane)
 
         elif box is None:
             box = tuple(np.diag(cell))
@@ -610,6 +695,25 @@ class _FieldBuilder(BaseField):
         self._exit_planes = _validate_exit_planes(
             exit_planes, len(self._slice_thickness)
         )
+
+    def _check_default_box_and_origin(self, cell, box, plane, origin):
+        """Raise unless `box` is the default box and `origin` is zero."""
+        if _require_cell_transform(cell, box=None, plane=plane, origin=(0.0,) * 3):
+            default_box = _default_box(cell, plane)
+        else:
+            default_box = tuple(np.diag(cell))
+
+        given_box = None if box is None else _validate_box(box)
+
+        if origin != (0.0, 0.0, 0.0) or (
+            given_box is not None
+            and not np.allclose(given_box, default_box, rtol=1e-9, atol=0.0)
+        ):
+            raise NotImplementedError(
+                f"{type(self).__name__} supports only its default box "
+                f"{tuple(float(b) for b in default_box)} and origin (0, 0, 0), "
+                f"got box={given_box} and origin={origin}."
+            )
 
     @property
     def slice_thickness(self) -> tuple[float, ...]:
@@ -646,7 +750,10 @@ class _FieldBuilder(BaseField):
     def origin(self) -> tuple[float, float, float]:
         """The origin relative to the provided atoms mapped to the origin of the
         potential."""
-        return self._origin
+        # Validated on every read as well as on construction, because a
+        # potential restored from a pickle skips `__init__` and may carry the
+        # origin exactly as it was passed (None, a list).
+        return _validate_origin(self._origin)
 
     def __getitem__(self, item) -> PotentialArray:
         return self.build(lazy=False)[item]
@@ -924,19 +1031,26 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         atoms = self.frozen_phonons.atoms.copy()
         atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
 
-        if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
-            atoms, frame = _rotate_atoms_to_plane(atoms, self.plane)
-            return atoms, False, frame
+        # An orthogonal cell that only changes plane is rotated, as long as the
+        # rotated cell is the box and there is no origin to translate it by.
+        if (
+            is_cell_orthogonal(atoms.cell)
+            and self.plane != "xy"
+            and tuple(self.origin) == (0.0, 0.0, 0.0)
+        ):
+            rotated, frame = _rotate_atoms_to_plane(atoms, self.plane)
+            if tuple(np.diag(rotated.cell)) == self.box:
+                return rotated, False, frame
 
         # `diag(atoms.cell) == self.box` is not by itself proof the cell is
         # orthogonal: for a near-orthorhombic cell with off-diagonal noise
         # below ~2e-8 relative, best_orthogonal_cell's box norms round to
         # the exact diagonal entries in float64 (see the matching guard in
-        # atoms.py's orthogonalize_cell). Also require is_cell_orthogonal
-        # so such noisy cells still reach orthogonalize_cell below instead
-        # of being silently used as-is.
-        elif tuple(np.diag(atoms.cell)) != self.box or not is_cell_orthogonal(
-            atoms.cell
+        # atoms.py's orthogonalize_cell). _require_cell_transform checks
+        # is_cell_orthogonal first, so such noisy cells still reach
+        # orthogonalize_cell below instead of being silently used as-is.
+        if _require_cell_transform(
+            atoms.cell, box=self.box, plane=self.plane, origin=self.origin
         ):
             if self.periodic:
                 plane_frame = _plane_frame(
@@ -1310,7 +1424,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         frozen_phonons = frozen_phonons_partial(*args)
         frozen_phonons = frozen_phonons.item()
 
-        new_potential = cls(frozen_phonons, **kwargs)
+        # The box was reported when the potential was constructed.
+        with _box_strain_warning_silenced():
+            new_potential = cls(frozen_phonons, **kwargs)
 
         ndims = max(len(new_potential.ensemble_shape), 1)
         new_potential = _wrap_with_array(new_potential, ndims)
@@ -1432,7 +1548,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If string,
@@ -1451,7 +1571,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         The extent of the potential in `x`, `y` and `z`. If not given this is determined
         from the atoms' cell. If the box size does not match an integer number of the
         atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword.
+        periodicity, determined by the `periodic` keyword. A periodic box must hold at
+        least one period of the atoms' cell along each direction (about half the cell
+        or more), and is otherwise rejected with a `ValueError`; the atoms are strained
+        to fit the box, however large the strain, and a `UserWarning` quotes the stretch
+        of each axis and the shear when either exceeds 0.1 %. The same warning is given
+        for the box chosen for a non-orthogonal cell when none is given (a box given
+        and equal to it is not checked). The box is filled with repetitions of the
+        atoms' cell whatever their `pbc`; it never adds vacuum.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the Atoms
@@ -1486,6 +1613,10 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
     ):
+        origin = _validate_origin(origin)
+        if box is not None:
+            box = _validate_box(box)
+
         frozen_phonons = _validate_frozen_phonons(atoms)
         atoms_obj = frozen_phonons.atoms
         # A multi-configuration `AtomsEnsemble` (e.g. an MD trajectory) has no
@@ -1498,6 +1629,21 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         has_multiple_configs = (
             isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
         )
+
+        def _placed_atoms(placed_box):
+            # The atoms as the potential places them in its box: strained into a
+            # periodic box, or cut out of the repeated structure for a
+            # non-periodic potential given a box.
+            if periodic or box is None:
+                return orthogonalize_cell(
+                    atoms_obj,
+                    box=placed_box,
+                    plane=plane,
+                    origin=origin,
+                    return_transform=False,
+                    allow_transform=True,
+                )
+            return cut_cell(atoms_obj, cell=placed_box, plane=plane, origin=origin)
 
         if sampling == "auto":
             if gpts is not None:
@@ -1517,8 +1663,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # constrains the grid here, so rounding is free).
                 from abtem.core.fft import next_fast_fft_size
 
+                # The extent the builder gives the potential: the box, else the
+                # cell rotated to the plane and made orthogonal when it needs a
+                # transform, else the cell itself.
                 if box is not None:
                     extent = box[:2]
+                elif _require_cell_transform(
+                    cell, box=None, plane=plane, origin=origin
+                ):
+                    extent = _default_box(cell, plane)[:2]
                 else:
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
                 gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
@@ -1527,19 +1680,13 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
                 if not isinstance(plane, str):
                     raise NotImplementedError
-                axes = plane_to_axes(plane)
-                cell_2d = cell[:, list(axes)]
-                auto_box = tuple(best_orthogonal_cell(cell_2d))
+                if box is not None:
+                    auto_box = box
+                else:
+                    auto_box = _default_box(cell, plane)
                 extent = auto_box[:2]
-                # Transform atoms to orthogonal cell so positions match the extent
-                _auto_atoms = orthogonalize_cell(
-                    atoms_obj,
-                    box=auto_box,
-                    plane=plane,
-                    origin=origin,
-                    return_transform=False,
-                    allow_transform=True,
-                )
+                # Place the atoms in the box so positions match the extent
+                _auto_atoms = _placed_atoms(auto_box)
                 gpts = commensurate_gpts(
                     extent,
                     _auto_atoms.positions,
@@ -1563,9 +1710,19 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
 
         if slice_thickness == "auto":
             if atoms_obj.pbc[2] and not has_multiple_configs:
-                # Periodic in z: align slice boundaries with crystal planes.
+                # Periodic in z: align slice boundaries with the crystal planes
+                # of the atoms as they are placed in the potential's box.
+                plane_atoms = atoms_obj
+                if _require_cell_transform(
+                    atoms_obj.cell, box=box, plane=plane, origin=origin
+                ):
+                    if box is not None:
+                        st_box = box
+                    else:
+                        st_box = _default_box(atoms_obj.cell, plane)
+                    plane_atoms = _placed_atoms(st_box)
                 slice_thickness = commensurate_slice_thickness(
-                    atoms_obj, target_thickness=1.0
+                    plane_atoms, target_thickness=1.0
                 )
             else:
                 # Non-periodic in z (e.g. a nanoparticle or slab in vacuum), or a
@@ -1997,8 +2154,12 @@ class PotentialArray(BasePotential, FieldArray):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer a
-        measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -2239,7 +2400,11 @@ class CrystalPotential(_PotentialBuilder):
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
-        a measurement will be collected every `exit_planes` number of slices.
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     seeds: int or sequence of int
         Seed for the random number generator (RNG), or one seed for each RNG in the
         frozen phonon ensemble.
@@ -2593,7 +2758,9 @@ class CrystalPotential(_PotentialBuilder):
             seed=int(member_seed) if reseed else int(fp.seed[0]),
         )
         kwargs = unit._copy_kwargs(exclude=("atoms",))
-        return type(unit)(new_fp, **kwargs)
+        # The unit's box was reported when the potential was constructed.
+        with _box_strain_warning_silenced():
+            return type(unit)(new_fp, **kwargs)
 
     def generate_slices(
         self,
