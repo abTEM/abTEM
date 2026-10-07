@@ -2129,10 +2129,13 @@ class CrystalPotential(_PotentialBuilder):
             self._seeds = None
         else:
             if seeds is None:
-                members = np.random.SeedSequence(
-                    self._root_seed_of(potential_unit)
-                ).spawn(num_frozen_phonons)
-                seeds = tuple(int(member.generate_state(1)[0]) for member in members)
+                root = np.random.SeedSequence(self._root_seed_of(potential_unit))
+                # one distinct seed per member: a repeat takes the next child
+                members = {}
+                while len(members) < num_frozen_phonons:
+                    for child in root.spawn(num_frozen_phonons - len(members)):
+                        members.setdefault(int(child.generate_state(1)[0]))
+                seeds = tuple(members)
             elif num_frozen_phonons is None:
                 seeds = validate_seeds(seeds)
                 num_frozen_phonons = len(seeds)

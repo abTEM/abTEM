@@ -843,6 +843,26 @@ class TestCrystalPotentialChunking:
         assert a != b
         assert a == a.copy()
 
+    def test_the_member_seeds_of_a_crystal_are_distinct(self, monkeypatch):
+        """A member seed that repeats an earlier one is replaced."""
+        values = iter([7, 7, 8, 9])
+
+        class Child:
+            def generate_state(self, n):
+                return np.array([next(values)], dtype=np.uint32)
+
+        class SeedSequence:
+            def __init__(self, entropy=None):
+                pass
+
+            def spawn(self, n):
+                return [Child() for _ in range(n)]
+
+        monkeypatch.setattr(np.random, "SeedSequence", SeedSequence)
+        crystal = _frozen_phonon_crystal(6, (2, 3, 2), num_frozen_phonons=3)
+
+        assert crystal.seeds == (7, 8, 9)
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize(
         "case, expected",
