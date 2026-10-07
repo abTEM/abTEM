@@ -1,7 +1,7 @@
 import ase
 import numpy as np
 import pytest
-from utils import devices, gpu, to_host_array
+from utils import devices, gpu, requires_gpu, to_host_array
 
 import abtem
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
@@ -95,9 +95,9 @@ class TestLazyVsEager:
             FourierMultislice(order=1),
             FourierMultislice(order=2),
             FourierMultislice(order='exact'),
-            RealSpaceMultislice(order=1),
-            RealSpaceMultislice(order=2),
-            RealSpaceMultislice(order=3),
+            pytest.param(RealSpaceMultislice(order=1), marks=pytest.mark.slow),
+            pytest.param(RealSpaceMultislice(order=2), marks=pytest.mark.slow),
+            pytest.param(RealSpaceMultislice(order=3), marks=pytest.mark.slow),
         ],
     )
     def test_lazy_vs_eager_single_point(self, test_system, algorithm):
@@ -188,6 +188,7 @@ class TestRealSpaceMultislice:
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.parametrize("expansion_scope", ["propagator", "full"])
+    @pytest.mark.slow
     def test_realspace_expansion_scope(self, test_system, expansion_scope):
         """Test different expansion scopes."""
         probe = test_system["probe"]
@@ -401,6 +402,7 @@ class TestBackscattering:
             )
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
+    @pytest.mark.slow
     def test_backscattering_returns_extra_waves(self, test_system):
         """Test that backscattering adds an extra detector (WavesDetector)."""
         probe = test_system["probe"]
@@ -420,6 +422,7 @@ class TestBackscattering:
         assert len(result) == 2
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
+    @pytest.mark.slow
     def test_backscattering_with_detectors(self, test_system):
         """Test backscattering with additional detectors."""
         probe = test_system["probe"]
@@ -444,6 +447,7 @@ class TestBackscattering:
         assert len(results) == len(detectors) + 1
 
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
+    @pytest.mark.slow
     def test_backscattering_shape_consistency(self, test_system):
         """Test that forward and backward waves have consistent shapes."""
         probe = test_system["probe"]
@@ -492,6 +496,7 @@ class TestAlgorithmComparison:
         assert np.abs(to_host_array(fourier_result.array)).sum() > 0
         assert np.abs(to_host_array(realspace_result.array)).sum() > 0
 
+    @pytest.mark.slow
     def test_higher_orders_differ(self, test_system):
         """Test that higher orders produce different results."""
         probe = test_system["probe"]
@@ -552,6 +557,7 @@ class TestAlgorithmComparison:
 class TestComplexWorkflows:
     """Test complex multislice workflows."""
 
+    @pytest.mark.slow
     def test_realspace_with_scan_and_detectors(self, test_system):
         """Test RealSpace multislice with scan and detectors."""
         probe = test_system["probe"]
@@ -626,10 +632,15 @@ class TestStencilNumericalAccuracy:
             err_msg=f"Stencil mismatch at accuracy={accuracy} on {device}",
         )
 
-    @pytest.mark.parametrize("device", [gpu])
-    def test_gpu_stencil_rejects_non_complex_dtype(self, device):
+    @requires_gpu
+    def test_gpu_stencil_rejects_non_complex_dtype(self):
         """The raw GPU kernel only ships complex specializations; a real array
-        must raise instead of silently reinterpreting the buffer."""
+        must raise instead of silently reinterpreting the buffer.
+
+        CUDA-only: it reaches for cupy directly rather than going through the
+        device parametrization, so it cannot stand in for another accelerator.
+        The Metal stencil's own rejection is covered by the shared
+        dtype check in ``_laplace_operator_stencil``."""
         import cupy as cp
 
         from abtem.finite_difference import _laplace_operator_stencil

@@ -28,7 +28,7 @@ from abtem.visualize.artists import (
     validate_cmap,
 )
 from abtem.visualize.axes_grid import AxesCollection, AxesGrid
-from abtem.visualize.widgets import slider_from_axes_metadata
+from abtem.visualize.widgets import default_ensemble_index, slider_from_axes_metadata
 
 if TYPE_CHECKING:
     from abtem.measurements import BaseMeasurements
@@ -88,6 +88,21 @@ def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasureme
         raise ValueError(f"complex conversion '{method}" f"' not implemented")
 
     return measurement
+
+
+def _sum_ensemble_range(measurement, axes: tuple[int, ...]):
+    """Sum a selected range of ensemble members.
+
+    Axes carrying probability weights are summed with their weights scaled to
+    average one over the range, ``N Σ p_i I_i / Σ p_i``, so that equal weights give
+    the plain sum and the plotted scale does not depend on whether the axis is
+    weighted.
+    """
+    if not measurement._weighted_axes(axes):
+        return measurement.sum(axis=axes)
+
+    num_members = int(np.prod([measurement.shape[axis] for axis in axes]))
+    return measurement._weighted_ensemble_mean(axes) * num_members
 
 
 def _validate_artist_type(measurement, complex_conversion, artist_type=None):
@@ -331,7 +346,12 @@ class Visualization:
         for i in range(len(self._measurement.ensemble_shape)):
             if i in self.indexing_axes:
                 if j >= len(indices):
-                    validated_indices += (0,)
+                    validated_indices += (
+                        default_ensemble_index(
+                            self._measurement.axes_metadata[i],
+                            self._measurement.shape[i],
+                        ),
+                    )
                 elif isinstance(indices[j], int):
                     validated_indices += (indices[j],)
                     removed_axes += 1
@@ -348,7 +368,7 @@ class Visualization:
 
         measurement = self._measurement[validated_indices]
         if len(summed_axes) > 0:
-            measurement = measurement.sum(axis=summed_axes)
+            measurement = _sum_ensemble_range(measurement, summed_axes)
 
         measurement = convert_complex(measurement, self._complex_conversion)
 
