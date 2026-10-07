@@ -45,6 +45,12 @@ settings.register_profile(
 settings.load_profile("dev")
 
 
+@pytest.fixture
+def cpu_float64_config():
+    with config.set({"device": "cpu", "precision": "float64", "fft": "numpy"}):
+        yield
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--runslow", action="store_true", default=False, help="run slow tests"

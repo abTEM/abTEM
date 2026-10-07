@@ -243,6 +243,16 @@ requires_gpu = _GpuRequirement(pytest.mark.skipif(_gpu_count() < 1, reason="no g
 devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
+# Runs a test in double precision on the CPU with the numpy FFT, which the
+# comparisons at 1e-10 of the maximum need (fixture in conftest.py).
+cpu_float64 = pytest.mark.usefixtures("cpu_float64_config")
+
+# A box that strains the atoms is reported by a warning, which only the tests of
+# the warning look at.
+ignore_strain_warning = pytest.mark.filterwarnings(
+    "ignore:The box .* is not a whole supercell:UserWarning"
+)
+
 
 try:
     import dask_cuda as _dask_cuda  # noqa: F401
