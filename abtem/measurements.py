@@ -4143,7 +4143,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         old_sums = array.sum((-2, -1), keepdims=True)
 
         if xp is cp:
-            array = interpolate_bilinear_cuda(array, v, u, vw, uw)
+            # the kernel types the pattern and the weights alike
+            array = interpolate_bilinear_cuda(
+                array, v, u, vw.astype(array.dtype), uw.astype(array.dtype)
+            )
         else:
             array = _interpolate_bilinear(array, v, u, vw, uw)
 
