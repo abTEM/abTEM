@@ -224,3 +224,13 @@ def test_a_unit_crystal_of_a_built_unit_leaves_the_crystal_unchanged():
     assert crystal.gpts == (80, 90)
     assert inner.gpts == (80, 30)
     assert crystal.build(lazy=False).array.shape[-2:] == (80, 90)
+
+
+def test_gpts_setter_takes_one_count_for_both_axes():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+
+    crystal.gpts = 120
+
+    assert crystal.gpts == (120, 120)
+    assert crystal.potential_unit.gpts == (60, 40)
+    assert crystal.build(lazy=False).array.shape[-2:] == (120, 120)

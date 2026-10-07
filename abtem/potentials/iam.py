@@ -2163,7 +2163,8 @@ class CrystalPotential(_PotentialBuilder):
         return super().gpts
 
     @gpts.setter
-    def gpts(self, gpts: tuple[int, int]):
+    def gpts(self, gpts: int | tuple[int, int]):
+        gpts = self.grid._validate(gpts, dtype=int)
         if not (
             (gpts[0] % self.repetitions[0] == 0)
             and (gpts[1] % self.repetitions[1] == 0)
