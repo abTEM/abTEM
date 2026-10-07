@@ -3248,6 +3248,14 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1
     :func:`_crop_kernel_to_extent`.
     """
     xp = get_array_module(array)
+    if xp is cp:
+        # cupyx.scipy does not import its signal submodule itself, and
+        # importing it loads cuBLAS (about 150 MB resident on CUDA), so it is
+        # imported here, on first use, rather than with abtem. The import warns
+        # that the cupyx.jit interface it uses is experimental.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            import cupyx.scipy.signal  # noqa: F401, PLC0415
     scipy_signal = get_scipy_module(array).signal
 
     if kernels_1d is not None:
