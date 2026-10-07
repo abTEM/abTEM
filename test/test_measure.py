@@ -11,7 +11,15 @@ import scipy.signal
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, requires_gpu
+from utils import (
+    array_is_close,
+    assert_array_matches_device,
+    devices,
+    ensure_is_tuple,
+    gpu,
+    lazy_params,
+    requires_gpu,
+)
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
@@ -183,6 +191,51 @@ def test_unsupported_left_operand_raises_type_error(op):
     measurement = Images(np.ones((2, 3)), sampling=0.1)
     with pytest.raises(TypeError, match="unsupported operand"):
         getattr(operator, op)(object(), measurement)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
+    # Oracle: the same operation on the plain arrays. The two operands differ in
+    # every element, so an operation computed in the forward order fails for
+    # sub, truediv and pow. The result is lazy whenever either operand is.
+    left = np.array([[3.0, 1.0, 2.0], [5.0, 7.0, 11.0]], dtype=get_dtype())
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
+    dask_left = copy_to_device(da.from_array(left, chunks=(1, 3)), device)
+
+    result = getattr(operator, op)(dask_left, measurement)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy
+    computed = result.compute().array
+    assert_array_matches_device(computed, device)
+    expected = getattr(operator, op)(left.astype(np.float64), array.astype(np.float64))
+    np.testing.assert_allclose(
+        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
+
+
+@lazy_params
+@devices
+def test_builtin_sum_of_measurements(lazy, device):
+    # sum() starts from the integer 0, so it needs 0 + m.
+    arrays = [np.full((2, 3), value, dtype=get_dtype()) for value in (1.0, 2.0, 4.0)]
+    measurements = [
+        Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=0.1
+        ).copy_to_device(device)
+        for array in arrays
+    ]
+
+    result = sum(measurements)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    np.testing.assert_array_equal(asnumpy(result.compute().array), sum(arrays))
 
 
 def test_measurement_as_a_map_blocks_keyword_argument():
