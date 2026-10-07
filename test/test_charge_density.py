@@ -4,9 +4,10 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import graphene
-from utils import cpu_float64
+from utils import float64_devices
 
 import abtem
+from abtem.core.backend import asnumpy
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.charge_density import ChargeDensityPotential
 
@@ -224,14 +225,14 @@ REPETITION_CASES = [
 ]
 
 
-@cpu_float64
+@float64_devices
 @pytest.mark.parametrize("case", REPETITION_CASES, ids=lambda c: c[0])
 def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
     name, make_atoms, repetitions, unit_gpts = case
     atoms, rho = make_atoms(), _charge_density()
 
     unit = ChargeDensityPotential(atoms, rho, gpts=unit_gpts, slice_thickness=1.0)
-    unit_array = unit.build(lazy=False).array
+    unit_array = asnumpy(unit.build(lazy=False).array)
     repeated = ChargeDensityPotential(
         atoms,
         rho,
@@ -247,23 +248,23 @@ def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
 
     nx, ny, nz = (round(float(repeated.box[i] / unit.box[i])) for i in range(3))
     tiled = np.tile(unit_array, (nz, nx, ny))
-    actual = repeated.build(lazy=False).array
+    actual = asnumpy(repeated.build(lazy=False).array)
     assert actual.shape == tiled.shape
     np.testing.assert_allclose(actual, tiled, rtol=0, atol=1e-4 * np.abs(tiled).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_repetitions_lazy_equals_eager_on_bn():
     atoms, rho = _bn(), _charge_density()
     potential = ChargeDensityPotential(
         atoms, rho, gpts=(50, 135), slice_thickness=1.0, repetitions=(2, 3, 2)
     )
-    eager = potential.build(lazy=False).array
-    lazy = potential.build(lazy=True).compute().array
+    eager = asnumpy(potential.build(lazy=False).array)
+    lazy = asnumpy(potential.build(lazy=True).compute().array)
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_with_an_approximate_default_box_reports_it_once():
     # The default box of BN x (3, 1, 1) is reached by a strain of about 1 %. The
     # potential reports it when it is constructed; the Ewald potential it builds
@@ -274,7 +275,7 @@ def test_charge_density_potential_with_an_approximate_default_box_reports_it_onc
         potential = ChargeDensityPotential(
             atoms, rho, sampling=0.2, slice_thickness=1.0, repetitions=(3, 1, 1)
         )
-        eager = potential.build(lazy=False).array
-        lazy = potential.build(lazy=True).compute().array
+        eager = asnumpy(potential.build(lazy=False).array)
+        lazy = asnumpy(potential.build(lazy=True).compute().array)
     assert len([r for r in records if "abTEM chose" in str(r.message)]) == 1
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())

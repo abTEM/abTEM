@@ -46,8 +46,10 @@ settings.load_profile("dev")
 
 
 @pytest.fixture
-def cpu_float64_config():
-    with config.set({"device": "cpu", "precision": "float64", "fft": "numpy"}):
+def float64_config(device):
+    if device == "mps":
+        pytest.skip(_METAL_DOUBLE_SKIP_REASON)
+    with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
         yield
 
 
@@ -88,6 +90,9 @@ def pytest_configure(config):
 # the honest outcome; letting it fail would bury real Metal regressions under
 # noise that no amount of backend work can clear.
 _DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+_METAL_DOUBLE_SKIP_REASON = (
+    "Metal (MPS) is single precision; float64 cannot run on this device"
+)
 
 
 def _is_double_precision_on_metal(item) -> bool:
@@ -132,9 +137,7 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-    skip_metal_double = pytest.mark.skip(
-        reason="Metal (MPS) is single precision; float64 cannot run on this device"
-    )
+    skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:
