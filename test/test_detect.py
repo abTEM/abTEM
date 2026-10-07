@@ -554,6 +554,12 @@ def test_segmented_detector_without_outer_refuses_multi_energy(lazy):
         probe.scan(potential, scan=scan, detectors=_segmented(None), lazy=lazy)
 
 
+def test_real_space_pixelated_detector_refuses_uniform_resampling():
+    # "uniform" equalises the angular sampling of diffraction patterns
+    with pytest.raises(ValueError, match="diffraction patterns only"):
+        abtem.PixelatedDetector(reciprocal_space=False, resample="uniform")
+
+
 def _waves_detector_setup():
     import ase.build
 

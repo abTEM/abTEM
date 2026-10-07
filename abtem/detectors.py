@@ -31,6 +31,7 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
+    _image_resampling_gpts,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -1903,6 +1904,11 @@ class PixelatedDetector(BaseDetector):
         url: Optional[str] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
+        if not reciprocal_space and isinstance(resample, str):
+            raise ValueError(
+                f"resample={resample!r} applies to diffraction patterns only; "
+                "in real space give the sampling of the images [Å]."
+            )
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
@@ -2026,10 +2032,7 @@ class PixelatedDetector(BaseDetector):
         sampling, gpts = waves._valid_sampling, waves._valid_gpts
         if self.resample:
             extent = tuple(d * n for d, n in zip(sampling, gpts))
-            resample = (
-                (self.resample,) * 2 if np.isscalar(self.resample) else self.resample
-            )
-            gpts = tuple(int(np.ceil(e / d)) for e, d in zip(extent, resample))
+            gpts = _image_resampling_gpts(extent, self.resample)
             sampling = tuple(e / n for e, n in zip(extent, gpts))
         return sampling, gpts
 
@@ -2111,13 +2114,8 @@ class PixelatedDetector(BaseDetector):
         else:
             measurements = waves.intensity()
 
-        resample = self.resample
-        if resample:
-            if isinstance(measurements, Images):
-                assert not isinstance(resample, str)
-                measurements = measurements.interpolate(sampling=resample)
-            else:
-                measurements = measurements.interpolate(sampling=resample)
+        if self.resample:
+            measurements = measurements.interpolate(sampling=self.resample)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
