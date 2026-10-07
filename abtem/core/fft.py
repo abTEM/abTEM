@@ -625,7 +625,7 @@ def _fft_dispatch(
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            meta=xp.array((), dtype=np.result_type(x.dtype, np.complex64)),
         )
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
@@ -836,12 +836,15 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
+        # The product is taken in place, so the blocks keep the dtype of the transform.
+        dtype = np.result_type(x.dtype, np.complex64)
+
         return da.map_blocks(
             _fft2_convolve,
             x,
             kernel=kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            meta=xp.array((), dtype=dtype),
         )
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):

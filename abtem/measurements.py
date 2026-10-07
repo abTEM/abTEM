@@ -2138,8 +2138,15 @@ class Images(_BaseMeasurement2D):
                 # Real on purpose, unlike the dtype-preserving map_blocks
                 # elsewhere: the input is required to be complex (its real and
                 # imaginary parts are the two gradient components) and
-                # _integrate_gradient_2d returns xp.real(...) of the result.
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                # _integrate_gradient_2d returns xp.real(...) of the result,
+                # in the precision of the gradient combined with the frequency
+                # grid.
+                meta=xp.array(
+                    (),
+                    dtype=np.result_type(
+                        np.finfo(self.array.dtype).dtype, xp.fft.fftfreq(1).dtype
+                    ),
+                ),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -2316,7 +2323,10 @@ class Images(_BaseMeasurement2D):
                     new_shape=gpts,
                     normalization=normalization,
                     chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                    meta=xp.array((), dtype=self.array.dtype),
+                    # fft_interpolate works in the configured precision
+                    meta=xp.array(
+                        (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
+                    ),
                 )
 
             elif method == "spline":
@@ -2431,9 +2441,12 @@ class Images(_BaseMeasurement2D):
             )
             # Real on purpose, unlike the dtype-preserving map_blocks
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
-            # a power spectrum even when the image itself is complex.
+            # a power spectrum even when the image itself is complex, with the
+            # precision of the image's FFT.
+            fft_dtype = np.result_type(self.array.dtype, np.complex64)
             array = array.map_blocks(
-                self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
+                self._diffractograms,
+                meta=xp.array((), dtype=np.finfo(fft_dtype).dtype),
             )
         else:
             array = self._diffractograms(self.array)
@@ -4162,9 +4175,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
-                meta=get_array_module(self.array).array(
-                    (), dtype=get_dtype(complex=False)
-                ),
+                meta=get_array_module(self.array).array((), dtype=self.array.dtype),
             )
         else:
             array = self._batch_interpolate_bilinear(
@@ -4757,7 +4768,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
+                self._com,
+                x=x,
+                y=y,
+                drop_axis=base_axes,
+                dtype=np.result_type(self.array.dtype, x.dtype, y.dtype, np.complex64),
             )
         else:
             array = self._com(self.array, x=x, y=y)
