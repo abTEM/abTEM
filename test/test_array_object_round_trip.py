@@ -14,11 +14,14 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import bulk
+from test_imports import NEEDS_CUPY
 from utils import assert_array_objects_equal
 
 import abtem
 from abtem.array import ArrayObject
 from abtem.core.axes import EnergyLossAxis, OrdinalAxis
+from abtem.core.backend import cp
+from abtem.magnetism.iam import MagneticField, VectorPotential
 
 ENERGY = 100e3
 
@@ -100,8 +103,8 @@ CASES = {
     "PolarMeasurements": lambda: _diffraction_patterns().polar_binning(
         nbins_radial=4, nbins_azimuthal=3
     ),
-    "IndexedDiffractionPatterns": lambda: _diffraction_patterns().index_diffraction_spots(
-        cell=_atoms().cell
+    "IndexedDiffractionPatterns": lambda: (
+        _diffraction_patterns().index_diffraction_spots(cell=_atoms().cell)
     ),
     "RealSpaceLineProfiles": lambda: _waves()
     .intensity()
@@ -114,16 +117,12 @@ CASES = {
         np.arange(3.0), ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))]
     ),
     "TransitionPotentialArray": _transition_potential_array,
-    "MagneticFieldArray": lambda: __import__(
-        "abtem.magnetism.iam", fromlist=["MagneticField"]
-    )
-    .MagneticField(_magnetic_atoms(), gpts=(20, 16), slice_thickness=1.0)
-    .build(lazy=False),
-    "VectorPotentialArray": lambda: __import__(
-        "abtem.magnetism.iam", fromlist=["VectorPotential"]
-    )
-    .VectorPotential(_magnetic_atoms(), gpts=(20, 16), slice_thickness=1.0)
-    .build(lazy=False),
+    "MagneticFieldArray": lambda: MagneticField(
+        _magnetic_atoms(), gpts=(20, 16), slice_thickness=1.0
+    ).build(lazy=False),
+    "VectorPotentialArray": lambda: VectorPotential(
+        _magnetic_atoms(), gpts=(20, 16), slice_thickness=1.0
+    ).build(lazy=False),
     "StructureFactorArray": lambda: abtem.StructureFactor(
         bulk("Si", cubic=True), g_max=2.0
     ).build(lazy=False),
@@ -132,10 +131,14 @@ CASES = {
 
 def _concrete_array_object_classes():
     for module in pkgutil.walk_packages(abtem.__path__, "abtem."):
+        if module.name in NEEDS_CUPY and cp is None:
+            continue
         try:
             importlib.import_module(module.name)
-        except (ImportError, AttributeError):
-            pass  # optional dependency missing; test_imports reports it
+        except ModuleNotFoundError as error:
+            if error.name and error.name.split(".")[0] != "abtem":
+                continue  # an optional package is not installed
+            raise
 
     def subclasses(cls):
         for subclass in cls.__subclasses__():
@@ -169,3 +172,29 @@ def test_array_object_round_trip(name, tmp_path):
     url = str(tmp_path / "array_object.zarr")
     array_object.to_zarr(url)
     assert_array_objects_equal(abtem.from_zarr(url), array_object)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_transmission_function_with_ensemble_axes_and_exit_planes_round_trip(
+    lazy, tmp_path
+):
+    frozen_phonons = abtem.FrozenPhonons(_atoms(), num_configs=3, sigmas=0.1, seed=1)
+    potential = abtem.Potential(
+        frozen_phonons, gpts=(40, 30), slice_thickness=1.0, exit_planes=1
+    ).build(lazy=lazy)
+    potential.metadata["label"] = "kept"
+    original = potential.transmission_function(ENERGY)
+
+    assert original.exit_planes == potential.exit_planes
+    assert original.ensemble_axes_metadata == potential.ensemble_axes_metadata
+    assert original.metadata["label"] == "kept"
+
+    url = str(tmp_path / "transmission_function.zarr")
+    original.to_zarr(url)
+    rebuilt = abtem.from_zarr(url)
+
+    assert_array_objects_equal(rebuilt, original)
+    assert rebuilt.energy == ENERGY
+    assert rebuilt.exit_planes == original.exit_planes
+    assert rebuilt.metadata["label"] == "kept"
+    assert rebuilt.array.shape == (3, 4, 40, 30)

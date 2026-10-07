@@ -2,7 +2,6 @@
 PotentialArray it was made from, once it is band-limited the way multislice
 band-limits a potential (a TransmissionFunction is used as given)."""
 
-import numpy as np
 import pytest
 from ase import Atoms
 from utils import assert_array_objects_equal
@@ -45,3 +44,17 @@ def test_multislice_through_a_transmission_function(kind, waves):
 
     # The same transmission function goes through the same steps either way.
     assert_array_objects_equal(result, expected)
+
+
+@pytest.mark.parametrize("kind", ["plain", "lazy", "exit_planes", "frozen_phonons"])
+def test_transmission_function_keeps_what_the_potential_carries(kind):
+    potential = _potential(kind)
+    potential.metadata["label"] = "kept"
+    transmission_function = potential.transmission_function(ENERGY)
+
+    assert transmission_function.metadata["label"] == "kept"
+    assert transmission_function.exit_planes == potential.exit_planes
+    assert (
+        transmission_function.ensemble_axes_metadata == potential.ensemble_axes_metadata
+    )
+    assert transmission_function.shape == potential.shape
