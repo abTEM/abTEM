@@ -239,12 +239,16 @@ def _generate_slices(
     first_slice=0,
     last_slice=None,
 ):
+    # `atoms` is the calculator's atoms or whole copies of them one after another
+    # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
+    # correction of atom i of the calculator.
+    n = len(interpolators)
     potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
         potential = Potential(
             gpts=gpts,
-            atoms=atoms[i : i + 1],
+            atoms=atoms[i::n],
             parametrization=parametrization,
             slice_thickness=slice_thickness,
             projection="finite",
@@ -421,7 +425,7 @@ class GPAWPotential(_PotentialBuilder):
         self._calculators = calculators
         self._frozen_phonons = frozen_phonons
         self._gridrefinement = gridrefinement
-        self._repetitions = repetitions
+        self._repetitions = tuple(repetitions)
 
         cell = frozen_phonons.atoms.cell * repetitions
         frozen_phonons.atoms.calc = None
@@ -494,8 +498,11 @@ class GPAWPotential(_PotentialBuilder):
         calculator = _DummyGPAW.from_generic(calculator)
 
         atoms = self.frozen_phonons.atoms
+        valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
+            # The valence potential is periodic with the calculator's cell.
+            valence_potential = np.tile(valence_potential, self.repetitions)
             # cell_cv = calculator.gd.cell_cv * self.repetitions
             # N_c = tuple(
             #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
@@ -520,17 +527,6 @@ class GPAWPotential(_PotentialBuilder):
 
         # array = self._get_all_electron_density()
         # array = calculator.valence_potential
-
-        valence_potential = calculator.valence_potential
-
-        if tuple(self.repetitions) != (1, 1, 1):
-            # `atoms * repetitions` lists whole copies of the calculator's atoms
-            # one after another, so atom j of the repeated atoms is atom
-            # j % len(calculator atoms) of the calculator and takes its core
-            # correction. The valence potential is periodic with the calculator's
-            # cell, so it is tiled over the repeated cell.
-            interpolators = interpolators * int(np.prod(self.repetitions))
-            valence_potential = np.tile(valence_potential, self.repetitions)
 
         for slic in _generate_slices(
             interpolators,
