@@ -4443,9 +4443,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., flat_indices]
 
-        # Use the configured floating-point precision, not a hardcoded float32.
-        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
-        # the result dtype must match to avoid a silent precision downgrade.
+        # The sums keep the precision of the patterns, as _AbstractRadialDetector's
+        # declared output dtype does (the real counterpart of the waves' precision).
         fp_dtype = array.dtype
         result = xp.zeros(
             (

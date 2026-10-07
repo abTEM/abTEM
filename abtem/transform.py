@@ -26,7 +26,12 @@ from abtem.core.ensemble import (
     _wrap_with_array,
 )
 from abtem.core.fft import ifft2
-from abtem.core.utils import CopyMixin, EqualityMixin, expand_dims_to_broadcast
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    expand_dims_to_broadcast,
+    get_dtype,
+)
 from abtem.distributions import (
     BaseDistribution,
     EnsembleFromDistributions,
@@ -459,3 +464,10 @@ class ReciprocalSpaceMultiplication(WavesToWavesTransform):
             new_array = ifft2(new_array, overwrite_x=self.in_place)
 
         return new_array
+
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
+        # The waves' dtype promoted with the configured complex precision, which is
+        # the kernel's. A kernel evaluated in float64 under float32 (SpatialEnvelope,
+        # and so CTF with an angular spread, Bullseye, RadialPhasePlate) makes the
+        # blocks of complex64 waves complex128, which this does not declare.
+        return (np.result_type(waves.dtype, get_dtype(complex=True)),)

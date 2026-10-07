@@ -307,7 +307,7 @@ class _AbstractRadialDetector(BaseDetector):
         """Spacing between the azimuthal detector bins [mrad]."""
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
         self._match_waves(waves)
@@ -805,9 +805,6 @@ class AnnularDetector(_AbstractRadialDetector):
         # metadata of an AnnularDetector result never records an outer angle.)
         return self
 
-    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
-
     def _out_type(
         self, waves: WavesType
     ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
@@ -1302,7 +1299,7 @@ class SpectralSlitDetector(BaseDetector):
         return (_scan_shape(waves),)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_type(
         self, waves: WavesType
@@ -2046,7 +2043,10 @@ class PixelatedDetector(BaseDetector):
         return (self._new_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        if self.resample and not self.reciprocal_space:
+            # Images.interpolate resamples in the configured precision
+            return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
         if self.reciprocal_space:
@@ -2188,6 +2188,12 @@ class WavesDetector(BaseDetector):
     def gpts(self) -> Optional[tuple[int, int]]:
         """Number of grid points of the detected wave functions."""
         return self._gpts
+
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
+        if self._gpts is not None:
+            # fft_interpolate works in the configured precision
+            return (get_dtype(complex=True),)
+        return (waves.dtype,)
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves

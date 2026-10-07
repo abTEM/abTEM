@@ -455,6 +455,10 @@ class Waves(BaseWaves, ArrayObject):
 
     _base_dims = 2
 
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
+
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -823,6 +827,16 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         waves = self.__class__(**d)
         return waves
+
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
@@ -1638,6 +1652,7 @@ class Waves(BaseWaves, ArrayObject):
         sites = _extract_scattering_sites(potential, sites)
 
         potential = _prebuild_reused_potential(potential, self)
+        waves = self._in_configured_precision()
 
         # One entry per transition potential, each a list over detectors. The
         # elastic multislice and the scattered waves are shared across
@@ -1653,7 +1668,7 @@ class Waves(BaseWaves, ArrayObject):
                 sites=sites,
                 **multislice_func_kwargs,
             )
-            new_measurements = self.apply_transform(multislice_transform)
+            new_measurements = waves.apply_transform(multislice_transform)
             if not isinstance(new_measurements, list):
                 new_measurements = [new_measurements]
             per_transition.append(new_measurements)
@@ -1745,7 +1760,7 @@ class Waves(BaseWaves, ArrayObject):
             potential=potential, detectors=detectors, **multislice_func_kwargs
         )
 
-        waves = multislice_transform.apply(self)
+        waves = multislice_transform.apply(self._in_configured_precision())
 
         return reduce_ensemble(waves)
 
