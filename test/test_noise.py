@@ -486,9 +486,8 @@ class TestLazyScanNoise:
     )
     def test_image_axes_split_lazy_equals_eager(self, device, chunks):
         # Pixel times, the magnification normalisation and the periodic wrap
-        # all span the whole frame, so chunking the image itself must not
-        # change the result (it distorted each chunk as a separate frame, and
-        # a size-1 chunk raised in np.gradient).
+        # all span the whole frame, so each image must be distorted whole,
+        # however the image itself is chunked (including a size-1 chunk).
         images = self._images(device)
         kwargs = dict(rms_power=5.0, seed=7, **_SCAN_NOISE_KWARGS)
         eager = images.scan_noise(**kwargs)
@@ -526,10 +525,12 @@ class TestLazyScanNoise:
 
     def test_unseeded_lazy_recompute_is_stable(self, device):
         # the entropy is drawn once when the graph is built, not in each task;
-        # each image of a stack still gets its own distortion
+        # each image of a stack still gets its own distortion, so two copies
+        # of one image end up different
+        image = np.random.default_rng(0).random((16, 24))
         stack = _to_device(
             Images(
-                np.random.default_rng(0).random((2, 16, 24)),
+                np.stack([image, image]),
                 sampling=0.1,
                 ensemble_axes_metadata=[UnknownAxis()],
             ),
@@ -540,9 +541,8 @@ class TestLazyScanNoise:
         )
         first = _to_cpu_array(lazy.copy())
         np.testing.assert_array_equal(first, _to_cpu_array(lazy.copy()))
-        undistorted = _to_cpu_array(stack)
-        assert not np.allclose(first, undistorted)
-        assert not np.allclose(first[0] - undistorted[0], first[1] - undistorted[1])
+        assert not np.allclose(first[0], image)
+        assert not np.allclose(first[0], first[1])
 
 
 # ---------------------------------------------------------------------------

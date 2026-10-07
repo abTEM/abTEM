@@ -476,9 +476,7 @@ def _scan_distort_block(block, block_info=None, **kwargs):
 
 
 class ScanNoiseTransform(EnsembleTransform):
-    # `samples` is implied by `seeds` (one seed per sample), so it is not passed
-    # on when the transform is rebuilt for a chunk: a chunk receives a sub-block
-    # of the seeds, which would not match the full sample count
+    # see NoiseTransform._exclude_from_copy
     _exclude_from_copy = ("samples",)
 
     def __init__(
