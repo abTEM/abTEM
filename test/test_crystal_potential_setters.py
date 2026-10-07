@@ -197,3 +197,30 @@ def test_the_exact_sampling_of_a_built_unit_is_not_rounded_to_a_fast_size():
 
     assert unit.gpts == (41, 33)
     assert crystal.gpts == (82, 33)
+
+
+@pytest.mark.parametrize("gpts", [(243, 180), (240, 182)])
+def test_a_unit_crystal_that_rejects_its_gpts_leaves_the_crystal_unchanged(gpts):
+    # The outer repetitions divide both counts; the inner ones (2, 3) do not
+    # divide 243 / 3 = 81 along x or 182 / 2 = 91 along y.
+    inner = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+    crystal = abtem.CrystalPotential(inner, repetitions=(3, 2, 1))
+
+    with pytest.raises(ValueError, match="divisible"):
+        crystal.gpts = gpts
+
+    assert crystal.gpts == (240, 180)
+    assert inner.gpts == (80, 90)
+    assert crystal.build(lazy=False).array.shape[-2:] == (240, 180)
+
+
+def test_a_unit_crystal_of_a_built_unit_leaves_the_crystal_unchanged():
+    inner, unit = _built_unit_crystal()
+    crystal = abtem.CrystalPotential(inner, repetitions=(1, 3, 1))
+
+    with pytest.raises(RuntimeError, match="PotentialArray"):
+        crystal.gpts = (160, 90)
+
+    assert crystal.gpts == (80, 90)
+    assert inner.gpts == (80, 30)
+    assert crystal.build(lazy=False).array.shape[-2:] == (80, 90)

@@ -2179,8 +2179,9 @@ class CrystalPotential(_PotentialBuilder):
         if isinstance(self._potential_unit, PotentialArray):
             self._require_the_grid_of_a_built_unit(unit_gpts, self._potential_unit.gpts)
             return
-        self.grid.gpts = gpts
+        # The unit first: a unit that rejects its gpts leaves the crystal unchanged.
         self._potential_unit.gpts = unit_gpts
+        self.grid.gpts = gpts
 
     @staticmethod
     def _require_the_grid_of_a_built_unit(requested, current):
