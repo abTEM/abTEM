@@ -2273,6 +2273,49 @@ def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_box(box):
     assert potential.slice_thickness == pytest.approx(reference.slice_thickness)
 
 
+def _triclinic():
+    # Lattice vectors with z components, so the default box strains z as well as
+    # x and y.
+    return Atoms(
+        "SiO",
+        scaled_positions=[(0.1, 0.2, 0.3), (0.6, 0.7, 0.85)],
+        cell=[[4.0, 0.0, 0.4], [0.5, 3.0, 0.3], [0.6, 0.2, 5.0]],
+        pbc=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "atoms, origin",
+    [
+        (graphene(formula="BN", a=2.5, vacuum=2.0) * (3, 1, 1), (0.0, 0.0, 0.0)),
+        (graphene(formula="BN", a=2.5, vacuum=2.0) * (3, 1, 1), (0.7, 0.3, 0.2)),
+        (_triclinic(), (0.0, 0.0, 0.0)),
+    ],
+    ids=["hBN-3x1x1", "hBN-3x1x1-origin", "triclinic"],
+)
+def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_default_box(
+    atoms, origin
+):
+    # With no box, a non-periodic potential cuts its default box out of the
+    # repeated structure, as it cuts a box it is given.
+    potential = abtem.Potential(
+        atoms, periodic=False, origin=origin, sampling="auto", slice_thickness="auto"
+    )
+    reference = abtem.Potential(
+        cut_cell(atoms, cell=potential.box, origin=origin),
+        sampling="auto",
+        slice_thickness="auto",
+    )
+    assert (potential.gpts, len(potential.slice_thickness)) == (
+        reference.gpts,
+        len(reference.slice_thickness),
+    )
+    assert potential.sampling == pytest.approx(reference.sampling, rel=1e-12)
+    assert potential.slice_thickness == pytest.approx(
+        reference.slice_thickness, rel=0, abs=1e-12 * potential.box[2]
+    )
+
+
 @cpu_float64
 @ignore_strain_warning
 def test_invalid_origin_raises():
