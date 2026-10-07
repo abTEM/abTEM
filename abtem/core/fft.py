@@ -600,6 +600,18 @@ def _cupy_fft_with_cache_fallback(func, x, **kwargs):
         cache.set_memsize(memsize)
 
 
+def _fft_dtype(dtype: np.dtype) -> np.dtype:
+    """The dtype NumPy's and CuPy's FFTs return for input of the given dtype.
+
+    Half- and single-precision input gives complex64, anything that is not a
+    float or a complex number (integers, as in detector images) is transformed
+    in double precision and gives complex128.
+    """
+    if not np.issubdtype(dtype, np.inexact):
+        dtype = np.float64
+    return np.result_type(dtype, np.complex64)
+
+
 def _fft_dispatch(
     x: U,
     func_name: str,
@@ -625,7 +637,7 @@ def _fft_dispatch(
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=np.result_type(x.dtype, np.complex64)),
+            meta=xp.array((), dtype=_fft_dtype(x.dtype)),
         )
 
     if backend.tp is not None and isinstance(x, backend.TorchNDArray):
@@ -837,7 +849,7 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
 
     if isinstance(x, da.core.Array):
         # The product is taken in place, so the blocks keep the dtype of the transform.
-        dtype = np.result_type(x.dtype, np.complex64)
+        dtype = _fft_dtype(x.dtype)
 
         return da.map_blocks(
             _fft2_convolve,

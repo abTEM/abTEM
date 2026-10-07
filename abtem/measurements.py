@@ -49,7 +49,7 @@ from abtem.core.backend import (
 )
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
     polar_spatial_frequencies,
@@ -2443,10 +2443,9 @@ class Images(_BaseMeasurement2D):
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
             # a power spectrum even when the image itself is complex, with the
             # precision of the image's FFT.
-            fft_dtype = np.result_type(self.array.dtype, np.complex64)
             array = array.map_blocks(
                 self._diffractograms,
-                meta=xp.array((), dtype=np.finfo(fft_dtype).dtype),
+                meta=xp.array((), dtype=np.finfo(_fft_dtype(self.array.dtype)).dtype),
             )
         else:
             array = self._diffractograms(self.array)

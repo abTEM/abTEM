@@ -151,8 +151,14 @@ MEASUREMENTS = {
         lambda m: m.diffractograms(),
     ),
     "diffractograms_int64": (
-        lambda: _int_images(True),
-        lambda: _int_images(False),
+        lambda: _int_images(np.int64, True),
+        lambda: _int_images(np.int64, False),
+        lambda m: m.diffractograms(),
+    ),
+    # 16-bit detector images: the FFT of any integer is complex128
+    "diffractograms_uint16": (
+        lambda: _int_images(np.uint16, True),
+        lambda: _int_images(np.uint16, False),
         lambda m: m.diffractograms(),
     ),
     "integrate_gradient_complex64": (
@@ -199,8 +205,8 @@ MEASUREMENTS = {
 }
 
 
-def _int_images(lazy):
-    array = (10 * _real_data(np.float64)).astype(np.int64)
+def _int_images(dtype, lazy):
+    array = np.abs(10 * _real_data(np.float64)).astype(dtype)
     if lazy:
         array = da.from_array(array, chunks=(1,) + GRID)
     return Images(array, sampling=0.1, ensemble_axes_metadata=_members())
@@ -231,10 +237,14 @@ def test_lazy_potential_array_transmission_function_declares_its_block_precision
         _check(lazy, eager)
 
 
-def test_lazy_fft2_declares_the_input_precision():
+@pytest.mark.parametrize("dtype", [np.complex128, np.uint16])
+def test_lazy_fft2_declares_the_dtype_of_its_blocks(dtype):
     with abtem.config.set({"precision": "float32", "fft": "numpy"}):
-        x = da.from_array(_complex_data(np.complex128), chunks=(1,) + GRID)
-        result = fft2(x)
+        if dtype == np.complex128:
+            data = _complex_data(dtype)
+        else:
+            data = _int_images(dtype, False).array
+        result = fft2(da.from_array(data, chunks=(1,) + GRID))
         assert result.dtype == result.compute().dtype == np.complex128
 
 
