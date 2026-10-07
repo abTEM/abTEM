@@ -347,13 +347,18 @@ class ReciprocalSpaceAxis(LinearAxis):
     def coordinates(self, n: int) -> tuple[float, ...]:
         """Spatial frequencies in storage order.
 
-        `offset` is the lowest frequency of the centred grid,
-        ``offset + sampling * arange(n)``. With ``fftshift=False`` the array is
+        `offset` is the lowest frequency of the centred grid, taken as a whole multiple
+        of the sampling: the coordinates are ``(round(offset / sampling) + arange(n))
+        * sampling``. With ``fftshift=False`` the array is
         stored in unshifted (``np.fft.fftfreq``) order, zero frequency first,
         so the centred grid is ``ifftshift``-ed into that order (``ifftshift``,
         not ``fftshift``: the two differ by one element for odd `n`).
         """
-        coordinates = super().coordinates(n)
+        # every coordinate is a whole multiple of the sampling, so zero frequency is
+        # exactly 0 and opposite frequencies are exact negatives
+        coordinates = tuple(
+            (round(self.offset / self.sampling) + np.arange(n)) * self.sampling
+        )
         if self.fftshift:
             return coordinates
         return tuple(np.fft.ifftshift(np.array(coordinates)))
