@@ -693,9 +693,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        if potential.num_exit_planes == 1:
+        # The back-propagation sums the backscattered waves into the entrance
+        # plane, the first exit plane.
+        if potential.num_exit_planes == 1 or potential.exit_planes[0] != -1:
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes."
+                "Backscattering contributions require potential.exit_planes, "
+                "starting with the entrance plane -1."
             )
 
         # moved to MultisliceTransform

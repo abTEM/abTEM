@@ -402,6 +402,20 @@ class TestBackscattering:
                 return_backscattered=True,
             )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("exit_planes", [(2, 5), (0, 2, 5)])
+    def test_backscattering_requires_the_entrance_plane(self, exit_planes, lazy):
+        # the back-propagation sums the backscattered waves into the entrance plane
+        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+        potential = abtem.Potential(
+            atoms,
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / 6,
+            exit_planes=exit_planes,
+        )
+        with pytest.raises(ValueError, match="starting with the entrance plane -1"):
+            _multislice_arrays(potential, lazy)
+
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.slow
     def test_backscattering_returns_extra_waves(self, test_system):
