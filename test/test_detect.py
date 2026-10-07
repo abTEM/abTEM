@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
+from utils import gpu, to_host_array
 
 import abtem
 
@@ -355,6 +356,14 @@ def float64_numpy_fft():
         yield
 
 
+@pytest.fixture
+def on_device(device):
+    if device == "mps":
+        pytest.skip("Metal is single precision; the tests using this run in float64")
+    with abtem.config.set({"device": device}):
+        yield
+
+
 def _real_space_setup(sampling, energy=60e3, scan_gpts=(3, 4), cells=(2, 1, 1)):
     import ase.build
 
@@ -368,11 +377,12 @@ def _real_space_setup(sampling, energy=60e3, scan_gpts=(3, 4), cells=(2, 1, 1)):
     return potential, probe, scan
 
 
-@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.usefixtures("float64_numpy_fft", "on_device")
+@pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("resample", [False, 0.1])
 @pytest.mark.parametrize("entry_point", ["detect", "detect_lazy", "scan", "scan_lazy"])
 def test_real_space_pixelated_detector_declares_what_it_returns(
-    entry_point, resample
+    entry_point, resample, device
 ):
     """PixelatedDetector(reciprocal_space=False) declares the shape and sampling
     of the intensity image it returns, |psi|^2 on the waves' grid or on the grid
@@ -383,12 +393,12 @@ def test_real_space_pixelated_detector_declares_what_it_returns(
     )
     detector = abtem.PixelatedDetector(reciprocal_space=False, resample=resample)
 
-    expected = np.abs(waves.array) ** 2
+    expected = np.abs(to_host_array(waves)) ** 2
     expected_sampling = waves.sampling
     if resample:
         gpts = tuple(int(np.ceil(e / resample)) for e in waves.extent)
         expected_sampling = tuple(e / n for e, n in zip(waves.extent, gpts))
-        expected = waves.intensity().interpolate(sampling=resample).array
+        expected = to_host_array(waves.intensity().interpolate(sampling=resample))
         assert expected.shape[-2:] == gpts
 
     if entry_point == "detect":
@@ -409,7 +419,7 @@ def test_real_space_pixelated_detector_declares_what_it_returns(
         rtol=1e-12,
     )
     np.testing.assert_allclose(
-        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+        to_host_array(result), expected, rtol=0, atol=1e-12 * expected.max()
     )
 
 
@@ -593,13 +603,16 @@ def _run_waves_detector(entry, potential, probe, scan, detector, lazy):
 
 # (32, 48) crops, (80, 128) pads the (64, 111) exit-wave grid; both differ along
 # x and y and from the (3, 4) scan, so a swapped or misplaced axis changes the shape
+@pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("gpts", [(32, 48), (80, 128)])
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("entry", ["detect", "scan", "multislice", "prism"])
-def test_waves_detector_gpts_matches_downsample(entry, lazy, gpts):
+def test_waves_detector_gpts_matches_downsample(entry, lazy, gpts, device):
     """`WavesDetector(gpts)` gives what `Waves.downsample(gpts)` gives on the
     full-grid waves: `gpts` points over the unchanged extent."""
-    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+    if device == "mps":
+        pytest.skip("Metal is single precision; this test runs in float64")
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": device}):
         potential, probe, scan = _waves_detector_setup()
         full = _run_waves_detector(
             entry, potential, probe, scan, abtem.WavesDetector(), lazy
@@ -617,15 +630,21 @@ def test_waves_detector_gpts_matches_downsample(entry, lazy, gpts):
     assert np.allclose(result.sampling, expected.sampling, rtol=1e-12, atol=0)
     assert np.allclose(result.extent, full.extent, rtol=1e-12, atol=0)
     assert result.antialias_cutoff_gpts == expected.antialias_cutoff_gpts
-    scale = np.abs(expected.array).max()
-    np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-12 * scale)
+    expected_array = to_host_array(expected)
+    scale = np.abs(expected_array).max()
+    np.testing.assert_allclose(
+        to_host_array(result), expected_array, rtol=0, atol=1e-12 * scale
+    )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("gpts", [None, ()])
 @pytest.mark.parametrize("lazy", [False, True])
-def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
+def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts, device):
     """No `gpts`, as `None` or an empty tuple, leaves ensemble waves as they are."""
-    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": "cpu"}):
+    if device == "mps":
+        pytest.skip("Metal is single precision; this test runs in float64")
+    with abtem.config.set({"precision": "float64", "fft": "numpy", "device": device}):
         potential, probe, scan = _waves_detector_setup()
         waves = probe.scan(
             potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
@@ -636,4 +655,4 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, gpts):
 
     assert result.shape == waves.shape
     assert np.array_equal(result.sampling, waves.sampling)
-    assert np.array_equal(result.array, waves.array)
+    assert np.array_equal(to_host_array(result), to_host_array(waves))
