@@ -2423,6 +2423,32 @@ class CrystalPotential(_PotentialBuilder):
         kwargs = unit._copy_kwargs(exclude=("atoms",))
         return type(unit)(new_fp, **kwargs)
 
+    def _built_pool(self) -> PotentialArray:
+        """The configurations the slices are drawn from, in memory, with a leading
+        configuration axis."""
+        member_seed = None if self.seeds is None else int(self.seeds[0])
+        pool_unit = self._pool_unit_for_member(member_seed)
+        if not isinstance(pool_unit, PotentialArray):
+            potentials = pool_unit.build(lazy=False)
+        else:
+            potentials = pool_unit
+
+        assert isinstance(potentials, PotentialArray)
+
+        if len(potentials.shape) == 3:
+            potentials = potentials.expand_dims(axis=0)
+
+        # A lazily-built PotentialArray unit (the default of Potential.build())
+        # carries a dask array, and tiling it would yield dask-backed slices:
+        # eager consumers such as build(lazy=False) cannot place those into a
+        # CuPy array, and on CPU compute them one slice at a time. The unit cell
+        # is small; materialise it once, into a new object, so that the caller's
+        # unit stays lazy. Blocks from _partition_args already receive it in
+        # memory; this covers direct calls. The synchronous scheduler keeps a
+        # compute that runs inside a task from starting a nested thread pool,
+        # and CuPy kernels from running concurrently.
+        return potentials.ensure_computed(scheduler="synchronous", progress_bar=False)
+
     def generate_slices(
         self,
         first_slice: int = 0,
@@ -2446,33 +2472,8 @@ class CrystalPotential(_PotentialBuilder):
         slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
-        # if hasattr(self.potential_unit, "array")
-        #    potentials = self.potential_unit
         member_seed = None if self.seeds is None else int(self.seeds[0])
-        pool_unit = self._pool_unit_for_member(member_seed)
-        if not isinstance(pool_unit, PotentialArray):
-            potentials = pool_unit.build(lazy=False)
-        else:
-            potentials = pool_unit
-
-        assert isinstance(potentials, PotentialArray)
-
-        if len(potentials.shape) == 3:
-            potentials = potentials.expand_dims(axis=0)
-
-        # A lazily-built PotentialArray unit (the default of Potential.build())
-        # carries a dask array, and tiling it would yield dask-backed slices:
-        # eager consumers such as build(lazy=False) cannot place those into a
-        # CuPy array, and on CPU compute them one slice at a time. The unit cell
-        # is small; materialise it once, into a new object, so that the caller's
-        # unit stays lazy. Blocks from _partition_args already receive it in
-        # memory; this covers direct calls. The synchronous scheduler keeps a
-        # compute that runs inside a task from starting a nested thread pool,
-        # and CuPy kernels from running concurrently.
-        potentials = potentials.ensure_computed(
-            scheduler="synchronous", progress_bar=False
-        )
-
+        potentials = self._built_pool()
         rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
@@ -2644,15 +2645,13 @@ class CrystalPotential(_PotentialBuilder):
         """
         Generate potential slices in memory-budgeted chunks.
 
-        The chunks hold exactly the slices of one ``generate_slices`` call (the
-        frozen-phonon pool is built and the mosaic drawn once for all chunks),
-        each written into one preallocated array rather than stacked from a
-        list of slices. The generator holds memory on top of the chunk budget:
-        for a single-configuration unit, ``len(potential_unit)`` tiled slices
-        for reuse across z-repetitions (about ``1 / repetitions[2]`` of the
-        crystal's slices; filling the chunks with ``xp.tile`` instead would
-        remove them); for a frozen-phonon unit, its pool (enlarged to the
-        number of lateral tiles when smaller), held for the whole call.
+        The chunks hold exactly the slices of ``generate_slices``, each written
+        into one preallocated array rather than stacked from a list of slices.
+        A unit with one configuration is built once and each slice is tiled
+        straight into its chunk. A frozen-phonon unit takes its slices from one
+        ``generate_slices`` call (the pool is built and the mosaic drawn once
+        for all chunks), and its pool, enlarged to the number of lateral tiles
+        when smaller, is held on top of the chunk budget for the whole call.
 
         The dtype of the output follows the unit potential's array dtype,
         which is set by the abtem ``precision`` config key (float32 / float64).
@@ -2668,7 +2667,21 @@ class CrystalPotential(_PotentialBuilder):
 
         xp = get_array_module(self.device)
         exit_plane_after = self._exit_plane_after
-        slices = self.generate_slices(first_slice, last_slice)
+        if self.potential_unit.num_configurations == 1:
+            unit = self._built_pool().array[0]
+            unit_thickness = self.potential_unit.slice_thickness
+            slices = (
+                (
+                    xp.tile(unit[i % len(unit)], self.repetitions[:2]),
+                    unit_thickness[i % len(unit)],
+                )
+                for i in range(first_slice, last_slice)
+            )
+        else:
+            slices = (
+                (slic.array[0], slic.slice_thickness[0])
+                for slic in self.generate_slices(first_slice, last_slice)
+            )
 
         for chunk_start, chunk_end in generate_chunks(
             last_slice - first_slice, chunks=chunk_size, start=first_slice
@@ -2677,14 +2690,13 @@ class CrystalPotential(_PotentialBuilder):
             slice_thicknesses = []
 
             for k in range(chunk_end - chunk_start):
-                slic = next(slices)
+                array, thickness = next(slices)
                 if out is None:
                     out = xp.empty(
-                        (chunk_end - chunk_start,) + slic.array.shape[1:],
-                        dtype=slic.array.dtype,
+                        (chunk_end - chunk_start,) + array.shape, dtype=array.dtype
                     )
-                out[k] = slic.array[0]
-                slice_thicknesses.extend(slic.slice_thickness)
+                out[k] = array
+                slice_thicknesses.append(thickness)
 
             exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]

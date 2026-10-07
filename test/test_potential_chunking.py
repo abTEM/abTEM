@@ -476,6 +476,27 @@ class TestCrystalPotentialChunking:
         for chunk in crystal_potential.generate_chunked_slices(chunk_size=chunk_size):
             assert chunk.array.shape[0] <= chunk_size
 
+    def test_single_configuration_chunks_hold_no_tiled_unit(self):
+        """A unit with one configuration is tiled into each chunk: no tiled copy
+        of the unit's slices is kept across z-repetitions."""
+        import tracemalloc
+
+        unit = Potential(
+            si_cubic_atoms(), gpts=(24, 32), slice_thickness=0.5
+        ).build(lazy=False)
+        crystal = CrystalPotential(unit, repetitions=(4, 3, 3))
+        slice_bytes = np.prod(crystal.gpts) * unit.array.dtype.itemsize
+
+        tracemalloc.start()
+        for chunk in crystal.generate_chunked_slices(chunk_size=1):
+            del chunk
+        peak = tracemalloc.get_traced_memory()[1]
+        tracemalloc.stop()
+
+        # two chunks and the temporaries of one tile; the 11 tiled unit slices
+        # would add 11
+        assert peak < 6 * slice_bytes, peak / slice_bytes
+
     def test_dtype_follows_precision_config(self, crystal_potential):
         """Chunk dtype must reflect the abtem precision config (float32 / float64)."""
         for precision, expected in [("float32", np.float32), ("float64", np.float64)]:
