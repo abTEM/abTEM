@@ -871,6 +871,29 @@ class TestCrystalPotentialChunking:
         assert a != b
         assert a == a.copy()
 
+    def test_a_rebuilt_crystal_takes_its_root_seed_without_drawing_one(
+        self, monkeypatch
+    ):
+        """A lazy block rebuilds the crystal with the root seed of the original,
+        and draws no fresh one."""
+        unit = _frozen_phonon_crystal(6, (1, 1, 1)).potential_unit.build(lazy=False)
+        crystal = CrystalPotential(unit, (2, 3, 2))
+        args = crystal._partition_args(lazy=False)
+
+        drawn = []
+        seed_sequence = np.random.SeedSequence
+
+        def counting_seed_sequence(entropy=None, **kwargs):
+            if entropy is None:
+                drawn.append(None)
+            return seed_sequence(entropy, **kwargs)
+
+        monkeypatch.setattr(np.random, "SeedSequence", counting_seed_sequence)
+        rebuilt = crystal._from_partitioned_args()(*args).item()
+
+        assert rebuilt == crystal
+        assert drawn == []
+
     def test_the_member_seeds_of_a_crystal_are_distinct(self, monkeypatch):
         """A member seed that repeats an earlier one is replaced."""
         values = iter([7, 7, 8, 9])

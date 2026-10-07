@@ -2118,10 +2118,14 @@ class CrystalPotential(_PotentialBuilder):
         exit_planes: int | None = None,
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
+        _root_seed: int | tuple[int, ...] | None = None,
     ):
+        # _root_seed is given when a crystal is rebuilt, e.g. for a lazy block
         root_seed = None
         if num_frozen_phonons is None and seeds is None:
-            root_seed = self._root_seed_of(potential_unit)
+            root_seed = _root_seed
+            if root_seed is None:
+                root_seed = self._root_seed_of(potential_unit)
             self._seeds = None
         else:
             if seeds is None:
@@ -2308,7 +2312,7 @@ class CrystalPotential(_PotentialBuilder):
         return self._sliced_atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, root_seed, **kwargs):
+    def _from_partitioned_args_func(cls, *args, **kwargs):
         args = unpack_blockwise_args(args)
         potential, seed, shared_pool = args[0]
         if hasattr(potential, "item"):
@@ -2325,7 +2329,6 @@ class CrystalPotential(_PotentialBuilder):
             num_frozen_phonons=num_frozen_phonons,
             **kwargs,
         )
-        new._root_seed = root_seed
         new._shared_pool = shared_pool
         return _wrap_with_array(new)
 
@@ -2333,9 +2336,7 @@ class CrystalPotential(_PotentialBuilder):
         kwargs = self._copy_kwargs(
             exclude=("potential_unit", "seeds", "num_frozen_phonons")
         )
-        output = partial(
-            self._from_partitioned_args_func, root_seed=self._root_seed, **kwargs
-        )
+        output = partial(self._from_partitioned_args_func, **kwargs)
         return output
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
