@@ -1633,8 +1633,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         def _placed_atoms(placed_box):
             # The atoms as the potential places them in its box: strained into a
             # periodic box, or cut out of the repeated structure for a
-            # non-periodic potential given a box.
-            if periodic or box is None:
+            # non-periodic potential.
+            if periodic:
                 return orthogonalize_cell(
                     atoms_obj,
                     box=placed_box,
