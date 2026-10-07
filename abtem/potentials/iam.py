@@ -2104,10 +2104,11 @@ class CrystalPotential(_PotentialBuilder):
         If False, the individual configurations are returned.
     """
 
-    # Same derived state as _FieldBuilderFromAtoms, built by this class's own
-    # get_sliced_atoms(). CrystalPotential descends from _PotentialBuilder, not
-    # from _FieldBuilderFromAtoms, so it does not inherit that declaration.
-    _eq_exclude = ("_sliced_atoms",)
+    # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
+    # this class's own get_sliced_atoms(); CrystalPotential descends from
+    # _PotentialBuilder, so it does not inherit that declaration), and the pool
+    # that _partition_args builds once for all members.
+    _eq_exclude = ("_sliced_atoms", "_shared_pool")
 
     # Appended to a FrozenPhonons unit's seeds to make the root seed of a
     # crystal (see _root_seed_of): "CRYS" in ASCII.
@@ -2180,6 +2181,7 @@ class CrystalPotential(_PotentialBuilder):
         self._ensemble_mean = ensemble_mean
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._root_seed = root_seed
+        self._shared_pool: Optional[PotentialArray] = None
 
     @property
     def ensemble_mean(self) -> bool:
@@ -2303,7 +2305,7 @@ class CrystalPotential(_PotentialBuilder):
     @classmethod
     def _from_partitioned_args_func(cls, *args, root_seed, **kwargs):
         args = unpack_blockwise_args(args)
-        potential, seed = args[0]
+        potential, seed, shared_pool = args[0]
         if hasattr(potential, "item"):
             potential = potential.item()
 
@@ -2319,6 +2321,7 @@ class CrystalPotential(_PotentialBuilder):
             **kwargs,
         )
         new._root_seed = root_seed
+        new._shared_pool = shared_pool
         return _wrap_with_array(new)
 
     def _from_partitioned_args(self):
@@ -2350,8 +2353,31 @@ class CrystalPotential(_PotentialBuilder):
         unit_is_lazy = (
             isinstance(potential_unit, PotentialArray) and potential_unit.is_lazy
         )
+        # Unless every member reseeds its own frozen-phonon pool (see
+        # _pool_unit_for_member), the members of an unbuilt unit draw from one
+        # pool. It is built once, here, for all members and blocks, rather
+        # than by every member's generate_slices.
+        shared_pool = self._shared_pool
+        fp = getattr(potential_unit, "frozen_phonons", None)
+        pool_per_member = (
+            self.seeds is not None
+            and isinstance(fp, FrozenPhonons)
+            and fp.num_configs > 1
+        )
+        build_pool = (
+            shared_pool is None
+            and not pool_per_member
+            and not isinstance(potential_unit, PotentialArray)
+        )
 
         if lazy:
+            if build_pool:
+                # one task of this graph, which every block depends on
+                shared_pool = dask.delayed(self._pool_unit_for_member(None).build)(
+                    lazy=False
+                )
+            elif shared_pool is not None:
+                shared_pool = dask.delayed(shared_pool)
             if unit_is_lazy:
                 # one task of this graph, which every block depends on
                 lazy_unit = dask.delayed(
@@ -2371,7 +2397,9 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_unit, seeds), ndims=1)
+                lazy_args = dask.delayed(_wrap_with_array)(
+                    (lazy_unit, seeds, shared_pool), ndims=1
+                )
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
@@ -2383,6 +2411,8 @@ class CrystalPotential(_PotentialBuilder):
         else:
             if unit_is_lazy:
                 potential_unit = potential_unit.ensure_computed(progress_bar=False)
+            if build_pool:
+                shared_pool = self._pool_unit_for_member(None).build(lazy=False)
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2391,7 +2421,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                itemset(array, i, (potential_unit, seeds))
+                itemset(array, i, (potential_unit, seeds, shared_pool))
 
             if old_chunks == ():
                 array = _wrap_with_array(array[0], ndims=0)
@@ -2523,7 +2553,10 @@ class CrystalPotential(_PotentialBuilder):
         # if hasattr(self.potential_unit, "array")
         #    potentials = self.potential_unit
         member_seed = None if self.seeds is None else int(self.seeds[0])
-        pool_unit = self._pool_unit_for_member(member_seed)
+        if self._shared_pool is not None:
+            pool_unit = self._shared_pool
+        else:
+            pool_unit = self._pool_unit_for_member(member_seed)
         if not isinstance(pool_unit, PotentialArray):
             potentials = pool_unit.build(lazy=False)
         else:

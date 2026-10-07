@@ -395,7 +395,10 @@ def test_loaded_calculators_between_paths(fake_gpaw, monkeypatch):
     assert max(counter.alive_while_slicing) == 1
 
 
-def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypatch):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_crystal_of_a_path_list_holds_one_read_calculator(
+    fake_gpaw, monkeypatch, lazy
+):
     counter = _CountReads(monkeypatch)
     crystal = abtem.CrystalPotential(
         GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS),
@@ -404,10 +407,11 @@ def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypat
         seeds=(1, 2, 3),
     )
 
-    abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=False)
+    result = abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=lazy)
+    if lazy:
+        result.compute(scheduler="threads")
 
-    # Each member may build the unit again (two reads per member).
-    assert counter.reads <= 6
+    assert counter.reads == 2
     assert max(counter.alive_while_slicing) == 1
 
 

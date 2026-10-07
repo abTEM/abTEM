@@ -833,6 +833,100 @@ class TestCrystalPotentialChunking:
             a.build(lazy=False).array, b.build(lazy=False).array
         )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "case, expected",
+        [
+            ("plain unit, seeds", 1),
+            ("unseeded frozen phonons, scan blocks", 1),
+            ("reseeded frozen phonons", 3),
+        ],
+    )
+    def test_an_unbuilt_unit_is_built_once(self, monkeypatch, lazy, case, expected):
+        """Members and scan blocks share one build of the unit, except members
+        that reseed their own frozen-phonon pool."""
+        from abtem.potentials.iam import _FieldBuilder
+
+        builds = []
+        build = _FieldBuilder.build
+
+        def counting(self, *args, **kwargs):
+            builds.append(type(self).__name__)
+            return build(self, *args, **kwargs)
+
+        atoms = bulk("Si", cubic=True)
+        if case == "plain unit, seeds":
+            unit = Potential(
+                atoms, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 4
+            )
+            crystal = CrystalPotential(unit, (2, 3, 2), seeds=(1, 2, 3))
+        elif case == "reseeded frozen phonons":
+            crystal = _frozen_phonon_crystal(6, (2, 3, 2), seeds=(1, 2, 3))
+        else:
+            crystal = _frozen_phonon_crystal(6, (2, 3, 2))
+
+        monkeypatch.setattr(_FieldBuilder, "build", counting)
+        with abtem.config.set({"potential.slice-chunk-size": 2}):
+            if crystal.seeds is None:
+                # four scan blocks of one crystal
+                result = abtem.Probe(energy=100e3, semiangle_cutoff=20).scan(
+                    crystal,
+                    scan=abtem.GridScan((0, 0), (3, 3), gpts=(3, 2)),
+                    detectors=abtem.AnnularDetector(10, 30),
+                    lazy=lazy,
+                    max_batch=2,
+                )
+            else:
+                result = PlaneWave(energy=100e3).multislice(crystal, lazy=lazy)
+            if lazy:
+                result.compute(scheduler="synchronous")
+
+        assert len(builds) == expected
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("seeds", [None, (1, 2)])
+    def test_prism_eels_extracts_the_sites_of_a_crystal(self, lazy, seeds):
+        """Members keep their unit, so PRISM-EELS can take the sites from it."""
+        from abtem.core.axes import OrdinalAxis
+        from abtem.inelastic.core_loss import TransitionPotentialArray
+
+        atoms = bulk("Si", cubic=True)
+        unit = Potential(atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2])
+        crystal = CrystalPotential(unit, (2, 2, 3), seeds=seeds)
+        rng = np.random.default_rng(0)
+        array = rng.standard_normal((2, 64, 64)) + 1j * rng.standard_normal(
+            (2, 64, 64)
+        )
+
+        def run(sites):
+            transition_potentials = TransitionPotentialArray(
+                Z=14,
+                array=array.astype(np.complex64),
+                energy=100e3,
+                extent=crystal.extent,
+                ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+                metadata={"Z": 14, "n": 1, "l": 0},
+            )
+            result = abtem.SMatrix(
+                potential=crystal, energy=100e3, semiangle_cutoff=20, interpolation=1
+            ).transition_potential_scan(
+                transition_potentials,
+                scan=abtem.GridScan((0, 0), (2, 2), gpts=(2, 3)),
+                detectors=abtem.AnnularDetector(0, 40),
+                sites=sites,
+                lazy=lazy,
+            )
+            if lazy:
+                result = result.compute(scheduler="synchronous")
+            return np.asarray(result.array)
+
+        expected = run(crystal.get_sliced_atoms())
+        result = run(None)
+        assert result.shape == expected.shape
+        np.testing.assert_allclose(
+            result, expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+        )
+
 
 def _drawn_tiles(crystal):
     """The pool configuration of every lateral tile of every z-repetition of
