@@ -2204,10 +2204,12 @@ class CrystalPotential(_PotentialBuilder):
     @sampling.setter
     def sampling(self, sampling: tuple[float, float]):
         validated = self.grid._validate(sampling, dtype=float)
-        if validated is None or not np.all(np.isfinite(validated)):
-            raise ValueError(f"The sampling must be positive, got {sampling}.")
-        if not np.all(np.array(validated) > 0):
-            raise ValueError(f"The sampling must be positive, got {sampling}.")
+        if validated is None or not np.all(
+            np.isfinite(validated) & (np.asarray(validated) > 0)
+        ):
+            raise ValueError(
+                f"The sampling must be positive and finite, got {sampling}."
+            )
         if isinstance(self._potential_unit, PotentialArray):
             self._require_the_grid_of_a_built_unit(
                 validated, self._potential_unit.sampling
