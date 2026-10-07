@@ -375,10 +375,10 @@ class TestFiniteProjectionChunked:
         np.testing.assert_allclose(ref.array, chunked.array, atol=1e-10)
 
 
-def _frozen_phonon_crystal(num_configs, repetitions, **kwargs):
+def _frozen_phonon_crystal(num_configs, repetitions, unit_seed=1, **kwargs):
     atoms = bulk("Si", cubic=True)
     unit = Potential(
-        abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1),
+        abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=unit_seed),
         gpts=(16, 16),
         slice_thickness=atoms.cell[2, 2] / 4,  # 4 slices per unit
     )
@@ -617,6 +617,248 @@ class TestCrystalPotentialChunking:
         np.testing.assert_allclose(
             scan(crystal()), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
         )
+
+    @pytest.mark.parametrize(
+        "root", ["seeds", "frozen phonons", "built ensemble", "lazy built ensemble"]
+    )
+    def test_a_crystal_is_one_crystal_in_every_scan_block(self, root):
+        """Identical probe positions in different lazy blocks see one crystal,
+        whichever of the crystal's seeds, the unit's frozen phonons, or a seed
+        drawn at construction sets its mosaic."""
+        crystal = _frozen_phonon_crystal(
+            8, (2, 3, 3), seeds=(5,) if root == "seeds" else None
+        )
+        if root == "built ensemble":
+            crystal = CrystalPotential(
+                crystal.potential_unit.build(lazy=False), crystal.repetitions
+            )
+        elif root == "lazy built ensemble":
+            crystal = CrystalPotential(
+                crystal.potential_unit.build(lazy=True), crystal.repetitions
+            )
+        scan = abtem.CustomScan(np.array([[1.0, 1.0]] * 4))
+
+        # a slice budget below the crystal's 12 slices: one multislice per block
+        with abtem.config.set({"potential.slice-chunk-size": 2}):
+            measurement = abtem.Probe(energy=100e3, semiangle_cutoff=20).scan(
+                crystal,
+                scan=scan,
+                detectors=abtem.AnnularDetector(10, 30),
+                lazy=True,
+                max_batch=1,
+            )
+            assert measurement.array.numblocks[-1] == 4
+            values = np.asarray(measurement.compute(scheduler="synchronous").array)
+
+        assert values.shape == (4,)
+        np.testing.assert_allclose(
+            values, values[0], rtol=0, atol=1e-6 * np.abs(values).max()
+        )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_an_unseeded_crystal_backscatters_as_it_builds(self, lazy):
+        """The backward pass of full-expansion backscattering, which calls
+        generate_slices again, sees the crystal of the forward pass."""
+        from abtem.multislice import RealSpaceMultislice
+
+        def crystal():
+            return _frozen_phonon_crystal(6, (2, 3, 2), exit_planes=1)
+
+        def run(potential):
+            result = PlaneWave(energy=100e3).multislice(
+                potential,
+                lazy=lazy,
+                algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
+                return_backscattered=True,
+            )
+            if lazy:
+                result = [r.compute(scheduler="synchronous") for r in result]
+            return [np.asarray(r.array) for r in result]
+
+        expected = run(crystal().build(lazy=False))
+        result = run(crystal())
+
+        assert len(result) == len(expected) == 2
+        for r, e in zip(result, expected):
+            assert r.shape == e.shape
+            np.testing.assert_allclose(r, e, rtol=0, atol=1e-6 * np.abs(e).max())
+
+    @pytest.mark.parametrize(
+        "kwargs", [{}, {"num_frozen_phonons": 2}], ids=["single", "ensemble"]
+    )
+    def test_a_seeded_unit_makes_the_crystal_reproducible(self, kwargs):
+        """Separately constructed crystals of a seeded unit give one result,
+        eager or lazy, for any number of scan blocks."""
+
+        def scan(lazy, max_batch):
+            crystal = _frozen_phonon_crystal(
+                6, (2, 3, 2), ensemble_mean=False, **kwargs
+            )
+            with abtem.config.set({"potential.slice-chunk-size": 2}):
+                measurement = abtem.Probe(energy=100e3, semiangle_cutoff=20).scan(
+                    crystal,
+                    scan=abtem.GridScan((0, 0), (3, 3), gpts=(3, 2)),
+                    detectors=abtem.AnnularDetector(10, 30),
+                    lazy=lazy,
+                    max_batch=max_batch,
+                )
+                if lazy:
+                    measurement = measurement.compute(scheduler="threads")
+            return np.asarray(measurement.array)
+
+        expected = scan(False, 6)
+        for lazy, max_batch in [(False, 6), (True, 1), (True, 4)]:
+            result = scan(lazy, max_batch)
+            assert result.shape == expected.shape
+            np.testing.assert_allclose(
+                result, expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+            )
+
+    @pytest.mark.parametrize(
+        "num_configs, repetitions, kwargs, expected",
+        [
+            (
+                6,
+                (2, 3, 2),
+                dict(seeds=(5, 6)),
+                [
+                    [[[1, 4, 2], [3, 5, 0]], [[4, 0, 1], [3, 2, 5]]],
+                    [[[2, 3, 0], [5, 4, 1]], [[4, 0, 2], [1, 5, 3]]],
+                ],
+            ),
+            (
+                12,
+                (2, 3, 2),
+                dict(num_frozen_phonons=2, seeds=11),
+                [
+                    [[[7, 11, 5], [8, 2, 3]], [[4, 10, 1], [9, 6, 0]]],
+                    [[[0, 10, 2], [6, 3, 9]], [[7, 11, 5], [8, 4, 1]]],
+                ],
+            ),
+            (
+                4,
+                (3, 1, 3),
+                dict(seeds=(7,)),
+                [[[[0], [3], [1]], [[0], [2], [3]], [[1], [2], [0]]]],
+            ),
+        ],
+        ids=["seeds", "master seed", "one seed"],
+    )
+    def test_explicit_seeds_draw_the_same_mosaic(
+        self, num_configs, repetitions, kwargs, expected
+    ):
+        """The pool configuration of every tile, pinned for explicit seeds."""
+        crystal = _frozen_phonon_crystal(num_configs, repetitions, **kwargs)
+        np.testing.assert_array_equal(_drawn_tiles(crystal), expected)
+
+    @pytest.mark.parametrize(
+        "num_configs, repetitions, kwargs, expected",
+        [
+            (
+                6,
+                (2, 3, 2),
+                {},
+                [[[[5, 4, 2], [0, 1, 3]], [[5, 2, 0], [3, 1, 4]]]],
+            ),
+            (
+                12,
+                (2, 3, 2),
+                dict(num_frozen_phonons=2),
+                [
+                    [[[8, 3, 7], [5, 2, 1]], [[11, 9, 4], [0, 10, 6]]],
+                    [[[1, 0, 6], [8, 7, 9]], [[2, 11, 10], [3, 5, 4]]],
+                ],
+            ),
+        ],
+        ids=["single", "ensemble"],
+    )
+    def test_a_seeded_unit_draws_a_pinned_mosaic(
+        self, num_configs, repetitions, kwargs, expected
+    ):
+        """Without seeds on the crystal, the seed of the unit's frozen phonons
+        fixes the pool configuration of every tile, in every session."""
+        crystal = _frozen_phonon_crystal(num_configs, repetitions, **kwargs)
+        np.testing.assert_array_equal(_drawn_tiles(crystal), expected)
+
+    def test_explicit_seeds_take_precedence_over_the_unit_seed(self):
+        a = _frozen_phonon_crystal(6, (2, 3, 2), unit_seed=1, seeds=(5, 6))
+        b = _frozen_phonon_crystal(6, (2, 3, 2), unit_seed=2, seeds=(5, 6))
+        np.testing.assert_array_equal(
+            a.build(lazy=False).array, b.build(lazy=False).array
+        )
+
+        unit = _frozen_phonon_crystal(6, (1, 1, 1)).potential_unit.build(lazy=False)
+        a = CrystalPotential(unit, (2, 3, 2), seeds=(5, 6))
+        b = CrystalPotential(unit, (2, 3, 2), seeds=(5, 6))
+        np.testing.assert_array_equal(
+            a.build(lazy=False).array, b.build(lazy=False).array
+        )
+
+    @pytest.mark.parametrize(
+        "seeds, expected", [(5, (5,)), ([5, 6], (5, 6))], ids=["int", "list"]
+    )
+    def test_seeds_take_an_int_or_a_list(self, seeds, expected):
+        crystal = _frozen_phonon_crystal(6, (2, 3, 2), seeds=seeds)
+
+        assert crystal.seeds == expected
+        np.testing.assert_array_equal(
+            crystal.build(lazy=False).array,
+            _frozen_phonon_crystal(6, (2, 3, 2), seeds=expected)
+            .build(lazy=False)
+            .array,
+        )
+
+    def test_two_crystals_of_one_built_ensemble_are_different_crystals(self):
+        """A crystal of a unit without frozen phonons draws its seed when it is
+        created: a copy is the same crystal, another construction is not."""
+        from dask.base import tokenize
+
+        unit = _frozen_phonon_crystal(6, (1, 1, 1)).potential_unit.build(lazy=False)
+        a = CrystalPotential(unit, (2, 3, 2))
+        b = CrystalPotential(unit, (2, 3, 2))
+
+        assert a == a.copy()
+        assert tokenize(a) == tokenize(a.copy())
+        assert a != b
+        assert tokenize(a) != tokenize(b)
+        assert not np.array_equal(a.build(lazy=False).array, b.build(lazy=False).array)
+
+    def test_two_crystals_of_one_frozen_phonon_unit_are_one_crystal(self):
+        unit = _frozen_phonon_crystal(6, (1, 1, 1)).potential_unit
+        a = CrystalPotential(unit, (2, 3, 2))
+        b = CrystalPotential(unit, (2, 3, 2))
+
+        assert a == b
+        np.testing.assert_array_equal(
+            a.build(lazy=False).array, b.build(lazy=False).array
+        )
+
+
+def _drawn_tiles(crystal):
+    """The pool configuration of every lateral tile of every z-repetition of
+    the built crystal, found by exact match against the member's pool; axes:
+    member, z-repetition, repetitions[0], repetitions[1]."""
+    repetitions = crystal.repetitions
+    built = crystal.build(lazy=False).array
+    if crystal.seeds is None:
+        built, members = built[None], [None]
+    else:
+        members = [int(seed) for seed in crystal.seeds]
+
+    drawn = np.empty((len(members), repetitions[2]) + repetitions[:2], dtype=int)
+    for m, seed in enumerate(members):
+        pool = crystal._pool_unit_for_member(seed).build(lazy=False).array
+        n_sub, uy, ux = pool.shape[1:]
+        for i in range(repetitions[2]):
+            layer = built[m, n_sub * i : n_sub * (i + 1)].reshape(
+                n_sub, repetitions[0], uy, repetitions[1], ux
+            )
+            for a in range(repetitions[0]):
+                for b in range(repetitions[1]):
+                    d = np.abs(pool - layer[None, :, a, :, b, :]).max(axis=(1, 2, 3))
+                    assert d.min() == 0
+                    drawn[m, i, a, b] = np.argmin(d)
+    return drawn
 
 
 class TestComplexExponential:

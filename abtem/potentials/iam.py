@@ -2080,16 +2080,25 @@ class CrystalPotential(_PotentialBuilder):
     num_frozen_phonons : int, optional
         Number of crystal realisations in the frozen-phonon ensemble; each
         realisation independently rebuilds its own pool of atomic
-        displacement snapshots.
+        displacement snapshots. Without `seeds`, the member seeds are spawned
+        from the crystal's root seed (see `seeds`).
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
         multislice simulation a measurement is created. If `exit_planes` is an integer
         a measurement will be collected every `exit_planes` number of slices.
-    seeds: int or sequence of int
-        Seed for the random number generator (RNG), or one seed for each RNG in the
-        frozen phonon ensemble.
+    seeds: int or sequence of int, optional
+        One seed for each member of the frozen-phonon ensemble. An int is the seed
+        of a one-member ensemble, or, with `num_frozen_phonons`, the seed the
+        member seeds are drawn from. Without `seeds`, the crystal is drawn from a
+        root seed fixed when it is created, so that every simulation of it sees
+        the same crystal: the seeds of the unit's `FrozenPhonons` determine it,
+        and a unit with several configurations but no `FrozenPhonons` (a built
+        potential ensemble, a list of GPAW calculators) gets a random one. Two
+        crystals made from one `FrozenPhonons` unit are therefore the same
+        crystal, with the same mosaic; pass different `seeds` for independent
+        crystals.
     ensemble_mean : bool, optional
         If True (default), the mean over the frozen-phonon ensemble is calculated.
         If False, the individual configurations are returned.
@@ -2100,6 +2109,10 @@ class CrystalPotential(_PotentialBuilder):
     # from _FieldBuilderFromAtoms, so it does not inherit that declaration.
     _eq_exclude = ("_sliced_atoms",)
 
+    # Appended to a FrozenPhonons unit's seeds to make the root seed of a
+    # crystal (see _root_seed_of): "CRYS" in ASCII.
+    _root_seed_tag = 0x43525953
+
     def __init__(
         self,
         potential_unit: BasePotential,
@@ -2109,14 +2122,19 @@ class CrystalPotential(_PotentialBuilder):
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
     ):
+        root_seed = None
         if num_frozen_phonons is None and seeds is None:
+            root_seed = self._root_seed_of(potential_unit)
             self._seeds = None
         else:
-            if num_frozen_phonons is None and seeds:
-                assert isinstance(seeds, tuple)
+            if seeds is None:
+                members = np.random.SeedSequence(
+                    self._root_seed_of(potential_unit)
+                ).spawn(num_frozen_phonons)
+                seeds = tuple(int(member.generate_state(1)[0]) for member in members)
+            elif num_frozen_phonons is None:
+                seeds = validate_seeds(seeds)
                 num_frozen_phonons = len(seeds)
-            elif num_frozen_phonons is None and seeds is None:
-                num_frozen_phonons = 1
 
             self._seeds = validate_seeds(seeds, num_frozen_phonons)
 
@@ -2161,6 +2179,7 @@ class CrystalPotential(_PotentialBuilder):
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
+        self._root_seed = root_seed
 
     @property
     def ensemble_mean(self) -> bool:
@@ -2282,7 +2301,7 @@ class CrystalPotential(_PotentialBuilder):
         return self._sliced_atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, **kwargs):
+    def _from_partitioned_args_func(cls, *args, root_seed, **kwargs):
         args = unpack_blockwise_args(args)
         potential, seed = args[0]
         if hasattr(potential, "item"):
@@ -2299,13 +2318,16 @@ class CrystalPotential(_PotentialBuilder):
             num_frozen_phonons=num_frozen_phonons,
             **kwargs,
         )
+        new._root_seed = root_seed
         return _wrap_with_array(new)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(
             exclude=("potential_unit", "seeds", "num_frozen_phonons")
         )
-        output = partial(self._from_partitioned_args_func, **kwargs)
+        output = partial(
+            self._from_partitioned_args_func, root_seed=self._root_seed, **kwargs
+        )
         return output
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
@@ -2379,6 +2401,31 @@ class CrystalPotential(_PotentialBuilder):
     @property
     def _n_lateral_tiles(self) -> int:
         return self.repetitions[0] * self.repetitions[1]
+
+    @classmethod
+    def _root_seed_of(
+        cls, potential_unit: BasePotential
+    ) -> int | tuple[int, ...] | None:
+        """The entropy of the ``np.random.SeedSequence`` that draws the mosaic
+        of a crystal without ``seeds``, and from which the member seeds of one
+        with only ``num_frozen_phonons`` are spawned.
+
+        It is fixed when the crystal is created, so that every
+        ``generate_slices`` call of one crystal (every lazy block, every pass
+        of a simulation) draws the same crystal. For a ``FrozenPhonons`` unit
+        it is all of the unit's seeds followed by a tag, so a seeded
+        ``FrozenPhonons`` makes the crystal reproducible, and its streams are
+        independent of the ``default_rng(seed)`` streams ``FrozenPhonons``
+        draws its configurations from. Any other unit with more than one
+        configuration gets fresh entropy. A unit with one configuration draws
+        no mosaic and gets none.
+        """
+        fp = getattr(potential_unit, "frozen_phonons", None)
+        if isinstance(fp, FrozenPhonons):
+            return (*(int(seed) for seed in fp.seed), cls._root_seed_tag)
+        if potential_unit.num_configurations > 1:
+            return np.random.SeedSequence().entropy
+        return None
 
     def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
         """Return the unit potential to draw pool configurations from for one
@@ -2500,7 +2547,10 @@ class CrystalPotential(_PotentialBuilder):
             scheduler="synchronous", progress_bar=False
         )
 
-        rng = np.random.default_rng(member_seed)
+        if member_seed is None:
+            rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
+        else:
+            rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
             last_slice = len(self)
