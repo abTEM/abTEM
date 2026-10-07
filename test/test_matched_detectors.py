@@ -109,6 +109,23 @@ def test_matched_is_sized_again_by_other_waves():
     assert second.outer == min(other.cutoff_angles) != first.outer
 
 
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: abtem.AnnularDetector(inner=20),
+        lambda: abtem.FlexibleAnnularDetector(),
+        lambda: abtem.SegmentedDetector(2, 4, 20, None),
+    ],
+    ids=["annular", "flexible_annular", "segmented"],
+)
+def test_a_rebuilt_matched_copy_is_sized_again_by_other_waves(make):
+    # a lazy detect rebuilds a detector from its constructor arguments
+    first = make()._matched(_plane_waves())
+    rebuilt = first._from_partitioned_args()().item()
+    other = Waves(np.ones((64, 64), "complex128"), energy=300e3, sampling=0.1)
+    assert rebuilt._matched(other).outer == min(other.cutoff_angles) != first.outer
+
+
 def test_annular_detector_integrates_to_the_outer_angle_that_show_draws():
     # Plane waves diffract into a delta at k=0, which no annulus contains; the
     # exit waves of a potential scatter into the annulus.

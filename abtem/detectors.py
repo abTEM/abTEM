@@ -256,6 +256,14 @@ class _AbstractRadialDetector(BaseDetector):
         self._offset = offset
         super().__init__(to_cpu=to_cpu, url=url)
 
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        # A sized outer angle stays automatic in a detector rebuilt for a lazy
+        # `detect`, so it is sized again for the waves the rebuilt one detects.
+        if not self._outer_is_explicit:
+            kwargs["outer"] = None
+        return kwargs
+
     @property
     def inner(self) -> float:
         """Inner integration limit [mrad]."""
@@ -782,12 +790,6 @@ class AnnularDetector(_AbstractRadialDetector):
     # each energy would; the result has no radial axis to share. (The metadata of
     # an AnnularDetector result never records an outer angle.)
     _sizes_outer_per_energy = True
-
-    # Returns `self`, not a matched copy: a copy is rebuilt for each lazy block
-    # through `_copy_kwargs`, which makes its outer angle explicit, so matching a
-    # multi-energy ensemble here would pin every energy to the one angle.
-    def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
-        return self
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
