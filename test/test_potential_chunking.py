@@ -891,15 +891,29 @@ class TestCrystalPotentialChunking:
 
         assert crystal.seeds == (7, 8, 9)
 
-    def test_the_lazy_graph_carries_the_unit_once(self):
-        """The task that builds the shared pool takes the unit from the graph's
-        own copy, so the tasks of the graph, serialized one by one as a
+    @pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+    @pytest.mark.parametrize(
+        "frozen_phonons, repetitions, kwargs",
+        [
+            (False, (1, 1, 2), dict(num_frozen_phonons=3)),
+            # a pool of 2 for 4 lateral tiles, enlarged in the pool's task
+            (True, (2, 2, 2), dict()),
+        ],
+        ids=["unit", "enlarged pool"],
+    )
+    def test_the_lazy_graph_carries_the_unit_once(
+        self, frozen_phonons, repetitions, kwargs
+    ):
+        """The task that builds the shared pool derives it from the graph's own
+        copy of the unit, so the tasks of the graph, serialized one by one as a
         distributed scheduler receives them, hold the unit once."""
         import cloudpickle
 
         atoms = bulk("Si", cubic=True) * (6, 6, 2)
+        if frozen_phonons:
+            atoms = abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1)
         unit = Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
-        crystal = CrystalPotential(unit, (1, 1, 2), num_frozen_phonons=3)
+        crystal = CrystalPotential(unit, repetitions, **kwargs)
 
         graph = dict(crystal._partition_args(lazy=True)[0].__dask_graph__())
         size = sum(len(cloudpickle.dumps(task)) for task in graph.values())

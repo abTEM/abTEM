@@ -7,7 +7,7 @@ import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
 from numbers import Number
-from operator import methodcaller, mul
+from operator import mul
 from typing import TYPE_CHECKING, Optional, Sequence, Type
 
 import dask
@@ -2389,11 +2389,9 @@ class CrystalPotential(_PotentialBuilder):
 
             if build_pool:
                 # one task of this graph, which every block depends on; it
-                # takes the graph's one copy of the unit when the pool is the
-                # unit itself
-                pool_unit = self._pool_unit_for_member(None)
-                shared_pool = dask.delayed(methodcaller("build", lazy=False))(
-                    lazy_unit if pool_unit is potential_unit else pool_unit
+                # derives the pool from the graph's one copy of the unit
+                shared_pool = dask.delayed(self._build_shared_pool)(
+                    lazy_unit, self._n_lateral_tiles
                 )
             elif shared_pool is not None:
                 shared_pool = dask.delayed(shared_pool)
@@ -2421,7 +2419,9 @@ class CrystalPotential(_PotentialBuilder):
             if unit_is_lazy:
                 potential_unit = potential_unit.ensure_computed(progress_bar=False)
             if build_pool:
-                shared_pool = self._pool_unit_for_member(None).build(lazy=False)
+                shared_pool = self._build_shared_pool(
+                    potential_unit, self._n_lateral_tiles
+                )
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2467,9 +2467,23 @@ class CrystalPotential(_PotentialBuilder):
         return None
 
     def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
+        """The unit to draw pool configurations from for one ensemble member, or
+        for the single default builder (see `_pool_unit`)."""
+        return self._pool_unit(self.potential_unit, self._n_lateral_tiles, member_seed)
+
+    @classmethod
+    def _build_shared_pool(cls, unit: BasePotential, n_tiles: int) -> PotentialArray:
+        """The pool every member draws from, unless each reseeds its own."""
+        return cls._pool_unit(unit, n_tiles, None).build(lazy=False)
+
+    @staticmethod
+    def _pool_unit(
+        unit: BasePotential, n_tiles: int, member_seed: Optional[int]
+    ) -> BasePotential:
         """Return the unit potential to draw pool configurations from for one
         ensemble member (``member_seed`` is that member's seed), or for the
-        single default builder (``member_seed`` is None).
+        single default builder (``member_seed`` is None), of a crystal of
+        ``n_tiles`` lateral tiles of ``unit``.
 
         Two independent adjustments are made when the unit carries frozen
         phonons; a precomputed ``PotentialArray`` unit has a fixed pool and is
@@ -2497,8 +2511,6 @@ class CrystalPotential(_PotentialBuilder):
            member gets its own independent set of atomic snapshots. This adds
            no cost: the pool was already rebuilt once per member.
         """
-        unit = self.potential_unit
-        n_tiles = self._n_lateral_tiles
         fp = getattr(unit, "frozen_phonons", None)
         if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
             return unit
