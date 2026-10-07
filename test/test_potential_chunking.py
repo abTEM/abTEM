@@ -833,6 +833,16 @@ class TestCrystalPotentialChunking:
             a.build(lazy=False).array, b.build(lazy=False).array
         )
 
+    def test_roots_that_differ_by_a_small_relative_amount_are_different_crystals(self):
+        """The root seed is compared exactly, not to a relative tolerance."""
+        unit = _frozen_phonon_crystal(6, (1, 1, 1)).potential_unit.build(lazy=False)
+        a = CrystalPotential(unit, (2, 3, 2))
+        b = a.copy()
+        b._root_seed = a._root_seed + a._root_seed // 10**9
+
+        assert a != b
+        assert a == a.copy()
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize(
         "case, expected",
