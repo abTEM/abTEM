@@ -8,6 +8,7 @@ from ase import Atoms
 from hypothesis import given
 from utils import devices, gpu, si_cubic_atoms, si_diamond_atoms
 
+from abtem.core.backend import asnumpy
 from abtem.core.grid import disk_meshgrid
 from abtem.integrals import (
     QuadratureProjectionIntegrals,
@@ -107,6 +108,41 @@ def test_crystal_potential_builds(data, potential_unit, tile, lazy):
         potential_unit.gpts[0] * tile[0],
         potential_unit.gpts[1] * tile[1],
     )
+
+
+def test_lazy_potential_unit_is_evaluated_once():
+    """A lazily built unit is materialized once, not once per slice.
+
+    A unit the caller has built themselves is used as-is, so a lazy one used
+    to be recomputed every time a slice consumed it -- once per unit slice per
+    z-repetition.
+    """
+    import dask.array as da
+    from ase.build import bulk
+
+    evaluations = []
+
+    def tap(block):
+        evaluations.append(None)
+        return block
+
+    atoms = bulk("Si", "diamond", a=5.43, cubic=True)
+    unit = Potential(atoms, gpts=32).build(lazy=True)
+    # 'meta' given explicitly: without it dask infers the output type by
+    # calling tap on a probe block, which the count would pick up.
+    unit._array = da.map_blocks(
+        tap, unit.array, meta=np.array((), dtype=unit.array.dtype)
+    )
+    assert unit.array.npartitions == 1
+    assert not evaluations
+
+    crystal = CrystalPotential(unit, repetitions=(2, 2, 4))
+    assert len(crystal) > 1
+
+    built = crystal.build().compute()
+
+    assert len(evaluations) == 1
+    assert built.array.shape == (len(crystal), 64, 64)
 
 
 @given(
@@ -757,6 +793,39 @@ def test_threaded_interpolation_matches_serial_kernel():
     np.testing.assert_allclose(array_threaded, array_serial, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_finite_projection_smooths_only_the_elements_given_a_sigma(device):
+    """With a smoothing width for Mg only, the finite MgO slice is the smoothed Mg part
+    plus the unsmoothed O part; every element without a width used to be dropped."""
+    import ase.build
+
+    from abtem.parametrizations import LobatoParametrization
+
+    atoms = ase.build.bulk("MgO", "rocksalt", a=4.21, cubic=True)
+    symbols = np.array(atoms.get_chemical_symbols())
+
+    def build(atoms, sigmas):
+        parametrization = LobatoParametrization(sigmas=sigmas)
+        potential = Potential(
+            atoms,
+            sampling=0.1,
+            slice_thickness=2.105,
+            projection="finite",
+            parametrization=parametrization,
+            device=device,
+        )
+        return asnumpy(potential.build(lazy=False).array)
+
+    both = build(atoms, {"Mg": 0.05})
+    magnesium = build(atoms[symbols == "Mg"], {"Mg": 0.05})
+    oxygen = build(atoms[symbols == "O"], {})
+
+    np.testing.assert_allclose(
+        both, magnesium + oxygen, rtol=0, atol=1e-5 * np.abs(both).max()
+    )
+    assert np.abs(oxygen).max() > 0.1 * np.abs(both).max()
+
+
 def test_finite_projection_tolerance_matches_tight_reference():
     # Regression test for the lateral disk-truncation optimization in
     # QuadratureProjectionIntegrals.integrate_on_grid: build a potential with
@@ -828,6 +897,27 @@ def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
 
     max_dev = np.abs(gpu_array - cpu).max() / cpu.max()
     assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
+
+
+@pytest.mark.parametrize(
+    "exit_planes, expected",
+    [
+        (10, (-1, 9, 19)),
+        (19, (-1, 18, 19)),
+        # every integer up to the number of slices includes the entrance plane
+        (20, (-1, 19)),
+        (21, (19,)),
+        (None, (19,)),
+    ],
+)
+def test_integer_exit_planes_include_entrance_plane_up_to_num_slices(
+    exit_planes, expected
+):
+    # issue #515: exit_planes == num_slices used to drop the thickness axis while
+    # exit_planes == num_slices - 1 kept it
+    from abtem.potentials.iam import _validate_exit_planes
+
+    assert _validate_exit_planes(exit_planes, 20) == expected
 
 
 def test_potential_array_slicing_maps_exit_planes():
