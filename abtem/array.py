@@ -1828,7 +1828,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     # object to an array through __len__ and __getitem__, because their priority
     # is lower. __array_ufunc__ = None would also defer them, but dask treats any
     # object with shape, dtype and __array_ufunc__ as array-like and then reads
-    # its ndim, which an ArrayObject lacks.
+    # its ndim, which an ArrayObject lacks. The same deferral applies to NumPy's
+    # in-place operators: `ndarray += m` leaves the ndarray unchanged and binds
+    # the name to the new object returned by `m.__radd__`.
     __array_priority__ = 1000
 
     def _get_ensemble_axes_metadata_items(self, items):
