@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import operator
 import warnings
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager, nullcontext
@@ -1753,7 +1754,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
         kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = getattr(self.array, func)(other_array)
+        if func.startswith("__r"):
+            # Through the operator module with the operands swapped, so that a
+            # left operand the array's own reflected method rejects, such as a
+            # dask array for CuPy, is dispatched by its own operator.
+            kwargs["array"] = getattr(operator, func[3:-2])(other_array, self.array)
+        else:
+            kwargs["array"] = getattr(self.array, func)(other_array)
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(
@@ -1803,8 +1810,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __pow__(self, other: Self) -> Self:
         return self._arithmetic(other, "__pow__")
 
-    __radd__ = __add__
-    __rmul__ = __mul__
+    def __radd__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__radd__")
+
+    def __rmul__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rmul__")
+
+    def __rpow__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rpow__")
 
     # NumPy scalars and arrays, dask arrays and CuPy arrays on the left of an
     # operator defer to the reflected methods above, instead of coercing this

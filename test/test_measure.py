@@ -119,7 +119,7 @@ def test_add_subtract(data, measurement, method, lazy, device):
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
 @pytest.mark.parametrize(
     "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
 )
@@ -127,16 +127,15 @@ def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
     # Oracle: the same operation with the scalar on the left of the plain array.
     # The array is not symmetric under any of the operations, so a reflected
     # operation computed in the forward order (`2 / m` as `m / 2`) fails.
-    if lazy and device == "mps" and scalar_type in ("numpy_float64", "0d_array"):
+    if lazy and device == "mps" and scalar_type == "numpy_float64":
         # On a lazy Metal measurement, dask's meta computation casts to float64,
-        # which Metal does not have, and dask defers to a TorchNDArray operand,
-        # leaving NotImplemented where an array is expected. The forward
-        # operation (`m op scalar`) fails the same way.
-        pytest.skip("float64 and device-array operands of a lazy Metal measurement")
+        # which Metal does not have. The forward operation (`m op scalar`) fails
+        # the same way.
+        pytest.skip("float64 operand of a lazy Metal measurement")
     xp = get_array_module(device)
     host_scalar = {
         "python": 2.0,
-        "numpy_float64": np.float64(-0.5),
+        "numpy_float64": np.float64(1.5),
         "numpy_float32": np.float32(3.0),
         "0d_array": np.asarray(2.0),
     }[scalar_type]
