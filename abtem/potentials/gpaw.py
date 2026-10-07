@@ -295,7 +295,11 @@ def _drops_directions(frozen_phonons: BaseFrozenPhonons) -> bool:
 def _slice_axes_frame(atoms: Atoms, plane, gpts) -> np.ndarray:
     """The linear map from the Cartesian axes of `atoms` to those of the potentials
     `_generate_slices` builds from them, acting on row vectors."""
-    potential = Potential(atoms=atoms[:1], gpts=gpts, projection="finite", plane=plane)
+    # The default box was reported when the GPAWPotential was constructed.
+    with _box_strain_warning_silenced():
+        potential = Potential(
+            atoms=atoms[:1], gpts=gpts, projection="finite", plane=plane
+        )
     if potential.plane != "xy" and not is_cell_orthogonal(atoms.cell):
         raise NotImplementedError
     return potential._transform_atoms()[2]

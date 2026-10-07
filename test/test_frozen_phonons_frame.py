@@ -8,6 +8,8 @@ transformed structure with a different number of atoms, and
 `Potential.to_atoms_ensemble()` returns the configurations as simulated.
 """
 
+import warnings
+
 import ase
 import ase.build
 import numpy as np
@@ -824,6 +826,28 @@ def test_gpaw_directions_with_a_strained_frame_are_unchanged(monkeypatch, sigmas
     expected = atoms.positions.copy()
     expected[:, :2] += (np.array(sigmas, dtype=np.float32) * r)[:, :2]
     np.testing.assert_array_equal(displaced.positions, expected)
+
+
+def test_gpaw_directions_frame_does_not_repeat_the_box_warning():
+    """The frame of the potentials GPAWPotential builds comes from a Potential of
+    its atoms, whose default box strains a sheared cell; the GPAWPotential
+    reported that box when it was constructed, so building the frame must not
+    report it again."""
+    from abtem.potentials.gpaw import _slice_axes_frame
+
+    atoms = ase.Atoms(
+        "Au",
+        positions=[(2.0, 2.0, 2.5)],
+        cell=[[4.0, 0.0, 0.0], [0.4, 4.0, 0.0], [0.0, 0.0, 5.0]],
+        pbc=True,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        frame = _slice_axes_frame(atoms, "xy", (40, 40))
+
+    assert [str(warning.message) for warning in caught] == []
+    assert frame.shape == (3, 3)
 
 
 @pytest.mark.parametrize("directions", ["xyz", "zyx"])
