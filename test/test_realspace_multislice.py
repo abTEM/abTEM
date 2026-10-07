@@ -668,6 +668,42 @@ class TestFullExpansionChunking:
                     err_msg=f"chunk size {chunk_size}",
                 )
 
+    def test_back_propagation_holds_one_summed_slice_per_exit_plane(self, monkeypatch):
+        # exit planes after every second of 6 slices, in chunks of one slice
+        atoms = ase.build.bulk("Si", cubic=True)
+        displaced = list(abtem.FrozenPhonons(atoms * (1, 1, 2), 1, sigmas=0.1, seed=1))
+        potential = abtem.Potential(
+            displaced[0],
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / 3,
+            exit_planes=2,
+        )
+        received = []
+        back_propagate = abtem.multislice._back_propagate_backscattered_waves
+
+        def spy(backscattered_waves, slices, *args):
+            received.append([(s.array[0].copy(), s.slice_thickness[0]) for s in slices])
+            return back_propagate(backscattered_waves, slices, *args)
+
+        monkeypatch.setattr(
+            abtem.multislice, "_back_propagate_backscattered_waves", spy
+        )
+        _multislice_arrays(potential, False, potential_chunk_size=1)
+
+        built = potential.build(lazy=False)
+        planes = built.exit_planes
+        assert planes == (-1, 1, 3, 5)
+        (blocks,) = received
+        assert len(blocks) == len(planes) - 1
+        for (array, thickness), start, stop in zip(blocks, planes[:-1], planes[1:]):
+            expected = built.array[start + 1 : stop + 1].sum(axis=0)
+            np.testing.assert_allclose(
+                array, expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+            )
+            assert thickness == pytest.approx(
+                sum(built.slice_thickness[start + 1 : stop + 1])
+            )
+
     @pytest.mark.parametrize("lazy", [False, True])
     def test_backscattering_between_identical_slices_is_zero(self, lazy):
         # One slice per unit cell: every slice equals the next, so the correction

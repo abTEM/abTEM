@@ -782,7 +782,11 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
-        forward_slices = []
+        # The sum of the slices of each exit-plane block, built as the forward
+        # pass goes, for the back-propagation of this configuration's
+        # backscattered waves: one slice is held per exit plane, not per slice.
+        blocks = []
+        block = None
 
         # One stream of slices across the chunks: the last slice of a chunk
         # looks ahead to the first slice of the next one, so only the exit
@@ -805,7 +809,7 @@ def multislice_and_detect(
             tqdm_pbar.update_if_exists(int(n_waves))
 
             if return_backscattered:
-                forward_slices.append(potential_slice)
+                block = _add_to_block(block, potential_slice)
 
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -835,16 +839,16 @@ def multislice_and_detect(
                             waves, detectors, measurements, measurement_index
                         )
                 exit_plane_index += 1
+                if return_backscattered:
+                    blocks.append(block)
+                    block = None
 
         if return_backscattered:
-            # The back-propagation of this configuration's backscattered waves
-            # uses the slices its forward pass used.
             _back_propagate_backscattered_waves(
                 measurements[-1][  # type: ignore
                     _validate_potential_ensemble_indices(potential_index, (), potential)
                 ],
-                forward_slices,
-                potential.exit_planes,
+                blocks,
                 multislice_step,
             )
 
@@ -861,48 +865,23 @@ def multislice_and_detect(
     return measurements
 
 
-def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
-    """
-    Group potential slices between exit_planes, summing their thicknesses.
+def _add_to_block(block, potential_slice):
+    """Add a slice to the sum of the slices of one exit-plane block, and its
+    thickness to the block's. The block starts as a copy of its first slice
+    (`block` is None)."""
+    if block is None:
+        return potential_slice.copy()
 
-    Parameters
-    ----------
-    potential_slices : list of PotentialSlice
-        Original slices along the beam direction.
-    exit_planes : list of int
-        Indices of exit planes (first can be -1 for entrance plane).
-
-    Returns
-    -------
-    effective_slices : list of PotentialSlice
-        Aggregated slices with summed potential arrays and summed thicknesses.
-    """
-
-    effective_slices = []
-
-    for i in range(0, len(exit_planes) - 1):
-        idx_start = exit_planes[i] + 1  # slice after previous exit plane
-        idx_end = exit_planes[i + 1] + 1  # include this exit plane
-
-        # Aggregate slices in this block
-        combined_slice = potential_slices[idx_start].copy()
-        thickness = combined_slice.slice_thickness[0]
-        # Add remaining slices in the block
-        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
-            combined_slice += in_bw_slice
-            thickness += in_bw_slice.slice_thickness[0]
-            combined_slice._slice_thickness = (thickness,)
-            combined_slice._slice_limits = [(0, thickness)]
-
-        effective_slices.append(combined_slice)
-
-    return effective_slices
+    thickness = block.slice_thickness[0] + potential_slice.slice_thickness[0]
+    block += potential_slice
+    block._slice_thickness = (thickness,)
+    block._slice_limits = [(0, thickness)]
+    return block
 
 
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    potential_slices: list[BasePotential],
-    exit_planes: tuple[int, ...],
+    effective_slices: list[BasePotential],
     multislice_step: Callable,
 ) -> Waves:
     """
@@ -911,11 +890,11 @@ def _back_propagate_backscattered_waves(
     them for a final backscattered wave result.
 
     `backscattered_waves` are those of one configuration, with the exit-plane axis
-    first, and `potential_slices` are the slices its forward pass used.
+    first, and `effective_slices` are the sums of the slices its forward pass used
+    between consecutive exit planes.
     """
 
     xp = get_array_module(backscattered_waves.device)
-    effective_slices = _aggregate_slices_by_exit_planes(potential_slices, exit_planes)
 
     num_slices = len(effective_slices)
 
