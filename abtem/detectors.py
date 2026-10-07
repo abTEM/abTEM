@@ -664,8 +664,9 @@ class AnnularDetector(_AbstractRadialDetector):
     ----------
     inner: float
         Inner integration limit [mrad].
-    outer: float
-        Outer integration limit [mrad].
+    outer: float, optional
+        Outer integration limit [mrad]. If None, the antialias cutoff angle of the
+        detected waves.
     offset: two float, optional
         Center offset of the annular integration region [mrad].
     to_cpu : bool, optional
