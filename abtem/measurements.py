@@ -2400,9 +2400,17 @@ class Images(_BaseMeasurement2D):
         flyback_time : float
             Flyback time of the beam [s].
         rms_power : float
-            RMS power of the scan noise [V].
+            Strength of the scan distortion: the FWHM of the local
+            magnification deviation across the frame, in percent (235.5 times
+            its RMS value).
         max_frequency : float
-            Maximum frequency of the scan noise [1/Å].
+            Maximum frequency of the scan noise [Hz].
+        num_components : int
+            Number of random frequency components in each of the x and y
+            distortions. Default is 200.
+        seed : int, optional
+            Seed for the random distortion. If given, the result has a sample
+            axis of length 1.
         """
         transform = ScanNoiseTransform(
             dwell_time=dwell_time,
