@@ -2110,6 +2110,11 @@ class CrystalPotential(_PotentialBuilder):
     # crystal (see _root_seed_of): "CRYS" in ASCII.
     _root_seed_tag = 0x43525953
 
+    # A crystal pickled without a shared pool loads with none; `__setstate__`
+    # gives one pickled without a root seed that of a fresh crystal of its unit,
+    # or none when it has member seeds.
+    _shared_pool = None
+
     def __init__(
         self,
         potential_unit: BasePotential,
@@ -2185,6 +2190,15 @@ class CrystalPotential(_PotentialBuilder):
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._root_seed = root_seed
         self._shared_pool: Optional[PotentialArray] = None
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if "_root_seed" not in state:
+            self._root_seed = (
+                None
+                if self._seeds is not None
+                else self._root_seed_of(self._potential_unit)
+            )
 
     def __eq__(self, other):
         # The root seed is an identity, compared exactly: the generic equality

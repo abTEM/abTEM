@@ -894,6 +894,25 @@ class TestCrystalPotentialChunking:
         assert rebuilt == crystal
         assert drawn == []
 
+    @pytest.mark.parametrize("seeds", [None, (5, 6)], ids=["unseeded", "seeded"])
+    def test_a_crystal_whose_pickle_lacks_the_root_seed_equals_a_fresh_one(self, seeds):
+        """A crystal whose pickle lacks the root seed and the shared pool."""
+        import copy
+        import pickle
+
+        fresh = _frozen_phonon_crystal(4, (2, 2, 1), seeds=seeds)
+        stripped = copy.copy(fresh)
+        del stripped.__dict__["_root_seed"], stripped.__dict__["_shared_pool"]
+        loaded = pickle.loads(pickle.dumps(stripped))
+
+        eager = loaded.build(lazy=False).array
+
+        assert loaded == fresh
+        assert fresh == loaded
+        np.testing.assert_array_equal(loaded.build(lazy=False).array, eager)
+        np.testing.assert_array_equal(loaded.build(lazy=True).compute().array, eager)
+        np.testing.assert_array_equal(fresh.build(lazy=False).array, eager)
+
     def test_the_member_seeds_of_a_crystal_are_distinct(self, monkeypatch):
         """A member seed that repeats an earlier one is replaced."""
         values = iter([7, 7, 8, 9])
