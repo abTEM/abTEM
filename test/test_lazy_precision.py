@@ -22,18 +22,24 @@ from abtem import (
     WavesDetector,
 )
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy, copy_to_device
 from abtem.core.fft import fft2, fft2_convolve
 from abtem.measurements import DiffractionPatterns, Images
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
 from abtem.tilt import BeamTilt
 from abtem.waves import Waves
-from utils import synthetic_transition_potential
+from utils import requires_gpu, synthetic_transition_potential
 
 CONFIG_AND_INPUT = [
     ("float32", np.complex128),
     ("float64", np.complex64),
 ]
+
+# CuPy and NumPy; Metal stores float32 only, and every case here has a 64-bit side.
+cuda_and_cpu = pytest.mark.parametrize(
+    "device", [pytest.param("gpu", marks=requires_gpu.marks), "cpu"]
+)
 
 GRID = (16, 20)
 MEMBERS = 3
@@ -83,7 +89,8 @@ def _check(lazy, eager, member_offset_free=False):
     declared = lazy.array.dtype
     computed = lazy.copy().compute().array
     assert declared == computed.dtype == eager.array.dtype
-    expected = eager.array
+    computed = asnumpy(computed)
+    expected = asnumpy(eager.array)
     if member_offset_free:
         computed = computed - computed.min(axis=(-2, -1), keepdims=True)
         expected = expected - expected.min(axis=(-2, -1), keepdims=True)
@@ -117,13 +124,16 @@ WAVES_ENTRY_POINTS = {
 }
 
 
+@cuda_and_cpu
 @pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
 @pytest.mark.parametrize("name", WAVES_ENTRY_POINTS)
-def test_lazy_waves_results_declare_their_block_precision(name, config, input_dtype):
+def test_lazy_waves_results_declare_their_block_precision(
+    name, config, input_dtype, device
+):
     entry_point = WAVES_ENTRY_POINTS[name]
     with abtem.config.set({"precision": config, "fft": "numpy"}):
-        lazy = entry_point(_waves(input_dtype, lazy=True))
-        eager = entry_point(_waves(input_dtype, lazy=False))
+        lazy = entry_point(_waves(input_dtype, lazy=True).copy_to_device(device))
+        eager = entry_point(_waves(input_dtype, lazy=False).copy_to_device(device))
         assert lazy.is_lazy and not eager.is_lazy
         _check(lazy, eager)
 
@@ -232,46 +242,58 @@ MEASUREMENT_PRECISION = {
 }
 
 
+@cuda_and_cpu
 @pytest.mark.parametrize("name", MEASUREMENTS)
-def test_lazy_measurements_declare_their_block_precision(name):
+def test_lazy_measurements_declare_their_block_precision(name, device):
     make_lazy, make_eager, method = MEASUREMENTS[name]
     config = MEASUREMENT_PRECISION.get(name, "float32")
     with abtem.config.set({"precision": config, "fft": "numpy"}):
-        lazy = method(make_lazy())
-        eager = method(make_eager())
+        lazy = method(make_lazy().copy_to_device(device))
+        eager = method(make_eager().copy_to_device(device))
         assert lazy.is_lazy and not eager.is_lazy
         _check(lazy, eager, member_offset_free=name.startswith("integrate_gradient"))
 
 
-def test_lazy_potential_array_transmission_function_declares_its_block_precision():
+@cuda_and_cpu
+def test_lazy_potential_array_transmission_function_declares_its_block_precision(
+    device,
+):
     with abtem.config.set({"precision": "float32"}):
-        lazy = _potential_array(np.float64, True).transmission_function(100e3)
-        eager = _potential_array(np.float64, False).transmission_function(100e3)
+        lazy = _potential_array(np.float64, True).copy_to_device(device)
+        eager = _potential_array(np.float64, False).copy_to_device(device)
+        lazy = lazy.transmission_function(100e3)
+        eager = eager.transmission_function(100e3)
         assert lazy.is_lazy and not eager.is_lazy
         _check(lazy, eager)
 
 
+@cuda_and_cpu
 @pytest.mark.parametrize("dtype", [np.complex128, np.uint16])
-def test_lazy_fft2_declares_the_dtype_of_its_blocks(dtype):
+def test_lazy_fft2_declares_the_dtype_of_its_blocks(dtype, device):
     with abtem.config.set({"precision": "float32", "fft": "numpy"}):
         if dtype == np.complex128:
             data = _complex_data(dtype)
         else:
             data = _int_images(dtype, False).array
+        data = copy_to_device(data, device)
         result = fft2(da.from_array(data, chunks=(1,) + GRID))
         assert result.dtype == result.compute().dtype == np.complex128
 
 
+@cuda_and_cpu
 @pytest.mark.parametrize("kernel_dtype", [np.float32, np.float64, np.complex128])
 @pytest.mark.parametrize("x_dtype", [np.complex64, np.complex128, np.float32])
-def test_lazy_fft2_convolve_declares_the_dtype_of_its_blocks(x_dtype, kernel_dtype):
+def test_lazy_fft2_convolve_declares_the_dtype_of_its_blocks(
+    x_dtype, kernel_dtype, device
+):
     # The product is taken in place, so the kernel's dtype does not matter.
     with abtem.config.set({"precision": "float32", "fft": "numpy"}):
         if np.issubdtype(x_dtype, np.complexfloating):
             data = _complex_data(x_dtype)
         else:
             data = _real_data(x_dtype)
-        kernel = np.ones(GRID, dtype=kernel_dtype)
+        data = copy_to_device(data, device)
+        kernel = copy_to_device(np.ones(GRID, dtype=kernel_dtype), device)
         lazy = fft2_convolve(da.from_array(data, chunks=(1,) + GRID), kernel)
         eager = fft2_convolve(data, kernel)
         assert lazy.dtype == lazy.compute().dtype == eager.dtype
@@ -293,7 +315,7 @@ MULTISLICE_ROUTES = {
 }
 
 
-def _multislice(case, dtype, lazy, route="multislice"):
+def _multislice(case, dtype, lazy, route="multislice", device="cpu"):
     from ase.build import bulk
 
     atoms = bulk("Si", cubic=True) * (1, 1, 2)
@@ -301,10 +323,11 @@ def _multislice(case, dtype, lazy, route="multislice"):
     extent = atoms.cell[0, 0]
     if case.startswith("fp"):
         atoms = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=5)
-    potential = abtem.Potential(atoms, gpts=(32, 40), slice_thickness=2)
+    potential = abtem.Potential(atoms, gpts=(32, 40), slice_thickness=2, device=device)
     rng = np.random.default_rng(3)
     shape = (2, 32, 40)
     array = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(dtype)
+    array = copy_to_device(array, device)
     if lazy:
         array = da.from_array(array, chunks=(1, 32, 40))
     waves = Waves(
@@ -319,15 +342,16 @@ def _multislice(case, dtype, lazy, route="multislice"):
     return MULTISLICE_ROUTES[route](waves, potential, detectors)
 
 
+@cuda_and_cpu
 @pytest.mark.parametrize("route", MULTISLICE_ROUTES)
 @pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
 @pytest.mark.parametrize("case", MULTISLICE_CASES)
 def test_multislice_of_waves_runs_in_the_configured_precision(
-    case, config, input_dtype, route
+    case, config, input_dtype, route, device
 ):
     with abtem.config.set({"precision": config, "fft": "numpy"}):
-        lazy = _multislice(case, input_dtype, lazy=True, route=route)
-        eager = _multislice(case, input_dtype, lazy=False, route=route)
+        lazy = _multislice(case, input_dtype, lazy=True, route=route, device=device)
+        eager = _multislice(case, input_dtype, lazy=False, route=route, device=device)
         assert lazy.is_lazy and not eager.is_lazy
         expected = np.dtype(config)
         if np.iscomplexobj(eager.array):

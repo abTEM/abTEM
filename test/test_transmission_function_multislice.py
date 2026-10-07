@@ -5,7 +5,7 @@ band-limits a potential (a TransmissionFunction is used as given)."""
 import numpy as np
 import pytest
 from ase import Atoms
-from utils import assert_array_objects_equal
+from utils import assert_array_objects_equal, devices
 
 import abtem
 from abtem.antialias import AntialiasAperture
@@ -13,7 +13,7 @@ from abtem.antialias import AntialiasAperture
 ENERGY = 100e3
 
 
-def _potential(kind):
+def _potential(kind, device="cpu"):
     atoms = Atoms(
         "CO",
         positions=[(1.0, 1.0, 0.5), (2.5, 1.7, 2.5)],
@@ -24,19 +24,26 @@ def _potential(kind):
         atoms = abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=1)
     exit_planes = 1 if kind == "exit_planes" else None
     potential = abtem.Potential(
-        atoms, gpts=(40, 30), slice_thickness=1.0, exit_planes=exit_planes
+        atoms,
+        gpts=(40, 30),
+        slice_thickness=1.0,
+        exit_planes=exit_planes,
+        device=device,
     )
     return potential.build(lazy=kind == "lazy")
 
 
+@devices
 @pytest.mark.parametrize("kind", ["plain", "lazy", "exit_planes", "frozen_phonons"])
 @pytest.mark.parametrize("waves", ["builder", "eager", "lazy"])
-def test_multislice_through_a_transmission_function(kind, waves):
-    potential = _potential(kind)
+def test_multislice_through_a_transmission_function(kind, waves, device):
+    potential = _potential(kind, device)
     transmission_function = AntialiasAperture().bandlimit(
         potential.transmission_function(ENERGY), in_place=False
     )
-    plane_wave = abtem.PlaneWave(energy=ENERGY, extent=(4.0, 3.0), gpts=(40, 30))
+    plane_wave = abtem.PlaneWave(
+        energy=ENERGY, extent=(4.0, 3.0), gpts=(40, 30), device=device
+    )
     if waves != "builder":
         plane_wave = plane_wave.build(lazy=waves == "lazy")
 
