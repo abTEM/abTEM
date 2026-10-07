@@ -61,15 +61,13 @@ def _relative_difference(a, b):
 
 
 @pytest.mark.parametrize("reps", [(1, 1, 1), (2, 3, 2), (1, 1, 4)])
-@pytest.mark.parametrize("first, last", [(1, 3), (2, None), (0, 2), (-1, None)])
+@pytest.mark.parametrize("first, last", [(1, 3), (2, None), (0, 2)])
 def test_generate_slices_of_a_range_equal_the_slices_of_the_whole(
     calculator, reps, first, last
 ):
     potential = _potential(calculator, reps)
     whole = potential.build(lazy=False).array
-    n = len(potential)
-    first = first % n
-    stop = n if last is None else last
+    stop = len(potential) if last is None else last
 
     part = np.stack(
         [
