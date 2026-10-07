@@ -176,6 +176,15 @@ def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes():
         np.testing.assert_allclose(result.array, op(2.0, array), rtol=1e-12)
 
 
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+def test_unsupported_left_operand_raises_type_error(op):
+    # A reflected operator declines an operand it does not support, so Python
+    # raises its own TypeError rather than the measurement raising another error.
+    measurement = Images(np.ones((2, 3)), sampling=0.1)
+    with pytest.raises(TypeError, match="unsupported operand"):
+        getattr(operator, op)(object(), measurement)
+
+
 def test_measurement_as_a_map_blocks_keyword_argument():
     # dask reads the ndim of any argument it takes for array-like, and a
     # measurement must not look array-like to it.

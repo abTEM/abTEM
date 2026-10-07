@@ -1748,6 +1748,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
         ):
             other_array = other
+        elif func.startswith("__r"):
+            # The left operand's own method has already declined, so Python
+            # raises its usual TypeError naming both types.
+            return NotImplemented
         else:
             raise NotImplementedError(
                 f"arithmetic operation not implemented for {type(other).__name__}"
