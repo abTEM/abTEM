@@ -525,11 +525,7 @@ def validate_potential(
     #    raise ValueError()
 
     if waves is not None and potential is not None:
-        if isinstance(potential, ArrayObject):
-            # the grid of a built potential belongs to its data
-            potential.grid.check_match(waves)
-        else:
-            potential.grid.match(waves)
+        potential.grid.match(waves)
 
     return potential
 

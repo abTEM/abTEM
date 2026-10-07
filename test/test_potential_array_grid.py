@@ -194,3 +194,51 @@ def test_the_grid_of_the_smatrix_of_a_builder_follows_the_smatrix():
     rounded = smatrix.round_gpts_to_interpolation()
 
     assert rounded.gpts == potential.gpts == (42, 32)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"gpts": (32, 40), "extent": (10.0, 13.0)},
+        {"gpts": (32, 48), "extent": (10.0, 13.0)},
+    ],
+)
+def test_matching_built_waves_to_another_grid_is_refused_without_changing_them(other):
+    waves = abtem.PlaneWave(energy=ENERGY, gpts=(32, 40), extent=(10.0, 12.0)).build(
+        lazy=False
+    )
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20, **other)
+
+    with pytest.raises(RuntimeError, match="Inconsistent grid"):
+        waves.match_grid(probe)
+
+    assert waves.gpts == (32, 40)
+    assert waves.extent == (10.0, 12.0)
+
+
+def test_multislice_through_a_built_potential_on_a_grid_within_tolerance_keeps_it(
+    potential_array,
+):
+    extent = potential_array.extent
+    sampling = potential_array.sampling
+    waves = abtem.PlaneWave(
+        energy=ENERGY,
+        gpts=GPTS,
+        extent=tuple(e * (1 + 5e-6) for e in extent),
+    ).build(lazy=False)
+
+    waves.multislice(potential_array)
+
+    assert potential_array.extent == extent
+    assert potential_array.sampling == sampling
+
+
+def test_matching_built_waves_fills_the_grid_of_a_builder_without_one():
+    waves = abtem.PlaneWave(energy=ENERGY, gpts=(32, 40), extent=(10.0, 12.0)).build(
+        lazy=False
+    )
+    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+
+    waves.match_grid(probe)
+
+    assert probe.gpts == (32, 40) and probe.extent == (10.0, 12.0)
