@@ -846,7 +846,15 @@ def test_gpaw_directions_frame_does_not_repeat_the_box_warning():
         warnings.simplefilter("always")
         frame = _slice_axes_frame(atoms, "xy", (40, 40))
 
-    assert [str(warning.message) for warning in caught] == []
+    # Only the report of the box is counted: ASE's own warnings, which this suite
+    # ignores, are re-enabled by `simplefilter("always")`.
+    box_warnings = [
+        str(warning.message)
+        for warning in caught
+        if issubclass(warning.category, UserWarning)
+        and str(warning.message).startswith("The box")
+    ]
+    assert box_warnings == []
     assert frame.shape == (3, 3)
 
 
