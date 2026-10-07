@@ -166,22 +166,24 @@ def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
     )
 
 
-def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes():
+@devices
+def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes(device):
     # MeasurementsEnsemble has no base axes, so NumPy's coercion through
     # __len__/__getitem__ would succeed and build an object array; a NumPy scalar
     # on the left must defer to the reflected operators instead.
-    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]])
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
     ensemble = MeasurementsEnsemble(
         array,
         ensemble_axes_metadata=[
             OrdinalAxis(values=(0, 1)),
             OrdinalAxis(values=(0, 1, 2)),
         ],
-    )
+    ).copy_to_device(device)
     for op in (operator.mul, operator.truediv, operator.add, operator.sub):
         result = op(np.float64(2.0), ensemble)
         assert isinstance(result, MeasurementsEnsemble)
-        np.testing.assert_allclose(result.array, op(2.0, array), rtol=1e-12)
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(asnumpy(result.array), op(2.0, array), rtol=1e-6)
 
 
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
@@ -1879,26 +1881,32 @@ class TestImagesNormalizeEnsemble:
         normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
         np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
 
+    @devices
     @pytest.mark.parametrize("scale, shift", [("ptp", "min"), ("max", "ptp")])
-    def test_lazy_matches_eager(self, scale, shift):
+    def test_lazy_matches_eager(self, scale, shift, device):
         """A lazy measurement, chunked along both base axes, normalizes to the
         eager result for 'ptp' as scale and as shift."""
-        array = np.random.default_rng(0).random((3, 5, 7)) + 0.5
+        if device == "mps":
+            pytest.skip("np.max and np.min are not implemented for torch arrays")
+        array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(get_dtype())
         axes = [OrdinalAxis(values=(0, 1, 2))]
         eager = Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+        eager = eager.copy_to_device(device)
         lazy = Images(
             da.from_array(array, chunks=(1, 3, 4)),
             sampling=0.1,
             ensemble_axes_metadata=axes,
-        )
-        expected = eager.normalize_ensemble(scale=scale, shift=shift).array
+        ).copy_to_device(device)
+        expected = asnumpy(eager.normalize_ensemble(scale=scale, shift=shift).array)
         normalized = lazy.normalize_ensemble(scale=scale, shift=shift)
         assert normalized.is_lazy
+        computed = normalized.array.compute()
+        assert_array_matches_device(computed, device)
         np.testing.assert_allclose(
-            normalized.array.compute(),
+            asnumpy(computed),
             expected,
             rtol=0,
-            atol=1e-12 * np.abs(expected).max(),
+            atol=1e-6 * np.abs(expected).max(),
         )
 
 
