@@ -234,3 +234,119 @@ def test_gpts_setter_takes_one_count_for_both_axes():
     assert crystal.gpts == (120, 120)
     assert crystal.potential_unit.gpts == (60, 40)
     assert crystal.build(lazy=False).array.shape[-2:] == (120, 120)
+
+
+def _probe(**grid):
+    return abtem.Probe(energy=100e3, semiangle_cutoff=20, **grid)
+
+
+def _plane_wave(**grid):
+    return abtem.PlaneWave(energy=100e3, **grid).build(lazy=False)
+
+
+def _tiled_unit(crystal):
+    reps = crystal.repetitions
+    unit = crystal.potential_unit.build(lazy=False).array
+    return np.tile(unit, (1, reps[0], reps[1]))
+
+
+@pytest.mark.parametrize(
+    "grid, with_extent, gpts, unit_gpts",
+    [
+        ({"gpts": (100, 99)}, True, (100, 99), (50, 33)),
+        ({"sampling": 0.05}, True, (160, 180), (80, 60)),
+        ({"sampling": 0.05}, False, (160, 180), (80, 60)),
+    ],
+)
+def test_match_grid_changes_the_gpts_of_the_crystal_and_of_its_unit(
+    grid, with_extent, gpts, unit_gpts
+):
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+    extent = crystal.extent if with_extent else None
+
+    crystal.match_grid(_probe(extent=extent, **grid))
+
+    assert crystal.gpts == gpts
+    assert crystal.potential_unit.gpts == unit_gpts
+    built = crystal.build(lazy=False).array
+    assert built.shape[-2:] == gpts
+    np.testing.assert_array_equal(built, _tiled_unit(crystal))
+
+
+def test_match_grid_to_an_indivisible_count_leaves_the_crystal_unchanged():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+
+    with pytest.raises(ValueError, match="divisible"):
+        crystal.match_grid(_probe(extent=crystal.extent, gpts=(100, 100)))
+
+    assert crystal.gpts == (80, 90)
+    assert crystal.potential_unit.gpts == (40, 30)
+    assert crystal.build(lazy=False).array.shape[-2:] == (80, 90)
+
+
+def test_match_grid_with_check_match_raises_on_other_gpts():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+
+    with pytest.raises(RuntimeError, match="Inconsistent grid gpts"):
+        crystal.match_grid(
+            _probe(extent=crystal.extent, gpts=(100, 99)), check_match=True
+        )
+
+    assert crystal.gpts == (80, 90)
+    assert crystal.potential_unit.gpts == (40, 30)
+
+
+def test_match_grid_to_another_extent_leaves_the_crystal_unchanged():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+
+    with pytest.raises(RuntimeError, match="(?i)extent"):
+        crystal.match_grid(_probe(extent=(10.0, 10.0), gpts=(100, 99)))
+
+    assert crystal.gpts == (80, 90)
+    assert crystal.potential_unit.gpts == (40, 30)
+
+
+def test_match_grid_to_a_built_unit_on_another_grid_leaves_the_crystal_unchanged():
+    crystal, unit = _built_unit_crystal()
+
+    with pytest.raises(RuntimeError, match="PotentialArray"):
+        crystal.match_grid(_probe(extent=crystal.extent, gpts=(160, 30)))
+
+    assert crystal.gpts == (80, 30)
+    assert unit.gpts == (40, 30)
+
+
+def test_waves_on_another_grid_change_the_gpts_of_the_crystal_and_of_its_unit():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+    waves = _plane_wave(extent=crystal.extent, gpts=(100, 99))
+
+    exit_waves = waves.multislice(crystal).compute()
+
+    assert exit_waves.array.shape == (100, 99)
+    assert crystal.gpts == (100, 99)
+    assert crystal.potential_unit.gpts == (50, 33)
+
+
+def test_waves_the_repetitions_do_not_divide_leave_the_crystal_unchanged():
+    crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
+    waves = _plane_wave(extent=crystal.extent, gpts=(100, 100))
+
+    with pytest.raises(ValueError, match="divisible"):
+        waves.multislice(crystal)
+
+    assert crystal.gpts == (80, 90)
+    assert crystal.potential_unit.gpts == (40, 30)
+
+
+def test_waves_on_another_grid_leave_the_crystal_of_a_built_unit_working():
+    crystal, unit = _built_unit_crystal()
+    waves = _plane_wave(extent=crystal.extent, gpts=(160, 30))
+
+    with pytest.raises(RuntimeError, match="PotentialArray"):
+        waves.multislice(crystal)
+
+    fresh, _ = _built_unit_crystal()
+    probe = _probe()
+    after = probe.multislice(crystal, scan=(1.0, 1.0)).compute()
+    reference = probe.multislice(fresh, scan=(1.0, 1.0)).compute()
+    np.testing.assert_array_equal(after.array, reference.array)

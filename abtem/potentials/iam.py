@@ -524,7 +524,7 @@ def validate_potential(
     #    raise ValueError()
 
     if waves is not None and potential is not None:
-        potential.grid.match(waves)
+        potential.match_grid(waves)
 
     return potential
 
@@ -2183,6 +2183,22 @@ class CrystalPotential(_PotentialBuilder):
         # The unit first: a unit that rejects its gpts leaves the crystal unchanged.
         self._potential_unit.gpts = unit_gpts
         self.grid.gpts = gpts
+
+    def match_grid(self, other, check_match: bool = False):
+        """Match the grid to another object with a Grid, keeping the unit in step."""
+        # The gpts go through the setter, which keeps the unit in step or raises
+        # before anything changes; the extent is checked first so that a mismatch
+        # leaves the gpts alone as well.
+        if check_match:
+            self.grid.check_match(other)
+        self.grid.check_match(Grid(extent=other.extent))
+        if other.extent is None:
+            # An object given a sampling works out its gpts from the extent.
+            other.extent = self.extent
+        if other.gpts is not None and tuple(other.gpts) != self.gpts:
+            self.gpts = other.gpts
+        self.grid.match(other, check_match=check_match)
+        return self
 
     @staticmethod
     def _require_the_grid_of_a_built_unit(requested, current):
