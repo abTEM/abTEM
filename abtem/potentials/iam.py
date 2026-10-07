@@ -1980,15 +1980,8 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         )
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
-        array = self.array[first_slice:last_slice]
-        if len(array.shape) == 2:
-            array = array[None]
-        return self.__class__(
-            array,
-            self.slice_thickness[first_slice:last_slice],
-            extent=self.extent,
-            energy=self.energy,
-        )
+        ensemble = (slice(None),) * len(self.ensemble_shape)
+        return self[ensemble + (slice(first_slice, last_slice),)]
 
     def transmission_function(self, energy) -> TransmissionFunction:
         """
