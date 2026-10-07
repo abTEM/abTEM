@@ -1904,6 +1904,9 @@ class PotentialArray(BasePotential, FieldArray):
             slice_thickness=self.slice_thickness,
             extent=self.extent,
             energy=energy,
+            exit_planes=self.exit_planes,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
         )
         return t
 
@@ -1947,6 +1950,13 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         Lateral sampling of the potential [1 / Å].
     energy : float
         Electron energy [eV].
+    exit_planes : int or tuple of int, optional
+        The slice indices after which an exit plane is desired, as for
+        :class:`.PotentialArray`.
+    ensemble_axes_metadata : list of AxisMetadata, optional
+        Axis metadata for each ensemble axis.
+    metadata : dict, optional
+        A dictionary defining the metadata of the transmission functions.
     """
 
     def __init__(
@@ -1956,9 +1966,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         energy: Optional[float] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(array, slice_thickness, extent, sampling)
+        super().__init__(
+            array,
+            slice_thickness,
+            extent,
+            sampling,
+            exit_planes=exit_planes,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]
