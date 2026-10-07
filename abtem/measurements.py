@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import functools
 import itertools
+import threading
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
@@ -3229,6 +3230,29 @@ def _crop_kernel_to_extent(kernel_2d, kernels_1d, extent):
     return cropped, None, float(kernel_2d.sum() - cropped.sum())
 
 
+_cupyx_signal_lock = threading.Lock()
+_cupyx_signal_imported = False
+
+
+def _import_cupyx_signal() -> None:
+    # cupyx.scipy does not import its signal submodule itself, and importing it
+    # loads cuBLAS (about 150 MB resident on CUDA), so it is imported on first
+    # use rather than with abtem. The import warns that the cupyx.jit interface
+    # it uses is experimental. catch_warnings swaps the process-wide filter
+    # list, so the import runs once per process: the first caller imports under
+    # the lock, and later callers, concurrent ones included, return without
+    # entering catch_warnings.
+    global _cupyx_signal_imported
+    if _cupyx_signal_imported:
+        return
+    with _cupyx_signal_lock:
+        if not _cupyx_signal_imported:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                import cupyx.scipy.signal  # noqa: F401, PLC0415
+            _cupyx_signal_imported = True
+
+
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1d=None):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
@@ -3261,13 +3285,7 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1
     """
     xp = get_array_module(array)
     if xp is cp:
-        # cupyx.scipy does not import its signal submodule itself, and
-        # importing it loads cuBLAS (about 150 MB resident on CUDA), so it is
-        # imported here, on first use, rather than with abtem. The import warns
-        # that the cupyx.jit interface it uses is experimental.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            import cupyx.scipy.signal  # noqa: F401, PLC0415
+        _import_cupyx_signal()
     scipy_signal = get_scipy_module(array).signal
 
     if kernels_1d is not None:
