@@ -7,7 +7,7 @@ import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
 from numbers import Number
-from operator import mul
+from operator import methodcaller, mul
 from typing import TYPE_CHECKING, Optional, Sequence, Type
 
 import dask
@@ -2380,13 +2380,6 @@ class CrystalPotential(_PotentialBuilder):
         )
 
         if lazy:
-            if build_pool:
-                # one task of this graph, which every block depends on
-                shared_pool = dask.delayed(self._pool_unit_for_member(None).build)(
-                    lazy=False
-                )
-            elif shared_pool is not None:
-                shared_pool = dask.delayed(shared_pool)
             if unit_is_lazy:
                 # one task of this graph, which every block depends on
                 lazy_unit = dask.delayed(
@@ -2397,6 +2390,17 @@ class CrystalPotential(_PotentialBuilder):
                 )(potential_unit.array)
             else:
                 lazy_unit = dask.delayed(potential_unit)
+
+            if build_pool:
+                # one task of this graph, which every block depends on; it
+                # takes the graph's one copy of the unit when the pool is the
+                # unit itself
+                pool_unit = self._pool_unit_for_member(None)
+                shared_pool = dask.delayed(methodcaller("build", lazy=False))(
+                    lazy_unit if pool_unit is potential_unit else pool_unit
+                )
+            elif shared_pool is not None:
+                shared_pool = dask.delayed(shared_pool)
 
             arrays = []
 

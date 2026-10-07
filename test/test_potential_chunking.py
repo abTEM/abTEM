@@ -863,6 +863,21 @@ class TestCrystalPotentialChunking:
 
         assert crystal.seeds == (7, 8, 9)
 
+    def test_the_lazy_graph_carries_the_unit_once(self):
+        """The task that builds the shared pool takes the unit from the graph's
+        own copy, so the tasks of the graph, serialized one by one as a
+        distributed scheduler receives them, hold the unit once."""
+        import cloudpickle
+
+        atoms = bulk("Si", cubic=True) * (6, 6, 2)
+        unit = Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        crystal = CrystalPotential(unit, (1, 1, 2), num_frozen_phonons=3)
+
+        graph = dict(crystal._partition_args(lazy=True)[0].__dask_graph__())
+        size = sum(len(cloudpickle.dumps(task)) for task in graph.values())
+
+        assert size < 1.5 * len(cloudpickle.dumps(unit))
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize(
         "case, expected",
