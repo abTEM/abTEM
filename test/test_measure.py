@@ -1573,29 +1573,32 @@ def test_interpolate_periodic_spline_and_fft(lazy):
     )
 
 
-def _periodic_spline_interpolate(array, gpts, order, lazy):
-    images = abtem.Images(array, sampling=0.1)
+def _periodic_spline_interpolate(array, gpts, order, lazy, device):
+    images = abtem.Images(copy_to_device(array, device), sampling=0.1)
     if lazy:
         images = images.lazy()
     interpolated = images.interpolate(
         gpts=gpts, method="spline", boundary="periodic", order=order
     )
-    return interpolated.compute().array
+    return asnumpy(interpolated.compute().array)
 
 
+@devices
 @lazy_params
 @pytest.mark.parametrize("order", [2, 3])
-def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(lazy, order):
+def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
+    lazy, order, device
+):
     # A periodic interpolant commutes with rolling the image by whole pixels. The
     # image has 40 x 30 pixels and is interpolated to 80 x 90, so one old pixel is
     # 2 new pixels along x and 3 along y and the rolled output is a whole-pixel roll.
     array = np.random.default_rng(0).random((40, 30))
 
     interpolated_roll = _periodic_spline_interpolate(
-        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy
+        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy, device
     )
     rolled_interpolation = np.roll(
-        _periodic_spline_interpolate(array, (80, 90), order, lazy),
+        _periodic_spline_interpolate(array, (80, 90), order, lazy, device),
         (10, 21),
         axis=(0, 1),
     )
@@ -1605,9 +1608,12 @@ def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(lazy, o
     )
 
 
+@devices
 @lazy_params
 @pytest.mark.parametrize("order", [2, 3])
-def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, order):
+def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
+    lazy, order, device
+):
     # Interpolating a periodic field with a few Fourier components from 40 x 30 to
     # 53 x 41 points (a factor that is not an integer) must give the field itself at
     # the new positions j * extent / gpts. A constant shift of the coordinates, which
@@ -1627,7 +1633,7 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, ord
         return field(*np.meshgrid(*axes, indexing="ij"))
 
     sampling = tuple(e / n for e, n in zip(extent, gpts))
-    images = abtem.Images(sample(gpts), sampling=sampling)
+    images = abtem.Images(copy_to_device(sample(gpts), device), sampling=sampling)
     if lazy:
         images = images.lazy()
     interpolated = images.interpolate(
@@ -1636,7 +1642,10 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, ord
 
     expected = sample(new_gpts)
     np.testing.assert_allclose(
-        interpolated.array, expected, rtol=0, atol=2e-3 * np.abs(expected).max()
+        asnumpy(interpolated.array),
+        expected,
+        rtol=0,
+        atol=2e-3 * np.abs(expected).max(),
     )
 
 

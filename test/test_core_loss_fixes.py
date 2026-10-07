@@ -2413,6 +2413,37 @@ def test_full_expansion_scope_is_refused_at_call_time(lazy, double_channel):
         )
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("option", ["algorithm", "detectors_elastic"])
+def test_core_loss_scan_refuses_before_building_the_probe(lazy, option, monkeypatch):
+    """An unsupported option is refused before the probe is built at every scan
+    position."""
+    from abtem.multislice import RealSpaceMultislice
+
+    builds = []
+    monkeypatch.setattr(
+        abtem.Probe, "build", lambda self, *args, **kwargs: builds.append(kwargs)
+    )
+    refused = {
+        "algorithm": RealSpaceMultislice(expansion_scope="full"),
+        "detectors_elastic": [abtem.AnnularDetector(inner=50, outer=150)],
+    }
+    atoms, potential, probe = _expansion_scope_setup()
+
+    with pytest.raises(NotImplementedError):
+        probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            lazy=lazy,
+            sites=atoms,
+            **{option: refused[option]},
+        )
+    assert builds == []
+
+
 def test_full_expansion_scope_is_refused_by_the_driver():
     """The public driver refuses it too, before any work."""
     from abtem.multislice import (

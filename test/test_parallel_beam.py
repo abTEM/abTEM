@@ -168,6 +168,29 @@ def test_block_direct_of_a_small_radius_blocks_only_the_zero_angle_pixel(fftshif
         assert zeroed == [center]
 
 
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_reciprocal_coordinates_are_whole_multiples_of_the_sampling(fftshift):
+    # Zero frequency is then exactly 0 and opposite frequencies are exact negatives,
+    # so bandlimit(inner=0) removes the zero-angle pixel on every grid.
+    sampling = (1 / 19.525, 1 / 10.0)
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 3)
+        patterns = abtem.measurements.DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=sampling,
+            fftshift=fftshift,
+            metadata={"energy": ENERGY},
+        )
+        for coordinates, n, d in zip(patterns.coordinates, shape, sampling):
+            expected = (np.arange(n) - n // 2) * d
+            if not fftshift:
+                expected = np.fft.ifftshift(expected)
+            np.testing.assert_array_equal(np.asarray(coordinates), expected)
+
+        center = (shape[0] // 2, shape[1] // 2) if fftshift else (0, 0)
+        assert patterns.bandlimit().array[center] == 0, gpts
+
+
 def test_block_direct_with_a_positive_cutoff_keeps_the_margin(potential):
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
     patterns = probe.multislice(potential).diffraction_patterns().compute()

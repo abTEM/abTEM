@@ -6,12 +6,13 @@ import types
 import numpy as np
 import pytest
 
-from utils import requires_gpu, si_cubic_atoms
+from utils import devices, requires_gpu, si_cubic_atoms
 from ase.build import bulk
 
 import abtem
 from abtem import PlaneWave, Potential
 from abtem.core import config as abtem_config
+from abtem.core.backend import asnumpy
 from abtem.core.chunks import (
     _nearest_power_of_two,
     estimate_potential_chunk_size,
@@ -375,12 +376,15 @@ class TestFiniteProjectionChunked:
         np.testing.assert_allclose(ref.array, chunked.array, atol=1e-10)
 
 
-def _frozen_phonon_crystal(num_configs, repetitions, unit_seed=1, **kwargs):
+def _frozen_phonon_crystal(
+    num_configs, repetitions, unit_seed=1, device="cpu", **kwargs
+):
     atoms = bulk("Si", cubic=True)
     unit = Potential(
         abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=unit_seed),
         gpts=(16, 16),
         slice_thickness=atoms.cell[2, 2] / 4,  # 4 slices per unit
+        device=device,
     )
     return CrystalPotential(unit, repetitions, **kwargs)
 
@@ -476,6 +480,27 @@ class TestCrystalPotentialChunking:
         for chunk in crystal_potential.generate_chunked_slices(chunk_size=chunk_size):
             assert chunk.array.shape[0] <= chunk_size
 
+    def test_single_configuration_chunks_hold_no_tiled_unit(self):
+        """A unit with one configuration is tiled into each chunk: no tiled copy
+        of the unit's slices is kept across z-repetitions."""
+        import tracemalloc
+
+        unit = Potential(
+            si_cubic_atoms(), gpts=(24, 32), slice_thickness=0.5
+        ).build(lazy=False)
+        crystal = CrystalPotential(unit, repetitions=(4, 3, 3))
+        slice_bytes = np.prod(crystal.gpts) * unit.array.dtype.itemsize
+
+        tracemalloc.start()
+        for chunk in crystal.generate_chunked_slices(chunk_size=1):
+            del chunk
+        peak = tracemalloc.get_traced_memory()[1]
+        tracemalloc.stop()
+
+        # two chunks and the temporaries of one tile; the 11 tiled unit slices
+        # would add 11
+        assert peak < 6 * slice_bytes, peak / slice_bytes
+
     def test_dtype_follows_precision_config(self, crystal_potential):
         """Chunk dtype must reflect the abtem precision config (float32 / float64)."""
         for precision, expected in [("float32", np.float32), ("float64", np.float64)]:
@@ -519,14 +544,17 @@ class TestCrystalPotentialChunking:
     @pytest.mark.parametrize("repetitions", [(2, 3, 2), (3, 1, 3)])
     @pytest.mark.parametrize("chunk_size", [1, 3, 5, 100])
     @pytest.mark.parametrize("slice_range", [(0, None), (3, 7)])
+    @devices
     def test_frozen_phonon_chunks_equal_generate_slices(
-        self, num_configs, repetitions, chunk_size, slice_range
+        self, num_configs, repetitions, chunk_size, slice_range, device
     ):
         """The chunks hold the slices of generate_slices: the member's reseeded
         pool, the balanced draws and the lateral mosaic."""
-        crystal = _frozen_phonon_crystal(num_configs, repetitions, seeds=(5,))
+        crystal = _frozen_phonon_crystal(
+            num_configs, repetitions, device=device, seeds=(5,)
+        )
         expected = np.stack(
-            [s.array[0] for s in crystal.generate_slices(*slice_range)]
+            [asnumpy(s.array[0]) for s in crystal.generate_slices(*slice_range)]
         )
         chunks = list(
             crystal.generate_chunked_slices(*slice_range, chunk_size=chunk_size)
@@ -534,7 +562,7 @@ class TestCrystalPotentialChunking:
 
         assert all(len(chunk) <= chunk_size for chunk in chunks)
         np.testing.assert_array_equal(
-            np.concatenate([chunk.array for chunk in chunks]), expected
+            np.concatenate([asnumpy(chunk.array) for chunk in chunks]), expected
         )
 
     @pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")

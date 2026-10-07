@@ -5100,11 +5100,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if margin:
             radius += max(self.angular_sampling)
 
-        # The zero-angle coordinate carries floating-point roundoff, so a radius of
-        # exactly zero does not reliably include it. Half the smaller angular sampling
-        # reaches no other pixel.
-        radius = max(radius, 0.5 * min(self.angular_sampling))
-
         return self.bandlimit(radius, outer=np.inf)
 
 
