@@ -133,3 +133,63 @@ def test_rotation_series_ms_and_bw_agree(si_disk):
     correlation = np.corrcoef(ms_array[keep], bw_array[keep])[0, 1]
     assert r1 < 0.05
     assert correlation > 0.999
+
+
+def _alpha_quartz():
+    from ase.spacegroup import crystal
+
+    return crystal(
+        ["Si", "O"],
+        basis=[(0.5302, 0.0, 1 / 3), (0.4151, 0.1476, 0.1194)],
+        spacegroup=152,
+        cellpar=[4.921, 4.921, 5.416, 90, 90, 120],
+    )
+
+
+def test_alpha_quartz_fixture():
+    quartz = _alpha_quartz()
+    assert quartz.get_chemical_formula() == "O6Si3"
+
+
+def _fill(atoms, box, z_max=None):
+    """Atoms in the box (or in its top `z_max` slab), relative to the bulk."""
+    positions = atoms.positions
+    n = len(atoms) if z_max is None else int((positions[:, 2] < z_max).sum())
+    depth = box[2] if z_max is None else z_max
+    return n / (len(_alpha_quartz()) / _alpha_quartz().get_volume() * box[0] * box[1] * depth)
+
+
+# tilted orientations only: untilted, quartz's c axis and Si rows run parallel
+# to the faces of this narrow box, and whole rows falling in or out of it move
+# the atom count by a few percent with every atom still on a lattice site
+@pytest.mark.parametrize(
+    "rotation_axis, rotation_range", [(25.0, (15.0, 20.0)), (-40.0, (5.0, 30.0))]
+)
+def test_cut_disk_fills_the_box_for_a_hexagonal_cell(rotation_axis, rotation_range):
+    """A tilted, tall box must stay filled, entrance and exit included, for a
+    non-cubic cell and an axis off x -- and the rotation_range-restricted disk
+    must put exactly the same atoms in the box as the full disk. Both failed
+    for hexagonal cells: the disk's lattice was sized with the cell rotated the
+    wrong way (a corner of it missing, its axis skewed), and the range mask
+    ignored the axis azimuth."""
+    quartz = _alpha_quartz()
+    box = (30.0, 30.0, 300.0)
+    angles = np.linspace(*rotation_range, 4)
+
+    full = rotated_atoms_ensemble(
+        cut_disk(quartz, box, rotation_axis=rotation_axis), angles, rotation_axis
+    )
+    restricted = rotated_atoms_ensemble(
+        cut_disk(quartz, box, rotation_axis=rotation_axis, rotation_range=rotation_range),
+        angles,
+        rotation_axis,
+    )
+    for a, b in zip(full.trajectory, restricted.trajectory):
+        a = a.compute() if hasattr(a, "compute") else a
+        b = b.compute() if hasattr(b, "compute") else b
+        assert abs(_fill(a, box) - 1) < 0.01
+        assert _fill(a, box, z_max=20.0) > 0.97
+        order_a = np.lexsort(np.round(a.positions, 6).T)
+        order_b = np.lexsort(np.round(b.positions, 6).T)
+        np.testing.assert_allclose(a.positions[order_a], b.positions[order_b], atol=1e-6)
+        np.testing.assert_array_equal(a.numbers[order_a], b.numbers[order_b])

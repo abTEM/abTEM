@@ -9,7 +9,7 @@ import dask
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import atoms_in_cell, euler_to_rotation
+from abtem.atoms import _tilt_rotation_matrix, atoms_in_cell
 from abtem.core.axes import NonLinearAxis
 from abtem.inelastic.phonons import AtomsEnsemble
 
@@ -19,12 +19,7 @@ def _rotation_matrix(angle: float, rotation_axis: float = 0.0) -> np.ndarray:
     `rotation_axis` [deg] about `z`, without any net rotation about `z` -- the
     zxz Euler sequence `(rotation_axis, angle, -rotation_axis)` used throughout
     this module."""
-    return euler_to_rotation(
-        np.deg2rad(rotation_axis),
-        np.deg2rad(angle),
-        -np.deg2rad(rotation_axis),
-        axes="zxz",
-    )
+    return _tilt_rotation_matrix(angle, rotation_axis)
 
 
 def _rotate_and_crop_to_cell(

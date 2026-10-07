@@ -1174,39 +1174,53 @@ def _rotate_positions(
     return (positions - center) @ R.T + center
 
 
+def _tilt_rotation_matrix(angle: float, rotation_axis: float = 0.0) -> np.ndarray:
+    """The rotation matrix for tilting by `angle` [deg] about an axis at azimuth
+    `rotation_axis` [deg] about `z`, without any net rotation about `z` -- the
+    zxz Euler sequence `(rotation_axis, angle, -rotation_axis)` that
+    :mod:`abtem.rotation_series` rotates a crystallite with."""
+    return euler_to_rotation(
+        np.deg2rad(rotation_axis),
+        np.deg2rad(angle),
+        -np.deg2rad(rotation_axis),
+        axes="zxz",
+    )
+
+
 def _disk_range_mask(
-    yz: np.ndarray,
-    box_y: float,
-    box_z: float,
+    positions: np.ndarray,
+    box: np.ndarray,
     rotation_range: tuple[float, float],
+    rotation_axis: float,
     margin: float,
 ) -> np.ndarray:
-    """Boolean mask selecting which rows of `yz` (an (N, 2) array of (y, z)
-    positions relative to the disk's own center) land within a
-    (box_y, box_z)-sized rectangle (grown by `margin` on each side) centered
-    at the origin, for at least one rotation angle in `rotation_range` [deg]
-    about `x`. This is the exact condition for an atom to be able to appear
-    inside the box for some angle in the range -- not an approximation of
-    it -- so restricting to it never drops an atom that a simulated rotation
-    step could actually need."""
-    theta_min, theta_max = sorted(np.deg2rad(rotation_range))
-    span = theta_max - theta_min
+    """Boolean mask selecting which rows of `positions` (an (N, 3) array, in the
+    box frame, relative to the box center) land inside `box` (grown by `margin`
+    on each side) after tilting by at least one angle in `rotation_range` [deg]
+    about the axis at azimuth `rotation_axis` [deg] -- with the same rotation,
+    about the same center, as :func:`abtem.rotation_series.rotated_atoms_ensemble`
+    applies. This is the exact condition for an atom to be able to appear
+    inside the box for some angle in the range, for any cell and any axis
+    azimuth, so restricting to it never drops an atom a rotation step could
+    actually need.
+
+    (It used to test only the (y, z) cross-section against `box`'s y and z
+    sizes, in the frame before the azimuth rotation -- right for an axis along
+    `x`, but for any other azimuth the box's cross-section perpendicular to the
+    axis is wider than its y size, and atoms near its corners were dropped.)"""
+    theta_min, theta_max = sorted(rotation_range)
     # Fine enough that even a rotation series with hundreds of steps samples
     # this range far more coarsely than this mask does, so no angle actually
     # used in a real rotation series can fall in the gap between two of
     # these samples and be missed.
-    n_samples = max(2, int(np.ceil(span / np.deg2rad(0.01))) + 1)
-    thetas = np.linspace(theta_min, theta_max, n_samples)
+    n_samples = max(2, int(np.ceil((theta_max - theta_min) / 0.01)) + 1)
+    half = np.asarray(box, dtype=float) / 2 + margin
 
-    y, z = yz[:, 0], yz[:, 1]
-    half_y, half_z = box_y / 2 + margin, box_z / 2 + margin
-
-    survives = np.zeros(len(yz), dtype=bool)
-    for theta in thetas:
-        c, s = np.cos(theta), np.sin(theta)
-        yp = c * y - s * z
-        zp = s * y + c * z
-        survives |= (np.abs(yp) <= half_y) & (np.abs(zp) <= half_z)
+    survives = np.zeros(len(positions), dtype=bool)
+    for theta in np.linspace(theta_min, theta_max, n_samples):
+        candidates = np.flatnonzero(~survives)
+        rotated = positions[candidates] @ _tilt_rotation_matrix(theta, rotation_axis).T
+        survives[candidates] = np.all(np.abs(rotated) <= half, axis=1)
     return survives
 
 
@@ -1231,7 +1245,15 @@ def _disk_lattice_points(
     height = np.linalg.norm(box) + margin
     large_box = np.array((width, height, height))
 
-    rotated_cell = _rotate_positions(cell, rotation_axis)
+    # Count the repetitions with the cell rotated exactly as the lattice is
+    # below (by -rotation_axis). Counting them with the opposite rotation, as
+    # this used to (inherited from py3DED's make_lattice_disk), only covers the
+    # large box when the cell's projected extents are the same for +/- the
+    # azimuth -- true for a cubic cell, not e.g. for a hexagonal one, whose
+    # lattice then fell short of a corner of the large box: the disk lost a
+    # chunk, its axis was skewed, and after tilting the box was left partly
+    # empty near its entrance and exit faces.
+    rotated_cell = _rotate_positions(cell, -rotation_axis)
     transformed_corners = _transform_positions(rotated_cell, _box_corners(large_box))
     repetitions = np.ceil(np.ptp(transformed_corners, axis=0)).astype(int)
 
@@ -1248,14 +1270,17 @@ def _disk_lattice_points(
     else:
         # Unlike the full-circle mask above (deliberately oversized, so it
         # tolerates the candidates not being exactly box-centered yet), the
-        # range mask is a tight fit and needs (y, z) measured from the box's
-        # actual center -- box-center the candidates first.
+        # range mask is a tight fit: box-center the candidates, put them in the
+        # box frame, and keep those the tilt itself carries into the box.
         centered = _center_positions_in_box(lattice, box)
-        rel_yz = centered[:, 1:] - box[1:] / 2
-        mask = _disk_range_mask(rel_yz, box[1], box[2], rotation_range, margin)
-        lattice = centered[mask]
+        boxed = _rotate_positions(centered, rotation_axis, center=box / 2)
+        mask = _disk_range_mask(
+            boxed - box / 2, box, rotation_range, -np.rad2deg(rotation_axis), margin
+        )
+        lattice = boxed[mask]
 
-    lattice = _rotate_positions(lattice, rotation_axis, center=box / 2)
+    if rotation_range is None:
+        lattice = _rotate_positions(lattice, rotation_axis, center=box / 2)
     lattice = lattice - cell.sum(0) / 2
     return lattice
 
