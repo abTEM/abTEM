@@ -4164,8 +4164,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
+        array = self.array
+        if np.issubdtype(array.dtype, np.integer):
+            # counts, e.g. from a detector, are interpolated in the configured
+            # precision
+            array = array.astype(get_dtype(complex=False))
+
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = array.map_blocks(
                 self._batch_interpolate_bilinear,
                 sampling=self.sampling,
                 new_sampling=sampling,
@@ -4174,11 +4180,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
-                meta=get_array_module(self.array).array((), dtype=self.array.dtype),
+                meta=get_array_module(array).array((), dtype=array.dtype),
             )
         else:
             array = self._batch_interpolate_bilinear(
-                self.array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
+                array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
             )
 
         kwargs = self._copy_kwargs(exclude=("array",))

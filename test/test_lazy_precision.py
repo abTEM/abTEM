@@ -176,6 +176,12 @@ MEASUREMENTS = {
         lambda: _patterns(np.float64, False),
         lambda m: m.interpolate(sampling=0.25),
     ),
+    # counts are interpolated in the configured precision
+    "diffraction_patterns_interpolate_uint16": (
+        lambda: _int_patterns(np.uint16, True),
+        lambda: _int_patterns(np.uint16, False),
+        lambda m: m.interpolate(sampling=0.25),
+    ),
     "center_of_mass_float32": (
         lambda: _patterns(np.float32, True),
         lambda: _patterns(np.float32, False),
@@ -210,6 +216,13 @@ def _int_images(dtype, lazy):
     if lazy:
         array = da.from_array(array, chunks=(1,) + GRID)
     return Images(array, sampling=0.1, ensemble_axes_metadata=_members())
+
+
+def _int_patterns(dtype, lazy):
+    array = np.abs(10 * _real_data(np.float64)).astype(dtype) + 1
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return DiffractionPatterns(array, sampling=0.1, ensemble_axes_metadata=_members())
 
 
 MEASUREMENT_PRECISION = {
