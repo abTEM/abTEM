@@ -1413,9 +1413,11 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_dtype(waves)[0] for detector in self.detectors)
 
     def _out_meta(self, waves: Waves) -> tuple[np.ndarray, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_meta(waves)[0] for detector in self.detectors)
 
     def _out_type(self, waves: Waves) -> tuple[type, ...]:
@@ -1598,6 +1600,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return transform
 
     def _calculate_new_array(self, waves: Waves):
+        # The slices are applied in place, so waves in another precision would
+        # be propagated and returned in that precision.
+        waves = waves._in_configured_precision()
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

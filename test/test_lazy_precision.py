@@ -24,6 +24,7 @@ from abtem import (
 from abtem.core.axes import OrdinalAxis
 from abtem.core.fft import fft2, fft2_convolve
 from abtem.measurements import DiffractionPatterns, Images
+from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
 from abtem.tilt import BeamTilt
 from abtem.waves import Waves
@@ -279,7 +280,20 @@ def test_lazy_fft2_convolve_declares_the_dtype_of_its_blocks(x_dtype, kernel_dty
 MULTISLICE_CASES = ["fp", "fp_member", "single", "single_annular"]
 
 
-def _multislice(case, dtype, lazy):
+MULTISLICE_ROUTES = {
+    "multislice": lambda waves, potential, detectors: waves.multislice(
+        potential, detectors=detectors
+    ),
+    "transform_apply": lambda waves, potential, detectors: MultisliceTransform(
+        potential, detectors
+    ).apply(waves),
+    "apply_transform": lambda waves, potential, detectors: waves.apply_transform(
+        MultisliceTransform(potential, detectors)
+    ),
+}
+
+
+def _multislice(case, dtype, lazy, route="multislice"):
     from ase.build import bulk
 
     atoms = bulk("Si", cubic=True) * (1, 1, 2)
@@ -302,17 +316,18 @@ def _multislice(case, dtype, lazy):
     if case == "fp_member":
         waves = waves[0]
     detectors = AnnularDetector(0, 40) if case == "single_annular" else None
-    return waves.multislice(potential, detectors=detectors)
+    return MULTISLICE_ROUTES[route](waves, potential, detectors)
 
 
+@pytest.mark.parametrize("route", MULTISLICE_ROUTES)
 @pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
 @pytest.mark.parametrize("case", MULTISLICE_CASES)
 def test_multislice_of_waves_runs_in_the_configured_precision(
-    case, config, input_dtype
+    case, config, input_dtype, route
 ):
     with abtem.config.set({"precision": config, "fft": "numpy"}):
-        lazy = _multislice(case, input_dtype, lazy=True)
-        eager = _multislice(case, input_dtype, lazy=False)
+        lazy = _multislice(case, input_dtype, lazy=True, route=route)
+        eager = _multislice(case, input_dtype, lazy=False, route=route)
         assert lazy.is_lazy and not eager.is_lazy
         expected = np.dtype(config)
         if np.iscomplexobj(eager.array):

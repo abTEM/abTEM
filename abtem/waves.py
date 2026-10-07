@@ -1655,7 +1655,6 @@ class Waves(BaseWaves, ArrayObject):
         sites = _extract_scattering_sites(potential, sites)
 
         potential = _prebuild_reused_potential(potential, self)
-        waves = self._in_configured_precision()
 
         # One entry per transition potential, each a list over detectors. The
         # elastic multislice and the scattered waves are shared across
@@ -1671,7 +1670,7 @@ class Waves(BaseWaves, ArrayObject):
                 sites=sites,
                 **multislice_func_kwargs,
             )
-            new_measurements = waves.apply_transform(multislice_transform)
+            new_measurements = self.apply_transform(multislice_transform)
             if not isinstance(new_measurements, list):
                 new_measurements = [new_measurements]
             per_transition.append(new_measurements)
@@ -1763,7 +1762,7 @@ class Waves(BaseWaves, ArrayObject):
             potential=potential, detectors=detectors, **multislice_func_kwargs
         )
 
-        waves = multislice_transform.apply(self._in_configured_precision())
+        waves = multislice_transform.apply(self)
 
         return reduce_ensemble(waves)
 
