@@ -9,7 +9,7 @@ from scipy.spatial.transform import Rotation as R  # type: ignore
 
 from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.magnetism.iam import (
@@ -542,7 +542,7 @@ class GPAWMagneticFields:
             )
 
             for ax, (image, name, unit) in zip(grid, panels):
-                array = np.asarray(image.tile(tile).array)
+                array = asnumpy(image.tile(tile).compute().array)
                 if np.abs(array).max() < 1e-5:
                     vmin, vmax = -1e-5, 1e-5
                 else:

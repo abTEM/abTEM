@@ -1,9 +1,15 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from ase import Atoms
 
 from abtem.core.backend import asnumpy, get_array_module
-from abtem.magnetism.gpaw import GPAWMagneticField, GPAWVectorPotential
+from abtem.magnetism.gpaw import (
+    GPAWMagneticField,
+    GPAWMagneticFields,
+    GPAWVectorPotential,
+)
+from abtem.potentials.iam import PotentialArray
 from utils import devices
 
 
@@ -51,3 +57,25 @@ def test_gpaw_field_built_on_a_device_matches_the_cpu_build(
     np.testing.assert_allclose(
         asnumpy(built.array), expected, rtol=0, atol=1e-6 * scale
     )
+
+
+@devices
+def test_show_draws_fields_built_on_a_device(device):
+    kwargs = dict(sampling=0.25, slice_thickness=1.0, gridrefinement=2, device=device)
+    vector_potential = GPAWVectorPotential(_SpinPolarizedCalculator(), **kwargs).build()
+    xp = get_array_module(device)
+    num_slices, _, *gpts = vector_potential.array.shape
+    fields = GPAWMagneticFields(
+        potential=PotentialArray(
+            xp.ones((num_slices, *gpts), dtype=np.float32),
+            slice_thickness=1.0,
+            extent=vector_potential.extent,
+        ),
+        vector_potential=vector_potential,
+        magnetic_field=GPAWMagneticField(_SpinPolarizedCalculator(), **kwargs).build(),
+    )
+
+    fig = fields.show()
+
+    assert len(fig.axes) == 10
+    plt.close(fig)
