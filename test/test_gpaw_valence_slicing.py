@@ -134,7 +134,9 @@ def test_a_limit_between_planes_keeps_the_plane_it_floors_to(limit):
     assert not before.any()
 
 
-@pytest.mark.parametrize("reps", [(1, 1, 1), (2, 3, 1), (3, 1, 2), (1, 2, 3)])
+@pytest.mark.parametrize(
+    "reps", [(1, 1, 1), (2, 3, 1), (3, 1, 2), (1, 2, 3), (2, 1, 5)]
+)
 @pytest.mark.parametrize("slice_thickness", [0.1, 0.3, 0.4, 0.7, 1.1])
 @pytest.mark.parametrize("multiple", [True, False])
 @pytest.mark.parametrize("strided", [False, True])
@@ -161,6 +163,9 @@ def test_integrate_slice_of_one_period_equals_that_of_the_repeated_grid(
     # periods take planes from both; the slice limits often land on the faces.
     faces = [k * shape[2] * dz for k in range(1, reps[2])]
     limits += [(z - 1.5 * dz, z + 1.5 * dz) for z in faces]
+    # A slice from inside the first period to inside the last holds the end of a
+    # period, whole periods and the start of a period.
+    limits.append((2.5 * dz, length - 1.5 * dz))
     repeated = np.tile(array, reps)
 
     for a, b in limits:

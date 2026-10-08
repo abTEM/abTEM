@@ -295,14 +295,18 @@ def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     if nb <= na:
         return np.zeros(gpts, dtype=array.dtype)
 
-    # A view when the planes lie in the first period, so that such a slice (every
-    # slice for repetitions (1, 1, 1)) sums the grid in place. `np.take` copies the
-    # planes, and along a strided axis the copy is summed in another order.
-    if nb <= array.shape[2]:
-        planes = array[..., na:nb]
-    else:
-        planes = np.take(array, range(na, nb), axis=-1, mode="wrap")
-    slice_array = np.tile(np.sum(planes, axis=-1) * dz, repetitions[:2])
+    # The planes na:nb of the repeated grid are the end of one period, whole periods
+    # and the start of one period. The partial periods are summed as views and the
+    # whole periods as `periods` times the sum of the grid, so no plane is copied.
+    n = array.shape[2]
+    head_end = min(nb, (na // n + 1) * n)
+    summed = np.sum(array[..., na % n : na % n + head_end - na], axis=-1)
+    periods, tail = divmod(nb - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    slice_array = np.tile(summed * dz, repetitions[:2])
     new_shape = (nb - na,) + gpts
     old_shape = (nb - na,) + slice_array.shape
     slice_array = np.fft.fftn(slice_array)
