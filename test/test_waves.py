@@ -591,31 +591,46 @@ def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
     assert profile.array.shape[-2:] == (exit_plane_waves.shape[-1], exit_plane_waves.shape[0])
 
 
+@devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("reciprocal_space", [False, True])
-def test_phase_shift_keeps_the_space_of_the_waves(reciprocal_space, lazy):
+def test_phase_shift_keeps_the_space_of_the_waves(
+    reciprocal_space, lazy, precision, device
+):
     import dask.array as da
 
     from abtem.core.axes import OrdinalAxis
+    from abtem.core.utils import get_dtype
 
     amount = 0.3
-    rng = np.random.default_rng(0)
-    psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
-    array = np.fft.fft2(psi) if reciprocal_space else psi
-    if lazy:
-        array = da.from_array(array, chunks=(1, -1, -1))
-    waves = Waves(
-        array,
-        energy=100e3,
-        sampling=0.1,
-        reciprocal_space=reciprocal_space,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-    )
+    with abtem.config.set({"precision": precision}):
+        dtype = get_dtype(complex=True)
+        rng = np.random.default_rng(0)
+        psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+        psi = psi.astype(dtype)
+        array = np.fft.fft2(psi).astype(dtype) if reciprocal_space else psi
+        if lazy:
+            array = da.from_array(array, chunks=(1, -1, -1))
+        waves = Waves(
+            array,
+            energy=100e3,
+            sampling=0.1,
+            reciprocal_space=reciprocal_space,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        ).copy_to_device(device)
 
-    shifted = waves.phase_shift(amount)
+        shifted = waves.phase_shift(amount)
 
-    assert shifted.reciprocal_space == reciprocal_space
-    assert shifted.is_lazy == lazy
-    result = shifted.ensure_real_space().compute().array
+        assert shifted.reciprocal_space == reciprocal_space
+        assert shifted.is_lazy == lazy
+        # The phase factor must not widen the waves: a NumPy complex128 scalar
+        # promotes complex64 waves to complex128 under NEP 50.
+        assert shifted.array.dtype == dtype
+        result = shifted.ensure_real_space().compute()
+        assert result.array.dtype == dtype
+        result = asnumpy(result.array)
+
     expected = np.exp(1j * amount) * psi
-    assert np.allclose(result, expected, rtol=0, atol=1e-12 * np.abs(psi).max())
+    atol = 100 * np.finfo(dtype).eps * np.abs(psi).max()
+    assert np.allclose(result, expected, rtol=0, atol=atol)
