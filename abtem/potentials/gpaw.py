@@ -20,7 +20,11 @@ from ase.data import atomic_numbers, chemical_symbols
 from dask.delayed import Delayed
 from scipy.interpolate import interp1d
 
-from abtem.atoms import is_cell_orthogonal, plane_to_axes
+from abtem.atoms import (
+    _box_strain_warning_silenced,
+    is_cell_orthogonal,
+    plane_to_axes,
+)
 from abtem.core.axes import AxisMetadata
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
@@ -30,6 +34,7 @@ from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import (
+    SOURCE_INDEX,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -308,6 +313,27 @@ class _DummyParametrization:
         return {}
 
 
+def _drops_directions(frozen_phonons: BaseFrozenPhonons) -> bool:
+    """Whether the frozen phonons displace the atoms along fewer than three axes."""
+    return (
+        isinstance(frozen_phonons, FrozenPhonons)
+        and len(set(frozen_phonons.directions.lower())) < 3
+    )
+
+
+def _slice_axes_frame(atoms: Atoms, plane, gpts) -> np.ndarray:
+    """The linear map from the Cartesian axes of `atoms` to those of the potentials
+    `_generate_slices` builds from them, acting on row vectors."""
+    # The default box was reported when the GPAWPotential was constructed.
+    with _box_strain_warning_silenced():
+        potential = Potential(
+            atoms=atoms[:1], gpts=gpts, projection="finite", plane=plane
+        )
+    if potential.plane != "xy" and not is_cell_orthogonal(atoms.cell):
+        raise NotImplementedError
+    return potential._transform_atoms()[2]
+
+
 def _generate_slices(
     interpolators,
     valence_potential,
@@ -325,14 +351,16 @@ def _generate_slices(
     potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-        potential = Potential(
-            gpts=gpts,
-            atoms=atoms[i::n],
-            parametrization=parametrization,
-            slice_thickness=slice_thickness,
-            projection="finite",
-            plane=plane,
-        )
+        # The default box was reported when the GPAWPotential was constructed.
+        with _box_strain_warning_silenced():
+            potential = Potential(
+                gpts=gpts,
+                atoms=atoms[i::n],
+                parametrization=parametrization,
+                slice_thickness=slice_thickness,
+                projection="finite",
+                plane=plane,
+            )
         potentials.append(potential)
 
     if last_slice is None:
@@ -429,12 +457,14 @@ class GPAWPotential(_PotentialBuilder):
         providing 'xy'.
     origin : three float, optional
         The origin relative to the provided Atoms mapped to the origin of the Potential.
-        This is equivalent to translating the atoms. The default is (0., 0., 0.)
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the potential is interpolated from the
+        calculator's grid of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms' cell. If the box size does not match an integer number of the
-        atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True (default), the periodicity of
@@ -443,7 +473,15 @@ class GPAWPotential(_PotentialBuilder):
         cut out of a larger repeated potential, which may not preserve periodicity.
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
         Approximates frozen phonons for a single GPAW calculator by displacing only the
-        nuclear core potentials. Supercedes the atoms from the calculator.
+        nuclear core potentials. Supercedes the atoms from the calculator. The atoms are
+        displaced along their own axes before the slices transform them to `plane`
+        (with the default box and origin; `box` and `origin` do not move the atoms),
+        so every displacement gets the linear map of that transform: anisotropic ones
+        as in :class:`~abtem.potentials.iam.Potential`, and isotropic
+        ones too, which therefore get the small strain of a non-orthogonal cell's
+        orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
+        isotropic displacements without it. `directions` refers to the axes of the
+        potential, as in :class:`~abtem.potentials.iam.Potential`.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -455,6 +493,8 @@ class GPAWPotential(_PotentialBuilder):
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
@@ -510,7 +550,12 @@ class GPAWPotential(_PotentialBuilder):
         self._gridrefinement = gridrefinement
         self._repetitions = tuple(repetitions)
 
-        cell = frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
         frozen_phonons.atoms.calc = None
 
         super().__init__(
@@ -581,7 +626,10 @@ class GPAWPotential(_PotentialBuilder):
 
         calculator = _DummyGPAW.from_generic(calculator)
 
-        atoms = self.frozen_phonons.atoms
+        atoms = self.frozen_phonons.atoms.copy()
+        # Per-atom displacement standard deviations follow their atoms into
+        # the repeated cell.
+        atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
         valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
@@ -598,7 +646,16 @@ class GPAWPotential(_PotentialBuilder):
         # gd = calculator.gd
         # nt_sG = calculator.nt_sG
 
-        random_atoms = self.frozen_phonons.randomize(atoms)
+        # The atoms are displaced along their own axes, before _generate_slices
+        # transforms them, while `directions` refers to the axes of the
+        # transformed atoms. Only frozen phonons that drop directions need that
+        # frame.
+        directions_frame = None
+        if _drops_directions(self.frozen_phonons):
+            directions_frame = _slice_axes_frame(atoms, self.plane, self.gpts)
+        random_atoms = self.frozen_phonons._randomize_transformed(
+            atoms, directions_frame=directions_frame
+        )
 
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
@@ -640,7 +697,9 @@ class GPAWPotential(_PotentialBuilder):
     def ensemble_shape(self):
         return self._frozen_phonons.ensemble_shape
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _gpaw_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
