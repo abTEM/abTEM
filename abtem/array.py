@@ -775,7 +775,9 @@ def _active_client():
         return None
 
 
-_LOCAL_SCHEDULER_WARNING = "Running on a single-machine scheduler when a distributed client"
+_LOCAL_SCHEDULER_WARNING = (
+    "Running on a single-machine scheduler when a distributed client"
+)
 
 
 def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
