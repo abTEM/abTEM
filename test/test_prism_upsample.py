@@ -88,6 +88,21 @@ def test_upsample_rank_one_in_vacuum(device):
 
 
 @devices
+def test_compressed_scan_default_detector(device):
+    # Like every other scan(), the compressed one defaults to the flexible
+    # annular detector, not to exit waves (issue #511).
+    s_matrix_array = SMatrix(
+        **_VACUUM_KWARGS, interpolation=(2, 2), upsample=True, device=device
+    ).build(lazy=False)
+    scan = CustomScan([[5.0, 5.0], [6.0, 7.0]])
+
+    assert isinstance(s_matrix_array.scan(scan=scan), abtem.PolarMeasurements)
+    assert isinstance(
+        s_matrix_array.scan(scan=scan, detectors=abtem.WavesDetector()), abtem.Waves
+    )
+
+
+@devices
 @pytest.mark.parametrize(
     "positions",
     [

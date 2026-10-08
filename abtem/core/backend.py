@@ -46,27 +46,11 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    # same reasoning as the cupyx.scipy.signal guard below: this can fail even
-    # though cupyx itself imported, if the CUDA/ROCm libraries it eagerly
-    # pulls in aren't on the loader path. GPU code that needs cupyx_ndimage
-    # then fails at use time instead of blocking the abtem import.
+    # this can fail even though cupyx itself imported, if the CUDA/ROCm
+    # libraries it eagerly pulls in aren't on the loader path. GPU code that
+    # needs cupyx_ndimage then fails at use time instead of blocking the abtem
+    # import.
     cupyx_ndimage = None
-
-
-try:
-    # cupyx.scipy exposes submodules lazily; signal must be imported explicitly
-    # before ``get_scipy_module(...).signal`` can resolve it (the import emits a
-    # FutureWarning about the experimental cupyx.jit interface it uses
-    # internally)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        import cupyx.scipy.signal  # type: ignore  # noqa: F401
-except ImportError:
-    # this can fail even though cupyx itself imported: cupyx.scipy.signal
-    # eagerly imports cuBLAS-backed submodules, so an environment without the
-    # CUDA/ROCm libraries on the loader path fails here. GPU filters that need
-    # scipy.signal then fail at use time instead of blocking the abtem import.
-    pass
 
 
 def _preload_torch_openmp() -> bool:
@@ -209,6 +193,17 @@ def check_mps_is_available():
                     )
 
                 from abtem.core import _torch
+
+                torch_device = _config_get("torch.device")
+                if not isinstance(torch_device, str) or torch_device.lower() not in (
+                    "mps",
+                    "cpu",
+                ):
+                    raise ValueError(
+                        "The configuration key 'torch.device' must be 'mps' or "
+                        f"'cpu', got {torch_device!r}."
+                    )
+                _torch.DEVICE = torch_device.lower()
 
                 _torch._check_available()
 

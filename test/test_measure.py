@@ -1,3 +1,6 @@
+import operator
+import sys
+import types
 import warnings
 
 import ase
@@ -10,7 +13,15 @@ import scipy.signal
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, requires_gpu
+from utils import (
+    array_is_close,
+    assert_array_matches_device,
+    devices,
+    ensure_is_tuple,
+    gpu,
+    lazy_params,
+    requires_gpu,
+)
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
@@ -136,6 +147,64 @@ def test_reflected_arithmetic_with_a_scalar(scalar, lazy, device):
         np.testing.assert_allclose(
             asnumpy(result.compute().array), expected, rtol=1e-6
         )
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize(
+    "operand_type",
+    [
+        "numpy_float64",
+        "numpy_int64",
+        "0d_numpy_array",
+        "0d_device_array",
+        "numpy_float64_array",
+    ],
+)
+def test_arithmetic_with_a_numpy_or_device_operand(
+    operand_type, op, in_place, lazy, device
+):
+    # Oracle: the same operation on the plain arrays in double precision. NumPy
+    # promotes a single-precision measurement to double with any of these
+    # operands; the torch backend holds single precision only and must give the
+    # single-precision result instead, eager and lazy alike. An in-place
+    # operation keeps single precision on every backend.
+    if in_place and lazy:
+        pytest.skip("in-place arithmetic refuses lazy measurements")
+    xp = get_array_module(device)
+    host_operand = {
+        "numpy_float64": np.float64(-0.5),
+        "numpy_int64": np.int64(3),
+        "0d_numpy_array": np.asarray(2.0),
+        "0d_device_array": np.asarray(2.0, dtype=get_dtype()),
+        # Broadcasts along the last axis, which is 3 long and the other 2.
+        "numpy_float64_array": np.array([0.5, 2.0, 4.0]),
+    }[operand_type]
+    operand = (
+        xp.asarray(host_operand) if operand_type == "0d_device_array" else host_operand
+    )
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+        sampling=(0.1, 0.2),
+    ).copy_to_device(device)
+
+    result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    computed = result.compute().array
+    assert_array_matches_device(computed, device)
+    if in_place or device == "mps":
+        assert asnumpy(computed).dtype == get_dtype()
+    expected = getattr(operator, op)(
+        array.astype(np.float64), np.asarray(host_operand, dtype=np.float64)
+    )
+    np.testing.assert_allclose(
+        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
 
 
 def test_in_place_true_division_refuses_lazy_measurements():
@@ -1573,41 +1642,51 @@ def test_interpolate_periodic_spline_and_fft(lazy):
     )
 
 
-def _periodic_spline_interpolate(array, gpts, order, lazy):
-    images = abtem.Images(array, sampling=0.1)
+def _periodic_spline_interpolate(array, gpts, order, lazy, device):
+    images = abtem.Images(copy_to_device(array, device), sampling=0.1)
     if lazy:
         images = images.lazy()
     interpolated = images.interpolate(
         gpts=gpts, method="spline", boundary="periodic", order=order
     )
-    return interpolated.compute().array
+    return asnumpy(interpolated.compute().array)
 
 
+@devices
 @lazy_params
 @pytest.mark.parametrize("order", [2, 3])
-def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(lazy, order):
+def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
+    lazy, order, device
+):
     # A periodic interpolant commutes with rolling the image by whole pixels. The
     # image has 40 x 30 pixels and is interpolated to 80 x 90, so one old pixel is
     # 2 new pixels along x and 3 along y and the rolled output is a whole-pixel roll.
     array = np.random.default_rng(0).random((40, 30))
 
     interpolated_roll = _periodic_spline_interpolate(
-        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy
+        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy, device
     )
     rolled_interpolation = np.roll(
-        _periodic_spline_interpolate(array, (80, 90), order, lazy),
+        _periodic_spline_interpolate(array, (80, 90), order, lazy, device),
         (10, 21),
         axis=(0, 1),
     )
 
+    # The two sides agree to within 20 eps of the data scale in the dtype the device
+    # stores (float64 on the CPU, float32 on Metal and torch); a roll that is off by
+    # one pixel differs by about 0.5 of it.
+    eps = np.finfo(interpolated_roll.dtype).eps
     np.testing.assert_allclose(
-        interpolated_roll, rolled_interpolation, rtol=0, atol=1e-12 * array.max()
+        interpolated_roll, rolled_interpolation, rtol=0, atol=200 * eps * array.max()
     )
 
 
+@devices
 @lazy_params
 @pytest.mark.parametrize("order", [2, 3])
-def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, order):
+def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
+    lazy, order, device
+):
     # Interpolating a periodic field with a few Fourier components from 40 x 30 to
     # 53 x 41 points (a factor that is not an integer) must give the field itself at
     # the new positions j * extent / gpts. A constant shift of the coordinates, which
@@ -1627,7 +1706,7 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, ord
         return field(*np.meshgrid(*axes, indexing="ij"))
 
     sampling = tuple(e / n for e, n in zip(extent, gpts))
-    images = abtem.Images(sample(gpts), sampling=sampling)
+    images = abtem.Images(copy_to_device(sample(gpts), device), sampling=sampling)
     if lazy:
         images = images.lazy()
     interpolated = images.interpolate(
@@ -1636,7 +1715,10 @@ def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, ord
 
     expected = sample(new_gpts)
     np.testing.assert_allclose(
-        interpolated.array, expected, rtol=0, atol=2e-3 * np.abs(expected).max()
+        asnumpy(interpolated.array),
+        expected,
+        rtol=0,
+        atol=2e-3 * np.abs(expected).max(),
     )
 
 
@@ -1827,6 +1909,34 @@ class TestImagesNormalizeEnsemble:
                 result, (original - original.mean()) / original.max()
             )
             assert abs(result.mean()) < 1e-12
+
+    @lazy_params
+    @devices
+    @pytest.mark.parametrize("scale, shift", [("max", "mean"), ("max", "min")])
+    def test_matches_double_precision_oracle(self, scale, shift, lazy, device):
+        """Each member of a (3, 5, 7) ensemble, chunked along both base axes when
+        lazy, normalizes as its double-precision NumPy reduction says."""
+        array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(
+            np.float32
+        )
+        images = Images(
+            da.from_array(array, chunks=(1, 3, 4)) if lazy else array,
+            sampling=0.1,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+        ).copy_to_device(device)
+
+        normalized = images.normalize_ensemble(scale=scale, shift=shift)
+
+        assert normalized.is_lazy == lazy
+        computed = normalized.compute().array
+        assert_array_matches_device(computed, device)
+        reference = array.astype(np.float64)
+        expected = (
+            reference - getattr(np, shift)(reference, axis=(1, 2), keepdims=True)
+        ) / getattr(np, scale)(reference, axis=(1, 2), keepdims=True)
+        np.testing.assert_allclose(
+            asnumpy(computed), expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+        )
 
     def test_normalize_line_profiles_per_profile(self):
         """For 1-D members the reduction runs along the single base axis."""
@@ -2159,3 +2269,44 @@ class TestReciprocalSpaceLineProfiles:
         profiles = ctf.profiles()
         assert len(profiles.base_shape) == 1
         assert profiles.base_shape[0] > 0
+
+
+def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
+    # The CuPy branch of the FFT convolution imports cupyx.scipy.signal under
+    # catch_warnings, which swaps the process-wide filter list; entered from
+    # dask's threads at once, it can leave the import's filter installed or drop
+    # the user's. Run that branch on NumPy blocks, with cupyx.scipy.signal
+    # stood in by an empty module, and count the entries.
+    import abtem.measurements as measurements
+
+    names = ("cupyx", "cupyx.scipy", "cupyx.scipy.signal")
+    modules = {name: types.ModuleType(name) for name in names}
+    modules["cupyx"].scipy = modules["cupyx.scipy"]
+    modules["cupyx.scipy"].signal = modules["cupyx.scipy.signal"]
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, modules[name])
+    monkeypatch.setattr(measurements, "cp", np)
+
+    entries = []
+
+    class CountingWarnings:
+        def __getattr__(self, name):
+            return getattr(warnings, name)
+
+        def catch_warnings(self, *args, **kwargs):
+            entries.append(None)
+            return warnings.catch_warnings(*args, **kwargs)
+
+    monkeypatch.setattr(measurements, "warnings", CountingWarnings())
+    # monkeypatch restores the flag, so the stand-in is not recorded as the real
+    # import
+    monkeypatch.setattr(measurements, "_cupyx_signal_imported", False)
+
+    images = Images(
+        da.ones((16, 32, 32), chunks=(1, 32, 32)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(16)))],
+    )
+    images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
+
+    assert len(entries) == 1

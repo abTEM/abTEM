@@ -160,6 +160,17 @@ def _prebuild_reused_potential(
     return potential
 
 
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if multislice_func_kwargs.get("detectors_elastic"):
+        raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+
+
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
     """Base class of all wave functions.
 
@@ -454,6 +465,10 @@ class Waves(BaseWaves, ArrayObject):
     """
 
     _base_dims = 2
+
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
 
     def __init__(
         self,
@@ -823,6 +838,16 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         waves = self.__class__(**d)
         return waves
+
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
@@ -1516,7 +1541,12 @@ class Waves(BaseWaves, ArrayObject):
         Parameters
         ----------
         ctf : CTF, optional
-            Contrast transfer function to be applied.
+            Contrast transfer function to be applied. For a multi-energy ensemble
+            of wave functions it is evaluated for each energy member at its own
+            wavelength; its energy must then be unset, or a distribution of
+            exactly the ensemble's energies. Only the energy values are matched:
+            the ensemble's own weights decide its ensemble mean, and those of the
+            CTF's distribution are not used.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto'
             (default), the batch size is automatically chosen based on the abtem user
@@ -1531,56 +1561,12 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
-        from abtem.array import stack
-        from abtem.core.axes import EnergyAxis
-
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        # Multi-energy ensemble: a single CTF cannot represent several
-        # wavelengths at once.  Apply the CTF to each energy member at its own
-        # wavelength and restack along the EnergyAxis.
-        energy_axes = [
-            (i, ax)
-            for i, ax in enumerate(self.ensemble_axes_metadata)
-            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-        ]
-        if energy_axes:
-            if ctf.accelerator.energy is not None:
-                raise ValueError(
-                    "Cannot apply a CTF with a fixed energy to a multi-energy "
-                    "ensemble: each energy member requires its own wavelength. "
-                    "Pass a CTF without an energy so the per-member energies are "
-                    "used."
-                )
-            axis_idx, energy_axis = energy_axes[0]
-            members = []
-            for i, energy in enumerate(energy_axis.values):
-                index = tuple(
-                    i if j == axis_idx else slice(None)
-                    for j in range(len(self.ensemble_shape))
-                )
-                member_ctf = ctf.copy()
-                member_ctf.accelerator.energy = float(energy)
-                members.append(
-                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
-                )
-            waves = stack(members, energy_axis, axis=axis_idx)
-            assert isinstance(waves, Waves)
-            return waves
-
-        if not ctf.accelerator.energy:
-            # Single energy: resolve the wavelength from the wave functions
-            # (ordinary waves, or an indexed ensemble member whose per-member
-            # energy lives in metadata) without mutating ``self``.
-            ctf.accelerator.energy = self._valid_energy
-        else:
-            # CTF fixes the energy: verify it does not disagree with a concrete
-            # wave energy, but do not overwrite ``self``.
-            self.accelerator.check_match(ctf.accelerator)
-
-        ctf.accelerator.check_is_defined()
-
+        # The energies are matched and checked in
+        # `BaseTransferFunction._match_ensemble`; a multi-energy ensemble is then
+        # evaluated one energy at a time, each at its own wavelength.
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves
@@ -1620,15 +1606,7 @@ class Waves(BaseWaves, ArrayObject):
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
-        # Refuse here rather than only in the driver: abTEM is lazy by default,
-        # so a check inside the per-chunk worker lets the caller build a whole
-        # measurement object without complaint and only fail later, from inside
-        # a dask traceback.
-        if multislice_func_kwargs.get("detectors_elastic"):
-            raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
-
-        if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
-            raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         potential = validate_potential(potential, self)
 
@@ -1762,14 +1740,16 @@ class Waves(BaseWaves, ArrayObject):
 
         Parameters
         ----------
-        potential : BasePotential or Atoms
-            The scattering potential.
-        scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire
-            potential at Nyquist sampling.
+        scan : BaseScan or np.ndarray
+            Positions of the probe wave functions.
+        potential : BasePotential or Atoms, optional
+            The scattering potential. If not given, the shifted wave functions are
+            returned without running the multislice algorithm.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`).
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -2761,7 +2741,9 @@ class Probe(WavesBuilder):
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
             converted to measurements after running the multislice algorithm. If not
-            given, defaults to the flexible annular detector.
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`). Use :meth:`Probe.scan` for a STEM simulation
+            that defaults to the :class:`FlexibleAnnularDetector`.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -2776,6 +2758,8 @@ class Probe(WavesBuilder):
         Returns
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements
+            The detected measurement(s), or the exit wave functions if no detector is
+            given.
         """
         probe = self.copy()
 
@@ -2864,6 +2848,8 @@ class Probe(WavesBuilder):
         if detectors is None:
             detectors = FlexibleAnnularDetector()
 
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
+
         probe = self.copy()
         potential = validate_potential(potential)
         if potential is not None:
@@ -2900,7 +2886,10 @@ class Probe(WavesBuilder):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector` or use
+            :meth:`Probe.multislice`.
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -2915,11 +2904,9 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurements
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:

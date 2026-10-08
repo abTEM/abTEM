@@ -383,9 +383,15 @@ class Grid(CopyMixin, EqualityMixin):
         check_match : bool
             If true check whether grids can match without overriding already defined
             grid parameters.
+
+        A grid with locked gpts (built `Waves`, `PotentialArray`, `SMatrixArray`) is
+        checked, not changed: it raises on a mismatch and is assigned only where its
+        own value is undefined.
         """
 
-        if check_match:
+        if check_match or self._lock_gpts:
+            # the gpts of a locked grid are those of its data: a grid that differs
+            # is refused, not matched, and one that agrees within tolerance is kept
             self.check_match(other)
 
         # if (self.extent is None) & (other.extent is None):
@@ -393,8 +399,11 @@ class Grid(CopyMixin, EqualityMixin):
 
         if other.extent is None:
             other.extent = self.extent
-        elif np.any(
-            np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+        elif self.extent is None or (
+            not self._lock_gpts
+            and np.any(
+                np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+            )
         ):
             self.extent = other.extent
 
@@ -408,8 +417,12 @@ class Grid(CopyMixin, EqualityMixin):
 
         if other.sampling is None:
             other.sampling = self.sampling
-        elif not np.allclose(
-            np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
+        elif self.sampling is None or (
+            not self._lock_gpts
+            and not np.allclose(
+                np.array(self.sampling, np.float32),
+                np.array(other.sampling, np.float32),
+            )
         ):
             self.sampling = other.sampling
 
@@ -597,7 +610,12 @@ class HasGrid2DMixin:
     _grid: Grid
 
     def match_grid(self, other: HasGrid2DMixin, check_match: bool = False):
-        """Match the grid to another object with a Grid."""
+        """
+        Match the grid to another object with a Grid.
+
+        A grid with locked gpts (built `Waves`, `PotentialArray`, `SMatrixArray`) is
+        checked, not changed, and raises on a mismatch.
+        """
         self.grid.match(other, check_match=check_match)
         return self
 

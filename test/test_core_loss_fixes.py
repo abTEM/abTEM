@@ -6,6 +6,8 @@ are grouped by the object they belong to rather than by symptom.
 
 from __future__ import annotations
 
+import functools
+import io
 import sys
 
 import ase
@@ -14,7 +16,7 @@ import pytest
 
 import abtem
 from abtem.array import ArrayObject
-from abtem.core.axes import OrdinalAxis
+from abtem.core.axes import EnergyAxis, OrdinalAxis
 from abtem.inelastic.core_loss import (
     AtomicWaveFunction,
     RadialWavefunction,
@@ -36,6 +38,24 @@ requires_gpaw = pytest.mark.skipif(
 )
 
 ENERGY = 100e3
+
+
+def _as_array(measurement):
+    return np.asarray(measurement.to_cpu().array)
+
+
+def _energy_members(measurement):
+    """Split an energy-ensemble measurement into its members, taken along
+    whichever array axis the measurement's own ``axes_metadata`` labels as
+    the ``EnergyAxis`` -- not an axis position assumed from the scan type.
+    """
+    axes = measurement.axes_metadata
+    energy_axes = [i for i, axis in enumerate(axes) if isinstance(axis, EnergyAxis)]
+    assert len(energy_axes) == 1, f"expected one EnergyAxis, got {axes}"
+    array = _as_array(measurement)
+    assert array.ndim == len(axes)
+    axis = energy_axes[0]
+    return [np.take(array, i, axis=axis) for i in range(array.shape[axis])]
 
 
 def _si2_atoms():
@@ -135,12 +155,95 @@ class TestContinuumGrid:
 
 
 @requires_gpaw
+class TestRadialEquation:
+    """``radial_schroedinger_equation`` is the operator the continuum states
+    are solved with; it must be the one GPAW's own bound states solve."""
+
+    @staticmethod
+    def _bound_eigenvalue(n, l, rv, rmax=25.0, h=2e-4):
+        """Shooting with node counting: the eigenvalue [Rydberg] of the state
+        with n - l - 1 radial nodes, by bisection on the energy."""
+        from abtem.inelastic.core_loss import numerov, radial_schroedinger_equation
+
+        # u(0) = 0 at the origin itself (r = 0 would divide by zero).
+        r = np.arange(int(rmax / h) + 1) * h
+        r[0] = 1e-12
+        inner = int(0.9 * len(r))  # ignore the divergent tail's last node
+        lower, upper = -1.2 * 14**2, -1e-4
+        for _ in range(80):
+            energy = 0.5 * (lower + upper)
+            u = numerov(radial_schroedinger_equation(energy, l, r, rv), 0.0, 1e-12, h)
+            signs = np.sign(u[:inner])
+            signs = signs[signs != 0]
+            if np.sum(signs[1:] != signs[:-1]) > n - l - 1:
+                upper = energy
+            else:
+                lower = energy
+        return 0.5 * (lower + upper)
+
+    @pytest.mark.parametrize("n, l", [(2, 1), (3, 0), (3, 1)])
+    def test_reproduces_gpaw_bound_eigenvalues(self, n, l):
+        """In the potential of a non-relativistic GPAW atom (whose kinetic
+        operator is the same non-relativistic one) the equation must give
+        GPAW's eigenvalues. It did not: both the centrifugal and the
+        potential term were multiplied by an unexplained 1.02, which put
+        these eigenvalues 4-10% off. Measured without it: <= 1e-5."""
+        from gpaw.atom.aeatom import AllElectronAtom
+        from scipy.interpolate import interp1d
+
+        ae = AllElectronAtom(
+            "Si", xc="PBE", scalar_relativistic=False, log=io.StringIO()
+        )
+        ae.run()
+        ae.refine()
+        rv = interp1d(
+            ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value=(28.0, 0.0), bounds_error=False
+        )
+        expected = 2 * ae.channels[l].e_n[n - l - 1]  # Hartree -> Rydberg
+
+        assert self._bound_eigenvalue(n, l, rv) == pytest.approx(expected, rel=1e-4)
+
+
+@requires_gpaw
+class TestAtomicPotentialTail:
+    """GPAW evaluates vxc at a floored density (1e-10), so in vacuum it sat
+    at a constant -8.5e-4 Hartree: r*V grew linearly to the edge of the grid
+    (r*V = 0.083 Ry Bohr at 49 Bohr for every element) and, extrapolated,
+    left a constant potential that shifted the continuum's asymptotic
+    wavenumber (q/k = 1.012 at 1 eV). Extending GPAW's grid did not help --
+    the constant was the same at rcut = 150 Bohr."""
+
+    @pytest.mark.parametrize("xc", ["LDA", "PBE"])
+    def test_potential_vanishes_in_vacuum_and_is_unchanged_inside(self, xc):
+        from gpaw.atom.aeatom import AllElectronAtom
+
+        from abtem.inelastic.core_loss import _atomic_rv
+
+        rv = _atomic_rv(14, xc=xc)
+        for r in (40.0, 49.0, 100.0, 150.0):
+            # Was 1.7e-3 Ry; measured <= 2e-7 Ry now.
+            assert abs(rv(r) / r) < 1e-6, f"V({r} Bohr) = {rv(r) / r:.2e} Ry"
+
+        ae = AllElectronAtom("Si", xc=xc, log=io.StringIO())
+        ae.run()
+        ae.scalar_relativistic = True
+        ae.refine()
+        dense = ae.n_sg.sum(0) >= 1e-10
+        np.testing.assert_allclose(
+            rv(ae.rgd.r_g[dense]), -2 * ae.vr_sg[0][dense], rtol=1e-12, atol=0
+        )
+
+
+@requires_gpaw
 class TestContinuumNormalisation:
     """The continuum state must be energy-normalised: u -> sin(kr+d)/sqrt(pi k)."""
 
     @pytest.mark.parametrize("epsilon", [1.0, 25.0, 400.0])
     @pytest.mark.parametrize("lprime", [0, 1, 2, 3])
     def test_asymptotic_amplitude_is_one_over_sqrt_pi_k(self, epsilon, lprime):
+        """Two checks on one wavefunction (each costs a GPAW all-electron run
+        and a Numerov integration on up to ~7.5e6 points, so it is computed
+        once): the envelope amplitude, and an independent WKB fit."""
         from ase import units
 
         from abtem.inelastic.core_loss import (
@@ -152,12 +255,78 @@ class TestContinuumNormalisation:
         )
         r = wavefunction.radial_grid
         u = wavefunction._radial_values
-        k = np.sqrt(epsilon / units.Rydberg)
+        ef = epsilon / units.Rydberg
+        k = np.sqrt(ef)
 
         outer = r > 0.75 * r[-1]
         du = np.gradient(u, r)
         amplitude = float(np.median(np.sqrt(u[outer] ** 2 + (du[outer] / k) ** 2)))
 
+        assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
+
+        self._assert_outer_region_fits_an_energy_normalised_wkb_wave(
+            r, u, ef, lprime
+        )
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _si_rv():
+        """r*V(r) of the Si atom [Rydberg * Bohr]: the very potential
+        calculate_continuum_radial_wavefunction solves in (the physical
+        input to the problem, not the code under test)."""
+        from abtem.inelastic.core_loss import _atomic_rv
+
+        return _atomic_rv(14, xc="PBE")
+
+    def _assert_outer_region_fits_an_energy_normalised_wkb_wave(
+        self, r, u, ef, lprime
+    ):
+        """Independent of ``_asymptotic_amplitude``'s envelope estimator:
+        least-squares fit the outer region to the WKB form of the solution.
+
+        The potential is the neutral ground-state atom's (no core hole), so
+        there is no Coulomb log-phase term, and it vanishes in vacuum (see
+        TestAtomicPotentialTail) -- but not by the start of the outer region
+        at every energy, so rather than a bare free-wave fit (Riccati-Bessel
+        functions at fixed k), fit
+        u = A sqrt(k/q) [a sin(phi) + b cos(phi)], phi = int q dr, with
+        q(r)^2 = -f(r) from the very radial equation u'' = f u that is
+        solved (``radial_schroedinger_equation``, which defines the
+        problem). A = hypot(a, b) is then the r -> infinity amplitude.
+
+        Because q(r) comes from that same equation, this checks the
+        normalisation of whatever equation is solved; whether the equation
+        itself is right is TestRadialEquation's job.
+
+        Energy normalisation, derived: u -> A sin(kr + delta) gives
+        integral u_k u_k' dr = A^2 (pi/2) delta(k - k'), and with E = k^2
+        (Rydberg units), delta(k - k') = 2k delta(E - E'), so
+        <E|E'> = delta(E - E') requires A = 1/sqrt(pi k).
+
+        Measured |A sqrt(pi k) - 1| <= 4e-4 (l'=3, 25 eV, the case the WKB
+        form describes worst: 0.2% fit residual); <= 2.4e-4 elsewhere. (With
+        the potential's spurious vacuum constant, before TestAtomicPotential
+        Tail's fix: 1.1e-3, and a 1% residual.)
+        """
+        from scipy.integrate import cumulative_trapezoid
+
+        from abtem.inelastic.core_loss import radial_schroedinger_equation
+
+        k = np.sqrt(ef)
+
+        # Outer 40% of the grid, and outside the Si atom.
+        outer = (r > 0.6 * r[-1]) & (r > 10.0)
+        r_outer = r[outer]
+        q = np.sqrt(-radial_schroedinger_equation(ef, lprime, r_outer, self._si_rv()))
+        phi = cumulative_trapezoid(q, r_outer, initial=0.0)
+        basis = np.sqrt(k / q)[:, None] * np.stack([np.sin(phi), np.cos(phi)], axis=1)
+        (a, b), *_ = np.linalg.lstsq(basis, u[outer], rcond=None)
+        amplitude = np.hypot(a, b)
+
+        # The WKB form must actually describe the wave out there ...
+        residual = np.abs(u[outer] - basis @ np.array([a, b])).max()
+        assert residual < 1e-2 * amplitude
+        # ... with the energy-normalised amplitude.
         assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
 
 
@@ -429,23 +598,19 @@ def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64,
 
 
 class TestFlexibleAnnularDetectorEnergyEnsemble:
-    """``FlexibleAnnularDetector._match_waves`` (abtem/detectors.py) used to
-    mutate ``self._outer`` in place, guarded only by ``if self.outer is
-    None`` -- which conflates "the user never gave an outer" with "already
-    matched", so it latched onto whichever waves it saw *first* and silently
-    ignored every later one. Eager splits an energy ensemble into per-energy
-    members before detection, so it saw member 0 first; lazy sizes its
-    output array from the full, un-indexed ensemble up front (``Waves.
-    angular_sampling`` resolves that to ``max(axis.values)``), so it saw the
-    highest energy first. The two conventions disagreed, and eager's answer
-    even depended on the order the energies were given in.
+    """A ``FlexibleAnnularDetector`` with an auto outer angle must not size
+    itself from whichever waves it sees first. Eager splits an energy ensemble
+    into per-energy members before detection, so it would see member 0 first;
+    lazy sizes its output array from the full, un-indexed ensemble up front
+    (``Waves.angular_sampling`` resolves that to ``max(axis.values)``), so it
+    would see the highest energy first. The two conventions disagree, and
+    eager's answer would depend on the order the energies were given in.
 
     A single radial axis cannot represent two different cutoff angles at
-    once, so the fix does not silently pick one convention (eager's,
-    lazy's, or a third) -- every one of those would just make the wrong
-    answer consistent instead of visible. It raises instead, identically
-    for eager and lazy and regardless of energy order, unless the caller
-    pins ``outer`` explicitly.
+    once, so no convention (eager's, lazy's, or a third) is picked silently
+    -- every one of those would just make the wrong answer consistent instead
+    of visible. It raises instead, identically for eager and lazy and
+    regardless of energy order, unless the caller pins ``outer`` explicitly.
     """
 
     @staticmethod
@@ -660,29 +825,32 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
         )
         if lazy:
             m = m.compute(progress_bar=False)
-        return np.asarray(m.to_cpu().array)
+        return m
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
     def test_each_member_reproduces_its_own_standalone_run(self, order, lazy):
         pytest.importorskip("sympy")
-        reference = {e: self._run(e, lazy=False) for e in order}
-        # A scale-appropriate atol: these signals sit around 1e-13 - 1e-12
-        # (see the module docstring rule against relying on default
-        # tolerances for physical quantities far below them).
+        reference = {e: _as_array(self._run(e, lazy=False)) for e in order}
+        # A scale-appropriate atol (see the module docstring rule against
+        # relying on default tolerances for physical quantities): tied to
+        # the signal's own maximum, not a fixed absolute number.
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = self._run(list(order), lazy)
-        # CustomScan puts the scan-position axis before the energy axis
-        # (opposite of GridScan's leading energy axis), so the energy
-        # member is the *last* array axis here, not the first.
-        for i, e in enumerate(order):
+        # Members are looked up along the axis the result's own metadata
+        # labels EnergyAxis (for CustomScan it trails the positions axis);
+        # a data/metadata mismatch then shows up as a wrong member here.
+        members = _energy_members(self._run(list(order), lazy))
+        assert len(members) == len(order)
+        for member, e in zip(members, order):
             np.testing.assert_allclose(
-                ensemble[..., i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                member, reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
         # The two members must be genuinely different results, or this test
         # would pass even with defect B fully unfixed.
-        assert not np.allclose(reference[order[0]], reference[order[1]])
+        assert not np.allclose(
+            reference[order[0]], reference[order[1]], rtol=1e-3, atol=scale * 1e-6
+        )
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
@@ -717,20 +885,20 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
             )
             if lazy:
                 m = m.compute(progress_bar=False)
-            return np.asarray(m.to_cpu().array)
+            return m
 
-        reference = {e: _run(e, lazy=False) for e in order}
+        reference = {e: _as_array(_run(e, lazy=False)) for e in order}
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = _run(list(order), lazy)
-        # Unlike CustomScan above, GridScan's two ScanAxis entries are moved
-        # to the end of AnnularDetector's declared ensemble order (see
-        # _out_ensemble_source), leaving energy as the sole leading axis.
-        for i, e in enumerate(order):
+        members = _energy_members(_run(list(order), lazy))
+        assert len(members) == len(order)
+        for member, e in zip(members, order):
             np.testing.assert_allclose(
-                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                member, reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
-        assert not np.allclose(reference[order[0]], reference[order[1]])
+        assert not np.allclose(
+            reference[order[0]], reference[order[1]], rtol=1e-3, atol=scale * 1e-6
+        )
 
 
 class TestScanEnergyEnsembleAxisOrder:
@@ -739,18 +907,21 @@ class TestScanEnergyEnsembleAxisOrder:
     TestUnbuiltTransitionPotentialEnergyEnsemble's docstring for why that
     class uses CustomScan instead and the mechanism this one guards.
 
-    Naively reading ensemble[0] as "energy member 0" gave neither standalone
-    single-energy run; ensemble[..., 0] (the array's actual axis, matching
-    the measurement's own ensemble_axes_metadata, which always reports
-    EnergyAxis leading here) did. Covers both GridScan (two ScanAxis entries
-    excluded by _scan_axes) and LineScan (one ScanAxis entry excluded):
-    the fix's own arithmetic, `sum(1 for i in range(energy_axis_idx) if i
-    not in scan_source)`, takes a different value for each -- 0 for
-    GridScan (both preceding axes excluded) vs 0 for LineScan too (its one
-    preceding axis is also excluded) -- but LineScan is the only shape here
-    that exercises _scan_axes actually excluding a *single* axis rather
-    than none (CustomScan's PositionsAxis) or both (GridScan). Uses a
-    >1-position scan for both: a single-position scan squeezes to no scan
+    The result's ensemble_axes_metadata reports EnergyAxis leading (the
+    detector moves the scan axes to the end), but the data were stacked
+    with the energy members on a different array axis, so taking the
+    members along the axis the metadata labels EnergyAxis reproduced
+    neither standalone single-energy run. The test therefore looks the
+    energy axis up in the metadata (``_energy_members``) rather than
+    assuming its position: a data/metadata mismatch is exactly what it
+    must expose.
+
+    Covers GridScan (two ScanAxis entries excluded by _scan_axes) and
+    LineScan (one excluded). In both, every axis preceding EnergyAxis is a
+    scan axis, so the energy axis ends up first either way; LineScan is the
+    only shape here that exercises _scan_axes excluding a *single* axis
+    rather than none (CustomScan's PositionsAxis) or both (GridScan). Uses
+    a >1-position scan for both: a single-position scan squeezes to no scan
     axes at all, which cannot show a mismatch between two axes that both
     still exist.
     """
@@ -798,7 +969,7 @@ class TestScanEnergyEnsembleAxisOrder:
         )
         if lazy:
             m = m.compute(progress_bar=False)
-        return np.asarray(m.to_cpu().array)
+        return m
 
     @pytest.mark.parametrize(
         "scan_kind, lazy",
@@ -814,27 +985,28 @@ class TestScanEnergyEnsembleAxisOrder:
         self, order, scan_kind, lazy
     ):
         pytest.importorskip("sympy")
-        reference = {e: self._run(scan_kind, e, lazy=False) for e in order}
+        reference = {
+            e: _as_array(self._run(scan_kind, e, lazy=False)) for e in order
+        }
         # A scale-appropriate atol: see the module docstring rule against
         # relying on default tolerances for physical quantities far below
         # them.
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = self._run(scan_kind, list(order), lazy)
-        # The energy axis leads for both scan types here (opposite of
-        # CustomScan's trailing energy axis in
-        # TestUnbuiltTransitionPotentialEnergyEnsemble above): _scan_axes
-        # excludes GridScan's two ScanAxis entries and LineScan's one,
-        # leaving EnergyAxis as the only, and therefore first, remaining
-        # ensemble axis in both cases -- unlike CustomScan's PositionsAxis,
-        # which _scan_axes never excludes at all.
-        for i, e in enumerate(order):
+        # Look the member up where the result's own metadata puts EnergyAxis;
+        # the defect was data stacked on a different axis than the one the
+        # metadata labels, which this comparison then exposes.
+        members = _energy_members(self._run(scan_kind, list(order), lazy))
+        assert len(members) == len(order)
+        for member, e in zip(members, order):
             np.testing.assert_allclose(
-                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                member, reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
         # The two members must be genuinely different results, or this test
         # would pass even with the axis mismatch fully unfixed.
-        assert not np.allclose(reference[order[0]], reference[order[1]])
+        assert not np.allclose(
+            reference[order[0]], reference[order[1]], rtol=1e-3, atol=scale * 1e-6
+        )
 
 
 class TestLazyEnsembleChunkReordering:
@@ -846,7 +1018,7 @@ class TestLazyEnsembleChunkReordering:
     ``AnnularDetector._out_ensemble_shape``'s buggy old order and its
     correct one give ``(2, 2, 2)``) -- but false in general, since
     ``AnnularDetector``/``SpectralSlitDetector`` move the scan axes to the
-    end of the ensemble (see ``TestGridScanEnergyEnsembleAxisOrder`` above),
+    end of the ensemble (see ``TestScanEnergyEnsembleAxisOrder`` above),
     which the lazy chunk declaration never accounted for. Surfaces as a
     ``RuntimeError``/``IndexError`` from ``_check_axes_metadata`` or
     ``multi_output_blockwise`` for any shape that breaks the coincidence: a
@@ -898,35 +1070,45 @@ class TestLazyEnsembleChunkReordering:
         )
         if lazy:
             m = m.compute(progress_bar=False)
-        return np.asarray(m.to_cpu().array)
+        return m
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 150e3, 200e3), (200e3, 100e3, 150e3)])
     def test_gridscan_three_energies(self, order, lazy):
         pytest.importorskip("sympy")
-        reference = {e: self._run("grid", e, lazy=False) for e in order}
+        reference = {e: _as_array(self._run("grid", e, lazy=False)) for e in order}
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = self._run("grid", list(order), lazy)
-        for i, e in enumerate(order):
+        members = _energy_members(self._run("grid", list(order), lazy))
+        assert len(members) == len(order)
+        for member, e in zip(members, order):
             np.testing.assert_allclose(
-                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                member, reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
-        assert len({tuple(np.round(reference[e], 12).ravel()) for e in order}) == 3
+        # The members must be pairwise different results (rounding to a
+        # fixed number of decimals is not scale-aware).
+        for a, b in [(0, 1), (0, 2), (1, 2)]:
+            assert not np.allclose(
+                reference[order[a]], reference[order[b]], rtol=1e-3,
+                atol=scale * 1e-6,
+            )
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
     def test_linescan_two_energies(self, order, lazy):
         pytest.importorskip("sympy")
-        reference = {e: self._run("line", e, lazy=False) for e in order}
+        reference = {e: _as_array(self._run("line", e, lazy=False)) for e in order}
         scale = max(np.abs(reference[e]).max() for e in order)
 
-        ensemble = self._run("line", list(order), lazy)
-        for i, e in enumerate(order):
+        members = _energy_members(self._run("line", list(order), lazy))
+        assert len(members) == len(order)
+        for member, e in zip(members, order):
             np.testing.assert_allclose(
-                ensemble[i], reference[e], rtol=1e-5, atol=scale * 1e-6,
+                member, reference[e], rtol=1e-5, atol=scale * 1e-6,
             )
-        assert not np.allclose(reference[order[0]], reference[order[1]])
+        assert not np.allclose(
+            reference[order[0]], reference[order[1]], rtol=1e-3, atol=scale * 1e-6
+        )
 
 
 class TestPrismScanAxisSqueeze:
@@ -2411,6 +2593,37 @@ def test_full_expansion_scope_is_refused_at_call_time(lazy, double_channel):
         _core_loss_scan(
             RealSpaceMultislice(expansion_scope="full"), lazy, double_channel
         )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("option", ["algorithm", "detectors_elastic"])
+def test_core_loss_scan_refuses_before_building_the_probe(lazy, option, monkeypatch):
+    """An unsupported option is refused before the probe is built at every scan
+    position."""
+    from abtem.multislice import RealSpaceMultislice
+
+    builds = []
+    monkeypatch.setattr(
+        abtem.Probe, "build", lambda self, *args, **kwargs: builds.append(kwargs)
+    )
+    refused = {
+        "algorithm": RealSpaceMultislice(expansion_scope="full"),
+        "detectors_elastic": [abtem.AnnularDetector(inner=50, outer=150)],
+    }
+    atoms, potential, probe = _expansion_scope_setup()
+
+    with pytest.raises(NotImplementedError):
+        probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=synthetic_transition_potential(
+                gpts=potential.gpts, extent=potential.extent, n_transitions=2
+            ),
+            scan=np.array([[0.0, 0.0]]),
+            lazy=lazy,
+            sites=atoms,
+            **{option: refused[option]},
+        )
+    assert builds == []
 
 
 def test_full_expansion_scope_is_refused_by_the_driver():

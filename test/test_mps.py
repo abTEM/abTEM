@@ -1,13 +1,26 @@
 """Tests for the experimental Metal (MPS) backend on Apple silicon.
 
-Skipped unless PyTorch is installed on Apple silicon. Nothing needs enabling:
-PyTorch is imported on the first use of the 'mps' device.
+Skipped unless PyTorch is installed on Apple silicon, or the backend is pointed
+at torch's CPU device. Nothing needs enabling on a Mac: PyTorch is imported on
+the first use of the 'mps' device.
+
+On any other machine with PyTorch installed, ``ABTEM_TORCH__DEVICE=cpu`` runs the
+backend's layer (array wrapper, dispatch registries, dtype narrowing, the lock)
+on torch's CPU device. Select every test that exercises the backend, here and in
+the device-parametrized tests of the other files (their ``[torch]`` cases), with
+``-m torch``::
+
+    ABTEM_TORCH__DEVICE=cpu pytest test -m torch
+
+CuPy takes precedence where both are present, so hide the GPU
+(``CUDA_VISIBLE_DEVICES=``) on a machine that has one. Metal's rules still apply
+on the CPU device (single precision only), so most failures there also fail on a
+Mac; Metal kernel numerics and its thread safety are not exercised.
 
 Metal is single precision, so every comparison against the CPU reference is made
 at float32 tolerances rather than exactly.
 """
 
-import os
 import subprocess
 import sys
 import textwrap
@@ -26,6 +39,12 @@ from abtem.core.backend import (
 )
 
 pytestmark = requires_mps
+
+# Loading torch's OpenMP runtime ahead of pyfftw's is only done on macOS on Apple
+# silicon (`_preload_torch_openmp`), so nothing can be asserted of it elsewhere.
+macos_only = pytest.mark.skipif(
+    sys.platform != "darwin", reason="concerns macOS's libomp.dylib handling"
+)
 
 
 @pytest.fixture
@@ -301,17 +320,119 @@ def test_diag_and_fill_diagonal_match_numpy():
     assert np.array_equal(asnumpy(on_device), expected)
 
 
+def test_flip_and_broadcasting_match_numpy():
+    xp = get_array_module("mps")
+    array = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    on_device = copy_to_device(array, "mps")
+
+    for axis in (None, 0, -1, (0, 2)):
+        assert np.array_equal(
+            asnumpy(xp.flip(on_device, axis=axis)), np.flip(array, axis)
+        )
+        assert np.array_equal(asnumpy(np.flip(on_device, axis)), np.flip(array, axis))
+
+    column = np.arange(3, dtype=np.float32)[:, None]
+    row = np.arange(4, dtype=np.int64)[None, :]
+    expected = np.broadcast_arrays(column, row)
+    for result in (
+        xp.broadcast_arrays(xp.asarray(column), xp.asarray(row)),
+        np.broadcast_arrays(xp.asarray(column), xp.asarray(row)),
+    ):
+        assert len(result) == len(expected)
+        for got, want in zip(result, expected):
+            assert get_array_module(got) is xp
+            assert np.array_equal(asnumpy(got), want)
+
+    assert np.array_equal(
+        asnumpy(np.broadcast_to(xp.asarray(column), (3, 5))),
+        np.broadcast_to(column, (3, 5)),
+    )
+
+
+@pytest.mark.parametrize("mode", ["constant", "wrap", "reflect", "symmetric"])
+def test_pad_matches_numpy(mode):
+    xp = get_array_module("mps")
+    array = np.arange(15, dtype=np.float32).reshape(3, 5)
+    # widths beyond the axis length exercise the folding of each mode
+    pad_width = ((4, 1), (0, 7))
+
+    result = xp.pad(xp.asarray(array), pad_width, mode=mode)
+
+    assert np.array_equal(asnumpy(result), np.pad(array, pad_width, mode=mode))
+
+
+def test_minimum_and_maximum_take_a_scalar():
+    # NumPy accepts a scalar on either side; torch's binary functions do not.
+    xp = get_array_module("mps")
+    indices = np.array([0, 3, 7, 9])
+    on_device = xp.asarray(indices)
+
+    assert np.array_equal(
+        asnumpy(xp.minimum(on_device + 1, 8)), np.minimum(indices + 1, 8)
+    )
+    assert np.array_equal(asnumpy(xp.maximum(2, on_device)), np.maximum(2, indices))
+
+
+def test_dask_constant_boundary_overlap_stays_on_device():
+    # A constant boundary pads with chunks dask builds from the array's meta
+    # through np.full_like. Unimplemented, that raised TypeError, which dask's
+    # curried creation wrapper took for missing arguments and returned a
+    # partial function as the chunk.
+    import dask.array as da
+
+    xp = get_array_module("mps")
+    array = np.random.RandomState(5).rand(2, 8, 8).astype(np.float32)
+    lazy = da.from_array(xp.asarray(array), chunks=(1, 4, 8))
+
+    result = da.overlap.overlap(
+        lazy, depth={0: 0, 1: 2, 2: 2}, boundary={0: 1.5, 1: 1.5, 2: 1.5}
+    ).compute(scheduler="synchronous")
+    expected = da.overlap.overlap(
+        da.from_array(array, chunks=(1, 4, 8)),
+        depth={0: 0, 1: 2, 2: 2},
+        boundary={0: 1.5, 1: 1.5, 2: 1.5},
+    ).compute()
+
+    assert get_array_module(result) is xp
+    assert np.array_equal(asnumpy(result), expected)
+
+    filled = np.full_like(xp.asarray(array), 2.0, shape=(3, 1), order="C")
+    assert get_array_module(filled) is xp
+    assert np.array_equal(asnumpy(filled), np.full((3, 1), 2.0, np.float32))
+
+
+def test_diffraction_pattern_bilinear_resampling_matches_cpu():
+    # The CPU routine writes into host buffers through `out=`; Metal has its
+    # own gather-based path.
+    patterns = []
+    for device in ("cpu", "mps"):
+        # a rectangular cell, so the two axes resample by different factors
+        probe = abtem.Probe(
+            energy=100e3,
+            semiangle_cutoff=20,
+            gpts=(64, 80),
+            extent=(10, 13),
+            device=device,
+        )
+        diffraction = probe.build().diffraction_patterns(max_angle=None)
+        resampled = diffraction.interpolate(sampling=0.137)
+        patterns.append(asnumpy(resampled.array))
+
+    assert patterns[1].shape == patterns[0].shape
+    np.testing.assert_allclose(
+        patterns[1], patterns[0], rtol=0, atol=1e-5 * np.abs(patterns[0]).max()
+    )
+
+
 def _run_isolated(script, hang="the script hung"):
     """Run ``script`` in a fresh interpreter, for what only a new process shows.
 
     Library load order is fixed once per process, and a crash or deadlock here
     would take the test session down with it.
     """
-    environment = {k: v for k, v in os.environ.items() if k != "ABTEM_ENABLE_MPS"}
     try:
         return subprocess.run(
             [sys.executable, "-c", textwrap.dedent(script)],
-            env=environment,
             capture_output=True,
             text=True,
             timeout=60,
@@ -334,6 +455,7 @@ def test_importing_abtem_does_not_import_torch():
     assert completed.returncode == 0, completed.stderr
 
 
+@macos_only
 def test_torch_openmp_runtime_is_loaded_ahead_of_pyfftws():
     # torch and pyfftw each bundle libomp.dylib, and torch's has to initialize
     # first; importing abTEM loads it, without torch, before pyfftw.
@@ -386,6 +508,7 @@ def test_metal_after_threaded_cpu_ffts():
     assert completed.returncode == 0, (completed.returncode, completed.stderr)
 
 
+@macos_only
 def test_pyfftw_imported_before_abtem_is_refused_rather_than_crashing():
     # Too late to load torch's runtime first: refuse with a reason instead of
     # importing torch into a process where its operations would segfault.
