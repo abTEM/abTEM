@@ -161,8 +161,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         array had to fit in memory (or VRAM) at once. There was no slice-level
         chunking. This method introduces that missing middle ground: it eagerly
         builds a group of contiguous slices that fits within a configurable
-        memory budget, yields it as an array of the same class as the field's
-        slices (a ``PotentialArray`` for a potential), and the caller can
+        memory budget, yields it, and the caller can
         discard it after propagation before the next chunk is built. This
         bounds peak memory and enables simulations of systems whose full
         potential would not fit in memory.
@@ -1385,8 +1384,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         Yields
         ------
-        PotentialArray
-            An eagerly computed chunk of contiguous potential slices.
+        FieldArray
+            An eagerly computed chunk of contiguous slices, of the class this
+            builder builds (``PotentialArray`` for a potential).
         """
         from abtem.core.chunks import (
             estimate_potential_chunk_size,
@@ -1900,8 +1900,9 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        PotentialArray
-            A view into the existing array covering a chunk of slices.
+        FieldArray
+            A view into the existing array covering a chunk of slices, of the
+            same class as this array.
         """
         from abtem.core.chunks import (
             estimate_potential_chunk_size,
