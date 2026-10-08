@@ -4,6 +4,7 @@ import pytest
 from ase import Atoms
 
 from abtem.core.backend import asnumpy, get_array_module
+from abtem.core.utils import get_dtype
 from abtem.magnetism.gpaw import (
     GPAWMagneticField,
     GPAWMagneticFields,
@@ -67,7 +68,7 @@ def test_show_draws_fields_built_on_a_device(device):
     num_slices, _, *gpts = vector_potential.array.shape
     fields = GPAWMagneticFields(
         potential=PotentialArray(
-            xp.ones((num_slices, *gpts), dtype=np.float32),
+            xp.ones((num_slices, *gpts), dtype=get_dtype()),
             slice_thickness=1.0,
             extent=vector_potential.extent,
         ),
