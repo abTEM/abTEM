@@ -1,4 +1,6 @@
 import operator
+import sys
+import types
 import warnings
 
 import ase
@@ -2267,3 +2269,44 @@ class TestReciprocalSpaceLineProfiles:
         profiles = ctf.profiles()
         assert len(profiles.base_shape) == 1
         assert profiles.base_shape[0] > 0
+
+
+def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
+    # The CuPy branch of the FFT convolution imports cupyx.scipy.signal under
+    # catch_warnings, which swaps the process-wide filter list; entered from
+    # dask's threads at once, it can leave the import's filter installed or drop
+    # the user's. Run that branch on NumPy blocks, with cupyx.scipy.signal
+    # stood in by an empty module, and count the entries.
+    import abtem.measurements as measurements
+
+    names = ("cupyx", "cupyx.scipy", "cupyx.scipy.signal")
+    modules = {name: types.ModuleType(name) for name in names}
+    modules["cupyx"].scipy = modules["cupyx.scipy"]
+    modules["cupyx.scipy"].signal = modules["cupyx.scipy.signal"]
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, modules[name])
+    monkeypatch.setattr(measurements, "cp", np)
+
+    entries = []
+
+    class CountingWarnings:
+        def __getattr__(self, name):
+            return getattr(warnings, name)
+
+        def catch_warnings(self, *args, **kwargs):
+            entries.append(None)
+            return warnings.catch_warnings(*args, **kwargs)
+
+    monkeypatch.setattr(measurements, "warnings", CountingWarnings())
+    # monkeypatch restores the flag, so the stand-in is not recorded as the real
+    # import
+    monkeypatch.setattr(measurements, "_cupyx_signal_imported", False)
+
+    images = Images(
+        da.ones((16, 32, 32), chunks=(1, 32, 32)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(16)))],
+    )
+    images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
+
+    assert len(entries) == 1

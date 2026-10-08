@@ -466,6 +466,10 @@ class Waves(BaseWaves, ArrayObject):
 
     _base_dims = 2
 
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
+
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -834,6 +838,16 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         waves = self.__class__(**d)
         return waves
+
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.

@@ -2245,7 +2245,9 @@ class PotentialArray(BasePotential, FieldArray):
                 self._transmission_function,
                 self.array,
                 energy=energy,
-                meta=xp.array((), dtype=get_dtype(complex=True)),
+                meta=xp.array(
+                    (), dtype=np.result_type(self.array.dtype, np.complex64)
+                ),
             )
         else:
             array = self._transmission_function(self.array, energy=energy)
@@ -2255,6 +2257,9 @@ class PotentialArray(BasePotential, FieldArray):
             slice_thickness=self.slice_thickness,
             extent=self.extent,
             energy=energy,
+            exit_planes=self.exit_planes,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
         )
         return t
 
@@ -2298,6 +2303,13 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         Lateral sampling of the potential [1 / Å].
     energy : float
         Electron energy [eV].
+    exit_planes : int or tuple of int, optional
+        The slice indices after which an exit plane is desired, as for
+        :class:`.PotentialArray`.
+    ensemble_axes_metadata : list of AxisMetadata, optional
+        Axis metadata for each ensemble axis.
+    metadata : dict, optional
+        A dictionary defining the metadata of the transmission functions.
     """
 
     def __init__(
@@ -2307,20 +2319,24 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         energy: Optional[float] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(array, slice_thickness, extent, sampling)
+        super().__init__(
+            array,
+            slice_thickness,
+            extent,
+            sampling,
+            exit_planes=exit_planes,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
-        array = self.array[first_slice:last_slice]
-        if len(array.shape) == 2:
-            array = array[None]
-        return self.__class__(
-            array,
-            self.slice_thickness[first_slice:last_slice],
-            extent=self.extent,
-            energy=self.energy,
-        )
+        ensemble = (slice(None),) * len(self.ensemble_shape)
+        return self[ensemble + (slice(first_slice, last_slice),)]
 
     def transmission_function(self, energy) -> TransmissionFunction:
         """
@@ -2408,7 +2424,8 @@ class CrystalPotential(_PotentialBuilder):
     num_frozen_phonons : int, optional
         Number of crystal realisations in the frozen-phonon ensemble; each
         realisation independently rebuilds its own pool of atomic
-        displacement snapshots.
+        displacement snapshots. Without `seeds`, the member seeds are spawned
+        from the crystal's root seed (see `seeds`).
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -2419,18 +2436,36 @@ class CrystalPotential(_PotentialBuilder):
         before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
         planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
         of slices, only the exit surface is returned and no thickness axis is added.
-    seeds: int or sequence of int
-        Seed for the random number generator (RNG), or one seed for each RNG in the
-        frozen phonon ensemble.
+    seeds: int or sequence of int, optional
+        One seed for each member of the frozen-phonon ensemble. An int is the seed
+        of a one-member ensemble, or, with `num_frozen_phonons`, the seed the
+        member seeds are drawn from. Without `seeds`, the crystal is drawn from a
+        root seed fixed when it is created, so that every simulation of it sees
+        the same crystal: the seeds of the unit's `FrozenPhonons` determine it,
+        and a unit with several configurations but no `FrozenPhonons` (a built
+        potential ensemble, a list of GPAW calculators) gets a random one. Two
+        crystals made from one `FrozenPhonons` unit are therefore the same
+        crystal, with the same mosaic; pass different `seeds` for independent
+        crystals.
     ensemble_mean : bool, optional
         If True (default), the mean over the frozen-phonon ensemble is calculated.
         If False, the individual configurations are returned.
     """
 
-    # Same derived state as _FieldBuilderFromAtoms, built by this class's own
-    # get_sliced_atoms(). CrystalPotential descends from _PotentialBuilder, not
-    # from _FieldBuilderFromAtoms, so it does not inherit that declaration.
-    _eq_exclude = ("_sliced_atoms",)
+    # Derived state: the sliced atoms, as on _FieldBuilderFromAtoms (built by
+    # this class's own get_sliced_atoms(); CrystalPotential descends from
+    # _PotentialBuilder, so it does not inherit that declaration), and the pool
+    # that _partition_args builds once for all members.
+    _eq_exclude = ("_sliced_atoms", "_shared_pool")
+
+    # Appended to a FrozenPhonons unit's seeds to make the root seed of a
+    # crystal (see _root_seed_of): "CRYS" in ASCII.
+    _root_seed_tag = 0x43525953
+
+    # A crystal pickled without a shared pool loads with none; `__setstate__`
+    # gives one pickled without a root seed that of a fresh crystal of its unit,
+    # or none when it has member seeds.
+    _shared_pool = None
 
     def __init__(
         self,
@@ -2440,15 +2475,27 @@ class CrystalPotential(_PotentialBuilder):
         exit_planes: int | None = None,
         seeds: int | tuple[int, ...] | None = None,
         ensemble_mean: bool = True,
+        _root_seed: int | tuple[int, ...] | None = None,
     ):
+        # _root_seed is given when a crystal is rebuilt, e.g. for a lazy block
+        root_seed = None
         if num_frozen_phonons is None and seeds is None:
+            root_seed = _root_seed
+            if root_seed is None:
+                root_seed = self._root_seed_of(potential_unit)
             self._seeds = None
         else:
-            if num_frozen_phonons is None and seeds:
-                assert isinstance(seeds, tuple)
+            if seeds is None:
+                root = np.random.SeedSequence(self._root_seed_of(potential_unit))
+                # one distinct seed per member: a repeat takes the next child
+                members = {}
+                while len(members) < num_frozen_phonons:
+                    for child in root.spawn(num_frozen_phonons - len(members)):
+                        members.setdefault(int(child.generate_state(1)[0]))
+                seeds = tuple(members)
+            elif num_frozen_phonons is None:
+                seeds = validate_seeds(seeds)
                 num_frozen_phonons = len(seeds)
-            elif num_frozen_phonons is None and seeds is None:
-                num_frozen_phonons = 1
 
             self._seeds = validate_seeds(seeds, num_frozen_phonons)
 
@@ -2493,6 +2540,23 @@ class CrystalPotential(_PotentialBuilder):
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
         self._sliced_atoms: Optional[BaseSlicedAtoms] = None
+        self._root_seed = root_seed
+        self._shared_pool: Optional[PotentialArray] = None
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if "_root_seed" not in state:
+            self._root_seed = (
+                None
+                if self._seeds is not None
+                else self._root_seed_of(self._potential_unit)
+            )
+
+    def __eq__(self, other):
+        # The root seed is an identity, compared exactly: the generic equality
+        # compares numbers to a relative tolerance, under which two different
+        # 128-bit roots can compare equal.
+        return super().__eq__(other) and self._root_seed == other._root_seed
 
     @property
     def ensemble_mean(self) -> bool:
@@ -2669,7 +2733,7 @@ class CrystalPotential(_PotentialBuilder):
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
         args = unpack_blockwise_args(args)
-        potential, seed = args[0]
+        potential, seed, shared_pool = args[0]
         if hasattr(potential, "item"):
             potential = potential.item()
 
@@ -2684,6 +2748,7 @@ class CrystalPotential(_PotentialBuilder):
             num_frozen_phonons=num_frozen_phonons,
             **kwargs,
         )
+        new._shared_pool = shared_pool
         return _wrap_with_array(new)
 
     def _from_partitioned_args(self):
@@ -2713,6 +2778,22 @@ class CrystalPotential(_PotentialBuilder):
         unit_is_lazy = (
             isinstance(potential_unit, PotentialArray) and potential_unit.is_lazy
         )
+        # Unless every member reseeds its own frozen-phonon pool (see
+        # _pool_unit_for_member), the members of an unbuilt unit draw from one
+        # pool. It is built once, here, for all members and blocks, rather
+        # than by every member's generate_slices.
+        shared_pool = self._shared_pool
+        fp = getattr(potential_unit, "frozen_phonons", None)
+        pool_per_member = (
+            self.seeds is not None
+            and isinstance(fp, FrozenPhonons)
+            and fp.num_configs > 1
+        )
+        build_pool = (
+            shared_pool is None
+            and not pool_per_member
+            and not isinstance(potential_unit, PotentialArray)
+        )
 
         if lazy:
             if unit_is_lazy:
@@ -2726,6 +2807,15 @@ class CrystalPotential(_PotentialBuilder):
             else:
                 lazy_unit = dask.delayed(potential_unit)
 
+            if build_pool:
+                # one task of this graph, which every block depends on; it
+                # derives the pool from the graph's one copy of the unit
+                shared_pool = dask.delayed(self._build_shared_pool)(
+                    lazy_unit, self._n_lateral_tiles
+                )
+            elif shared_pool is not None:
+                shared_pool = dask.delayed(shared_pool)
+
             arrays = []
 
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2734,7 +2824,9 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_unit, seeds), ndims=1)
+                lazy_args = dask.delayed(_wrap_with_array)(
+                    (lazy_unit, seeds, shared_pool), ndims=1
+                )
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
@@ -2746,6 +2838,10 @@ class CrystalPotential(_PotentialBuilder):
         else:
             if unit_is_lazy:
                 potential_unit = potential_unit.ensure_computed(progress_bar=False)
+            if build_pool:
+                shared_pool = self._build_shared_pool(
+                    potential_unit, self._n_lateral_tiles
+                )
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
@@ -2754,7 +2850,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                itemset(array, i, (potential_unit, seeds))
+                itemset(array, i, (potential_unit, seeds, shared_pool))
 
             if old_chunks == ():
                 array = _wrap_with_array(array[0], ndims=0)
@@ -2765,10 +2861,49 @@ class CrystalPotential(_PotentialBuilder):
     def _n_lateral_tiles(self) -> int:
         return self.repetitions[0] * self.repetitions[1]
 
+    @classmethod
+    def _root_seed_of(
+        cls, potential_unit: BasePotential
+    ) -> int | tuple[int, ...] | None:
+        """The entropy of the ``np.random.SeedSequence`` that draws the mosaic
+        of a crystal without ``seeds``, and from which the member seeds of one
+        with only ``num_frozen_phonons`` are spawned.
+
+        It is fixed when the crystal is created, so that every
+        ``generate_slices`` call of one crystal (every lazy block, every pass
+        of a simulation) draws the same crystal. For a ``FrozenPhonons`` unit
+        it is all of the unit's seeds followed by a tag, so a seeded
+        ``FrozenPhonons`` makes the crystal reproducible, and its streams are
+        independent of the ``default_rng(seed)`` streams ``FrozenPhonons``
+        draws its configurations from. Any other unit with more than one
+        configuration gets fresh entropy. A unit with one configuration draws
+        no mosaic and gets none.
+        """
+        fp = getattr(potential_unit, "frozen_phonons", None)
+        if isinstance(fp, FrozenPhonons):
+            return (*(int(seed) for seed in fp.seed), cls._root_seed_tag)
+        if potential_unit.num_configurations > 1:
+            return np.random.SeedSequence().entropy
+        return None
+
     def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
+        """The unit to draw pool configurations from for one ensemble member, or
+        for the single default builder (see `_pool_unit`)."""
+        return self._pool_unit(self.potential_unit, self._n_lateral_tiles, member_seed)
+
+    @classmethod
+    def _build_shared_pool(cls, unit: BasePotential, n_tiles: int) -> PotentialArray:
+        """The pool every member draws from, unless each reseeds its own."""
+        return cls._pool_unit(unit, n_tiles, None).build(lazy=False)
+
+    @staticmethod
+    def _pool_unit(
+        unit: BasePotential, n_tiles: int, member_seed: Optional[int]
+    ) -> BasePotential:
         """Return the unit potential to draw pool configurations from for one
         ensemble member (``member_seed`` is that member's seed), or for the
-        single default builder (``member_seed`` is None).
+        single default builder (``member_seed`` is None), of a crystal of
+        ``n_tiles`` lateral tiles of ``unit``.
 
         Two independent adjustments are made when the unit carries frozen
         phonons; a precomputed ``PotentialArray`` unit has a fixed pool and is
@@ -2796,8 +2931,6 @@ class CrystalPotential(_PotentialBuilder):
            member gets its own independent set of atomic snapshots. This adds
            no cost: the pool was already rebuilt once per member.
         """
-        unit = self.potential_unit
-        n_tiles = self._n_lateral_tiles
         fp = getattr(unit, "frozen_phonons", None)
         if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
             return unit
@@ -2840,8 +2973,11 @@ class CrystalPotential(_PotentialBuilder):
     def _built_pool(self) -> PotentialArray:
         """The configurations the slices are drawn from, in memory, with a leading
         configuration axis."""
-        member_seed = None if self.seeds is None else int(self.seeds[0])
-        pool_unit = self._pool_unit_for_member(member_seed)
+        if self._shared_pool is not None:
+            pool_unit = self._shared_pool
+        else:
+            member_seed = None if self.seeds is None else int(self.seeds[0])
+            pool_unit = self._pool_unit_for_member(member_seed)
         if not isinstance(pool_unit, PotentialArray):
             potentials = pool_unit.build(lazy=False)
         else:
@@ -2888,7 +3024,11 @@ class CrystalPotential(_PotentialBuilder):
         """
         member_seed = None if self.seeds is None else int(self.seeds[0])
         potentials = self._built_pool()
-        rng = np.random.default_rng(member_seed)
+
+        if member_seed is None:
+            rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
+        else:
+            rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
             last_slice = len(self)

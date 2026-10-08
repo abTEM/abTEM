@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import functools
 import itertools
+import threading
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
@@ -49,7 +50,7 @@ from abtem.core.backend import (
 )
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
     polar_spatial_frequencies,
@@ -2158,8 +2159,15 @@ class Images(_BaseMeasurement2D):
                 # Real on purpose, unlike the dtype-preserving map_blocks
                 # elsewhere: the input is required to be complex (its real and
                 # imaginary parts are the two gradient components) and
-                # _integrate_gradient_2d returns xp.real(...) of the result.
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                # _integrate_gradient_2d returns xp.real(...) of the result,
+                # in the precision of the gradient combined with the frequency
+                # grid.
+                meta=xp.array(
+                    (),
+                    dtype=np.result_type(
+                        np.finfo(self.array.dtype).dtype, xp.fft.fftfreq(1).dtype
+                    ),
+                ),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -2334,7 +2342,10 @@ class Images(_BaseMeasurement2D):
                     new_shape=gpts,
                     normalization=normalization,
                     chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                    meta=xp.array((), dtype=self.array.dtype),
+                    # fft_interpolate works in the configured precision
+                    meta=xp.array(
+                        (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
+                    ),
                 )
 
             elif method == "spline":
@@ -2457,9 +2468,11 @@ class Images(_BaseMeasurement2D):
             )
             # Real on purpose, unlike the dtype-preserving map_blocks
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
-            # a power spectrum even when the image itself is complex.
+            # a power spectrum even when the image itself is complex, with the
+            # precision of the image's FFT.
             array = array.map_blocks(
-                self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
+                self._diffractograms,
+                meta=xp.array((), dtype=np.finfo(_fft_dtype(self.array.dtype)).dtype),
             )
         else:
             array = self._diffractograms(self.array)
@@ -3243,6 +3256,29 @@ def _crop_kernel_to_extent(kernel_2d, kernels_1d, extent):
     return cropped, None, float(kernel_2d.sum() - cropped.sum())
 
 
+_cupyx_signal_lock = threading.Lock()
+_cupyx_signal_imported = False
+
+
+def _import_cupyx_signal() -> None:
+    # cupyx.scipy does not import its signal submodule itself, and importing it
+    # loads cuBLAS (about 150 MB resident on CUDA), so it is imported on first
+    # use rather than with abtem. The import warns that the cupyx.jit interface
+    # it uses is experimental. catch_warnings swaps the process-wide filter
+    # list, so the import runs once per process: the first caller imports under
+    # the lock, and later callers, concurrent ones included, return without
+    # entering catch_warnings.
+    global _cupyx_signal_imported
+    if _cupyx_signal_imported:
+        return
+    with _cupyx_signal_lock:
+        if not _cupyx_signal_imported:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                import cupyx.scipy.signal  # noqa: F401, PLC0415
+            _cupyx_signal_imported = True
+
+
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1d=None):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
@@ -3274,6 +3310,8 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1
     :func:`_crop_kernel_to_extent`.
     """
     xp = get_array_module(array)
+    if xp is cp:
+        _import_cupyx_signal()
     scipy_signal = get_scipy_module(array).signal
 
     if kernels_1d is not None:
@@ -4240,7 +4278,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         old_sums = array.sum((-2, -1), keepdims=True)
 
         if xp is cp:
-            array = interpolate_bilinear_cuda(array, v, u, vw, uw)
+            # the kernel types the pattern and the weights alike
+            array = interpolate_bilinear_cuda(
+                array, v, u, vw.astype(array.dtype), uw.astype(array.dtype)
+            )
         elif xp is np:
             array = _interpolate_bilinear(array, v, u, vw, uw)
         else:
@@ -4281,8 +4322,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
+        array = self.array
+        if np.issubdtype(array.dtype, np.integer):
+            # counts, e.g. from a detector, are interpolated in the configured
+            # precision
+            array = array.astype(get_dtype(complex=False))
+
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = array.map_blocks(
                 self._batch_interpolate_bilinear,
                 sampling=self.sampling,
                 new_sampling=sampling,
@@ -4291,13 +4338,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
-                meta=get_array_module(self.array).array(
-                    (), dtype=get_dtype(complex=False)
-                ),
+                meta=get_array_module(array).array((), dtype=array.dtype),
             )
         else:
             array = self._batch_interpolate_bilinear(
-                self.array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
+                array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
             )
 
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -4561,9 +4606,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., flat_indices]
 
-        # Use the configured floating-point precision, not a hardcoded float32.
-        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
-        # the result dtype must match to avoid a silent precision downgrade.
+        # The sums keep the precision of the patterns, as _AbstractRadialDetector's
+        # declared output dtype does (the real counterpart of the waves' precision).
         fp_dtype = array.dtype
         result = xp.zeros(
             (
@@ -4886,7 +4930,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
+                self._com,
+                x=x,
+                y=y,
+                drop_axis=base_axes,
+                dtype=np.result_type(self.array.dtype, x.dtype, y.dtype, np.complex64),
             )
         else:
             array = self._com(self.array, x=x, y=y)

@@ -395,7 +395,10 @@ def test_loaded_calculators_between_paths(fake_gpaw, monkeypatch):
     assert max(counter.alive_while_slicing) == 1
 
 
-def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypatch):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_crystal_of_a_path_list_holds_one_read_calculator(
+    fake_gpaw, monkeypatch, lazy
+):
     counter = _CountReads(monkeypatch)
     crystal = abtem.CrystalPotential(
         GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS),
@@ -404,10 +407,11 @@ def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypat
         seeds=(1, 2, 3),
     )
 
-    abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=False)
+    result = abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=lazy)
+    if lazy:
+        result.compute(scheduler="threads")
 
-    # Each member may build the unit again (two reads per member).
-    assert counter.reads <= 6
+    assert counter.reads == 2
     assert max(counter.alive_while_slicing) == 1
 
 
@@ -552,15 +556,8 @@ def test_the_pool_unit_of_a_member_is_the_unit_with_the_seed_of_the_member(fake_
     ids=["seeded", "enlarged"],
 )
 def test_a_crystal_of_a_frozen_phonon_gpaw_unit_simulates_as_it_builds(
-    fake_gpaw, monkeypatch, num_configs, repetitions, kwargs, lazy
+    fake_gpaw, num_configs, repetitions, kwargs, lazy
 ):
-    # An unseeded crystal draws its mosaic from fresh entropy in every call;
-    # fix it, so that the build and the simulation draw the same crystal.
-    default_rng = np.random.default_rng
-    monkeypatch.setattr(
-        np.random, "default_rng", lambda seed=None: default_rng(0 if seed is None else seed)
-    )
-
     expected = abtem.PlaneWave(energy=100e3).multislice(
         _gpaw_crystal(num_configs, repetitions, **kwargs).build(lazy=False),
         lazy=False,
