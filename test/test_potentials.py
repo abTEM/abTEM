@@ -1476,6 +1476,56 @@ class TestSliceIndexedAtomsWrapping:
 
         assert self._per_slice(sliced) == [1, 0, 1, 2]
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
+        self, device, lazy
+    ):
+        """A CrystalPotential draws its tiles from the unit's frozen-phonon pool,
+        built by the unit's own slicing. A pool configuration that pushed the
+        atom near the exit face out of the cell used to lose it, so 3 of these
+        4 members were 0.75 of the expected potential."""
+        import ase
+        import numpy as np
+
+        from abtem.core.backend import asnumpy
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        cell = np.diag([4.0, 4.0, 4.0])
+        kwargs = dict(gpts=(32, 32), slice_thickness=1.0, device=device)
+
+        # One atom 0.01 A below the exit face: sigma = 0.2 pushes it out in
+        # about half of the configurations.
+        atoms = ase.Atoms(
+            "B2", positions=[[1.0, 1.0, 2.0], [3.0, 3.0, 3.99]], cell=cell, pbc=True
+        )
+        unit = Potential(
+            FrozenPhonons(atoms, num_configs=4, sigmas=0.2, seed=5),
+            periodic=False,
+            **kwargs,
+        )
+        crystal = CrystalPotential(
+            unit,
+            repetitions=(1, 1, 2),
+            num_frozen_phonons=4,
+            seeds=7,
+            ensemble_mean=False,
+        )
+        array = asnumpy(crystal.build(lazy=lazy).compute().array)
+
+        # Oracle: an atom's infinite projection summed over the cell is its
+        # q = 0 Fourier component, independent of where the atom sits, so
+        # every member must sum to (2 atoms x 2 units) single atoms.
+        single = asnumpy(
+            Potential(ase.Atoms("B", positions=[[2.0, 2.0, 2.0]], cell=cell), **kwargs)
+            .build()
+            .compute()
+            .array
+        ).sum()
+        np.testing.assert_allclose(
+            array.reshape(len(array), -1).sum(axis=1), 4 * single, rtol=1e-5
+        )
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_non_periodic_infinite_projection_conserves_every_atom(self, device):
         """An atom displaced out of a non-periodic cell used to lose all of its
