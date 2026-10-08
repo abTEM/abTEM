@@ -99,7 +99,7 @@ def test_branches_match_independent_direct_multislice(equilibrium):
 
 def test_all_equals_ordinary_tds_over_full_parity_set(equilibrium):
     """Exact identity (not a statistical one): for the symmetric set of
-    2N configurations {+u_j, -u_j}, the ordinary I_incoherent - I_coherent
+    2N configurations {+u_j, -u_j}, the ordinary total-minus-elastic (diffuse)
     estimator equals one + multi, because the odd part of the mean wave and
     the odd-even cross term in the intensity cancel pairwise. So the "all"
     slot must match a plain (non-parity) run on the real *and* twin
@@ -119,7 +119,7 @@ def test_all_equals_ordinary_tds_over_full_parity_set(equilibrium):
             for group in snapshots
         ]
         exit_waves_full = _run(equilibrium, full_set, energies, ensemble_mean=False)
-        dp_full = phonon_loss_diffraction_patterns(exit_waves_full, component="tds")
+        dp_full = phonon_loss_diffraction_patterns(exit_waves_full, components="diffuse")
 
     scale = np.abs(dp.array[1]).max()
     np.testing.assert_allclose(dp.array[0], dp_full.array, atol=1e-9 * scale, rtol=0)
@@ -172,7 +172,7 @@ def test_full_pipeline_end_to_end(equilibrium):
     assert np.all(dp.array[1:] >= -tiny)
 
     exit_waves_plain = _run(equilibrium, snapshots, [0.02, 0.05], ensemble_mean=False)
-    dp_plain = phonon_loss_diffraction_patterns(exit_waves_plain, component="tds")
+    dp_plain = phonon_loss_diffraction_patterns(exit_waves_plain, components="diffuse")
     assert dp_plain.array.shape == dp.array.shape[1:]
     assert np.all(np.isfinite(dp_plain.array))
 
@@ -229,7 +229,7 @@ def test_rest_parity_damps_one_phonon_channel(equilibrium):
 
     # four runs per snapshot: only the one-phonon channel comes back
     assert damped.array.shape == plain.array.shape[1:]
-    assert damped.metadata["phonon_loss_component"] == "one"
+    assert damped.metadata["frozen_phonon_component"] == "one"
     one_plain, one_damped = plain.array[1, 0], damped.array[0]
 
     ny, nx = one_plain.shape
@@ -306,7 +306,7 @@ def test_one_phonon_only_mode_accepts_a_single_configuration(equilibrium):
              rest_snapshots=rest),
         max_angle=60,
     )
-    assert one_only.metadata["phonon_loss_component"] == "one"
+    assert one_only.metadata["frozen_phonon_component"] == "one"
     assert np.all(np.isfinite(one_only.array))
     assert one_only.array.sum() > 0  # a real signal, not an empty result
 

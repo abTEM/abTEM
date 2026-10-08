@@ -64,6 +64,39 @@ jobs:
       - name: Run tests
         run: uv run pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
+  # The torch backend (device 'mps') on torch's CPU device: runs the test cases
+  # that exercise it without Apple hardware. Its single-precision rules apply on
+  # the CPU device too, so most failures here also fail on a Mac. Not part of
+  # `all-tests-passed`.
+  torch-backend:
+    name: torch backend / python 3.13
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and set python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --group test
+
+      # The `mps` extra is Darwin-only; torch's CPU wheel is the smallest build.
+      - name: Install PyTorch (CPU wheel)
+        run: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      # test_hyperspy skips without it; the `test` group does not carry it.
+      - name: Install HyperSpy
+        run: uv pip install hyperspy
+
+      - name: Run the torch backend's tests
+        env:
+          ABTEM_TORCH__DEVICE: cpu
+        run: uv run pytest test -n auto -m torch ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+
   # A single, stable check to require in branch protection on main, that
   # exists (at all) only for a run that includes --runslow -- PRs into main,
   # and every push/schedule/workflow_dispatch trigger (see RUNSLOW above).

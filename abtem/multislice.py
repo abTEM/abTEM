@@ -693,9 +693,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        if potential.num_exit_planes == 1:
+        # The back-propagation sums the backscattered waves into the entrance
+        # plane, the first exit plane.
+        if potential.num_exit_planes == 1 or potential.exit_planes[0] != -1:
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes."
+                "Backscattering contributions require potential.exit_planes, "
+                "starting with the entrance plane -1."
             )
 
         # moved to MultisliceTransform
@@ -779,49 +782,75 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
+        # The sum of the slices of each exit-plane block, built as the forward
+        # pass goes, for the back-propagation of this configuration's
+        # backscattered waves: one slice is held per exit plane, not per slice.
+        blocks = []
+        block = None
 
-        for potential_chunk in potential_configuration.generate_chunked_slices(
-            chunk_size=potential_chunk_size
-        ):
-            for potential_slice, next_slice in lookahead(
-                potential_chunk.generate_slices()
-            ):
-                if algorithm.expansion_scope == "full":
-                    waves, backscatter_waves = multislice_step(
-                        waves, potential_slice, next_slice=next_slice
-                    )
-                else:
-                    waves = multislice_step(waves, potential_slice, next_slice=None)
-                tqdm_pbar.update_if_exists(int(n_waves))
+        # One stream of slices across the chunks: the last slice of a chunk
+        # looks ahead to the first slice of the next one, so only the exit
+        # face is stepped without a next slice.
+        potential_slices = (
+            potential_slice
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
+            )
+            for potential_slice in potential_chunk.generate_slices()
+        )
 
-                depth += potential_slice.axes_metadata[0].values[0]
+        for potential_slice, next_slice in lookahead(potential_slices):
+            if algorithm.expansion_scope == "full":
+                waves, backscatter_waves = multislice_step(
+                    waves, potential_slice, next_slice=next_slice
+                )
+            else:
+                waves = multislice_step(waves, potential_slice, next_slice=None)
+            tqdm_pbar.update_if_exists(int(n_waves))
 
-                _update_plasmon_axes(waves, depth)
+            if return_backscattered:
+                block = _add_to_block(block, potential_slice)
 
-                if potential_slice.exit_planes:
-                    measurement_index = _validate_potential_ensemble_indices(
-                        potential_index, exit_plane_index, potential
-                    )
+            depth += potential_slice.axes_metadata[0].values[0]
 
-                    if measurements is not None:
-                        if algorithm.expansion_scope == "full" and return_backscattered:
-                            _update_measurements(
-                                waves,
-                                detectors[:-1],
-                                measurements[:-1],
-                                measurement_index,
-                            )
-                            _update_measurements(
-                                backscatter_waves,
-                                detectors[-1:],
-                                measurements[-1:],
-                                measurement_index,
-                            )
-                        else:
-                            _update_measurements(
-                                waves, detectors, measurements, measurement_index
-                            )
-                    exit_plane_index += 1
+            _update_plasmon_axes(waves, depth)
+
+            if potential_slice.exit_planes:
+                measurement_index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential
+                )
+
+                if measurements is not None:
+                    if algorithm.expansion_scope == "full" and return_backscattered:
+                        _update_measurements(
+                            waves,
+                            detectors[:-1],
+                            measurements[:-1],
+                            measurement_index,
+                        )
+                        _update_measurements(
+                            backscatter_waves,
+                            detectors[-1:],
+                            measurements[-1:],
+                            measurement_index,
+                        )
+                    else:
+                        _update_measurements(
+                            waves, detectors, measurements, measurement_index
+                        )
+                exit_plane_index += 1
+                if return_backscattered:
+                    blocks.append(block)
+                    block = None
+
+        if return_backscattered:
+            _back_propagate_backscattered_waves(
+                measurements[-1][  # type: ignore
+                    _validate_potential_ensemble_indices(potential_index, (), potential)
+                ],
+                blocks,
+                multislice_step,
+            )
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
@@ -831,81 +860,43 @@ def multislice_and_detect(
                 for detector in detectors
             ]
 
-    elif return_backscattered:
-        _back_propagate_backscattered_waves(
-            measurements[-1],  # type: ignore
-            potential,
-            multislice_step,
-        )
-
     tqdm_pbar.close_if_exists()
 
     return measurements
 
 
-def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
-    """
-    Group potential slices between exit_planes, summing their thicknesses.
+def _add_to_block(block, potential_slice):
+    """Add a slice to the sum of the slices of one exit-plane block, and its
+    thickness to the block's. The block starts as a copy of its first slice
+    (`block` is None)."""
+    if block is None:
+        return potential_slice.copy()
 
-    Parameters
-    ----------
-    potential_slices : list of PotentialSlice
-        Original slices along the beam direction.
-    exit_planes : list of int
-        Indices of exit planes (first can be -1 for entrance plane).
-
-    Returns
-    -------
-    effective_slices : list of PotentialSlice
-        Aggregated slices with summed potential arrays and summed thicknesses.
-    """
-
-    effective_slices = []
-
-    for i in range(0, len(exit_planes) - 1):
-        idx_start = exit_planes[i] + 1  # slice after previous exit plane
-        idx_end = exit_planes[i + 1] + 1  # include this exit plane
-
-        # Aggregate slices in this block
-        combined_slice = potential_slices[idx_start].copy()
-        thickness = combined_slice.slice_thickness[0]
-        # Add remaining slices in the block
-        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
-            combined_slice += in_bw_slice
-            thickness += in_bw_slice.slice_thickness[0]
-            combined_slice._slice_thickness = (thickness,)
-            combined_slice._slice_limits = [(0, thickness)]
-
-        effective_slices.append(combined_slice)
-
-    return effective_slices
+    thickness = block.slice_thickness[0] + potential_slice.slice_thickness[0]
+    block += potential_slice
+    block._slice_thickness = (thickness,)
+    block._slice_limits = [(0, thickness)]
+    return block
 
 
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    potential: BasePotential,
+    effective_slices: list[BasePotential],
     multislice_step: Callable,
 ) -> Waves:
     """
     For each slice in the multislice step, a small part of the wave get backscattered.
     This function runs the multislice in reverse for each backscattered wave summing
     them for a final backscattered wave result.
+
+    `backscattered_waves` are those of one configuration, with the exit-plane axis
+    first, and `effective_slices` are the sums of the slices its forward pass used
+    between consecutive exit planes.
     """
 
     xp = get_array_module(backscattered_waves.device)
-    potential_slices = [
-        slice
-        for _, config in _generate_potential_configurations(potential)
-        for slice in config.generate_slices()
-    ]
-
-    effective_slices = _aggregate_slices_by_exit_planes(
-        potential_slices, potential.exit_planes
-    )
 
     num_slices = len(effective_slices)
-    if len(backscattered_waves) != num_slices + 1:
-        raise ValueError("Wrong shapes")
 
     # zero intensity in incoming wave
     backscattered_waves[0]._array[:] = 0
@@ -1081,10 +1072,6 @@ def transition_potential_multislice_and_detect(
             f"{transition_potential.Z}"
         )
 
-    absolute_threshold = transition_potential.absolute_threshold(
-        waves, threshold=threshold
-    )
-
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
 
@@ -1168,6 +1155,16 @@ def transition_potential_multislice_and_detect(
 
             if len(sites_slice) == 0:
                 continue
+
+            # The overlap cut is ranked on the very waves the sites of this
+            # slice scatter. A cut ranked once on the entrance wave and
+            # applied at every depth drifted as the probe propagated: a
+            # symmetry-tied group of sites at the cut fell below it together
+            # (in one 1 A vacuum slice, threshold=0.1 kept 4.8% of the signal),
+            # and as the probe spreads with depth it dropped ever more sites.
+            absolute_threshold = transition_potential.absolute_threshold(
+                waves, threshold=threshold
+            )
 
             for (
                 included_sites,
@@ -1318,6 +1315,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         Additional keyword arguments passed to the multislice function.
     """
 
+    _splits_energy_ensembles = True
+
     def __init__(
         self,
         potential: BasePotential,
@@ -1415,8 +1414,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return base_shape
 
     def _out_ensemble_source(self, waves: Waves) -> tuple[tuple[int, ...], ...]:
+        # Each output starts with the potential's ensemble axes (and the exit
+        # planes), which stay in place; a detector's permutation refers to the
+        # waves' axes that follow them.
+        n = len(self.ensemble_shape)
         return tuple(
-            detector._out_ensemble_source(waves)[0] for detector in self.detectors
+            tuple(range(n))
+            + tuple(i + n for i in detector._out_ensemble_source(waves)[0])
+            for detector in self.detectors
         )
 
     def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata], ...]:
@@ -1553,68 +1558,25 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             **func_kwargs,
         )
 
+    def _match_ensemble(self, waves: Waves) -> MultisliceTransform:
+        """This transform with its detectors matched against the whole ensemble.
+
+        The detectors are matched before a multi-energy ensemble is split into
+        its energies (see `abtem.array._calculate_new_array_per_energy`), so a
+        radial detector with an auto-sized outer angle raises, eagerly and
+        lazily alike, and a pixelated detector crops every energy to the
+        pixel count of the ensemble.
+        """
+        matched = [detector._match_ensemble(waves) for detector in self._detectors]
+        if all(new is old for new, old in zip(matched, self._detectors)):
+            return self
+
+        transform = copy.copy(self)
+        transform._detectors = matched
+        transform._user_detectors = matched[: len(self._user_detectors)]
+        return transform
+
     def _calculate_new_array(self, waves: Waves):
-        from abtem.core.axes import EnergyAxis
-
-        # Eager energy-ensemble path: iterate per-energy so that each call
-        # receives a single-energy Waves and _valid_energy resolves correctly.
-        energy_axis_idx = next(
-            (
-                i
-                for i, ax in enumerate(waves.ensemble_axes_metadata)
-                if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-            ),
-            None,
-        )
-        if energy_axis_idx is not None:
-            import numpy as np
-
-            # Match every detector against the *full*, un-indexed ensemble
-            # waves before splitting into per-energy members below -- the
-            # same waves the lazy path's `_out_base_shape` matches against to
-            # size the output array up front (abtem/detectors.py). Without
-            # this, an auto-sizing radial detector (e.g.
-            # FlexibleAnnularDetector with no explicit outer) would instead
-            # see each per-energy `member` one at a time -- via
-            # `_match_waves`'s own per-call energy-ensemble guard -- either
-            # raising there in an order that varies with which member the
-            # detector is reused across, or, once unguarded, sizing its bins
-            # from each member's own cutoff angle and producing per-member
-            # arrays of different shapes for `np.stack` below to fail on.
-            # Matching here instead reaches the same
-            # cannot-auto-size-for-an-ensemble guard while still holding the
-            # full ensemble, so eager raises the same clear error as lazy,
-            # regardless of energy order.
-            for detector in self.detectors:
-                if hasattr(detector, "_match_waves"):
-                    detector._match_waves(waves)
-
-            energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
-            per_energy = []
-            for j in range(len(energy_axis.values)):
-                idx = (slice(None),) * energy_axis_idx + (j,)
-                member = waves.__class__(**waves.get_items(idx))
-                per_energy.append(self._calculate_new_array(member))
-            # Stack at energy_axis_idx itself, reinserting the axis exactly
-            # where indexing removed it -- member's own remaining axes are
-            # *waves*' own axes with energy_axis_idx dropped, in their
-            # original relative order, so this always reproduces waves' own
-            # (natural, undeclared) ensemble axis order, whatever detector
-            # or scan type is in play. A detector like AnnularDetector
-            # declares a *different* axis order in its own metadata (moving
-            # scan axes to the end -- see _out_ensemble_source in
-            # abtem/detectors.py); reordering to match that declared order
-            # is handled once, uniformly for both eager and lazy results, in
-            # ArrayObject.apply_transform (abtem/array.py) rather than here,
-            # so this function only ever needs to know its own axes, not any
-            # particular detector's output convention.
-            if isinstance(per_energy[0], tuple):
-                return tuple(
-                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
-                    for k in range(len(per_energy[0]))
-                )
-            return np.stack(per_energy, axis=energy_axis_idx)
-
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,
@@ -1627,7 +1589,19 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
                 f"Expected {len(self.detectors)} outputs, got {len(measurements)}"
             )
 
-        arrays = tuple(measurement.array for measurement in measurements)
+        from abtem.array import _transpose_from_ensemble_source
+
+        # multislice_func allocates each output in the order its detector
+        # declares, which moves the scan axes behind any ensemble axis that
+        # follows them in the waves (a lazy block's length-1 slice of a probe's
+        # energy ensemble). Return the waves' own order, like every
+        # _calculate_new_array; ArrayObject.apply_transform reorders once.
+        arrays = tuple(
+            _transpose_from_ensemble_source(measurement.array, order)
+            for measurement, order in zip(
+                measurements, self._out_ensemble_source(waves)
+            )
+        )
         if len(arrays) == 1:
             arrays = arrays[0]
 

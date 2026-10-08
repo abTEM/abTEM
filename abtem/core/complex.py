@@ -2,6 +2,7 @@ import dask.array as da
 import numba as nb  # type: ignore
 import numpy as np
 
+from abtem.core import backend
 from abtem.core.backend import check_cupy_is_installed, cp
 
 
@@ -89,6 +90,9 @@ def abs2(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.Array:
     if isinstance(x, da.core.Array):
         return da.map_blocks(abs2, x)
 
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return x.real**2 + x.imag**2
+
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
@@ -118,6 +122,9 @@ def complex_exponential(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.A
 
     if isinstance(x, da.core.Array):
         return da.map_blocks(complex_exponential, x)
+
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return backend.tp.exp(1.0j * x)
 
     check_cupy_is_installed()  # type: ignore
 
@@ -158,6 +165,9 @@ def complex_exponential_scaled(
 
     if isinstance(x, da.core.Array):
         return da.map_blocks(complex_exponential_scaled, x, scale=scale)
+
+    if backend.tp is not None and isinstance(x, backend.TorchNDArray):
+        return backend.tp.exp((1.0j * scale) * x)
 
     check_cupy_is_installed()  # type: ignore
 

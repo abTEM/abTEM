@@ -171,7 +171,11 @@ def test_incommensurate_fallback_scales_to_large_supercells():
     base = np.sort(np.random.RandomState(0).uniform(0, cell, 12))
     planes = np.concatenate([base + i * cell for i in range(200)])
     extent = 200 * cell
-    positions = _plane_positions(planes, planes)
+    # Pair the planes up rather than taking their outer product: the 2400 x
+    # 2400 grid of _plane_positions is 5.8M atoms, and sorting those (not the
+    # period search this test targets) then dominates the timing -- ~0.3 s
+    # locally, enough to push a slow CI runner past the bound below.
+    positions = np.stack([planes, planes, np.zeros_like(planes)], axis=1)
 
     start = time.perf_counter()
     gpts = commensurate_gpts((extent, extent), positions, target_sampling=0.05)
