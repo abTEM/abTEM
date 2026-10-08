@@ -18,7 +18,7 @@ from abtem.core.chunks import (
 )
 from abtem.core.complex import complex_exponential
 from abtem.magnetism.iam import MagneticField, VectorPotential
-from abtem.potentials.iam import CrystalPotential, PotentialArray
+from abtem.potentials.iam import BaseField, CrystalPotential, PotentialArray
 
 
 @pytest.fixture
@@ -584,6 +584,34 @@ def _local_exit_planes(global_exit_planes, offset, length):
     return tuple(
         int(i) - offset for i in global_exit_planes if offset <= i < offset + length
     )
+
+
+class TestBaseFieldSubclasses:
+    """A subclass written against the released BaseField needs no chunker."""
+
+    @staticmethod
+    def _minimal_subclass():
+        # The abstract members of BaseField in v1.0.10.
+        class Minimal(BaseField):
+            num_configurations = 1
+            base_axes_metadata = []
+            exit_planes = (0,)
+            slice_thickness = (1.0,)
+
+            def generate_slices(self, first_slice=0, last_slice=None):
+                yield from ()
+
+            def build(self, first_slice=0, last_slice=None, chunks=1, lazy=None):
+                pass
+
+        return Minimal
+
+    def test_instantiates(self):
+        assert isinstance(self._minimal_subclass()(), BaseField)
+
+    def test_chunking_it_names_the_class(self):
+        with pytest.raises(NotImplementedError, match="Minimal"):
+            self._minimal_subclass()().generate_chunked_slices()
 
 
 class TestTransmissionFunctionSlices:

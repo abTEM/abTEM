@@ -147,7 +147,6 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
-    @abstractmethod
     def generate_chunked_slices(
         self,
         first_slice: int = 0,
@@ -158,8 +157,12 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         Generate the slices in chunks of contiguous slices, each of the same class
         as the field's built array and with its exit planes counted from the
         chunk's first slice.
+
+        Implemented by the builders and the built arrays.
         """
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement generate_chunked_slices."
+        )
 
     @abstractmethod
     def build(
