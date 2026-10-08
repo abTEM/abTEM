@@ -242,9 +242,10 @@ def test_s_matrix_store_on_host(data, lazy):
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
+@pytest.mark.parametrize("store_on_host", [False, True])
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-def test_s_matrix_build_dtype_follows_the_precision(precision, lazy):
+def test_s_matrix_build_dtype_follows_the_precision(precision, lazy, store_on_host):
     from ase.build import bulk
 
     import abtem
@@ -259,6 +260,7 @@ def test_s_matrix_build_dtype_follows_the_precision(precision, lazy):
             semiangle_cutoff=20,
             potential=potential,
             interpolation=1,
+            store_on_host=store_on_host,
         )
         expected = get_dtype(complex=True)
         built = s_matrix.build(lazy=lazy)
