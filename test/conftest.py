@@ -45,6 +45,12 @@ settings.register_profile(
 settings.load_profile("dev")
 
 
+@pytest.fixture
+def cpu_float64_config():
+    with config.set({"device": "cpu", "precision": "float64", "fft": "numpy"}):
+        yield
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--runslow", action="store_true", default=False, help="run slow tests"
@@ -68,13 +74,26 @@ def pytest_configure(config):
         "device parameter and by requires_gpu/requires_multigpu, not meant "
         "to be applied directly. Deselect with -m 'not gpu'.",
     )
+    for name in ("torch", "mps", "metal"):
+        config.addinivalue_line(
+            "markers",
+            f"{name}: the torch backend (device 'mps'): Apple Metal, or torch's CPU "
+            "device with ABTEM_TORCH__DEVICE=cpu; see `gpu` in test/utils.py.",
+        )
+    config.addinivalue_line(
+        "markers",
+        "float64: the test runs in double precision, set in its body or by a "
+        "fixture rather than by a parameter; its 'mps' case is skipped.",
+    )
 
 
 # Metal is a single-precision backend -- torch refuses a float64 tensor on the
 # MPS device outright -- so a test parametrized on both the 'mps' device and
 # double precision is asking for something the hardware cannot do. Skipping is
 # the honest outcome; letting it fail would bury real Metal regressions under
-# noise that no amount of backend work can clear.
+# noise that no amount of backend work can clear. Double precision is seen in
+# the test's parameters, or declared with the `float64` marker by a test that
+# sets it in its body or a fixture, which no parameter shows.
 _DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
 
 
@@ -86,7 +105,9 @@ def _is_double_precision_on_metal(item) -> bool:
     # Only string parameters are of interest, and restricting to them also
     # keeps unhashable ones (arrays, Atoms) away from the set membership test.
     values = [value for value in callspec.params.values() if isinstance(value, str)]
-    return "mps" in values and any(
+    if "mps" not in values:
+        return False
+    return item.get_closest_marker("float64") is not None or any(
         value in _DOUBLE_PRECISION_PARAMS for value in values
     )
 

@@ -18,7 +18,7 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
-from utils import gpu, lazy_params, si_cubic_atoms
+from utils import devices, gpu, lazy_params, si_cubic_atoms
 
 ENERGIES = [80e3, 200e3, 300e3]
 
@@ -576,6 +576,266 @@ class TestCTFEnergyEnsemble:
         assert isinstance(ap.ensemble_axes_metadata[0], EnergyAxis)
 
 
+class TestTransferFunctionEnergyMatching:
+    """A transfer function whose energy is a distribution is matched to the
+    EnergyAxis of a multi-energy ensemble and evaluated per member, rather than
+    adding a second energy axis. Oracle: the same simulation run separately at
+    each single energy."""
+
+    CTF_KWARGS = dict(defocus=50.0, Cs=-20e4, semiangle_cutoff=20.0, focal_spread=20.0)
+
+    @staticmethod
+    def _potential(device="cpu"):
+        atoms = ase.Atoms(
+            "CSi", positions=[(1.5, 2.0, 1.0), (3.5, 3.0, 2.0)], cell=(5, 5, 3)
+        )
+        return abtem.Potential(atoms, gpts=48, slice_thickness=1.0, device=device)
+
+    def _exit_waves(self, energy, lazy, device="cpu"):
+        return PlaneWave(energy=energy, device=device).multislice(
+            self._potential(device), lazy=lazy
+        )
+
+    @staticmethod
+    def _intensity(waves):
+        return waves.intensity().compute().to_cpu().array
+
+    def _oracle(self, ctf_kwargs=None):
+        ctf_kwargs = self.CTF_KWARGS if ctf_kwargs is None else ctf_kwargs
+        return np.stack(
+            [
+                self._exit_waves(energy, lazy=False)
+                .apply_ctf(abtem.CTF(energy=energy, **ctf_kwargs))
+                .intensity()
+                .array
+                for energy in TEST_ENERGIES
+            ]
+        )
+
+    @devices
+    @lazy_params
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply", "apply_transform"])
+    def test_matches_single_energy_simulations(self, lazy, apply, device):
+        waves = self._exit_waves(TEST_ENERGIES, lazy, device)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+
+        if apply == "apply_ctf":
+            result = waves.apply_ctf(ctf)
+        elif apply == "ctf.apply":
+            result = ctf.apply(waves)
+        else:
+            result = waves.apply_transform(ctf)
+
+        assert len(result.ensemble_axes_metadata) == 1
+        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
+        assert result.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
+        assert result.accelerator.energy is None
+        np.testing.assert_allclose(
+            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
+        )
+
+    def test_matches_ctf_without_energy(self):
+        """Matching the energies is equivalent to leaving the CTF energy unset, and
+        neither CTF is left with the energy of a member."""
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        matched_ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+        unset_ctf = abtem.CTF(**self.CTF_KWARGS)
+        matched = waves.apply_ctf(matched_ctf)
+        unset = waves.apply_ctf(unset_ctf)
+        assert np.array_equal(matched.array, unset.array)
+        assert tuple(matched_ctf.energy.values) == tuple(TEST_ENERGIES)
+        assert unset_ctf.energy is None
+        # ... so both can be applied again
+        assert np.array_equal(waves.apply_ctf(unset_ctf).array, unset.array)
+
+    @devices
+    def test_lazy_block_holding_several_energies(self, device):
+        """A lazy block holding every energy is split into its energies too."""
+        waves = self._exit_waves(TEST_ENERGIES, lazy=True, device=device)
+        waves = waves.rechunk((len(TEST_ENERGIES), -1, -1))
+        assert waves.array.chunks[0] == (len(TEST_ENERGIES),)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+        np.testing.assert_allclose(
+            self._intensity(waves.apply_ctf(ctf)),
+            self._oracle(),
+            rtol=1e-4,
+            atol=1e-6,
+        )
+
+    @devices
+    def test_ensemble_mean(self, device):
+        """The reported example: an ensemble-mean energy distribution on both."""
+        distribution = abtem.distributions.from_values(
+            TEST_ENERGIES, ensemble_mean=True
+        )
+        waves = self._exit_waves(distribution, lazy=True, device=device)
+        ctf = abtem.CTF(energy=distribution, **self.CTF_KWARGS)
+        intensity = waves.apply_ctf(ctf).intensity().reduce_ensemble().compute()
+        assert intensity.ensemble_shape == ()
+        np.testing.assert_allclose(
+            intensity.to_cpu().array, self._oracle().mean(0), rtol=1e-4, atol=1e-6
+        )
+
+    @devices
+    def test_weighted_ensemble_mean(self, device):
+        """The weights of the wave functions decide the ensemble mean; those of the
+        CTF's distribution are not used."""
+        weights = [0.2, 0.7, 0.1]
+        waves = self._exit_waves(
+            abtem.distributions.from_values(
+                TEST_ENERGIES, weights=weights, ensemble_mean=True
+            ),
+            lazy=True,
+            device=device,
+        )
+        ctf = abtem.CTF(
+            energy=abtem.distributions.from_values(
+                TEST_ENERGIES, weights=[0.6, 0.2, 0.2], ensemble_mean=True
+            ),
+            **self.CTF_KWARGS,
+        )
+        intensity = waves.apply_ctf(ctf).intensity().reduce_ensemble().compute()
+        assert intensity.ensemble_shape == ()
+        np.testing.assert_allclose(
+            intensity.to_cpu().array,
+            np.tensordot(weights, self._oracle(), axes=1),
+            rtol=1e-4,
+            atol=1e-6,
+        )
+
+    @devices
+    @lazy_params
+    def test_with_defocus_series(self, lazy, device):
+        """The CTF's other ensemble axes precede the matched energy axis, as for
+        a single energy, and each (defocus, energy) member is the oracle's, also
+        when each lazy block holds one energy."""
+        defocus = abtem.distributions.from_values([0.0, 40.0, 80.0])
+        waves = self._exit_waves(TEST_ENERGIES, lazy, device)
+        if lazy:
+            assert waves.array.chunks[0] == (1,) * len(TEST_ENERGIES)
+        ctf = abtem.CTF(energy=TEST_ENERGIES, defocus=defocus, semiangle_cutoff=20.0)
+        result = waves.apply_ctf(ctf)
+
+        assert result.ensemble_shape == (3, len(TEST_ENERGIES))
+        assert isinstance(result.ensemble_axes_metadata[1], EnergyAxis)
+        if lazy:
+            assert result.array.chunks[1] == (1,) * len(TEST_ENERGIES)
+
+        intensity = self._intensity(result)
+        for i, value in enumerate(defocus.values):
+            oracle = self._oracle(dict(defocus=float(value), semiangle_cutoff=20.0))
+            np.testing.assert_allclose(intensity[i], oracle, rtol=1e-4, atol=1e-6)
+
+    def test_mismatched_energies_raise(self):
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=[100e3, 200e3, 250e3], defocus=50))
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES[::-1], defocus=50))
+        with pytest.raises(ValueError, match="do not match the energies"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES[:2], defocus=50))
+
+    def test_fixed_energy_on_ensemble_raises(self):
+        waves = self._exit_waves(TEST_ENERGIES, lazy=False)
+        with pytest.raises(ValueError, match="fixed energy"):
+            abtem.Aperture(semiangle_cutoff=20, energy=100e3).apply(waves)
+
+    @pytest.mark.parametrize("index", [None, 1])
+    def test_single_energy_waves_raise(self, index):
+        if index is None:
+            waves = self._exit_waves(200e3, lazy=False)
+        else:
+            waves = self._exit_waves(TEST_ENERGIES, lazy=False)[index]
+        with pytest.raises(ValueError, match="not an energy ensemble"):
+            waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, defocus=50))
+
+    @devices
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
+    def test_reused_after_single_energy_waves(self, apply, device):
+        """Applying a CTF to single-energy wave functions leaves it without their
+        energy, so it can then be applied to a multi-energy ensemble."""
+        ctf = abtem.CTF(**self.CTF_KWARGS)
+        for energy in (200e3, TEST_ENERGIES):
+            waves = self._exit_waves(energy, lazy=False, device=device)
+            if apply == "apply_ctf":
+                result = waves.apply_ctf(ctf)
+            else:
+                result = ctf.apply(waves)
+            assert ctf.energy is None
+        np.testing.assert_allclose(
+            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
+        )
+
+    @lazy_params
+    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
+    def test_fixed_energy_on_mismatched_member_raises(self, lazy, apply):
+        """A fixed energy is checked against an indexed member's own energy."""
+        member = PlaneWave(energy=TEST_ENERGIES, extent=5, gpts=32).build(lazy=lazy)[1]
+        ctf = abtem.CTF(energy=TEST_ENERGIES[0], **self.CTF_KWARGS)
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            member.apply_ctf(ctf) if apply == "apply_ctf" else ctf.apply(member)
+        assert ctf.energy == TEST_ENERGIES[0]
+
+        matching = abtem.CTF(energy=TEST_ENERGIES[1], **self.CTF_KWARGS)
+        result = member.apply_ctf(matching) if apply == "apply_ctf" else (
+            matching.apply(member)
+        )
+        assert result.metadata["energy"] == TEST_ENERGIES[1]
+
+    def test_single_valued_energy_distribution_is_scalar(self):
+        ctf = abtem.CTF(energy=[200e3], defocus=50)
+        assert ctf.energy == 200e3
+        assert ctf.ensemble_axes_metadata == []
+
+    def test_profiles(self):
+        """Each energy member of the profiles is the single-energy profile on the
+        common spatial-frequency grid, which reaches max_angle at the highest
+        energy."""
+        from abtem.core.energy import energy2wavelength
+
+        max_angle = 30.0
+        profiles = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS).profiles(
+            max_angle=max_angle
+        )
+        assert isinstance(profiles.ensemble_axes_metadata[0], EnergyAxis)
+        assert profiles.ensemble_shape[0] == len(TEST_ENERGIES)
+        assert "energy" not in profiles.metadata
+
+        shortest = energy2wavelength(max(TEST_ENERGIES))
+        for i, energy in enumerate(TEST_ENERGIES):
+            member_max_angle = max_angle * energy2wavelength(energy) / shortest
+            oracle = abtem.CTF(energy=energy, **self.CTF_KWARGS).profiles(
+                max_angle=member_max_angle
+            )
+            assert np.isclose(profiles.sampling, oracle.sampling)
+            np.testing.assert_allclose(
+                profiles.array[i], oracle.array, rtol=1e-4, atol=1e-6
+            )
+            assert profiles[i].metadata["energy"] == energy
+
+    def test_profiles_require_two_points(self):
+        with pytest.raises(ValueError, match="at least 2 points"):
+            abtem.CTF(energy=200e3, semiangle_cutoff=20).profiles(gpts=1)
+
+    def test_to_diffraction_patterns_grid(self):
+        """The default grid is sized from the highest energy, so that it reaches
+        the semiangle cutoff for every member; each member is the single-energy
+        aperture on that grid."""
+        aperture = abtem.Aperture(semiangle_cutoff=20, energy=TEST_ENERGIES)
+        patterns = aperture.to_diffraction_patterns()
+        assert patterns.ensemble_shape == (len(TEST_ENERGIES),)
+        assert isinstance(patterns.ensemble_axes_metadata[0], EnergyAxis)
+        assert "energy" not in patterns.metadata
+
+        highest = abtem.Aperture(
+            semiangle_cutoff=20, energy=max(TEST_ENERGIES)
+        ).to_diffraction_patterns()
+        assert np.allclose(patterns.sampling, highest.sampling)
+        np.testing.assert_allclose(
+            patterns.array[TEST_ENERGIES.index(max(TEST_ENERGIES))], highest.array
+        )
+
+
 # ---------------------------------------------------------------------------
 # SrTiO3 fixture used by BlochWaves tests
 # ---------------------------------------------------------------------------
@@ -723,6 +983,84 @@ class TestBlochWavesEnergyEnsemble:
                 dp_single.array[i, inactive], 0.0,
                 err_msg=f"Inactive beams non-zero at energy index {i}",
             )
+
+
+BLOCH_ENSEMBLE_N_ROTATIONS = 4
+
+
+@pytest.mark.slow
+@pytest.mark.xdist_group("bloch_energy_ensemble")
+class TestBlochwaveEnsembleEnergyEnsemble:
+    """BlochWaves.rotate() with a rotation ensemble returns a BlochwaveEnsemble,
+    a different class from BlochWaves with its own calculate_diffraction_patterns.
+    Combined with a multi-energy ensemble, reciprocal_lattice_vectors -- which has
+    no energy dependence of its own -- needs an explicit size-1 placeholder axis
+    for energy, in the same position array has one, or the two disagree by one
+    axis the moment both ensembles are present together (rotation ensemble alone,
+    or energy ensemble alone as covered above, each stay one axis short of
+    triggering it)."""
+
+    @staticmethod
+    def _rotated_ensemble(n_rotations, energies):
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(atoms, energy=energies, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
+        angles = np.linspace(0.0, 10.0, n_rotations)
+        zero = np.zeros_like(angles)
+        all_angles = np.stack((zero, angles, -zero), axis=-1)
+        return bw.rotate("zxz", all_angles, degrees=True)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def rotated_multi_energy(cls):
+        """Shared rotation+energy ensemble (expensive: rebuilds the structure
+        factor once instead of once per test)."""
+        return cls._rotated_ensemble(BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def dp_multi(cls, rotated_multi_energy):
+        """Cached multi-thickness diffraction patterns, shared by the tests
+        that only read the result rather than re-triggering the bug."""
+        return rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+
+    def test_diffraction_patterns_shape_with_thicknesses(self, dp_multi):
+        n_rot = BLOCH_ENSEMBLE_N_ROTATIONS
+        n_energies, n_thick = len(BLOCH_ENERGIES), len(BLOCH_THICKNESS)
+        assert dp_multi.array.shape[:-1] == (n_rot, n_energies, n_thick)
+        assert isinstance(dp_multi.ensemble_axes_metadata[1], EnergyAxis)
+        assert isinstance(dp_multi.ensemble_axes_metadata[2], ThicknessAxis)
+
+    def test_diffraction_patterns_shape_scalar_thickness(self, rotated_multi_energy):
+        result = rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS[0], lazy=False
+        )
+        n_rot, n_energies = BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_ENERGIES)
+        assert result.array.shape[:-1] == (n_rot, n_energies)
+
+    def test_getitem_after_multi_energy(self, dp_multi):
+        """__getitem__ zips items against reciprocal_lattice_vectors.shape
+        positionally, so a missing energy placeholder there mis-slices this
+        even where __init__'s broadcast check alone would not catch it."""
+        sub = dp_multi[1]
+        assert sub.array.shape == dp_multi.array.shape[1:]
+
+    def test_crop_after_multi_energy(self, dp_multi):
+        cropped = dp_multi.crop(k_max=BLOCH_G_MAX / 2)
+        assert cropped.array.shape[:-1] == dp_multi.array.shape[:-1]
+
+    def test_single_energy_rotation_ensemble_unchanged(self):
+        """No regression for the rotation-ensemble-only path (single energy)."""
+        rotated = self._rotated_ensemble(
+            BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES[0]
+        )
+        result = rotated.calculate_diffraction_patterns(
+            BLOCH_THICKNESS, lazy=False
+        )
+        assert result.array.shape[:-1] == (
+            BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_THICKNESS)
+        )
 
 
 # ---------------------------------------------------------------------------

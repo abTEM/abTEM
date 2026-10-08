@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import abstractmethod
 from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
@@ -11,6 +12,12 @@ from ase import Atoms
 
 from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
+
+# How far outside the cell along z [Å] a non-periodic potential places an atom in
+# its face slice before warning. A thermal displacement is a few times its
+# standard deviation, which rarely exceeds 0.25 Å, so this is about 8 sigma: no
+# frozen phonon reaches it, but a misplaced atom or a wrong cell height does.
+FACE_SLICE_WARNING_DISTANCE = 2.0
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -636,6 +643,25 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
+    """Warn about atoms far enough outside [0, height] along z that placing them
+    in the face slice is a guess at their depth, not a correction of it."""
+    outside = np.maximum(-z, z - height)
+    far = outside > FACE_SLICE_WARNING_DISTANCE
+    if not np.any(far):
+        return
+
+    warnings.warn(
+        f"{int(far.sum())} atom(s) lie more than {FACE_SLICE_WARNING_DISTANCE} Å "
+        f"outside the cell along z (0 to {height:.4g} Å). A non-periodic potential "
+        "keeps an atom that left the cell in the face slice it left through, which "
+        "is right for a small displacement such as a frozen phonon, but puts an "
+        "atom this far out at the wrong depth. Check the atomic positions against "
+        "the cell height.",
+        stacklevel=3,
+    )
+
+
 class SliceIndexedAtoms(BaseSlicedAtoms):
     """
     Sliced atoms assigning each atom to a specific slice index.
@@ -702,13 +728,26 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
         # label_to_index silently discards labels outside [0, num_slices - 1],
-        # which is how an out-of-cell atom used to disappear. After the wrap
-        # above there is no such atom, so say so rather than dropping one.
-        # Only meaningful after a wrap: with wrap=False (a non-periodic
-        # potential) an atom outside the cell is expected, and label_to_index
-        # dropping it is the pre-existing behaviour this must not change.
-        # np.digitize against increasing bins returns [0, len(bins)], never
-        # negative, so only the upper end can escape.
+        # which is how an out-of-cell atom used to disappear. np.digitize
+        # against increasing bins returns [0, len(bins)], never negative, so
+        # only the upper end can escape: an atom below the entrance face
+        # already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised
+        # after padding. It belongs to the face it left, so clamp it into the
+        # last slice, mirroring what digitize already does at the entrance
+        # face. Its true position is kept: the infinite projection does not
+        # depend on z within a slice, so the projected potential is conserved
+        # exactly, where dropping the atom lost its whole contribution.
+        if not wrap:
+            _warn_far_outside_faces(
+                self.atoms.positions[:, 2], float(np.sum(self.slice_thickness))
+            )
+            labels = np.minimum(labels, len(self) - 1)
+
+        # After a wrap there is no atom outside the cell, so say so rather
+        # than dropping one.
         if wrap and len(labels) and labels.max() > len(self) - 1:
             raise RuntimeError(
                 f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "

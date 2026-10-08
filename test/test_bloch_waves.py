@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from ase.build import bulk
+from ase.build import bulk, graphene
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from utils import gpu, requires_gpu
@@ -15,6 +15,7 @@ from abtem.bloch import BlochWavePrecisionWarning, BlochWaves, StructureFactor
 from abtem.bloch.dynamical import BlochwaveEnsemble, calculate_structure_factors
 from abtem.bloch.utils import (
     auto_detect_centering,
+    get_reflection_condition,
     relative_positions_for_centering,
     wrapped_is_close,
 )
@@ -62,7 +63,6 @@ def basis_match_templates(basis):
 
 @settings(max_examples=5)
 @pytest.mark.parametrize("centering", ["P", "F", "I", "A", "B", "C"])
-@pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @given(
     data=basis_and_positions(),
     cell=st.tuples(st.floats(1, 2), st.floats(1, 2), st.floats(1, 2)),
@@ -84,6 +84,339 @@ def test_auto_detect_centering(data, cell, centering):
     assert auto_detect_centering(atoms) == centering
 
 
+REFLECTION_CONDITIONS = {
+    "P": lambda h, k, l: np.ones_like(h, dtype=bool),
+    "A": lambda h, k, l: (k + l) % 2 == 0,
+    "B": lambda h, k, l: (h + l) % 2 == 0,
+    "C": lambda h, k, l: (h + k) % 2 == 0,
+    "I": lambda h, k, l: (h + k + l) % 2 == 0,
+    "F": lambda h, k, l: (h % 2 == k % 2) & (k % 2 == l % 2),
+}
+
+
+def _hkl_cube(n=3):
+    hkl = np.stack(
+        np.meshgrid(*(np.arange(-n, n + 1),) * 3, indexing="ij"), axis=-1
+    ).reshape((-1, 3))
+    return hkl[(hkl != 0).any(axis=1)]
+
+
+@pytest.mark.parametrize("centering", ["P", "A", "B", "C", "I", "F"])
+def test_reflection_condition_matches_crystallographic_rules(centering):
+    # Regression: the A, B and C branches applied .all(axis=1) to a 1-D mask
+    # and raised numpy.exceptions.AxisError.
+    hkl = _hkl_cube()
+    mask = get_reflection_condition(hkl, centering)
+    assert mask.shape == (len(hkl),)
+    np.testing.assert_array_equal(mask, REFLECTION_CONDITIONS[centering](*hkl.T))
+
+
+OBLIQUE_CELLS = {
+    "orthorhombic": [3.1, 3.7, 4.3],
+    "monoclinic": [[3.1, 0.0, 0.0], [0.0, 3.7, 0.0], [1.1, 0.0, 4.3]],
+    "triclinic": [[3.1, 0.0, 0.0], [0.8, 3.7, 0.0], [1.1, -0.6, 4.3]],
+}
+
+
+@pytest.mark.parametrize("cell", OBLIQUE_CELLS.values(), ids=OBLIQUE_CELLS.keys())
+@pytest.mark.parametrize("centering", ["A", "B", "C", "I", "F"])
+def test_centering_templates_are_consistent_with_reflection_conditions(centering, cell):
+    # A crystal built from the centering translations returned by
+    # relative_positions_for_centering must be auto-detected as that centering, and
+    # exactly the reflections removed by get_reflection_condition must be
+    # systematically absent. The A, B and C templates previously encoded
+    # half-translations along a single lattice vector, so the reflection
+    # conditions would have removed allowed reflections. The absences depend only on
+    # the fractional translations, so they hold in oblique cells too.
+    basis = np.array([[0.1, 0.2, 0.3], [0.27, 0.13, 0.41]])
+    lattice = relative_positions_for_centering()[centering]
+    scaled_positions = (lattice[:, None] + basis[None]).reshape((-1, 3)) % 1.0
+    atoms = Atoms(
+        np.tile([6, 8], len(lattice)),
+        scaled_positions=scaled_positions,
+        cell=cell,
+        pbc=True,
+    )
+    assert auto_detect_centering(atoms) == centering
+
+    hkl = _hkl_cube()
+    F = calculate_structure_factors(
+        hkl,
+        atoms,
+        parametrization="lobato",
+        g_max=10.0,
+        thermal_sigma=0.0,
+        occupancy=1.0,
+        device="cpu",
+    )
+    allowed = get_reflection_condition(hkl, centering)
+    assert np.abs(F[~allowed]).max() < 1e-6 * np.abs(F).max()
+    assert (np.abs(F[allowed]) > 1e-4 * np.abs(F).max()).all()
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    assert structure_factor.centering == centering
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+    expected = structure_factor_p.hkl[
+        get_reflection_condition(structure_factor_p.hkl, centering)
+    ]
+    np.testing.assert_array_equal(structure_factor.hkl, expected)
+
+
+def test_structure_factor_auto_centering_keeps_allowed_reflections():
+    # Regression: graphene repeated along c used to be auto-detected as "C" (from a
+    # (0, 0, 1/2) translation) and then crashed in get_reflection_condition; with
+    # only the crash fixed, h + k odd reflections such as (1, 0, 0) would have been
+    # silently dropped.
+    atoms = graphene(vacuum=2.0)
+    atoms.pbc = True
+    atoms = atoms.repeat((1, 1, 20))
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+
+    F = np.asarray(structure_factor_p.build(lazy=False).array)
+    kept = (structure_factor_p.hkl[:, None] == structure_factor.hkl[None]).all(-1)
+    kept = kept.any(axis=1)
+    assert np.abs(F[~kept]).max(initial=0.0) < 1e-6 * np.abs(F).max()
+    assert [1, 0, 0] in structure_factor.hkl.tolist()
+
+
+@pytest.mark.parametrize(
+    "atoms, expected_centering",
+    [
+        (bulk("Si", cubic=True).repeat(2), "FI"),
+        (bulk("Si", cubic=True).repeat((1, 1, 2)), "IC"),
+        (bulk("Cu", cubic=True).repeat((2, 1, 1)), "IA"),
+    ],
+    ids=["Si-2x2x2", "Si-1x1x2", "Cu-2x1x1"],
+)
+def test_supercell_with_several_centerings_combines_reflection_conditions(
+    atoms, expected_centering
+):
+    # Regression: a cell with the translations of several centerings (common for
+    # supercells) fell back to "P" with a "Something went wrong" warning. Each
+    # translation forces its own absences, so all their conditions apply at once.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        centering = auto_detect_centering(atoms)
+    assert centering == expected_centering
+
+    hkl = _hkl_cube()
+    allowed = get_reflection_condition(hkl, centering)
+    expected = np.ones(len(hkl), dtype=bool)
+    for letter in centering:
+        expected &= REFLECTION_CONDITIONS[letter](*hkl.T)
+    np.testing.assert_array_equal(allowed, expected)
+
+    F = calculate_structure_factors(
+        hkl,
+        atoms,
+        parametrization="lobato",
+        g_max=10.0,
+        thermal_sigma=0.0,
+        occupancy=1.0,
+        device="cpu",
+    )
+    assert np.abs(F[~allowed]).max() < 1e-6 * np.abs(F).max()
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    assert structure_factor.centering == centering
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+    expected_hkl = structure_factor_p.hkl[
+        get_reflection_condition(structure_factor_p.hkl, centering)
+    ]
+    np.testing.assert_array_equal(structure_factor.hkl, expected_hkl)
+
+
+def test_auto_detect_centering_in_hexagonal_supercell():
+    # Regression: the C-centering gate required a perpendicular to b, so the C
+    # translation of an in-plane 2x2 supercell of a hexagonal cell was missed.
+    assert auto_detect_centering(graphene(vacuum=2.0).repeat((2, 2, 1))) == "C"
+
+
+def test_auto_detect_centering_with_a_subset_of_centerings():
+    # Regression: the orthogonality gates called set.remove on the caller's set,
+    # which raised KeyError when a centering was missing and mutated the set.
+    atoms = bulk("Si", cubic=True).repeat(2)
+    centerings = {"P", "I", "c"}
+    assert auto_detect_centering(atoms, centerings) == "IC"
+    assert centerings == {"P", "I", "c"}
+    assert auto_detect_centering(atoms, {"A"}) == "A"
+    assert auto_detect_centering(atoms, set()) == "P"
+    with pytest.raises(ValueError, match="X"):
+        auto_detect_centering(atoms, {"X"})
+
+
+@pytest.mark.parametrize("centering", ["", "Q", "FX"])
+def test_reflection_condition_rejects_invalid_centering(centering):
+    with pytest.raises(ValueError, match="Invalid crystal centering"):
+        get_reflection_condition(_hkl_cube(1), centering)
+
+
+def test_rotate_forwards_multiple_energies():
+    # Regression: rotate passed energy=self.energy (the first energy) to the
+    # BlochWaves it built, silently dropping the others.
+    atoms = bulk("Si", cubic=True)
+    energies = [100e3, 200e3]
+    bloch_waves = BlochWaves(atoms, energy=energies, sg_max=0.05, g_max=3.0)
+
+    rotated = bloch_waves.rotate("x", 0.01)
+
+    np.testing.assert_array_equal(rotated._energies, energies)
+    for energy in energies:
+        expected = bloch_waves.select_energy(energy).rotate("x", 0.01)
+        selected = rotated.select_energy(energy)
+        np.testing.assert_array_equal(selected.hkl, expected.hkl)
+        np.testing.assert_allclose(
+            selected.calculate_structure_matrix(lazy=False),
+            expected.calculate_structure_matrix(lazy=False),
+        )
+
+
+def _assert_energy_slice_matches(ensemble_result, single_result, atol):
+    # one energy of an energy ensemble against the single-energy result: the
+    # ensemble's union beam set includes the single energy's beams, and every
+    # other beam is zero
+    ensemble = _intensities_by_hkl(ensemble_result)
+    single = _intensities_by_hkl(single_result)
+    assert set(single) <= set(ensemble)
+    for hkl, value in ensemble.items():
+        np.testing.assert_allclose(
+            value, single.get(hkl, np.zeros_like(value)), rtol=0, atol=atol
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+def test_rotation_ensemble_with_multiple_energies(device, lazy):
+    # A multi-energy BlochWaves rotated over a distribution of angles gives
+    # results with an EnergyAxis after the rotation axes, as for a multislice
+    # rotation series; each energy equals the single-energy rotation ensemble
+    # (rotate used to drop all but the first energy, and then to raise).
+    from abtem.core.axes import EnergyAxis, NonLinearAxis
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0, device=device)
+    energies = [100e3, 200e3]
+    rotations = ("x", np.array([0.0, 0.02, 0.05]))
+    thicknesses = [50.0, 100.0]
+    multi = BlochWaves(structure_factor, energy=energies, sg_max=0.1, device=device)
+
+    ensemble = multi.rotate(*rotations)
+    assert isinstance(ensemble, BlochwaveEnsemble)
+    assert ensemble.ensemble_shape == (3,)
+    np.testing.assert_array_equal(ensemble._copy_kwargs()["energy"], energies)
+
+    patterns = ensemble.calculate_diffraction_patterns(thicknesses, lazy=lazy)
+    assert patterns.shape[:3] == (3, 2, 2)
+    assert isinstance(patterns.ensemble_axes_metadata[0], NonLinearAxis)
+    assert isinstance(patterns.ensemble_axes_metadata[1], EnergyAxis)
+    assert patterns.ensemble_axes_metadata[1].values == tuple(energies)
+    assert patterns.metadata["energy"] == energies
+    waves = ensemble.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=lazy)
+    assert waves.shape == (3, 2, 2, 16, 16)
+    assert isinstance(waves.ensemble_axes_metadata[1], EnergyAxis)
+    waves = asnumpy(waves.compute().array if lazy else waves.array)
+
+    for k, energy in enumerate(energies):
+        single = BlochWaves(
+            structure_factor, energy=energy, sg_max=0.1, device=device
+        ).rotate(*rotations)
+        expected = single.calculate_diffraction_patterns(thicknesses, lazy=False)
+        _assert_energy_slice_matches(patterns[:, k], expected, atol=1e-6)
+
+        expected_waves = asnumpy(
+            single.calculate_exit_waves(thicknesses, gpts=(16, 16), lazy=False).array
+        )
+        np.testing.assert_allclose(
+            waves[:, k],
+            expected_waves,
+            rtol=0,
+            atol=1e-5 * np.abs(expected_waves).max(),
+        )
+
+    # indexing an orientation and an energy carries the energy into the metadata
+    member = patterns[0, 1]
+    assert member.metadata["energy"] == 200e3
+    assert member.shape == patterns.shape[2:]
+
+
+def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
+    # energies, a fixed rotation and a distributed two-axis rotation together,
+    # with a scalar thickness
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+    energies = [80e3, 120e3, 200e3]
+    angles = np.array([[0.0, 0.0], [0.01, 0.02], [0.03, 0.0]])
+    rotations = ("z", 0.1, "xy", angles)
+
+    ensemble = BlochWaves(structure_factor, energy=energies, sg_max=0.1).rotate(
+        *rotations
+    )
+    patterns = ensemble.calculate_diffraction_patterns(50.0, lazy=True)
+    assert patterns.shape[:2] == (3, 3)
+    assert np.shape(patterns.reciprocal_lattice_vectors) == (3, 1, 3, 3)
+    assert patterns[1].shape == patterns.shape[1:]
+    assert patterns.crop(k_max=1.0).shape[:2] == (3, 3)
+
+    for k, energy in enumerate(energies):
+        expected = (
+            BlochWaves(structure_factor, energy=energy, sg_max=0.1)
+            .rotate(*rotations)
+            .calculate_diffraction_patterns(50.0, lazy=False)
+        )
+        _assert_energy_slice_matches(patterns[:, k], expected, atol=1e-6)
+
+
+def test_energy_ensemble_blocks_keep_every_energy():
+    # The ensemble is split into blocks of rotations for dask; each block is
+    # rebuilt from _copy_kwargs and must keep every energy (getattr(self,
+    # "energy") alone gives the first).
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
+    ensemble = BlochWaves(structure_factor, energy=[100e3, 200e3], sg_max=0.1).rotate(
+        "x", np.array([0.0, 0.02])
+    )
+    assert ensemble.energy == 100e3  # backward compatible
+    blocks = ensemble.ensemble_blocks(1).compute()
+    assert blocks.shape == (2,)
+    np.testing.assert_array_equal(blocks[1]._energies, [100e3, 200e3])
+
+    # one energy given as a list behaves like a scalar energy, as in BlochWaves
+    single = BlochwaveEnsemble(
+        "x",
+        np.array([0.0, 0.02]),
+        structure_factor=structure_factor,
+        energy=[200e3],
+        sg_max=0.1,
+        g_max=2.0,
+    )
+    patterns = single.calculate_diffraction_patterns([50.0], lazy=False)
+    assert patterns.shape[:2] == (2, 1)
+    assert patterns.metadata["energy"] == 200e3
+
+
+@pytest.mark.parametrize("built_lazy", [True, False], ids=["lazy", "eager"])
+def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
+    # Regression: StructureFactorArray.get_projected_potential ignored its lazy
+    # argument and followed self.is_lazy.
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0).build(
+        lazy=built_lazy
+    )
+
+    potentials = {
+        lazy: structure_factor.get_projected_potential(slice_thickness=1.0, lazy=lazy)
+        for lazy in (True, False, None)
+    }
+
+    assert potentials[True].is_lazy
+    assert not potentials[False].is_lazy
+    assert potentials[None].is_lazy == built_lazy
+    assert structure_factor.is_lazy == built_lazy
+
+    expected = potentials[False].array
+    for potential in potentials.values():
+        assert potential.slice_thickness == potentials[False].slice_thickness
+        np.testing.assert_allclose(potential.compute().array, expected, atol=1e-6)
+
+
 @settings(max_examples=5)
 @given(
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
@@ -97,7 +430,6 @@ def test_auto_detect_centering(data, cell, centering):
     g_max=st.floats(min_value=10, max_value=16),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
-@pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 def test_potential_from_structure_factor(
     atoms, sampling, thermal_sigma, g_max, slice_thickness, lazy
@@ -290,6 +622,364 @@ def test_bloch_waves_on_skewed_cell_at_tilt_matches_orthogonalized_supercell():
     keep = (a > 1e-9) | (b > 1e-9)
     r1 = np.abs(a[keep] - b[keep]).sum() / b[keep].sum()
     assert r1 < 1e-4
+
+
+def test_exact_excitation_errors_match_the_nonparaxial_dispersion():
+    # use_wave_eq="exact": -g_z + k (sqrt(1 - (lambda g_perp)^2) - 1), the
+    # counterpart of the exact multislice propagator; to first order in
+    # (lambda g_perp)^2 it is the paraxial use_wave_eq=True form
+    from abtem.bloch.utils import excitation_errors
+    from abtem.core.energy import energy2wavelength
+
+    energy = 100e3
+    k = 1 / energy2wavelength(energy)
+    g = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, 0.2], [6.0, 0.0, -0.3], [1e-3, 0, 0]])
+
+    exact = excitation_errors(g, energy, use_wave_eq="exact")
+    g_perp_sq = g[:, 0] ** 2 + g[:, 1] ** 2
+    np.testing.assert_allclose(
+        exact, -g[:, 2] + np.sqrt(k**2 - g_perp_sq) - k, rtol=1e-12, atol=1e-12
+    )
+
+    paraxial = excitation_errors(g, energy, use_wave_eq=True)
+    np.testing.assert_allclose(exact[-1], paraxial[-1], rtol=1e-9)
+    assert np.all(exact[1:3] < paraxial[1:3])  # the sphere lies below the paraboloid
+
+    with pytest.raises(ValueError, match="evanescent|g_perp"):
+        excitation_errors(np.array([[1.1 * k, 0.0, 0.0]]), energy, use_wave_eq="exact")
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        excitation_errors(g, energy, use_wave_eq="paraxial")
+
+
+@pytest.mark.parametrize("use_wave_eq", ["paraxial", "True", None])
+def test_invalid_use_wave_eq_is_rejected_at_construction(use_wave_eq):
+    # not only later, at compute time inside dask
+    from abtem.bloch.dynamical import BlochwaveEnsemble
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        BlochWaves(structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=use_wave_eq)
+    with pytest.raises(ValueError, match="use_wave_eq"):
+        BlochwaveEnsemble(
+            "x",
+            np.array([0.0, 0.01]),
+            structure_factor=structure_factor,
+            energy=100e3,
+            sg_max=0.1,
+            g_max=1.0,
+            use_wave_eq=use_wave_eq,
+        )
+    for valid in (False, True, "exact", np.bool_(True)):
+        bloch_waves = BlochWaves(
+            structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=valid
+        )
+        assert bloch_waves.use_wave_eq == valid
+
+
+def test_use_wave_eq_defaults_to_exact_and_is_forwarded():
+    from abtem.bloch.dynamical import BlochwaveEnsemble
+
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
+    bloch_waves = BlochWaves(structure_factor, energy=100e3, sg_max=0.1)
+    assert bloch_waves.use_wave_eq == "exact"
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor,
+            energy=[80e3, 100e3],
+            sg_max=0.1,
+            use_wave_eq=use_wave_eq,
+        )
+        assert bloch_waves._with_energy(0, 80e3).use_wave_eq == use_wave_eq
+        assert bloch_waves.rotate("x", 0.01).use_wave_eq == use_wave_eq
+        ensemble = bloch_waves.rotate("x", np.array([0.0, 0.01]))
+        assert isinstance(ensemble, BlochwaveEnsemble)
+        assert ensemble.use_wave_eq == use_wave_eq
+        assert ensemble._copy_kwargs()["use_wave_eq"] == use_wave_eq
+        np.testing.assert_array_equal(ensemble._copy_kwargs()["energy"], [80e3, 100e3])
+
+
+def test_exact_form_excludes_evanescent_beams_with_a_warning():
+    # Beams are selected by their Ewald-sphere excitation error, which at low
+    # energy with a large g_max admits beams with lambda |g_perp| >= 1. The
+    # 'exact' form has no real excitation error for them (they are evanescent,
+    # as in exact multislice): they are dropped with a warning, not an error.
+    from abtem.core.energy import energy2wavelength
+
+    energy = 1e3
+    atoms = Atoms("C", positions=[(0, 0, 0)], cell=[2.0, 2.0, 2.0], pbc=True)
+    structure_factor = StructureFactor(
+        atoms, g_max=8.0, parametrization="lobato", centering="P"
+    )
+    kwargs = dict(energy=energy, sg_max=0.2, g_max=4.0)
+
+    standard = BlochWaves(structure_factor, use_wave_eq=False, **kwargs)
+    g = standard.g_vec
+    evanescent = energy2wavelength(energy) * np.hypot(g[:, 0], g[:, 1]) >= 1
+    assert evanescent.any()
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        exact = BlochWaves(structure_factor, use_wave_eq="exact", **kwargs)
+    np.testing.assert_array_equal(exact.hkl, standard.hkl[~evanescent])
+
+    psi = np.asarray(
+        exact.calculate_diffraction_patterns(
+            [20.0], return_complex=True, lazy=False
+        ).array
+    )
+    np.testing.assert_allclose((np.abs(psi) ** 2).sum(), 1.0, atol=1e-5)
+
+    with pytest.warns(UserWarning, match="evanescent"):
+        BlochWaves(
+            structure_factor, use_wave_eq="exact", **{**kwargs, "energy": [1e3, 1.5e3]}
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_kinematical_pattern_weights_follow_use_wave_eq(device):
+    # get_kinematical_diffraction_pattern weights |F_g|^2 with a Gaussian in the
+    # excitation error of the form use_wave_eq selects; beam selection (sg_max)
+    # keeps the Ewald-sphere form for all three.
+    from abtem.bloch.utils import excitation_errors
+
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        bulk("Si", cubic=True),
+        g_max=4.0,
+        parametrization="lobato",
+        centering="F",
+        device=device,
+    )
+    sg_max = 0.5
+    patterns = {}
+    for use_wave_eq in (False, True, "exact"):
+        bloch_waves = BlochWaves(
+            structure_factor=structure_factor,
+            energy=100e3,
+            sg_max=sg_max,
+            orientation_matrix=orientation_matrix,
+            use_wave_eq=use_wave_eq,
+            device=device,
+        )
+        sg = excitation_errors(
+            bloch_waves.g_vec, bloch_waves.energy, use_wave_eq=use_wave_eq
+        )
+        np.testing.assert_array_equal(bloch_waves.excitation_errors(), sg)
+
+        f_squared = (
+            np.abs(
+                asnumpy(bloch_waves._get_structure_factor_array().array)[
+                    bloch_waves.hkl_mask
+                ]
+            )
+            ** 2
+        )
+        expected = f_squared * np.exp(-(sg**2) / (2 * (sg_max / 3) ** 2))
+        pattern = asnumpy(bloch_waves.get_kinematical_diffraction_pattern().array)
+        np.testing.assert_allclose(pattern, expected, rtol=1e-5, atol=0)
+        patterns[use_wave_eq] = pattern
+
+    # the same beams, but different weights off zone axis
+    difference = np.abs(patterns["exact"] - patterns[False]).sum()
+    assert difference > 1e-3 * patterns[False].sum()
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_scattering_matrix_matches_eager(device):
+    import dask.array as da
+
+    bloch_waves = _silicon_bloch_waves(device)
+    lazy = bloch_waves.calculate_scattering_matrix(50.0, lazy=True)
+    assert isinstance(lazy, da.Array)
+    eager = bloch_waves.calculate_scattering_matrix(50.0)
+    assert not isinstance(eager, da.Array)
+    np.testing.assert_allclose(
+        asnumpy(lazy.compute()), asnumpy(eager), rtol=0, atol=1e-6
+    )
+
+
+@pytest.mark.slow
+# order=1 at 10 keV is used deliberately, as the paraxial reference
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+def test_exact_bloch_waves_pair_with_exact_multislice():
+    # Bloch waves with use_wave_eq=True solve the paraxial equation that
+    # multislice solves with the first-order propagator; use_wave_eq="exact"
+    # the non-paraxial one of FourierMultislice(order="exact"). The two place
+    # the Ewald sphere differently, by ~lambda^3 g^4 / 8, which matters most at
+    # low energy and for the first-order Laue zone (FOLZ). A weakly scattering
+    # crystal (one C atom per 4 x 4 x 5 Å cell) keeps the scattering nearly
+    # kinematic, so a small beam set converges, while the long c puts its FOLZ
+    # ring (~1.8 1/Å at 10 keV) inside the compared beams; there each Bloch-wave
+    # variant must agree with its own multislice counterpart, and clearly not
+    # with the other.
+    from abtem.multislice import FourierMultislice
+
+    energy = 10e3
+    atoms = Atoms("C", positions=[(0, 0, 0)], cell=[4.0, 4.0, 5.0], pbc=True)
+    potential = abtem.Potential(
+        atoms.repeat((1, 1, 40)),
+        sampling=0.05,
+        slice_thickness=0.25,
+        parametrization="lobato",
+        projection="finite",  # the 3D potential, as the structure factor has it
+    )
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="P"
+    )
+
+    # The beams sharing a g_perp = (h, k) / a, one per Laue zone l, all fall on
+    # the same multislice pixel; at a thickness of whole unit cells their phases
+    # exp(2 pi i l z / c) are 1, so the pixel is their coherent sum. Comparing
+    # |sum over l|^2 with the pixel intensity avoids assigning it to a single l.
+    def multislice(order):
+        waves = abtem.PlaneWave(energy=energy).multislice(
+            potential, algorithm=FourierMultislice(order=order), lazy=False
+        )
+        array = np.asarray(waves.array)
+        return np.fft.fft2(array) / array.size
+
+    def bloch_waves(use_wave_eq):
+        bloch_waves = BlochWaves(
+            structure_factor=structure_factor,
+            energy=energy,
+            sg_max=0.3,
+            use_wave_eq=use_wave_eq,
+        )
+        psi = bloch_waves.calculate_diffraction_patterns(
+            potential.thickness, return_complex=True, lazy=False
+        )
+        summed = {}
+        for (h, k, _), value in zip(bloch_waves.hkl, np.asarray(psi.array)):
+            summed[(h, k)] = summed.get((h, k), 0.0) + value
+        return summed
+
+    ms = {order: multislice(order) for order in (1, "exact")}
+    bw = {w: bloch_waves(w) for w in (True, "exact")}
+
+    hk = [(h, k) for h, k in bw[True] if (h, k) != (0, 0) and np.hypot(h, k) / 4.0 <= 2]
+
+    def r_factor(ms, bw):
+        a = np.array([abs(bw[h, k]) ** 2 for h, k in hk])
+        b = np.array([abs(ms[h % ms.shape[0], k % ms.shape[1]]) ** 2 for h, k in hk])
+        return np.abs(a - b).sum() / b.sum()
+
+    # R ~ 1 % for the matched pairs, ~ 10 % for the mixed ones
+    for order, use_wave_eq, other in ((1, True, "exact"), ("exact", "exact", True)):
+        matched = r_factor(ms[order], bw[use_wave_eq])
+        assert matched < 0.03
+        assert r_factor(ms[order], bw[other]) > 3 * matched
+
+
+@pytest.fixture
+def float64():
+    with abtem.config.set({"precision": "float64"}):
+        yield
+
+
+def _tilted_si_bloch_waves(use_wave_eq):
+    # beam || [018] of cubic Si, 7.1 degrees from [001]: g_z != 0 for most beams,
+    # so the (1 + g_z / K) metric of the standard form matters
+    atoms = bulk("Si", cubic=True)
+    basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
+    orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
+    structure_factor = StructureFactor(
+        atoms, g_max=4.0, parametrization="lobato", centering="F"
+    )
+    return BlochWaves(
+        structure_factor=structure_factor,
+        energy=100e3,
+        sg_max=0.5,
+        use_wave_eq=use_wave_eq,
+        orientation_matrix=orientation_matrix,
+    )
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_eigendecomposition_matches_scattering_matrix_when_tilted(use_wave_eq):
+    # Both solution paths must map the symmetrized eigenproblem back to beam
+    # amplitudes with the same metric (they used not to, off zone axis).
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    thickness = 300.0
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [thickness], return_complex=True, lazy=False
+        ).array
+    )[0]
+    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
+    S = np.asarray(bloch_waves.calculate_scattering_matrix(thickness))
+    np.testing.assert_allclose(psi, S[:, direct_beam], atol=1e-10)
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
+    # The wave-equation forms, like multislice, are unitary: sum |psi_g|^2 = 1.
+    # The standard form conserves the current along z instead:
+    # sum (1 + g_z / K) |psi_g|^2 = 1.
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            [100.0, 300.0, 600.0], return_complex=True, lazy=False
+        ).array
+    )
+    if use_wave_eq:
+        weights = 1.0
+    else:
+        weights = 1 + bloch_waves.g_vec[:, 2] * energy2wavelength(bloch_waves.energy)
+    np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
+    if not use_wave_eq:
+        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
+
+
+@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
+@pytest.mark.usefixtures("float64")
+def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
+    # The standard form (use_wave_eq=False; Helmholtz with only gamma**2 dropped)
+    # is the generalized eigenproblem A C = 2 K gamma B C, with
+    # A = 2 K diag(s_g) + U, U_ij = U_{g_i - g_j} and B = diag(1 + g_z / K). The
+    # wave-equation forms have B = 1. Compare the eigenvalues and the propagated
+    # beams with scipy's generalized Hermitian solver. (Conservation of
+    # sum B |psi_g|^2 alone cannot tell the right metric from a wrong one.)
+    import scipy.linalg
+
+    from abtem.bloch.utils import excitation_errors
+    from abtem.core.energy import energy2wavelength
+
+    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
+    energy = bloch_waves.energy
+    k = 1 / energy2wavelength(energy)
+    g = bloch_waves.g_vec
+    metric = 1 + g[:, 2] / k if use_wave_eq is False else np.ones(len(g))
+    assert use_wave_eq or np.ptp(metric) > 0.02  # the metric matters
+
+    # U from the paraxial form, which carries no metric
+    paraxial = _tilted_si_bloch_waves(True)
+    assert np.array_equal(paraxial.hkl, bloch_waves.hkl)
+    A = np.asarray(paraxial.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.diag(A).real, 2 * k * excitation_errors(g, energy, use_wave_eq=True)
+    )
+    np.fill_diagonal(A, 2 * k * excitation_errors(g, energy, use_wave_eq=use_wave_eq))
+
+    eigenvalues, C = scipy.linalg.eigh(A, np.diag(metric))  # 2 K gamma; C^H B C = 1
+    structure_matrix = np.asarray(bloch_waves.calculate_structure_matrix(lazy=False))
+    np.testing.assert_allclose(
+        np.linalg.eigvalsh(structure_matrix), eigenvalues, rtol=0, atol=1e-9
+    )
+
+    # psi(0) = C alpha = e_0, so alpha = C^H B e_0
+    initial = np.all(bloch_waves.hkl == 0, axis=1) * metric
+    alpha = C.conj().T @ initial
+    z = np.array([100.0, 300.0])
+    phases = np.exp(2j * np.pi * z[:, None] * eigenvalues[None] / (2 * k))
+    expected = (phases * alpha) @ C.T
+    psi = bloch_waves.calculate_diffraction_patterns(
+        z, return_complex=True, lazy=False
+    ).array
+    np.testing.assert_allclose(np.asarray(psi), expected, rtol=0, atol=1e-9)
 
 
 # --- abTEM/abTEM#455 --------------------------------------------------------

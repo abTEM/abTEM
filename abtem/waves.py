@@ -1514,7 +1514,12 @@ class Waves(BaseWaves, ArrayObject):
         Parameters
         ----------
         ctf : CTF, optional
-            Contrast transfer function to be applied.
+            Contrast transfer function to be applied. For a multi-energy ensemble
+            of wave functions it is evaluated for each energy member at its own
+            wavelength; its energy must then be unset, or a distribution of
+            exactly the ensemble's energies. Only the energy values are matched:
+            the ensemble's own weights decide its ensemble mean, and those of the
+            CTF's distribution are not used.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto'
             (default), the batch size is automatically chosen based on the abtem user
@@ -1529,56 +1534,12 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
-        from abtem.array import stack
-        from abtem.core.axes import EnergyAxis
-
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        # Multi-energy ensemble: a single CTF cannot represent several
-        # wavelengths at once.  Apply the CTF to each energy member at its own
-        # wavelength and restack along the EnergyAxis.
-        energy_axes = [
-            (i, ax)
-            for i, ax in enumerate(self.ensemble_axes_metadata)
-            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
-        ]
-        if energy_axes:
-            if ctf.accelerator.energy is not None:
-                raise ValueError(
-                    "Cannot apply a CTF with a fixed energy to a multi-energy "
-                    "ensemble: each energy member requires its own wavelength. "
-                    "Pass a CTF without an energy so the per-member energies are "
-                    "used."
-                )
-            axis_idx, energy_axis = energy_axes[0]
-            members = []
-            for i, energy in enumerate(energy_axis.values):
-                index = tuple(
-                    i if j == axis_idx else slice(None)
-                    for j in range(len(self.ensemble_shape))
-                )
-                member_ctf = ctf.copy()
-                member_ctf.accelerator.energy = float(energy)
-                members.append(
-                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
-                )
-            waves = stack(members, energy_axis, axis=axis_idx)
-            assert isinstance(waves, Waves)
-            return waves
-
-        if not ctf.accelerator.energy:
-            # Single energy: resolve the wavelength from the wave functions
-            # (ordinary waves, or an indexed ensemble member whose per-member
-            # energy lives in metadata) without mutating ``self``.
-            ctf.accelerator.energy = self._valid_energy
-        else:
-            # CTF fixes the energy: verify it does not disagree with a concrete
-            # wave energy, but do not overwrite ``self``.
-            self.accelerator.check_match(ctf.accelerator)
-
-        ctf.accelerator.check_is_defined()
-
+        # The energies are matched and checked in
+        # `BaseTransferFunction._match_ensemble`; a multi-energy ensemble is then
+        # evaluated one energy at a time, each at its own wavelength.
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
         return waves

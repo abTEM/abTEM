@@ -303,6 +303,9 @@ def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
 def test_apply_transform(data, transform, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     transform = data.draw(transform())
+    if getattr(transform, "energy", None) is not None:
+        # A fixed energy must be that of the wave functions.
+        transform.energy = waves.energy
     assume(len(transform.ensemble_shape + waves.shape) < 6)
     transformed_waves = waves.apply_transform(transform)
     assert transformed_waves.shape == transform.ensemble_shape + waves.shape
