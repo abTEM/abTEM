@@ -709,17 +709,19 @@ class GPAWParametrization:
         that converts the all-electron radial charge density into an X-ray
         scattering factor. `None` (default) lets `hankel` choose automatically.
     integration_step : float, optional
-        Step size used by the Hankel transform. The default of 0.002 is fine
-        for light elements, but is too coarse for heavier ones (e.g. In, Z=49),
-        where it can produce a non-monotonic, unphysical scattering factor; 0.001
-        resolves this for most elements at negligible extra cost. The heaviest
-        elements (e.g. Re, Z=75) may still show a several-percent-level
-        mismatch against tabulated parametrizations even at this step size,
-        plausibly from GPAW's scalar-relativistic treatment diverging from
-        whatever reference the tabulated parameters were fit to.
+        Step size used by the Hankel transform. The default is 1e-4. Coarser
+        steps are inaccurate at small k, where the transform must resolve the
+        whole radial extent of the density: against direct quadrature of the
+        same density on GPAW's radial grid, a step of 0.001 puts f_x for Au
+        2.9 electrons low at k = 0.06 1/A and 0.63 high at k = 0.12 1/A (Si:
+        0.009 low at 0.06). The electron scattering factor divides Z - f_x by
+        k^2, so that became a 45 % (Au) and 26 % (Re) error in the fitted
+        f_e at k = 0.12 1/A -- the "several-percent mismatch" of heavy
+        elements previously attributed to relativistic effects. At 1e-4 the
+        error is < 5e-4 electrons for k >= 0.06 1/A, for ~0.1 s per call.
     """
 
-    def __init__(self, nodes=None, integration_step=0.001):
+    def __init__(self, nodes=None, integration_step=1e-4):
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}

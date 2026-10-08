@@ -253,11 +253,19 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
 
-    slice_array = _interpolate_between_cells(
-        array, slice_shape, cell, slice_box, (0, 0, a)
-    )
-
     dz = (b - a) / slice_shape[-1]
+
+    # Midpoint rule: sample at a + (i + 1/2) dz. The samples used to start at
+    # z = a (a left Riemann sum), which centres the slice integral dz/2 below
+    # the slice centre -- a quarter of the slice thickness at the minimum of
+    # two samples. Summed over a full period the bias cancels, but per slice it
+    # shifts the long-range part of ChargeDensityPotential against the
+    # short-range quadrature part, which is placed correctly: for a neutral
+    # carbon atom on a slice boundary the slices above and below differed by
+    # 2x and the potential 3 A from the atom was ~1 eV A instead of ~0.
+    slice_array = _interpolate_between_cells(
+        array, slice_shape, cell, slice_box, (0, 0, a + dz / 2)
+    )
 
     return np.sum(slice_array, axis=-1) * dz
 
