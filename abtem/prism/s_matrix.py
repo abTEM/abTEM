@@ -86,6 +86,22 @@ def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
+def _squeeze_flagged_axes(measurements):
+    # The first half of the module-level reduce_ensemble, which multislice applies
+    # to its result: validate_scan flags the position axis of a bare position
+    # (x, y) for squeezing. The ensemble mean is applied elsewhere.
+    return [
+        measurement.squeeze(
+            tuple(
+                i
+                for i, axis in enumerate(measurement.ensemble_axes_metadata)
+                if axis._squeeze
+            )
+        )
+        for measurement in measurements
+    ]
+
+
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
@@ -1373,10 +1389,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
-        if not isinstance(scan, BaseScan):
-            squeeze = (-3,)
-        else:
-            squeeze = ()
+        # A scan the caller validated is squeezed by the caller, which assembles
+        # the blocks this reduction returns (SMatrix.reduce).
+        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -1417,9 +1432,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
 
-        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
-        out = _wrap_measurements(measurements)
-        return out
+        if squeeze:
+            measurements = _squeeze_flagged_axes(measurements)
+        return _wrap_measurements(measurements)
 
     def scan(
         self,
@@ -3192,7 +3207,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
-        squeeze = () if isinstance(scan, BaseScan) else (-3,)
+        # as in SMatrixArray.reduce
+        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -3253,7 +3269,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     blend_taper=_blend_taper,
                 )
 
-        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
+        if squeeze:
+            measurements = _squeeze_flagged_axes(measurements)
         return _wrap_measurements(measurements)
 
     @property
@@ -3637,7 +3654,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     "detectors whose measurements do not depend on the "
                     "reduction window (for example annular detectors)."
                 )
-            low_measurement.array[:] += high_measurement.array
+            low_measurement.array[...] += high_measurement.array
 
         return low if not isinstance(low, list) else _wrap_measurements(low_list)
 
@@ -5709,7 +5726,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 else measurement
                 for measurement in ensure_list(measurements)
             ]
-            return _wrap_measurements(measurements)
+            return _wrap_measurements(_squeeze_flagged_axes(measurements))
 
         if disable_s_matrix_chunks:
             scan = validate_scan(scan, self)
@@ -5769,13 +5786,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 arrays, waves, detectors, extra_axes_metadata
             )
 
-            return _wrap_measurements(measurements)
+            return _wrap_measurements(_squeeze_flagged_axes(measurements))
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-        return s_matrix_array.reduce(
+        measurements = s_matrix_array.reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
+        # the multi-energy branch above passes a validated scan
+        return _wrap_measurements(_squeeze_flagged_axes(ensure_list(measurements)))
