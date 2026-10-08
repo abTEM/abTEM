@@ -161,7 +161,8 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         array had to fit in memory (or VRAM) at once. There was no slice-level
         chunking. This method introduces that missing middle ground: it eagerly
         builds a group of contiguous slices that fits within a configurable
-        memory budget, yields it as a ``PotentialArray``, and the caller can
+        memory budget, yields it as an array of the same class as the field's
+        slices (a ``PotentialArray`` for a potential), and the caller can
         discard it after propagation before the next chunk is built. This
         bounds peak memory and enables simulations of systems whose full
         potential would not fit in memory.
@@ -191,9 +192,10 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
         Yields
         ------
-        PotentialArray
-            A chunk of contiguous potential slices with correctly assigned
-            exit planes.
+        FieldArray
+            A chunk of contiguous slices, of the same class as the slices of
+            ``generate_slices()`` (``PotentialArray`` for a potential), with
+            correctly assigned exit planes.
         """
         from abtem.core.chunks import (
             estimate_potential_chunk_size,
@@ -230,7 +232,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
 
-            chunk = PotentialArray(
+            chunk = type(slic)(
                 array,
                 slice_thickness=tuple(slice_thicknesses),
                 extent=self.extent,
@@ -1850,7 +1852,7 @@ class FieldArray(BaseField, ArrayObject):
         stop = first_slice + 1
 
         for i in range(first_slice, last_slice):
-            s = (0,) * (len(self.array.shape) - 3) + (i,)
+            s = (0,) * (len(self.array.shape) - self._base_dims) + (i,)
             array = self.array[s][None]
 
             slic = self.__class__(
@@ -1924,7 +1926,7 @@ class FieldArray(BaseField, ArrayObject):
         for chunk_start, chunk_end in generate_chunks(
             last_slice - first_slice, chunks=chunk_size, start=first_slice
         ):
-            s = (0,) * (len(self.array.shape) - 3) + (
+            s = (0,) * (len(self.array.shape) - self._base_dims) + (
                 slice(chunk_start, chunk_end),
             )
             chunk_array = self.array[s]

@@ -261,3 +261,90 @@ def test_gpaw_fft_projection_takes_uniform_slice_thicknesses_only(builder):
             .array
         ),
     )
+
+
+def _local_exit_planes(global_exit_planes, offset, length):
+    return tuple(
+        i - offset for i in global_exit_planes if offset <= i < offset + length
+    )
+
+
+@pytest.mark.parametrize(
+    "projection, slice_thickness",
+    [
+        # 3, 4, 3, 3, 3 z pixels
+        ("real_space", (0.75, 1.0, 0.75, 0.75, 0.75)),
+        ("fft", 0.8),
+    ],
+)
+@pytest.mark.parametrize(
+    "first_slice, last_slice, chunk_size", [(0, None, 2), (2, 5, 2)]
+)
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_chunked_slices_match_the_full_build(
+    builder, projection, slice_thickness, first_slice, last_slice, chunk_size
+):
+    field = builder(
+        _SpinPolarizedCalculator(),
+        sampling=0.25,
+        slice_thickness=slice_thickness,
+        gridrefinement=2,
+        projection=projection,
+        exit_planes=2,
+    )
+    full = field.build()
+    stop = len(full) if last_slice is None else last_slice
+
+    chunks = list(
+        field.generate_chunked_slices(first_slice, last_slice, chunk_size=chunk_size)
+    )
+
+    assert len(full) == 5
+    assert len(chunks) > 1
+    assert len({len(chunk) for chunk in chunks}) > 1
+    assert all(type(chunk) is type(full) for chunk in chunks)
+    scale = np.abs(full.array).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        np.concatenate([chunk.array for chunk in chunks]),
+        full.array[first_slice:stop],
+        rtol=0,
+        atol=1e-6 * scale,
+    )
+    assert (
+        sum((chunk.slice_thickness for chunk in chunks), ())
+        == full.slice_thickness[first_slice:stop]
+    )
+    offset = first_slice
+    for chunk in chunks:
+        assert chunk.exit_planes == _local_exit_planes(
+            full.exit_planes, offset, len(chunk)
+        )
+        offset += len(chunk)
+
+
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_built_gpaw_field_iterates_and_chunks_its_own_slices(builder):
+    full = builder(
+        _SpinPolarizedCalculator(),
+        sampling=0.25,
+        slice_thickness=(0.75, 1.0, 0.75, 0.75, 0.75),
+        gridrefinement=2,
+        projection="real_space",
+    ).build()
+
+    slices = list(full)
+
+    assert len(set(full.slice_thickness)) == 2
+    assert [type(s) for s in slices] == [type(full)] * len(full)
+    np.testing.assert_array_equal(np.concatenate([s.array for s in slices]), full.array)
+    assert [s.slice_thickness for s in slices] == [(t,) for t in full.slice_thickness]
+
+    chunks = list(full.generate_chunked_slices(2, 5, chunk_size=2))
+
+    assert [len(c) for c in chunks] == [1, 2]
+    assert [type(c) for c in chunks] == [type(full)] * len(chunks)
+    np.testing.assert_array_equal(
+        np.concatenate([c.array for c in chunks]), full.array[2:5]
+    )
+    assert sum((c.slice_thickness for c in chunks), ()) == full.slice_thickness[2:5]
