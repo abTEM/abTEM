@@ -480,7 +480,9 @@ class GPAWPotential(_PotentialBuilder):
         ones too, which therefore get the small strain of a non-orthogonal cell's
         orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
         isotropic displacements without it. `directions` refers to the axes of the
-        potential, as in :class:`~abtem.potentials.iam.Potential`.
+        potential, as in :class:`~abtem.potentials.iam.Potential`. A trajectory
+        (:class:`~abtem.inelastic.phonons.AtomsEnsemble`) is not accepted: pass one
+        calculator per frame instead.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -537,6 +539,13 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif frozen_phonons.ensemble_shape and not isinstance(
+                frozen_phonons, FrozenPhonons
+            ):
+                raise ValueError(
+                    "One calculator takes `FrozenPhonons`; for a trajectory, pass "
+                    "one calculator per frame."
+                )
             elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
                 raise ValueError(
                     "The frozen phonons must have the calculator's atoms: the same "
