@@ -780,14 +780,18 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         # 2-D measurement (e.g. Images) separately rather than each member.
         base_axes = tuple(range(-len(self.base_shape), 0))
 
+        def reduce(name):
+            # dask's ptp takes no keepdims, so ptp is spelled out as max - min.
+            if name == "ptp":
+                return reduce("max") - reduce("min")
+            return getattr(np, name)(self.array, axis=base_axes, keepdims=True)
+
         if shift != "none":
-            array = self.array - getattr(np, shift)(
-                self.array, axis=base_axes, keepdims=True
-            )
+            array = self.array - reduce(shift)
         else:
             array = self.array
 
-        array = array / getattr(np, scale)(self.array, axis=base_axes, keepdims=True)
+        array = array / reduce(scale)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 
@@ -2294,9 +2298,7 @@ class Images(_BaseMeasurement2D):
             raise ValueError()
 
         if gpts is None and sampling is not None:
-            if np.isscalar(sampling):
-                sampling = (sampling,) * 2
-            gpts = tuple(int(np.ceil(l / d)) for d, l in zip(sampling, self.extent))
+            gpts = _image_resampling_gpts(self.extent, sampling)
 
         elif gpts is not None:
             if np.isscalar(gpts):
@@ -3642,6 +3644,16 @@ def _interpolate_bilinear_gather(x, v, u, vw, uw):
         + vw * (1 - uw) * x[:, v1, u]
         + vw * uw * x[:, v1, u1]
     )
+
+
+def _image_resampling_gpts(
+    extent: tuple[float, float], sampling: float | tuple[float, float]
+) -> tuple[int, int]:
+    """Grid points of images of `extent` [Å] interpolated to `sampling` [Å], as
+    `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
+    if np.isscalar(sampling):
+        sampling = (sampling,) * 2
+    return tuple(int(np.ceil(e / d)) for d, e in zip(sampling, extent))
 
 
 def _diffraction_pattern_resampling_gpts(
@@ -5191,7 +5203,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             margin = True
 
         if margin:
-            radius += max(self.angular_sampling)
+            radius = radius + max(self.angular_sampling)
 
         return self.bandlimit(radius, outer=np.inf)
 
