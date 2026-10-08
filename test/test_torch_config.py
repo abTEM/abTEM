@@ -1,31 +1,24 @@
 """Tests for the ``torch.device`` configuration key of the torch backend.
 
 The key is read when the backend loads, so each test reloads it from scratch with
-the backend's state put back afterwards. Needs PyTorch, but not Apple silicon:
-the key's ``'cpu'`` value runs the backend on torch's CPU device.
+the backend's state put back afterwards. Needs PyTorch and either a Mac or
+``ABTEM_TORCH__DEVICE=cpu``: the key's ``'cpu'`` value runs the backend on torch's
+CPU device.
 """
-
-import importlib.util
 
 import numpy as np
 import pytest
 from ase.build import bulk
+from utils import requires_mps
 
 import abtem
 from abtem.core import backend
 from abtem.core.backend import asnumpy, get_array_module
 
-# Selected with the other tests of the torch backend (see test_mps.py). PyTorch is
-# not imported at module level: collecting this file must leave it unimported
-# (see test_backend.py).
-pytestmark = [
-    pytest.mark.torch,
-    pytest.mark.mps,
-    pytest.mark.metal,
-    pytest.mark.skipif(
-        importlib.util.find_spec("torch") is None, reason="requires PyTorch"
-    ),
-]
+# Selected with the other tests of the torch backend (see test_mps.py), and run
+# only where it loads: the fixture below imports PyTorch, which a machine that
+# cannot use Metal must not do partway through a test run (see test_backend.py).
+pytestmark = requires_mps
 
 
 @pytest.fixture
