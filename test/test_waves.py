@@ -176,7 +176,9 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
     assert_is_normalized(waves)
 
 
-@pytest.mark.parametrize("chunks", [(1, 16, 20), (2, 16, 20)])
+@pytest.mark.parametrize(
+    "chunks", [(1, 16, 20), (2, 16, 20), (3, 8, 10), (2, (10, 6), 20)]
+)
 @pytest.mark.parametrize("reciprocal_space", [False, True])
 def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
     from abtem.core.axes import OrdinalAxis
