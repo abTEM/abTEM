@@ -341,25 +341,49 @@ class TestDiskMeshgridIter:
 class TestFiniteProjectionChunked:
     """Verify finite projection builds correctly and is deterministic."""
 
-    def test_finite_builds_without_error(self):
-        """Finite projection should build without error on CPU."""
+    def test_finite_build_obeys_the_sum_rule(self):
+        """The finite projection of 64 Si atoms must integrate to 64 F_Si(0).
+
+        Oracle: the k = 0 sum rule int V d^3r = F(0), with F(0) the Lobato
+        ``projected_scattering_factor`` at k = 0 (see test_potential_physics).
+        Budget: default-cutoff truncation (<= 0.2 % for Si) plus the core-pixel
+        discretisation, which test_potential_physics measures as <= 1.8 % of
+        the atom's slice at dx = 0.1 A and shows to scale as dx^2 -- so
+        <= 1.3 % of the total at dx = 0.085 A. Truncation only removes
+        potential, so the result must be a deficit.
+        """
+        from abtem.parametrizations import LobatoParametrization
+
         atoms = si_cubic_atoms() * (2, 2, 2)
-        pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
+        pot = Potential(atoms, gpts=(128, 128), slice_thickness=2.0,
                         projection="finite")
         result = pot.build(lazy=False)
-        # Should produce non-zero potential slices.
-        assert len(result) > 0
-        assert any(np.any(s.array != 0) for s in result)
+        total = float(result.array.sum()) * np.prod(pot.sampling)
+        f0 = float(
+            LobatoParametrization().projected_scattering_factor("Si")(
+                np.array([0.0])
+            )[0]
+        )
+        deficit = 1 - total / (len(atoms) * f0)
+        assert -1e-3 < deficit < 1.5e-2, deficit
 
-    def test_finite_deterministic(self):
-        """Two builds of the same finite potential must be identical."""
+    def test_finite_chunked_slices_equal_the_unchunked_build(self):
+        """Chunked slice generation must reproduce the one-shot build and the
+        per-slice generator exactly, and a second build must be identical."""
         atoms = si_cubic_atoms() * (2, 2, 2)
-        pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
+        pot = Potential(atoms, gpts=(64, 64), slice_thickness=1.0,
                         projection="finite")
-        arr1 = pot.build(lazy=False)
-        arr2 = pot.build(lazy=False)
-        for s1, s2 in zip(arr1, arr2):
-            np.testing.assert_array_equal(s1.array, s2.array)
+        reference = pot.build(lazy=False).array
+        per_slice = np.concatenate([s.array for s in pot.generate_slices()])
+        np.testing.assert_array_equal(per_slice, reference)
+        for chunk_size in (1, 3, 5):
+            chunked = np.concatenate(
+                [c.array for c in pot.generate_chunked_slices(chunk_size=chunk_size)]
+            )
+            np.testing.assert_array_equal(chunked, reference)
+        np.testing.assert_array_equal(pot.build(lazy=False).array, reference)
+        lazy = pot.build(lazy=True).compute().array
+        np.testing.assert_allclose(lazy, reference, rtol=0, atol=0)
 
     def test_finite_multislice_chunked(self):
         """Finite-projection multislice must be identical across chunk sizes."""

@@ -969,6 +969,11 @@ def _active_client():
         return None
 
 
+_LOCAL_SCHEDULER_WARNING = (
+    "Running on a single-machine scheduler when a distributed client"
+)
+
+
 def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     """Whether ``dask.compute(*arrays, **kwargs)`` would run on a distributed
     client: an active default client, or one named by ``scheduler`` (the client
@@ -980,9 +985,15 @@ def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     except ImportError:
         return False
 
-    scheduler = dask.base.get_scheduler(
-        scheduler=kwargs.get("scheduler"), collections=arrays
-    )
+    with warnings.catch_warnings():
+        # Only asks which scheduler would run, but older dask (e.g. 2025.3) warns
+        # whenever a local scheduler is named while a client is active.
+        warnings.filterwarnings(
+            "ignore", message=_LOCAL_SCHEDULER_WARNING, category=UserWarning
+        )
+        scheduler = dask.base.get_scheduler(
+            scheduler=kwargs.get("scheduler"), collections=arrays
+        )
     return isinstance(getattr(scheduler, "__self__", None), Client)
 
 
