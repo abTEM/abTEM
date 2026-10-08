@@ -4659,7 +4659,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad] (default is 0.0).
         outer : float
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches.
         rotation : float
             Rotation of the bins around the origin [rad] (default is 0.0).
         offset : two float
@@ -4750,10 +4752,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad]. Default is 0.0.
         outer : float, optional
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern. Every bin is
-            ``step_size`` wide, so if ``outer - inner`` is not a multiple of
-            ``step_size`` the trailing partial step is dropped and the last bin ends
-            at ``inner + n * step_size``.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches. Every bin is ``step_size`` wide, so if
+            ``outer - inner`` is not a multiple of ``step_size`` the trailing partial
+            step is dropped and the last bin ends at ``inner + n * step_size``.
 
         Returns
         -------

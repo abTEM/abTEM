@@ -16,6 +16,7 @@ import abtem
 ENERGIES = (70e3, 50e3, 80e3, 60e3)
 
 pytestmark = [
+    pytest.mark.float64,
     pytest.mark.filterwarnings(
         "ignore:The interpolation factor does not exactly divide:UserWarning"
     ),
