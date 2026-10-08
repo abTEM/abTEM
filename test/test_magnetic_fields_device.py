@@ -17,14 +17,17 @@ from abtem.core.backend import asnumpy, get_array_module
 from abtem.magnetism.iam import MagneticField, VectorPotential
 
 
-def _atoms(height: float = 5.0) -> Atoms:
+def _atoms(height: float = 5.0, symbols: str = "FeO") -> Atoms:
     atoms = Atoms(
-        "FeO",
+        symbols,
         positions=[(0.5, 0.6, 0.7), (2.0, 1.5, 3.0)],
         cell=[4.0, 3.0, height],
         pbc=True,
     )
-    atoms.set_array("magnetic_moments", np.array([[0.3, -0.4, 2.0], [0, 0, 0]]))
+    moments = np.array([[0.3, -0.4, 2.0], [0, 0, 0]])
+    if symbols == "Fe2":
+        moments[1] = (0.0, 1.0, -1.5)
+    atoms.set_array("magnetic_moments", moments)
     return atoms
 
 
@@ -37,8 +40,11 @@ def _build(cls, atoms, device, lazy):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("lazy", [False, True])
-def test_build_on_device_matches_cpu(cls, device, precision, lazy):
-    atoms = _atoms()
+# One element: generate_slices yields the integrator's array as it is and build()
+# copies it into its buffer. Two elements: generate_slices adds it into a buffer.
+@pytest.mark.parametrize("symbols", ["Fe2", "FeO"])
+def test_build_on_device_matches_cpu(cls, device, precision, lazy, symbols):
+    atoms = _atoms(symbols=symbols)
     with abtem.config.set({"precision": precision}):
         reference = _build(cls, atoms, "cpu", lazy=False)
         field = _build(cls, atoms, device, lazy=lazy)
