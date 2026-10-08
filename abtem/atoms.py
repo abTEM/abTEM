@@ -1410,29 +1410,44 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
+    floor_min = np.floor(scaled_corners.min(axis=0))
 
-    # The repetitions follow from the corners of the box. An atom given outside
-    # the cell, and in a non-orthogonal cell with a margin even one inside it,
-    # needs more lattice shifts, below or above, for its images to reach the
-    # region kept, [-margin, cell + margin).
-    first = np.floor(scaled_corners.min(axis=0)) - scaled_margin.sum(0)
-    kept = scaled_corners - np.linalg.solve(atoms.cell.T, np.array(margin))
-    scaled_positions = atoms.get_scaled_positions(wrap=False)
-    lowest = np.ceil(kept.min(axis=0) - scaled_positions.max(axis=0, initial=0.0))
-    highest = np.ceil(kept.max(axis=0) - scaled_positions.min(axis=0, initial=0.0)) - 1
-    below = np.maximum(first - lowest, 0).astype(int)
-    above = np.maximum(highest - (first + repetitions - 1), 0).astype(int)
+    new_atoms = atoms * repetitions
 
-    new_atoms = atoms * (repetitions + below + above)
-
-    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    center_translate = np.dot(floor_min, atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
-    new_atoms.positions[:] -= np.dot(below, atoms.cell)
 
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
+
+    # The repetitions are the lattice shifts [first, first + repetitions). They reach
+    # every image in the region kept of an atom given in the cell, except in a
+    # non-orthogonal cell with a margin, and at a face within rounding. They miss
+    # those of an atom given outside the cell. Those images are placed directly, at
+    # the lattice shifts the region kept needs, and follow the atoms of the
+    # repetitions, which are as they would be without them. Their number is set by
+    # the box, not by how far outside the cell the atom is.
+    first = floor_min - scaled_margin.sum(0)
+    kept = scaled_corners - np.linalg.solve(atoms.cell.T, np.array(margin)) - 1e-12
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    unreached = np.flatnonzero(
+        np.any(
+            (scaled_positions < kept.max(axis=0) - first - repetitions)
+            | (scaled_positions >= kept.min(axis=0) - first + 1),
+            axis=1,
+        )
+    )
+    # The region kept spans fewer than `repetitions` shifts along each axis.
+    steps = np.indices(repetitions).reshape(3, -1).T
+    shifts = np.ceil(kept.min(axis=0) - scaled_positions[unreached])[:, None] + steps
+    shifts = shifts.reshape(-1, 3)
+    reached = np.all((shifts >= first) & (shifts < first + repetitions), axis=1)
+    missed = atoms[np.repeat(unreached, len(steps))[~reached]]
+    missed.positions[:] += np.dot(shifts[~reached], atoms.cell)
+    missed.cell = cell
+    new_atoms.extend(atoms_in_cell(missed, margin=margin))
 
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
