@@ -5596,10 +5596,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # Fix whatever depends on the whole ensemble, as `apply_transform`
             # does before it splits a multi-energy ensemble: each energy is then
             # reduced with the same detectors, whose measurements stack. The
-            # reduction detects on the waves of `dummy_probes`, downsampled only
-            # for the compressed (upsampled) reduction.
+            # members detect on the downsampled grid of the S-matrix.
             ensemble = self.dummy_probes(
-                downsample=self._upsample_enabled,
+                downsample=True,
                 energy=self._energies,
                 metadata={k: v for k, v in self.metadata.items() if k != "energy"},
             ).build(lazy=True)

@@ -12,7 +12,8 @@ from utils import devices
 
 import abtem
 
-ENERGIES = (50e3, 60e3, 70e3)
+# not sorted, and a different count from the scan axes (3 and 5)
+ENERGIES = (70e3, 50e3, 80e3, 60e3)
 
 pytestmark = [
     pytest.mark.filterwarnings(
@@ -35,7 +36,7 @@ def _potential(device="cpu"):
     return abtem.Potential(atoms, sampling=0.15, slice_thickness=2, device=device)
 
 
-def _scan(potential, gpts=(3, 4)):
+def _scan(potential, gpts=(3, 5)):
     return abtem.GridScan(
         (0, 0), (1, 1), gpts=gpts, fractional=True, potential=potential
     )
@@ -52,42 +53,81 @@ def _close(a, b, atol=1e-12):
 
 # --- multi-energy S-matrix scans (#502) -----------------------------------------
 
-
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize(
+_PRISM_CONFIGURATIONS = pytest.mark.parametrize(
     "kwargs",
     [dict(), dict(interpolation=2), dict(interpolation=2, upsample=True)],
     ids=["interpolation_1", "interpolation_2", "interpolation_2_upsampled"],
 )
-def test_multi_energy_prism_pixelated_crop_stacks_like_multislice(kwargs, lazy):
-    potential = _potential()
+
+
+def _prism(potential, energy, detector, lazy=False, **kwargs):
     s_matrix = abtem.SMatrix(
-        potential=potential, energy=list(ENERGIES), semiangle_cutoff=20, **kwargs
+        potential=potential, energy=energy, semiangle_cutoff=20, **kwargs
     )
-    prism = s_matrix.scan(
-        scan=_scan(potential),
-        detectors=abtem.PixelatedDetector(max_angle=60),
-        lazy=lazy,
-    )
-    prism = prism.compute(progress_bar=False) if lazy else prism
+    out = s_matrix.scan(scan=_scan(potential), detectors=detector, lazy=lazy)
+    return out.compute(progress_bar=False) if lazy else out
 
-    probe = abtem.Probe(energy=list(ENERGIES), semiangle_cutoff=20)
-    probe.grid.match(potential)
-    multislice = probe.scan(
+
+def _same_pixels(a, b):
+    """The patterns `a` and `b` cropped to the pixels they share."""
+    shape = tuple(min(m, n) for m, n in zip(a.shape[-2:], b.shape[-2:]))
+    return a.crop(gpts=shape).array, b.crop(gpts=shape).array
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@_PRISM_CONFIGURATIONS
+@pytest.mark.parametrize("max_angle", ["valid", "cutoff", "full", 60])
+def test_multi_energy_prism_pixelated_equals_single_energy_runs(
+    max_angle, kwargs, lazy
+):
+    potential = _potential()
+    multi = _prism(
         potential,
-        scan=_scan(potential),
-        detectors=abtem.PixelatedDetector(max_angle=60),
-        lazy=False,
+        list(ENERGIES),
+        abtem.PixelatedDetector(max_angle=max_angle),
+        lazy,
+        **kwargs,
     )
+    axis = [type(a).__name__ for a in multi.axes_metadata].index("EnergyAxis")
+    assert multi.shape[axis] == len(ENERGIES)
 
-    assert prism.shape[0] == len(ENERGIES)
-    # the pixel count of the whole ensemble, and its axis labels, as multislice
-    if not kwargs:
-        assert prism.shape[-2:] == multislice.shape[-2:]
-        np.testing.assert_allclose(prism.sampling, multislice.sampling, rtol=1e-12)
+    shapes = []
+    for i, energy in enumerate(ENERGIES):
+        single = _prism(
+            potential,
+            energy,
+            abtem.PixelatedDetector(max_angle=max_angle),
+            lazy,
+            **kwargs,
+        )
+        member = multi[(slice(None),) * axis + (i,)]
+        shapes.append(single.shape[-2:])
+        # a string max_angle crops every energy alike; a number of mrad crops the
+        # ensemble to the pixel count of its highest energy, and what is there
+        # equals the energy's own run
+        a, b = _same_pixels(member, single)
+        # lazy blocks are computed in the default single precision
+        _close(a, b, atol=1e-5 if lazy else 1e-10)
+        if isinstance(max_angle, str):
+            assert member.shape[-2:] == single.shape[-2:]
+
+    if isinstance(max_angle, str):
+        assert len(set(shapes)) == 1
+    else:
+        highest = ENERGIES.index(max(ENERGIES))
+        assert multi.shape[-2:] == shapes[highest]
 
 
-@pytest.mark.parametrize("make", [lambda: abtem.FlexibleAnnularDetector()])
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: abtem.FlexibleAnnularDetector(),
+        lambda: abtem.SegmentedDetector(
+            nbins_radial=2, nbins_azimuthal=4, inner=30, outer=None
+        ),
+    ],
+    ids=["flexible_annular", "segmented"],
+)
 def test_multi_energy_prism_refuses_an_auto_sized_radial_detector(make):
     potential = _potential()
     s_matrix = abtem.SMatrix(
@@ -163,3 +203,32 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
             np.take(annular.array, i, axis=annular_axis),
             atol=1e-6,
         )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "name, args", [("polar_binning", (4, 4)), ("radial_binning", ())]
+)
+def test_default_outer_is_the_same_for_every_energy(name, args, lazy, device):
+    # each energy's own maximum angle would give radial axes that cannot stack, or
+    # that are labelled with the first energy's; the ensemble's, the highest
+    # energy's, is reached by every energy
+    potential = _potential(device)
+    multi = _exit_waves(potential, list(ENERGIES)).diffraction_patterns(
+        max_angle="full"
+    )
+    shared = min(multi.max_angles)
+    if lazy:
+        multi = multi.lazy()
+    result = getattr(multi, name)(*args)
+    result = result.compute(progress_bar=False) if lazy else result
+
+    axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
+    for i, energy in enumerate(ENERGIES):
+        single = getattr(
+            _exit_waves(potential, energy).diffraction_patterns(max_angle="full"),
+            name,
+        )(*args, outer=shared)
+        _close(np.take(result.array, i, axis=axis), single.array, atol=1e-10)
+        assert result.radial_sampling == pytest.approx(single.radial_sampling)

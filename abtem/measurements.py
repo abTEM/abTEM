@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import inspect
 import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -3691,7 +3692,7 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
-def _per_energy(method):
+def _per_energy(method=None, *, shared_outer: bool = False):
     """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
     ensemble on its own, and restack the results along the energy axis.
 
@@ -3700,27 +3701,47 @@ def _per_energy(method):
     the ensemble as a whole is that of its highest energy (see
     `BaseMeasurements._get_energy`). A method that takes or returns scattering
     angles must therefore see one energy at a time.
+
+    Parameters
+    ----------
+    shared_outer : bool
+        The method has radial bins up to its `outer` argument. The default, the
+        maximum angle, differs between energies, and the members stack along one
+        radial axis, so it is resolved once for the whole ensemble, to the
+        maximum angle of its highest energy, which every energy reaches.
     """
 
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        from abtem.array import _multi_energy_axis
+    def decorator(method):
+        signature = inspect.signature(method)
 
-        index = _multi_energy_axis(self)
-        if index is None:
-            return method(self, *args, **kwargs)
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            from abtem.array import _multi_energy_axis
 
-        axis = self.ensemble_axes_metadata[index]
-        members = [
-            method(self[(slice(None),) * index + (j,)], *args, **kwargs)
-            for j in range(len(axis.values))
-        ]
-        # A method may move ensemble axes into the base (the scan axes of a
-        # center of mass), which can only be ones that follow the energy axis.
-        position = min(index, len(members[0].ensemble_shape))
-        return stack(members, axis, axis=position)
+            index = _multi_energy_axis(self)
+            if index is None:
+                return method(self, *args, **kwargs)
 
-    return wrapper
+            if shared_outer:
+                bound = signature.bind(self, *args, **kwargs)
+                bound.apply_defaults()
+                if bound.arguments["outer"] is None:
+                    bound.arguments["outer"] = min(self.max_angles)
+                args, kwargs = bound.args[1:], bound.kwargs
+
+            axis = self.ensemble_axes_metadata[index]
+            members = [
+                method(self[(slice(None),) * index + (j,)], *args, **kwargs)
+                for j in range(len(axis.values))
+            ]
+            # A method may move ensemble axes into the base (the scan axes of a
+            # center of mass), which can only be ones that follow the energy axis.
+            position = min(index, len(members[0].ensemble_shape))
+            return stack(members, axis, axis=position)
+
+        return wrapper
+
+    return decorator if method is None else decorator(method)
 
 
 class DiffractionPatterns(_BaseMeasurement2D):
@@ -4608,7 +4629,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return result.reshape(new_shape)
 
-    @_per_energy
+    @_per_energy(shared_outer=True)
     def polar_binning(
         self,
         nbins_radial: int,
@@ -4709,7 +4730,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
-    @_per_energy
+    @_per_energy(shared_outer=True)
     def radial_binning(
         self, step_size: float = 1.0, inner: float = 0.0, outer: Optional[float] = None
     ) -> PolarMeasurements:
