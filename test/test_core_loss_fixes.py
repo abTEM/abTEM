@@ -7,6 +7,7 @@ are grouped by the object they belong to rather than by symptom.
 from __future__ import annotations
 
 import functools
+import io
 import sys
 
 import ase
@@ -190,8 +191,9 @@ class TestRadialEquation:
         from gpaw.atom.aeatom import AllElectronAtom
         from scipy.interpolate import interp1d
 
-        AllElectronAtom.log = lambda self, *args, **kwargs: None
-        ae = AllElectronAtom("Si", xc="PBE", scalar_relativistic=False)
+        ae = AllElectronAtom(
+            "Si", xc="PBE", scalar_relativistic=False, log=io.StringIO()
+        )
         ae.run()
         ae.refine()
         rv = interp1d(
@@ -222,8 +224,7 @@ class TestAtomicPotentialTail:
             # Was 1.7e-3 Ry; measured <= 2e-7 Ry now.
             assert abs(rv(r) / r) < 1e-6, f"V({r} Bohr) = {rv(r) / r:.2e} Ry"
 
-        AllElectronAtom.log = lambda self, *args, **kwargs: None
-        ae = AllElectronAtom("Si", xc=xc)
+        ae = AllElectronAtom("Si", xc=xc, log=io.StringIO())
         ae.run()
         ae.scalar_relativistic = True
         ae.refine()
