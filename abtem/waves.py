@@ -842,7 +842,6 @@ class Waves(BaseWaves, ArrayObject):
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = _phase_shift(self.array)
-        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:

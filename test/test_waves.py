@@ -589,3 +589,33 @@ def test_depth_profile_finite_depth(exit_plane_waves):
 def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
     profile = exit_plane_waves.depth_profile(convert_complex=convert_complex)
     assert profile.array.shape[-2:] == (exit_plane_waves.shape[-1], exit_plane_waves.shape[0])
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+def test_phase_shift_keeps_the_space_of_the_waves(reciprocal_space, lazy):
+    import dask.array as da
+
+    from abtem.core.axes import OrdinalAxis
+
+    amount = 0.3
+    rng = np.random.default_rng(0)
+    psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+    array = np.fft.fft2(psi) if reciprocal_space else psi
+    if lazy:
+        array = da.from_array(array, chunks=(1, -1, -1))
+    waves = Waves(
+        array,
+        energy=100e3,
+        sampling=0.1,
+        reciprocal_space=reciprocal_space,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+
+    shifted = waves.phase_shift(amount)
+
+    assert shifted.reciprocal_space == reciprocal_space
+    assert shifted.is_lazy == lazy
+    result = shifted.ensure_real_space().compute().array
+    expected = np.exp(1j * amount) * psi
+    assert np.allclose(result, expected, rtol=0, atol=1e-12 * np.abs(psi).max())
