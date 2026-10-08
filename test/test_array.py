@@ -10,7 +10,7 @@ from hypothesis import given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
                    assert_array_objects_equal, devices, gpu, lazy_params,
-                   remove_dummy_dimensions, requires_gpu, si_cubic_atoms)
+                   remove_dummy_dimensions, si_cubic_atoms)
 
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
@@ -556,7 +556,7 @@ class TestStackAndHyperspyTrustTheRealArrayType:
     """
 
     @staticmethod
-    def _stale_label_measurement():
+    def _stale_label_measurement(device):
         import ase
 
         import abtem
@@ -565,9 +565,9 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
             pbc=True,
         )
-        with abtem.config.set({"device": "gpu"}):
+        with abtem.config.set({"device": device}):
             pot = abtem.Potential(
-                atoms, gpts=(32, 32), slice_thickness=2.0, device="gpu"
+                atoms, gpts=(32, 32), slice_thickness=2.0, device=device
             )
             probe = abtem.Probe(
                 semiangle_cutoff=20, energy=60e3, extent=(8.0, 8.0), gpts=(32, 32)
@@ -584,22 +584,25 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 lazy=False,
             )
 
-    @requires_gpu
-    def test_precondition_device_label_disagrees_with_array_type(self):
+    # Parametrized over the accelerator rather than gated on CUDA: Metal
+    # results carry the same stale label, for the same reason, and the
+    # consumers below must not trust it there either.
+    @pytest.mark.parametrize("device", [gpu])
+    def test_precondition_device_label_disagrees_with_array_type(self, device):
         """Pins down the setup every test below depends on, so a future fix
         to the underlying label inconsistency (out of scope here) doesn't
         silently turn these into tests of nothing."""
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         assert isinstance(m.array, np.ndarray)
-        assert m.device == "gpu"
+        assert m.device == device
 
-    @requires_gpu
-    def test_stack_does_not_crash_on_a_stale_device_label(self):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_stack_does_not_crash_on_a_stale_device_label(self, device):
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         stacked = stack(
             (m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0
         )
@@ -607,8 +610,10 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             np.asarray(stacked.array), np.stack([np.asarray(m.array)] * 2, axis=0)
         )
 
-    @requires_gpu
-    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(self, monkeypatch):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(
+        self, monkeypatch, device
+    ):
         """hyperspy isn't installed in every environment this suite runs
         in; stubbing its two signal classes lets this test exercise the
         real to_hyperspy code path -- including the line that crashed --
@@ -638,7 +643,7 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 )
             ),
         )
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         sig = m.to_hyperspy()
         # transpose=True (the default) is what exercises the crashing line
         # (xp.moveaxis); for this measurement -- base_dims=2, no ensemble
@@ -648,15 +653,15 @@ class TestStackAndHyperspyTrustTheRealArrayType:
     def test_get_array_module_receives_the_array_not_the_device_label(
         self, monkeypatch
     ):
-        """CPU-runnable complement to the two GPU-only tests above. Those
-        need get_array_module("gpu") to actually resolve to cupy to
-        reproduce the crash, so (like every @requires_gpu test) they never
+        """CPU-runnable complement to the two accelerator tests above. Those
+        need get_array_module(device) to actually resolve to cupy or torch
+        to reproduce the crash, so (like every accelerator test) they never
         run in CI -- no GPU runner is configured -- and only ever execute
-        on a workstation with cupy. This doesn't reproduce the crash, but
-        it runs everywhere and directly asserts the fix's actual invariant
-        -- _stack and to_hyperspy call get_array_module with the real
-        array, never with .device -- independent of cupy or a GPU being
-        present at all.
+        on a workstation with CUDA or Apple silicon. This doesn't reproduce
+        the crash, but it runs everywhere and directly asserts the fix's
+        actual invariant -- _stack and to_hyperspy call get_array_module
+        with the real array, never with .device -- independent of cupy or
+        a GPU being present at all.
 
         Deliberately does not use _stale_label_measurement: that needs a
         real GPU to produce a genuine numpy/cupy mismatch, but the
@@ -802,3 +807,32 @@ class TestBaseLessArrayObject:
             np.asarray(transformed.compute().array),
             np.asarray(m.compute().array) * 2,
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_arithmetic_with_array_of_own_device(device):
+    # A measurement on the GPU combined with a CuPy array (and on the CPU with a
+    # NumPy array) used to raise NotImplementedError for the CuPy case.
+    import numpy as np
+
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    xp = get_array_module(device)
+    host = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    images = abtem.Images(
+        xp.asarray(host),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    factor = np.array([2.0, 3.0], dtype=np.float32)[:, None, None]
+
+    for result, expected in (
+        (images * xp.asarray(factor), host * factor),
+        (images - xp.asarray(factor), host - factor),
+        (images / xp.asarray(factor), host / factor),
+        (xp.asarray(factor) * images, factor * host),
+        (xp.asarray(factor) - images, factor - host),
+    ):
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(result.to_cpu().array, expected)

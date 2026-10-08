@@ -31,6 +31,7 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
+    _image_resampling_gpts,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -123,16 +124,10 @@ def validate_detectors(
         raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
     if waves is not None:
-        matched = []
-        for detector in detectors:
-            if hasattr(detector, "_match_waves"):
-                # Matching writes the waves' cutoff angle onto the detector. Done on
-                # a copy, the caller's detector keeps no outer angle that a later,
-                # unrelated run (another energy, grid or algorithm) would reuse.
-                detector = detector.copy()
-                detector._match_waves(waves)
-            matched.append(detector)
-        detectors = matched
+        detectors = [
+            detector._matched(waves) if hasattr(detector, "_matched") else detector
+            for detector in detectors
+        ]
 
     return detectors
 
@@ -235,6 +230,11 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         return measurements
 
 class _AbstractRadialDetector(BaseDetector):
+    # Whether an automatic outer angle is sized for each energy of a multi-energy
+    # ensemble on its own. A detector with radial bins has one radial axis for the
+    # whole ensemble, which no single outer angle fits.
+    _sizes_outer_per_energy = False
+
     def __init__(
         self,
         inner: float,
@@ -246,16 +246,23 @@ class _AbstractRadialDetector(BaseDetector):
     ):
         self._inner = inner
         self._outer = outer
-        # Whether `outer` was ever given explicitly (constructor or the
-        # setter below), as opposed to auto-matched from waves in
-        # `_match_waves`. `outer is None` alone cannot tell these apart once
-        # a value has been auto-matched, which is exactly what made
-        # `_match_waves` latch onto the first waves it ever saw and ignore
-        # every later one (see `_match_waves`'s own docstring).
+        # Whether `outer` was given explicitly (constructor or the setter
+        # below), as opposed to sized from the detected waves by `_matched`.
+        # `outer is None` alone cannot tell these apart on a matched copy, which
+        # holds its sized value but must be sized again by the next waves it
+        # detects (see `_matched`).
         self._outer_is_explicit = outer is not None
         self._rotation = rotation
         self._offset = offset
         super().__init__(to_cpu=to_cpu, url=url)
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        # A sized outer angle stays automatic in a detector rebuilt for a lazy
+        # `detect`, so it is sized again for the waves the rebuilt one detects.
+        if not self._outer_is_explicit:
+            kwargs["outer"] = None
+        return kwargs
 
     @property
     def inner(self) -> float:
@@ -310,8 +317,8 @@ class _AbstractRadialDetector(BaseDetector):
         return (get_dtype(complex=False),)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
-        self._match_waves(waves)
-        return ((self.nbins_radial, self.nbins_azimuthal),)
+        matched = self._matched(waves)
+        return ((matched.nbins_radial, matched.nbins_azimuthal),)
 
     def _out_type(self, waves: WavesType) -> tuple[Type[PolarMeasurements]]:
         return (PolarMeasurements,)
@@ -323,19 +330,20 @@ class _AbstractRadialDetector(BaseDetector):
         return (metadata,)
 
     def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        matched = self._matched(waves)
         return (
             [
                 LinearAxis(
                     label="Radial scattering angle",
                     offset=self.inner,
-                    sampling=self.radial_sampling,
+                    sampling=matched.radial_sampling,
                     _concatenate=False,
                     units="mrad",
                 ),
                 LinearAxis(
                     label="Azimuthal scattering angle",
                     offset=self.rotation,
-                    sampling=self.azimuthal_sampling,
+                    sampling=matched.azimuthal_sampling,
                     _concatenate=False,
                     units="rad",
                 ),
@@ -355,11 +363,11 @@ class _AbstractRadialDetector(BaseDetector):
 
     def _outer_for(self, waves: WavesType) -> float:
         """The ``outer`` used to detect ``waves`` [mrad]: the given one, or
-        else the antialias cutoff angle of ``waves`` (see `_match_waves`)."""
+        else the antialias cutoff angle of ``waves`` (see `_matched`)."""
         if self._outer_is_explicit:
             return self.outer
 
-        if any(
+        if not self._sizes_outer_per_energy and any(
             isinstance(axis, EnergyAxis) and len(axis.values) > 1
             for axis in waves.ensemble_axes_metadata
         ):
@@ -387,7 +395,8 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        inner, outer = self.angular_limits(waves)
+        detector = self._matched(waves)
+        inner, outer = detector.angular_limits(waves)
 
         # The pattern is cropped about k=0 and polar_binning then shifts the
         # bins by the offset, so the crop reaches `outer` beyond the offset
@@ -406,8 +415,8 @@ class _AbstractRadialDetector(BaseDetector):
         measurement = waves.diffraction_patterns(max_angle=max_angle, parity="same")
 
         measurement = measurement.polar_binning(
-            nbins_radial=self.nbins_radial,
-            nbins_azimuthal=self.nbins_azimuthal,
+            nbins_radial=detector.nbins_radial,
+            nbins_azimuthal=detector.nbins_azimuthal,
             inner=inner,
             outer=outer,
             rotation=self._rotation,
@@ -420,47 +429,35 @@ class _AbstractRadialDetector(BaseDetector):
         return measurement._eager_array
 
     def _match_ensemble(self, waves: WavesType) -> _AbstractRadialDetector:
-        """Refuse an auto-sized outer angle of a detector with radial bins for a
-        multi-energy ensemble.
+        """This detector sized for ``waves`` (see `_matched`), before the ensemble
+        is split into energies or lazy blocks. An automatic outer angle is
+        refused for a multi-energy ensemble."""
+        return self._matched(waves)
 
-        Each energy is detected on its own, so without this an auto-sized outer
-        angle would follow each energy's cutoff (see `_match_waves`).
-        """
-        from abtem.array import _multi_energy_axis
+    def _matched(self, waves: WavesType) -> _AbstractRadialDetector:
+        """This detector with its outer angle sized for ``waves``.
 
-        if _multi_energy_axis(waves) is not None:
-            self._match_waves(waves)
-        return self
-
-    def _match_waves(self, waves: WavesType) -> None:
-        """Auto-size ``outer`` from ``waves``, unless the user gave one.
-
-        Previously guarded by ``if self.outer is None``, which conflated
-        "the user never gave an outer" with "not matched yet": once matched,
-        this would latch onto whichever waves it saw *first* for the rest of
-        this detector's life, including a later, unrelated call with
-        different waves (e.g. this same detector instance reused for a
-        second scan at a different energy). Re-matching every call instead
-        makes each call self-consistent, at the cost of being a no-op for
-        the common case (repeated calls at one energy already agree).
+        An explicit ``outer`` is returned as it is, as the detector itself. Else the
+        outer angle is the antialias cutoff angle of ``waves``, held by a copy:
+        sizing never writes onto the detector the caller holds, which another run
+        (other energy, grid or algorithm) would otherwise reuse with the first
+        run's angle. The copy is not explicit, so it is sized again by the next
+        waves it is matched with, as the S-matrix reduction does twice.
 
         A detector with radial bins (`FlexibleAnnularDetector`,
-        `SegmentedDetector`) cannot be auto-sized for a multi-member energy
-        ensemble at all: each member has its own antialias cutoff angle
-        (`waves.cutoff_angles`, which scales with wavelength at a fixed grid --
-        it is not the semiangle_cutoff/aperture, which does not enter it at all),
-        so a single radial axis cannot fit all of them (see the module docstring
-        analogue: this is the `FlexibleAnnularDetector` gotcha; unlike a
-        single-value cutoff, the two shortest-first / longest-first energy
-        orders would otherwise silently size the bins differently). Refuse
-        it instead of picking one member's cutoff (or lazy's own, different,
-        convention) silently. `AnnularDetector` has no radial bins to share and
-        sizes an auto outer angle per energy instead (see its `_match_ensemble`).
+        `SegmentedDetector`) cannot be sized for a multi-energy ensemble: each
+        energy has its own cutoff angle (`waves.cutoff_angles`, which scales with
+        wavelength at a fixed grid; the semiangle cutoff of the probe does not
+        enter it), so no single radial axis fits all of them. Picking one energy's
+        cutoff would silently depend on the order of the energies, so this raises.
+        `AnnularDetector` has no radial bins and sizes each energy on its own.
         """
         if self._outer_is_explicit:
-            return
+            return self
 
-        self._outer = self._outer_for(waves)
+        matched = self.copy()
+        matched._outer = self._outer_for(waves)
+        return matched
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
         """
@@ -667,8 +664,9 @@ class AnnularDetector(_AbstractRadialDetector):
     ----------
     inner: float
         Inner integration limit [mrad].
-    outer: float
-        Outer integration limit [mrad].
+    outer: float, optional
+        Outer integration limit [mrad]. If None, the antialias cutoff angle of the
+        detected waves.
     offset: two float, optional
         Center offset of the annular integration region [mrad].
     to_cpu : bool, optional
@@ -748,16 +746,6 @@ class AnnularDetector(_AbstractRadialDetector):
         metadata["units"] = "arb. unit"
         return (metadata,)
 
-    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
-        inner = self.inner
-
-        if self.outer is not None:
-            outer = self.outer
-        else:
-            outer = min(waves.cutoff_angles)
-
-        return inner, outer
-
     def _out_ensemble_axes_metadata(
         self, waves: WavesType
     ) -> tuple[list[AxisMetadata]]:
@@ -799,11 +787,10 @@ class AnnularDetector(_AbstractRadialDetector):
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
-    def _match_ensemble(self, waves: WavesType) -> AnnularDetector:
-        # An auto-sized outer angle follows each energy's cutoff, as a separate
-        # run of each energy would; the result has no radial axis to share. (The
-        # metadata of an AnnularDetector result never records an outer angle.)
-        return self
+    # An auto-sized outer angle follows each energy's cutoff, as a separate run of
+    # each energy would; the result has no radial axis to share. (The metadata of
+    # an AnnularDetector result never records an outer angle.)
+    _sizes_outer_per_energy = True
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
@@ -826,10 +813,7 @@ class AnnularDetector(_AbstractRadialDetector):
         -------
         measurement : DiffractionPatterns
         """
-        if self.outer is None:
-            outer = np.floor(min(waves.cutoff_angles))
-        else:
-            outer = self.outer
+        outer = self._outer_for(waves)
 
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
@@ -1777,10 +1761,6 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     def azimuthal_sampling(self) -> float:
         return 2 * np.pi
 
-    def detect(self, waves: Waves) -> PolarMeasurements:
-        self._match_waves(waves)
-        return super().detect(waves)
-
 
 class SegmentedDetector(_AbstractRadialDetector):
     """
@@ -1797,7 +1777,8 @@ class SegmentedDetector(_AbstractRadialDetector):
     inner : float
         Inner integration limit of the bins [mrad].
     outer : float
-        Outer integration limit of the bins [mrad].
+        Outer integration limit of the bins [mrad]. If None, the antialias cutoff angle
+        of the detected waves.
     rotation : float
         Rotation of the bins around the origin [rad].
     offset : two float
@@ -1818,7 +1799,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         nbins_radial: int,
         nbins_azimuthal: int,
         inner: float,
-        outer: float,
+        outer: Optional[float],
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = True,
@@ -1926,6 +1907,11 @@ class PixelatedDetector(BaseDetector):
         url: Optional[str] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
+        if not reciprocal_space and isinstance(resample, str):
+            raise ValueError(
+                f"resample={resample!r} applies to diffraction patterns only; "
+                "in real space give the sampling of the images [Å]."
+            )
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
@@ -2042,8 +2028,21 @@ class PixelatedDetector(BaseDetector):
 
         return sampling, gpts
 
+    def _real_space_sampling_and_gpts(self, waves: WavesType):
+        """The sampling [Å] and grid points of the intensity images detected in real
+        space: the waves' own grid, or the grid `Images.interpolate` gives with
+        `resample` as its sampling."""
+        sampling, gpts = waves._valid_sampling, waves._valid_gpts
+        if self.resample:
+            extent = tuple(d * n for d, n in zip(sampling, gpts))
+            gpts = _image_resampling_gpts(extent, self.resample)
+            sampling = tuple(e / n for e, n in zip(extent, gpts))
+        return sampling, gpts
+
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
-        return (self._new_sampling_and_gpts(waves)[1],)
+        if self.reciprocal_space:
+            return (self._new_sampling_and_gpts(waves)[1],)
+        return (self._real_space_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
@@ -2073,14 +2072,11 @@ class PixelatedDetector(BaseDetector):
                 ],
             )
         else:
+            sampling = self._real_space_sampling_and_gpts(waves)[0]
             return (
                 [
-                    RealSpaceAxis(
-                        label="x", sampling=waves._valid_sampling[0], units="Å"
-                    ),
-                    RealSpaceAxis(
-                        label="y", sampling=waves._valid_sampling[1], units="Å"
-                    ),
+                    RealSpaceAxis(label="x", sampling=sampling[0], units="Å"),
+                    RealSpaceAxis(label="y", sampling=sampling[1], units="Å"),
                 ],
             )
 
@@ -2121,13 +2117,8 @@ class PixelatedDetector(BaseDetector):
         else:
             measurements = waves.intensity()
 
-        resample = self.resample
-        if resample:
-            if isinstance(measurements, Images):
-                assert not isinstance(resample, str)
-                measurements = measurements.interpolate(sampling=resample)
-            else:
-                measurements = measurements.interpolate(sampling=resample)
+        if self.resample:
+            measurements = measurements.interpolate(sampling=self.resample)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
@@ -2158,6 +2149,11 @@ class WavesDetector(BaseDetector):
 
     Parameters
     ----------
+    gpts : two int, optional
+       Number of grid points of the detected wave functions. The waves are
+       Fourier-interpolated onto `gpts` points over their unchanged extent, as
+       :meth:`abtem.waves.Waves.downsample` does. If not given (default), the waves
+       keep their grid.
     to_cpu : bool, optional
        If True, copy the measurement data from the calculation device to CPU memory
        after applying the detector, otherwise the data stays on the respective devices.
@@ -2197,7 +2193,34 @@ class WavesDetector(BaseDetector):
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
+        if self._gpts:
+            # as `Waves.downsample` records it: the resampled waves keep the
+            # band limit of the waves they were resampled from
+            metadata["adjusted_antialias_cutoff_gpts"] = waves.antialias_cutoff_gpts
         return (metadata,)
+
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
+        if self._gpts:
+            return (tuple(self._gpts),)
+        return super()._out_base_shape(waves)
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        if not self._gpts:
+            return super()._out_base_axes_metadata(waves)
+        # `gpts` points over the extent of the waves, as `Waves.downsample` gives
+        sampling = tuple(
+            length / n for length, n in zip(waves._valid_extent, self._gpts)
+        )
+        return (
+            [
+                RealSpaceAxis(
+                    label="x", sampling=sampling[0], units="Å", endpoint=False
+                ),
+                RealSpaceAxis(
+                    label="y", sampling=sampling[1], units="Å", endpoint=False
+                ),
+            ],
+        )
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         waves = waves.ensure_real_space()
@@ -2205,10 +2228,8 @@ class WavesDetector(BaseDetector):
         if self.to_cpu:
             waves = waves.to_cpu()
 
-        if self._gpts is not None:
-            array = fft_interpolate(
-                waves._eager_array, new_shape=waves.shape[:-2] + self._gpts
-            )
+        if self._gpts:
+            array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
         else:
             array = waves.array
 

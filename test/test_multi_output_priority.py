@@ -13,6 +13,7 @@ a distributed client runs an annotated graph.
 """
 
 import collections
+import warnings
 
 import ase.build
 import dask
@@ -24,6 +25,7 @@ from utils import gpu
 import abtem
 from abtem.array import (
     _EXTRACT_PRIORITY,
+    _LOCAL_SCHEDULER_WARNING,
     ComputableList,
     _keep_annotations_guard,
 )
@@ -150,7 +152,15 @@ def test_packed_blocks_are_released_as_they_are_extracted(cluster):
 
     assert plugin.total == 32
     assert plugin.peak <= 3 * n_workers
-    reference = elastic_and_total().compute(progress_bar=False, scheduler="synchronous")
+    with warnings.catch_warnings():
+        # Older dask (e.g. 2025.3) warns about a local scheduler while the
+        # fixture's client is active.
+        warnings.filterwarnings(
+            "ignore", message=_LOCAL_SCHEDULER_WARNING, category=UserWarning
+        )
+        reference = elastic_and_total().compute(
+            progress_bar=False, scheduler="synchronous"
+        )
     for result, ref in zip(computed, reference):
         result, ref = asnumpy(result.array), asnumpy(ref.array)
         np.testing.assert_allclose(result, ref, rtol=0, atol=1e-5 * np.abs(ref).max())

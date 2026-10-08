@@ -7,7 +7,9 @@
 # ABTEM_-prefixed environment variables, e.g. ABTEM_DEVICE=gpu or
 # ABTEM_DASK__CHUNK_SIZE="256 MB".
 
-# The device can be either 'cpu' or 'gpu'
+# The device can be 'cpu', 'gpu' (CUDA, via CuPy) or 'mps' -- the experimental
+# Metal backend on Apple silicon, which needs PyTorch (https://pytorch.org)
+# and single precision. PyTorch is only imported once 'mps' is first used.
 device: cpu
 # The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw
@@ -56,6 +58,12 @@ cupy:
   # larger through CuPy's own API is left alone. null or a non-positive value
   # leaves the entry count untouched entirely.
   fft-cache-entries: 64
+torch:
+  # Torch device the torch backend (device 'mps', 'metal' or 'torch') places its arrays on:
+  # 'mps' (Apple-silicon Metal, the default) or 'cpu' (torch's CPU device, for running the
+  # backend's tests on any machine). Metal's single-precision rules apply on either. The
+  # key is read once, when the backend loads; changing it afterwards has no effect.
+  device: mps
 mkl:
   # The number of threads to use for mkl
   threads: 2
