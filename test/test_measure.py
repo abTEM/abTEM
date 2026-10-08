@@ -246,6 +246,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
 
 @lazy_params
 @devices
+@pytest.mark.parametrize("reflected", [False, True])
 @pytest.mark.parametrize("in_place", [False, True])
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
 @pytest.mark.parametrize(
@@ -259,7 +260,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
     ],
 )
 def test_arithmetic_with_a_numpy_or_device_operand(
-    operand_type, op, in_place, lazy, device
+    operand_type, op, in_place, reflected, lazy, device
 ):
     # Oracle: the same operation on the plain arrays in double precision. NumPy
     # promotes a single-precision measurement to double with any of these
@@ -268,6 +269,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     # operation keeps single precision on every backend.
     if in_place and lazy:
         pytest.skip("in-place arithmetic refuses lazy measurements")
+    if in_place and reflected:
+        pytest.skip("an in-place operation has the measurement on the left")
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -286,7 +289,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         sampling=(0.1, 0.2),
     ).copy_to_device(device)
 
-    result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
+    operands = (operand, measurement) if reflected else (measurement, operand)
+    result = getattr(operator, ("i" if in_place else "") + op)(*operands)
 
     assert isinstance(result, Images)
     assert result.is_lazy == lazy
@@ -294,9 +298,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     assert_array_matches_device(computed, device)
     if in_place or device == "mps":
         assert asnumpy(computed).dtype == get_dtype()
-    expected = getattr(operator, op)(
-        array.astype(np.float64), np.asarray(host_operand, dtype=np.float64)
-    )
+    host_operands = (array.astype(np.float64), np.asarray(host_operand, np.float64))
+    expected = getattr(operator, op)(*(host_operands[::-1] if reflected else host_operands))
     np.testing.assert_allclose(
         asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
     )
