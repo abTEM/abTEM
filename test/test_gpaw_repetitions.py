@@ -325,19 +325,34 @@ def test_frozen_phonons_with_other_positions_are_accepted(calculator):
     assert potential.build(lazy=False).array.shape == (1, 4) + GPTS
 
 
-def test_a_slice_with_repetitions_does_not_build_the_repeated_valence_grid(calculator):
-    reps = (8, 8, 2)
+# The repetitions give a repeated grid of 33.0 MB in each case. A slice in the
+# second period, or late in a long stack of periods, takes its planes from a later
+# period; a slice as thick as the whole stack takes every plane of every period.
+@pytest.mark.parametrize(
+    "reps, gpts, slice_thickness, first_slice",
+    [
+        ((8, 8, 2), (64, 56), 0.9, 0),
+        ((8, 8, 2), (64, 56), 0.9, 5),
+        ((1, 1, 128), (32, 28), 0.9, 500),
+        ((1, 1, 128), (32, 28), 460.8, 0),
+    ],
+)
+def test_a_slice_with_repetitions_does_not_build_the_repeated_valence_grid(
+    calculator, reps, gpts, slice_thickness, first_slice
+):
     repeated_bytes = calculator.get_electrostatic_potential().nbytes * np.prod(reps)
     potential = GPAWPotential(
-        calculator, gpts=(64, 56), slice_thickness=0.9, repetitions=reps
+        calculator, gpts=gpts, slice_thickness=slice_thickness, repetitions=reps
     )
 
     was_tracing = tracemalloc.is_tracing()
-    tracemalloc.start()
+    if not was_tracing:
+        tracemalloc.start()
+    # The peak counts from here on; this resets the peak of an outer tracing session.
     tracemalloc.reset_peak()
     start = tracemalloc.get_traced_memory()[0]
     try:
-        list(potential.generate_slices(0, 1))
+        list(potential.generate_slices(first_slice, first_slice + 1))
         peak = tracemalloc.get_traced_memory()[1] - start
     finally:
         if not was_tracing:
