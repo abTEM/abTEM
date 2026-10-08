@@ -31,7 +31,7 @@ dependencies = [
     "pyfftw",
     "scipy",
     "numba",
-    "dask>=2024.3.0,!=2025.12.*,!=2026.1.0,!=2026.1.1",
+    "dask>=2025.1.0,!=2025.12.*,!=2026.1.0,!=2026.1.1",  # defers to ArrayObject via __array_priority__
     "distributed",
     "zarr>=3.1",  # create_array(data=...) requires the 3.1 API
     "ase",
