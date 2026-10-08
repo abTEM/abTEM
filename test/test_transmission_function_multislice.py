@@ -50,8 +50,12 @@ def test_multislice_through_a_transmission_function(kind, waves, device):
     expected = plane_wave.multislice(potential).compute()
     result = plane_wave.multislice(transmission_function).compute()
 
-    # The same transmission function goes through the same steps either way.
-    assert_array_objects_equal(result, expected)
+    # The same transmission function goes through the same steps either way,
+    # except that the band limit is an FFT of one slice in multislice and of
+    # the whole stack here. FFTW (with FFTW_MEASURE) and cuFFT may plan those
+    # shapes differently, which leaves the two a few eps apart.
+    eps = np.finfo(result.dtype).eps
+    assert_array_objects_equal(result, expected, rtol=0, atol=20 * eps)
 
 
 @pytest.mark.parametrize("kind", ["plain", "lazy", "exit_planes", "frozen_phonons"])
