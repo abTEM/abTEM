@@ -291,7 +291,7 @@ requires_multigpu = _GpuRequirement(
 
 
 # Marks for the torch backend, which -- like CUDA -- is exercised whenever the
-# machine has it: Metal on Apple silicon, or torch's CPU device with
+# machine has it: Metal on macOS, or torch's CPU device with
 # ABTEM_TORCH__DEVICE=cpu. A list, for `pytestmark = requires_mps`, with the
 # same markers as the `gpu` parameter above.
 requires_mps = [
