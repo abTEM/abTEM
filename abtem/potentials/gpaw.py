@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
+import io
 import threading
 import warnings
 from collections import defaultdict
@@ -885,22 +884,21 @@ class GPAWParametrization:
     def _run_all_electron_atom(symbol, added_electrons, spinpol):
         from gpaw.atom.aeatom import AllElectronAtom
 
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE")
+        ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE", log=io.StringIO())
 
-            for n, l, df in added_electrons:
-                ae.add(n, l, df)
+        for n, l, df in added_electrons:
+            ae.add(n, l, df)
 
-            if added_electrons:
-                # The occupations perturbed by add() need a more conservative
-                # mixing schedule to reach self-consistency than the default,
-                # which is tuned for the unperturbed (neutral) configuration.
-                ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-            else:
-                ae.run()
+        if added_electrons:
+            # The occupations perturbed by add() need a more conservative
+            # mixing schedule to reach self-consistency than the default,
+            # which is tuned for the unperturbed (neutral) configuration.
+            ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+        else:
+            ae.run()
 
-            ae.scalar_relativistic = True
-            ae.refine()
+        ae.scalar_relativistic = True
+        ae.refine()
 
         return ae
 

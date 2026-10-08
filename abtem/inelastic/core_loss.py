@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import contextlib
 import copy
+import io
 import itertools
-import os
 import warnings
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left
@@ -249,8 +248,7 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
     )
     subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
-    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], xcname=xc)
+    with AllElectron(chemical_symbols[Z], xcname=xc, txt=None) as ae:
         ae.run()
 
     energy = ae.e_j[subshell_index] * units.Hartree
@@ -432,12 +430,7 @@ def _atomic_rv(Z, xc="PBE"):
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
-    def f(self, *args, **kwargs):
-        pass
-
-    AllElectronAtom.log = f
-
-    ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
+    ae = AllElectronAtom(chemical_symbols[Z], xc=xc, log=io.StringIO())
     # ae.f_j[subshell_index] -= 0.0
     ae.run()
     ae.scalar_relativistic = True
