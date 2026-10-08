@@ -1,4 +1,8 @@
 import ast
+import os
+import platform
+import subprocess
+import sys
 from pathlib import Path
 
 import numba
@@ -161,3 +165,66 @@ def test_metal_backend_serializes_every_torch_call():
         "Decorate them, or add them to _UNLOCKED_BY_DESIGN with the reason "
         "they are safe."
     )
+
+
+# Importing PyTorch can break CuPy's kernel compilation in the same process
+# (observed with a ROCm build), so on a machine that cannot have a Metal device
+# neither asking for 'mps' nor collecting the tests may import it. Whether it is
+# imported is process-wide state, hence the fresh processes.
+_not_apple_silicon = pytest.mark.skipif(
+    sys.platform == "darwin" and platform.machine() == "arm64",
+    reason="the Metal backend is loaded on Apple silicon",
+)
+
+
+def _run_in_fresh_process(code):
+    # The device is set explicitly: the torch-CPU job runs with it set to 'cpu'.
+    env = {**os.environ, "ABTEM_TORCH__DEVICE": "mps"}
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@_not_apple_silicon
+def test_mps_is_refused_off_apple_silicon_without_importing_torch():
+    result = _run_in_fresh_process("""
+import sys
+
+import abtem
+from abtem.core import backend
+
+try:
+    backend.check_mps_is_available()
+except RuntimeError as error:
+    print(error)
+else:
+    raise SystemExit("check_mps_is_available() did not raise")
+
+print("TORCH_IMPORTED", "torch" in sys.modules or "abtem.core._torch" in sys.modules)
+""")
+
+    assert result.returncode == 0, result.stderr
+    assert "Metal requires macOS on Apple silicon" in result.stdout
+    assert "TORCH_IMPORTED False" in result.stdout
+
+
+@_not_apple_silicon
+def test_collecting_the_tests_does_not_import_torch():
+    result = _run_in_fresh_process(f"""
+import sys
+
+import pytest
+
+exit_code = pytest.main(
+    ["--collect-only", "-q", "-p", "no:cacheprovider", {str(Path(__file__).parent)!r}]
+)
+print("COLLECT_EXIT", int(exit_code))
+print("TORCH_IMPORTED", "torch" in sys.modules or "abtem.core._torch" in sys.modules)
+""")
+
+    assert "COLLECT_EXIT 0" in result.stdout, result.stdout[-2000:] + result.stderr
+    assert "TORCH_IMPORTED False" in result.stdout

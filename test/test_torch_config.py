@@ -5,29 +5,43 @@ the backend's state put back afterwards. Needs PyTorch, but not Apple silicon:
 the key's ``'cpu'`` value runs the backend on torch's CPU device.
 """
 
+import importlib.util
+
 import numpy as np
 import pytest
 from ase.build import bulk
 
 import abtem
-from abtem.core import _torch, backend
+from abtem.core import backend
 from abtem.core.backend import asnumpy, get_array_module
 
-pytest.importorskip("torch")
-
-# Selected with the other tests of the torch backend (see test_mps.py).
-pytestmark = [pytest.mark.torch, pytest.mark.mps, pytest.mark.metal]
+# Selected with the other tests of the torch backend (see test_mps.py). PyTorch is
+# not imported at module level: collecting this file must leave it unimported
+# (see test_backend.py).
+pytestmark = [
+    pytest.mark.torch,
+    pytest.mark.mps,
+    pytest.mark.metal,
+    pytest.mark.skipif(
+        importlib.util.find_spec("torch") is None, reason="requires PyTorch"
+    ),
+]
 
 
 @pytest.fixture
 def unloaded_backend(monkeypatch):
+    """Put the backend's state back after the test; returns ``abtem.core._torch``."""
+    from abtem.core import _torch
+
     monkeypatch.setattr(backend, "tp", None)
     monkeypatch.setattr(backend, "TorchNDArray", None)
     monkeypatch.setattr(_torch, "DEVICE", "mps")
+    return _torch
 
 
 @pytest.mark.parametrize("value", ["cpu", "CPU", "Cpu"])
 def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend, value):
+    _torch = unloaded_backend
     atoms = bulk("Si", "diamond", a=5.43, cubic=True) * (2, 2, 3)
 
     with abtem.config.set(
