@@ -14,6 +14,10 @@ from ase.build import bulk
 from utils import assert_array_objects_equal, devices
 
 import abtem
+from abtem.core.axes import OrdinalAxis
+from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.potentials.iam import PotentialArray
+from abtem.prism.s_matrix import SMatrix
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
 POSITION = (2.0, 1.5)
@@ -23,7 +27,9 @@ POSITION = (2.0, 1.5)
 TOLERANCE = 1e-5
 
 
-def _potential(frozen_phonons=None, device="cpu", num_configs=2, exit_planes=None):
+def _potential(
+    frozen_phonons=None, device="cpu", num_configs=2, exit_planes=None, gpts=64
+):
     atoms = ATOMS
     if frozen_phonons is not None:
         atoms = abtem.FrozenPhonons(
@@ -34,7 +40,7 @@ def _potential(frozen_phonons=None, device="cpu", num_configs=2, exit_planes=Non
             ensemble_mean=frozen_phonons,
         )
     return abtem.Potential(
-        atoms, gpts=64, slice_thickness=2, exit_planes=exit_planes, device=device
+        atoms, gpts=gpts, slice_thickness=2, exit_planes=exit_planes, device=device
     )
 
 
@@ -212,3 +218,141 @@ def test_composite_blend_single_position_drops_the_position_axis():
 
     assert measured.shape == ()
     np.testing.assert_array_equal(measured.array, expected.array[0])
+
+
+def _transition_potential(potential):
+    # a synthetic transition potential stands in for GPAW
+    rng = np.random.default_rng(0)
+    array = rng.standard_normal((2, 64, 64)) + 1j * rng.standard_normal((2, 64, 64))
+    return TransitionPotentialArray(
+        Z=14,
+        array=array.astype(np.complex64),
+        energy=100e3,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+
+def _core_loss_scan(s_matrix, potential, lazy):
+    return s_matrix.transition_potential_scan(
+        _transition_potential(potential),
+        scan=_grid_scan(potential),
+        detectors=abtem.AnnularDetector(0, 40),
+        sites=ATOMS[:2],
+        lazy=lazy,
+    )
+
+
+@pytest.mark.parametrize("exit_planes", [None, 2])
+def test_lazy_upsampled_core_loss_does_not_compress(monkeypatch, exit_planes):
+    # the core-loss reduction never reads the compressed basis; the eager
+    # static scan never builds the S-matrix, so it is the oracle
+    calls = []
+    compress = SMatrix._compress
+
+    def counting_compress(self, array):
+        calls.append(1)
+        return compress(self, array)
+
+    monkeypatch.setattr(SMatrix, "_compress", counting_compress)
+
+    potential = _potential(exit_planes=exit_planes)
+    s_matrix = _s_matrix(potential, interpolation=2, upsample=True)
+
+    measured = _core_loss_scan(s_matrix, potential, lazy=True)
+    assert calls == []
+    measured = measured.compute()
+    expected = _core_loss_scan(s_matrix, potential, lazy=False)
+
+    assert calls == []
+    assert measured.shape == expected.shape
+    assert measured.axes_metadata == expected.axes_metadata
+    np.testing.assert_array_equal(measured.array, expected.array)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("ensemble_mean", [False, True])
+def test_upsampled_core_loss_frozen_phonons_match_each_configuration(
+    lazy, ensemble_mean
+):
+    # 4 configurations, a 3 x 5 scan: each configuration's result is the
+    # static scan of that configuration's potential, which never builds
+    potential = _potential(ensemble_mean, num_configs=4)
+    s_matrix = _s_matrix(potential, interpolation=2, upsample=True)
+    configurations = [block.item() for _, _, block in potential.generate_blocks(1)]
+
+    expected = np.stack(
+        [
+            _core_loss_scan(
+                _s_matrix(configuration, interpolation=2, upsample=True),
+                configuration,
+                lazy=False,
+            ).array.reshape((3, 5))
+            for configuration in configurations
+        ]
+    )
+    if ensemble_mean:
+        expected = expected.mean(0)
+
+    measured = _core_loss_scan(s_matrix, potential, lazy=lazy).compute()
+
+    assert measured.shape == expected.shape
+    np.testing.assert_allclose(
+        measured.array, expected, rtol=TOLERANCE, atol=TOLERANCE * expected.max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("frozen_phonons", [None, False, True])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible"])
+def test_upsampled_prism_sizes_detectors_on_a_non_square_grid(
+    lazy, frozen_phonons, detector
+):
+    # the size of a pixelated pattern or of the flexible annular bins follows
+    # the antialias cutoff of the downsampled S-matrix, which differs from that
+    # of the full grid on a non-square grid. The oracle is the eager scan of
+    # each configuration as a static potential, which has no ensemble axis and
+    # takes the size from the reduction.
+    def make_detector():
+        if detector == "pixelated":
+            return abtem.PixelatedDetector()
+        return abtem.FlexibleAnnularDetector()
+
+    potential = _potential(frozen_phonons, gpts=(56, 64))
+    s_matrix = _s_matrix(potential, interpolation=2, upsample=True, downsample="cutoff")
+    scan = _grid_scan(potential)
+
+    built = potential.build(lazy=False)
+    slices = np.asarray(built.array)
+    slices = slices[None] if frozen_phonons is None else slices
+    configurations = [
+        PotentialArray(
+            configuration,
+            slice_thickness=built.slice_thickness,
+            extent=potential.extent,
+        )
+        for configuration in slices
+    ]
+
+    arrays = [
+        _s_matrix(configuration, interpolation=2, upsample=True, downsample="cutoff")
+        .scan(scan=scan, detectors=make_detector(), lazy=False)
+        .array
+        for configuration in configurations
+    ]
+    expected = np.stack(arrays)
+    if frozen_phonons is None:
+        expected = expected[0]
+    elif frozen_phonons:
+        expected = expected.mean(0)
+
+    measured = s_matrix.scan(scan=scan, detectors=make_detector(), lazy=lazy)
+    declared_shape = measured.shape
+    measured = measured.compute()
+
+    assert declared_shape == expected.shape
+    assert measured.shape == expected.shape
+    np.testing.assert_allclose(
+        measured.array, expected, rtol=TOLERANCE, atol=TOLERANCE * expected.max()
+    )

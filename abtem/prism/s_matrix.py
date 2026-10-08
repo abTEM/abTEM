@@ -5266,6 +5266,26 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
+    def _built_dummy_probes(self, scan, ctf=None):
+        # The dummy probes of the built S-matrix. With upsample, building computes
+        # the compression (and raises for ensemble potentials), so they come from
+        # the S-matrix itself, with the adjusted antialias cutoff that build
+        # records on a downsampled S-matrix; it sets the size of the pixelated
+        # and flexible annular detectors. They lack the other metadata that the
+        # dummy probes of the built array carry (reciprocal_space).
+        if not self._upsample_enabled:
+            return self.build(lazy=True).dummy_probes(scan, ctf)
+
+        probes = self.dummy_probes(scan, ctf)
+        if self.downsampled_gpts != self.gpts:
+            probes._metadata = {
+                **probes.metadata,
+                "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
+                    self.window_gpts, self.sampling
+                ),
+            }
+        return probes
+
     def _eager_transition_potential_scan(
         self, scan, detectors, transition_potentials, sites, double_channel,
         inelastic_crop=None,
@@ -5278,7 +5298,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
         if self.ensemble_shape:
-            dummy_waves = self.build(lazy=True).dummy_probes(scan)
+            dummy_waves = self._built_dummy_probes(scan)
             measurements = allocate_multislice_measurements(
                 dummy_waves,
                 detectors,
@@ -5494,7 +5514,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             meta=np.array((), dtype=object),
         )
 
-        waves = self.build(lazy=True).dummy_probes(scan=scan)
+        waves = self._built_dummy_probes(scan)
 
         extra_axes_metadata = []
         if self.potential is not None:
@@ -5521,13 +5541,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         detectors = validate_detectors(detectors)
 
         if self.ensemble_shape:
-            if self._upsample_enabled:
-                # building would compute the compression of a single ensemble
-                # member eagerly (and raises for ensemble potentials); the
-                # builder's dummy probes carry the same grid and metadata
-                dummy_probes = self.dummy_probes(scan, ctf)
-            else:
-                dummy_probes = self.build(lazy=True).dummy_probes(scan, ctf)
+            dummy_probes = self._built_dummy_probes(scan, ctf)
 
             # Wave functions are not averaged over an ensemble (reduce_ensemble
             # averages measurements only), so they keep every member.
@@ -5784,12 +5798,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 meta=np.array((), dtype=object),
             )
 
-            if self._upsample_enabled:
-                # building would compute the compression eagerly; the builder's
-                # dummy probes carry the same grid and metadata
-                waves = self.dummy_probes(scan=scan)
-            else:
-                waves = self.build(lazy=True).dummy_probes(scan=scan)
+            waves = self._built_dummy_probes(scan)
 
             extra_axes_metadata = []
             if self.potential is not None:
