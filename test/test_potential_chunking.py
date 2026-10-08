@@ -566,10 +566,36 @@ def _fe_atoms_with_moments():
     return atoms
 
 
+def _transmission_function():
+    atoms = bulk("Si", cubic=True) * (1, 1, 2)
+    potential = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+    return potential.build(lazy=False).transmission_function(100e3)
+
+
 def _local_exit_planes(global_exit_planes, offset, length):
     return tuple(
         int(i) - offset for i in global_exit_planes if offset <= i < offset + length
     )
+
+
+class TestTransmissionFunctionSlices:
+    """Slices and chunks of a transmission function carry its energy."""
+
+    def test_slices_keep_the_energy(self):
+        t = _transmission_function()
+        slices = list(t.generate_slices())
+
+        assert len(slices) == len(t) > 1
+        assert [s.energy for s in slices] == [t.energy] * len(t)
+        assert slices[0].transmission_function(100e3) is slices[0]
+
+    def test_chunks_keep_the_energy(self):
+        t = _transmission_function()
+        chunks = list(t.generate_chunked_slices(chunk_size=1))
+
+        assert len(chunks) == len(t) > 1
+        assert [c.energy for c in chunks] == [t.energy] * len(t)
+        assert chunks[0].transmission_function(100e3) is chunks[0]
 
 
 @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])

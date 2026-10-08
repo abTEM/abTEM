@@ -1744,6 +1744,12 @@ class FieldArray(BaseField, ArrayObject):
     def exit_planes(self) -> tuple[int, ...]:
         return self._exit_planes
 
+    @property
+    def _slice_kwargs(self) -> dict:
+        """The constructor arguments, besides the array and thicknesses, that a
+        slice or chunk of this array shares with it."""
+        return {"extent": self.extent}
+
     def build(
         self,
         first_slice: int = 0,
@@ -1782,7 +1788,7 @@ class FieldArray(BaseField, ArrayObject):
             array = self.array[s][None]
 
             slic = self.__class__(
-                array, self.slice_thickness[i : i + 1], extent=self.extent
+                array, self.slice_thickness[i : i + 1], **self._slice_kwargs
             )
 
             exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
@@ -1865,7 +1871,7 @@ class FieldArray(BaseField, ArrayObject):
             chunk = self.__class__(
                 chunk_array,
                 slice_thickness=self.slice_thickness[chunk_start:chunk_end],
-                extent=self.extent,
+                **self._slice_kwargs,
             )
             chunk._exit_planes = exit_planes
             yield chunk
@@ -2237,6 +2243,10 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
     ):
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thickness, extent, sampling)
+
+    @property
+    def _slice_kwargs(self) -> dict:
+        return {**super()._slice_kwargs, "energy": self.energy}
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]
