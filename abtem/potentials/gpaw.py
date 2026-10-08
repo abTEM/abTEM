@@ -251,10 +251,39 @@ def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
     return interpolators
 
 
+def _same_elements_and_cell(atoms, other):
+    """Whether two atoms have the same elements in the same order and cell."""
+    return (
+        len(atoms) == len(other)
+        and np.array_equal(atoms.numbers, other.numbers)
+        and np.allclose(np.array(atoms.cell), np.array(other.cell))
+    )
+
+
+# Slice limits are cumulative float sums, so a limit that is a whole number of planes
+# can lie a few units of roundoff below it. A limit within this fraction of a plane
+# below a plane boundary counts as on the boundary.
+_PLANE_TOLERANCE = 1e-6
+
+
 def integrate_slice(array, gpts, a, b, thickness):
-    dz = thickness / array.shape[2]
-    na = int(np.floor(a / dz))
-    nb = int(np.floor(b / dz))
+    """
+    Integrate the planes of `array` along its last axis between the heights `a`
+    and `b`, and Fourier interpolate the result to `gpts`.
+
+    Plane k covers the heights from k * dz to (k + 1) * dz, with dz the plane
+    spacing. A slice takes the planes from floor(a / dz) up to, not including,
+    floor(b / dz), so consecutive slices share their limit and every plane belongs
+    to exactly one slice. A slice that contains no plane gets zero.
+    """
+    nz = array.shape[2]
+    dz = thickness / nz
+    na = int(np.floor(a / dz + _PLANE_TOLERANCE))
+    nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
+
+    if nb <= na:
+        return np.zeros(gpts, dtype=array.dtype)
+
     slice_array = np.sum(array[..., na:nb], axis=-1) * dz
     new_shape = (nb - na,) + gpts
     old_shape = (nb - na,) + slice_array.shape
@@ -289,18 +318,29 @@ def _generate_slices(
     first_slice=0,
     last_slice=None,
 ):
-    potential_generators = []
+    # `atoms` is the calculator's atoms or whole copies of them one after another
+    # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
+    # correction of atom i of the calculator.
+    n = len(interpolators)
+    potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
         potential = Potential(
             gpts=gpts,
-            atoms=atoms[i : i + 1],
+            atoms=atoms[i::n],
             parametrization=parametrization,
             slice_thickness=slice_thickness,
             projection="finite",
             plane=plane,
         )
-        potential_generators.append(potential.generate_slices())
+        potentials.append(potential)
+
+    if last_slice is None:
+        last_slice = len(potential)
+
+    potential_generators = [
+        potential.generate_slices(first_slice, last_slice) for potential in potentials
+    ]
 
     transform_valence_potential = None
     if potential.plane != "xy":
@@ -319,9 +359,6 @@ def _generate_slices(
         transform_valence_potential = False
     elif transform_valence_potential is None:
         transform_valence_potential = True
-
-    if last_slice is None:
-        last_slice = len(potential)
 
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
@@ -461,11 +498,17 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
+                raise ValueError(
+                    "The frozen phonons must have the calculator's atoms: the same "
+                    "elements in the same order and the same cell, with positions "
+                    "that may differ. Repeat the cell with `repetitions`."
+                )
 
         self._calculators = calculators
         self._frozen_phonons = frozen_phonons
         self._gridrefinement = gridrefinement
-        self._repetitions = repetitions
+        self._repetitions = tuple(repetitions)
 
         cell = frozen_phonons.atoms.cell * repetitions
         frozen_phonons.atoms.calc = None
@@ -539,8 +582,11 @@ class GPAWPotential(_PotentialBuilder):
         calculator = _DummyGPAW.from_generic(calculator)
 
         atoms = self.frozen_phonons.atoms
+        valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
+            # The valence potential is periodic with the calculator's cell.
+            valence_potential = np.tile(valence_potential, self.repetitions)
             # cell_cv = calculator.gd.cell_cv * self.repetitions
             # N_c = tuple(
             #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
@@ -569,7 +615,7 @@ class GPAWPotential(_PotentialBuilder):
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
-            valence_potential=calculator.valence_potential,
+            valence_potential=valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
             slice_thickness=self.slice_thickness,
@@ -709,17 +755,19 @@ class GPAWParametrization:
         that converts the all-electron radial charge density into an X-ray
         scattering factor. `None` (default) lets `hankel` choose automatically.
     integration_step : float, optional
-        Step size used by the Hankel transform. The default of 0.002 is fine
-        for light elements, but is too coarse for heavier ones (e.g. In, Z=49),
-        where it can produce a non-monotonic, unphysical scattering factor; 0.001
-        resolves this for most elements at negligible extra cost. The heaviest
-        elements (e.g. Re, Z=75) may still show a several-percent-level
-        mismatch against tabulated parametrizations even at this step size,
-        plausibly from GPAW's scalar-relativistic treatment diverging from
-        whatever reference the tabulated parameters were fit to.
+        Step size used by the Hankel transform. The default is 1e-4. Coarser
+        steps are inaccurate at small k, where the transform must resolve the
+        whole radial extent of the density: against direct quadrature of the
+        same density on GPAW's radial grid, a step of 0.001 puts f_x for Au
+        2.9 electrons low at k = 0.06 1/A and 0.63 high at k = 0.12 1/A (Si:
+        0.009 low at 0.06). The electron scattering factor divides Z - f_x by
+        k^2, so that became a 45 % (Au) and 26 % (Re) error in the fitted
+        f_e at k = 0.12 1/A -- the "several-percent mismatch" of heavy
+        elements previously attributed to relativistic effects. At 1e-4 the
+        error is < 5e-4 electrons for k >= 0.06 1/A, for ~0.1 s per call.
     """
 
-    def __init__(self, nodes=None, integration_step=0.001):
+    def __init__(self, nodes=None, integration_step=1e-4):
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}
