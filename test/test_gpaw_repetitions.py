@@ -7,6 +7,7 @@ row scaling of a non-orthogonal cell is a separate mechanism.
 """
 
 import sys
+import tracemalloc
 
 import numpy as np
 import pytest
@@ -100,7 +101,10 @@ def test_integral_scales_with_the_number_of_cells(calculator, reps):
     "plane, gpts, slice_thickness, axes",
     [("xz", (32, 36), 0.4, (0, 2, 1)), ("yz", (28, 36), 1.6, (1, 2, 0))],
 )
-@pytest.mark.parametrize("reps", [(2, 1, 1), (1, 2, 1), (1, 1, 2), (2, 2, 2)])
+@pytest.mark.parametrize(
+    "reps",
+    [(2, 1, 1), (1, 2, 1), (1, 1, 2), (2, 2, 2), (2, 3, 1), (1, 2, 3)],
+)
 def test_repetitions_equal_the_one_cell_potential_tiled_in_other_planes(
     calculator, plane, gpts, slice_thickness, axes, reps
 ):
@@ -319,3 +323,25 @@ def test_frozen_phonons_with_other_positions_are_accepted(calculator):
     )
 
     assert potential.build(lazy=False).array.shape == (1, 4) + GPTS
+
+
+def test_a_slice_with_repetitions_does_not_build_the_repeated_valence_grid(calculator):
+    reps = (8, 8, 2)
+    repeated_bytes = calculator.get_electrostatic_potential().nbytes * np.prod(reps)
+    potential = GPAWPotential(
+        calculator, gpts=(64, 56), slice_thickness=0.9, repetitions=reps
+    )
+
+    was_tracing = tracemalloc.is_tracing()
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    start = tracemalloc.get_traced_memory()[0]
+    try:
+        list(potential.generate_slices(0, 1))
+        peak = tracemalloc.get_traced_memory()[1] - start
+    finally:
+        if not was_tracing:
+            tracemalloc.stop()
+
+    # Generating a slice needs the planes of the slice, not the repeated grid.
+    assert peak < repeated_bytes / 2

@@ -134,6 +134,43 @@ def test_a_limit_between_planes_keeps_the_plane_it_floors_to(limit):
     assert not before.any()
 
 
+@pytest.mark.parametrize("reps", [(1, 1, 1), (2, 3, 1), (3, 1, 2), (1, 2, 3)])
+@pytest.mark.parametrize("slice_thickness", [0.1, 0.3, 0.4, 0.7, 1.1])
+@pytest.mark.parametrize("multiple", [True, False])
+@pytest.mark.parametrize("strided", [False, True])
+def test_integrate_slice_of_one_period_equals_that_of_the_repeated_grid(
+    reps, slice_thickness, multiple, strided
+):
+    # One period of 6 x 5 x 7 points, so the three axes differ, with a plane
+    # spacing of 0.1 A along the last axis.
+    array = np.random.default_rng(0).normal(size=(6, 5, 7))
+    if strided:
+        # As `_generate_slices` passes it for plane="yz": the planes lie along
+        # the first axis of the calculator's grid.
+        array = np.moveaxis(array, (1, 2), (0, 1))
+    shape = array.shape
+    gpts = (shape[0] * reps[0], shape[1] * reps[1])
+    if not multiple:
+        gpts = (gpts[0] + 3, gpts[1] - 1)
+    dz = 0.1
+    length = shape[2] * reps[2] * dz
+    atoms = Atoms("C", positions=[(0.1, 0.1, 0.1)], cell=(1.0, 1.0, length), pbc=True)
+    potential = Potential(atoms, sampling=0.5, slice_thickness=slice_thickness)
+    limits = list(potential.get_sliced_atoms().slice_limits)
+    # Slices from 1.5 planes below to 1.5 planes above each face between two
+    # periods take planes from both; the slice limits often land on the faces.
+    faces = [k * shape[2] * dz for k in range(1, reps[2])]
+    limits += [(z - 1.5 * dz, z + 1.5 * dz) for z in faces]
+    repeated = np.tile(array, reps)
+
+    for a, b in limits:
+        expected = integrate_slice(repeated, gpts, a, b, potential.thickness)
+        result = integrate_slice(array, gpts, a, b, potential.thickness, reps)
+        np.testing.assert_allclose(
+            result, expected, rtol=0, atol=1e-13 * np.abs(repeated).max()
+        )
+
+
 @pytest.fixture(scope="module")
 def calculator():
     atoms = Atoms(
