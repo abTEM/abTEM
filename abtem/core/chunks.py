@@ -449,7 +449,9 @@ def estimate_potential_chunk_size(
     Parameters
     ----------
     gpts : tuple of int
-        The number of grid points (y, x).
+        The shape of one slice: the number of grid points (y, x), preceded by
+        the length of a component axis for a field with components
+        (components, y, x).
     device : str
         The device ('cpu' or 'gpu').
     dtype : numpy.dtype, optional
@@ -471,7 +473,7 @@ def estimate_potential_chunk_size(
     if chunk_size_setting != "auto":
         return int(chunk_size_setting)
 
-    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
+    slice_bytes = int(np.prod(gpts)) * dtype.itemsize
 
     if device == "gpu":
         # Deliberately no Bluestein-overhead factor here, unlike the sibling

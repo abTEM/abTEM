@@ -105,6 +105,14 @@ class TestEstimatePotentialChunkSize:
         fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
         assert bluestein == fast == 117
 
+    def test_device_chunk_size_counts_every_element_of_a_slice(self, monkeypatch):
+        """The shape of a slice may carry a component axis: a magnetic slice of
+        (3, 2623, 2271) takes three times the bytes of a (2623, 2271) one.
+        int(0.35 * 40 GB / (3*2623*2271*4 * 5)) = 39."""
+        _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
+        dtype = np.dtype(np.float32)
+        assert estimate_potential_chunk_size((3, 2623, 2271), "gpu", dtype) == 39
+
 
 class TestEstimateScanBatchSize:
     """Unit tests for the VRAM-aware scan-batch estimator (GPU path mocked)."""
@@ -596,6 +604,43 @@ class TestTransmissionFunctionSlices:
         assert len(chunks) == len(t) > 1
         assert [c.energy for c in chunks] == [t.energy] * len(t)
         assert chunks[0].transmission_function(100e3) is chunks[0]
+
+
+class TestAutoChunkSizeCountsTheComponentAxis:
+    """chunk_size="auto" prices a slice at its own shape."""
+
+    @staticmethod
+    def _record_estimates(monkeypatch):
+        shapes = []
+
+        def estimate(gpts, device="cpu", dtype=None):
+            shapes.append(tuple(gpts))
+            return 2
+
+        monkeypatch.setattr("abtem.core.chunks.estimate_potential_chunk_size", estimate)
+        return shapes
+
+    @pytest.mark.parametrize("builder", [MagneticField, VectorPotential])
+    def test_field_builder_and_array(self, builder, monkeypatch):
+        shapes = self._record_estimates(monkeypatch)
+        field = builder(_fe_atoms_with_moments(), gpts=(16, 20), slice_thickness=1.5)
+        built = field.build()
+
+        assert field.base_shape[1:] == built.base_shape[1:] == (3, 16, 20)
+        for chunked in (field, built):
+            assert [len(c) for c in chunked.generate_chunked_slices()] == [2, 2]
+        assert shapes == [(3, 16, 20)] * 2
+
+    def test_potentials_keep_their_shape(self, monkeypatch):
+        shapes = self._record_estimates(monkeypatch)
+        potential = Potential(
+            bulk("Si", cubic=True), gpts=(16, 20), slice_thickness=1.5
+        )
+        built = potential.build()
+
+        for chunked in (potential, built):
+            list(chunked.generate_chunked_slices())
+        assert shapes == [(16, 20)] * 2
 
 
 class TestBuiltFieldWithAnEnsembleAxis:

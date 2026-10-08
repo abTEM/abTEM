@@ -838,7 +838,7 @@ class _FieldBuilder(BaseField):
 
         if chunk_size == "auto":
             chunk_size = estimate_potential_chunk_size(
-                self.gpts, self.device
+                self.base_shape[1:], self.device
             )
 
         # Cap so the whole range is one chunk when it fits in the budget,
@@ -1865,7 +1865,7 @@ class FieldArray(BaseField, ArrayObject):
 
         if chunk_size == "auto":
             chunk_size = estimate_potential_chunk_size(
-                self.gpts, self.device
+                self.base_shape[1:], self.device
             )
 
         # Cap so the whole range is one chunk when it fits in the budget,
