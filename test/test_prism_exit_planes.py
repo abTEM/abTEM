@@ -14,7 +14,9 @@ from ase.build import bulk
 from utils import assert_array_objects_equal, devices
 
 import abtem
+from abtem import distributions
 from abtem.core.axes import ThicknessAxis
+from abtem.potentials.iam import PotentialArray
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
 
@@ -85,8 +87,8 @@ def test_prism_exit_planes_match_multislice(
         expected = expected.compute()
         measured = measured.compute()
 
-    # float32 round-off of two different reduction orders: measured at
-    # 7.4e-7 of the maximum
+    # float32 round-off of two different reduction orders: the largest
+    # difference over these cases is 1.2e-6 of the maximum
     tolerance = 1e-5
     assert_array_objects_equal(
         measured, expected, rtol=tolerance, atol=tolerance * _max_abs(expected)
@@ -94,11 +96,49 @@ def test_prism_exit_planes_match_multislice(
 
 
 @pytest.mark.parametrize("lazy", [True, False])
-def test_prism_exit_planes_match_truncated_potentials(lazy):
+@pytest.mark.parametrize("disable_s_matrix_chunks", [False, True])
+def test_prism_exit_planes_with_a_ctf_series_match_multislice(
+    lazy, disable_s_matrix_chunks
+):
+    # 6 defoci differ from the 2 configurations, 4 exit planes and 3 x 5 scan,
+    # so the order configuration, exit planes, defocus, scan is fixed by the
+    # shapes.
+    potential = _potential(False)
+    s_matrix = _s_matrix(potential)
+    scan = _scan(potential)
+    ctf = abtem.CTF(defocus=distributions.from_values(np.linspace(0, 50, 6)))
+    detector = abtem.AnnularDetector(30, 90)
+
+    expected = s_matrix.dummy_probes(ctf=ctf).scan(
+        potential=potential, scan=scan, detectors=detector, lazy=lazy
+    )
+    measured = s_matrix.scan(
+        scan=scan,
+        detectors=detector,
+        ctf=ctf,
+        lazy=lazy,
+        disable_s_matrix_chunks=disable_s_matrix_chunks,
+    )
+    if lazy:
+        expected = expected.compute()
+        measured = measured.compute()
+
+    assert measured.shape == (2, 4, 6, 3, 5)
+    tolerance = 1e-5
+    assert_array_objects_equal(
+        measured, expected, rtol=tolerance, atol=tolerance * _max_abs(expected)
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("frozen_phonons", [None, False, True])
+def test_prism_exit_planes_match_truncated_potentials(lazy, frozen_phonons):
     # With interpolation the reduction is not multislice, but multislice is
     # causal: the S-matrix at an exit plane is the S-matrix of the potential
-    # truncated after that plane's slice, reduced the same way.
-    potential = _potential()
+    # truncated after that plane's slice, reduced the same way, for every
+    # configuration. Interpolation 2 reduces through the windowed branch of
+    # SMatrixArray._reduce_to_waves.
+    potential = _potential(frozen_phonons)
     scan = _scan(potential)
     detector = abtem.PixelatedDetector(max_angle=100)
 
@@ -108,30 +148,56 @@ def test_prism_exit_planes_match_truncated_potentials(lazy):
     if lazy:
         measured = measured.compute()
 
-    whole = abtem.Potential(ATOMS, gpts=64, slice_thickness=2).build(lazy=False)
-
-    assert measured.shape == (4, 3, 5, 18, 18)
-    assert isinstance(measured.axes_metadata[0], ThicknessAxis)
-    for i, plane in enumerate(potential.exit_planes):
-        if plane == -1:
-            reference = abtem.SMatrix(
-                extent=potential.extent,
-                gpts=potential.gpts,
-                energy=100e3,
-                semiangle_cutoff=20,
-                interpolation=2,
-                downsample=False,
-            )
-        else:
-            reference = _s_matrix(whole[: plane + 1], interpolation=2)
-
-        expected = reference.scan(scan=scan, detectors=detector, lazy=False)
-        np.testing.assert_allclose(
-            measured.array[i],
-            expected.array,
-            rtol=1e-5,
-            atol=1e-5 * np.abs(expected.array).max(),
+    configurations = (
+        abtem.FrozenPhonons(
+            ATOMS, num_configs=2, sigmas=0.05, seed=1, ensemble_mean=False
         )
+        if frozen_phonons is not None
+        else ATOMS
+    )
+    whole = abtem.Potential(configurations, gpts=64, slice_thickness=2).build(
+        lazy=False
+    )
+    slices = np.asarray(whole.array)
+    slices = slices[None] if frozen_phonons is None else slices
+
+    ensemble_shape = (2,) if frozen_phonons is False else ()
+    assert measured.shape == ensemble_shape + (4, 3, 5, 18, 18)
+    assert isinstance(measured.axes_metadata[len(ensemble_shape)], ThicknessAxis)
+
+    expected = []
+    for configuration in slices:
+        planes = []
+        for plane in potential.exit_planes:
+            if plane == -1:
+                reference = abtem.SMatrix(
+                    extent=potential.extent,
+                    gpts=potential.gpts,
+                    energy=100e3,
+                    semiangle_cutoff=20,
+                    interpolation=2,
+                    downsample=False,
+                )
+            else:
+                reference = _s_matrix(
+                    PotentialArray(
+                        configuration[: plane + 1],
+                        slice_thickness=whole.slice_thickness[: plane + 1],
+                        extent=potential.extent,
+                    ),
+                    interpolation=2,
+                )
+            planes.append(
+                reference.scan(scan=scan, detectors=detector, lazy=False).array
+            )
+        expected.append(np.stack(planes))
+    expected = np.stack(expected)
+    expected = expected.mean(0) if frozen_phonons else expected
+    expected = expected[0] if frozen_phonons is None else expected
+
+    np.testing.assert_allclose(
+        measured.array, expected, rtol=1e-5, atol=1e-5 * np.abs(expected).max()
+    )
 
 
 @pytest.mark.parametrize("lazy", [True, False])
