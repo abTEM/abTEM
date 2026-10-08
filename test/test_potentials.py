@@ -2032,8 +2032,9 @@ class TestSliceIndexedAtomsWrapping:
     )
     def test_default_box_keeps_an_atom_just_past_an_upper_face(self, integrator):
         """The default box of a hexagonal cell is cut out of the repeated
-        structure. An atom 0.1 A past the upper face along the second lattice
-        vector is as much part of it as the same atom moved into the cell."""
+        structure. An atom 0.08 A past the upper face (0.03 of the second
+        lattice vector) is as much part of it as the same atom moved into the
+        cell."""
 
         def potential(scaled_y):
             atoms = mx2("MoS2", vacuum=3.0)
