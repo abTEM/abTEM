@@ -1518,6 +1518,20 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement.integrated_center_of_mass().compute()
 
 
+@pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
+def test_integrate_gradient_offset_is_per_member(chunks):
+    rng = np.random.default_rng(0)
+    gradient = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    gradient *= np.array([1.0, 5.0, 0.3])[:, None, None]
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))])
+
+    eager = Images(gradient, **kwargs).integrate_gradient()
+    lazy = Images(da.from_array(gradient, chunks=chunks), **kwargs).integrate_gradient()
+
+    np.testing.assert_allclose(eager.array.min(axis=(-2, -1)), 0.0, atol=1e-12)
+    np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
+
+
 @given(data=st.data())
 @lazy_params
 @devices
