@@ -970,6 +970,11 @@ def _active_client():
         return None
 
 
+_LOCAL_SCHEDULER_WARNING = (
+    "Running on a single-machine scheduler when a distributed client"
+)
+
+
 def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     """Whether ``dask.compute(*arrays, **kwargs)`` would run on a distributed
     client: an active default client, or one named by ``scheduler`` (the client
@@ -981,9 +986,15 @@ def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     except ImportError:
         return False
 
-    scheduler = dask.base.get_scheduler(
-        scheduler=kwargs.get("scheduler"), collections=arrays
-    )
+    with warnings.catch_warnings():
+        # Only asks which scheduler would run, but older dask (e.g. 2025.3) warns
+        # whenever a local scheduler is named while a client is active.
+        warnings.filterwarnings(
+            "ignore", message=_LOCAL_SCHEDULER_WARNING, category=UserWarning
+        )
+        scheduler = dask.base.get_scheduler(
+            scheduler=kwargs.get("scheduler"), collections=arrays
+        )
     return isinstance(getattr(scheduler, "__self__", None), Client)
 
 
@@ -1757,14 +1768,30 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
+        if backend.tp is not None and get_array_module(self.array) is backend.tp:
+            # dask infers a lazy result's dtype with NumPy's rules, under which a
+            # NumPy scalar or array is strongly typed (float32 times np.float64(2)
+            # is float64), and Metal holds no double precision. A Python scalar
+            # is weakly typed to NumPy and torch alike, and a device array is
+            # single precision.
+            if isinstance(other_array, (np.generic, np.ndarray)):
+                if other_array.ndim == 0:
+                    other_array = other_array.item()
+                else:
+                    other_array = backend.tp.asarray(other_array)
+
+        # Through the operator module rather than a direct call of the method
+        # named by func, so that an operand that returns NotImplemented hands
+        # over to the other operand's reflected method, and a pair neither side
+        # supports raises TypeError.
+        name = func.strip("_")
+        if hasattr(operator, name):
+            array = getattr(operator, name)(self.array, other_array)
+        else:  # a reflected operation: "__rtruediv__" is other / self
+            array = getattr(operator, name[1:])(other_array, self.array)
+
         kwargs = self._copy_kwargs(exclude=("array",))
-        if func.startswith("__r"):
-            # Through the operator module with the operands swapped, so that a
-            # left operand the array's own reflected method rejects, such as a
-            # dask array for CuPy, is dispatched by its own operator.
-            kwargs["array"] = getattr(operator, func[3:-2])(other_array, self.array)
-        else:
-            kwargs["array"] = getattr(self.array, func)(other_array)
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(
@@ -2548,6 +2575,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array = xp.moveaxis(self.array, source=source, destination=destination)
         else:
             array = self.array
+
+        if backend.tp is not None and xp is backend.tp:
+            # HyperSpy holds NumPy, dask or CuPy data, not torch backend arrays.
+            array = asnumpy(array)
 
         s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
 
