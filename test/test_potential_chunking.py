@@ -598,6 +598,57 @@ class TestTransmissionFunctionSlices:
         assert chunks[0].transmission_function(100e3) is chunks[0]
 
 
+class TestBuiltFieldWithAnEnsembleAxis:
+    """Iterating or chunking a built array visits its first ensemble member only,
+    and says so."""
+
+    @staticmethod
+    def _built(cls, num_configurations=2):
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), num_configurations, sigmas=0.05, seed=3
+        )
+        return cls(phonons, gpts=(16, 20), slice_thickness=1.5).build()
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
+    def test_warns(self, cls, method):
+        built = self._built(cls)
+        assert built.shape == (2, 4, 3, 16, 20)
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(getattr(built, method)())
+
+        np.testing.assert_array_equal(
+            np.concatenate([s.array for s in slices]), built.array[0]
+        )
+
+    def test_warns_for_a_potential_too(self):
+        phonons = FrozenPhonons(bulk("Si", cubic=True), 2, sigmas=0.05, seed=3)
+        built = Potential(phonons, gpts=(16, 20), slice_thickness=2.0).build()
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(built.generate_slices())
+
+        np.testing.assert_array_equal(
+            np.concatenate([s.array for s in slices]), built.array[0]
+        )
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
+    @pytest.mark.parametrize("num_configurations", [None, 1])
+    def test_a_single_member_does_not_warn(
+        self, cls, method, num_configurations, recwarn
+    ):
+        atoms = _fe_atoms_with_moments()
+        if num_configurations is not None:
+            atoms = FrozenPhonons(atoms, num_configurations, sigmas=0.05, seed=3)
+        built = cls(atoms, gpts=(16, 20), slice_thickness=1.5).build()
+        assert built.ensemble_shape == (() if num_configurations is None else (1,))
+
+        list(getattr(built, method)())
+        assert not [w for w in recwarn if "ensemble" in str(w.message)]
+
+
 @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
 class TestAtomBasedFieldsWithFrozenPhonons:
     """The slices of a field with an ensemble axis, against slicing the full
@@ -609,6 +660,30 @@ class TestAtomBasedFieldsWithFrozenPhonons:
             _fe_atoms_with_moments(), 2, sigmas=0.05, seed=3
         )
         return cls(phonons, gpts=(16, 20), slice_thickness=1.5, exit_planes=2)
+
+    def test_built_array_iterates_and_chunks_its_first_member(self, cls):
+        full = self._field(cls).build()
+        assert full.shape == (2, 4, 3, 16, 20)
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(full.generate_slices())
+        assert len(slices) == 4
+        for i, s in enumerate(slices):
+            assert type(s) is type(full)
+            np.testing.assert_array_equal(s.array, full.array[0, i : i + 1])
+            assert s.slice_thickness == full.slice_thickness[i : i + 1]
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            chunks = list(full.generate_chunked_slices(1, 4, chunk_size=2))
+        assert [len(c) for c in chunks] == [1, 2]
+        np.testing.assert_array_equal(
+            np.concatenate([c.array for c in chunks]), full.array[0, 1:4]
+        )
+        assert full.exit_planes == (-1, 1, 3)
+        assert [c.exit_planes for c in chunks] == [
+            _local_exit_planes(full.exit_planes, 1, 1),
+            _local_exit_planes(full.exit_planes, 2, 2),
+        ]
 
     def test_builder_chunks_hold_every_member(self, cls):
         field = self._field(cls)

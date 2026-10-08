@@ -1750,6 +1750,15 @@ class FieldArray(BaseField, ArrayObject):
         slice or chunk of this array shares with it."""
         return {"extent": self.extent}
 
+    def _warn_if_ensemble(self):
+        if np.prod(self.ensemble_shape) > 1:
+            warnings.warn(
+                f"{type(self).__name__} has an ensemble axis of shape "
+                f"{self.ensemble_shape}; only the slices of its first member are "
+                "generated. Index the array to choose a member.",
+                stacklevel=3,
+            )
+
     def build(
         self,
         first_slice: int = 0,
@@ -1763,6 +1772,9 @@ class FieldArray(BaseField, ArrayObject):
         """
         Generate the slices for the potential.
 
+        An array with an ensemble axis (frozen phonons) of more than one member
+        generates the slices of its first member, with a warning.
+
         Parameters
         ----------
         first_slice : int, optional
@@ -1772,9 +1784,11 @@ class FieldArray(BaseField, ArrayObject):
 
         Yields
         ------
-        slices : generator of numpy.ndarray
-            Generator for the array of slices.
+        FieldArray
+            A single slice, of the same class as this array.
         """
+        self._warn_if_ensemble()
+
         if last_slice is None:
             last_slice = len(self)
 
@@ -1820,6 +1834,9 @@ class FieldArray(BaseField, ArrayObject):
         slice chunking, pass an unbuilt :class:`.Potential` to the
         multislice algorithm instead.
 
+        An array with an ensemble axis (frozen phonons) of more than one member
+        generates the chunks of its first member, with a warning.
+
         Parameters
         ----------
         first_slice : int, optional
@@ -1836,6 +1853,8 @@ class FieldArray(BaseField, ArrayObject):
             A view into the existing array covering a chunk of slices, of the
             same class as this array.
         """
+        self._warn_if_ensemble()
+
         from abtem.core.chunks import (
             estimate_potential_chunk_size,
             generate_chunks,
