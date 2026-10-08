@@ -1838,6 +1838,103 @@ class TestSliceIndexedAtomsWrapping:
             atol=1e-5 * np.abs(reference).max(),
         )
 
+    @staticmethod
+    def _far_in_plane(shifts=((0, 0), (0, 0), (0, 0))):
+        """Three B atoms in a 4 x 5 x 4 A cell (unequal in-plane lengths), moved
+        by whole cell lengths ``shifts`` [(nx, ny) per atom]. The repeated
+        structure is the same for every shift."""
+        atoms = Atoms(
+            "B3",
+            positions=[[2.0, 2.5, 2.0], [1.0, 1.0, 1.2], [1.0, 3.0, 2.7]],
+            cell=np.diag([4.0, 5.0, 4.0]),
+            pbc=True,
+        )
+        atoms.positions[:, :2] += np.array(shifts) * [4.0, 5.0]
+        return atoms
+
+    @staticmethod
+    def _slices(atoms, lazy=False, **kwargs):
+        potential = Potential(atoms, sampling=0.1, slice_thickness=0.5, **kwargs)
+        return asnumpy(potential.build(lazy=lazy).compute().array)
+
+    # Quadrature pads 4.29 A in-plane, repeating the cell twice to each side
+    # along x (4 A) and once along y (5 A): an atom given further out than that
+    # has an image missing in the cell.
+    FAR_IN_PLANE = {
+        "far_x": ((0, 0), (-2, 0), (0, 0)),  # x = -7
+        "far_y": ((0, 0), (0, 0), (0, 2)),  # y = 13
+        "far_x_and_y": ((0, 0), (2, -2), (-1, 3)),
+    }
+
+    @cpu_float64
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("case", list(FAR_IN_PLANE))
+    def test_quadrature_potential_folds_atoms_far_outside_in_plane(self, case, lazy):
+        """The padding repeats the cell a number of times set by the cell, so the
+        images of an atom further outside than that reaches never entered the
+        cell. Moving an atom by whole cell lengths leaves the periodic in-plane
+        build unchanged."""
+        kwargs = dict(projection="finite", periodic=False)
+        moved = self._slices(
+            self._far_in_plane(self.FAR_IN_PLANE[case]), lazy=lazy, **kwargs
+        )
+        reference = self._slices(self._far_in_plane(), lazy=lazy, **kwargs)
+        np.testing.assert_allclose(
+            moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+        )
+
+    @cpu_float64
+    @pytest.mark.parametrize(
+        "length_x, x, y",
+        [(4.0, -7.0, 1.0), (4.0, 1.0, 13.0), (20.0, -5.0, 1.0), (20.0, 25.0, 1.0)],
+        ids=["far_x", "far_y", "wide_below", "wide_above"],
+    )
+    def test_quadrature_configurations_keep_atoms_far_outside_in_plane(
+        self, length_x, x, y
+    ):
+        """An atom given outside the cell is kept, wherever the padding stops:
+        beyond its reach, or, in a cell wider than twice the cutoff, in the range
+        it reaches but the crop of the padding drops."""
+        atoms = Atoms(
+            "B2",
+            positions=[[2.0, 2.5, 2.0], [x, y, 1.2]],
+            cell=np.diag([length_x, 5.0, 4.0]),
+            pbc=True,
+        )
+        potential = Potential(
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
+            sampling=0.2,
+            slice_thickness=1.0,
+            projection="finite",
+            periodic=False,
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            assert len(configuration) == len(atoms)
+
+    @cpu_float64
+    @pytest.mark.parametrize("x", [-0.3, -1e-16])
+    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(self, x):
+        """An atom given just outside the cell is within the padding's reach, so
+        it is displaced where it is given, not moved a cell length and drawn in
+        another order."""
+        atoms = Atoms(
+            "B2",
+            positions=[[2.0, 2.5, 2.0], [x, 1.0, 1.2]],
+            cell=np.diag([4.0, 5.0, 4.0]),
+            pbc=True,
+        )
+        potential = Potential(
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3),
+            sampling=0.1,
+            slice_thickness=0.5,
+            projection="finite",
+            periodic=False,
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            # sigma is 0.1 A, a cell length is at least 4 A.
+            displacement = configuration.positions - atoms.positions
+            assert np.abs(displacement).max() < 0.5
+
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self, device):
         """``for atoms in frozen_phonons: Potential(atoms, periodic=False)``

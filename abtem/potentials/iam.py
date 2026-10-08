@@ -1114,10 +1114,14 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         the margin the integrator needs beyond the cell along each axis.
 
         The configuration is the transformed atoms, displaced, and wrapped
-        into the cell when the potential is periodic. The atoms to slice add
-        the atoms within the margin outside the cell: images of the
-        configuration for a periodic potential, and for a non-periodic one the
-        surrounding atoms, displaced independently of those in the cell.
+        into the cell when the potential is periodic; in-plane only, before
+        it is displaced, and only the atoms given more than min(reach - margin,
+        margin) outside the cell, when it is non-periodic and the integrator is
+        real-space in-plane (quadrature), where reach is the extent of the
+        padding. The atoms to slice add the atoms within the margin outside
+        the cell: images of the configuration for a periodic potential, and for
+        a non-periodic one the surrounding atoms, displaced independently of
+        those in the cell.
         """
         atoms, is_cut, frame = self._transform_atoms()
         margins = self._margins()
@@ -1141,6 +1145,22 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cut:
             in_cell = _in_cell(atoms)
         else:
+            if not self.integrator.periodic:
+                # A real-space integrator takes its in-plane images from
+                # pad_atoms, which repeats the cell ceil(margin / length) times
+                # to each side and crops to the margin around the cell. An atom
+                # given further than min(reach - margin, margin) outside the
+                # cell either has images that are not reached, or is itself
+                # cropped; wrapping it in-plane puts it back, and changes no
+                # atom's images, as the build is periodic in-plane. An atom
+                # given less far out is reached and kept, and is not wrapped.
+                lengths = np.diag(np.array(atoms.cell))[:2]
+                margin = np.array(margins[:2])
+                reach = np.ceil(margin / lengths) * lengths
+                slack = np.minimum(reach - margin, margin)
+                xy = atoms.positions[:, :2]
+                far = (xy < -slack) | (xy >= lengths + slack)
+                xy[far] = np.mod(xy, lengths)[far]
             atoms, in_cell = _pad_atoms_marking_images(atoms, margins)
 
         atoms = self._displace(atoms, frame)
@@ -1188,7 +1208,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         such as ``"auto"``, may give the displaced atoms another grid)
         and the same slicing, projection and `periodic`, and the default plane,
         origin and box, reproduces that configuration's member of this
-        potential's ensemble.
+        potential's ensemble. A non-periodic potential whose integrator is
+        real-space in-plane (quadrature) first wraps in-plane the given atoms
+        more than min(reach - margin, margin) outside the box, where reach is the
+        extent of the padding and margin the cutoff.
 
         The exception is a non-periodic potential with a finite projection.
         It also integrates the atoms within its cutoff outside the box, each
