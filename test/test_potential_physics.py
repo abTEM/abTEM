@@ -244,6 +244,8 @@ def test_infinite_projection_is_translation_invariant_across_the_boundary(device
     leave the sub-pixel split of the delta unchanged, so only round-off is
     allowed.
     """
+    if device == "mps":
+        pytest.skip("Metal is single precision; this test runs in float64")
     parametrization = LobatoParametrization()
     gpts = 240
     dx = _CELL / gpts
@@ -631,6 +633,8 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential(device)
     0.125 A density grid, ~(0.125/3)^3 ~ 7e-5, and excluding the log-singular
     core pixels.
     """
+    if device == "mps":
+        pytest.skip("Metal is single precision; this test runs in float64")
     from scipy.special import exp1
 
     from abtem.core.constants import eps0
@@ -702,6 +706,8 @@ def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0, devi
     Two z0: mid-slice and on a slice boundary, where a z-offset shows as an
     asymmetry between the slices above and below.
     """
+    if device == "mps":
+        pytest.skip("Metal is single precision; this test runs in float64")
     from scipy.special import erfc
 
     from abtem.core.constants import eps0
