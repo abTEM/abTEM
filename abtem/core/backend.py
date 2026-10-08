@@ -210,6 +210,17 @@ def check_mps_is_available():
 
                 from abtem.core import _torch
 
+                torch_device = _config_get("torch.device")
+                if not isinstance(torch_device, str) or torch_device.lower() not in (
+                    "mps",
+                    "cpu",
+                ):
+                    raise ValueError(
+                        "The configuration key 'torch.device' must be 'mps' or "
+                        f"'cpu', got {torch_device!r}."
+                    )
+                _torch.DEVICE = torch_device.lower()
+
                 _torch._check_available()
 
                 # tp last: other threads test it without the lock, and must
