@@ -565,10 +565,11 @@ def _cupy_safe_coordinates(array, coordinates):
     k - 1e-12, then rounds to k for the index but not for the weights, and
     the result is the value at node k + 1. Giving the coordinates the
     kernel's precision keeps both floors consistent. SciPy computes in
-    float64 throughout and is left alone.
+    float64 throughout and is left alone -- on the CPU, and on Metal, whose
+    map_coordinates is SciPy's run on the host.
     """
     xp = get_array_module(array)
-    if xp is np:
+    if cp is None or xp is not cp:
         return coordinates
     float_dtype = xp.promote_types(array.real.dtype, xp.float32)
     return coordinates.astype(float_dtype, copy=False)
@@ -680,6 +681,25 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             if isinstance(axis, EnergyAxis):
                 return float(max(axis.values))
         raise RuntimeError("energy not in measurement metadata.")
+
+    def _member_energies(self) -> Optional[np.ndarray]:
+        """Per-member energies [eV] of an un-indexed energy ensemble.
+
+        Returns an array broadcastable against the ensemble shape (length 1
+        on every axis but the ``EnergyAxis``), or None when the measurement
+        has a single energy -- i.e. whenever :meth:`_get_energy` is exact.
+        """
+        from abtem.core.axes import EnergyAxis
+        from abtem.core.energy import resolve_energy
+
+        if resolve_energy(None, self.metadata, self.ensemble_axes_metadata) is not None:
+            return None
+        for i, axis in enumerate(self.ensemble_axes_metadata):
+            if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+                shape = [1] * len(self.ensemble_shape)
+                shape[i] = len(axis.values)
+                return np.asarray(axis.values, dtype=float).reshape(shape)
+        return None
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
@@ -2296,9 +2316,7 @@ class Images(_BaseMeasurement2D):
             raise ValueError()
 
         if gpts is None and sampling is not None:
-            if np.isscalar(sampling):
-                sampling = (sampling,) * 2
-            gpts = tuple(int(np.ceil(l / d)) for d, l in zip(sampling, self.extent))
+            gpts = _image_resampling_gpts(self.extent, sampling)
 
         elif gpts is not None:
             if np.isscalar(gpts):
@@ -2405,9 +2423,17 @@ class Images(_BaseMeasurement2D):
         flyback_time : float
             Flyback time of the beam [s].
         rms_power : float
-            RMS power of the scan noise [V].
+            Strength of the scan distortion: the FWHM of the local
+            magnification deviation across the frame, in percent (235.5 times
+            its RMS value).
         max_frequency : float
-            Maximum frequency of the scan noise [1/Å].
+            Maximum frequency of the scan noise [Hz].
+        num_components : int
+            Number of random frequency components in each of the x and y
+            distortions. Default is 200.
+        seed : int, optional
+            Seed for the random distortion. If given, the result has a sample
+            axis of length 1.
         """
         transform = ScanNoiseTransform(
             dwell_time=dwell_time,
@@ -2417,7 +2443,7 @@ class Images(_BaseMeasurement2D):
             num_components=num_components,
             seeds=seed,
         )
-        return self.apply_transform(transform)
+        return transform.apply(self)
 
     @staticmethod
     def _diffractograms(array):
@@ -3646,6 +3672,38 @@ def _interpolate_bilinear(x, v, u, vw, uw):
     return y.reshape((B, out_H, out_W))
 
 
+def _interpolate_bilinear_gather(x, v, u, vw, uw):
+    """Device counterpart of :func:`_interpolate_bilinear` for Metal.
+
+    The NumPy routine writes panel by panel into host buffers through ``out=``,
+    which the Metal namespace does not offer; CuPy has its own kernel. This
+    computes the same weighted sum of the four neighbors with whole-array
+    gathers instead.
+    """
+    xp = get_array_module(x)
+    H, W = x.shape[-2:]
+    v1 = xp.minimum(v + 1, H - 1)
+    u1 = xp.minimum(u + 1, W - 1)
+    vw = vw.astype(x.dtype, copy=False)
+    uw = uw.astype(x.dtype, copy=False)
+    return (
+        (1 - vw) * (1 - uw) * x[:, v, u]
+        + (1 - vw) * uw * x[:, v, u1]
+        + vw * (1 - uw) * x[:, v1, u]
+        + vw * uw * x[:, v1, u1]
+    )
+
+
+def _image_resampling_gpts(
+    extent: tuple[float, float], sampling: float | tuple[float, float]
+) -> tuple[int, int]:
+    """Grid points of images of `extent` [Å] interpolated to `sampling` [Å], as
+    `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
+    if np.isscalar(sampling):
+        sampling = (sampling,) * 2
+    return tuple(int(np.ceil(e / d)) for d, e in zip(sampling, extent))
+
+
 def _diffraction_pattern_resampling_gpts(
     old_sampling: tuple[float, float],
     old_gpts: tuple[int, int],
@@ -3857,6 +3915,50 @@ class DiffractionPatterns(_BaseMeasurement2D):
         from abtem.bloch.indexing import index_diffraction_spots
         from abtem.bloch.utils import filter_reciprocal_space_vectors
 
+        from abtem.bloch.indexing import estimate_necessary_excitation_error
+
+        energy = np.asarray(energy)
+        if energy.ndim > 0:
+            # Per-member energies of an energy ensemble, shaped like the
+            # orientation matrices: this block's ensemble shape (1 on every
+            # axis but the energy axis) followed by two length-1 axes. Each
+            # member's spots are filtered and assigned with its own excitation
+            # errors -- exactly as for a single-energy measurement of that
+            # member -- rather than with one energy for the whole ensemble.
+            energy = energy[..., 0, 0]
+            kwargs = dict(
+                hkl=hkl, mask_all=mask_all, sampling=sampling, cell=cell,
+                sg_max=sg_max, g_max=g_max, centering=centering, radius=radius,
+            )
+            varying = [i for i, n in enumerate(energy.shape) if n > 1]
+            if not varying:
+                return DiffractionPatterns._index_diffraction_spots(
+                    array=array,
+                    orientation_matrices=orientation_matrices,
+                    energy=float(energy.ravel()[0]),
+                    **kwargs,
+                )
+            (axis,) = varying
+            members = []
+            for j in range(energy.shape[axis]):
+                take = (slice(None),) * axis + (slice(j, j + 1),)
+                om = orientation_matrices
+                if om.shape[axis] > 1:
+                    om = om[take]
+                members.append(
+                    DiffractionPatterns._index_diffraction_spots(
+                        array=array[take],
+                        orientation_matrices=om,
+                        energy=float(energy[take].ravel()[0]),
+                        **kwargs,
+                    )
+                )
+            return get_array_module(members[0]).concatenate(members, axis=axis)
+
+        energy = float(energy)
+        if sg_max is None:
+            sg_max = estimate_necessary_excitation_error(energy, g_max)
+
         mask = filter_reciprocal_space_vectors(
             hkl,
             cell,
@@ -3877,7 +3979,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             orientation_matrices=orientation_matrices,
         )
 
-        array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
+        xp = get_array_module(array)
+        array_all = xp.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
         array_all[..., mask[mask_all]] = array
 
         return array_all
@@ -3917,8 +4020,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centering : {'P', 'F', 'I', 'A', 'B', 'C'}
             Assumed lattice centering used for determining the reflection conditions.
         energy : float, optional
-            The energy of the electrons [keV]. The default is the energy stored in the
-            metadata.
+            The energy of the electrons [eV]. The default is the energy stored in the
+            metadata; for an energy ensemble, each member is indexed with its own
+            energy (and, if `sg_max` is not given, its own default `sg_max`), and
+            the returned reflections are the union over members.
 
         Return
         -------
@@ -3939,51 +4044,82 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 " broadcastable."
             )
 
+        ensemble_ndim = len(self.array.shape[:-2])
+
+        # An un-indexed energy ensemble has no single energy: index every
+        # member with its own, instead of _get_energy()'s ensemble-wide
+        # fallback (the maximum), which mis-assigns overlapping spots and
+        # filters the wrong reflections for every other member.
+        energies = None
         if energy is None:
-            energy = self._get_energy()
+            energies = self._member_energies()
+            if energies is None:
+                energy = self._get_energy()
 
         if g_max is None:
             g_max = max(self.max_frequency)
 
-        if sg_max is None:
-            sg_max = estimate_necessary_excitation_error(energy, g_max)
-
         if orientation_matrices is None:
-            orientation_matrices = np.eye(3)[(None,) * len(self.array.shape[:-2])]
+            orientation_matrices = np.eye(3)[(None,) * ensemble_ndim]
+
+        orientation_matrices = orientation_matrices[
+            (None,) * (ensemble_ndim - len(orientation_matrices.shape[:-2]))
+        ]
 
         cell = validate_cell(cell)
 
         hkl = make_hkl_grid(cell, g_max)
 
-        mask = filter_reciprocal_space_vectors(
-            hkl,
-            cell,
-            energy=energy,
-            sg_max=sg_max,
-            g_max=g_max,
-            centering=centering,
-            orientation_matrices=orientation_matrices,
-        )
+        # The returned reflections are the union over members; a member that
+        # does not include a reflection records zero for it, as already
+        # happens across orientations.
+        mask = np.zeros(len(hkl), dtype=bool)
+        for member_energy in [energy] if energies is None else np.unique(energies):
+            mask |= filter_reciprocal_space_vectors(
+                hkl,
+                cell,
+                energy=member_energy,
+                sg_max=(
+                    sg_max
+                    if sg_max is not None
+                    else estimate_necessary_excitation_error(member_energy, g_max)
+                ),
+                g_max=g_max,
+                centering=centering,
+                orientation_matrices=orientation_matrices,
+            )
 
         if self.is_lazy:
-            orientation_matrices = orientation_matrices[
-                (None,)
-                * (len(self.array.shape[:-2]) - len(orientation_matrices.shape[:-2]))
+            def block_chunks(shape):
+                return tuple(
+                    c if n == sum(c) else 1
+                    for n, c in zip(shape, self.array.chunks[:-2])
+                )
+
+            lazy_args = [
+                da.from_array(
+                    orientation_matrices,
+                    chunks=block_chunks(orientation_matrices.shape) + (3, 3),
+                )
             ]
+            if energies is not None:
+                lazy_args.append(
+                    da.from_array(
+                        energies[..., None, None],
+                        chunks=block_chunks(energies.shape) + (1, 1),
+                    )
+                )
 
-            chunks = tuple(
-                c if n == sum(c) else 1
-                for n, c in zip(orientation_matrices.shape, self.array.chunks[:-2])
-            )
-
-            lazy_orientation_matrices = da.from_array(
-                orientation_matrices, chunks=chunks + (3, 3)
-            )
+            # map_blocks passes the energy block (if any) positionally, third
+            def index_block(array, orientation_matrices, energy=energy, **kwargs):
+                return DiffractionPatterns._index_diffraction_spots(
+                    array, orientation_matrices, energy=energy, **kwargs
+                )
 
             intensities = da.map_blocks(
-                self._index_diffraction_spots,
+                index_block,
                 self.array,
-                lazy_orientation_matrices,
+                *lazy_args,
                 hkl=hkl,
                 mask_all=mask,
                 sampling=self.sampling,
@@ -3991,11 +4127,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sg_max=sg_max,
                 g_max=g_max,
                 centering=centering,
-                energy=energy,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (mask.sum(),),
-                meta=np.array((), dtype=self.dtype),
+                meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
             intensities = self._index_diffraction_spots(
@@ -4008,7 +4143,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sg_max=sg_max,
                 g_max=g_max,
                 centering=centering,
-                energy=energy,
+                energy=energy if energies is None else energies[..., None, None],
                 radius=radius,
             )
 
@@ -4147,8 +4282,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             array = interpolate_bilinear_cuda(
                 array, v, u, vw.astype(array.dtype), uw.astype(array.dtype)
             )
-        else:
+        elif xp is np:
             array = _interpolate_bilinear(array, v, u, vw, uw)
+        else:
+            array = _interpolate_bilinear_gather(array, v, u, vw, uw)
 
         array = array / array.sum((-2, -1), keepdims=True) * old_sums
 
@@ -5124,7 +5261,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             margin = True
 
         if margin:
-            radius += max(self.angular_sampling)
+            radius = radius + max(self.angular_sampling)
 
         return self.bandlimit(radius, outer=np.inf)
 
@@ -6198,8 +6335,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         Parameters
         ----------
         criterion : {'distance', 'intensity'}
-            The boundary parameter determines how the images are extended beyond their
-            boundaries when the filter overlaps with a border.
+            The sort key, descending:
 
                 ``distance`` :
                     Sort according to the distance in reciprocal space from the zero
@@ -6213,26 +6349,31 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         sorted_spots : IndexedDiffractionPatterns
             The indexed diffraction spots sorted according to the given criterion.
         """
-        if self.lazy:
+        if self.is_lazy:
             raise RuntimeError("Cannot sort lazy IndexedDiffractionPatterns.")
 
         if criterion == "distance":
-            criterion = -np.linalg.norm(self.positions, axis=1)
+            # |g| over x, y, z; any ensemble prefix of the lattice vectors (e.g.
+            # one per orientation) leaves it unchanged, so reduce it away
+            distance = np.linalg.norm(self.positions, axis=-1)
+            key = -distance.reshape(-1, distance.shape[-1]).max(axis=0)
         elif criterion == "intensity":
             ensemble_axes = tuple(range(len(self.ensemble_shape)))
-            criterion = -np.max(self.intensities, axis=ensemble_axes)
+            key = -asnumpy(self.intensities.max(axis=ensemble_axes))
         else:
-            raise ValueError()
+            raise ValueError(
+                f"criterion must be 'distance' or 'intensity', not {criterion!r}"
+            )
 
-        order = np.argsort(criterion)
+        order = np.argsort(key)
         array = self.array[..., order]
         miller_indices = self.miller_indices[order]
-        reciprocal_lattice_vectors = self.reciprocal_lattice_vectors[..., order, :, :]
 
+        # the lattice vectors are per ensemble member, (..., 3, 3), not per spot
         return self.__class__(
             array,
             miller_indices,
-            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
+            reciprocal_lattice_vectors=self.reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self._metadata,
         )
@@ -6576,11 +6717,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         A dictionary mapping miller indices to reciprocal space positions [1/Å].
         """
 
+        # positions are (..., spots, 3): iterate over the spot axis (zipping
+        # with the (..., 3, 3) lattice vectors gave 3 entries, whatever the
+        # number of spots)
         positions = {
             tuple(hkl): position
             for hkl, position in zip(
                 self.miller_indices,
-                np.moveaxis(self.reciprocal_lattice_vectors, -2, 0),
+                np.moveaxis(self.positions, -2, 0),
             )
         }
         return positions
