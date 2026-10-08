@@ -79,3 +79,42 @@ def test_show_draws_fields_built_on_a_device(device):
 
     assert len(fig.axes) == 10
     plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "projection, slice_thickness",
+    [
+        # real-space slices are whole z pixels: 16 pixels over 5 slices are
+        # 3, 3, 3, 3, 4
+        ("real_space", 0.8),
+        ("fft", (0.4, 1.2, 0.8, 1.0, 0.6)),
+    ],
+)
+@pytest.mark.parametrize("first_slice, last_slice", [(1, 4), (2, None)])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_slice_range_matches_the_full_build(
+    builder, projection, slice_thickness, first_slice, last_slice
+):
+    field = builder(
+        _SpinPolarizedCalculator(),
+        sampling=0.25,
+        slice_thickness=slice_thickness,
+        gridrefinement=2,
+        projection=projection,
+    )
+
+    full = field.build()
+    part = field.build(first_slice=first_slice, last_slice=last_slice)
+
+    assert full.array.shape[0] == 5
+    assert len(set(full.slice_thickness)) > 1
+    scale = np.abs(full.array).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        part.array, full.array[first_slice:last_slice], rtol=0, atol=1e-6 * scale
+    )
+    # `build` takes the thicknesses from the builder, so read the generated slices
+    generated = [
+        s.slice_thickness for s in field.generate_slices(first_slice, last_slice)
+    ]
+    assert generated == [(t,) for t in full.slice_thickness[first_slice:last_slice]]

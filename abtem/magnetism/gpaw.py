@@ -289,12 +289,12 @@ class _GPAWMagnetics(_FieldBuilder):
 
             dz = slice_thicknesses.sum() / array.shape[-1]
 
-            start = 0
-            for i, slice_idx in enumerate(range(first_slice, last_slice)):
+            start = pixels_per_slice[:first_slice].sum()
+            for slice_idx in range(first_slice, last_slice):
                 slice_array = (
-                    array[..., start : start + pixels_per_slice[i]].sum(-1) * dz
+                    array[..., start : start + pixels_per_slice[slice_idx]].sum(-1) * dz
                 )
-                start += pixels_per_slice[i]
+                start += pixels_per_slice[slice_idx]
 
                 if self._valid_gpts != slice_array.shape[1:]:
                     slice_array = fft_interpolate(slice_array, slice_shape)
@@ -302,14 +302,14 @@ class _GPAWMagnetics(_FieldBuilder):
                 yield self._array_object(
                     xp.asarray(slice_array[None]),
                     extent=self.extent,
-                    slice_thickness=slice_thicknesses[i],
+                    slice_thickness=slice_thicknesses[slice_idx],
                 )
 
         else:
             shape = array.shape[:-1] + (self.num_slices,)
             array = fft_interpolate(array, shape)
 
-            for i, slice_idx in enumerate(range(first_slice, last_slice)):
+            for slice_idx in range(first_slice, last_slice):
                 slice_array = array[..., slice_idx]
 
                 if self._valid_gpts != slice_array.shape[1:]:
@@ -318,7 +318,7 @@ class _GPAWMagnetics(_FieldBuilder):
                 yield self._array_object(
                     xp.asarray(slice_array[None]),
                     extent=self.extent,
-                    slice_thickness=slice_thicknesses[i],
+                    slice_thickness=slice_thicknesses[slice_idx],
                 )
 
     def build(
