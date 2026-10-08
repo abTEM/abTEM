@@ -1,4 +1,5 @@
 import ase
+import ase.build
 import numpy as np
 import pytest
 from utils import devices, gpu, requires_gpu, to_host_array
@@ -401,6 +402,20 @@ class TestBackscattering:
                 return_backscattered=True,
             )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("exit_planes", [(2, 5), (0, 2, 5)])
+    def test_backscattering_requires_the_entrance_plane(self, exit_planes, lazy):
+        # the back-propagation sums the backscattered waves into the entrance plane
+        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+        potential = abtem.Potential(
+            atoms,
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / 6,
+            exit_planes=exit_planes,
+        )
+        with pytest.raises(ValueError, match="starting with the entrance plane -1"):
+            _multislice_arrays(potential, lazy)
+
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.slow
     def test_backscattering_returns_extra_waves(self, test_system):
@@ -464,6 +479,276 @@ class TestBackscattering:
 
         # Forward and backward should have same spatial dimensions
         assert forward.array.shape[-2:] == backward.array.shape[-2:]
+
+
+def _multislice_arrays(
+    potential, lazy, scan=None, backscattered=True, potential_chunk_size="auto"
+):
+    """The arrays of a full-expansion real-space multislice: the transmitted
+    waves, and with `backscattered` also the backscattered waves."""
+    algorithm = RealSpaceMultislice(expansion_scope="full")
+    kwargs = dict(
+        lazy=lazy,
+        return_backscattered=backscattered,
+        potential_chunk_size=potential_chunk_size,
+        algorithm=algorithm,
+    )
+    if scan is None:
+        result = abtem.PlaneWave(energy=100e3).multislice(potential, **kwargs)
+    else:
+        result = abtem.Probe(energy=100e3, semiangle_cutoff=20).multislice(
+            potential, scan=scan, **kwargs
+        )
+    result = result if backscattered else [result]
+    if lazy:
+        result = [
+            r.compute(scheduler="synchronous", progress_bar=False) for r in result
+        ]
+    return [to_host_array(r) for r in result]
+
+
+class TestBackscatteringEnsemble:
+    """The backscattered waves of an ensemble potential are those of each
+    configuration run on its own."""
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize(
+        "num_configs, slices_per_cell, scan, lazy",
+        [
+            pytest.param(
+                *case,
+                lazy,
+                marks=[pytest.mark.slow] if lazy and case[0] == 3 else [],
+            )
+            for case in [
+                (2, 2, None),  # 3 exit planes
+                (3, 2, None),  # as many configurations as exit planes
+                (2, 3, None),  # 4 exit planes
+                (3, 2, [(1.0, 1.0), (2.0, 3.0)]),  # two probe positions
+            ]
+            for lazy in (False, True)
+        ],
+    )
+    def test_frozen_phonons(self, num_configs, slices_per_cell, scan, lazy, device):
+        if lazy and device != "cpu":
+            pytest.skip("lazy device runs are covered by TestFullExpansionChunking")
+        atoms = ase.build.bulk("Si", cubic=True)
+        frozen_phonons = abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1)
+        kwargs = dict(
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / slices_per_cell,
+            exit_planes=1,
+        )
+
+        with abtem.config.set({"device": device}):
+            members = [
+                _multislice_arrays(abtem.Potential(config, **kwargs), False, scan)
+                for config in frozen_phonons
+            ]
+            result = _multislice_arrays(
+                abtem.Potential(frozen_phonons, **kwargs), lazy, scan
+            )
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    @pytest.mark.parametrize(
+        "num_frozen_phonons, lazy",
+        [
+            pytest.param(
+                num_frozen_phonons,  # 5 exit planes
+                lazy,
+                marks=[pytest.mark.slow] if lazy and num_frozen_phonons == 5 else [],
+            )
+            for num_frozen_phonons in (2, 5)
+            for lazy in (False, True)
+        ],
+    )
+    def test_crystal_potential(self, num_frozen_phonons, lazy):
+        atoms = ase.build.bulk("Si", cubic=True)
+
+        def crystal():
+            unit = abtem.Potential(
+                abtem.FrozenPhonons(atoms, 4, sigmas=0.1, seed=1),
+                gpts=(24, 20),
+                slice_thickness=atoms.cell[2, 2] / 2,
+            )
+            return abtem.CrystalPotential(
+                unit,
+                (2, 1, 2),
+                num_frozen_phonons=num_frozen_phonons,
+                seeds=tuple(range(1, num_frozen_phonons + 1)),
+                exit_planes=1,
+            )
+
+        members = []
+        for _, _, member in crystal().generate_blocks():
+            member = member.item()
+            chunks = list(member.generate_chunked_slices())
+            slices = abtem.PotentialArray(
+                np.concatenate([chunk.array for chunk in chunks]),
+                slice_thickness=[t for chunk in chunks for t in chunk.slice_thickness],
+                sampling=member.sampling,
+                exit_planes=1,
+            )
+            members.append(_multislice_arrays(slices, False))
+
+        result = _multislice_arrays(crystal(), lazy)
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+
+def _full_expansion_potentials():
+    atoms = ase.build.bulk("Si", cubic=True)
+    grid = dict(gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3)  # 6 slices
+
+    def displaced(atoms):
+        return list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+
+    return {
+        "potential": lambda: abtem.Potential(
+            displaced(atoms * (1, 1, 2)), exit_planes=1, **grid
+        ),
+        "frozen_phonons": lambda: abtem.Potential(
+            abtem.FrozenPhonons(atoms * (1, 1, 2), 4, sigmas=0.1, seed=1),
+            exit_planes=2,
+            **grid,
+        ),
+        "crystal_potential": lambda: abtem.CrystalPotential(
+            abtem.Potential(abtem.FrozenPhonons(atoms, 4, sigmas=0.1, seed=1), **grid),
+            (1, 1, 2),
+            num_frozen_phonons=3,
+            seeds=(1, 2, 3),
+            exit_planes=1,
+        ),
+    }
+
+
+class TestFullExpansionChunking:
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize("backscattered", [False, True])
+    @pytest.mark.parametrize(
+        "name, lazy",
+        [
+            pytest.param(
+                name,
+                lazy,
+                marks=[pytest.mark.slow] if lazy and name != "potential" else [],
+            )
+            for name in _full_expansion_potentials()
+            for lazy in (False, True)
+        ],
+    )
+    def test_independent_of_the_potential_chunk_size(
+        self, name, backscattered, lazy, device
+    ):
+        make = _full_expansion_potentials()[name]
+
+        def arrays(chunk_size):
+            with abtem.config.set({"device": device}):
+                return _multislice_arrays(
+                    make(),
+                    lazy,
+                    backscattered=backscattered,
+                    potential_chunk_size=chunk_size,
+                )
+
+        expected = arrays(6)
+        # 4 does not divide the 6 slices; the lazy runs are slow, so skip chunk size 2
+        for chunk_size in (1, 4) if lazy else (1, 2, 4):
+            result = arrays(chunk_size)
+            for array, reference in zip(result, expected):
+                assert array.shape == reference.shape
+                np.testing.assert_allclose(
+                    array,
+                    reference,
+                    rtol=0,
+                    atol=1e-6 * np.abs(reference).max(),
+                    err_msg=f"chunk size {chunk_size}",
+                )
+
+    def test_back_propagation_holds_one_summed_slice_per_exit_plane(self, monkeypatch):
+        # exit planes after every second of 6 slices, in chunks of one slice
+        atoms = ase.build.bulk("Si", cubic=True)
+        displaced = list(abtem.FrozenPhonons(atoms * (1, 1, 2), 1, sigmas=0.1, seed=1))
+        potential = abtem.Potential(
+            displaced[0],
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / 3,
+            exit_planes=2,
+        )
+        received = []
+        back_propagate = abtem.multislice._back_propagate_backscattered_waves
+
+        def spy(backscattered_waves, slices, *args):
+            received.append([(s.array[0].copy(), s.slice_thickness[0]) for s in slices])
+            return back_propagate(backscattered_waves, slices, *args)
+
+        monkeypatch.setattr(
+            abtem.multislice, "_back_propagate_backscattered_waves", spy
+        )
+        _multislice_arrays(potential, False, potential_chunk_size=1)
+
+        built = potential.build(lazy=False)
+        planes = built.exit_planes
+        assert planes == (-1, 1, 3, 5)
+        (blocks,) = received
+        assert len(blocks) == len(planes) - 1
+        for (array, thickness), start, stop in zip(blocks, planes[:-1], planes[1:]):
+            expected = built.array[start + 1 : stop + 1].sum(axis=0)
+            np.testing.assert_allclose(
+                array, expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+            )
+            assert thickness == pytest.approx(
+                sum(built.slice_thickness[start + 1 : stop + 1])
+            )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_backscattering_between_identical_slices_is_zero(self, lazy, device):
+        # One slice per unit cell: every slice equals the next, so the correction
+        # term (the difference between consecutive slices) vanishes exactly.
+        atoms = ase.build.bulk("Si", cubic=True)
+        displaced = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        with abtem.config.set({"device": device}):
+            potential = abtem.Potential(
+                displaced * (1, 1, 3),
+                gpts=(24, 20),
+                slice_thickness=atoms.cell[2, 2],
+                exit_planes=1,
+            )
+            transmitted, backscattered = _multislice_arrays(potential, lazy)
+            (alone,) = _multislice_arrays(potential, lazy, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        assert not np.any(backscattered)
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_backscattering_of_a_slab_followed_by_vacuum(self, device):
+        atoms = ase.build.bulk("Si", cubic=True)
+        slab = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        slab.positions[:, 2] += 2.0
+        slab.cell[2, 2] = 3 * atoms.cell[2, 2]
+        with abtem.config.set({"device": device}):
+            potential = abtem.Potential(
+                slab, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3, exit_planes=1
+            )
+            transmitted, backscattered = _multislice_arrays(potential, False)
+            (alone,) = _multislice_arrays(potential, False, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        per_plane = np.abs(backscattered).max(axis=(-2, -1))
+        # nothing comes back from the vacuum behind the slab
+        assert per_plane[:5].all() and not per_plane[5:].any()
 
 
 class TestAlgorithmComparison:
