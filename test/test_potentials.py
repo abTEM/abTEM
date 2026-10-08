@@ -1,3 +1,4 @@
+import os
 import pickle
 import warnings
 
@@ -1612,6 +1613,25 @@ class TestSliceIndexedAtomsWrapping:
         assert face
         assert all(r.filename == __file__ for r in face)
 
+    def test_far_outside_face_warning_of_a_lazy_build_is_not_inside_abtem(self):
+        """A lazy build raises the warning in a dask worker thread, whose stack
+        holds no frame of the caller. It is attributed to a frame outside abTEM,
+        not to one inside it or to ``<sys>``."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        potential = Potential(atoms, sampling=0.2, slice_thickness=1.0, periodic=False)
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=True).compute()
+
+        face = [r for r in records if "lie more than" in str(r.message)]
+        assert face
+        package = os.path.dirname(abtem.__file__) + os.sep
+        for record in face:
+            assert record.filename != "<sys>"
+            assert not record.filename.startswith(package)
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
@@ -1956,6 +1976,29 @@ class TestSliceIndexedAtomsWrapping:
             # sigma is 0.1 A, a cell length is at least 4 A.
             displacement = configuration.positions - atoms.positions
             assert np.abs(displacement).max() < 0.5
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="abTEM #540, part 1b: the padding along z drops an atom given more "
+        "than a cell height outside the cell, and how such an atom should be "
+        "treated is undecided",
+    )
+    @pytest.mark.parametrize(
+        "integrator",
+        [{"integrator": GaussianProjectionIntegrals()}, {"projection": "finite"}],
+        ids=["gaussian", "quadrature"],
+    )
+    def test_configurations_keep_an_atom_given_far_outside_along_z(self, integrator):
+        """The infinite integrator keeps the atom; the integrators that pad along z
+        do not, and the loss is silent."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        potential = Potential(
+            atoms, sampling=0.2, slice_thickness=1.0, periodic=False, **integrator
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            assert len(configuration) == len(atoms)
 
     @cpu_float64
     @pytest.mark.parametrize(
