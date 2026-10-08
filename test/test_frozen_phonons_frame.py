@@ -456,31 +456,41 @@ def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(
     """Each configuration, built on its own with the same projection and
     `periodic`, gives the ensemble member it belongs to, exactly. A configuration
     holds the atoms of the box only: a finite projection's images of the atoms
-    within its margin, added again by the rebuild, would count them twice."""
+    within its margin, added again by the rebuild, would count them twice.
+
+    The infinite projection is built with FFTs. FFTW picks its codelets from the
+    alignment of the buffer it is given, and on x86 a buffer that happens to land
+    16- rather than 32-byte aligned gets an unaligned plan that rounds slightly
+    differently (~1e-7 relative). Two builds of the same atoms can then differ in
+    the last bit, so the comparison uses numpy's FFT, which does not depend on
+    the alignment."""
     atoms, kwargs = REBUILT[name]
     periodic = kwargs.get("periodic", True)
     sigmas = {s: 0.08 for s in set(atoms.get_chemical_symbols())}
     fp = abtem.FrozenPhonons(
         atoms, num_configs=3, sigmas=sigmas, seed=7, ensemble_mean=False
     )
-    potential = abtem.Potential(
-        fp, sampling=0.05, slice_thickness=2, projection=projection, **kwargs
-    )
-    ensemble = potential.build().compute().array
-
-    configurations = potential.to_atoms_ensemble()
-    assert len(configurations) == 3
-    for i, configuration in enumerate(configurations):
-        assert SOURCE_INDEX not in configuration.arrays
-        assert len(configuration) == len(potential.get_transformed_atoms())
-        single = abtem.Potential(
-            configuration,
-            sampling=0.05,
-            slice_thickness=2,
-            projection=projection,
-            periodic=periodic,
+    with abtem.config.set({"fft": "numpy"}):
+        potential = abtem.Potential(
+            fp, sampling=0.05, slice_thickness=2, projection=projection, **kwargs
         )
-        np.testing.assert_array_equal(single.build().compute().array, ensemble[i])
+        ensemble = potential.build().compute().array
+
+        configurations = potential.to_atoms_ensemble()
+        assert len(configurations) == 3
+        for i, configuration in enumerate(configurations):
+            assert SOURCE_INDEX not in configuration.arrays
+            assert len(configuration) == len(potential.get_transformed_atoms())
+            single = abtem.Potential(
+                configuration,
+                sampling=0.05,
+                slice_thickness=2,
+                projection=projection,
+                periodic=periodic,
+            )
+            np.testing.assert_array_equal(
+                single.build().compute().array, ensemble[i]
+            )
 
 
 @pytest.mark.parametrize(
