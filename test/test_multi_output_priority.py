@@ -13,6 +13,7 @@ a distributed client runs an annotated graph.
 """
 
 import collections
+import warnings
 
 import ase.build
 import dask
@@ -150,7 +151,15 @@ def test_packed_blocks_are_released_as_they_are_extracted(cluster):
 
     assert plugin.total == 32
     assert plugin.peak <= 3 * n_workers
-    reference = elastic_and_total().compute(progress_bar=False, scheduler="synchronous")
+    # The reference is computed locally on purpose, next to the fixture's client;
+    # dask up to 2025.3.0 warns about any local scheduler named while one is active.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", "Running on a single-machine scheduler", UserWarning
+        )
+        reference = elastic_and_total().compute(
+            progress_bar=False, scheduler="synchronous"
+        )
     for result, ref in zip(computed, reference):
         result, ref = asnumpy(result.array), asnumpy(ref.array)
         np.testing.assert_allclose(result, ref, rtol=0, atol=1e-5 * np.abs(ref).max())
@@ -180,6 +189,7 @@ def test_keep_annotations_guard_scope(cluster):
         {},
         {"scheduler": client},
         {"scheduler": "distributed"},
+        {"scheduler": "dask.distributed"},
         {"scheduler": client.get},
     ):
         assert _fusion_inside([annotated], kwargs) == off

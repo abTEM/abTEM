@@ -974,15 +974,24 @@ def _runs_on_distributed_client(arrays: list, kwargs: dict) -> bool:
     client: an active default client, or one named by ``scheduler`` (the client
     itself, its ``get``, or ``"distributed"``), unless a local scheduler is named
     by ``scheduler`` or the ``scheduler`` configuration. ``arrays`` must all be
-    dask collections."""
+    dask collections.
+
+    A scheduler named by a string is resolved here rather than by
+    ``dask.base.get_scheduler``: up to dask 2025.3.0 that warns whenever a local
+    scheduler is named while a client is active, and this is only a query, so the
+    warning is left to the compute itself."""
     try:
         from distributed import Client
     except ImportError:
         return False
 
-    scheduler = dask.base.get_scheduler(
-        scheduler=kwargs.get("scheduler"), collections=arrays
-    )
+    scheduler = kwargs.get("scheduler")
+    if scheduler is None:
+        scheduler = dask.config.get("scheduler", None)
+    if isinstance(scheduler, str):
+        return scheduler.lower() in ("distributed", "dask.distributed")
+
+    scheduler = dask.base.get_scheduler(scheduler=scheduler, collections=arrays)
     return isinstance(getattr(scheduler, "__self__", None), Client)
 
 
