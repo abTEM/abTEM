@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 from ase.build import graphene
+from utils import devices
 
 import abtem
 
@@ -329,20 +330,41 @@ def _chosen_box_warnings(records):
     return [r for r in records if "abTEM chose" in str(r.message)]
 
 
+def _xfail_gpaw_build_on_gpu(request, device):
+    # GPAWPotential and the GPAW magnetic builders yield NumPy slices whatever
+    # the device (abTEM/abTEM#535, fixed by #544), and the build's CuPy buffer
+    # refuses them at `array[j] = slic.array[0]`; the message is CuPy's, quoted
+    # in #544. strict: once #544 lands, the XPASS fails the run so that the
+    # marker is removed.
+    if device == "gpu":
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="The GPAW builders yield NumPy slices on the GPU, #535",
+                raises=pytest.RaisesExc(
+                    ValueError,
+                    match=r"non-scalar numpy\.ndarray cannot be used for fill",
+                ),
+                strict=True,
+            )
+        )
+
+
+@devices
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell:UserWarning")
 @pytest.mark.parametrize(
     "repetitions, warns",
     [((1, 1, 1), False), ((2, 1, 1), False), ((3, 1, 1), True), ((4, 1, 1), True)],
 )
 def test_gpaw_potential_reports_a_strained_default_box(
-    hexagonal_calculator, repetitions, warns
+    hexagonal_calculator, repetitions, warns, request, device
 ):
     # The calculator's cell is repeated, and the default box of the repeated
     # hexagonal cell is exact for (1, 1, 1) and (2, 1, 1) only.
+    _xfail_gpaw_build_on_gpu(request, device)
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         potential = GPAWPotential(
-            hexagonal_calculator, repetitions=repetitions, sampling=0.2
+            hexagonal_calculator, repetitions=repetitions, sampling=0.2, device=device
         )
         potential.build(lazy=True).compute()
     assert len(_chosen_box_warnings(records)) == int(warns)
@@ -369,22 +391,25 @@ def spinpolarised_calculator():
     return atoms.calc
 
 
+@devices
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell:UserWarning")
 @pytest.mark.parametrize("include_magnetic_field", [False, True])
 def test_gpaw_magnetic_fields_report_the_strained_default_box_once(
-    spinpolarised_calculator, include_magnetic_field
+    spinpolarised_calculator, include_magnetic_field, request, device
 ):
     # The potential and the vector potential (and the magnetic field) are built
     # from one box_calculator in one call and share one default box, so the strain
     # of that box is reported once, at the call.
     from abtem.magnetism.gpaw import gpaw_magnetic_fields
 
+    _xfail_gpaw_build_on_gpu(request, device)
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         gpaw_magnetic_fields(
             spinpolarised_calculator,
             sampling=0.2,
             include_magnetic_field=include_magnetic_field,
+            device=device,
         )
     chosen = _chosen_box_warnings(records)
     assert len(chosen) == 1

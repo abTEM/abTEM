@@ -256,8 +256,10 @@ lazy_params = pytest.mark.parametrize("lazy", [True, False])
 def float64_devices(function):
     """Parametrize a test over `device` and run it in double precision with the
     numpy FFT, which the comparisons at 1e-10 of the maximum need (the
-    `float64_config` fixture of conftest.py, which skips Metal)."""
-    return devices(pytest.mark.usefixtures("float64_config")(function))
+    `float64_config` fixture of conftest.py). The `float64` marker makes the
+    collection hook of conftest.py skip the Metal case."""
+    function = pytest.mark.usefixtures("float64_config")(function)
+    return devices(pytest.mark.float64(function))
 
 
 # A box that strains the atoms is reported by a warning, which only the tests of

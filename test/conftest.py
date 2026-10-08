@@ -47,8 +47,9 @@ settings.load_profile("dev")
 
 @pytest.fixture
 def float64_config(device):
-    if device == "mps":
-        pytest.skip(_METAL_DOUBLE_SKIP_REASON)
+    # Its 'mps' case never gets here: `float64_devices` in test/utils.py also
+    # applies the `float64` marker, which pytest_collection_modifyitems below
+    # skips on Metal.
     with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
         yield
 
