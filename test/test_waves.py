@@ -1,5 +1,6 @@
 import warnings
 
+import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -173,6 +174,28 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
     waves = _to_waves(waves_builder.multislice(atoms, lazy=lazy))
     waves.compute()
     assert_is_normalized(waves)
+
+
+@pytest.mark.parametrize("chunks", [(1, 16, 20), (2, 16, 20)])
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
+    from abtem.core.axes import OrdinalAxis
+
+    rng = np.random.default_rng(0)
+    array = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    kwargs = dict(
+        energy=100e3,
+        sampling=0.1,
+        reciprocal_space=reciprocal_space,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    eager = Waves(array, **kwargs).normalize()
+    lazy = Waves(da.from_array(array, chunks=chunks), **kwargs).normalize()
+
+    assert lazy.is_lazy
+    lazy_result = lazy.copy().compute()
+    assert lazy_result.reciprocal_space == reciprocal_space
+    assert np.allclose(lazy_result.array, eager.array)
 
 
 @given(data=st.data(), potential=abtem_st.potential())

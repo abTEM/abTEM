@@ -398,6 +398,15 @@ class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
         self._in_place = in_place
+        super().__init__()
+
+    @property
+    def space(self) -> str:
+        return self._space
+
+    @property
+    def in_place(self) -> bool:
+        return self._in_place
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
