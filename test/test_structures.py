@@ -1024,3 +1024,33 @@ def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(
     difference -= lengths * np.round(difference / lengths)
     nearest = np.linalg.norm(difference, axis=-1).min(axis=1)
     np.testing.assert_allclose(nearest, 0.0, rtol=0, atol=1e-10)
+
+
+def _sorted_positions(atoms):
+    return atoms.positions[np.lexsort(np.round(atoms.positions, 6).T)]
+
+
+@pytest.mark.parametrize("margin", [0.0, 1.25, 3.0])
+@pytest.mark.parametrize(
+    "pbc, origin",
+    [(True, (0.0, 0.0, 0.0)), (False, (0.0, 0.0, 0.0)), (False, (0.7, 0.3, 0.0))],
+)
+@pytest.mark.parametrize("shift", [(-3, 0, 0), (0, 2, 0), (0, 0, 3), (2, -2, -2)])
+def test_cut_cell_keeps_atoms_given_outside_the_cell(shift, pbc, origin, margin):
+    """Moving an atom by whole lattice vectors leaves the repeated structure
+    unchanged, so it must leave the cut unchanged. Hexagonal, so the lattice
+    vectors are not the box axes; the cut has a margin, a nonzero origin, and
+    pbc False, where ``wrap`` does nothing."""
+    atoms = graphene(a=2.46, vacuum=2.0)
+    atoms.pbc = pbc
+    box = (4.26, 4.92, 4.0)
+    reference = cut_cell(atoms, cell=box, margin=margin, origin=origin)
+
+    moved = atoms.copy()
+    moved.positions[0] += np.dot(shift, atoms.cell)
+    cut = cut_cell(moved, cell=box, margin=margin, origin=origin)
+
+    assert len(cut) == len(reference)
+    np.testing.assert_allclose(
+        _sorted_positions(cut), _sorted_positions(reference), rtol=0, atol=1e-9
+    )

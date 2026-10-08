@@ -1352,7 +1352,7 @@ def cut_cell(
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell,
     ignoring periodicity. If the given atoms do not originally fill the cell, they are
-    first repeated until they do.
+    first repeated until they do, also when some of them lie outside the cell.
 
     Parameters
     ----------
@@ -1410,12 +1410,26 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
-    new_atoms = atoms * repetitions
+
+    # The repetitions follow from the corners of the box. An atom given outside
+    # the cell, and in a non-orthogonal cell with a margin even one inside it,
+    # needs more lattice shifts, below or above, for its images to reach the
+    # region kept, [-margin, cell + margin).
+    first = np.floor(scaled_corners.min(axis=0)) - scaled_margin.sum(0)
+    kept = scaled_corners - np.linalg.solve(atoms.cell.T, np.array(margin))
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    lowest = np.ceil(kept.min(axis=0) - scaled_positions.max(axis=0, initial=0.0))
+    highest = np.ceil(kept.max(axis=0) - scaled_positions.min(axis=0, initial=0.0)) - 1
+    below = np.maximum(first - lowest, 0).astype(int)
+    above = np.maximum(highest - (first + repetitions - 1), 0).astype(int)
+
+    new_atoms = atoms * (repetitions + below + above)
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
+    new_atoms.positions[:] -= np.dot(below, atoms.cell)
 
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from ase.build import bulk, graphene
+from ase.build import bulk, graphene, mx2
 from hypothesis import given
 from utils import (
     assert_array_matches_device,
@@ -24,6 +24,7 @@ from abtem.core.backend import asnumpy
 from abtem.core.fft import next_fast_fft_size
 from abtem.core.grid import disk_meshgrid, round_auto_derived_gpts
 from abtem.integrals import (
+    GaussianProjectionIntegrals,
     QuadratureProjectionIntegrals,
     _threaded_interpolate_radial_functions,
     interpolate_radial_functions,
@@ -1934,6 +1935,63 @@ class TestSliceIndexedAtomsWrapping:
             # sigma is 0.1 A, a cell length is at least 4 A.
             displacement = configuration.positions - atoms.positions
             assert np.abs(displacement).max() < 0.5
+
+    @cpu_float64
+    @pytest.mark.parametrize(
+        "integrator",
+        [
+            {"projection": "infinite"},
+            {"integrator": GaussianProjectionIntegrals()},
+            {"projection": "finite"},
+        ],
+        ids=["infinite", "gaussian", "quadrature"],
+    )
+    def test_cut_potential_folds_atoms_far_outside_the_cell(self, integrator):
+        """A box other than the cell sends a non-periodic potential through
+        ``cut_cell``, which repeated the cell only as far as the atoms inside it
+        need."""
+        kwargs = dict(integrator, periodic=False, box=(8.0, 10.0, 4.0))
+        moved = self._slices(
+            self._far_in_plane(self.FAR_IN_PLANE["far_x_and_y"]), **kwargs
+        )
+        reference = self._slices(self._far_in_plane(), **kwargs)
+        np.testing.assert_allclose(
+            moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+        )
+
+    @cpu_float64
+    @ignore_strain_warning
+    @pytest.mark.parametrize(
+        "integrator",
+        [{"projection": "infinite"}, {"integrator": GaussianProjectionIntegrals()}],
+        ids=["infinite", "gaussian"],
+    )
+    def test_default_box_keeps_an_atom_just_past_an_upper_face(self, integrator):
+        """The default box of a hexagonal cell is cut out of the repeated
+        structure. An atom 0.1 A past the upper face along the second lattice
+        vector is as much part of it as the same atom moved into the cell."""
+
+        def potential(scaled_y):
+            atoms = mx2("MoS2", vacuum=3.0)
+            scaled = atoms.get_scaled_positions(wrap=False)
+            scaled[1, 1] = scaled_y
+            atoms.set_scaled_positions(scaled)
+            return asnumpy(
+                Potential(
+                    atoms,
+                    sampling=0.1,
+                    slice_thickness=0.5,
+                    periodic=False,
+                    **integrator,
+                )
+                .build(lazy=False)
+                .array
+            )
+
+        reference = potential(0.03)
+        np.testing.assert_allclose(
+            potential(1.03), reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+        )
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_iterated_frozen_phonons_match_the_non_periodic_ensemble(self, device):
