@@ -524,7 +524,7 @@ def validate_potential(
     #    raise ValueError()
 
     if waves is not None and potential is not None:
-        potential.grid.match(waves)
+        potential.match_grid(waves)
 
     return potential
 
@@ -2175,20 +2175,55 @@ class CrystalPotential(_PotentialBuilder):
         return super().gpts
 
     @gpts.setter
-    def gpts(self, gpts: tuple[int, int]):
+    def gpts(self, gpts: int | tuple[int, int]):
+        gpts = self.grid._validate(gpts, dtype=int)
         if not (
             (gpts[0] % self.repetitions[0] == 0)
-            and (gpts[1] % self.repetitions[0] == 0)
+            and (gpts[1] % self.repetitions[1] == 0)
         ):
             raise ValueError(
                 "Number of grid points must be divisible by the number of potential"
-                "repetitions."
+                " repetitions."
             )
-        self.grid.gpts = gpts
-        self._potential_unit.gpts = (
+        unit_gpts = (
             gpts[0] // self._repetitions[0],
             gpts[1] // self._repetitions[1],
         )
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(unit_gpts, self._potential_unit.gpts)
+            return
+        # The unit first: a unit that rejects its gpts leaves the crystal unchanged.
+        self._potential_unit.gpts = unit_gpts
+        self.grid.gpts = gpts
+
+    def match_grid(self, other, check_match: bool = False):
+        """Match the grid to another object with a Grid, keeping the unit in step."""
+        # The gpts go through the setter, which keeps the unit in step or raises
+        # before anything changes; the extent is checked first so that a mismatch
+        # leaves the gpts alone as well.
+        if check_match:
+            self.grid.check_match(other)
+        self.grid.check_match(Grid(extent=other.extent))
+        if other.extent is None:
+            # An object given a sampling works out its gpts from the extent.
+            other.extent = self.extent
+        if other.gpts is not None and tuple(other.gpts) != self.gpts:
+            self.gpts = other.gpts
+        self.grid.match(other, check_match=check_match)
+        return self
+
+    @staticmethod
+    def _require_the_grid_of_a_built_unit(requested, current):
+        """
+        A built `PotentialArray` has the grid of its data. Setting the grid it has
+        changes nothing; any other grid raises, with the unit left untouched.
+        """
+        if not np.allclose(requested, current):
+            raise RuntimeError(
+                "The grid of a built PotentialArray unit is that of its data and "
+                "cannot be changed; set the gpts or sampling of the unit before "
+                "building it."
+            )
 
     @property
     def sampling(self) -> tuple[float, float] | None:
@@ -2196,8 +2231,26 @@ class CrystalPotential(_PotentialBuilder):
 
     @sampling.setter
     def sampling(self, sampling: tuple[float, float]):
-        self.sampling = sampling
+        validated = self.grid._validate(sampling, dtype=float)
+        if validated is None or not np.all(
+            np.isfinite(validated) & (np.asarray(validated) > 0)
+        ):
+            raise ValueError(
+                f"The sampling must be positive and finite, got {sampling}."
+            )
+        if isinstance(self._potential_unit, PotentialArray):
+            self._require_the_grid_of_a_built_unit(
+                validated, self._potential_unit.sampling
+            )
+            return
+        # The unit rounds its own gpts up for the requested sampling, and the
+        # crystal takes whole units, so its gpts follow the unit's.
         self._potential_unit.sampling = sampling
+        unit_gpts = self._potential_unit._valid_gpts
+        self.grid.gpts = (
+            unit_gpts[0] * self._repetitions[0],
+            unit_gpts[1] * self._repetitions[1],
+        )
 
     @property
     def repetitions(self) -> tuple[int, int, int]:
