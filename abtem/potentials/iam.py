@@ -1751,7 +1751,7 @@ class FieldArray(BaseField, ArrayObject):
     def _slice_kwargs(self) -> dict:
         """The constructor arguments, besides the array and thicknesses, that a
         slice or chunk of this array shares with it."""
-        return {"extent": self.extent}
+        return {"extent": self.extent, "metadata": self.metadata}
 
     def _warn_if_ensemble(self):
         if np.prod(self.ensemble_shape) > 1:
@@ -2268,7 +2268,9 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
     @property
     def _slice_kwargs(self) -> dict:
-        return {**super()._slice_kwargs, "energy": self.energy}
+        # The constructor takes no metadata: a transmission function always has
+        # the default metadata of a potential array.
+        return {"extent": self.extent, "energy": self.energy}
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]

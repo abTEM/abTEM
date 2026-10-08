@@ -17,7 +17,12 @@ from abtem.core.chunks import (
     estimate_scan_batch_size,
 )
 from abtem.core.complex import complex_exponential
-from abtem.magnetism.iam import MagneticField, VectorPotential
+from abtem.magnetism.iam import (
+    MagneticField,
+    MagneticFieldArray,
+    VectorPotential,
+    VectorPotentialArray,
+)
 from abtem.potentials.iam import BaseField, CrystalPotential, PotentialArray
 
 
@@ -632,6 +637,46 @@ class TestTransmissionFunctionSlices:
         assert len(chunks) == len(t) > 1
         assert [c.energy for c in chunks] == [t.energy] * len(t)
         assert chunks[0].transmission_function(100e3) is chunks[0]
+
+
+class TestSlicesKeepTheMetadata:
+    """Slices and chunks carry the metadata of their array, as indexing it does."""
+
+    @pytest.mark.parametrize(
+        "cls, shape",
+        [
+            (PotentialArray, (3, 8, 10)),
+            (MagneticFieldArray, (3, 3, 8, 10)),
+            (VectorPotentialArray, (3, 3, 8, 10)),
+        ],
+    )
+    def test_arrays(self, cls, shape):
+        array = cls(
+            np.ones(shape, dtype=np.float32),
+            slice_thickness=(1.0, 2.0, 1.5),
+            extent=(4.0, 5.0),
+            metadata={"note": "kept"},
+        )
+
+        slices = list(array.generate_slices())
+        chunks = list(array.generate_chunked_slices(chunk_size=2))
+
+        assert [len(c) for c in chunks] == [1, 2]
+        assert array.metadata["note"] == "kept"
+        for i, s in enumerate(slices):
+            assert s.metadata == array[i : i + 1].metadata
+        for chunk, (start, stop) in zip(chunks, [(0, 1), (1, 3)]):
+            assert chunk.metadata == array[start:stop].metadata
+
+    def test_transmission_functions(self):
+        t = _transmission_function()
+
+        for i, s in enumerate(t.generate_slices()):
+            assert s.metadata == t.get_chunk(i, i + 1).metadata
+        for chunk, (start, stop) in zip(
+            t.generate_chunked_slices(chunk_size=2), [(0, 2), (2, 4), (4, 6)]
+        ):
+            assert chunk.metadata == t.get_chunk(start, stop).metadata
 
 
 class TestAutoChunkSizeCountsTheComponentAxis:
