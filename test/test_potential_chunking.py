@@ -17,13 +17,14 @@ from abtem.core.chunks import (
     estimate_scan_batch_size,
 )
 from abtem.core.complex import complex_exponential
+from abtem.core.grid import Grid
 from abtem.magnetism.iam import (
     MagneticField,
     MagneticFieldArray,
     VectorPotential,
     VectorPotentialArray,
 )
-from abtem.potentials.iam import BaseField, CrystalPotential, PotentialArray
+from abtem.potentials.iam import BasePotential, CrystalPotential, PotentialArray
 
 
 @pytest.fixture
@@ -591,32 +592,55 @@ def _local_exit_planes(global_exit_planes, offset, length):
     )
 
 
-class TestBaseFieldSubclasses:
-    """A subclass written against the released BaseField needs no chunker."""
+class TestPotentialSubclassWithoutAChunker:
+    """A potential class written against v1.0.10 implements only that version's
+    abstract members, and has no generate_chunked_slices."""
 
     @staticmethod
-    def _minimal_subclass():
-        # The abstract members of BaseField in v1.0.10.
-        class Minimal(BaseField):
+    def _minimal_potential(array, extent):
+        class Minimal(BasePotential):
+            def __init__(self):
+                self._grid = Grid(extent=extent, gpts=array.shape[-2:])
+
             num_configurations = 1
             base_axes_metadata = []
-            exit_planes = (0,)
-            slice_thickness = (1.0,)
+            ensemble_axes_metadata = []
+            ensemble_shape = ()
+            device = "cpu"
+            slice_thickness = (1.0,) * len(array)
+            exit_planes = (len(array) - 1,)
 
             def generate_slices(self, first_slice=0, last_slice=None):
-                yield from ()
+                for i in range(first_slice, last_slice or len(array)):
+                    yield PotentialArray(array[i : i + 1], (1.0,), extent=extent)
 
             def build(self, first_slice=0, last_slice=None, chunks=1, lazy=None):
-                pass
+                return PotentialArray(array, self.slice_thickness, extent=extent)
 
-        return Minimal
+            def _partition_args(self, chunks=1, lazy=True):
+                return ()
 
-    def test_instantiates(self):
-        assert isinstance(self._minimal_subclass()(), BaseField)
+            def _from_partitioned_args(self):
+                def from_partitioned_args(*args, **kwargs):
+                    members = np.empty((), dtype=object)
+                    members[()] = self
+                    return members
 
-    def test_chunking_it_names_the_class(self):
-        with pytest.raises(NotImplementedError, match="Minimal"):
-            self._minimal_subclass()().generate_chunked_slices()
+                return from_partitioned_args
+
+        return Minimal()
+
+    def test_multislice_runs_slice_by_slice(self):
+        array = np.random.default_rng(0).random((3, 32, 32)).astype(np.float32)
+        potential = self._minimal_potential(array, extent=8.0)
+        waves = PlaneWave(energy=100e3, gpts=32, extent=8.0)
+
+        result = waves.multislice(potential, lazy=False)
+        expected = waves.multislice(
+            PotentialArray(array, (1.0,) * 3, extent=8.0), lazy=False
+        )
+
+        np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6)
 
 
 class TestTransmissionFunctionSlices:

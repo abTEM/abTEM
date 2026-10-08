@@ -147,23 +147,6 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
-    def generate_chunked_slices(
-        self,
-        first_slice: int = 0,
-        last_slice: Optional[int] = None,
-        chunk_size: int | str = "auto",
-    ):
-        """
-        Generate the slices in chunks of contiguous slices, each of the same class
-        as the field's built array and with its exit planes counted from the
-        chunk's first slice.
-
-        Implemented by the builders and the built arrays.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement generate_chunked_slices."
-        )
-
     @abstractmethod
     def build(
         self,
@@ -858,8 +841,9 @@ class _FieldBuilder(BaseField):
                 first_slice=chunk_start, last_slice=chunk_end, lazy=False
             )
 
-            # Remap exit planes to chunk-local indices (build() sets the
-            # full potential's exit_planes which are global indices).
+            # A chunk keeps only the exit planes inside its range, counted from
+            # its first slice: build() would add the entrance plane to the first
+            # range and, with none in range, the range's last slice.
             chunk._exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
