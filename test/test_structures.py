@@ -11,6 +11,7 @@ from utils import cpu_float64, ignore_strain_warning
 
 import abtem
 from abtem.atoms import (
+    _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
     decompose_affine_transform,
@@ -22,6 +23,7 @@ from abtem.atoms import (
     is_cell_valid,
     merge_close_atoms,
     orthogonalize_cell,
+    pad_atoms,
     plane_to_axes,
     rotate_atoms,
     rotate_atoms_to_plane,
@@ -1175,3 +1177,37 @@ def test_cut_cell_keeps_the_order_of_the_atoms_the_repetitions_reach():
     np.testing.assert_allclose(
         hexagonal.positions[:5], MOS2_PAST_THE_FACE_POSITIONS, rtol=0, atol=5e-5
     )
+
+
+@pytest.mark.parametrize("length, margin", [(4.0, 4.29), (20.0, 4.29), (5.0, 1.05)])
+def test_wrap_far_atoms_leaves_pad_atoms_every_image_of_every_atom(length, margin):
+    """Wherever an atom is given along x, the padding of the wrapped atom holds
+    all the atoms of the periodic structure within the margin, and the wrapped atom
+    is itself within the margin. An atom is moved only when it needs to be."""
+    margins = (margin, margin, margin)
+    given = np.arange(-7.5 * length, 7.5 * length, 0.37)
+    atoms = Atoms(
+        "B" * len(given),
+        positions=np.column_stack([given, np.ones_like(given), np.ones_like(given)]),
+        cell=np.diag([length, 5.0, 5.0]),
+        pbc=True,
+    )
+    wrapped = atoms.copy()
+
+    _wrap_far_atoms(wrapped, margins, "x")
+
+    moved = wrapped.positions[:, 0] != given
+    within = (given >= -margin) & (given < length + margin)
+    reached = (given >= margin - np.ceil(margin / length) * length) & (
+        given < (np.ceil(margin / length) + 1) * length - margin
+    )
+    np.testing.assert_array_equal(moved, ~(within & reached))
+    for x, new_x in zip(given, wrapped.positions[:, 0]):
+        single = Atoms("B", positions=[[new_x, 1.0, 1.0]], cell=atoms.cell, pbc=True)
+        padded = pad_atoms(single, margins, "x").positions[:, 0]
+        expected = x + length * np.arange(-12, 13)
+        expected = expected[
+            (expected >= -margin - 1e-12) & (expected < length + margin - 1e-12)
+        ]
+        np.testing.assert_allclose(np.sort(padded), expected, rtol=0, atol=1e-9)
+        assert -margin <= new_x < length + margin

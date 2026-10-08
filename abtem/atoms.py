@@ -1508,6 +1508,43 @@ def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
     return atoms
 
 
+def _pad_images(margin: float, length: float) -> int:
+    """The number of cell lengths `pad_atoms` repeats a cell to each side."""
+    return int(np.ceil(margin / length))
+
+
+def _wrap_far_atoms(
+    atoms: Atoms, margins: tuple[float, float, float], directions: str = "xy"
+) -> None:
+    """
+    Wrap into the cell, in place, the atoms that `pad_atoms` would not keep with all
+    their images, along the given directions.
+
+    `pad_atoms` repeats the cell `_pad_images` times to each side and crops to the
+    margin. The images of an atom given outside the cell are all in the repetitions
+    only up to the distance they reach less the margin, and the atom itself is kept
+    only up to the margin. Wrapping the atoms further out, by whole cell lengths,
+    leaves the periodic structure unchanged. An atom closer to the cell is not moved.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to wrap, with an orthogonal cell.
+    margins : tuple of three floats
+        The padding margin along `x`, `y` and `z`.
+    directions : str
+        The directions to wrap along, as for `pad_atoms`.
+    """
+    for direction in directions:
+        axis = "xyz".index(direction)
+        length = atoms.cell[axis, axis]
+        reach = _pad_images(margins[axis], length) * length
+        slack = min(reach - margins[axis], margins[axis])
+        positions = atoms.positions[:, axis]
+        far = (positions < -slack) | (positions >= length + slack)
+        positions[far] = np.mod(positions[far], length)
+
+
 def pad_atoms(
     atoms: Atoms,
     margins: SupportsFloat | tuple[float, float, float],
@@ -1561,7 +1598,7 @@ def pad_atoms(
 
     reps = [1, 1, 1]
     for axis in axes:
-        reps[axis] = int(1 + 2 * np.ceil(margins[axis] / atoms.cell[axis, axis]))
+        reps[axis] = 1 + 2 * _pad_images(margins[axis], atoms.cell[axis, axis])
 
     if not any([rep > 1 for rep in reps]):
         return atoms
