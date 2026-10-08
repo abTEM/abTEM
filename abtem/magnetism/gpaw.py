@@ -22,6 +22,7 @@ from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
 from abtem.potentials.gpaw import _GPAW_LOCK, GPAWPotential
 from abtem.potentials.iam import PotentialArray, _FieldBuilder
+from abtem.slicing import is_number
 
 
 def _calculate_non_periodic_magnetic_vector_potential():
@@ -152,6 +153,40 @@ def _check_unsupported_ensemble_params(frozen_phonons, repetitions):
         )
 
 
+def _real_space_slicing(
+    slice_thickness: float | tuple[float, ...], num_planes: int, depth: float
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """
+    The slice thicknesses of a real-space projection and the number of z planes
+    of the density summed into each slice, which add up to `num_planes`.
+
+    A single thickness is divided into slices of whole planes as evenly as the
+    planes allow. A sequence of thicknesses must put every slice boundary on a
+    plane, as the thicknesses returned here do, so that a builder made with the
+    `slice_thickness` of another slices the same way.
+    """
+    if is_number(slice_thickness):
+        thicknesses, planes = equal_slice_thicknesses(
+            num_planes, float(slice_thickness), depth=depth
+        )
+        return tuple(thicknesses), tuple(int(n) for n in planes)
+
+    dz = depth / num_planes
+    thicknesses = np.array([float(t) for t in slice_thickness])
+    planes = np.rint(thicknesses / dz).astype(int)
+    if (
+        planes.min() < 1
+        or planes.sum() != num_planes
+        or not np.allclose(planes * dz, thicknesses, rtol=1e-6, atol=0.0)
+    ):
+        raise NotImplementedError(
+            "The slice thicknesses of the real-space projection must be whole "
+            f"numbers of the z grid spacing, {dz:.6g} Å, that add up to the depth, "
+            f"{depth:.6g} Å; the nearest are {tuple(float(n * dz) for n in planes)}."
+        )
+    return tuple(float(n * dz) for n in planes), tuple(int(n) for n in planes)
+
+
 @runtime_checkable
 class GPAW(Protocol):
     @property
@@ -202,20 +237,28 @@ class _GPAWMagnetics(_FieldBuilder):
 
         self._rotate_field = rotate_field
 
-        if projection == "real_space" and isinstance(slice_thickness, (float, int)):
-            n_z = calculators.get_number_of_grid_points()[2] * gridrefinement
+        # The number of z planes of the density summed into each real-space slice.
+        self._planes_per_slice: Optional[tuple[int, ...]] = None
 
-            slice_thickness = float(slice_thickness)
-
-            axes = plane_to_axes(plane)
-            depth = np.diag(cell)[axes[2]]
-
-            slice_thickness, n_per_slice = equal_slice_thicknesses(
-                n_z, slice_thickness, depth=depth
+        if projection == "real_space":
+            # The slices are stacked along the third axis of `plane`, which is the
+            # last axis of the field once `generate_slices` has moved its axes.
+            axis = plane_to_axes(plane)[2]
+            slice_thickness, self._planes_per_slice = _real_space_slicing(
+                slice_thickness,
+                num_planes=int(calculators.get_number_of_grid_points()[axis])
+                * gridrefinement,
+                depth=float(np.diag(cell)[axis]),
             )
-        elif projection == "real_space":
+        elif not is_number(slice_thickness) and not np.allclose(
+            [float(t) for t in slice_thickness], float(slice_thickness[0]), rtol=1e-6
+        ):
+            # The fft projection samples the field on evenly spaced planes, one at
+            # the entrance of each slice, so it cannot follow other thicknesses.
             raise NotImplementedError(
-                "Non-uniform slice thicknesses not supported for real-space projection."
+                "Non-uniform slice thicknesses are not supported for the fft "
+                "projection; use projection='real_space', whose slice boundaries "
+                "may be any of the z grid planes."
             )
 
         self._projection = projection
@@ -286,17 +329,20 @@ class _GPAWMagnetics(_FieldBuilder):
         xp = get_array_module(self.device)
 
         if self._projection == "real_space":
-            depth = self._calculators.atoms.cell[2, 2]
-            pixels_per_slice = (slice_thicknesses / depth * array.shape[-1]).astype(int)
+            planes_per_slice = self._planes_per_slice
+            assert planes_per_slice is not None
+            if sum(planes_per_slice) != array.shape[-1]:
+                raise RuntimeError(
+                    f"The slices span {sum(planes_per_slice)} z planes, but the "
+                    f"calculator's density has {array.shape[-1]}."
+                )
+            bounds = np.cumsum((0,) + planes_per_slice)
 
             dz = slice_thicknesses.sum() / array.shape[-1]
 
-            start = pixels_per_slice[:first_slice].sum()
             for slice_idx in range(first_slice, last_slice):
-                slice_array = (
-                    array[..., start : start + pixels_per_slice[slice_idx]].sum(-1) * dz
-                )
-                start += pixels_per_slice[slice_idx]
+                start, stop = bounds[slice_idx], bounds[slice_idx + 1]
+                slice_array = array[..., start:stop].sum(-1) * dz
 
                 if self._valid_gpts != slice_array.shape[1:]:
                     slice_array = fft_interpolate(slice_array, slice_shape)

@@ -3,11 +3,14 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.magnetism.gpaw import (
     GPAWMagneticField,
     GPAWMagneticFields,
     GPAWVectorPotential,
+    get_magnetic_field_from_gpaw,
+    get_vector_potential_from_gpaw,
 )
 from abtem.potentials.iam import PotentialArray
 from utils import devices
@@ -82,18 +85,21 @@ def test_show_draws_fields_built_on_a_device(device):
 
 
 @pytest.mark.parametrize(
-    "projection, slice_thickness",
+    "projection, slice_thickness, num_thicknesses",
     [
         # real-space slices are whole z pixels: 16 pixels over 5 slices are
         # 3, 3, 3, 3, 4
-        ("real_space", 0.8),
-        ("fft", (0.4, 1.2, 0.8, 1.0, 0.6)),
+        ("real_space", 0.8, 2),
+        # ... or any thicknesses whose boundaries are on z pixels
+        ("real_space", (0.75, 1.0, 0.75, 0.75, 0.75), 2),
+        # the fft projection takes uniform slices only
+        ("fft", 0.8, 1),
     ],
 )
 @pytest.mark.parametrize("first_slice, last_slice", [(1, 4), (2, None)])
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
 def test_gpaw_field_slice_range_matches_the_full_build(
-    builder, projection, slice_thickness, first_slice, last_slice
+    builder, projection, slice_thickness, num_thicknesses, first_slice, last_slice
 ):
     field = builder(
         _SpinPolarizedCalculator(),
@@ -107,7 +113,7 @@ def test_gpaw_field_slice_range_matches_the_full_build(
     part = field.build(first_slice=first_slice, last_slice=last_slice)
 
     assert full.array.shape[0] == 5
-    assert len(set(full.slice_thickness)) > 1
+    assert len(set(full.slice_thickness)) == num_thicknesses
     scale = np.abs(full.array).max()
     assert scale > 0
     np.testing.assert_allclose(
@@ -118,3 +124,139 @@ def test_gpaw_field_slice_range_matches_the_full_build(
         s.slice_thickness for s in field.generate_slices(first_slice, last_slice)
     ]
     assert generated == [(t,) for t in full.slice_thickness[first_slice:last_slice]]
+
+
+class _NonDividingCalculator(_SpinPolarizedCalculator):
+    """A calculator whose 17 z planes over 2 Å, sliced at 0.34 Å, are 2, 3, 3, 3,
+    3, 3 planes per slice. With `axis=1` the y axis is the one of 17 planes, the
+    slicing axis of plane="xz"."""
+
+    def __init__(self, axis=2):
+        cell, gpts = [3.0, 3.5, 3.5], [6, 7, 7]
+        cell[axis], gpts[axis] = 2.0, 17
+        self.atoms = Atoms("Fe", positions=[(1.0, 1.2, 0.7)], cell=cell, pbc=True)
+        self._gpts = np.array(gpts)
+
+    def get_number_of_grid_points(self):
+        return self._gpts
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self.get_number_of_grid_points() * gridrefinement)
+        x, y, z = np.meshgrid(
+            *(2 * np.pi * np.arange(n) / n for n in shape), indexing="ij"
+        )
+        # Terms constant along z and along y give the field a nonzero average
+        # along either slicing axis; the second harmonics vary it over slices.
+        up = (
+            1.0
+            + 0.3 * np.sin(x) * np.cos(y)
+            + 0.3 * np.sin(x) * np.cos(z)
+            + 0.2 * np.cos(x) * np.sin(2 * y) * np.sin(2 * z)
+        )
+        return np.stack([up, 0.5 * up])[spin]
+
+
+_REAL_SPACE_PLANES = {"xy": ((0, 1, 2), 2), "xz": ((0, 2, 1), 1)}
+
+
+@devices
+@pytest.mark.parametrize("plane", list(_REAL_SPACE_PLANES))
+@pytest.mark.parametrize(
+    "builder, raw_field",
+    [
+        (GPAWMagneticField, get_magnetic_field_from_gpaw),
+        (GPAWVectorPotential, get_vector_potential_from_gpaw),
+    ],
+)
+def test_gpaw_real_space_slices_use_every_z_plane_once(
+    builder, raw_field, plane, device
+):
+    axes, axis = _REAL_SPACE_PLANES[plane]
+    calculator = _NonDividingCalculator(axis)
+    field = builder(
+        calculator,
+        gpts=tuple(int(calculator.get_number_of_grid_points()[a]) for a in axes[:2]),
+        slice_thickness=0.34,
+        gridrefinement=1,
+        projection="real_space",
+        plane=plane,
+        rotate_field=None,
+        device=device,
+    )
+    thicknesses, planes = equal_slice_thicknesses(17, 0.34, depth=2.0)
+    assert tuple(planes) == (2, 3, 3, 3, 3, 3)
+    assert field.slice_thickness == pytest.approx(thicknesses, rel=1e-12)
+
+    # The field in the frame of `plane`: its components and axes in the order of
+    # `axes`, sliced along the last axis.
+    expected = np.moveaxis(raw_field(calculator, gridrefinement=1), axis + 1, -1)
+    expected = expected[list(axes)]
+    dz = 2.0 / 17
+    bounds = np.cumsum((0,) + tuple(planes))
+    expected_slices = np.stack(
+        [expected[..., a:b].sum(-1) * dz for a, b in zip(bounds[:-1], bounds[1:])]
+    )
+
+    built = field.build()
+    assert get_array_module(built.array) is get_array_module(device)
+    array = asnumpy(built.array)
+    scale = np.abs(expected_slices).max()
+    assert scale > 0
+    atol = 1e-5 * scale
+    np.testing.assert_allclose(array, expected_slices, rtol=0, atol=atol)
+    # The slices add up to the integral of the field through the whole cell.
+    integral = expected.sum(-1) * dz
+    assert np.abs(integral).max() > 0.1 * scale
+    np.testing.assert_allclose(array.sum(0), integral, rtol=0, atol=atol)
+
+    part = asnumpy(field.build(first_slice=2, last_slice=5).array)
+    np.testing.assert_allclose(part, array[2:5], rtol=0, atol=atol)
+
+
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_real_space_builder_rebuilds_from_its_slice_thickness(builder):
+    calculator = _NonDividingCalculator()
+    kwargs = dict(gpts=(6, 7), gridrefinement=1, projection="real_space")
+    field = builder(calculator, slice_thickness=0.34, **kwargs)
+
+    rebuilt = builder(calculator, slice_thickness=field.slice_thickness, **kwargs)
+    copied = field.copy()
+
+    expected = asnumpy(field.build().array)
+    for other in (rebuilt, copied):
+        assert other.slice_thickness == field.slice_thickness
+        np.testing.assert_array_equal(asnumpy(other.build().array), expected)
+
+
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_real_space_projection_rejects_thicknesses_off_the_z_grid(builder):
+    # The z planes of _SpinPolarizedCalculator are 0.25 Å apart.
+    with pytest.raises(NotImplementedError, match="whole numbers of the z grid"):
+        builder(
+            _SpinPolarizedCalculator(),
+            sampling=0.25,
+            slice_thickness=(0.4, 1.2, 0.8, 1.0, 0.6),
+            gridrefinement=2,
+            projection="real_space",
+        )
+
+
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_fft_projection_takes_uniform_slice_thicknesses_only(builder):
+    kwargs = dict(sampling=0.25, gridrefinement=2, projection="fft")
+    with pytest.raises(NotImplementedError, match="Non-uniform slice thicknesses"):
+        builder(
+            _SpinPolarizedCalculator(),
+            slice_thickness=(0.4, 1.2, 0.8, 1.0, 0.6),
+            **kwargs,
+        )
+
+    uniform = builder(_SpinPolarizedCalculator(), slice_thickness=(0.8,) * 5, **kwargs)
+    np.testing.assert_array_equal(
+        asnumpy(uniform.build().array),
+        asnumpy(
+            builder(_SpinPolarizedCalculator(), slice_thickness=0.8, **kwargs)
+            .build()
+            .array
+        ),
+    )
