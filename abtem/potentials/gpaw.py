@@ -22,6 +22,7 @@ from scipy.interpolate import interp1d
 
 from abtem.atoms import is_cell_orthogonal, plane_to_axes
 from abtem.core.axes import AxisMetadata
+from abtem.core.backend import copy_to_device
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,
@@ -288,6 +289,7 @@ def _generate_slices(
     plane="xy",
     first_slice=0,
     last_slice=None,
+    device=None,
 ):
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
@@ -299,6 +301,7 @@ def _generate_slices(
             slice_thickness=slice_thickness,
             projection="finite",
             plane=plane,
+            device=device,
         )
         potential_generators.append(potential.generate_slices())
 
@@ -331,14 +334,17 @@ def _generate_slices(
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array
 
+        # The valence potential is on the host; its slice is moved to the device
+        # of the slice array.
         if transform_valence_potential:
-            slic.array[:] -= _interpolate_slice(
+            valence_slice = _interpolate_slice(
                 valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
             )
         else:
-            slic.array[:] -= integrate_slice(
+            valence_slice = integrate_slice(
                 valence_potential, potential.gpts, a, b, potential.thickness
             )
+        slic.array[:] -= copy_to_device(valence_slice, slic.array)
 
         yield slic
 
@@ -575,6 +581,7 @@ class GPAWPotential(_PotentialBuilder):
             slice_thickness=self.slice_thickness,
             first_slice=first_slice,
             last_slice=last_slice,
+            device=self.device,
         ):
             yield slic
         # for slic in _generate_slices(

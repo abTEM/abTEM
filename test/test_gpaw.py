@@ -5,8 +5,10 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.iam import Potential
+from utils import devices
 
 try:
     from gpaw import GPAW, PW
@@ -212,4 +214,44 @@ def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
     assert np.all(
         gpaw_potential_from_disk_with_fp.array[0]
         == gpaw_potential_from_disk_with_fp.array[1]
+    )
+
+
+# A single element, two elements (their potentials are summed per slice), and a
+# non-orthogonal cell (the valence potential is interpolated onto each slice).
+_DEVICE_CELLS = {
+    "C": (["C"], [(0.6, 0.8, 1.0)], (3.2, 2.8, 3.6)),
+    "CO": (["C", "O"], [(0.6, 0.8, 1.0), (1.9, 1.5, 2.4)], (3.2, 2.8, 3.6)),
+    "C-nonorthogonal": (
+        ["C"],
+        [(0.6, 0.8, 1.0)],
+        [[3.2, 0.0, 0.0], [1.0, 2.8, 0.0], [0.0, 0.0, 3.6]],
+    ),
+}
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("cell_name", list(_DEVICE_CELLS))
+def test_gpaw_potential_built_on_a_device_matches_the_cpu_build(
+    cell_name, lazy, device
+):
+    symbols, positions, cell = _DEVICE_CELLS[cell_name]
+    atoms = Atoms(symbols, positions=positions, cell=cell, pbc=True)
+    atoms.calc = GPAW(mode=PW(250), h=0.2, txt=None, symmetry="off")
+    atoms.get_potential_energy()
+
+    kwargs = dict(gpts=(32, 28), slice_thickness=0.9)
+    expected = asnumpy(
+        GPAWPotential(atoms.calc, device="cpu", **kwargs).build(lazy=False).array
+    )
+    built = GPAWPotential(atoms.calc, device=device, **kwargs).build(lazy=lazy)
+    built = built.compute()
+
+    assert get_array_module(built.array) is get_array_module(device)
+    assert built.array.shape[0] > 1
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        asnumpy(built.array), expected, rtol=0, atol=1e-5 * scale
     )
