@@ -12,7 +12,7 @@ import abtem
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.iam import Potential
-from utils import devices
+from utils import devices, ignore_strain_warning
 
 try:
     from gpaw import GPAW, PW
@@ -270,6 +270,7 @@ _DEVICE_CELLS = {
 }
 
 
+@ignore_strain_warning
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("cell_name", list(_DEVICE_CELLS))
