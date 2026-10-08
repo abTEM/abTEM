@@ -269,6 +269,7 @@ def _local_exit_planes(global_exit_planes, offset, length):
     )
 
 
+@devices
 @pytest.mark.parametrize(
     "projection, slice_thickness",
     [
@@ -282,8 +283,9 @@ def _local_exit_planes(global_exit_planes, offset, length):
 )
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
 def test_gpaw_field_chunked_slices_match_the_full_build(
-    builder, projection, slice_thickness, first_slice, last_slice, chunk_size
+    builder, projection, slice_thickness, first_slice, last_slice, chunk_size, device
 ):
+    xp = get_array_module(device)
     field = builder(
         _SpinPolarizedCalculator(),
         sampling=0.25,
@@ -291,6 +293,7 @@ def test_gpaw_field_chunked_slices_match_the_full_build(
         gridrefinement=2,
         projection=projection,
         exit_planes=2,
+        device=device,
     )
     full = field.build()
     stop = len(full) if last_slice is None else last_slice
@@ -303,11 +306,13 @@ def test_gpaw_field_chunked_slices_match_the_full_build(
     assert len(chunks) > 1
     assert len({len(chunk) for chunk in chunks}) > 1
     assert all(type(chunk) is type(full) for chunk in chunks)
-    scale = np.abs(full.array).max()
+    assert all(get_array_module(chunk.array) is xp for chunk in chunks)
+    assert all(chunk.sampling == full.sampling for chunk in chunks)
+    scale = np.abs(asnumpy(full.array)).max()
     assert scale > 0
     np.testing.assert_allclose(
-        np.concatenate([chunk.array for chunk in chunks]),
-        full.array[first_slice:stop],
+        asnumpy(xp.concatenate([chunk.array for chunk in chunks])),
+        asnumpy(full.array[first_slice:stop]),
         rtol=0,
         atol=1e-6 * scale,
     )
@@ -323,21 +328,26 @@ def test_gpaw_field_chunked_slices_match_the_full_build(
         offset += len(chunk)
 
 
+@devices
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-def test_built_gpaw_field_iterates_and_chunks_its_own_slices(builder):
+def test_built_gpaw_field_iterates_and_chunks_its_own_slices(builder, device):
+    xp = get_array_module(device)
     full = builder(
         _SpinPolarizedCalculator(),
         sampling=0.25,
         slice_thickness=(0.75, 1.0, 0.75, 0.75, 0.75),
         gridrefinement=2,
         projection="real_space",
+        device=device,
     ).build()
 
     slices = list(full)
 
     assert len(set(full.slice_thickness)) == 2
     assert [type(s) for s in slices] == [type(full)] * len(full)
-    np.testing.assert_array_equal(np.concatenate([s.array for s in slices]), full.array)
+    np.testing.assert_array_equal(
+        asnumpy(xp.concatenate([s.array for s in slices])), asnumpy(full.array)
+    )
     assert [s.slice_thickness for s in slices] == [(t,) for t in full.slice_thickness]
 
     chunks = list(full.generate_chunked_slices(2, 5, chunk_size=2))
@@ -345,6 +355,6 @@ def test_built_gpaw_field_iterates_and_chunks_its_own_slices(builder):
     assert [len(c) for c in chunks] == [1, 2]
     assert [type(c) for c in chunks] == [type(full)] * len(chunks)
     np.testing.assert_array_equal(
-        np.concatenate([c.array for c in chunks]), full.array[2:5]
+        asnumpy(xp.concatenate([c.array for c in chunks])), asnumpy(full.array[2:5])
     )
     assert sum((c.slice_thickness for c in chunks), ()) == full.slice_thickness[2:5]

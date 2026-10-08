@@ -141,6 +141,34 @@ def test_build_from_frozen_phonons(
         )
 
 
+def test_chunks_of_frozen_phonons_hold_every_configuration(
+    carbon_atoms, charge_density_3d
+):
+    """The chunks of an unbuilt potential with frozen phonons hold every
+    configuration, each equal to the potential of its displaced atoms built alone."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    potential = ChargeDensityPotential(
+        frozen_phonons, charge_density_3d, sampling=0.2, slice_thickness=1.0
+    )
+
+    chunks = list(potential.generate_chunked_slices(chunk_size=2))
+
+    assert len(potential) == 5
+    assert [chunk.shape[:2] for chunk in chunks] == [(3, 1), (3, 2), (3, 2)]
+    for i, atoms in enumerate(frozen_phonons):
+        expected = ChargeDensityPotential(
+            atoms, charge_density_3d, sampling=0.2, slice_thickness=1.0
+        ).build(lazy=False)
+        np.testing.assert_allclose(
+            np.concatenate([chunk.array[i] for chunk in chunks]),
+            expected.array,
+            rtol=0,
+            atol=1e-6 * expected.array.max(),
+        )
+
+
 @pytest.mark.parametrize("plane", ["xz", "yz"])
 def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     charge_density_3d, plane

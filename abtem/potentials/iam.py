@@ -147,6 +147,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
+    @abstractmethod
     def generate_chunked_slices(
         self,
         first_slice: int = 0,
@@ -154,90 +155,11 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         chunk_size: int | str = "auto",
     ):
         """
-        Generate potential slices in memory-budgeted chunks.
-
-        Previously, ``build()`` always placed the entire slice dimension into a
-        single dask chunk — meaning the full ``(num_slices, gpts_y, gpts_x)``
-        array had to fit in memory (or VRAM) at once. There was no slice-level
-        chunking. This method introduces that missing middle ground: it eagerly
-        builds a group of contiguous slices that fits within a configurable
-        memory budget, yields it, and the caller can
-        discard it after propagation before the next chunk is built. This
-        bounds peak memory and enables simulations of systems whose full
-        potential would not fit in memory.
-
-        On GPU this is especially important: dask uses a synchronous scheduler,
-        so the full potential chunk would be materialized at once in VRAM.
-        Chunking over slices keeps VRAM usage bounded while still feeding the
-        GPU enough data per chunk for efficient computation.
-
-        This default implementation collects slices from ``generate_slices()``
-        and stacks them. Subclasses may override for more efficient
-        implementations (e.g. ``_FieldBuilderFromAtoms`` uses
-        ``build(first_slice, last_slice)`` to avoid intermediate single-slice
-        allocations).
-
-        Parameters
-        ----------
-        first_slice : int, optional
-            Index of the first slice.
-        last_slice : int, optional
-            Index of the last slice.
-        chunk_size : int or str, optional
-            Number of slices per chunk. ``"auto"`` selects based on the
-            configured memory budget (``dask.chunk-size`` on CPU,
-            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
-            ``potential.slice-chunk-size`` configuration key.
-
-        Yields
-        ------
-        FieldArray
-            A chunk of contiguous slices, of the same class as the slices of
-            ``generate_slices()`` (``PotentialArray`` for a potential), with
-            correctly assigned exit planes.
+        Generate the slices in chunks of contiguous slices, each of the same class
+        as the field's built array and with its exit planes counted from the
+        chunk's first slice.
         """
-        from abtem.core.chunks import (
-            estimate_potential_chunk_size,
-            generate_chunks,
-        )
-
-        if last_slice is None:
-            last_slice = len(self)
-
-        if chunk_size == "auto":
-            chunk_size = estimate_potential_chunk_size(
-                self.gpts, self.device
-            )
-
-        # Cap so the whole range is one chunk when it fits in the budget,
-        # then distribute evenly so the last chunk is never smaller than
-        # necessary (equal_sized_chunks inside generate_chunks handles this).
-        chunk_size = min(chunk_size, last_slice - first_slice)
-
-        xp = get_array_module(self.device)
-        exit_plane_after = self._exit_plane_after
-
-        for chunk_start, chunk_end in generate_chunks(
-            last_slice - first_slice, chunks=chunk_size, start=first_slice
-        ):
-            arrays = []
-            slice_thicknesses = []
-            for slic in self.generate_slices(chunk_start, chunk_end):
-                arrays.append(slic.array)
-                slice_thicknesses.extend(slic.slice_thickness)
-
-            array = xp.concatenate(arrays, axis=0)
-            exit_planes = tuple(
-                np.where(exit_plane_after[chunk_start:chunk_end])[0]
-            )
-
-            chunk = type(slic)(
-                array,
-                slice_thickness=tuple(slice_thicknesses),
-                extent=self.extent,
-            )
-            chunk._exit_planes = exit_planes
-            yield chunk
+        pass
 
     @abstractmethod
     def build(
@@ -870,6 +792,77 @@ class _FieldBuilder(BaseField):
         )
         return output_potential
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate the slices in memory-budgeted chunks.
+
+        Each chunk is built eagerly with ``build(chunk_start, chunk_end,
+        lazy=False)``, so it has the sampling and ensemble axes of the built
+        field. The caller discards a chunk after use, which bounds the memory
+        (on a GPU, the VRAM) held at once to one chunk instead of the whole
+        slice axis of ``build()``. A builder whose ``generate_slices`` computes
+        the whole field on every call (the GPAW magnetic builders) repeats that
+        work for each chunk.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget (``dask.chunk-size`` on CPU,
+            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
+
+        Yields
+        ------
+        FieldArray
+            An eagerly computed chunk of contiguous slices, of the class this
+            builder builds (``PotentialArray`` for a potential), with exit planes
+            counted from its first slice.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            chunk = self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
+
+            # Remap exit planes to chunk-local indices (build() sets the
+            # full potential's exit_planes which are global indices).
+            chunk._exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            yield chunk
+
 
 def _plane_frame(atoms: Atoms, plane, small_cell_components: float = 0.0) -> np.ndarray:
     """The linear map `rotate_atoms_to_plane` applies to the positions of
@@ -1355,73 +1348,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 yield depth, potential_array
             else:
                 yield potential_array
-
-    def generate_chunked_slices(
-        self,
-        first_slice: int = 0,
-        last_slice: Optional[int] = None,
-        chunk_size: int | str = "auto",
-    ):
-        """
-        Generate potential slices in memory-budgeted chunks.
-
-        Overrides the base class to use ``build(first_slice, last_slice,
-        lazy=False)`` for each chunk range. This eagerly computes a contiguous
-        block of slices directly into a single allocation, avoiding the
-        overhead of building and stacking individual slices. Each chunk is
-        discarded by the caller after propagation, so only one chunk needs
-        to reside in memory (or VRAM) at a time.
-
-        Parameters
-        ----------
-        first_slice : int, optional
-            Index of the first slice.
-        last_slice : int, optional
-            Index of the last slice.
-        chunk_size : int or str, optional
-            Number of slices per chunk. ``"auto"`` selects based on the
-            configured memory budget.
-
-        Yields
-        ------
-        FieldArray
-            An eagerly computed chunk of contiguous slices, of the class this
-            builder builds (``PotentialArray`` for a potential).
-        """
-        from abtem.core.chunks import (
-            estimate_potential_chunk_size,
-            generate_chunks,
-        )
-
-        if last_slice is None:
-            last_slice = len(self)
-
-        if chunk_size == "auto":
-            chunk_size = estimate_potential_chunk_size(
-                self.gpts, self.device
-            )
-
-        # Cap so the whole range is one chunk when it fits in the budget,
-        # then distribute evenly so the last chunk is never smaller than
-        # necessary (equal_sized_chunks inside generate_chunks handles this).
-        chunk_size = min(chunk_size, last_slice - first_slice)
-
-        exit_plane_after = self._exit_plane_after
-
-        for chunk_start, chunk_end in generate_chunks(
-            last_slice - first_slice, chunks=chunk_size, start=first_slice
-        ):
-            chunk = self.build(
-                first_slice=chunk_start, last_slice=chunk_end, lazy=False
-            )
-
-            # Remap exit planes to chunk-local indices (build() sets the
-            # full potential's exit_planes which are global indices).
-            chunk._exit_planes = tuple(
-                np.where(exit_plane_after[chunk_start:chunk_end])[0]
-            )
-
-            yield chunk
 
     @property
     def ensemble_axes_metadata(self):

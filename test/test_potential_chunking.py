@@ -9,7 +9,7 @@ import pytest
 from utils import requires_gpu, si_cubic_atoms
 from ase.build import bulk
 
-from abtem import PlaneWave, Potential
+from abtem import FrozenPhonons, PlaneWave, Potential
 from abtem.core import config as abtem_config
 from abtem.core.chunks import (
     _nearest_power_of_two,
@@ -17,6 +17,7 @@ from abtem.core.chunks import (
     estimate_scan_batch_size,
 )
 from abtem.core.complex import complex_exponential
+from abtem.magnetism.iam import MagneticField, VectorPotential
 from abtem.potentials.iam import CrystalPotential, PotentialArray
 
 
@@ -249,7 +250,7 @@ class TestMultisliceWithChunking:
 
         This is stronger than comparing two chunked runs: the pre-built path
         exercises ``FieldArray.generate_chunked_slices`` (array-view slicing)
-        while the unbuilt path exercises ``_FieldBuilderFromAtoms.generate_chunked_slices``
+        while the unbuilt path exercises ``_FieldBuilder.generate_chunked_slices``
         (on-the-fly build). Agreement between the two confirms that neither
         chunker introduces numerical error relative to the underlying atom
         integration.
@@ -556,3 +557,49 @@ class TestComplexExponential:
         assert isinstance(result_gpu, cp.ndarray)
         assert result_gpu.dtype == expected_cdtype
         assert np.allclose(cp.asnumpy(result_gpu), result_cpu, atol=1e-6)
+
+
+def _fe_atoms_with_moments():
+    atoms = bulk("Fe", cubic=True) * (1, 1, 2)
+    moments = np.tile([[0.0, 0.0, 2.0], [0.5, 0.0, 1.0]], (len(atoms) // 2, 1))
+    atoms.set_array("magnetic_moments", moments)
+    return atoms
+
+
+def _local_exit_planes(global_exit_planes, offset, length):
+    return tuple(
+        int(i) - offset for i in global_exit_planes if offset <= i < offset + length
+    )
+
+
+@pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+class TestAtomBasedFieldsWithFrozenPhonons:
+    """The slices of a field with an ensemble axis, against slicing the full
+    build's array."""
+
+    @staticmethod
+    def _field(cls):
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), 2, sigmas=0.05, seed=3
+        )
+        return cls(phonons, gpts=(16, 20), slice_thickness=1.5, exit_planes=2)
+
+    def test_builder_chunks_hold_every_member(self, cls):
+        field = self._field(cls)
+        full = field.build()
+
+        chunks = list(field.generate_chunked_slices(chunk_size=3))
+
+        assert [len(c) for c in chunks] == [2, 2]
+        for chunk, (start, stop) in zip(chunks, [(0, 2), (2, 4)]):
+            assert type(chunk) is type(full)
+            assert chunk.shape == (2, stop - start, 3, 16, 20)
+            np.testing.assert_array_equal(chunk.array, full.array[:, start:stop])
+            assert chunk.ensemble_axes_metadata == full.ensemble_axes_metadata
+            assert chunk.sampling == full.sampling
+            assert chunk.slice_thickness == full.slice_thickness[start:stop]
+        assert full.exit_planes == (-1, 1, 3)
+        assert [c.exit_planes for c in chunks] == [
+            _local_exit_planes(full.exit_planes, 0, 2),
+            _local_exit_planes(full.exit_planes, 2, 2),
+        ]
