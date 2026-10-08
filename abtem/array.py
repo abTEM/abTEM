@@ -1775,6 +1775,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
+        elif cp is not None and get_array_module(self.array) is cp:
+            # CuPy refuses NumPy operands, eager or as dask chunks.
+            if isinstance(other_array, (np.ndarray, da.core.Array)):
+                other_array = copy_to_device(other_array, cp)
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands
