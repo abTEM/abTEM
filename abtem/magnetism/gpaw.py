@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation as R  # type: ignore
 
 from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
+from abtem.core.backend import get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.magnetism.iam import (
@@ -278,6 +279,9 @@ class _GPAWMagnetics(_FieldBuilder):
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
+        # The density and its curl are computed on the host; each slice is moved to
+        # `device`.
+        xp = get_array_module(self.device)
 
         if self._projection == "real_space":
             depth = self._calculators.atoms.cell[2, 2]
@@ -296,7 +300,7 @@ class _GPAWMagnetics(_FieldBuilder):
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
                     slice_thickness=slice_thicknesses[i],
                 )
@@ -312,7 +316,7 @@ class _GPAWMagnetics(_FieldBuilder):
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
                     slice_thickness=slice_thicknesses[i],
                 )
