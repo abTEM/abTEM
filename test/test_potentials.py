@@ -1591,6 +1591,27 @@ class TestSliceIndexedAtomsWrapping:
 
         assert self._per_slice(sliced) == [1, 0, 1, 2]
 
+    @pytest.mark.parametrize("ensemble", [False, True])
+    def test_far_outside_face_warning_points_at_the_caller(self, ensemble):
+        """The warning is attributed to the line that builds the potential, not
+        to a frame inside abTEM."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        source = (
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1)
+            if ensemble
+            else atoms
+        )
+        potential = Potential(source, sampling=0.2, slice_thickness=1.0, periodic=False)
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=False)
+
+        face = [r for r in records if "lie more than" in str(r.message)]
+        assert face
+        assert all(r.filename == __file__ for r in face)
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
