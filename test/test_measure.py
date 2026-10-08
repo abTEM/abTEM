@@ -1672,8 +1672,12 @@ def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
         axis=(0, 1),
     )
 
+    # The two sides agree to within 20 eps of the data scale in the dtype the device
+    # stores (float64 on the CPU, float32 on Metal and torch); a roll that is off by
+    # one pixel differs by about 0.5 of it.
+    eps = np.finfo(interpolated_roll.dtype).eps
     np.testing.assert_allclose(
-        interpolated_roll, rolled_interpolation, rtol=0, atol=1e-12 * array.max()
+        interpolated_roll, rolled_interpolation, rtol=0, atol=200 * eps * array.max()
     )
 
 
