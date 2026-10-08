@@ -135,11 +135,6 @@ def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
     # Oracle: the same operation with the scalar on the left of the plain array.
     # The array is not symmetric under any of the operations, so a reflected
     # operation computed in the forward order (`2 / m` as `m / 2`) fails.
-    if lazy and device == "mps" and scalar_type == "numpy_float64":
-        # On a lazy Metal measurement, dask's meta computation casts to float64,
-        # which Metal does not have. The forward operation (`m op scalar`) fails
-        # the same way.
-        pytest.skip("float64 operand of a lazy Metal measurement")
     xp = get_array_module(device)
     host_scalar = {
         "python": 2.0,
@@ -1972,8 +1967,6 @@ class TestImagesNormalizeEnsemble:
     def test_lazy_matches_eager(self, scale, shift, device):
         """A lazy measurement, chunked along both base axes, normalizes to the
         eager result for 'ptp' as scale and as shift."""
-        if device == "mps":
-            pytest.skip("np.max and np.min are not implemented for torch arrays")
         array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(get_dtype())
         axes = [OrdinalAxis(values=(0, 1, 2))]
         eager = Images(array, sampling=0.1, ensemble_axes_metadata=axes)
