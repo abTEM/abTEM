@@ -298,7 +298,7 @@ requires_mps = [
     pytest.mark.skipif(
         not _mps_is_usable(),
         reason=(
-            "requires the torch backend: Metal on macOS on Apple silicon, or "
+            "requires the torch backend: Metal on macOS, or "
             "ABTEM_TORCH__DEVICE=cpu, with PyTorch installed"
         ),
     ),

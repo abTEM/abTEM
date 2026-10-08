@@ -6,7 +6,6 @@ import ctypes
 import importlib.util
 import logging
 import os
-import platform
 import sys
 import threading
 import warnings
@@ -69,9 +68,13 @@ except ImportError:
     pass
 
 
-def _is_apple_silicon() -> bool:
-    """Whether this machine can have a Metal (MPS) device."""
-    return sys.platform == "darwin" and platform.machine() == "arm64"
+def _is_macos() -> bool:
+    """Whether this machine can have a Metal (MPS) device.
+
+    Apple silicon and Intel Macs with an AMD GPU both can; whether this one
+    does is for PyTorch to answer.
+    """
+    return sys.platform == "darwin"
 
 
 def _preload_torch_openmp() -> bool:
@@ -94,7 +97,7 @@ def _preload_torch_openmp() -> bool:
         Whether torch can safely be imported later. False only when it is too
         late: pyfftw's runtime is already in the process and torch's is not.
     """
-    if not _is_apple_silicon():
+    if not _is_macos():
         return True  # no Metal device to load torch for
     if "torch" in sys.modules:
         return True  # its runtime is already in, ahead of whatever follows
@@ -227,11 +230,10 @@ def check_mps_is_available():
                 # Importing PyTorch can break CuPy's runtime kernel compilation
                 # in the same process (observed with ROCm), so a machine that
                 # cannot have a Metal device is refused before the import.
-                if torch_device == "mps" and not _is_apple_silicon():
+                if torch_device == "mps" and not _is_macos():
                     raise RuntimeError(
                         "The Metal (MPS) backend is not available on this machine. "
-                        "Metal requires macOS on Apple silicon; change the device "
-                        "to 'cpu'."
+                        "Metal requires macOS; change the device to 'cpu'."
                     )
 
                 from abtem.core import _torch

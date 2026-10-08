@@ -137,7 +137,7 @@ def _check_available() -> None:
     if DEVICE == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError(
             "The Metal (MPS) backend is not available in this PyTorch build. "
-            "Metal requires macOS on Apple silicon; change the device to 'cpu'."
+            "Metal requires macOS; change the device to 'cpu'."
         )
 
 
