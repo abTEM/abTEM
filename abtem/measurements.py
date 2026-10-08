@@ -2420,7 +2420,7 @@ class Images(_BaseMeasurement2D):
             num_components=num_components,
             seeds=seed,
         )
-        return self.apply_transform(transform)
+        return transform.apply(self)
 
     @staticmethod
     def _diffractograms(array):
