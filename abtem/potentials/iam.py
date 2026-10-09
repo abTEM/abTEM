@@ -29,7 +29,6 @@ from abtem.atoms import (
     is_cell_orthogonal,
     orthogonalize_cell,
     pad_atoms,
-    plane_to_axes,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -616,18 +615,23 @@ def _default_box(cell, plane) -> tuple[float, float, float]:
     The box of a potential that needs a cell transform and was given no box: the
     best orthogonal cell of the atoms' cell rotated to `plane`, as
     `orthogonalize_cell` rotates it (axes permuted, then the rotation about the new
-    z that `standardize_cell` applies). A cell that cannot be rotated to `plane`
-    gets the best orthogonal cell of its permuted, unrotated lattice vectors.
+    z that `standardize_cell` applies). Raises a RuntimeError for a cell that
+    cannot be rotated to `plane`, which every build would otherwise raise later.
     """
     if not isinstance(plane, str):
         raise NotImplementedError
-    if plane != "xy":
-        try:
-            return tuple(best_orthogonal_cell(_cell_in_plane_frame(cell, plane)))
-        except RuntimeError:
-            pass
-    axes = plane_to_axes(plane)
-    return tuple(best_orthogonal_cell(np.array(cell)[:, list(axes)]))
+    if plane == "xy":
+        return tuple(best_orthogonal_cell(np.array(cell)))
+    try:
+        cell = _cell_in_plane_frame(cell, plane)
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"The cell cannot be rotated to plane={plane!r} ({error}): a plane "
+            "other than 'xy' needs a cell that is orthogonal once rotated to it. "
+            "Make the cell orthogonal first, for example with "
+            "abtem.orthogonalize_cell(atoms)."
+        ) from error
+    return tuple(best_orthogonal_cell(cell))
 
 
 class _FieldBuilder(BaseField):
@@ -669,11 +673,12 @@ class _FieldBuilder(BaseField):
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
             if not isinstance(plane, str):
                 raise NotImplementedError
+            default_box = _default_box(cell, plane)
             if box is None:
-                box = _default_box(cell, plane)
+                box = default_box
                 if periodic and not box_given:
                     _warn_if_box_is_strained(cell, box, plane, default=True)
-            elif periodic and box != _default_box(cell, plane):
+            elif periodic and box != default_box:
                 _warn_if_box_is_strained(cell, box, plane)
 
         elif box is None:

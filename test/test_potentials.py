@@ -3083,14 +3083,36 @@ def test_charge_density_does_not_repeat_the_warning_when_it_builds_the_ewald_fie
 
 
 @ignore_strain_warning
-def test_cell_that_cannot_be_rotated_to_the_plane_is_constructed_silently():
-    # The hexagonal cell has no vertical lattice vector once rotated to xz; the
-    # potential is constructed as before, and the check of the default box does
-    # not raise in its place.
-    atoms = _bn()
-    atoms.pbc = (False, False, True)
-    _, records = _construct_chosen(abtem.Potential, atoms, plane="xz", **STRAIN_GRID)
-    assert records == []
+@pytest.mark.parametrize("plane", ["xz", "yz"])
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda atoms, plane: abtem.Potential(atoms, plane=plane, **STRAIN_GRID),
+        lambda atoms, plane: abtem.Potential(
+            atoms, plane=plane, periodic=False, box=(5.0, 5.0, 5.0), **STRAIN_GRID
+        ),
+        lambda atoms, plane: ChargeDensityPotential(
+            atoms, _charge_density(), plane=plane, **STRAIN_GRID
+        ),
+        lambda atoms, plane: GPAWMagneticField(
+            _FakeCalculator(atoms), plane=plane, **STRAIN_GRID
+        ),
+    ],
+    ids=["potential", "non-periodic-box", "charge-density", "gpaw-magnetic-field"],
+)
+def test_cell_that_cannot_be_rotated_to_the_plane_raises_at_construction(build, plane):
+    # The hexagonal cell has no lattice vector along y, the beam direction of
+    # "xz", and is not orthogonal once rotated to "yz". Building it in either
+    # plane raises, so constructing it does.
+    with pytest.raises(RuntimeError, match=f"cannot be rotated to plane='{plane}'"):
+        build(_bn(), plane)
+
+
+@ignore_strain_warning
+@pytest.mark.parametrize("plane", ["xz", "yz"])
+def test_orthogonalized_cell_can_be_rotated_to_the_plane(plane):
+    potential = abtem.Potential(orthogonalize_cell(_bn()), plane=plane, **STRAIN_GRID)
+    assert potential.build(lazy=False).shape[0] == len(potential)
 
 
 @ignore_strain_warning
@@ -3149,7 +3171,6 @@ AUTO_GRID_CASES = [
     ("CO, pbc (F, F, T), plane yz", lambda: _co(NON_PERIODIC_XY), dict(plane="yz")),
     ("CO, pbc (T, F, T), plane xz", lambda: _co((True, False, True)), dict(plane="xz")),
     ("BN, pbc (F, F, T), plane xy", lambda: _bn_with_pbc(NON_PERIODIC_XY), {}),
-    ("BN, pbc (F, F, T), plane xz", lambda: _bn_with_pbc(NON_PERIODIC_XY), dict(plane="xz")),
     ("CO, pbc (F, F, T), box", lambda: _co(NON_PERIODIC_XY), dict(box=(8.0, 9.0, 10.0))),
     ("CO, pbc (F, F, T), origin", lambda: _co(NON_PERIODIC_XY), dict(origin=(1.0, 0.0, 0.0))),
     (
@@ -3158,11 +3179,6 @@ AUTO_GRID_CASES = [
         dict(plane="xz"),
     ),
     ("AtomsEnsemble of BN", lambda: _ensemble(_bn_with_pbc(True)), {}),
-    (
-        "AtomsEnsemble of BN, plane xz",
-        lambda: _ensemble(_bn_with_pbc(True)),
-        dict(plane="xz"),
-    ),
 ]
 
 
