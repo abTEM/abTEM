@@ -2624,8 +2624,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             coords[axis.label] = dr
 
-        attrs = self.metadata
-        attrs["long_name"] = self.metadata["label"]
+        attrs = dict(self.metadata)
+        if "label" in attrs:
+            attrs["long_name"] = attrs["label"]
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
