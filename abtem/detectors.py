@@ -1921,17 +1921,19 @@ class PixelatedDetector(BaseDetector):
     def _match_ensemble(self, waves: WavesType) -> PixelatedDetector:
         """Fix the crop size of a multi-energy ensemble.
 
-        Cropped to `max_angle`, each energy has its own number of pixels, since
-        the angular sampling scales with the wavelength. Every energy is cropped
+        Cropped to a `max_angle` in mrad, each energy has its own number of pixels,
+        since the angular sampling scales with the wavelength. Every energy is cropped
         to the pixel count of the whole ensemble instead, before any resampling,
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
         from abtem.array import _multi_energy_axis, _without_scalar_energy
 
+        # A string max_angle crops every energy to the same pixels already.
         if (
             self._ensemble_gpts is not None
             or not self.reciprocal_space
+            or isinstance(self.max_angle, str)
             or _multi_energy_axis(waves) is None
         ):
             return self

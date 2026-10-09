@@ -40,6 +40,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
     momentum_resolved_spectrum,
+    elastic_diffuse_diffraction_patterns,
     phonon_loss_diffraction_patterns,
 )
 from abtem.potentials.iam import (
@@ -86,6 +87,7 @@ __all__ = [
     "MeasurementsEnsemble",
     "MomentumResolvedSpectrum",
     "momentum_resolved_spectrum",
+    "elastic_diffuse_diffraction_patterns",
     "phonon_loss_diffraction_patterns",
     "PolarMeasurements",
     "IndexedDiffractionPatterns",
