@@ -4991,12 +4991,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.store_on_host:
                 array = np.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
             else:
                 array = xp.zeros(
                     self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 )
 
             pbar = config.get("diagnostics.task_progress", False)
@@ -5013,7 +5013,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     )
 
                     if self.store_on_host:
-                        new_array = xp.asnumpy(new_array)
+                        new_array = asnumpy(new_array)
 
                     array[items] = new_array
 

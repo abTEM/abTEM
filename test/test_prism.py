@@ -242,6 +242,34 @@ def test_s_matrix_store_on_host(data, lazy):
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
+@pytest.mark.parametrize("store_on_host", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_s_matrix_build_dtype_follows_the_precision(precision, lazy, store_on_host):
+    from ase.build import bulk
+
+    import abtem
+    from abtem.core.utils import get_dtype
+
+    with abtem.config.set({"precision": precision, "device": "cpu"}):
+        potential = abtem.Potential(
+            bulk("Si", cubic=True), gpts=32, slice_thickness=2.7
+        )
+        s_matrix = abtem.SMatrix(
+            energy=100e3,
+            semiangle_cutoff=20,
+            potential=potential,
+            interpolation=1,
+            store_on_host=store_on_host,
+        )
+        expected = get_dtype(complex=True)
+        built = s_matrix.build(lazy=lazy)
+
+        assert expected == (np.complex128 if precision == "float64" else np.complex64)
+        assert built.array.dtype == expected
+        assert built.compute().array.dtype == expected
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @devices

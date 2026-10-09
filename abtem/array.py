@@ -1779,6 +1779,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
+        elif (
+            cp is not None
+            and isinstance(other_array, (np.ndarray, cp.ndarray, da.core.Array))
+            and {get_array_module(self.array), get_array_module(other_array)}
+            == {np, cp}
+        ):
+            # CuPy refuses NumPy arrays, 0-d ones included; a lazy pair would
+            # fail only at compute time, block by block. NumPy scalars and
+            # Python numbers pass.
+            raise TypeError(
+                "arithmetic between data on the CPU and data on the GPU is not "
+                "supported; move one operand with copy_to_device"
+            )
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands

@@ -2129,7 +2129,9 @@ class Images(_BaseMeasurement2D):
     def integrate_gradient(self):
         """
         Calculate integrated gradients. Requires complex images whose real and imaginary
-        parts represent the `x` and `y` components of a gradient.
+        parts represent the `x` and `y` components of a gradient. The gradient
+        determines the result only up to a constant; each image of an ensemble is
+        shifted so that its minimum is zero.
 
         Returns
         -------
@@ -2928,7 +2930,7 @@ def _integrate_gradient_2d(gradient, sampling):
     k[k == 0] = 1e-12
     That = (xp.fft.fft2(gx) * grid_ikx + xp.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
     T = xp.real(xp.fft.ifft2(That))
-    T -= xp.min(T)
+    T -= xp.min(T, axis=(-2, -1), keepdims=True)
     return T
 
 
@@ -5163,10 +5165,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         radius : float, optional
             The radius of the zeroth-order reflection to block [mrad]. If not given this
-            will be inferred from the metadata, if available. Must be non-negative. A
-            zero `semiangle_cutoff` in the metadata (a parallel beam) raises a
-            `ValueError`; pass `radius=0, margin=False` to block only the zero-angle
-            pixel.
+            will be inferred from the metadata, if available. Without a
+            `semiangle_cutoff` in the metadata only the zero-angle pixel is blocked,
+            unless `margin=True`.
+            Must be non-negative. A zero `semiangle_cutoff` in the metadata (a parallel
+            beam) raises a `ValueError`; pass `radius=0, margin=False` to block only the
+            zero-angle pixel.
         margin : bool, optional
             If True adds a margin to the blocking radius to fully block soft apertures.
             Margin is true by default for diffraction patterns with `semiangle_cutoff`
@@ -5191,7 +5195,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     "parallel beam.",
                 )
             else:
-                radius = max(self.angular_sampling) * 1.0001
+                radius = 0.5 * min(self.angular_sampling)
 
         if not radius >= 0.0:
             # a negative radius would block nothing
@@ -5227,12 +5231,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
           cutoffs; a cutoff of at most half the smaller angular sampling; an
           infinite one; or an array of cutoffs): the zero-frequency pixel alone,
           so the bright-field disks of an ensemble stay; pass a radius for those.
-          ``block_direct()`` without a cutoff would also block the nearest pixels,
-          which in a one-unit-cell pattern are the first-order reflections. With
-          ``fftshift`` the pixel is found by its angular coordinate, within half
-          the smaller angular sampling, which reaches no other pixel whatever
-          roundoff the coordinate carries; without ``fftshift`` it is pixel
-          (0, 0), whatever the shape.
+          This is what ``block_direct()`` blocks without a cutoff: the pixel is
+          found by its angular coordinate, within half the smaller angular
+          sampling, which reaches no other pixel whatever roundoff the coordinate
+          carries.
         """
         if not block_direct:
             return self
@@ -5251,15 +5253,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ):
             return self.block_direct()
 
-        if self.fftshift:
-            return self.block_direct(radius=half_sampling, margin=False)
-
-        xp = get_array_module(self.array)
-        keep = xp.ones(self.base_shape, dtype=bool)
-        keep[0, 0] = False
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = self.array * keep
-        return self.__class__(**kwargs)
+        return self.block_direct(radius=half_sampling, margin=False)
 
 
 def _complex_from_real_and_imag(real, imag):

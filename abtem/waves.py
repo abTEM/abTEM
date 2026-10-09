@@ -398,6 +398,15 @@ class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
         self._in_place = in_place
+        super().__init__()
+
+    @property
+    def space(self) -> str:
+        return self._space
+
+    @property
+    def in_place(self) -> bool:
+        return self._in_place
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -724,7 +733,8 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        return transform.apply(self)
+        # The norm sums over the whole grid, so a lazy block must hold all of it.
+        return transform.apply(self.no_base_chunks())
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.

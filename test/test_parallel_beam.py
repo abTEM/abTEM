@@ -8,11 +8,14 @@ what to pass instead.
 """
 
 import ase.build
+import dask.array as da
 import numpy as np
 import pytest
+from ase.spacegroup import crystal
 
 import abtem
 from abtem.core.energy import energy2wavelength
+from abtem.measurements import DiffractionPatterns
 from abtem.prism.s_matrix import SMatrix
 from abtem.transfer import CTF, Aperture, nyquist_sampling
 
@@ -135,6 +138,46 @@ def test_block_direct_with_a_positive_cutoff_keeps_the_margin(potential):
     expected = patterns.bandlimit(20 + max(patterns.angular_sampling), outer=np.inf)
 
     np.testing.assert_array_equal(patterns.block_direct().array, expected.array)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("fftshift", [False, True])
+def test_block_direct_without_a_cutoff_blocks_only_the_zero_angle_pixel(
+    fftshift, lazy
+):
+    array = np.ones((15, 20), dtype=np.float32)
+    if lazy:
+        array = da.from_array(array)
+    patterns = DiffractionPatterns(
+        array, sampling=(0.05, 0.04), fftshift=fftshift, metadata={"energy": 100e3}
+    )
+    assert "semiangle_cutoff" not in patterns.metadata
+
+    blocked = patterns.block_direct().compute()
+
+    zeroed = np.argwhere(blocked.array == 0)
+    zero_angle = (7, 10) if fftshift else (0, 0)
+    assert [tuple(index) for index in zeroed] == [zero_angle]
+
+
+def test_block_direct_without_a_cutoff_keeps_the_first_order_reflections():
+    atoms = crystal(
+        ["Sr", "Ti", "O"],
+        basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221,
+        cellpar=[3.905] * 3 + [90] * 3,
+    )
+    potential = abtem.Potential(atoms, sampling=0.1)
+    waves = abtem.PlaneWave(energy=100e3).multislice(potential)
+    patterns = waves.diffraction_patterns(max_angle=None, fftshift=True).compute()
+
+    blocked = patterns.block_direct()
+
+    center = tuple(n // 2 for n in patterns.shape[-2:])
+    first_order = (center[0] + 1, center[1])
+    assert patterns.array[first_order] > 0
+    assert blocked.array[first_order] == patterns.array[first_order]
+    assert blocked.array[center] == 0
 
 
 def test_ctf_default_angular_range_of_a_parallel_beam_raises():
