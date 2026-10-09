@@ -11,6 +11,7 @@ from utils import float64_devices, ignore_strain_warning
 
 import abtem
 from abtem.atoms import (
+    _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
     decompose_affine_transform,
@@ -22,6 +23,7 @@ from abtem.atoms import (
     is_cell_valid,
     merge_close_atoms,
     orthogonalize_cell,
+    pad_atoms,
     plane_to_axes,
     rotate_atoms,
     rotate_atoms_to_plane,
@@ -1021,3 +1023,206 @@ def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(
     difference -= lengths * np.round(difference / lengths)
     nearest = np.linalg.norm(difference, axis=-1).min(axis=1)
     np.testing.assert_allclose(nearest, 0.0, rtol=0, atol=1e-10)
+
+
+def _sorted_positions(atoms):
+    return atoms.positions[np.lexsort(np.round(atoms.positions, 6).T)]
+
+
+@pytest.mark.parametrize("margin", [0.0, 1.25, 3.0])
+@pytest.mark.parametrize(
+    "pbc, origin",
+    [(True, (0.0, 0.0, 0.0)), (False, (0.0, 0.0, 0.0)), (False, (0.7, 0.3, 0.0))],
+)
+@pytest.mark.parametrize("shift", [(-3, 0, 0), (0, 2, 0), (0, 0, 3), (2, -2, -2)])
+def test_cut_cell_keeps_atoms_given_outside_the_cell(shift, pbc, origin, margin):
+    """Moving an atom by whole lattice vectors leaves the repeated structure
+    unchanged, so it must leave the cut unchanged. Hexagonal, so the lattice
+    vectors are not the box axes; the cut has a margin, a nonzero origin, and
+    pbc False, where ``wrap`` does nothing."""
+    atoms = graphene(a=2.46, vacuum=2.0)
+    atoms.pbc = pbc
+    box = (4.26, 4.92, 4.0)
+    reference = cut_cell(atoms, cell=box, margin=margin, origin=origin)
+
+    moved = atoms.copy()
+    moved.positions[0] += np.dot(shift, atoms.cell)
+    cut = cut_cell(moved, cell=box, margin=margin, origin=origin)
+
+    assert len(cut) == len(reference)
+    np.testing.assert_allclose(
+        _sorted_positions(cut), _sorted_positions(reference), rtol=0, atol=1e-9
+    )
+
+
+def test_cut_cell_keeps_an_atom_at_the_upper_face_within_rounding():
+    """An atom 1e-15 short of the upper face of the cell is kept by the cut at the
+    position the cut keeps for the same atom at the lower face, where it is one
+    cell length further out than the cell it is given in."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    reference = Atoms("B", positions=[[0.0, 2.5, 2.0]], cell=cell, pbc=True)
+    atoms = Atoms("B", positions=[[4.0 - 1e-15, 2.5, 2.0]], cell=cell, pbc=True)
+
+    cut = cut_cell(atoms, cell=(8.0, 5.0, 4.0))
+
+    assert len(cut) == len(cut_cell(reference, cell=(8.0, 5.0, 4.0))) == 2
+    np.testing.assert_allclose(
+        np.sort(cut.positions[:, 0]), [0.0, 4.0], rtol=0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize(
+    "short, length, expected", [(6e-12, 8.0, 2), (1e-11, 40.0, 10), (1e-15, 40.0, 10)]
+)
+def test_cut_cell_keeps_every_image_the_crop_keeps_at_a_face_of_a_wide_box(
+    short, length, expected
+):
+    """The crop keeps an atom up to 1e-12 of the box length below the lower face of
+    the box, so the cut holds every image of an atom short of the upper face of its
+    cell by less than that, 1e-11 A short included when the box is 40 A wide:
+    one per cell along the box, as for an atom at the face."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    atoms = Atoms("B", positions=[[4.0 - short, 2.5, 2.0]], cell=cell, pbc=True)
+
+    cut = cut_cell(atoms, cell=(length, 5.0, 4.0))
+
+    assert len(cut) == expected
+
+
+def test_cut_cell_repeats_the_atoms_as_far_as_the_box_needs_and_no_further(
+    monkeypatch,
+):
+    """Atoms given many cells outside the cell are repeated as often as atoms
+    inside it, as the repeated structure holds every atom of the cell."""
+    atoms = bulk("Si", cubic=True)
+    built = []
+    multiply = Atoms.__mul__
+
+    def spy(self, repetitions):
+        repeated = multiply(self, repetitions)
+        built.append(len(repeated))
+        return repeated
+
+    monkeypatch.setattr(Atoms, "__mul__", spy)
+    reference = cut_cell(atoms, cell=(6.0, 6.0, 5.0), margin=2.0)
+    reference_built = max(built)
+
+    far = atoms.copy()
+    far.positions[0] -= 20 * far.cell.sum(0)
+    far.positions[1] += 20 * far.cell.sum(0)
+    built.clear()
+    cut = cut_cell(far, cell=(6.0, 6.0, 5.0), margin=2.0)
+
+    assert len(cut) == len(reference)
+    assert max(built) <= reference_built
+    np.testing.assert_allclose(
+        _sorted_positions(cut), _sorted_positions(reference), rtol=0, atol=1e-9
+    )
+
+
+def test_cut_cell_leaves_atoms_within_reach_of_the_repetitions_in_place():
+    """An atom given just outside the cell, on either side, has all its images in
+    the repetitions of the cell the box gives, so the cut holds the atoms of those
+    repetitions in order: the repetitions in turn, the atoms of the cell in each."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    atoms = Atoms(
+        "B3",
+        positions=[[2.0, 2.5, 2.0], [-0.3, 1.0, -0.2], [1.0, -2.0, 2.7]],
+        cell=cell,
+        pbc=True,
+    )
+
+    cut = cut_cell(atoms, cell=(8.0, 10.0, 4.0))
+
+    shifts = itertools.product(range(3), range(3), range(2))
+    repeated = np.concatenate(
+        [atoms.positions + np.dot(shift, cell) for shift in shifts]
+    )
+    box = np.array([8.0, 10.0, 4.0])
+    kept = np.all((repeated >= -1e-12 * box) & (repeated < box - 1e-12 * box), axis=1)
+    np.testing.assert_array_equal(cut.positions, repeated[kept])
+
+
+# The atoms that cut_cell keeps from the cell and its margin, in order, for the
+# inputs of the tests below.
+SI_PRIMITIVE_MARGIN_POSITIONS = [
+    [5.43, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [1.3575, 1.3575, 1.3575],
+    [2.715, 2.715, 0.0],
+    [4.0725, 4.0725, 1.3575],
+    [2.715, 0.0, 2.715],
+    [4.0725, 1.3575, 4.0725],
+    [5.43, 2.715, 2.715],
+    [0.0, 5.43, 0.0],
+    [0.0, 2.715, 2.715],
+    [1.3575, 4.0725, 4.0725],
+    [2.715, 5.43, 2.715],
+    [0.0, 0.0, 5.43],
+    [2.715, 2.715, 5.43],
+    [5.43, 5.43, 5.43],
+]
+MOS2_PAST_THE_FACE_POSITIONS = [
+    [0.0, 0.0, 4.595],
+    [0.4823, 2.8366, 6.19],
+    [1.59, 0.918, 3.0],
+    [0.0, 3.6719, 3.0],
+    [1.59, 2.754, 4.595],
+]
+
+
+def test_cut_cell_keeps_the_order_of_the_atoms_the_repetitions_reach():
+    """FrozenPhonons draws the displacements of a cut by the index of the atom, so
+    the atoms the repetitions reach come in the same order wherever the images of
+    others are added: the margin images of a non-orthogonal cell, and the images
+    of an atom 0.08 A past the second lattice vector's face of a hexagonal cell,
+    follow them. The positions are those the cut had before it added images."""
+    primitive = cut_cell(bulk("Si"), margin=0.8)
+    assert len(primitive) == 18
+    np.testing.assert_allclose(
+        primitive.positions[:15], SI_PRIMITIVE_MARGIN_POSITIONS, rtol=0, atol=5e-5
+    )
+
+    atoms = build.mx2("MoS2", vacuum=3.0)
+    scaled = atoms.get_scaled_positions(wrap=False)
+    scaled[1, 1] = 1.03
+    atoms.set_scaled_positions(scaled)
+    hexagonal = cut_cell(atoms)
+    assert len(hexagonal) == 6
+    np.testing.assert_allclose(
+        hexagonal.positions[:5], MOS2_PAST_THE_FACE_POSITIONS, rtol=0, atol=5e-5
+    )
+
+
+@pytest.mark.parametrize("length, margin", [(4.0, 4.29), (20.0, 4.29), (5.0, 1.05)])
+def test_wrap_far_atoms_leaves_pad_atoms_every_image_of_every_atom(length, margin):
+    """Wherever an atom is given along x, the padding of the wrapped atom holds
+    all the atoms of the periodic structure within the margin, and the wrapped atom
+    is itself within the margin. An atom is moved only when it needs to be."""
+    margins = (margin, margin, margin)
+    given = np.arange(-7.5 * length, 7.5 * length, 0.37)
+    atoms = Atoms(
+        "B" * len(given),
+        positions=np.column_stack([given, np.ones_like(given), np.ones_like(given)]),
+        cell=np.diag([length, 5.0, 5.0]),
+        pbc=True,
+    )
+    wrapped = atoms.copy()
+
+    _wrap_far_atoms(wrapped, margins, "x")
+
+    moved = wrapped.positions[:, 0] != given
+    within = (given >= -margin) & (given < length + margin)
+    reached = (given >= margin - np.ceil(margin / length) * length) & (
+        given < (np.ceil(margin / length) + 1) * length - margin
+    )
+    np.testing.assert_array_equal(moved, ~(within & reached))
+    for x, new_x in zip(given, wrapped.positions[:, 0]):
+        single = Atoms("B", positions=[[new_x, 1.0, 1.0]], cell=atoms.cell, pbc=True)
+        padded = pad_atoms(single, margins, "x").positions[:, 0]
+        expected = x + length * np.arange(-12, 13)
+        expected = expected[
+            (expected >= -margin - 1e-12) & (expected < length + margin - 1e-12)
+        ]
+        np.testing.assert_allclose(np.sort(padded), expected, rtol=0, atol=1e-9)
+        assert -margin <= new_x < length + margin

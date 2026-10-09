@@ -24,6 +24,7 @@ from abtem.atoms import (
     _rotate_atoms_to_plane,
     _stacklevel_outside_package,
     _warn_if_box_is_strained,
+    _wrap_far_atoms,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
@@ -1131,7 +1132,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         the margin the integrator needs beyond the cell along each axis.
 
         The configuration is the transformed atoms, displaced, and wrapped
-        into the cell when the potential is periodic. The atoms to slice add
+        into the cell when the potential is periodic. When it is non-periodic
+        and the integrator is real-space in-plane (quadrature), the atoms that
+        the padding does not keep with all their images (`_wrap_far_atoms`) are
+        wrapped in-plane, before they are displaced. The atoms to slice add
         the atoms within the margin outside the cell: images of the
         configuration for a periodic potential, and for a non-periodic one the
         surrounding atoms, displaced independently of those in the cell.
@@ -1158,6 +1162,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cut:
             in_cell = _in_cell(atoms)
         else:
+            if not self.integrator.periodic:
+                # A real-space integrator takes its in-plane images from
+                # pad_atoms, which does not reach an atom given far outside the
+                # cell, and the build is periodic in-plane.
+                _wrap_far_atoms(atoms, margins, "xy")
             atoms, in_cell = _pad_atoms_marking_images(atoms, margins)
 
         atoms = self._displace(atoms, frame)
@@ -1205,7 +1214,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         such as ``"auto"``, may give the displaced atoms another grid)
         and the same slicing, projection and `periodic`, and the default plane,
         origin and box, reproduces that configuration's member of this
-        potential's ensemble.
+        potential's ensemble. A non-periodic potential whose integrator is
+        real-space in-plane (quadrature) first wraps in-plane the given atoms
+        that the padding does not keep with all their images.
 
         The exception is a non-periodic potential with a finite projection.
         It also integrates the atoms within its cutoff outside the box, each

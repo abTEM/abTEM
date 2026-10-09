@@ -1,3 +1,4 @@
+import os
 import pickle
 import warnings
 
@@ -6,7 +7,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from ase.build import bulk, graphene
+from ase.build import bulk, graphene, mx2
 from hypothesis import given
 from utils import (
     assert_array_matches_device,
@@ -24,6 +25,7 @@ from abtem.core.backend import asnumpy
 from abtem.core.fft import next_fast_fft_size
 from abtem.core.grid import disk_meshgrid, round_auto_derived_gpts
 from abtem.integrals import (
+    GaussianProjectionIntegrals,
     QuadratureProjectionIntegrals,
     _threaded_interpolate_radial_functions,
     interpolate_radial_functions,
@@ -1590,6 +1592,46 @@ class TestSliceIndexedAtomsWrapping:
 
         assert self._per_slice(sliced) == [1, 0, 1, 2]
 
+    @pytest.mark.parametrize("ensemble", [False, True])
+    def test_far_outside_face_warning_points_at_the_caller(self, ensemble):
+        """The warning is attributed to the line that builds the potential, not
+        to a frame inside abTEM."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        source = (
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1)
+            if ensemble
+            else atoms
+        )
+        potential = Potential(source, sampling=0.2, slice_thickness=1.0, periodic=False)
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=False)
+
+        face = [r for r in records if "lie more than" in str(r.message)]
+        assert face
+        assert all(r.filename == __file__ for r in face)
+
+    def test_far_outside_face_warning_of_a_lazy_build_is_not_inside_abtem(self):
+        """A lazy build raises the warning in a dask worker thread, whose stack
+        holds no frame of the caller. It is attributed to a frame outside abTEM,
+        not to one inside it or to ``<sys>``."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        potential = Potential(atoms, sampling=0.2, slice_thickness=1.0, periodic=False)
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=True).compute()
+
+        face = [r for r in records if "lie more than" in str(r.message)]
+        assert face
+        package = os.path.dirname(abtem.__file__) + os.sep
+        for record in face:
+            assert record.filename != "<sys>"
+            assert not record.filename.startswith(package)
+
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
@@ -1836,6 +1878,184 @@ class TestSliceIndexedAtomsWrapping:
             reference,
             rtol=1e-5,
             atol=1e-5 * np.abs(reference).max(),
+        )
+
+    @staticmethod
+    def _far_in_plane(shifts=((0, 0), (0, 0), (0, 0))):
+        """Three B atoms in a 4 x 5 x 4 A cell (unequal in-plane lengths), moved
+        by whole cell lengths ``shifts`` [(nx, ny) per atom]. The repeated
+        structure is the same for every shift."""
+        atoms = Atoms(
+            "B3",
+            positions=[[2.0, 2.5, 2.0], [1.0, 1.0, 1.2], [1.0, 3.0, 2.7]],
+            cell=np.diag([4.0, 5.0, 4.0]),
+            pbc=True,
+        )
+        atoms.positions[:, :2] += np.array(shifts) * [4.0, 5.0]
+        return atoms
+
+    @staticmethod
+    def _slices(atoms, lazy=False, **kwargs):
+        potential = Potential(atoms, sampling=0.1, slice_thickness=0.5, **kwargs)
+        return asnumpy(potential.build(lazy=lazy).compute().array)
+
+    # Quadrature pads 4.29 A in-plane, repeating the cell twice to each side
+    # along x (4 A) and once along y (5 A): an atom given further out than that
+    # has an image missing in the cell.
+    FAR_IN_PLANE = {
+        "far_x": ((0, 0), (-2, 0), (0, 0)),  # x = -7
+        "far_y": ((0, 0), (0, 0), (0, 2)),  # y = 13
+        "far_x_and_y": ((0, 0), (2, -2), (-1, 3)),
+    }
+
+    @cpu_float64
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("case", list(FAR_IN_PLANE))
+    def test_quadrature_potential_folds_atoms_far_outside_in_plane(self, case, lazy):
+        """The padding repeats the cell a number of times set by the cell, so the
+        images of an atom further outside than that reaches never entered the
+        cell. Moving an atom by whole cell lengths leaves the periodic in-plane
+        build unchanged."""
+        kwargs = dict(projection="finite", periodic=False)
+        moved = self._slices(
+            self._far_in_plane(self.FAR_IN_PLANE[case]), lazy=lazy, **kwargs
+        )
+        reference = self._slices(self._far_in_plane(), lazy=lazy, **kwargs)
+        np.testing.assert_allclose(
+            moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+        )
+
+    @cpu_float64
+    @pytest.mark.parametrize(
+        "length_x, x, y",
+        [(4.0, -7.0, 1.0), (4.0, 1.0, 13.0), (20.0, -5.0, 1.0), (20.0, 25.0, 1.0)],
+        ids=["far_x", "far_y", "wide_below", "wide_above"],
+    )
+    def test_quadrature_configurations_keep_atoms_far_outside_in_plane(
+        self, length_x, x, y
+    ):
+        """An atom given outside the cell is kept, wherever the padding stops:
+        beyond its reach, or, in a cell wider than twice the cutoff, in the range
+        it reaches but the crop of the padding drops."""
+        atoms = Atoms(
+            "B2",
+            positions=[[2.0, 2.5, 2.0], [x, y, 1.2]],
+            cell=np.diag([length_x, 5.0, 4.0]),
+            pbc=True,
+        )
+        potential = Potential(
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
+            sampling=0.2,
+            slice_thickness=1.0,
+            projection="finite",
+            periodic=False,
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            assert len(configuration) == len(atoms)
+
+    @cpu_float64
+    @pytest.mark.parametrize("x", [-0.3, -1e-16])
+    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(self, x):
+        """An atom given just outside the cell is within the padding's reach, so
+        it is displaced where it is given, not moved a cell length and drawn in
+        another order."""
+        atoms = Atoms(
+            "B2",
+            positions=[[2.0, 2.5, 2.0], [x, 1.0, 1.2]],
+            cell=np.diag([4.0, 5.0, 4.0]),
+            pbc=True,
+        )
+        potential = Potential(
+            FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3),
+            sampling=0.1,
+            slice_thickness=0.5,
+            projection="finite",
+            periodic=False,
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            # sigma is 0.1 A, a cell length is at least 4 A.
+            displacement = configuration.positions - atoms.positions
+            assert np.abs(displacement).max() < 0.5
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="abTEM #540, part 1b: the padding along z drops an atom given more "
+        "than a cell height outside the cell, and how such an atom should be "
+        "treated is undecided",
+    )
+    @pytest.mark.parametrize(
+        "integrator",
+        [{"integrator": GaussianProjectionIntegrals()}, {"projection": "finite"}],
+        ids=["gaussian", "quadrature"],
+    )
+    def test_configurations_keep_an_atom_given_far_outside_along_z(self, integrator):
+        """The infinite integrator keeps the atom; the integrators that pad along z
+        do not, and the loss is silent."""
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        potential = Potential(
+            atoms, sampling=0.2, slice_thickness=1.0, periodic=False, **integrator
+        )
+        for configuration in potential.to_atoms_ensemble().trajectory:
+            assert len(configuration) == len(atoms)
+
+    @cpu_float64
+    @pytest.mark.parametrize(
+        "integrator",
+        [
+            {"projection": "infinite"},
+            {"integrator": GaussianProjectionIntegrals()},
+            {"projection": "finite"},
+        ],
+        ids=["infinite", "gaussian", "quadrature"],
+    )
+    def test_cut_potential_folds_atoms_far_outside_the_cell(self, integrator):
+        """A box other than the cell sends a non-periodic potential through
+        ``cut_cell``, which repeated the cell only as far as the atoms inside it
+        need."""
+        kwargs = dict(integrator, periodic=False, box=(8.0, 10.0, 4.0))
+        moved = self._slices(
+            self._far_in_plane(self.FAR_IN_PLANE["far_x_and_y"]), **kwargs
+        )
+        reference = self._slices(self._far_in_plane(), **kwargs)
+        np.testing.assert_allclose(
+            moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
+        )
+
+    @cpu_float64
+    @ignore_strain_warning
+    @pytest.mark.parametrize(
+        "integrator",
+        [{"projection": "infinite"}, {"integrator": GaussianProjectionIntegrals()}],
+        ids=["infinite", "gaussian"],
+    )
+    def test_default_box_keeps_an_atom_just_past_an_upper_face(self, integrator):
+        """The default box of a hexagonal cell is cut out of the repeated
+        structure. An atom 0.08 A past the upper face (0.03 of the second
+        lattice vector) is as much part of it as the same atom moved into the
+        cell."""
+
+        def potential(scaled_y):
+            atoms = mx2("MoS2", vacuum=3.0)
+            scaled = atoms.get_scaled_positions(wrap=False)
+            scaled[1, 1] = scaled_y
+            atoms.set_scaled_positions(scaled)
+            return asnumpy(
+                Potential(
+                    atoms,
+                    sampling=0.1,
+                    slice_thickness=0.5,
+                    periodic=False,
+                    **integrator,
+                )
+                .build(lazy=False)
+                .array
+            )
+
+        reference = potential(0.03)
+        np.testing.assert_allclose(
+            potential(1.03), reference, rtol=0, atol=1e-10 * np.abs(reference).max()
         )
 
     @pytest.mark.parametrize("device", ["cpu", gpu])
