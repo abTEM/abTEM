@@ -30,7 +30,7 @@ import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy, copy_to_device, get_array_module
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import get_dtype
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -387,7 +387,7 @@ def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     elif gpts_or_sampling["sampling"]:
         sampling = ensure_is_tuple(gpts_or_sampling["sampling"], 2)
         adjusted_sampling = tuple(
-            l / np.ceil(l / d) for d, l in zip(sampling, measurement.extent)
+            l / safe_ceiling_int(l / d) for d, l in zip(sampling, measurement.extent)
         )
         assert np.allclose(interpolated.sampling, adjusted_sampling)
 
@@ -1967,10 +1967,22 @@ def test_line_profiles_tile(data, reps, lazy, device):
     measurement.tile(reps).compute()
 
 
-def test_images_interpolate_to_a_sampling_that_divides_the_extent():
-    # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
-    images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
-    assert images.interpolate(sampling=0.3).shape == (36, 18)
+@pytest.mark.parametrize(
+    "shape, sampling, new_sampling, new_shape",
+    [
+        # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
+        ((10, 5), 1.08, 0.3, (36, 18)),
+        # The extent 3 * 0.1 is 0.30000000000000004; at its own sampling the image
+        # keeps its 3 pixels.
+        ((2, 3), 0.1, 0.1, (2, 3)),
+    ],
+)
+@pytest.mark.parametrize("method", ["fft", "spline"])
+def test_images_interpolate_to_a_sampling_that_divides_the_extent(
+    shape, sampling, new_sampling, new_shape, method
+):
+    images = Images(np.random.default_rng(0).random(shape), sampling=sampling)
+    assert images.interpolate(sampling=new_sampling, method=method).shape == new_shape
 
 
 def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():

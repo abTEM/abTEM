@@ -4,11 +4,12 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given
+from hypothesis import assume, example, given
 from utils import ensure_is_tuple, exactly_dividing_lengths
 
 from abtem.core import config
 from abtem.core.grid import Grid, GridUndefinedError, adjusted_gpts
+from abtem.core.utils import safe_ceiling_int
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
@@ -101,6 +102,8 @@ def test_extent_change(grid_data, new_extent):
 
 
 @given(grid_data=grid_data(), new_sampling=abtem_st.sampling())
+# 1.8 / 0.06 is 30.000000000000004 in floats; the grid has 30 points.
+@example(grid_data={"gpts": 32, "extent": 1.8}, new_sampling=0.06)
 def test_sampling_change(grid_data, new_sampling):
     # Pin the option: these assert the behaviour of the default mode,
     # which a user-level override of the config would otherwise change.
@@ -115,8 +118,9 @@ def test_sampling_change(grid_data, new_sampling):
                 else new_sampling
             )
         else:
-            adjusted_sampling = grid.extent / np.ceil(
-                np.array(grid.extent) / np.array(new_sampling)
+            adjusted_sampling = tuple(
+                e / safe_ceiling_int(e / d)
+                for e, d in zip(grid.extent, ensure_is_tuple(new_sampling, 2))
             )
             assert np.allclose(grid.sampling, adjusted_sampling)
 
