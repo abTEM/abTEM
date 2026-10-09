@@ -847,6 +847,9 @@ def _no_chunks_reduce(
 
     array = s_matrix_array.array
 
+    # every block is reduced with the axes metadata of the whole array, hence an
+    # axis whose metadata has per-member values (the exit planes) must be one
+    # chunk; SMatrix.build makes it one, as one multislice yields every plane
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
 
     chunks = array.chunks[:-3] + ctf_chunks + scan.shape
@@ -5842,6 +5845,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 + len(ctf.ensemble_shape),
             )
 
+            # each task runs one multislice, which yields every exit plane
             chunks += exit_planes_shape + ctf.ensemble_shape + scan.shape
 
             arrays = blocks.map_blocks(
