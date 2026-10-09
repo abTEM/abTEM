@@ -853,15 +853,16 @@ class Waves(BaseWaves, ArrayObject):
         images : Images
             The wave functions as an image.
         """
-        array = self.array.copy()
-        metadata = copy(self.metadata)
+        waves = self.ensure_real_space()
+        array = waves.array.copy()
+        metadata = copy(waves.metadata)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
         images = Images(
             array,
-            sampling=self._valid_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            sampling=waves._valid_sampling,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
             metadata=metadata,
         )
 
@@ -1251,48 +1252,57 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        xp = get_array_module(self.array)
+        waves = self.ensure_real_space()
+        xp = get_array_module(waves.array)
 
         if gpts is None:
-            gpts = self._gpts_within_angle(max_angle)
+            gpts = waves._gpts_within_angle(max_angle)
 
-        if self.is_lazy:
+        if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
-                self.array,
+                waves.array,
                 new_shape=gpts,
                 normalization=normalization,
-                chunks=self._lazy_array.chunks[:-2] + gpts,
+                chunks=waves._lazy_array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = fft_interpolate(
-                self._eager_array, new_shape=gpts, normalization=normalization
+                waves._eager_array, new_shape=gpts, normalization=normalization
             )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["sampling"] = (
-            self._valid_extent[0] / gpts[0],
-            self._valid_extent[1] / gpts[1],
+            waves._valid_extent[0] / gpts[0],
+            waves._valid_extent[1] / gpts[1],
         )
         kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            self.antialias_cutoff_gpts
+            waves.antialias_cutoff_gpts
         )
-        return self.__class__(**kwargs)
+        downsampled = self.__class__(**kwargs)
+        if self.reciprocal_space:
+            return downsampled.ensure_reciprocal_space()
+        return downsampled
 
     @staticmethod
-    def _diffraction_pattern_fft(array, normalize):
+    def _diffraction_pattern_fft(array, normalize, reciprocal_space):
         """Compute the (un-cropped) FFT that all diffraction-pattern flavours
         (full/cutoff/valid crop, real or complex, block-direct or not) are
         derived from. Factored out of ``_diffraction_pattern`` so it can be
         shared (and cached) across several downstream cropping calls that
         differ only in ``new_gpts``/``return_complex``/``fftshift``.
+
+        A reciprocal-space ``array`` already holds these Fourier coefficients:
+        it is only normalized, into a new array as the FFT would return.
         """
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
+        elif reciprocal_space:
+            array = array.copy()
 
-        return fft2(array, overwrite_x=False)
+        return array if reciprocal_space else fft2(array, overwrite_x=False)
 
     @staticmethod
     def _diffraction_pattern_from_fft(fft_array, new_gpts, return_complex, fftshift):
@@ -1317,8 +1327,10 @@ class Waves(BaseWaves, ArrayObject):
         return array
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
-        fft_array = Waves._diffraction_pattern_fft(array, normalize)
+    def _diffraction_pattern(
+        array, new_gpts, return_complex, fftshift, normalize, reciprocal_space
+    ):
+        fft_array = Waves._diffraction_pattern_fft(array, normalize, reciprocal_space)
         return Waves._diffraction_pattern_from_fft(
             fft_array, new_gpts=new_gpts, return_complex=return_complex, fftshift=fftshift
         )
@@ -1357,7 +1369,11 @@ class Waves(BaseWaves, ArrayObject):
             self.metadata, renormalize
         )
         with share_diffraction_pattern_fft(
-            self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+            self,
+            normalize,
+            lambda: self._diffraction_pattern_fft(
+                self.array, normalize, self.reciprocal_space
+            ),
         ):
             yield
 
@@ -1467,6 +1483,7 @@ class Waves(BaseWaves, ArrayObject):
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
+                reciprocal_space=self.reciprocal_space,
                 chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
@@ -1479,7 +1496,11 @@ class Waves(BaseWaves, ArrayObject):
             # runs per call, so this is bit-for-bit identical to calling
             # ``_diffraction_pattern`` directly.
             fft_array = get_shared_diffraction_pattern_fft(
-                self, normalize, lambda: self._diffraction_pattern_fft(self.array, normalize)
+                self,
+                normalize,
+                lambda: self._diffraction_pattern_fft(
+                    self.array, normalize, self.reciprocal_space
+                ),
             )
             pattern = self._diffraction_pattern_from_fft(
                 fft_array,
