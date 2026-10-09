@@ -979,10 +979,30 @@ def test_dtype_preserving_operations_keep_complex():
             computed, np.asarray(operation(eager_in).compute().array), err_msg=name
         )
 
+
 def _integer_frequencies(n, fftshift):
     """Integer frequency indices of an `n`-point axis in storage order."""
     frequencies = np.rint(np.fft.fftfreq(n, 1 / n)).astype(int)
     return np.fft.fftshift(frequencies) if fftshift else frequencies
+
+
+def _step_bin_masks(scaled_r_squared, scale, num_bins, radial_sampling=1, width=1):
+    """The pixels of each step bin of `azimuthal_average`, in exact arithmetic.
+
+    The radii are in units of the smallest angular sampling and the integer array
+    `scaled_r_squared` is `scale * r**2`. Bin k holds the pixels with
+    `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
+    which for an integer `scaled_r_squared` is a comparison with the ceilings
+    of `scale` times the squared edges."""
+    step, full_width = Fraction(radial_sampling), Fraction(width)
+    masks = []
+    for k in range(num_bins):
+        lower, upper = k * step - full_width / 2, k * step + full_width / 2
+        mask = scaled_r_squared < math.ceil(scale * upper**2)
+        if lower > 0:
+            mask &= scaled_r_squared >= math.ceil(scale * lower**2)
+        masks.append(mask)
+    return masks
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
@@ -1007,16 +1027,12 @@ def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, preci
 
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
-    four_r_squared = 4 * (i**2 + j**2)
+    r_squared = i**2 + j**2
     n = -min(i.min(), j.min())
 
     # The oracle's own bins: each pixel inside the last bin edge is in exactly one.
-    masks = [
-        ((2 * k - 1) ** 2 <= four_r_squared) & (four_r_squared < (2 * k + 1) ** 2)
-        for k in range(n)
-    ]
-    masks[0] = four_r_squared < 1
-    inside = four_r_squared < (2 * n - 1) ** 2
+    masks = _step_bin_masks(r_squared, 1, n)
+    inside = r_squared < math.ceil((n - Fraction(1, 2)) ** 2)
     assert np.array_equal(np.sum(masks, axis=0), inside)
 
     expected = [data[mask].astype(np.float64).mean() for mask in masks]
@@ -1096,7 +1112,6 @@ def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of
     )
 
 
-
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("fftshift", [True, False])
 def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_rule(
@@ -1123,14 +1138,9 @@ def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_ru
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
     # (2 r)**2 in units of the finer sampling is the integer 4 i**2 + 9 j**2.
-    four_r_squared = 4 * i**2 + 9 * j**2
     n = 24
     assert -i.min() == n and 3 * -j.min() == 2 * n
-    masks = [
-        ((2 * k - 1) ** 2 <= four_r_squared) & (four_r_squared < (2 * k + 1) ** 2)
-        for k in range(n)
-    ]
-    masks[0] = four_r_squared < 1
+    masks = _step_bin_masks(4 * i**2 + 9 * j**2, 4, n)
 
     expected = [data[mask].astype(np.float64).mean() for mask in masks]
     rtol = 1e-6 if precision == "float32" else 1e-12
@@ -1163,19 +1173,17 @@ def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
 
     i = _integer_frequencies(gpts[0], True)[:, None]
     j = _integer_frequencies(gpts[1], True)[None, :]
-    r_squared = i**2 + j**2
-    step, full_width = Fraction(radial_sampling), Fraction(width)
-    n = math.ceil(-min(i.min(), j.min()) / step)
-
-    expected = []
-    for k in range(n):
-        lower, upper = k * step - full_width / 2, k * step + full_width / 2
-        # r_squared is an integer, so r >= lower is r_squared >= ceil(lower**2)
-        # for a positive lower edge, and r < upper is r_squared < ceil(upper**2).
-        mask = r_squared < math.ceil(upper**2)
-        if lower > 0:
-            mask &= r_squared >= math.ceil(lower**2)
-        expected.append(data[mask].astype(np.float64).mean() if mask.any() else 0.0)
+    n = math.ceil(-min(i.min(), j.min()) / Fraction(radial_sampling))
+    masks = _step_bin_masks(
+        i**2 + j**2,
+        1,
+        n,
+        radial_sampling=Fraction(radial_sampling),
+        width=Fraction(width),
+    )
+    expected = [
+        data[mask].astype(np.float64).mean() if mask.any() else 0.0 for mask in masks
+    ]
 
     rtol = 1e-6 if precision == "float32" else 1e-12
     assert profiles.shape == (n,)
@@ -1935,18 +1943,14 @@ def test_images_interpolate_to_a_sampling_that_divides_the_extent():
 
 
 def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
-    profiles = RealSpaceLineProfiles(
-        np.random.default_rng(0).random(10), sampling=1.08
-    )
+    profiles = RealSpaceLineProfiles(np.random.default_rng(0).random(10), sampling=1.08)
     assert profiles.interpolate(sampling=0.3).shape == (36,)
 
 
 def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
     images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
     assert images.interpolate(sampling=1e9).shape == (1, 1)
-    profiles = RealSpaceLineProfiles(
-        np.random.default_rng(0).random(10), sampling=1.08
-    )
+    profiles = RealSpaceLineProfiles(np.random.default_rng(0).random(10), sampling=1.08)
     assert profiles.interpolate(sampling=1e9).shape == (1,)
 
 

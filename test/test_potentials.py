@@ -3409,7 +3409,10 @@ def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
     # in floats; the grid still has 48 points, as the numeric sampling 0.05 gives.
     extent = points * 0.05
     atoms = Atoms(
-        "C", positions=[(0.5, 0.5, 1.0)], cell=[extent, extent, 3.0], pbc=NON_PERIODIC_XY
+        "C",
+        positions=[(0.5, 0.5, 1.0)],
+        cell=[extent, extent, 3.0],
+        pbc=NON_PERIODIC_XY,
     )
     with abtem.config.set({"grid.round-to-fast-fft": rounding}):
         auto = abtem.Potential(atoms, sampling="auto")
@@ -3428,9 +3431,7 @@ def test_auto_grid_that_was_right_is_unchanged(pbc, plane, gpts):
 
 
 def _carbon_cell(depth):
-    return Atoms(
-        "C", positions=[(1.0, 1.0, 0.5)], cell=(4.0, 3.0, depth), pbc=True
-    )
+    return Atoms("C", positions=[(1.0, 1.0, 0.5)], cell=(4.0, 3.0, depth), pbc=True)
 
 
 def test_slice_count_of_an_exactly_dividing_thickness():
