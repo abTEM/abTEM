@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 license = "GPL-3.0-or-later"
-license-files = ["LICENCE"]
+license-files = ["LICENSE"]
 
 dependencies = [
     "numpy>=2.1.2",
