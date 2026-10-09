@@ -439,7 +439,7 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = safe_ceiling_int(thickness / slice_thickness)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
             validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):

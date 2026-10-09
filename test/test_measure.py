@@ -1911,6 +1911,15 @@ def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
     assert profiles.interpolate(sampling=0.3).shape == (36,)
 
 
+def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
+    images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
+    assert images.interpolate(sampling=1e9).shape == (1, 1)
+    profiles = RealSpaceLineProfiles(
+        np.random.default_rng(0).random(10), sampling=1.08
+    )
+    assert profiles.interpolate(sampling=1e9).shape == (1,)
+
+
 @lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
     atoms = ase.build.bulk("Si", cubic=True)

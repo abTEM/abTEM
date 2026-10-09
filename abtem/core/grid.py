@@ -101,11 +101,11 @@ def adjusted_gpts(
         The new sampling [Å].
     """
     new_sampling = tuple(
-        d * n / safe_ceiling_int(n * (d / d_target))
+        d * n / max(safe_ceiling_int(n * (d / d_target)), 1)
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
     new_gpts = tuple(
-        safe_ceiling_int(n * (d / d_target))
+        max(safe_ceiling_int(n * (d / d_target)), 1)
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
     return new_sampling, new_gpts
@@ -325,7 +325,7 @@ class Grid(CopyMixin, EqualityMixin):
     ):
         if extent is not None and sampling is not None:
             self._gpts = tuple(
-                safe_ceiling_int(r / d) + 1 if e else safe_ceiling_int(r / d)
+                max(safe_ceiling_int(r / d), 1) + int(e)
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 

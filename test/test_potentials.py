@@ -3429,6 +3429,10 @@ def test_slice_count_still_rounds_up_a_genuine_remainder(depth, thickness):
     assert len(_validate_slice_thickness(thickness, thickness=depth)) == 37
 
 
+def test_slice_count_of_a_thickness_far_below_the_slice_thickness_is_one():
+    assert _validate_slice_thickness(1.0, thickness=1e-9) == (1e-9,)
+
+
 def test_potential_slice_count_of_an_exactly_dividing_thickness():
     potential = Potential(_carbon_cell(10.8), gpts=(40, 30), slice_thickness=0.3)
     assert potential.num_slices == 36

@@ -2698,7 +2698,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = safe_ceiling_int(self.extent / sampling)
+            gpts = max(safe_ceiling_int(self.extent / sampling), 1)
 
         if sampling is None:
             sampling = self.extent / gpts
@@ -3707,7 +3707,7 @@ def _image_resampling_gpts(
     `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
     if np.isscalar(sampling):
         sampling = (sampling,) * 2
-    return tuple(safe_ceiling_int(e / d) for d, e in zip(sampling, extent))
+    return tuple(max(safe_ceiling_int(e / d), 1) for d, e in zip(sampling, extent))
 
 
 def _diffraction_pattern_resampling_gpts(

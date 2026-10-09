@@ -8,7 +8,7 @@ from hypothesis import assume, given
 from utils import ensure_is_tuple, exactly_dividing_lengths
 
 from abtem.core import config
-from abtem.core.grid import Grid, GridUndefinedError
+from abtem.core.grid import Grid, GridUndefinedError, adjusted_gpts
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
@@ -218,3 +218,14 @@ def test_gpts_round_trip_through_the_sampling(extent):
 @pytest.mark.parametrize("extent", [36.001, 36.0000002])
 def test_gpts_still_round_up_a_genuine_remainder(extent):
     assert Grid(extent=extent, sampling=1.0).gpts == (37, 37)
+
+
+def test_gpts_of_an_extent_far_below_the_sampling_is_one():
+    assert Grid(extent=1e-9, sampling=1.0).gpts == (1, 1)
+    assert Grid(extent=1e-9, sampling=1.0, endpoint=False).gpts == (1, 1)
+
+
+def test_adjusted_gpts_of_a_target_far_above_the_sampling_is_one():
+    sampling, gpts = adjusted_gpts((1.0, 1.0), (1e-9, 1e-9), (1, 1))
+    assert gpts == (1, 1)
+    assert sampling == pytest.approx((1e-9, 1e-9))

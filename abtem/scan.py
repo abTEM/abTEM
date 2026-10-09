@@ -604,7 +604,9 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint)
+        self._gpts = max(safe_ceiling_int(self.extent / self.sampling), 1) + int(
+            self.endpoint
+        )
 
         self._adjust_sampling()
 
