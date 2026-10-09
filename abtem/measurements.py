@@ -5166,7 +5166,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         radius : float, optional
             The radius of the zeroth-order reflection to block [mrad]. If not given this
             will be inferred from the metadata, if available. Without a
-            `semiangle_cutoff` in the metadata only the zero-angle pixel is blocked.
+            `semiangle_cutoff` in the metadata only the zero-angle pixel is blocked,
+            unless `margin=True`.
             Must be non-negative. A zero `semiangle_cutoff` in the metadata (a parallel
             beam) raises a `ValueError`; pass `radius=0, margin=False` to block only the
             zero-angle pixel.
@@ -5230,12 +5231,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
           cutoffs; a cutoff of at most half the smaller angular sampling; an
           infinite one; or an array of cutoffs): the zero-frequency pixel alone,
           so the bright-field disks of an ensemble stay; pass a radius for those.
-          ``block_direct()`` without a cutoff would also block the nearest pixels,
-          which in a one-unit-cell pattern are the first-order reflections. With
-          ``fftshift`` the pixel is found by its angular coordinate, within half
-          the smaller angular sampling, which reaches no other pixel whatever
-          roundoff the coordinate carries; without ``fftshift`` it is pixel
-          (0, 0), whatever the shape.
+          This is what ``block_direct()`` blocks without a cutoff: the pixel is
+          found by its angular coordinate, within half the smaller angular
+          sampling, which reaches no other pixel whatever roundoff the coordinate
+          carries.
         """
         if not block_direct:
             return self
@@ -5254,15 +5253,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ):
             return self.block_direct()
 
-        if self.fftshift:
-            return self.block_direct(radius=half_sampling, margin=False)
-
-        xp = get_array_module(self.array)
-        keep = xp.ones(self.base_shape, dtype=bool)
-        keep[0, 0] = False
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = self.array * keep
-        return self.__class__(**kwargs)
+        return self.block_direct(radius=half_sampling, margin=False)
 
 
 def _complex_from_real_and_imag(real, imag):
