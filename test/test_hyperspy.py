@@ -11,8 +11,9 @@ from hypothesis import given
 from utils import devices, lazy_params
 
 import abtem.array
-from abtem.core.axes import OrdinalAxis
+from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
+from abtem.measurements import Images
 from abtem.waves import Waves
 
 try:
@@ -91,6 +92,16 @@ def _assert_frequencies(coordinates, i: int):
     dk = 1 / (GPTS[i] * SAMPLING[i])
     expected = np.fft.fftshift(np.fft.fftfreq(GPTS[i], SAMPLING[i]))
     np.testing.assert_allclose(coordinates, expected, rtol=0, atol=1e-12 * dk)
+
+
+def _assert_quantem_calibration(records, expected):
+    """origin + index * sampling of the trailing axes equal the expected coordinates."""
+    origin, sampling = records["origin"], records["sampling"]
+    for o, d, coordinates in zip(
+        origin[-len(expected) :], sampling[-len(expected) :], expected
+    ):
+        calibrated = o + np.arange(len(coordinates)) * d
+        np.testing.assert_allclose(calibrated, coordinates, rtol=0, atol=1e-12 * d)
 
 
 @pytest.fixture
@@ -176,7 +187,70 @@ def test_to_quantem_of_real_space_waves_is_unchanged(lazy, device, quantem_recor
     assert quantem_records["name"] == "Waves"
     np.testing.assert_allclose(quantem_records["sampling"][-2:], SAMPLING)
     assert quantem_records["units"][-2:] == ("A", "A")
+    assert quantem_records["origin"] == (0.0, 0.0, 0.0)
+    _assert_quantem_calibration(
+        quantem_records, [np.arange(n) * d for n, d in zip(GPTS, SAMPLING)]
+    )
     np.testing.assert_array_equal(_host(quantem_records["array"]), expected)
+
+
+def _frequency_exports(kind: str, lazy: bool, device: str):
+    if kind == "reciprocal_space_waves":
+        return _waves(lazy, device, reciprocal_space=True)
+    waves = _waves(lazy, device, reciprocal_space=False)
+    return waves.diffraction_patterns(
+        max_angle=None, fftshift=kind == "diffraction_patterns_centred"
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "reciprocal_space_waves",
+        "diffraction_patterns_centred",
+        "diffraction_patterns_unshifted",
+    ],
+)
+@lazy_params
+@devices
+def test_to_quantem_origin_puts_zero_frequency_at_k_zero(
+    kind, lazy, device, quantem_records
+):
+    exported = _frequency_exports(kind, lazy, device)
+
+    exported.to_quantem()
+
+    frequencies = [
+        np.fft.fftshift(np.fft.fftfreq(n, d)) for n, d in zip(GPTS, SAMPLING)
+    ]
+    _assert_quantem_calibration(quantem_records, frequencies)
+    assert quantem_records["origin"][0] == 0.0  # the ensemble axis
+    for o, d, n in zip(
+        quantem_records["origin"][-2:], quantem_records["sampling"][-2:], GPTS
+    ):
+        assert abs(o + (n // 2) * d) <= 1e-12 * d
+
+
+@devices
+def test_to_quantem_origin_is_the_offset_of_scan_axes(device, quantem_records):
+    scan_axes = [
+        ScanAxis(label="x", sampling=0.5, offset=1.0, units="Å"),
+        ScanAxis(label="y", sampling=0.4, offset=-2.0, units="Å"),
+    ]
+    images = Images(
+        np.zeros((4, 5, *GPTS), dtype=np.float32),
+        sampling=SAMPLING,
+        ensemble_axes_metadata=scan_axes,
+    ).copy_to_device(device)
+
+    images.to_quantem()
+
+    assert quantem_records["origin"][:2] == (1.0, -2.0)
+    assert quantem_records["origin"][2:] == (0.0, 0.0)
+    _assert_quantem_calibration(
+        quantem_records,
+        [axis.coordinates(n) for axis, n in zip(images.axes_metadata, images.shape)],
+    )
 
 
 @devices

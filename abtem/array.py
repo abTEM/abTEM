@@ -2667,7 +2667,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            origin.append(0.0)
+            origin.append(getattr(axis, "offset", 0.0))
 
         if self.is_lazy:
             self.compute()
