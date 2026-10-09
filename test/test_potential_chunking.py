@@ -630,17 +630,38 @@ class TestPotentialSubclassWithoutAChunker:
 
         return Minimal()
 
-    def test_multislice_runs_slice_by_slice(self):
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_multislice_runs_slice_by_slice(self, lazy):
         array = np.random.default_rng(0).random((3, 32, 32)).astype(np.float32)
         potential = self._minimal_potential(array, extent=8.0)
         waves = PlaneWave(energy=100e3, gpts=32, extent=8.0)
 
-        result = waves.multislice(potential, lazy=False)
+        result = waves.multislice(potential, lazy=lazy).compute()
         expected = waves.multislice(
             PotentialArray(array, (1.0,) * 3, extent=8.0), lazy=False
         )
 
         np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6)
+
+    @pytest.mark.parametrize("chunk_size", [1, 2, "auto"])
+    @pytest.mark.parametrize("first_slice, last_slice", [(0, None), (1, 3)])
+    def test_the_inherited_chunker_yields_each_slice_as_a_chunk(
+        self, chunk_size, first_slice, last_slice
+    ):
+        array = np.random.default_rng(0).random((4, 32, 32)).astype(np.float32)
+        potential = self._minimal_potential(array, extent=8.0)
+
+        chunks = list(
+            potential.generate_chunked_slices(first_slice, last_slice, chunk_size)
+        )
+        slices = list(potential.generate_slices(first_slice, last_slice))
+
+        assert len(chunks) == len(slices) == (last_slice or 4) - first_slice
+        for chunk, slic in zip(chunks, slices):
+            assert type(chunk) is PotentialArray
+            np.testing.assert_array_equal(chunk.array, slic.array)
+            assert chunk.slice_thickness == slic.slice_thickness
+            assert chunk.exit_planes == slic.exit_planes
 
 
 class TestTransmissionFunctionSlices:

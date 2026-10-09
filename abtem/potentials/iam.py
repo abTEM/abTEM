@@ -147,6 +147,34 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate the slices of ``generate_slices``, each as a chunk of its own.
+
+        A class that groups slices into memory-budgeted chunks overrides this;
+        ``chunk_size`` is then the number of slices per chunk.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Not used: every chunk is a single slice.
+
+        Yields
+        ------
+        FieldArray
+            A single slice, as ``generate_slices`` yields it.
+        """
+        yield from self.generate_slices(first_slice, last_slice)
+
     @abstractmethod
     def build(
         self,

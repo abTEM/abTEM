@@ -791,18 +791,13 @@ def multislice_and_detect(
         # One stream of slices across the chunks: the last slice of a chunk
         # looks ahead to the first slice of the next one, so only the exit
         # face is stepped without a next slice.
-        if hasattr(potential_configuration, "generate_chunked_slices"):
-            potential_slices = (
-                potential_slice
-                for potential_chunk in potential_configuration.generate_chunked_slices(
-                    chunk_size=potential_chunk_size
-                )
-                for potential_slice in potential_chunk.generate_slices()
+        potential_slices = (
+            potential_slice
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
             )
-        else:
-            # A potential class that implements only generate_slices is iterated
-            # slice by slice.
-            potential_slices = potential_configuration.generate_slices()
+            for potential_slice in potential_chunk.generate_slices()
+        )
 
         for potential_slice, next_slice in lookahead(potential_slices):
             if algorithm.expansion_scope == "full":
