@@ -1689,6 +1689,36 @@ def _extract_scattering_sites(potential, sites):
     return sites
 
 
+def _prism_eels_detected_waves(s_matrix, scan):
+    """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
+    the downsampled grid of ``s_matrix`` divided by its interpolation factor.
+    They carry the probe metadata of the elastic dummy probes (semiangle cutoff
+    and base tilt), which the detectors of the results read, but not their
+    ``adjusted_antialias_cutoff_gpts``. They only describe the grid; the array
+    is a broadcast zero, so no memory is allocated for it."""
+    from abtem.core.utils import safe_ceiling_int
+    from abtem.waves import Waves
+
+    xp = get_array_module(s_matrix.device)
+    ds_gpts = s_matrix.downsampled_gpts
+    gpts = tuple(
+        safe_ceiling_int(n / f) for n, f in zip(ds_gpts, s_matrix.interpolation)
+    )
+    extent = tuple(
+        g * length / n for g, length, n in zip(gpts, s_matrix.extent, ds_gpts)
+    )
+    array = xp.broadcast_to(
+        xp.zeros((), dtype=get_dtype(complex=True)), scan.shape + gpts
+    )
+    return Waves(
+        array,
+        energy=s_matrix.energy,
+        extent=extent,
+        ensemble_axes_metadata=scan.ensemble_axes_metadata,
+        metadata=s_matrix.dummy_probes().metadata,
+    )
+
+
 def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, sites):
     """Shared setup for the real-space and beam-basis PRISM-EELS drivers."""
     import types as _types
@@ -1982,17 +2012,12 @@ def prism_transition_potential_scan(
         safe_ceiling_int(gpts[0] / interpolation[0]),
         safe_ceiling_int(gpts[1] / interpolation[1]),
     )
-    output_window_gpts = (
-        safe_ceiling_int(ds_gpts[0] / interpolation[0]),
-        safe_ceiling_int(ds_gpts[1] / interpolation[1]),
-    )
+    detected_waves = _prism_eels_detected_waves(s_matrix, scan)
+    output_window_gpts = detected_waves.gpts
+    output_window_extent = detected_waves.extent
     scatter_window_extent = (
         scatter_window_gpts[0] * full_sampling[0],
         scatter_window_gpts[1] * full_sampling[1],
-    )
-    output_window_extent = (
-        output_window_gpts[0] * ds_sampling[0],
-        output_window_gpts[1] * ds_sampling[1],
     )
 
     # --- Inelastic crop window (Brown et al. Sec. IV B, independent of the
@@ -2101,14 +2126,8 @@ def prism_transition_potential_scan(
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
-    dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + output_window_gpts, dtype=complex_dtype),
-        energy=energy,
-        extent=output_window_extent,
-        ensemble_axes_metadata=scan_axes_metadata,
-    )
     measurements = allocate_multislice_measurements(
-        dummy_scan_waves,
+        detected_waves,
         detectors,
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
