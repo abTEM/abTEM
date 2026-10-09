@@ -116,6 +116,13 @@ WAVES_ENTRY_POINTS = {
     "pixelated_resample": lambda w: PixelatedDetector(resample=0.5).detect(w),
     "spectral_slit": lambda w: SpectralSlitDetector(width=10.0, q_max=40.0).detect(w),
     "waves": lambda w: WavesDetector().detect(w),
+    "diffraction_patterns": lambda w: w.diffraction_patterns(),
+    "diffraction_patterns_complex": lambda w: w.diffraction_patterns(
+        return_complex=True
+    ),
+    "diffraction_patterns_cropped_blocked": lambda w: w.diffraction_patterns(
+        max_angle=30, block_direct=True
+    ),
     # consistent on the base: fft_interpolate works in the configured precision
     "waves_gpts": lambda w: WavesDetector(gpts=GRID).detect(w),
     "pixelated_real_space_resample": lambda w: PixelatedDetector(
