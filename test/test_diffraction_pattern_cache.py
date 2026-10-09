@@ -324,9 +324,9 @@ def test_standalone_detect_calls_never_share(si_atoms, device):
 
     original = Waves._diffraction_pattern_fft
 
-    def counting(array, normalize):
+    def counting(*args):
         calls.append(1)
-        return original(array, normalize)
+        return original(*args)
 
     Waves._diffraction_pattern_fft = staticmethod(counting)
     try:
@@ -468,9 +468,9 @@ def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
         original = Waves._diffraction_pattern_fft
         calls = []
 
-        def counting(array, normalize):
+        def counting(*args):
             calls.append(1)
-            return original(array, normalize)
+            return original(*args)
 
         Waves._diffraction_pattern_fft = staticmethod(counting)
         try:
