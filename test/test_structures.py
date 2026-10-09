@@ -1074,6 +1074,24 @@ def test_cut_cell_keeps_an_atom_at_the_upper_face_within_rounding():
     )
 
 
+@pytest.mark.parametrize(
+    "short, length, expected", [(6e-12, 8.0, 2), (1e-11, 40.0, 10), (1e-15, 40.0, 10)]
+)
+def test_cut_cell_keeps_every_image_the_crop_keeps_at_a_face_of_a_wide_box(
+    short, length, expected
+):
+    """The crop keeps an atom up to 1e-12 of the box length below the lower face of
+    the box, so the cut holds every image of an atom short of the upper face of its
+    cell by less than that, 1e-11 A short included when the box is 40 A wide:
+    one per cell along the box, as for an atom at the face."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    atoms = Atoms("B", positions=[[4.0 - short, 2.5, 2.0]], cell=cell, pbc=True)
+
+    cut = cut_cell(atoms, cell=(length, 5.0, 4.0))
+
+    assert len(cut) == expected
+
+
 def test_cut_cell_repeats_the_atoms_as_far_as_the_box_needs_and_no_further(
     monkeypatch,
 ):

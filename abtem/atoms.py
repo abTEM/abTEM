@@ -1430,7 +1430,11 @@ def cut_cell(
     # repetitions, which are as they would be without them. Their number is set by
     # the box, not by how far outside the cell the atom is.
     first = floor_min - scaled_margin.sum(0)
-    kept = scaled_corners - np.linalg.solve(atoms.cell.T, np.array(margin)) - 1e-12
+    # The region kept is the one `atoms_in_cell` keeps, which allows 1e-12 of the box
+    # length at both faces of the box.
+    kept = scaled_corners - np.linalg.solve(
+        atoms.cell.T, np.array(margin) + 1e-12 * np.array(cell)
+    )
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     unreached = np.flatnonzero(
         np.any(
