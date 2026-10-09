@@ -2637,7 +2637,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def to_quantem(self):
         """
-        Convert ArrayObject to quantem Dataset object.
+        Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
+        origin is the coordinate of its first sample, in the units of the sampling; other
+        axes get origin 0 and sampling 1.
         """
 
         if em is None:

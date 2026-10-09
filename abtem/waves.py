@@ -459,7 +459,7 @@ class Waves(BaseWaves, ArrayObject):
         instead of real space (default is False). Their exports (`to_data_array`,
         `to_hyperspy`, `to_quantem`) are those of the corresponding
         `DiffractionPatterns` [1/Å]: the fftshifted Fourier coefficients on
-        spatial-frequency axes `kx` and `ky`.
+        spatial-frequency axes `kx` and `ky`, with the zero frequency at the centre.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
