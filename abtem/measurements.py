@@ -3818,7 +3818,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
     fftshift : bool, optional
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
-        be at `(0, 0)`.
+        be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
