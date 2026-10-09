@@ -5162,7 +5162,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     (r + width / 2) / radial_sampling,
                 )
             )
-        elif weighting_function == "gaussian":
+        else:
             x, y = np.meshgrid(
                 *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
                 indexing="ij",
@@ -5176,10 +5176,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)
-            elif weighting_function == "gaussian":
-                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
             else:
-                raise ValueError("weighting function must be 'step' or 'gaussian'")
+                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
 
             weight = np.sum(mask)
 
@@ -5239,6 +5237,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         azimuthal_averages : ReciprocalSpaceLineProfiles
             The azimuthal averages of the diffraction patterns.
         """
+
+        if weighting_function not in ("step", "gaussian"):
+            raise ValueError("weighting function must be 'step' or 'gaussian'")
 
         unit = min(self.angular_sampling)
         xp = get_array_module(self.array)

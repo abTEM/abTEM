@@ -1067,6 +1067,17 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_azimuthal_average_rejects_an_unknown_weighting_function_at_the_call(lazy):
+    patterns = DiffractionPatterns(
+        np.ones((16, 16)), sampling=1 / 10.0, metadata={"energy": 200e3}
+    )
+    if lazy:
+        patterns = patterns.ensure_lazy()
+    with pytest.raises(ValueError, match="weighting function must be"):
+        patterns.azimuthal_average(weighting_function="bad")
+
+
 def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of_precision():
     data = np.random.default_rng(0).random((128, 96)) + 1.0
     profiles = {}
