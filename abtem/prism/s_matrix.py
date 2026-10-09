@@ -5053,8 +5053,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             new_axes = {}
             if exit_planes_shape:
-                new_axes = {4: exit_planes_shape[0]}
-                symbols = symbols[:-3] + (4,) + symbols[-3:]
+                plane_symbol = max(symbols) + 1
+                new_axes = {plane_symbol: exit_planes_shape[0]}
+                symbols = symbols[:-3] + (plane_symbol,) + symbols[-3:]
 
             pbar = config.get("diagnostics.task_progress", False)
 
