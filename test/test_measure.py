@@ -1083,6 +1083,37 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
+def test_lazy_azimuthal_average_computes_the_step_bounds_once_for_all_blocks(
+    monkeypatch,
+):
+    calls = []
+    bounds = DiffractionPatterns._azimuthal_step_bounds
+
+    def counting_bounds(*args):
+        calls.append(1)
+        return bounds(*args)
+
+    monkeypatch.setattr(
+        DiffractionPatterns, "_azimuthal_step_bounds", staticmethod(counting_bounds)
+    )
+    data = np.random.default_rng(0).random((4, 32, 32))
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 20.0,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))],
+    )
+    eager = patterns.azimuthal_average()
+    del calls[:]
+
+    lazy = patterns.ensure_lazy(chunks=(1, -1, -1)).azimuthal_average()
+    assert len(calls) == 0
+    computed = lazy.array.compute(scheduler="synchronous")
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(computed, eager.array)
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 def test_azimuthal_average_rejects_an_unknown_weighting_function_at_the_call(lazy):
     patterns = DiffractionPatterns(

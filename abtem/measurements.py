@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
 )
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atom
@@ -5137,31 +5138,45 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_bounds(
+        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The first and last step bin of every pixel, as int32 arrays on the host.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
+        x, y = np.meshgrid(*coordinates, indexing="ij")
+        r = np.sqrt(x**2 + y**2)
+        del x, y
+        # Bin k holds r with k * radial_sampling - width / 2 <= r <
+        # k * radial_sampling + width / 2, that is first <= k <= last. The
+        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
+        # multiple of the sampling is not missed by rounding noise.
+        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
+        first = first.astype(np.int32)
+        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
+        last = last.astype(np.int32)
+        return first, last
+
+    @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
-        coordinates: tuple[np.ndarray, np.ndarray],
         centers: np.ndarray,
         weighting_function: str,
-        radial_sampling: float,
         width: float,
-        coordinate_dtype: np.dtype,
+        coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        coordinate_dtype: Optional[np.dtype] = None,
+        step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ):
+        """Azimuthal averages of the pixel-unit patterns in the last two axes.
+
+        `step_bounds` are the first and last bin of every pixel for the step
+        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
+        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
+        weighting.
+        """
         xp = get_array_module(array)
 
         if weighting_function == "step":
-            x, y = np.meshgrid(*coordinates, indexing="ij")
-            r = np.sqrt(x**2 + y**2)
-            # Bin k holds r with k * radial_sampling - width / 2 <= r <
-            # k * radial_sampling + width / 2, that is first <= k <= last. The
-            # quotients are rounded as in safe_ceiling_int, so an edge at a
-            # decimal multiple of the sampling is not missed by rounding noise.
-            first, last = (
-                xp.asarray(np.floor(np.round(q, 7)), dtype=np.int32)
-                for q in (
-                    (r - width / 2) / radial_sampling + 1,
-                    (r + width / 2) / radial_sampling,
-                )
-            )
+            first, last = (xp.asarray(bound) for bound in step_bounds)
         else:
             x, y = np.meshgrid(
                 *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
@@ -5256,6 +5271,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
         num_bins = safe_ceiling_int(max_angle / radial_sampling)
         centers = np.arange(num_bins) * radial_sampling
 
+        if weighting_function == "step":
+            # One node shared by every block, which holds the pattern-sized bounds.
+            step_bounds = self._azimuthal_step_bounds
+            if self.is_lazy:
+                step_bounds = dask.delayed(step_bounds, pure=True)
+            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+        else:
+            kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
+
         if self.is_lazy:
             base_axes = tuple(
                 range(
@@ -5265,12 +5289,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._azimuthal_average,
-                coordinates=coordinates,
                 centers=centers,
                 weighting_function=weighting_function,
-                radial_sampling=radial_sampling,
                 width=width,
-                coordinate_dtype=get_dtype(),
+                **kwargs,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (len(centers),),
@@ -5279,12 +5301,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             array = self._azimuthal_average(
                 self.array,
-                coordinates=coordinates,
                 centers=centers,
                 weighting_function=weighting_function,
-                radial_sampling=radial_sampling,
                 width=width,
-                coordinate_dtype=get_dtype(),
+                **kwargs,
             )
 
         wavelength = energy2wavelength(self._get_energy())
