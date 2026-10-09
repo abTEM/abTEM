@@ -4506,10 +4506,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = (
-                waves.antialias_cutoff_gpts
-            )
-
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
                 normalization="intensity",
@@ -5153,10 +5149,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             + self.base_axes_metadata[:1],
         )
 
-        if self.downsampled_gpts != self.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
-                self.window_gpts, self.sampling
-            )
+        waves.metadata.update(self._built_metadata)
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,
@@ -5330,25 +5323,31 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
+    @property
+    def _built_metadata(self) -> dict:
+        # What build adds to the metadata of a downsampled S-matrix: the antialias
+        # cutoff of the full grid, which sets the size of the pixelated and
+        # flexible annular detectors.
+        if self.downsampled_gpts == self.gpts:
+            return {}
+        return {
+            "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
+                self.window_gpts, self.sampling
+            )
+        }
+
     def _built_dummy_probes(self, scan, ctf=None):
         # The dummy probes of the built S-matrix. With upsample, building computes
         # the compression (and raises for ensemble potentials), so they come from
-        # the S-matrix itself, with the adjusted antialias cutoff that build
-        # records on a downsampled S-matrix; it sets the size of the pixelated
-        # and flexible annular detectors. They lack the other metadata that the
-        # dummy probes of the built array carry (reciprocal_space).
+        # the S-matrix itself, with the metadata that build adds. They lack the
+        # other metadata that the dummy probes of the built array carry
+        # (reciprocal_space).
         if not self._upsample_enabled:
             return self.build(lazy=True).dummy_probes(scan, ctf)
 
-        probes = self.dummy_probes(scan, ctf)
-        if self.downsampled_gpts != self.gpts:
-            probes._metadata = {
-                **probes.metadata,
-                "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
-                    self.window_gpts, self.sampling
-                ),
-            }
-        return probes
+        return self.dummy_probes(
+            scan, ctf, metadata={**self.metadata, **self._built_metadata}
+        )
 
     def _allocate_ensemble_measurements(self, waves, detectors):
         """The measurements of every member of the S-matrix ensemble, detected on
