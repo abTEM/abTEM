@@ -46,8 +46,11 @@ settings.load_profile("dev")
 
 
 @pytest.fixture
-def cpu_float64_config():
-    with config.set({"device": "cpu", "precision": "float64", "fft": "numpy"}):
+def float64_config(device):
+    # Its 'mps' case never gets here: `float64_devices` in test/utils.py also
+    # applies the `float64` marker, which pytest_collection_modifyitems below
+    # skips on Metal.
+    with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
         yield
 
 
@@ -95,6 +98,9 @@ def pytest_configure(config):
 # the test's parameters, or declared with the `float64` marker by a test that
 # sets it in its body or a fixture, which no parameter shows.
 _DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+_METAL_DOUBLE_SKIP_REASON = (
+    "Metal (MPS) is single precision; float64 cannot run on this device"
+)
 
 
 def _is_double_precision_on_metal(item) -> bool:
@@ -141,9 +147,7 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-    skip_metal_double = pytest.mark.skip(
-        reason="Metal (MPS) is single precision; float64 cannot run on this device"
-    )
+    skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:

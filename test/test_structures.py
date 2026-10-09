@@ -7,7 +7,7 @@ import pytest
 from ase import Atoms, build
 from ase.build import bulk, cut, graphene
 from scipy.spatial import cKDTree
-from utils import cpu_float64, ignore_strain_warning
+from utils import float64_devices, ignore_strain_warning
 
 import abtem
 from abtem.atoms import (
@@ -30,6 +30,7 @@ from abtem.atoms import (
     standardize_cell,
     wrap_with_tolerance,
 )
+from abtem.core.backend import asnumpy
 
 
 def fcc(orthogonal=False):
@@ -467,7 +468,6 @@ def _by_hand(atoms, box, repetitions=6):
     return out[np.sort(keep)]
 
 
-@cpu_float64
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c[0])
 def test_cell_with_its_diagonal_as_the_orthogonal_box(case):
     name, atoms, diagonal_is_the_box = case
@@ -483,7 +483,7 @@ def test_cell_with_its_diagonal_as_the_orthogonal_box(case):
     assert expected == pytest.approx(round(expected))
 
 
-@cpu_float64
+@float64_devices
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c[0])
 def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     name, atoms, _ = case
@@ -491,15 +491,14 @@ def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     oracle = _by_hand(atoms, potential.box)
     assert len(potential.get_transformed_atoms()) == len(oracle)
 
-    actual = potential.build(lazy=False).array
-    expected = abtem.Potential(oracle, **GRID).build(lazy=False).array
+    actual = asnumpy(potential.build(lazy=False).array)
+    expected = asnumpy(abtem.Potential(oracle, **GRID).build(lazy=False).array)
     assert actual.shape == expected.shape
     np.testing.assert_allclose(
         actual, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
     )
 
 
-@cpu_float64
 @pytest.mark.parametrize(
     "atoms",
     [_bn() * (1, 2, 1), _two_atoms([[4, 0, 0], [0, 3, 0], [4, 0, 5]])],
@@ -512,7 +511,6 @@ def test_automatic_sampling_of_a_sheared_cell(atoms):
     assert potential.gpts == abtem.Potential(oracle, sampling="auto").gpts
 
 
-@cpu_float64
 def test_noise_in_the_off_diagonal_components_is_still_removed():
     atoms = _noisy_orthorhombic()
     assert tuple(np.diag(atoms.cell)) == tuple(best_orthogonal_cell(atoms.cell))
@@ -541,7 +539,7 @@ def _rectangular_bn():
     return orthogonalize_cell(_bn())
 
 
-@cpu_float64
+@float64_devices
 def test_atom_on_a_cell_boundary_by_round_off_is_not_dropped():
     # The atom at the origin of the rectangular BN cell sits at a scaled
     # coordinate of -3.6e-16 of this sheared cell, which `ase.build.cut` wraps to
@@ -553,14 +551,13 @@ def test_atom_on_a_cell_boundary_by_round_off_is_not_dropped():
 
     potential = abtem.Potential(atoms, **GRID)
     oracle = _by_hand(atoms, potential.box)
-    actual = potential.build(lazy=False).array
-    expected = abtem.Potential(oracle, **GRID).build(lazy=False).array
+    actual = asnumpy(potential.build(lazy=False).array)
+    expected = asnumpy(abtem.Potential(oracle, **GRID).build(lazy=False).array)
     np.testing.assert_allclose(
         actual, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
     )
 
 
-@cpu_float64
 @pytest.mark.parametrize(
     "base",
     [

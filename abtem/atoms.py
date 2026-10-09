@@ -1051,12 +1051,12 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
 
     If `default` is true, `box` is the one abTEM chose because none was given: the
     warning says so, names the ways to avoid the strain, and a box that holds no
-    whole repetition, or a cell that cannot be rotated to `plane`, is not an error
-    here but silent: the potential reports it when it places the atoms, if it does.
+    whole repetition is not an error here but silent: the potential reports it when
+    it places the atoms, if it does.
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except (ValueError, RuntimeError):
+    except ValueError:
         if default:
             return
         raise
