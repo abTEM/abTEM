@@ -22,6 +22,7 @@ from abtem.atoms import (
     _box_strain_warning_silenced,
     _cell_in_plane_frame,
     _rotate_atoms_to_plane,
+    _stacklevel_outside_package,
     _warn_if_box_is_strained,
     wrap_and_snap_atoms,
     best_orthogonal_cell,
@@ -1772,7 +1773,7 @@ class FieldArray(BaseField, ArrayObject):
                 f"{type(self).__name__} has an ensemble axis of shape "
                 f"{self.ensemble_shape}; only the slices of its first member are "
                 "generated. Index the array to choose a member.",
-                stacklevel=3,
+                stacklevel=_stacklevel_outside_package(),
             )
 
     def build(

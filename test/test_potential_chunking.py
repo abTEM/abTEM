@@ -864,6 +864,24 @@ class TestBuiltFieldWithAnEnsembleAxis:
         )
 
     @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize(
+        "how", ["generate_slices", "generate_chunked_slices", "list", "for"]
+    )
+    def test_the_warning_points_at_the_caller(self, cls, how):
+        built = self._built(cls)
+
+        with pytest.warns(UserWarning, match="ensemble") as record:
+            if how == "list":
+                list(built)
+            elif how == "for":
+                for _ in built:
+                    break
+            else:
+                list(getattr(built, how)())
+
+        assert [w.filename for w in record] == [__file__]
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
     @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
     @pytest.mark.parametrize("num_configurations", [None, 1])
     def test_a_single_member_does_not_warn(
