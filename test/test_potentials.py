@@ -1908,15 +1908,17 @@ class TestSliceIndexedAtomsWrapping:
         "far_x_and_y": ((0, 0), (2, -2), (-1, 3)),
     }
 
-    @cpu_float64
+    @float64_devices
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("case", list(FAR_IN_PLANE))
-    def test_quadrature_potential_folds_atoms_far_outside_in_plane(self, case, lazy):
+    def test_quadrature_potential_folds_atoms_far_outside_in_plane(
+        self, case, lazy, device
+    ):
         """The padding repeats the cell a number of times set by the cell, so the
         images of an atom further outside than that reaches never entered the
         cell. Moving an atom by whole cell lengths leaves the periodic in-plane
         build unchanged."""
-        kwargs = dict(projection="finite", periodic=False)
+        kwargs = dict(projection="finite", periodic=False, device=device)
         moved = self._slices(
             self._far_in_plane(self.FAR_IN_PLANE[case]), lazy=lazy, **kwargs
         )
@@ -1925,14 +1927,14 @@ class TestSliceIndexedAtomsWrapping:
             moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
         )
 
-    @cpu_float64
+    @float64_devices
     @pytest.mark.parametrize(
         "length_x, x, y",
         [(4.0, -7.0, 1.0), (4.0, 1.0, 13.0), (20.0, -5.0, 1.0), (20.0, 25.0, 1.0)],
         ids=["far_x", "far_y", "wide_below", "wide_above"],
     )
     def test_quadrature_configurations_keep_atoms_far_outside_in_plane(
-        self, length_x, x, y
+        self, length_x, x, y, device
     ):
         """An atom given outside the cell is kept, wherever the padding stops:
         beyond its reach, or, in a cell wider than twice the cutoff, in the range
@@ -1949,13 +1951,16 @@ class TestSliceIndexedAtomsWrapping:
             slice_thickness=1.0,
             projection="finite",
             periodic=False,
+            device=device,
         )
         for configuration in potential.to_atoms_ensemble().trajectory:
             assert len(configuration) == len(atoms)
 
-    @cpu_float64
+    @float64_devices
     @pytest.mark.parametrize("x", [-0.3, -1e-16])
-    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(self, x):
+    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(
+        self, x, device
+    ):
         """An atom given just outside the cell is within the padding's reach, so
         it is displaced where it is given, not moved a cell length and drawn in
         another order."""
@@ -1971,6 +1976,7 @@ class TestSliceIndexedAtomsWrapping:
             slice_thickness=0.5,
             projection="finite",
             periodic=False,
+            device=device,
         )
         for configuration in potential.to_atoms_ensemble().trajectory:
             # sigma is 0.1 A, a cell length is at least 4 A.
@@ -2000,7 +2006,7 @@ class TestSliceIndexedAtomsWrapping:
         for configuration in potential.to_atoms_ensemble().trajectory:
             assert len(configuration) == len(atoms)
 
-    @cpu_float64
+    @float64_devices
     @pytest.mark.parametrize(
         "integrator",
         [
@@ -2010,11 +2016,11 @@ class TestSliceIndexedAtomsWrapping:
         ],
         ids=["infinite", "gaussian", "quadrature"],
     )
-    def test_cut_potential_folds_atoms_far_outside_the_cell(self, integrator):
+    def test_cut_potential_folds_atoms_far_outside_the_cell(self, integrator, device):
         """A box other than the cell sends a non-periodic potential through
         ``cut_cell``, which repeated the cell only as far as the atoms inside it
         need."""
-        kwargs = dict(integrator, periodic=False, box=(8.0, 10.0, 4.0))
+        kwargs = dict(integrator, periodic=False, box=(8.0, 10.0, 4.0), device=device)
         moved = self._slices(
             self._far_in_plane(self.FAR_IN_PLANE["far_x_and_y"]), **kwargs
         )
@@ -2023,14 +2029,16 @@ class TestSliceIndexedAtomsWrapping:
             moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
         )
 
-    @cpu_float64
+    @float64_devices
     @ignore_strain_warning
     @pytest.mark.parametrize(
         "integrator",
         [{"projection": "infinite"}, {"integrator": GaussianProjectionIntegrals()}],
         ids=["infinite", "gaussian"],
     )
-    def test_default_box_keeps_an_atom_just_past_an_upper_face(self, integrator):
+    def test_default_box_keeps_an_atom_just_past_an_upper_face(
+        self, integrator, device
+    ):
         """The default box of a hexagonal cell is cut out of the repeated
         structure. An atom 0.08 A past the upper face (0.03 of the second
         lattice vector) is as much part of it as the same atom moved into the
@@ -2047,6 +2055,7 @@ class TestSliceIndexedAtomsWrapping:
                     sampling=0.1,
                     slice_thickness=0.5,
                     periodic=False,
+                    device=device,
                     **integrator,
                 )
                 .build(lazy=False)
