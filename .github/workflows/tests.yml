@@ -126,10 +126,6 @@ jobs:
       - name: Install PyTorch (CPU wheel)
         run: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      # test_hyperspy skips without it; the `test` group does not carry it.
-      - name: Install HyperSpy
-        run: uv pip install hyperspy
-
       - name: Run the torch backend's tests
         env:
           ABTEM_TORCH__DEVICE: cpu
