@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 from ase.build import graphene
+from utils import devices
 
 import abtem
 
@@ -91,15 +92,6 @@ except ImportError:
     pass
 
 pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
-
-
-@pytest.fixture
-def _cpu_device():
-    with abtem.config.set({"device": "cpu"}):
-        yield
-
-
-cpu_device = pytest.mark.usefixtures("_cpu_device")
 
 
 @pytest.fixture(scope="module")
@@ -276,7 +268,6 @@ def box_calculator():
     return atoms.calc
 
 
-@cpu_device
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -292,14 +283,12 @@ def test_gpaw_potential_rejects_a_box_or_origin(box_calculator, kwargs):
         GPAWPotential(box_calculator, sampling=0.1, **kwargs)
 
 
-@cpu_device
 def test_gpaw_potential_accepts_its_own_box(box_calculator):
     default = GPAWPotential(box_calculator, sampling=0.1)
     own = GPAWPotential(box_calculator, box=CELL, sampling=0.1)
     assert own.box == default.box == CELL
 
 
-@cpu_device
 def test_gpaw_potential_box_follows_the_repetitions(box_calculator):
     repeated = (6.4, 2.8, 3.6)
     potential = GPAWPotential(
@@ -310,19 +299,16 @@ def test_gpaw_potential_box_follows_the_repetitions(box_calculator):
         GPAWPotential(box_calculator, repetitions=(2, 1, 1), box=CELL, sampling=0.1)
 
 
-@cpu_device
 def test_gpaw_potential_origin_none_is_the_zero_origin(box_calculator):
     assert GPAWPotential(box_calculator, origin=None, sampling=0.1).box == CELL
 
 
-@cpu_device
 @pytest.mark.parametrize("origin", [(1.0, 0.5), ("1", "0", "0"), (float("nan"), 0, 0)])
 def test_gpaw_potential_invalid_origin_raises(box_calculator, origin):
     with pytest.raises(ValueError, match="origin"):
         GPAWPotential(box_calculator, origin=origin, sampling=0.1)
 
 
-@cpu_device
 def test_gpaw_potential_box_of_strings_raises(box_calculator):
     with pytest.raises(ValueError, match="box"):
         GPAWPotential(box_calculator, box=("3.2", "2.8", "3.6"), sampling=0.1)
@@ -344,21 +330,41 @@ def _chosen_box_warnings(records):
     return [r for r in records if "abTEM chose" in str(r.message)]
 
 
-@cpu_device
+def _xfail_gpaw_build_on_gpu(request, device):
+    # GPAWPotential and the GPAW magnetic builders yield NumPy slices whatever
+    # the device (abTEM/abTEM#535, fixed by #544), and the build's CuPy buffer
+    # refuses them at `array[j] = slic.array[0]`; the message is CuPy's, quoted
+    # in #544. strict: once #544 lands, the XPASS fails the run so that the
+    # marker is removed.
+    if device == "gpu":
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="The GPAW builders yield NumPy slices on the GPU, #535",
+                raises=pytest.RaisesExc(
+                    ValueError,
+                    match=r"non-scalar numpy\.ndarray cannot be used for fill",
+                ),
+                strict=True,
+            )
+        )
+
+
+@devices
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell:UserWarning")
 @pytest.mark.parametrize(
     "repetitions, warns",
     [((1, 1, 1), False), ((2, 1, 1), False), ((3, 1, 1), True), ((4, 1, 1), True)],
 )
 def test_gpaw_potential_reports_a_strained_default_box(
-    hexagonal_calculator, repetitions, warns
+    hexagonal_calculator, repetitions, warns, request, device
 ):
     # The calculator's cell is repeated, and the default box of the repeated
     # hexagonal cell is exact for (1, 1, 1) and (2, 1, 1) only.
+    _xfail_gpaw_build_on_gpu(request, device)
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         potential = GPAWPotential(
-            hexagonal_calculator, repetitions=repetitions, sampling=0.2
+            hexagonal_calculator, repetitions=repetitions, sampling=0.2, device=device
         )
         potential.build(lazy=True).compute()
     assert len(_chosen_box_warnings(records)) == int(warns)
@@ -385,23 +391,25 @@ def spinpolarised_calculator():
     return atoms.calc
 
 
-@cpu_device
+@devices
 @pytest.mark.filterwarnings("ignore:The box .* is not a whole supercell:UserWarning")
 @pytest.mark.parametrize("include_magnetic_field", [False, True])
 def test_gpaw_magnetic_fields_report_the_strained_default_box_once(
-    spinpolarised_calculator, include_magnetic_field
+    spinpolarised_calculator, include_magnetic_field, request, device
 ):
     # The potential and the vector potential (and the magnetic field) are built
     # from one box_calculator in one call and share one default box, so the strain
     # of that box is reported once, at the call.
     from abtem.magnetism.gpaw import gpaw_magnetic_fields
 
+    _xfail_gpaw_build_on_gpu(request, device)
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         gpaw_magnetic_fields(
             spinpolarised_calculator,
             sampling=0.2,
             include_magnetic_field=include_magnetic_field,
+            device=device,
         )
     chosen = _chosen_box_warnings(records)
     assert len(chosen) == 1
@@ -427,9 +435,8 @@ def test_gpaw_potential_box_is_that_of_the_repeated_crystal(bn_calculator, repet
     # Only the layout is tested here: the values of GPAWPotential(repetitions)
     # are a separate matter.
     atoms = bn_calculator.atoms
-    with abtem.config.set({"device": "cpu"}):
-        potential = GPAWPotential(bn_calculator, repetitions=repetitions, sampling=0.1)
-        reference = abtem.Potential(atoms * repetitions, sampling=0.1)
+    potential = GPAWPotential(bn_calculator, repetitions=repetitions, sampling=0.1)
+    reference = abtem.Potential(atoms * repetitions, sampling=0.1)
 
     assert potential.box == pytest.approx(reference.box)
     assert potential.extent == pytest.approx(reference.extent)
