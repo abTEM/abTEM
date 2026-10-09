@@ -5372,8 +5372,47 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
         return measurements
 
+    def _detect_ensemble(self, waves, detectors, detect, squeeze):
+        """The measurements of ``detect(s_matrix)`` for every member of the
+        S-matrix ensemble, allocated on ``waves()``. A measurement whose leading
+        ensemble axis is flagged for the ensemble mean is averaged over it, and
+        that axis is squeezed with ``squeeze``; wave functions keep every
+        member."""
+        measurements = None
+        if self.ensemble_shape:
+            measurements = self._allocate_ensemble_measurements(waves(), detectors)
+
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            new_measurements = ensure_list(detect(s_matrix.item()))
+
+            if measurements is None:
+                measurements = new_measurements
+            else:
+                for measurement, new_measurement in zip(measurements, new_measurements):
+                    if _averaged(measurement):
+                        measurement.array[:] += new_measurement.array
+                    else:
+                        measurement.array[i] = new_measurement.array
+
+            num_blocks += 1
+
+        for i, measurement in enumerate(measurements):
+            if _averaged(measurement):
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[i] = measurement.squeeze((0,))
+
+        return measurements
+
     def _eager_transition_potential_scan(
-        self, scan, detectors, transition_potentials, sites, double_channel,
+        self,
+        scan,
+        detectors,
+        transition_potentials,
+        sites,
+        double_channel,
         inelastic_crop=None,
         squeeze=True,
     ):
@@ -5382,50 +5421,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             prism_transition_potential_scan,
         )
 
-        if self.ensemble_shape:
-            measurements = self._allocate_ensemble_measurements(
-                _prism_eels_detected_waves(self, scan), detectors
-            )
-        else:
-            measurements = None
-
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-
-            new_measurements = ensure_list(
-                prism_transition_potential_scan(
-                    s_matrix=s_matrix,
-                    transition_potentials=transition_potentials,
-                    scan=scan,
-                    detectors=detectors,
-                    sites=sites,
-                    double_channel=double_channel,
-                    inelastic_crop=inelastic_crop,
-                )
+        def detect(s_matrix):
+            return prism_transition_potential_scan(
+                s_matrix=s_matrix,
+                transition_potentials=transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
             )
 
-            if measurements is None:
-                measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(
-                    measurements, new_measurements
-                ):
-                    if _averaged(measurement):
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
-
-            num_blocks += 1
-
-        for idx, measurement in enumerate(measurements):
-            if _averaged(measurement):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze:
-                    measurements[idx] = measurement.squeeze((0,))
-
-        return measurements
+        return self._detect_ensemble(
+            lambda: _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_transition_potential_scan(
@@ -5619,45 +5628,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
         detectors = validate_detectors(detectors)
 
-        if self.ensemble_shape:
-            measurements = self._allocate_ensemble_measurements(
-                self._built_dummy_probes(scan, ctf), detectors
-            )
-        else:
-            measurements = None
-
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-            s_matrix_array = s_matrix.build(lazy=False)
-
-            new_measurements = s_matrix_array._reduce(
+        def detect(s_matrix):
+            return s_matrix.build(lazy=False)._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
-            new_measurements = ensure_list(new_measurements)
-
-            if measurements is None:
-                measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(measurements, new_measurements):
-                    if _averaged(measurement):
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
-
-            num_blocks += 1
-
-        # measurements = list(measurements.values())
-
-        for i, measurement in enumerate(measurements):
-            if _averaged(measurement):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze:
-                    measurements[i] = measurement.squeeze((0,))
-
-        return measurements
+        return self._detect_ensemble(
+            lambda: self._built_dummy_probes(scan, ctf), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_build_s_matrix_detect(s_matrix, scan, ctf, detectors):
