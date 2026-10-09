@@ -833,7 +833,8 @@ class _FieldBuilder(BaseField):
         chunk_size : int or str, optional
             Number of slices per chunk. ``"auto"`` selects based on the
             configured memory budget (``dask.chunk-size`` on CPU,
-            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``dask.chunk-size-gpu`` on GPU), priced for a chunk that holds
+            every member of the ensemble. Can also be set globally via the
             ``potential.slice-chunk-size`` configuration key.
 
         Yields
