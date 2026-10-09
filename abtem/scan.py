@@ -749,7 +749,9 @@ class LineScan(BaseScan):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         direction = np.array(self.end) - np.array(self.start)
-        direction = direction / np.linalg.norm(direction, axis=0)
+        length = np.linalg.norm(direction)
+        if length > 0:
+            direction = direction / length
 
         cumchunks = tuple(np.cumsum(chunks[0]))
 

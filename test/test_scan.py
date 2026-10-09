@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase import Atoms
 from ase.build import bulk
 from hypothesis import given
 from hypothesis import strategies as st
@@ -240,12 +241,34 @@ def test_line_scan_sampling_is_at_most_the_requested_sampling(
     assert scan.sampling <= sampling * (1 + 1e-12)
 
 
-def test_line_scan_of_an_extent_far_below_the_sampling_has_one_interval():
+def test_line_scan_of_an_extent_far_below_the_sampling_has_one_position():
     scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0, endpoint=False)
     assert scan.gpts == 1
     scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0)
     assert scan.gpts == 1
     assert scan.sampling == pytest.approx(1e-9)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("endpoint", [False, True])
+def test_zero_length_line_scan_measures_its_one_position(endpoint, lazy):
+    atoms = Atoms("C", positions=[(1.5, 1.5, 1.0)], cell=(5, 5, 2), pbc=True)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0)
+    probe = _probe()
+    detector = AnnularDetector(inner=5, outer=20)
+
+    scan = LineScan(start=(1, 1), end=(1, 1), sampling=0.5, endpoint=endpoint)
+    assert scan.get_positions().tolist() == [[1.0, 1.0]]
+    measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    expected = probe.scan(
+        potential, scan=CustomScan([(1, 1)]), detectors=detector, lazy=lazy
+    )
+    if lazy:
+        measurement, expected = measurement.compute(), expected.compute()
+
+    assert measurement.shape == (1,)
+    assert np.isfinite(measurement.array).all()
+    np.testing.assert_allclose(measurement.array, expected.array, rtol=1e-6)
 
 
 def test_scans_of_a_zero_extent_have_one_position():
