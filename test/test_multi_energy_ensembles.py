@@ -11,6 +11,7 @@ import pytest
 from utils import devices
 
 import abtem
+from abtem.core.backend import asnumpy
 
 # not sorted, and a different count from the scan axes (3 and 5)
 ENERGIES = (70e3, 50e3, 80e3, 60e3)
@@ -49,6 +50,8 @@ def _exit_waves(potential, energy, lazy=False):
 
 
 def _close(a, b, atol=1e-12):
+    # the arrays of a GPU run are CuPy arrays, which NumPy does not convert
+    a, b = asnumpy(a), asnumpy(b)
     np.testing.assert_allclose(a, b, rtol=0, atol=atol * np.abs(b).max())
 
 
@@ -179,7 +182,7 @@ def test_diffraction_pattern_methods_equal_single_energy_runs(
         single = operation(
             _exit_waves(potential, energy).diffraction_patterns(max_angle="full")
         )
-        _close(np.take(result.array, i, axis=axis), single.array, atol=1e-10)
+        _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
 
 
 @devices
@@ -200,8 +203,8 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
     )
     for i in range(len(ENERGIES)):
         _close(
-            np.take(pixelated.array, i, axis=axis),
-            np.take(annular.array, i, axis=annular_axis),
+            np.take(asnumpy(pixelated.array), i, axis=axis),
+            np.take(asnumpy(annular.array), i, axis=annular_axis),
             atol=1e-6,
         )
 
@@ -231,5 +234,5 @@ def test_default_outer_is_the_same_for_every_energy(name, args, lazy, device):
             _exit_waves(potential, energy).diffraction_patterns(max_angle="full"),
             name,
         )(*args, outer=shared)
-        _close(np.take(result.array, i, axis=axis), single.array, atol=1e-10)
+        _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
         assert result.radial_sampling == pytest.approx(single.radial_sampling)

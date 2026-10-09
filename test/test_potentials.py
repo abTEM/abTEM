@@ -1990,32 +1990,6 @@ def _assert_same(actual, expected):
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-10 * scale)
 
 
-# QuasiDipoleProjections.integrate_on_grid ignores the device and returns a
-# NumPy array (abTEM/abTEM#541, fixed by #543). CuPy raises TypeError when
-# generate_slices adds it into a device array (several chemical elements), and
-# ValueError when the eager build assigns it into one (a single chemical
-# element); the messages are CuPy's, quoted in #541 and in the review of #543.
-_MAGNETIC_FIELD_ON_GPU_SEVERAL_ELEMENTS = pytest.RaisesExc(
-    TypeError, match=r"Unsupported type <class 'numpy\.ndarray'>"
-)
-_MAGNETIC_FIELD_ON_GPU_ONE_ELEMENT = pytest.RaisesExc(
-    ValueError, match=r"non-scalar numpy\.ndarray cannot be used for fill"
-)
-
-
-def _xfail_magnetic_field_on_gpu(request, device, raises):
-    # strict: once #543 lands the case passes, and the XPASS fails the run so
-    # that the marker is removed rather than left to hide a later error.
-    if device == "gpu":
-        request.applymarker(
-            pytest.mark.xfail(
-                reason="MagneticField returns a NumPy array on the GPU, #541",
-                raises=raises,
-                strict=True,
-            )
-        )
-
-
 def _integral(potential):
     array = asnumpy(potential.build(lazy=False).array)
     return array.sum() * np.prod(potential.sampling)
@@ -2589,10 +2563,7 @@ def test_multislice_through_a_box_matches_the_repeated_atoms():
 
 @float64_devices
 @ignore_strain_warning
-def test_magnetic_field_box_matches_repeated_atoms(request, device):
-    _xfail_magnetic_field_on_gpu(
-        request, device, _MAGNETIC_FIELD_ON_GPU_SEVERAL_ELEMENTS
-    )
+def test_magnetic_field_box_matches_repeated_atoms(device):
     atoms = _two_atoms()
     atoms.set_chemical_symbols(["Fe", "O"])
     atoms.set_array("magnetic_moments", np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 0.0]]))
@@ -2769,11 +2740,7 @@ def test_non_periodic_box_is_not_strained_and_is_silent():
 @float64_devices
 @ignore_strain_warning
 @pytest.mark.parametrize("builder", [abtem.Potential, MagneticField])
-def test_strain_warning_is_given_once_per_construction(builder, request, device):
-    if builder is MagneticField:
-        _xfail_magnetic_field_on_gpu(
-            request, device, _MAGNETIC_FIELD_ON_GPU_ONE_ELEMENT
-        )
+def test_strain_warning_is_given_once_per_construction(builder, device):
     si = bulk("Si", "diamond", a=5.431, cubic=True)
     si.set_array("magnetic_moments", np.zeros((len(si), 3)))
     kwargs = dict(box=(20.0, 5.431, 5.431), sampling=0.2, slice_thickness=2.0)
