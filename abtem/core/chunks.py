@@ -449,9 +449,10 @@ def estimate_potential_chunk_size(
     Parameters
     ----------
     slice_shape : tuple of int
-        The shape of one slice: the number of grid points (y, x), preceded by
-        the length of a component axis for a field with components
-        (components, y, x).
+        The shape of what one slice allocates: the number of grid points
+        (y, x), preceded by the length of a component axis for a field with
+        components, and by the shape of the ensemble axes when a chunk holds
+        every member of an ensemble.
     device : str
         The device ('cpu' or 'gpu').
     dtype : numpy.dtype, optional

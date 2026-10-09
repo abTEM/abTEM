@@ -740,6 +740,73 @@ class TestAutoChunkSizeCountsTheComponentAxis:
         assert shapes == [(16, 20)] * 2
 
 
+class TestAutoChunkSizeCountsTheEnsembleAxis:
+    """A builder's chunk holds every member of its ensemble, so chunk_size="auto"
+    prices a slice at ensemble_shape + base_shape[1:]."""
+
+    @staticmethod
+    def _record_estimates(monkeypatch):
+        shapes = []
+
+        def estimate(slice_shape, device="cpu", dtype=None):
+            shapes.append(tuple(slice_shape))
+            return 2
+
+        monkeypatch.setattr("abtem.core.chunks.estimate_potential_chunk_size", estimate)
+        return shapes
+
+    @pytest.mark.parametrize("cls", [Potential, MagneticField, VectorPotential])
+    @pytest.mark.parametrize("num_configurations", [1, 4])
+    def test_the_slice_shape_includes_the_ensemble_axis(
+        self, cls, num_configurations, monkeypatch
+    ):
+        shapes = self._record_estimates(monkeypatch)
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), num_configurations, sigmas=0.05, seed=3
+        )
+        field = cls(phonons, gpts=(16, 20), slice_thickness=1.5)
+
+        list(field.generate_chunked_slices())
+
+        assert shapes == [(num_configurations,) + field.base_shape[1:]]
+
+    def test_a_chunk_shrinks_with_the_number_of_configurations(self, monkeypatch):
+        """The estimate of a 4-configuration builder is a quarter of the
+        estimate of a single member, on a device with a fixed amount of free
+        memory."""
+        _install_fake_cupy(monkeypatch, free=150_000, total=1_000_000)
+        monkeypatch.setattr(
+            "abtem.core.chunks.estimate_potential_chunk_size",
+            lambda slice_shape, device="cpu", dtype=None: estimate_potential_chunk_size(
+                slice_shape, "gpu", dtype
+            ),
+        )
+
+        def chunk_lengths(num_configurations):
+            phonons = FrozenPhonons(
+                bulk("Si", cubic=True), num_configurations, sigmas=0.05, seed=3
+            )
+            builder = Potential(phonons, gpts=(16, 20), slice_thickness=0.34)
+            return [len(c) for c in builder.generate_chunked_slices()]
+
+        assert max(chunk_lengths(1)) == 8
+        assert max(chunk_lengths(4)) == 2
+
+    def test_multislice_prices_a_slice_of_one_configuration(self, monkeypatch):
+        """Multislice hands each configuration over with an ensemble axis of
+        length 1, so its chunk size does not change."""
+        shapes = self._record_estimates(monkeypatch)
+        phonons = FrozenPhonons(bulk("Si", cubic=True), 3, sigmas=0.05, seed=3)
+        potential = Potential(phonons, gpts=(16, 20), slice_thickness=2.0)
+
+        PlaneWave(energy=100e3, gpts=(16, 20), extent=potential.extent).multislice(
+            potential, lazy=False
+        )
+
+        assert len(shapes) == 3
+        assert {int(np.prod(shape)) for shape in shapes} == {16 * 20}
+
+
 class TestBuiltFieldWithAnEnsembleAxis:
     """Iterating or chunking a built array visits its first ensemble member only,
     and says so."""

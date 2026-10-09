@@ -823,8 +823,9 @@ class _FieldBuilder(BaseField):
             last_slice = len(self)
 
         if chunk_size == "auto":
+            # A chunk holds every member of the ensemble.
             chunk_size = estimate_potential_chunk_size(
-                self.base_shape[1:], self.device
+                self.ensemble_shape + self.base_shape[1:], self.device
             )
 
         # Cap so the whole range is one chunk when it fits in the budget,
