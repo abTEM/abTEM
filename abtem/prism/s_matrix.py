@@ -74,6 +74,7 @@ from abtem.waves import (
     Probe,
     Waves,
     _antialias_cutoff_gpts,
+    _squeeze_flagged_axes,
     reduce_ensemble,
 )
 
@@ -90,20 +91,13 @@ def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
-def _squeeze_flagged_axes(measurements):
-    # The first half of the module-level reduce_ensemble, which multislice applies
-    # to its result: validate_scan flags the position axis of a bare position
-    # (x, y) for squeezing. The ensemble mean is applied elsewhere.
-    return [
-        measurement.squeeze(
-            tuple(
-                i
-                for i, axis in enumerate(measurement.ensemble_axes_metadata)
-                if axis._squeeze
-            )
-        )
-        for measurement in measurements
-    ]
+def _squeezed(measurements):
+    # The public reductions remove the position axis of a bare position (x, y),
+    # as multislice does (reduce_ensemble); the private _reduce methods keep it
+    # for the code that assembles several reductions.
+    return _wrap_measurements(
+        [_squeeze_flagged_axes(m) for m in ensure_list(measurements)]
+    )
 
 
 def _finalize_lazy_measurements(
@@ -1395,7 +1389,20 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
         """
+        return _squeezed(
+            self._reduce(scan, ctf, detectors, max_batch_reduction, reduction_scheme)
+        )
 
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        reduction_scheme: str = "auto",
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # reduce, keeping the position axis of a bare position for the caller
+        # that assembles the results of several reductions
         self.accelerator.check_is_defined()
 
         if ctf is None:
@@ -1406,10 +1413,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        # A scan the caller validated is squeezed by the caller, which assembles
-        # the blocks this reduction returns (SMatrix.reduce).
-        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -1450,8 +1453,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
 
-        if squeeze:
-            measurements = _squeeze_flagged_axes(measurements)
         return _wrap_measurements(measurements)
 
     def scan(
@@ -3057,8 +3058,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
         blend_taper: float = None,
-        _blend_component: str = None,
-        _blend_taper: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -3119,6 +3118,35 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
+        return _squeezed(
+            self._reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                max_batch_expansion=max_batch_expansion,
+                method=method,
+                blend_angle=blend_angle,
+                blend_window_gpts=blend_window_gpts,
+                blend_taper=blend_taper,
+            )
+        )
+
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        max_batch_expansion: int | str = None,
+        method: str = "auto",
+        blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
+        _blend_component: str = None,
+        _blend_taper: float = None,
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # as SMatrixArray._reduce
         self.accelerator.check_is_defined()
 
         explicit_blend = blend_angle is not None
@@ -3211,7 +3239,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method = "modes"
 
         if full_window and method == "expand" and max_batch_expansion == "auto":
-            return self._expanded_s_matrix_array().reduce(
+            return self._expanded_s_matrix_array()._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3226,9 +3254,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        # as in SMatrixArray.reduce
-        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -3289,8 +3314,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     blend_taper=_blend_taper,
                 )
 
-        if squeeze:
-            measurements = _squeeze_flagged_axes(measurements)
         return _wrap_measurements(measurements)
 
     @property
@@ -3402,7 +3425,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     snap=False,
                 )
             elif component == "low":
-                measurements = self.reduce(
+                measurements = self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3415,7 +3438,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     min(-(-g // i), g)
                     for g, i in zip(self.gpts, self._interpolation)
                 )
-                measurements = self._with_window(period).reduce(
+                measurements = self._with_window(period)._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3461,7 +3484,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             for detector in detectors
         ]
         low_list = ensure_list(
-            self.reduce(
+            self._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=padded,
@@ -3490,7 +3513,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # a vanishing blend angle keeps the plane-wave branch whole except at
         # the zero-frequency pixel, which lies far below any usable cut
         high_list = ensure_list(
-            self._with_window(period).reduce(
+            self._with_window(period)._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3622,7 +3645,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 blend_angle, detectors, self._offset_rounding_margin
             )
 
-        low = self.reduce(
+        low = self._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -3653,7 +3676,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             singular_values=self._singular_values,
             reference_depth=self._reference_depth,
         )
-        high = high_array.reduce(
+        high = high_array._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -5602,7 +5625,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             s_matrix = s_matrix.item()
             s_matrix_array = s_matrix.build(lazy=False)
 
-            new_measurements = s_matrix_array.reduce(
+            new_measurements = s_matrix_array._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
@@ -5791,7 +5814,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 else measurement
                 for measurement in ensure_list(measurements)
             ]
-            return _wrap_measurements(_squeeze_flagged_axes(measurements))
+            return _squeezed(measurements)
 
         if disable_s_matrix_chunks:
             scan = validate_scan(scan, self)
@@ -5846,15 +5869,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 arrays, waves, detectors, extra_axes_metadata
             )
 
-            return _wrap_measurements(_squeeze_flagged_axes(measurements))
+            return _squeezed(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-        measurements = s_matrix_array.reduce(
+        measurements = s_matrix_array._reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
-        # the multi-energy branch above passes a validated scan
-        return _wrap_measurements(_squeeze_flagged_axes(ensure_list(measurements)))
+        return _squeezed(measurements)

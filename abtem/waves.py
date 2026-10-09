@@ -328,6 +328,18 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         return alpha, phi
 
 
+def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble without its axes flagged ``_squeeze`` (the position axis of a
+    bare scan position)."""
+    return ensemble.squeeze(
+        tuple(
+            i
+            for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
+            if axes_metadata._squeeze
+        )
+    )
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -369,12 +381,7 @@ def reduce_ensemble(
 
         return outputs
 
-    squeeze = tuple(
-        i
-        for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
-        if axes_metadata._squeeze
-    )
-    output = ensemble.squeeze(squeeze)
+    output = _squeeze_flagged_axes(ensemble)
 
     reduced_output: Waves | BaseMeasurements
     if isinstance(output, BaseMeasurements):

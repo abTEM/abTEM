@@ -18,6 +18,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.potentials.iam import PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.scan import validate_scan
 
 ATOMS = bulk("Si", cubic=True) * (1, 1, 2)
 POSITION = (2.0, 1.5)
@@ -446,3 +447,43 @@ def test_auto_reduction_batch_of_a_single_position_may_exceed_the_chunk_size(
 
     assert measured.shape[0] == 4
     _assert_matches(measured, expected)
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+@pytest.mark.parametrize("exit_planes", [None, 2])
+@devices
+def test_reduce_without_a_scan_has_no_position_axis(path, exit_planes, device):
+    potential = _potential(exit_planes=exit_planes, device=device)
+    s_matrix = _s_matrix(potential, device=device)
+    centre = (potential.extent[0] / 2, potential.extent[1] / 2)
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 90), abtem.PixelatedDetector(max_angle=100)]
+
+    expected = s_matrix.dummy_probes().scan(
+        potential=potential, scan=centre, detectors=detectors(), lazy=False
+    )
+    measured = s_matrix.reduce(detectors=detectors(), **_PATHS[path]).compute()
+
+    planes = () if exit_planes is None else (4,)
+    assert measured[0].shape == planes
+    assert measured[1].shape == planes + expected[1].base_shape
+    _assert_matches(list(measured), list(expected))
+
+
+# an upsampled S-matrix is always built eagerly
+@pytest.mark.parametrize(
+    "lazy, upsample", [(False, False), (True, False), (False, True)]
+)
+@devices
+def test_array_reduce_squeezes_a_validated_bare_position(lazy, upsample, device):
+    s_matrix = _s_matrix(
+        _potential(device=device), interpolation=2, upsample=upsample, device=device
+    )
+    built = s_matrix.build(lazy=lazy)
+    scan = validate_scan(POSITION, s_matrix)
+
+    measured = built.reduce(scan=scan, detectors=abtem.AnnularDetector(30, 90))
+    expected = built.reduce(scan=POSITION, detectors=abtem.AnnularDetector(30, 90))
+
+    assert measured.shape == expected.shape == ()
