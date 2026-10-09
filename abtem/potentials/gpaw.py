@@ -271,7 +271,7 @@ def _same_elements_and_cell(atoms, other):
 _PLANE_TOLERANCE = 1e-6
 
 
-def integrate_slice(array, gpts, a, b, thickness):
+def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     """
     Integrate the planes of `array` along its last axis between the heights `a`
     and `b`, and Fourier interpolate the result to `gpts`.
@@ -280,8 +280,14 @@ def integrate_slice(array, gpts, a, b, thickness):
     spacing. A slice takes the planes from floor(a / dz) up to, not including,
     floor(b / dz), so consecutive slices share their limit and every plane belongs
     to exactly one slice. A slice that contains no plane gets zero.
+
+    `array` is one period of a grid repeated `repetitions` times along its three
+    axes, and `thickness` is the length of the repeated grid along the last axis.
+    The planes are taken from the one period and the integral is repeated in the
+    plane, which gives the same values as integrating the repeated grid, up to
+    the order of the float sum.
     """
-    nz = array.shape[2]
+    nz = array.shape[2] * repetitions[2]
     dz = thickness / nz
     na = int(np.floor(a / dz + _PLANE_TOLERANCE))
     nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
@@ -289,7 +295,18 @@ def integrate_slice(array, gpts, a, b, thickness):
     if nb <= na:
         return np.zeros(gpts, dtype=array.dtype)
 
-    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
+    # The planes na:nb of the repeated grid are the end of one period, whole periods
+    # and the start of one period. The partial periods are summed as views and the
+    # whole periods as `periods` times the sum of the grid, so no plane is copied.
+    n = array.shape[2]
+    head_end = min(nb, (na // n + 1) * n)
+    summed = np.sum(array[..., na % n : na % n + head_end - na], axis=-1)
+    periods, tail = divmod(nb - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    slice_array = np.tile(summed * dz, repetitions[:2])
     new_shape = (nb - na,) + gpts
     old_shape = (nb - na,) + slice_array.shape
     slice_array = np.fft.fftn(slice_array)
@@ -344,10 +361,12 @@ def _generate_slices(
     first_slice=0,
     last_slice=None,
     device=None,
+    repetitions=(1, 1, 1),
 ):
     # `atoms` is the calculator's atoms or whole copies of them one after another
     # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
-    # correction of atom i of the calculator.
+    # correction of atom i of the calculator. `valence_potential` is that of one
+    # calculator cell.
     n = len(interpolators)
     potentials = []
     for i, interpolator in enumerate(interpolators):
@@ -379,6 +398,7 @@ def _generate_slices(
 
         axes = plane_to_axes(potential.plane)
         valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
+        repetitions = tuple(repetitions[axis] for axis in axes)
         transform_valence_potential = False
     # else:
     #    atoms = ewald_potential.frozen_phonons.atoms
@@ -389,6 +409,11 @@ def _generate_slices(
         transform_valence_potential = False
     elif transform_valence_potential is None:
         transform_valence_potential = True
+
+    if transform_valence_potential and repetitions != (1, 1, 1):
+        # `_interpolate_slice` maps the grid points of the slice into the cell of
+        # `atoms`, so it takes the valence potential of the repeated cell.
+        valence_potential = np.tile(valence_potential, repetitions)
 
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
@@ -406,7 +431,12 @@ def _generate_slices(
             )
         else:
             valence_slice = integrate_slice(
-                valence_potential, potential.gpts, a, b, potential.thickness
+                valence_potential,
+                potential.gpts,
+                a,
+                b,
+                potential.thickness,
+                repetitions,
             )
         slic.array[:] -= copy_to_device(valence_slice, slic.array)
 
@@ -638,8 +668,6 @@ class GPAWPotential(_PotentialBuilder):
         valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
-            # The valence potential is periodic with the calculator's cell.
-            valence_potential = np.tile(valence_potential, self.repetitions)
             # cell_cv = calculator.gd.cell_cv * self.repetitions
             # N_c = tuple(
             #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
@@ -684,6 +712,7 @@ class GPAWPotential(_PotentialBuilder):
             first_slice=first_slice,
             last_slice=last_slice,
             device=self.device,
+            repetitions=self.repetitions,
         ):
             yield slic
         # for slic in _generate_slices(
