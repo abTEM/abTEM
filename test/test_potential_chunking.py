@@ -10,7 +10,7 @@ from utils import devices, requires_gpu, si_cubic_atoms
 from ase.build import bulk
 
 import abtem
-from abtem import PlaneWave, Potential
+from abtem import FrozenPhonons, PlaneWave, Potential
 from abtem.core import config as abtem_config
 from abtem.core.backend import asnumpy
 from abtem.core.chunks import (
@@ -19,7 +19,14 @@ from abtem.core.chunks import (
     estimate_scan_batch_size,
 )
 from abtem.core.complex import complex_exponential
-from abtem.potentials.iam import CrystalPotential, PotentialArray
+from abtem.core.grid import Grid
+from abtem.magnetism.iam import (
+    MagneticField,
+    MagneticFieldArray,
+    VectorPotential,
+    VectorPotentialArray,
+)
+from abtem.potentials.iam import BasePotential, CrystalPotential, PotentialArray
 
 
 @pytest.fixture
@@ -105,6 +112,14 @@ class TestEstimatePotentialChunkSize:
         bluestein = estimate_potential_chunk_size((2623, 2271), "gpu", dtype)
         fast = estimate_potential_chunk_size((2625, 2268), "gpu", dtype)
         assert bluestein == fast == 117
+
+    def test_device_chunk_size_counts_every_element_of_a_slice(self, monkeypatch):
+        """The shape of a slice may carry a component axis: a magnetic slice of
+        (3, 2623, 2271) takes three times the bytes of a (2623, 2271) one.
+        int(0.35 * 40 GB / (3*2623*2271*4 * 5)) = 39."""
+        _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
+        dtype = np.dtype(np.float32)
+        assert estimate_potential_chunk_size((3, 2623, 2271), "gpu", dtype) == 39
 
 
 class TestEstimateScanBatchSize:
@@ -251,7 +266,7 @@ class TestMultisliceWithChunking:
 
         This is stronger than comparing two chunked runs: the pre-built path
         exercises ``FieldArray.generate_chunked_slices`` (array-view slicing)
-        while the unbuilt path exercises ``_FieldBuilderFromAtoms.generate_chunked_slices``
+        while the unbuilt path exercises ``_FieldBuilder.generate_chunked_slices``
         (on-the-fly build). Agreement between the two confirms that neither
         chunker introduces numerical error relative to the underlying atom
         integration.
@@ -1138,3 +1153,384 @@ class TestComplexExponential:
         assert isinstance(result_gpu, cp.ndarray)
         assert result_gpu.dtype == expected_cdtype
         assert np.allclose(cp.asnumpy(result_gpu), result_cpu, atol=1e-6)
+
+
+def _fe_atoms_with_moments():
+    atoms = bulk("Fe", cubic=True) * (1, 1, 2)
+    moments = np.tile([[0.0, 0.0, 2.0], [0.5, 0.0, 1.0]], (len(atoms) // 2, 1))
+    atoms.set_array("magnetic_moments", moments)
+    return atoms
+
+
+def _transmission_function():
+    atoms = bulk("Si", cubic=True) * (1, 1, 2)
+    potential = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+    return potential.build(lazy=False).transmission_function(100e3)
+
+
+def _local_exit_planes(global_exit_planes, offset, length):
+    return tuple(
+        int(i) - offset for i in global_exit_planes if offset <= i < offset + length
+    )
+
+
+class TestPotentialSubclassWithoutAChunker:
+    """A potential class written against v1.0.10 implements only that version's
+    abstract members, and has no generate_chunked_slices."""
+
+    @staticmethod
+    def _minimal_potential(array, extent):
+        class Minimal(BasePotential):
+            def __init__(self):
+                self._grid = Grid(extent=extent, gpts=array.shape[-2:])
+
+            num_configurations = 1
+            base_axes_metadata = []
+            ensemble_axes_metadata = []
+            ensemble_shape = ()
+            device = "cpu"
+            slice_thickness = (1.0,) * len(array)
+            exit_planes = (len(array) - 1,)
+
+            def generate_slices(self, first_slice=0, last_slice=None):
+                for i in range(first_slice, last_slice or len(array)):
+                    yield PotentialArray(array[i : i + 1], (1.0,), extent=extent)
+
+            def build(self, first_slice=0, last_slice=None, chunks=1, lazy=None):
+                return PotentialArray(array, self.slice_thickness, extent=extent)
+
+            def _partition_args(self, chunks=1, lazy=True):
+                return ()
+
+            def _from_partitioned_args(self):
+                def from_partitioned_args(*args, **kwargs):
+                    members = np.empty((), dtype=object)
+                    members[()] = self
+                    return members
+
+                return from_partitioned_args
+
+        return Minimal()
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_multislice_runs_slice_by_slice(self, lazy):
+        array = np.random.default_rng(0).random((3, 32, 32)).astype(np.float32)
+        potential = self._minimal_potential(array, extent=8.0)
+        waves = PlaneWave(energy=100e3, gpts=32, extent=8.0)
+
+        result = waves.multislice(potential, lazy=lazy).compute()
+        expected = waves.multislice(
+            PotentialArray(array, (1.0,) * 3, extent=8.0), lazy=False
+        )
+
+        np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6)
+
+    @pytest.mark.parametrize("chunk_size", [1, 2, "auto"])
+    @pytest.mark.parametrize("first_slice, last_slice", [(0, None), (1, 3)])
+    def test_the_inherited_chunker_yields_each_slice_as_a_chunk(
+        self, chunk_size, first_slice, last_slice
+    ):
+        array = np.random.default_rng(0).random((4, 32, 32)).astype(np.float32)
+        potential = self._minimal_potential(array, extent=8.0)
+
+        chunks = list(
+            potential.generate_chunked_slices(first_slice, last_slice, chunk_size)
+        )
+        slices = list(potential.generate_slices(first_slice, last_slice))
+
+        assert len(chunks) == len(slices) == (last_slice or 4) - first_slice
+        for chunk, slic in zip(chunks, slices):
+            assert type(chunk) is PotentialArray
+            np.testing.assert_array_equal(chunk.array, slic.array)
+            assert chunk.slice_thickness == slic.slice_thickness
+            assert chunk.exit_planes == slic.exit_planes
+
+
+class TestTransmissionFunctionSlices:
+    """Slices and chunks of a transmission function carry its energy."""
+
+    def test_slices_keep_the_energy(self):
+        t = _transmission_function()
+        slices = list(t.generate_slices())
+
+        assert len(slices) == len(t) > 1
+        assert [s.energy for s in slices] == [t.energy] * len(t)
+        assert slices[0].transmission_function(100e3) is slices[0]
+
+    def test_chunks_keep_the_energy(self):
+        t = _transmission_function()
+        chunks = list(t.generate_chunked_slices(chunk_size=1))
+
+        assert len(chunks) == len(t) > 1
+        assert [c.energy for c in chunks] == [t.energy] * len(t)
+        assert chunks[0].transmission_function(100e3) is chunks[0]
+
+
+class TestSlicesKeepTheMetadata:
+    """Slices and chunks carry the metadata of their array, as indexing it does."""
+
+    @pytest.mark.parametrize(
+        "cls, shape",
+        [
+            (PotentialArray, (3, 8, 10)),
+            (MagneticFieldArray, (3, 3, 8, 10)),
+            (VectorPotentialArray, (3, 3, 8, 10)),
+        ],
+    )
+    def test_arrays(self, cls, shape):
+        array = cls(
+            np.ones(shape, dtype=np.float32),
+            slice_thickness=(1.0, 2.0, 1.5),
+            extent=(4.0, 5.0),
+            metadata={"note": "kept"},
+        )
+
+        slices = list(array.generate_slices())
+        chunks = list(array.generate_chunked_slices(chunk_size=2))
+
+        assert [len(c) for c in chunks] == [1, 2]
+        assert array.metadata["note"] == "kept"
+        for i, s in enumerate(slices):
+            assert s.metadata == array[i : i + 1].metadata
+        for chunk, (start, stop) in zip(chunks, [(0, 1), (1, 3)]):
+            assert chunk.metadata == array[start:stop].metadata
+
+    def test_transmission_functions(self):
+        t = _transmission_function()
+
+        for i, s in enumerate(t.generate_slices()):
+            assert s.metadata == t.get_chunk(i, i + 1).metadata
+        for chunk, (start, stop) in zip(
+            t.generate_chunked_slices(chunk_size=2), [(0, 2), (2, 4), (4, 6)]
+        ):
+            assert chunk.metadata == t.get_chunk(start, stop).metadata
+
+
+class TestAutoChunkSizeCountsTheComponentAxis:
+    """chunk_size="auto" prices a slice at its own shape."""
+
+    @staticmethod
+    def _record_estimates(monkeypatch):
+        shapes = []
+
+        def estimate(gpts, device="cpu", dtype=None):
+            shapes.append(tuple(gpts))
+            return 2
+
+        monkeypatch.setattr("abtem.core.chunks.estimate_potential_chunk_size", estimate)
+        return shapes
+
+    @pytest.mark.parametrize("builder", [MagneticField, VectorPotential])
+    def test_field_builder_and_array(self, builder, monkeypatch):
+        shapes = self._record_estimates(monkeypatch)
+        field = builder(_fe_atoms_with_moments(), gpts=(16, 20), slice_thickness=1.5)
+        built = field.build()
+
+        assert field.base_shape[1:] == built.base_shape[1:] == (3, 16, 20)
+        for chunked in (field, built):
+            assert [len(c) for c in chunked.generate_chunked_slices()] == [2, 2]
+        assert shapes == [(3, 16, 20)] * 2
+
+    def test_potentials_keep_their_shape(self, monkeypatch):
+        shapes = self._record_estimates(monkeypatch)
+        potential = Potential(
+            bulk("Si", cubic=True), gpts=(16, 20), slice_thickness=1.5
+        )
+        built = potential.build()
+
+        for chunked in (potential, built):
+            list(chunked.generate_chunked_slices())
+        assert shapes == [(16, 20)] * 2
+
+
+class TestAutoChunkSizeCountsTheEnsembleAxis:
+    """A builder's chunk holds every member of its ensemble, so chunk_size="auto"
+    prices a slice at ensemble_shape + base_shape[1:]."""
+
+    @staticmethod
+    def _record_estimates(monkeypatch):
+        shapes = []
+
+        def estimate(slice_shape, device="cpu", dtype=None):
+            shapes.append(tuple(slice_shape))
+            return 2
+
+        monkeypatch.setattr("abtem.core.chunks.estimate_potential_chunk_size", estimate)
+        return shapes
+
+    @pytest.mark.parametrize("cls", [Potential, MagneticField, VectorPotential])
+    @pytest.mark.parametrize("num_configurations", [1, 4])
+    def test_the_slice_shape_includes_the_ensemble_axis(
+        self, cls, num_configurations, monkeypatch
+    ):
+        shapes = self._record_estimates(monkeypatch)
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), num_configurations, sigmas=0.05, seed=3
+        )
+        field = cls(phonons, gpts=(16, 20), slice_thickness=1.5)
+
+        list(field.generate_chunked_slices())
+
+        assert shapes == [(num_configurations,) + field.base_shape[1:]]
+
+    def test_a_chunk_shrinks_with_the_number_of_configurations(self, monkeypatch):
+        """The estimate of a 4-configuration builder is a quarter of the
+        estimate of a single member, on a device with a fixed amount of free
+        memory."""
+        _install_fake_cupy(monkeypatch, free=150_000, total=1_000_000)
+        monkeypatch.setattr(
+            "abtem.core.chunks.estimate_potential_chunk_size",
+            lambda slice_shape, device="cpu", dtype=None: estimate_potential_chunk_size(
+                slice_shape, "gpu", dtype
+            ),
+        )
+
+        def chunk_lengths(num_configurations):
+            phonons = FrozenPhonons(
+                bulk("Si", cubic=True), num_configurations, sigmas=0.05, seed=3
+            )
+            builder = Potential(phonons, gpts=(16, 20), slice_thickness=0.34)
+            return [len(c) for c in builder.generate_chunked_slices()]
+
+        assert max(chunk_lengths(1)) == 8
+        assert max(chunk_lengths(4)) == 2
+
+    def test_multislice_prices_a_slice_of_one_configuration(self, monkeypatch):
+        """Multislice hands each configuration over with an ensemble axis of
+        length 1, so its chunk size does not change."""
+        shapes = self._record_estimates(monkeypatch)
+        phonons = FrozenPhonons(bulk("Si", cubic=True), 3, sigmas=0.05, seed=3)
+        potential = Potential(phonons, gpts=(16, 20), slice_thickness=2.0)
+
+        PlaneWave(energy=100e3, gpts=(16, 20), extent=potential.extent).multislice(
+            potential, lazy=False
+        )
+
+        assert len(shapes) == 3
+        assert {int(np.prod(shape)) for shape in shapes} == {16 * 20}
+
+
+class TestBuiltFieldWithAnEnsembleAxis:
+    """Iterating or chunking a built array visits its first ensemble member only,
+    and says so."""
+
+    @staticmethod
+    def _built(cls, num_configurations=2):
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), num_configurations, sigmas=0.05, seed=3
+        )
+        return cls(phonons, gpts=(16, 20), slice_thickness=1.5).build()
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
+    def test_warns(self, cls, method):
+        built = self._built(cls)
+        assert built.shape == (2, 4, 3, 16, 20)
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(getattr(built, method)())
+
+        np.testing.assert_array_equal(
+            np.concatenate([s.array for s in slices]), built.array[0]
+        )
+
+    def test_warns_for_a_potential_too(self):
+        phonons = FrozenPhonons(bulk("Si", cubic=True), 2, sigmas=0.05, seed=3)
+        built = Potential(phonons, gpts=(16, 20), slice_thickness=2.0).build()
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(built.generate_slices())
+
+        np.testing.assert_array_equal(
+            np.concatenate([s.array for s in slices]), built.array[0]
+        )
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize(
+        "how", ["generate_slices", "generate_chunked_slices", "list", "for"]
+    )
+    def test_the_warning_points_at_the_caller(self, cls, how):
+        built = self._built(cls)
+
+        with pytest.warns(UserWarning, match="ensemble") as record:
+            if how == "list":
+                list(built)
+            elif how == "for":
+                for _ in built:
+                    break
+            else:
+                list(getattr(built, how)())
+
+        assert [w.filename for w in record] == [__file__]
+
+    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
+    @pytest.mark.parametrize("num_configurations", [None, 1])
+    def test_a_single_member_does_not_warn(
+        self, cls, method, num_configurations, recwarn
+    ):
+        atoms = _fe_atoms_with_moments()
+        if num_configurations is not None:
+            atoms = FrozenPhonons(atoms, num_configurations, sigmas=0.05, seed=3)
+        built = cls(atoms, gpts=(16, 20), slice_thickness=1.5).build()
+        assert built.ensemble_shape == (() if num_configurations is None else (1,))
+
+        list(getattr(built, method)())
+        assert not [w for w in recwarn if "ensemble" in str(w.message)]
+
+
+@pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+class TestAtomBasedFieldsWithFrozenPhonons:
+    """The slices of a field with an ensemble axis, against slicing the full
+    build's array."""
+
+    @staticmethod
+    def _field(cls):
+        phonons = FrozenPhonons(
+            _fe_atoms_with_moments(), 2, sigmas=0.05, seed=3
+        )
+        return cls(phonons, gpts=(16, 20), slice_thickness=1.5, exit_planes=2)
+
+    def test_built_array_iterates_and_chunks_its_first_member(self, cls):
+        full = self._field(cls).build()
+        assert full.shape == (2, 4, 3, 16, 20)
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            slices = list(full.generate_slices())
+        assert len(slices) == 4
+        for i, s in enumerate(slices):
+            assert type(s) is type(full)
+            np.testing.assert_array_equal(s.array, full.array[0, i : i + 1])
+            assert s.slice_thickness == full.slice_thickness[i : i + 1]
+
+        with pytest.warns(UserWarning, match="ensemble"):
+            chunks = list(full.generate_chunked_slices(1, 4, chunk_size=2))
+        assert [len(c) for c in chunks] == [1, 2]
+        np.testing.assert_array_equal(
+            np.concatenate([c.array for c in chunks]), full.array[0, 1:4]
+        )
+        assert full.exit_planes == (-1, 1, 3)
+        assert [c.exit_planes for c in chunks] == [
+            _local_exit_planes(full.exit_planes, 1, 1),
+            _local_exit_planes(full.exit_planes, 2, 2),
+        ]
+
+    def test_builder_chunks_hold_every_member(self, cls):
+        field = self._field(cls)
+        full = field.build()
+
+        chunks = list(field.generate_chunked_slices(chunk_size=3))
+
+        assert [len(c) for c in chunks] == [2, 2]
+        for chunk, (start, stop) in zip(chunks, [(0, 2), (2, 4)]):
+            assert type(chunk) is type(full)
+            assert chunk.shape == (2, stop - start, 3, 16, 20)
+            np.testing.assert_array_equal(chunk.array, full.array[:, start:stop])
+            assert chunk.ensemble_axes_metadata == full.ensemble_axes_metadata
+            assert chunk.sampling == full.sampling
+            assert chunk.slice_thickness == full.slice_thickness[start:stop]
+        assert full.exit_planes == (-1, 1, 3)
+        assert [c.exit_planes for c in chunks] == [
+            _local_exit_planes(full.exit_planes, 0, 2),
+            _local_exit_planes(full.exit_planes, 2, 2),
+        ]

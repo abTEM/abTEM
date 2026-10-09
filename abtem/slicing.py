@@ -10,7 +10,11 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
+from abtem.atoms import (
+    _stacklevel_outside_package,
+    is_cell_orthogonal,
+    wrap_and_snap_atoms,
+)
 from abtem.core.utils import (
     EqualityMixin,
     label_to_index,
@@ -663,7 +667,7 @@ def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
         "is right for a small displacement such as a frozen phonon, but puts an "
         "atom this far out at the wrong depth. Check the atomic positions against "
         "the cell height.",
-        stacklevel=3,
+        stacklevel=_stacklevel_outside_package(),
     )
 
 

@@ -196,6 +196,39 @@ class TestEqualityDiscriminates:
             built.build(lazy=False)
         assert s_built == s_unbuilt
 
+    def test_a_nested_object_is_compared_once(self, monkeypatch):
+        """Each nested `EqualityMixin` attribute is compared once per path, so
+        the number of `safe_equality` calls grows with the number of nested
+        objects, not with 2 ** depth."""
+        import collections
+
+        import abtem
+        import abtem.core.utils as utils
+
+        real_safe_equality = utils.safe_equality
+        parents = []
+        calls = collections.Counter()
+
+        def counting_safe_equality(a, b, exclude=()):
+            calls[(parents[-1] if parents else None, id(a), id(b))] += 1
+            parents.append((id(a), id(b)))
+            try:
+                return real_safe_equality(a, b, exclude)
+            finally:
+                parents.pop()
+
+        monkeypatch.setattr(utils, "safe_equality", counting_safe_equality)
+
+        a = abtem.SMatrix(
+            potential=self._potential(), energy=100e3, semiangle_cutoff=20
+        )
+        b = abtem.SMatrix(
+            potential=self._potential(), energy=100e3, semiangle_cutoff=20
+        )
+        assert a == b
+        assert len(calls) > 1
+        assert max(calls.values()) == 1, [k for k, n in calls.items() if n > 1]
+
     def test_a_built_crystal_potential_equals_an_identical_unbuilt_one(self):
         """CrystalPotential creates its own `_sliced_atoms` and descends from
         `_PotentialBuilder`, not from `_FieldBuilderFromAtoms`, so it needs the
