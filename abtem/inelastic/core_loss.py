@@ -1179,7 +1179,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             waves = waves.build(lazy=False)
         # The whole intensity is reduced to one host-side number: lazy waves are
         # computed once, into a copy, rather than piecewise by the operations below
-        waves = waves.ensure_computed(progress_bar=False)
+        waves = waves.ensure_computed(progress_bar=False).ensure_real_space()
 
         array = abs2(waves.array)
 
@@ -1372,7 +1372,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
         # As in absolute_threshold: the mask below needs the intensity in memory
-        waves = waves.ensure_computed(progress_bar=False)
+        waves = waves.ensure_computed(progress_bar=False).ensure_real_space()
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,
@@ -1468,6 +1468,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
     ) -> Waves:
+        """Scatter ``waves`` at ``sites``. Waves in reciprocal space are converted to
+        real space, and the scattered waves are in real space."""
+        waves = waves.ensure_real_space()
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -1564,6 +1567,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_batch: int = "auto",
         threshold=None,
     ):
+        """Yield ``(sites, scattered_waves)`` for chunks of ``sites``. Waves in
+        reciprocal space are converted to real space once, and the scattered waves
+        are in real space."""
+        waves = waves.ensure_real_space()
         # Match before filtering: filter_sites reads self.sampling, and the
         # scatter path used to run this match first -- keep the immediate,
         # informative error for a grid mismatch.

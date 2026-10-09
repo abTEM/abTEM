@@ -754,7 +754,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
         )
 
 
-class VectorPotential(_FieldBuilderFromAtoms, BaseMagneticField):
+class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
     _exclude_from_copy = ("parametrization",)
 
     def __init__(
