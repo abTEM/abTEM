@@ -1468,7 +1468,8 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
     ) -> Waves:
-        # The transition potentials multiply the waves as a real-space wave function.
+        """Scatter ``waves`` at ``sites``. Waves in reciprocal space are converted to
+        real space, and the scattered waves are in real space."""
         waves = waves.ensure_real_space()
         self.grid.match(waves)
         self.accelerator.match(waves)
@@ -1566,7 +1567,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_batch: int = "auto",
         threshold=None,
     ):
-        # Convert once here, so the scatter call of each chunk does not repeat it.
+        """Yield ``(sites, scattered_waves)`` for chunks of ``sites``. Waves in
+        reciprocal space are converted to real space once, and the scattered waves
+        are in real space."""
         waves = waves.ensure_real_space()
         # Match before filtering: filter_sites reads self.sampling, and the
         # scatter path used to run this match first -- keep the immediate,
