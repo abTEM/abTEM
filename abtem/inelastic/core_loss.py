@@ -1212,7 +1212,13 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         # below the largest single-pixel fraction, wrapped to -1, i.e. the
         # *smallest* overlap, keeping almost every site).
         index = min(
-            int(xp.searchsorted(cumulative, threshold, side="left")),
+            int(
+                xp.searchsorted(
+                    cumulative,
+                    xp.asarray(threshold, dtype=cumulative.dtype),
+                    side="left",
+                )
+            ),
             len(overlap) - 1,
         )
 
