@@ -1215,7 +1215,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             int(
                 xp.searchsorted(
                     cumulative,
-                    xp.asarray(threshold, dtype=cumulative.dtype),
+                    xp.asarray(threshold),
                     side="left",
                 )
             ),
