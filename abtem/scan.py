@@ -449,6 +449,9 @@ class LineScan(BaseScan):
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
         Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
+        The number of positions is rounded up to fit the line, so the actual
+        sampling is at most the requested one. With `endpoint=True` the number
+        includes the end point.
         If not provided the sampling will match the Nyquist sampling of the Probe
         in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
@@ -544,7 +547,9 @@ class LineScan(BaseScan):
         gpts : int
             Number of grid points along the line.
         sampling : float
-            Sampling of grid points along the line [Å].
+            Sampling of grid points along the line [Å]. The number of positions is
+            rounded up to fit the line, so the actual sampling is at most the
+            requested one. With `endpoint=True` the number includes the end point.
         endpoint : bool
             Sets whether the ending position is included or not.
 
