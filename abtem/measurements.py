@@ -1382,7 +1382,12 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         if width:
             direction = xp.array(scan.end) - xp.array(scan.start)
-            direction = direction / xp.linalg.norm(direction)
+            length = xp.linalg.norm(direction)
+            if length == 0:
+                raise ValueError(
+                    "A line of zero length cannot be averaged over a width."
+                )
+            direction = direction / length
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
             # The offsets are spaced by min(sampling) along the perpendicular

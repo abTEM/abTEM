@@ -1978,6 +1978,34 @@ def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
     assert profiles.interpolate(sampling=0.3).shape == (36,)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("endpoint", [False, True])
+def test_interpolate_line_of_zero_length_gives_the_point_value_without_width(
+    endpoint, lazy
+):
+    array = np.random.default_rng(0).random((40, 40))
+    images = Images(array, sampling=0.1)
+    if lazy:
+        images = images.ensure_lazy()
+
+    profile = images.interpolate_line(
+        start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
+    )
+    expected = scipy.ndimage.map_coordinates(array, [[10.0], [10.0]], order=3)
+    assert profile.shape == (1,)
+    np.testing.assert_allclose(profile.compute().array, expected, rtol=1e-10)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_interpolate_line_of_zero_length_cannot_be_averaged_over_a_width(lazy):
+    images = Images(np.random.default_rng(0).random((40, 40)), sampling=0.1)
+    if lazy:
+        images = images.ensure_lazy()
+
+    with pytest.raises(ValueError, match="zero length cannot be averaged"):
+        images.interpolate_line(start=(1, 1), end=(1, 1), sampling=0.1, width=0.3)
+
+
 def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
     images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
     assert images.interpolate(sampling=1e9).shape == (1, 1)
