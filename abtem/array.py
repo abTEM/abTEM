@@ -2630,7 +2630,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             coords[axis.label] = dr
 
-        attrs = dict(self.metadata)
+        attrs = copy.deepcopy(self.metadata)
         if "label" in attrs:
             attrs["long_name"] = attrs["label"]
 
