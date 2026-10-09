@@ -5074,16 +5074,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
-        angular_coordinates: tuple[np.ndarray, np.ndarray],
-        max_angle: float,
-        radial_sampling: float,
+        geometry: tuple[np.ndarray, np.ndarray],
+        centers: np.ndarray,
         weighting_function: str,
         width: float,
     ):
-        x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
-
-        centers = np.arange(0, max_angle, radial_sampling)
+        if weighting_function == "gaussian":
+            x, y = np.meshgrid(*geometry, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
@@ -5091,7 +5089,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
-                mask = np.abs(r - center) < width
+                first, last = geometry
+                mask = (first <= i) & (i <= last)
             elif weighting_function == "gaussian":
                 mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
             else:
@@ -5116,23 +5115,39 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Calculate the azimuthal averages of the diffraction patterns.
 
+        The radial bins are centered at multiples of `radial_sampling`, starting at
+        zero. Radii are measured in units of the smallest angular sampling, from the
+        integer frequency indices of the pixels. The pixels of a step bin are chosen
+        from these radii in double precision on the host, with each pixel's position
+        in units of `radial_sampling` rounded to 7 decimals. A pixel on the edge of a
+        bin belongs to the bin above the edge, at every precision and pattern size.
+        With the default bins and equal sampling no pixel is on an edge; pixels are on
+        edges for other values of `radial_sampling` and `width`, and for ratios of the
+        x and y sampling whose denominator in lowest terms is even (3:2, 5:4).
+
         Parameters
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the azimuthal averages [mrad].
         radial_sampling : float, optional
-            The radial sampling of the azimuthal averages [mrad]. Default is equal to
-            the smallest value of the x and y component of the angular sampling.
+            The radial sampling of the azimuthal averages, as a multiple of the
+            smallest value of the x and y component of the angular sampling.
+            Default is 1.
         weighting_function : str
             The weighting function to determining how to average the diffraction
             patterns. The weighting function determines the shape of the mask that is
             applied to the diffraction patterns before averaging. The options are 'step'
             and 'gaussian'. Default is 'step'.
         width : float, optional
-            The width of the weighting function [mrad]. Default is 1.0.
-            For the 'step' weighting function, this is the width of the step function.
-            For the 'gaussian' weighting function, this is the standard deviation of the
-            Gaussian function.
+            The width of the weighting function, as a multiple of the smallest value
+            of the x and y component of the angular sampling. Default is 1.
+            For the 'step' weighting function, this is the full width of the ring: bin
+            `k` holds the pixels with
+            `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
+            so the default bins do not overlap.
+            For the 'gaussian' weighting function, the weight is
+            `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
+            of `width / 2`.
 
         Returns
         -------
@@ -5140,15 +5155,39 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The azimuthal averages of the diffraction patterns.
         """
 
-        if max_angle is None:
-            max_angle = -min(min(self.angular_limits))
+        unit = min(self.angular_sampling)
+        xp = get_array_module(self.array)
+        coordinates = tuple(
+            np.rint(np.asarray(k) / d) * (a / unit)
+            for k, d, a in zip(self.coordinates, self.sampling, self.angular_sampling)
+        )
 
-        radial_sampling = radial_sampling * min(self.angular_sampling)
-        width = width * min(self.angular_sampling)
+        if max_angle is None:
+            max_angle = -min(c.min() for c in coordinates)
+        else:
+            max_angle = max_angle / unit
+
+        num_bins = safe_ceiling_int(max_angle / radial_sampling)
+        centers = np.arange(num_bins) * radial_sampling
+
+        if weighting_function == "step":
+            x, y = np.meshgrid(*coordinates, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
+            # Bin k holds r with k * radial_sampling - width / 2 <= r <
+            # k * radial_sampling + width / 2, that is first <= k <= last. The
+            # quotients are rounded as in safe_ceiling_int, so an edge at a
+            # decimal multiple of the sampling is not missed by rounding noise.
+            geometry = tuple(
+                xp.asarray(np.floor(np.round(q, 7)), dtype=np.int32)
+                for q in (
+                    (r - width / 2) / radial_sampling + 1,
+                    (r + width / 2) / radial_sampling,
+                )
+            )
+        else:
+            geometry = tuple(xp.asarray(c, dtype=get_dtype()) for c in coordinates)
 
         if self.is_lazy:
-            xp = get_array_module(self.array)
-            n = int(max_angle / radial_sampling)
             base_axes = tuple(
                 range(
                     len(self.ensemble_shape),
@@ -5157,22 +5196,20 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._azimuthal_average,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                geometry=geometry,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (n,),
+                chunks=self.array.chunks[:-2] + (len(centers),),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._azimuthal_average(
                 self.array,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                geometry=geometry,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
             )
@@ -5181,7 +5218,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return ReciprocalSpaceLineProfiles(
             array,
-            sampling=radial_sampling / (wavelength * 1e3),
+            sampling=radial_sampling * unit / (wavelength * 1e3),
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )

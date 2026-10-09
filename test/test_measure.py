@@ -1,7 +1,9 @@
+import math
 import operator
 import sys
 import types
 import warnings
+from fractions import Fraction
 
 import ase
 import dask.array as da
@@ -882,6 +884,199 @@ def test_dtype_preserving_operations_keep_complex():
         np.testing.assert_allclose(
             computed, np.asarray(operation(eager_in).compute().array), err_msg=name
         )
+
+def _integer_frequencies(n, fftshift):
+    """Integer frequency indices of an `n`-point axis in storage order."""
+    frequencies = np.rint(np.fft.fftfreq(n, 1 / n)).astype(int)
+    return np.fft.fftshift(frequencies) if fftshift else frequencies
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(48, 36), (37, 50)])
+def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, precision):
+    """With the default radial sampling and width, bin k holds the pixels with
+    (k - 1/2) <= sqrt(i**2 + j**2) < (k + 1/2) in units of the angular sampling,
+    which no pixel radius sits on, so the bins hold the same pixels at every
+    precision and every pattern size."""
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    with abtem.config.set({"precision": precision}):
+        data = data.astype(precision)
+        patterns = DiffractionPatterns(
+            data,
+            sampling=1 / 16.29,
+            fftshift=fftshift,
+            metadata={"energy": 200e3},
+        )
+        profiles = patterns.azimuthal_average()
+
+    i = _integer_frequencies(gpts[0], fftshift)[:, None]
+    j = _integer_frequencies(gpts[1], fftshift)[None, :]
+    four_r_squared = 4 * (i**2 + j**2)
+    n = -min(i.min(), j.min())
+
+    # The oracle's own bins: each pixel inside the last bin edge is in exactly one.
+    masks = [
+        ((2 * k - 1) ** 2 <= four_r_squared) & (four_r_squared < (2 * k + 1) ** 2)
+        for k in range(n)
+    ]
+    masks[0] = four_r_squared < 1
+    inside = four_r_squared < (2 * n - 1) ** 2
+    assert np.array_equal(np.sum(masks, axis=0), inside)
+
+    expected = [data[mask].astype(np.float64).mean() for mask in masks]
+    rtol = 1e-6 if precision == "float32" else 1e-12
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(
+        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "gpts, extent, radial_sampling", [((18, 18), 10.0, 1.0), ((64, 64), 20.0, 3.0)]
+)
+def test_lazy_azimuthal_average_declares_its_bins(gpts, extent, radial_sampling):
+    rng = np.random.default_rng(0)
+    patterns = DiffractionPatterns(
+        rng.random((4,) + gpts),
+        sampling=1 / extent,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))],
+    )
+    eager = patterns.azimuthal_average(radial_sampling=radial_sampling)
+    lazy = patterns.ensure_lazy(chunks=(2, -1, -1)).azimuthal_average(
+        radial_sampling=radial_sampling
+    )
+
+    assert lazy.array.shape == eager.array.shape
+    assert lazy.array.compute().shape == eager.array.shape
+    assert np.array_equal(lazy.array[:, -1].compute(), eager.array[:, -1])
+
+
+def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of_precision():
+    data = np.random.default_rng(0).random((128, 96)) + 1.0
+    profiles = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            patterns = DiffractionPatterns(
+                data.astype(precision),
+                sampling=(1 / 30.0, 1 / 22.5),
+                metadata={"energy": 200e3},
+            )
+            profiles[precision] = patterns.azimuthal_average().array
+
+    assert profiles["float32"].shape == profiles["float64"].shape
+    np.testing.assert_allclose(
+        profiles["float32"].astype(np.float64), profiles["float64"], rtol=1e-6, atol=0
+    )
+
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_rule(
+    fftshift, precision
+):
+    """With sampling (1 / (3 a), 1 / (2 a)) the pixels at frequency (0, +-1) have
+    the radius 3 / 2 in units of the finer sampling, exactly on the edge between
+    bins 1 and 2, but the ratio of the angular samplings is not exactly 3 / 2 in
+    floating point. They belong to bin 2 at every precision."""
+    a = 5.431
+    gpts = (48, 32)
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    with abtem.config.set({"precision": precision}):
+        data = data.astype(precision)
+        patterns = DiffractionPatterns(
+            data,
+            sampling=(1 / (3 * a), 1 / (2 * a)),
+            fftshift=fftshift,
+            metadata={"energy": 200e3},
+        )
+        profiles = patterns.azimuthal_average()
+
+    i = _integer_frequencies(gpts[0], fftshift)[:, None]
+    j = _integer_frequencies(gpts[1], fftshift)[None, :]
+    # (2 r)**2 in units of the finer sampling is the integer 4 i**2 + 9 j**2.
+    four_r_squared = 4 * i**2 + 9 * j**2
+    n = 24
+    assert -i.min() == n and 3 * -j.min() == 2 * n
+    masks = [
+        ((2 * k - 1) ** 2 <= four_r_squared) & (four_r_squared < (2 * k + 1) ** 2)
+        for k in range(n)
+    ]
+    masks[0] = four_r_squared < 1
+
+    expected = [data[mask].astype(np.float64).mean() for mask in masks]
+    rtol = 1e-6 if precision == "float32" else 1e-12
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(
+        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
+    )
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize(
+    "gpts, radial_sampling, width",
+    [((30, 30), "0.2", "0.4"), ((25, 24), "0.1", "0.2")],
+)
+def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
+    gpts, radial_sampling, width, precision
+):
+    """Bin edges at decimal multiples of the sampling, such as 2.0 = 20 * 0.1,
+    are exact: 1.9 / 0.1 is 18.999999999999996 in floating point."""
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    with abtem.config.set({"precision": precision}):
+        data = data.astype(precision)
+        patterns = DiffractionPatterns(
+            data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
+        )
+        profiles = patterns.azimuthal_average(
+            radial_sampling=float(radial_sampling), width=float(width)
+        )
+
+    i = _integer_frequencies(gpts[0], True)[:, None]
+    j = _integer_frequencies(gpts[1], True)[None, :]
+    r_squared = i**2 + j**2
+    step, full_width = Fraction(radial_sampling), Fraction(width)
+    n = math.ceil(-min(i.min(), j.min()) / step)
+
+    expected = []
+    for k in range(n):
+        lower, upper = k * step - full_width / 2, k * step + full_width / 2
+        # r_squared is an integer, so r >= lower is r_squared >= ceil(lower**2)
+        # for a positive lower edge, and r < upper is r_squared < ceil(upper**2).
+        mask = r_squared < math.ceil(upper**2)
+        if lower > 0:
+            mask &= r_squared >= math.ceil(lower**2)
+        expected.append(data[mask].astype(np.float64).mean() if mask.any() else 0.0)
+
+    rtol = 1e-6 if precision == "float32" else 1e-12
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(
+        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
+    )
+
+
+def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_bin():
+    """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
+    centered at 2116 and half a unit from the next edge, which float32 radii of
+    that size cannot resolve."""
+    data = np.zeros((4240, 96), dtype=np.float32)
+    data[2120 + 2116, 48 + 46] = 1.0
+    with abtem.config.set({"precision": "float32"}):
+        patterns = DiffractionPatterns(
+            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 200e3}
+        )
+        profiles = patterns.azimuthal_average(
+            max_angle=2118 * patterns.angular_sampling[0]
+        )
+
+    assert profiles.shape == (2118,)
+    assert np.flatnonzero(profiles.array).tolist() == [2116]
 
 
 def test_filter_boundary_modes():
