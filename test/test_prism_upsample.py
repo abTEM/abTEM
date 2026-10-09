@@ -213,9 +213,79 @@ def test_upsample_windowed(device):
         device=device,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    # the cropping window truncates the high-angle scattering tails, hence the
-    # annular dark field signal is slightly reduced
-    assert np.allclose(to_host_array(windowed), to_host_array(full), rtol=0.12)
+    # Oracle: probe multislice. Cropping the reduced wave functions to a window
+    # truncates them, and a truncation in real space is a convolution in
+    # Fourier space: intensity leaks out of the bright-field disc to higher
+    # angles, so the dark-field signal goes UP, not down. Measured against
+    # multislice on this cell (bands 0-20 / 20-40 / 40-100 mrad):
+    #
+    #   window  periods  BF      20-40   ADF 40-100
+    #   64/auto   2.0    1.000   0.996   1.008
+    #   48        1.5    0.984   1.17    1.068
+    #   32        1.0    0.947   1.67    1.081
+    #   24        0.75   0.915   2.01    1.114
+    #
+    # ("periods" is the window in units of the interpolation period,
+    # downsampled gpts / interpolation = 32.) The total intensity of the
+    # windowed patterns stays below one (0.992, 0.987, 0.978), at or above the
+    # multislice intensity inside the same window, so this is a redistribution
+    # by the truncation, not an excess from normalisation. Cropping the full
+    # reduction to 48 px accounts for +3.8% of the ADF by itself; the rest is
+    # the interpolation kernel truncated to the window. Both are inherent to
+    # windows narrower than the 1.75 periods the automatic window enforces
+    # (SMatrix._auto_window_gpts).
+    #
+    # The bound is the error of the one-period (32 px) window: the 1.5-period
+    # window used here must stay more accurate than that.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    reference = to_host_array(
+        probe.scan(potential=potential, scan=scan, detectors=detector, lazy=False)
+    )
+    windowed, full = to_host_array(windowed), to_host_array(full)
+
+    # the full (here: automatic) window is held to the interpolation bound
+    assert np.abs(full / reference - 1).max() < 0.05
+    assert np.abs(windowed / reference - 1).max() < 0.085
+
+
+@devices
+def test_upsample_window_at_interpolation_one_is_exact(device):
+    # Oracle: at interpolation 1 the expansion is complete and no compression
+    # applies (SMatrix._upsample_enabled is False), so the reduction is plain
+    # PRISM at interpolation 1, which equals probe multislice. A C-PRISM
+    # window must not change that. It used to be passed on to the PRISM
+    # reduction as its cropping window, without the sqrt(gpts / window)
+    # amplitude rescaling of the compressed reduction, scaling every signal
+    # by (window / gpts)^2: 0.5616 at 48 of 64 px, 0.2408 at 32 px.
+    potential = _small_potential(device=device)
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=20),
+        abtem.AnnularDetector(inner=40, outer=100),
+    ]
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    measurements = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        upsample=True,
+        window_gpts=48,
+        device=device,
+    ).scan(scan=scan, detectors=detectors, lazy=False)
+
+    # PRISM at interpolation 1 matches multislice to single-precision
+    # round-off (see test_prism_scan_matches_probe_scan in
+    # test_propagation_physics.py); 1e-4 leaves room for the summation order
+    for measurement, reference in zip(measurements, references):
+        measurement, reference = to_host_array(measurement), to_host_array(reference)
+        np.testing.assert_allclose(measurement, reference, rtol=1e-4)
 
 
 @devices
@@ -263,7 +333,33 @@ def test_upsample_frozen_phonons(lazy, device):
         measurement = measurement.compute()
 
     assert measurement.shape == (3, 3)
-    assert np.all(to_host_array(measurement) >= 0.0)
+
+    # Oracle: the frozen-phonon measurement is the incoherent average over the
+    # configurations, ie. the mean of independent single-configuration
+    # simulations of each displaced structure (iterating the FrozenPhonons
+    # yields exactly those structures). The per-configuration results differ
+    # by ~9% of the signal here, so dropping or duplicating a configuration,
+    # or summing instead of averaging, is far outside the round-off bound.
+    per_configuration = [
+        to_host_array(
+            SMatrix(
+                potential=Potential(
+                    atoms, gpts=96, slice_thickness=2, device=device
+                ),
+                energy=100e3,
+                semiangle_cutoff=20,
+                interpolation=2,
+                upsample=True,
+                device=device,
+            ).scan(scan=scan, detectors=detector, lazy=False)
+        )
+        for atoms in frozen_phonons
+    ]
+    assert len(per_configuration) == 2
+    expected = np.mean(per_configuration, axis=0)
+    np.testing.assert_allclose(
+        to_host_array(measurement), expected, rtol=0, atol=1e-5 * expected.max()
+    )
 
 
 @devices
@@ -316,6 +412,40 @@ def test_upsample_detectors(device):
     for measurement in measurements:
         assert measurement.shape[:2] == (2, 2)
 
+    # Oracle: an independent method. Each detector must read the same signal
+    # off the upsampled reduction as off the multislice exit waves of the same
+    # probes, within the interpolation error the upsampled reduction is held
+    # to above (test_upsample_beats_prism_at_same_interpolation: < 0.05).
+    # Measured: annular 0.9%, pixelated 1.4%, wave intensities 1.3%, radial
+    # bands 0.07-1%.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    annular, flexible, pixelated, waves = measurements
+    annular_ref, flexible_ref, pixelated_ref, waves_ref = references
+
+    assert _relative_error(annular, annular_ref) < 0.05
+
+    # the reduction is downsampled to the antialias cutoff, so it has fewer
+    # 1 mrad radial bins than the reference; single bins hold a few discrete
+    # pixels each, hence compare bands within the common range
+    flexible, flexible_ref = to_host_array(flexible), to_host_array(flexible_ref)
+    assert flexible.shape[2] < flexible_ref.shape[2]
+    for inner, outer in [(0, 20), (20, 40), (40, 70)]:
+        band = flexible[:, :, inner:outer].sum(axis=2)
+        band_ref = flexible_ref[:, :, inner:outer].sum(axis=2)
+        assert _relative_error(band, band_ref) < 0.05, (inner, outer)
+
+    assert pixelated.shape == pixelated_ref.shape
+    assert _relative_error(pixelated, pixelated_ref) < 0.05
+
+    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:], normalization="amplitude")
+    intensity = np.abs(to_host_array(waves)) ** 2
+    intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
+    assert _relative_error(intensity, intensity_ref) < 0.05
+
 
 @devices
 def test_upsample_ctf_ensemble(device):
@@ -338,6 +468,25 @@ def test_upsample_ctf_ensemble(device):
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
 
     assert measurement.shape == (3, 2, 2)
+
+    # Oracle: each ensemble member is an independent simulation with that
+    # member's CTF. The defocus-0 member is the aberration-free probe, ie. the
+    # reduction without a CTF, and the last member is the defocus-50 probe.
+    # The members differ from each other by ~14% of the signal, so a
+    # misordered or misapplied ensemble is far outside the round-off bound.
+    without_ctf = to_host_array(
+        s_matrix.scan(scan=scan, detectors=detector, lazy=False)
+    )
+    defocus_50 = to_host_array(
+        s_matrix.scan(
+            scan=scan, detectors=detector, ctf=abtem.CTF(defocus=50), lazy=False
+        )
+    )
+    measurement = to_host_array(measurement)
+    atol = 1e-5 * without_ctf.max()
+    np.testing.assert_allclose(measurement[0], without_ctf, rtol=0, atol=atol)
+    np.testing.assert_allclose(measurement[2], defocus_50, rtol=0, atol=atol)
+    assert np.abs(measurement[0] - measurement[2]).max() > 100 * atol
 
 
 def test_upsample_downsampled_gpts_independent_of_interpolation():
