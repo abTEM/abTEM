@@ -322,7 +322,7 @@ class Grid(CopyMixin, EqualityMixin):
     ):
         if extent is not None and sampling is not None:
             self._gpts = tuple(
-                max(safe_ceiling_int(r / d), 1) + int(e)
+                max(safe_ceiling_int(r / d) + int(e), 1)
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 

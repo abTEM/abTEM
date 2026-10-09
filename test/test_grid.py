@@ -225,6 +225,11 @@ def test_gpts_of_an_extent_far_below_the_sampling_is_one():
     assert Grid(extent=1e-9, sampling=1.0, endpoint=False).gpts == (1, 1)
 
 
+def test_gpts_of_a_zero_extent_axis_with_an_endpoint_is_one():
+    grid = Grid(extent=(2.0, 0.0), sampling=0.5, endpoint=True)
+    assert grid.gpts == (5, 1)
+
+
 def test_adjusted_gpts_of_a_target_far_above_the_sampling_is_one():
     sampling, gpts = adjusted_gpts((1.0, 1.0), (1e-9, 1e-9), (1, 1))
     assert gpts == (1, 1)

@@ -244,5 +244,14 @@ def test_line_scan_of_an_extent_far_below_the_sampling_has_one_interval():
     scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0, endpoint=False)
     assert scan.gpts == 1
     scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0)
-    assert scan.gpts == 2
+    assert scan.gpts == 1
     assert scan.sampling == pytest.approx(1e-9)
+
+
+def test_scans_of_a_zero_extent_have_one_position():
+    assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5).gpts == 1
+    assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5, endpoint=False).gpts == 1
+    scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=True)
+    assert scan.gpts == (5, 1)
+    scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=False)
+    assert scan.gpts == (4, 1)
