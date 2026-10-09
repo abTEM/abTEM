@@ -265,9 +265,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     # promotes a single-precision measurement to double with any of these
     # operands; the torch backend holds single precision only and must give the
     # single-precision result instead, eager and lazy alike. An in-place
-    # operation keeps single precision on every backend.
-    if in_place and lazy:
-        pytest.skip("in-place arithmetic refuses lazy measurements")
+    # operation keeps single precision on every backend, and refuses a lazy
+    # measurement rather than silently returning a new (lazy) object.
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -286,6 +285,11 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         sampling=(0.1, 0.2),
     ).copy_to_device(device)
 
+    if in_place and lazy:
+        with pytest.raises(RuntimeError, match="inplace"):
+            getattr(operator, "i" + op)(measurement, operand)
+        return
+
     result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
 
     assert isinstance(result, Images)
@@ -300,14 +304,6 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     np.testing.assert_allclose(
         asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
     )
-
-
-def test_in_place_true_division_refuses_lazy_measurements():
-    # Like the other in-place operators, /= must refuse a lazy measurement
-    # rather than silently returning a new (lazy) object.
-    measurement = Images(da.ones((4, 4), chunks=2), sampling=0.1)
-    with pytest.raises(RuntimeError, match="inplace"):
-        measurement /= 2.0
 
 
 @settings(max_examples=5)
