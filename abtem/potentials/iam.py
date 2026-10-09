@@ -45,7 +45,13 @@ from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGrid2DMixin, round_auto_derived_gpts
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    get_dtype,
+    itemset,
+    safe_ceiling_int,
+)
 from abtem.inelastic.phonons import (
     SOURCE_INDEX,
     AtomsEnsemble,
@@ -1648,7 +1654,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                     extent = _default_box(cell, plane)[:2]
                 else:
                     extent = (float(cell[0, 0]), float(cell[1, 1]))
-                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+                gpts = tuple(safe_ceiling_int(extent[i] / 0.05) for i in range(2))
                 if round_auto_derived_gpts():
                     gpts = tuple(next_fast_fft_size(n) for n in gpts)
             elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):

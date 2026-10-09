@@ -339,7 +339,7 @@ def commensurate_gpts(
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = int(np.ceil(L / target_sampling))
+        n_target = safe_ceiling_int(L / target_sampling)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
