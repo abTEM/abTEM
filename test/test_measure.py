@@ -31,6 +31,7 @@ from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
@@ -128,25 +129,121 @@ def test_add_subtract(data, measurement, method, lazy, device):
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("scalar", [2.0, -0.5])
-def test_reflected_arithmetic_with_a_scalar(scalar, lazy, device):
-    # Oracle: numpy's own reflected operators on the plain array. The array is
-    # not symmetric under any of the operations, so e.g. `scalar / m` computed
-    # as `m / scalar` (as __rtruediv__ = __truediv__ used to do) fails.
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+@pytest.mark.parametrize(
+    "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
+)
+def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
+    # Oracle: the same operation with the scalar on the left of the plain array.
+    # The array is not symmetric under any of the operations, so a reflected
+    # operation computed in the forward order (`2 / m` as `m / 2`) fails.
+    xp = get_array_module(device)
+    host_scalar = {
+        "python": 2.0,
+        "numpy_float64": np.float64(1.5),
+        "numpy_float32": np.float32(3.0),
+        "0d_array": np.asarray(2.0),
+    }[scalar_type]
+    scalar = xp.asarray(host_scalar) if scalar_type == "0d_array" else host_scalar
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
-    measurement = Images(array, sampling=(0.1, 0.2))
-    if lazy:
-        measurement = Images(da.from_array(array, chunks=(1, 3)), sampling=(0.1, 0.2))
-    measurement = measurement.copy_to_device(device)
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
 
-    for result, expected in (
-        (scalar / measurement, scalar / array),
-        (scalar * measurement, scalar * array),
-    ):
-        assert isinstance(result, Images)
-        np.testing.assert_allclose(
-            asnumpy(result.compute().array), expected, rtol=1e-6
-        )
+    result = getattr(operator, op)(scalar, measurement)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    expected = getattr(operator, op)(host_scalar, array)
+    np.testing.assert_allclose(
+        asnumpy(result.compute().array),
+        expected,
+        rtol=1e-6,
+        atol=1e-6 * np.abs(expected).max(),
+    )
+
+
+@devices
+def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes(device):
+    # MeasurementsEnsemble has no base axes, so NumPy's coercion through
+    # __len__/__getitem__ would succeed and build an object array; a NumPy scalar
+    # on the left must defer to the reflected operators instead.
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    ensemble = MeasurementsEnsemble(
+        array,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            OrdinalAxis(values=(0, 1, 2)),
+        ],
+    ).copy_to_device(device)
+    for op in (operator.mul, operator.truediv, operator.add, operator.sub):
+        result = op(np.float64(2.0), ensemble)
+        assert isinstance(result, MeasurementsEnsemble)
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(asnumpy(result.array), op(2.0, array), rtol=1e-6)
+
+
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+def test_unsupported_left_operand_raises_type_error(op):
+    # A reflected operator declines an operand it does not support, so Python
+    # raises its own TypeError rather than the measurement raising another error.
+    measurement = Images(np.ones((2, 3)), sampling=0.1)
+    with pytest.raises(TypeError, match="unsupported operand"):
+        getattr(operator, op)(object(), measurement)
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
+def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
+    # Oracle: the same operation on the plain arrays. The two operands differ in
+    # every element, so an operation computed in the forward order fails for
+    # sub, truediv and pow. The result is lazy whenever either operand is.
+    left = np.array([[3.0, 1.0, 2.0], [5.0, 7.0, 11.0]], dtype=get_dtype())
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
+    dask_left = copy_to_device(da.from_array(left, chunks=(1, 3)), device)
+
+    result = getattr(operator, op)(dask_left, measurement)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy
+    computed = result.compute().array
+    assert_array_matches_device(computed, device)
+    expected = getattr(operator, op)(left.astype(np.float64), array.astype(np.float64))
+    np.testing.assert_allclose(
+        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
+
+
+@lazy_params
+@devices
+def test_builtin_sum_of_measurements(lazy, device):
+    # sum() starts from the integer 0, so it needs 0 + m.
+    arrays = [np.full((2, 3), value, dtype=get_dtype()) for value in (1.0, 2.0, 4.0)]
+    measurements = [
+        Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=0.1
+        ).copy_to_device(device)
+        for array in arrays
+    ]
+
+    result = sum(measurements)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    np.testing.assert_array_equal(asnumpy(result.compute().array), sum(arrays))
+
+
+def test_measurement_as_a_map_blocks_keyword_argument():
+    # dask reads the ndim of any argument it takes for array-like, and a
+    # measurement must not look array-like to it.
+    x = da.ones((4, 4), chunks=2)
+    images = Images(np.ones((4, 4)), sampling=0.1)
+    result = x.map_blocks(lambda block, images=None: block * 2, images=images)
+    np.testing.assert_array_equal(result.compute(), 2 * np.ones((4, 4)))
 
 
 @lazy_params
@@ -170,9 +267,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     # promotes a single-precision measurement to double with any of these
     # operands; the torch backend holds single precision only and must give the
     # single-precision result instead, eager and lazy alike. An in-place
-    # operation keeps single precision on every backend.
-    if in_place and lazy:
-        pytest.skip("in-place arithmetic refuses lazy measurements")
+    # operation keeps single precision on every backend, and refuses a lazy
+    # measurement rather than silently returning a new (lazy) object.
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -191,6 +287,11 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         sampling=(0.1, 0.2),
     ).copy_to_device(device)
 
+    if in_place and lazy:
+        with pytest.raises(RuntimeError, match="inplace"):
+            getattr(operator, "i" + op)(measurement, operand)
+        return
+
     result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
 
     assert isinstance(result, Images)
@@ -205,14 +306,6 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     np.testing.assert_allclose(
         asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
     )
-
-
-def test_in_place_true_division_refuses_lazy_measurements():
-    # Like the other in-place operators, /= must refuse a lazy measurement
-    # rather than silently returning a new (lazy) object.
-    measurement = Images(da.ones((4, 4), chunks=2), sampling=0.1)
-    with pytest.raises(RuntimeError, match="inplace"):
-        measurement /= 2.0
 
 
 @settings(max_examples=5)
@@ -1673,8 +1766,9 @@ def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
     )
 
     # The two sides agree to within 20 eps of the data scale in the dtype the device
-    # stores (float64 on the CPU, float32 on Metal and torch); a roll that is off by
-    # one pixel differs by about 0.5 of it.
+    # stores (float64 on the CPU, float32 on Metal and torch); the tolerance of 200 eps
+    # leaves a margin of 10 over that, and a roll that is off by one pixel differs by
+    # about 0.5 of the data scale.
     eps = np.finfo(interpolated_roll.dtype).eps
     np.testing.assert_allclose(
         interpolated_roll, rolled_interpolation, rtol=0, atol=200 * eps * array.max()
@@ -1946,6 +2040,32 @@ class TestImagesNormalizeEnsemble:
         )
         normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
         np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
+
+    @devices
+    @pytest.mark.parametrize("scale, shift", [("ptp", "min"), ("max", "ptp")])
+    def test_lazy_matches_eager(self, scale, shift, device):
+        """A lazy measurement, chunked along both base axes, normalizes to the
+        eager result for 'ptp' as scale and as shift."""
+        array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(get_dtype())
+        axes = [OrdinalAxis(values=(0, 1, 2))]
+        eager = Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+        eager = eager.copy_to_device(device)
+        lazy = Images(
+            da.from_array(array, chunks=(1, 3, 4)),
+            sampling=0.1,
+            ensemble_axes_metadata=axes,
+        ).copy_to_device(device)
+        expected = asnumpy(eager.normalize_ensemble(scale=scale, shift=shift).array)
+        normalized = lazy.normalize_ensemble(scale=scale, shift=shift)
+        assert normalized.is_lazy
+        computed = normalized.array.compute()
+        assert_array_matches_device(computed, device)
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=0,
+            atol=1e-6 * np.abs(expected).max(),
+        )
 
 
 class TestImagesScanNoise:

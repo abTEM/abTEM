@@ -6,7 +6,6 @@ import ctypes
 import importlib.util
 import logging
 import os
-import platform
 import sys
 import threading
 import warnings
@@ -53,6 +52,15 @@ except ImportError:
     cupyx_ndimage = None
 
 
+def _is_macos() -> bool:
+    """Whether this machine can have a Metal (MPS) device.
+
+    Apple silicon and Intel Macs with an AMD GPU both can; whether this one
+    does is for PyTorch to answer.
+    """
+    return sys.platform == "darwin"
+
+
 def _preload_torch_openmp() -> bool:
     """Load PyTorch's own OpenMP runtime ahead of pyfftw's, without torch.
 
@@ -73,7 +81,7 @@ def _preload_torch_openmp() -> bool:
         Whether torch can safely be imported later. False only when it is too
         late: pyfftw's runtime is already in the process and torch's is not.
     """
-    if sys.platform != "darwin" or platform.machine() != "arm64":
+    if not _is_macos():
         return True  # no Metal device to load torch for
     if "torch" in sys.modules:
         return True  # its runtime is already in, ahead of whatever follows
@@ -192,8 +200,6 @@ def check_mps_is_available():
                         "process. Import abtem (or torch) before pyfftw."
                     )
 
-                from abtem.core import _torch
-
                 torch_device = _config_get("torch.device")
                 if not isinstance(torch_device, str) or torch_device.lower() not in (
                     "mps",
@@ -203,7 +209,20 @@ def check_mps_is_available():
                         "The configuration key 'torch.device' must be 'mps' or "
                         f"'cpu', got {torch_device!r}."
                     )
-                _torch.DEVICE = torch_device.lower()
+                torch_device = torch_device.lower()
+
+                # Importing PyTorch can break CuPy's runtime kernel compilation
+                # in the same process (observed with ROCm), so a machine that
+                # cannot have a Metal device is refused before the import.
+                if torch_device == "mps" and not _is_macos():
+                    raise RuntimeError(
+                        "The Metal (MPS) backend is not available on this machine. "
+                        "Metal requires macOS; change the device to 'cpu'."
+                    )
+
+                from abtem.core import _torch
+
+                _torch.DEVICE = torch_device
 
                 _torch._check_available()
 

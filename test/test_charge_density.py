@@ -4,9 +4,10 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import graphene
-from utils import cpu_float64
+from utils import float64_devices
 
 import abtem
+from abtem.core.backend import asnumpy
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.charge_density import (
     ChargeDensityPotential,
@@ -225,6 +226,34 @@ def test_build_from_frozen_phonons(
         )
 
 
+def test_chunks_of_frozen_phonons_hold_every_configuration(
+    carbon_atoms, charge_density_3d
+):
+    """The chunks of an unbuilt potential with frozen phonons hold every
+    configuration, each equal to the potential of its displaced atoms built alone."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    potential = ChargeDensityPotential(
+        frozen_phonons, charge_density_3d, sampling=0.2, slice_thickness=1.0
+    )
+
+    chunks = list(potential.generate_chunked_slices(chunk_size=2))
+
+    assert len(potential) == 5
+    assert [chunk.shape[:2] for chunk in chunks] == [(3, 1), (3, 2), (3, 2)]
+    for i, atoms in enumerate(frozen_phonons):
+        expected = ChargeDensityPotential(
+            atoms, charge_density_3d, sampling=0.2, slice_thickness=1.0
+        ).build(lazy=False)
+        np.testing.assert_allclose(
+            np.concatenate([chunk.array[i] for chunk in chunks]),
+            expected.array,
+            rtol=0,
+            atol=1e-6 * expected.array.max(),
+        )
+
+
 @pytest.mark.parametrize("plane", ["xz", "yz"])
 def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     charge_density_3d, plane
@@ -308,14 +337,14 @@ REPETITION_CASES = [
 ]
 
 
-@cpu_float64
+@float64_devices
 @pytest.mark.parametrize("case", REPETITION_CASES, ids=lambda c: c[0])
 def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
     name, make_atoms, repetitions, unit_gpts = case
     atoms, rho = make_atoms(), _charge_density()
 
     unit = ChargeDensityPotential(atoms, rho, gpts=unit_gpts, slice_thickness=1.0)
-    unit_array = unit.build(lazy=False).array
+    unit_array = asnumpy(unit.build(lazy=False).array)
     repeated = ChargeDensityPotential(
         atoms,
         rho,
@@ -331,23 +360,23 @@ def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
 
     nx, ny, nz = (round(float(repeated.box[i] / unit.box[i])) for i in range(3))
     tiled = np.tile(unit_array, (nz, nx, ny))
-    actual = repeated.build(lazy=False).array
+    actual = asnumpy(repeated.build(lazy=False).array)
     assert actual.shape == tiled.shape
     np.testing.assert_allclose(actual, tiled, rtol=0, atol=1e-4 * np.abs(tiled).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_repetitions_lazy_equals_eager_on_bn():
     atoms, rho = _bn(), _charge_density()
     potential = ChargeDensityPotential(
         atoms, rho, gpts=(50, 135), slice_thickness=1.0, repetitions=(2, 3, 2)
     )
-    eager = potential.build(lazy=False).array
-    lazy = potential.build(lazy=True).compute().array
+    eager = asnumpy(potential.build(lazy=False).array)
+    lazy = asnumpy(potential.build(lazy=True).compute().array)
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_with_an_approximate_default_box_reports_it_once():
     # The default box of BN x (3, 1, 1) is reached by a strain of about 1 %. The
     # potential reports it when it is constructed; the Ewald potential it builds
@@ -358,7 +387,7 @@ def test_charge_density_potential_with_an_approximate_default_box_reports_it_onc
         potential = ChargeDensityPotential(
             atoms, rho, sampling=0.2, slice_thickness=1.0, repetitions=(3, 1, 1)
         )
-        eager = potential.build(lazy=False).array
-        lazy = potential.build(lazy=True).compute().array
+        eager = asnumpy(potential.build(lazy=False).array)
+        lazy = asnumpy(potential.build(lazy=True).compute().array)
     assert len([r for r in records if "abTEM chose" in str(r.message)]) == 1
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())

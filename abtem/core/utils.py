@@ -122,15 +122,24 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             continue
 
         try:
-            equal = value == b.__dict__[key]
+            other = b.__dict__[key]
+            if isinstance(value, EqualityMixin):
+                # Recurse directly instead of through `value == other`, and
+                # forward the nested object's own exclusions, which its __eq__
+                # would otherwise apply: without them an exclusion holds only
+                # for a top-level operand, and SMatrix(built potential) !=
+                # SMatrix(unbuilt potential) although the two potentials
+                # compare equal. Evaluating `==` as well compares the nested
+                # object a second time, doubling the work at every level.
+                equal = safe_equality(value, other, value._eq_exclude)
+            else:
+                equal = value == other
         except (KeyError, TypeError, ValueError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
 
-        if isinstance(value, EmptyEnsemble) and isinstance(
-            b.__dict__[key], EmptyEnsemble
-        ):
+        if isinstance(value, EmptyEnsemble) and isinstance(other, EmptyEnsemble):
             # `continue`, not `return True`: two EmptyEnsembles make THIS
             # attribute equal, not the whole object. Returning here skipped
             # every remaining attribute, so two objects differing in anything
@@ -142,24 +151,11 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         # with warnings.catch_warnings():
         # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
-        if isinstance(value, EqualityMixin):
-            # Forward the nested object's own exclusions. This recursion
-            # bypasses its __eq__, which is what would otherwise apply them, so
-            # without this an exclusion holds only for a top-level operand:
-            # SMatrix(built potential) != SMatrix(unbuilt potential) even
-            # though the two potentials themselves compare equal.
-            equal = safe_equality(
-                value, b.__dict__[key], getattr(value, "_eq_exclude", ())
-            )
-
-        else:  # if isinstance(value, (tuple, list, np.ndarray)):
+        if not isinstance(value, EqualityMixin):
             try:
-                equal = np.allclose(value, b.__dict__[key])
+                equal = np.allclose(value, other)
             except (ValueError, TypeError):
-                if isinstance(value, EqualityMixin):
-                    equal = safe_equality(
-                        value, b.__dict__[key], getattr(value, "_eq_exclude", ())
-                    )
+                pass
         # else:
         #    equal = safe_equality(value, b.__dict__[key])
         # `np.all`, not `equal is False`. The identity test only catches the

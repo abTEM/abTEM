@@ -1759,6 +1759,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
         ):
             other_array = other
+        elif func.startswith("__r"):
+            # The left operand's own method has already declined, so Python
+            # raises its usual TypeError naming both types.
+            return NotImplemented
         else:
             raise NotImplementedError(
                 f"arithmetic operation not implemented for {type(other).__name__}"
@@ -1775,6 +1779,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
+        elif cp is not None and get_array_module(self.array) is cp:
+            # CuPy refuses a host array as an operand, a 0-d one included,
+            # though it takes a NumPy scalar. On the device the array keeps its
+            # dtype, so the result is promoted as NumPy promotes it on the CPU.
+            if isinstance(other_array, np.ndarray):
+                other_array = cp.asarray(other_array)
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands
@@ -1822,6 +1832,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __sub__(self, other: Self) -> Self:
         return self._arithmetic(other, "__sub__")
 
+    def __rsub__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rsub__")
+
     def __isub__(self, other: Self) -> Self:
         return self._in_place_arithmetic(other, "__isub__")
 
@@ -1834,7 +1847,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __pow__(self, other: Self) -> Self:
         return self._arithmetic(other, "__pow__")
 
-    __rmul__ = __mul__
+    def __radd__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__radd__")
+
+    def __rmul__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rmul__")
+
+    def __rpow__(self, other: Self) -> Self:
+        return self._arithmetic(other, "__rpow__")
+
+    # NumPy scalars and arrays, dask arrays and CuPy arrays on the left of an
+    # operator defer to the reflected methods above, instead of coercing this
+    # object to an array through __len__ and __getitem__, because their priority
+    # is lower. __array_ufunc__ = None would also defer them, but dask treats any
+    # object with shape, dtype and __array_ufunc__ as array-like and then reads
+    # its ndim, which an ArrayObject lacks. The same deferral applies to NumPy's
+    # in-place operators: `ndarray += m` leaves the ndarray unchanged and binds
+    # the name to the new object returned by `m.__radd__`.
+    __array_priority__ = 1000
 
     def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
