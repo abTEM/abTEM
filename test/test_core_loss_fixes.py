@@ -2549,3 +2549,100 @@ class TestCeilToMultiple:
 
         assert _ceil_to_multiple(n, multiple) == expected
         assert _ceil_to_multiple(n, multiple) >= n
+
+
+class TestScatteringSitesReadReciprocalSpaceWaves:
+    """``Waves`` with ``reciprocal_space=True`` give the same result as the same
+    waves in real space in every public method that reads the waves as a real-space
+    wave function."""
+
+    @staticmethod
+    def _setup(lazy):
+        # Three waves on a 16 x 20 grid with two transitions and five sites: the
+        # ensemble, transition and site counts and both grid sides all differ.
+        gpts = (16, 20)
+        x, y = np.meshgrid(*(np.arange(n) * 0.1 for n in gpts), indexing="ij")
+        centers = [(0.4, 0.5), (0.8, 1.0), (1.2, 1.5)]
+        psi = np.stack(
+            [np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 0.05) for cx, cy in centers]
+        ).astype(np.complex128)
+        real = abtem.Waves(
+            psi,
+            energy=ENERGY,
+            sampling=0.1,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+        )
+        if lazy:
+            real = real.ensure_lazy()
+        recip = real.ensure_reciprocal_space()
+        assert recip.reciprocal_space
+
+        tp = synthetic_transition_potential(
+            gpts=gpts, extent=(1.6, 2.0), energy=ENERGY, n_transitions=2
+        )
+        sites = np.array(
+            [[0.4, 0.5], [0.8, 1.0], [1.2, 1.5], [0.1, 1.9], [1.5, 0.1]]
+        )
+        return tp, real, recip, sites
+
+    @pytest.fixture(autouse=True)
+    def _precision(self):
+        with abtem.config.set({"precision": "float64", "fft": "numpy"}):
+            yield
+
+    @staticmethod
+    def _assert_close(actual, expected):
+        actual, expected = np.asarray(actual), np.asarray(expected)
+        assert actual.shape == expected.shape
+        np.testing.assert_allclose(
+            actual, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
+        )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_scatter(self, lazy):
+        tp, real, recip, sites = self._setup(lazy)
+
+        expected = tp.scatter(real, sites)
+        result = tp.scatter(recip, sites)
+
+        assert not result.reciprocal_space
+        self._assert_close(result.compute().array, expected.compute().array)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_generate_scattered_waves(self, lazy):
+        tp, real, recip, sites = self._setup(lazy)
+
+        def collect(waves):
+            chunks = list(tp.generate_scattered_waves(waves, sites, max_batch=2))
+            assert len(chunks) > 1
+            assert not any(w.reciprocal_space for _, w in chunks)
+            return np.concatenate([w.compute().array for _, w in chunks])
+
+        self._assert_close(collect(recip), collect(real))
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_absolute_threshold(self, lazy):
+        tp, real, recip, _ = self._setup(lazy)
+
+        expected = tp.absolute_threshold(real, 0.5)
+        assert expected > 0
+        assert tp.absolute_threshold(recip, 0.5) == pytest.approx(expected, rel=1e-8)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_filter_sites(self, lazy):
+        tp, real, recip, sites = self._setup(lazy)
+
+        cut = tp.absolute_threshold(real, 0.5)
+        expected = tp.filter_sites(real, sites, cut)
+        assert 0 < len(expected) < len(sites)
+        np.testing.assert_array_equal(tp.filter_sites(recip, sites, cut), expected)
+
+    def test_scatter_with_a_threshold(self):
+        tp, real, recip, sites = self._setup(lazy=False)
+
+        cut = tp.absolute_threshold(real, 0.5)
+        expected = tp.scatter(real, sites, threshold=cut)
+        assert 0 < expected.shape[0] < len(sites) * len(tp)
+        self._assert_close(
+            tp.scatter(recip, sites, threshold=cut).array, expected.array
+        )
