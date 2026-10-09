@@ -296,6 +296,43 @@ def test_euler_zero_angles_and_extrinsic():
     assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
 
 
+def _Rx(t):
+    return np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+
+
+def _Ry(t):
+    return np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
+
+
+def _Rz(t):
+    return np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1]])
+
+
+@pytest.mark.parametrize("convention", ["intrinsic", "extrinsic"])
+@pytest.mark.parametrize(
+    "angles, expected",
+    [((0.4, 0.0, 0.0), _Rx(0.4)), ((0.0, 0.4, 0.0), _Ry(0.4)), ((0.0, 0.0, 0.4), _Rz(0.4))],
+)
+def test_euler_single_axis_is_standard_active_rotation(convention, angles, expected):
+    # Oracle: the textbook right-handed (counter-clockwise, active) rotation
+    # matrices, written out by hand. A single nonzero angle of an "xyz" sequence
+    # is a rotation about that axis, whatever the frame convention.
+    assert np.allclose(euler_to_rotation(*angles, axes="xyz", convention=convention), expected)
+
+
+def test_euler_composition_order():
+    # Pins the documented frame conventions (euler_sequence docstring):
+    # "intrinsic"/"static" = rotations about the *fixed* axes, applied in order,
+    # R = Rz(c) Ry(b) Rx(a); "extrinsic"/"rotating" = rotations about the moving
+    # axes, R = Rx(a) Ry(b) Rz(c). (Note: standard nomenclature, e.g. scipy's
+    # Rotation, calls fixed-axis rotations "extrinsic" -- abTEM's labels are the
+    # other way round, but the docstring describes the frames correctly.)
+    a, b, c = 0.3, 0.5, 0.7
+    assert np.allclose(euler_to_rotation(a, b, c, "xyz", "intrinsic"), _Rz(c) @ _Ry(b) @ _Rx(a))
+    assert np.allclose(euler_to_rotation(a, b, c, "xyz", "extrinsic"), _Rx(a) @ _Ry(b) @ _Rz(c))
+    assert np.allclose(euler_to_rotation(a, b, c, "zxz", "intrinsic"), _Rz(c) @ _Rx(b) @ _Rz(a))
+
+
 # ---------------------------------------------------------------------------
 # decompose_affine_transform
 # ---------------------------------------------------------------------------
@@ -349,6 +386,26 @@ def test_rotate_atoms():
     assert np.allclose(atoms.positions, original_pos)  # original not modified
 
 
+@pytest.mark.parametrize("axes", ["zxz", "zyz", "xyz"])
+def test_rotate_atoms_quarter_turn_about_z(axes):
+    # A +90 deg (counter-clockwise, right-handed) rotation about z maps
+    # x -> y and y -> -x, for positions and cell vectors alike. Independent oracle:
+    # ASE's Atoms.rotate(90, "z"), documented as a right-handed rotation.
+    atoms = Atoms(
+        "HHe", positions=[[1.0, 0.0, 0.0], [0.3, 0.7, 1.1]], cell=[[4.0, 0, 0], [0, 5.0, 0], [0, 0, 6.0]]
+    )
+    angles = (0.0, 0.0, np.pi / 2) if axes == "xyz" else (np.pi / 2, 0.0, 0.0)
+    rotated = rotate_atoms(atoms, axes=axes, angles=angles)
+    assert np.allclose(rotated.positions[0], [0.0, 1.0, 0.0])
+    assert np.allclose(rotated.positions[1], [-0.7, 0.3, 1.1])
+    assert np.allclose(rotated.cell[:], [[0, 4.0, 0], [-5.0, 0, 0], [0, 0, 6.0]])
+
+    reference = atoms.copy()
+    reference.rotate(90, "z", rotate_cell=True)
+    assert np.allclose(rotated.positions, reference.positions)
+    assert np.allclose(rotated.cell[:], reference.cell[:])
+
+
 def test_rotate_atoms_preserves_distances():
     atoms = bulk("Al", cubic=True)
     rotated = rotate_atoms(atoms, angles=(0.3, 0.5, 0.1))
@@ -362,16 +419,81 @@ def test_rotate_atoms_preserves_distances():
 # rotate_atoms_to_plane / best_orthogonal_cell
 # ---------------------------------------------------------------------------
 
+def _orthorhombic_test_atoms():
+    # Distinct cell lengths and a chiral (non-coplanar, all-distinct) motif well
+    # inside the cell, so that permutations, reflections and wrapping are visible.
+    return Atoms(
+        "HHeLiBe",
+        positions=[[0.2, 0.4, 1.1], [1.0, 2.5, 4.0], [1.5, 0.9, 2.2], [0.6, 1.8, 3.1]],
+        cell=[2.0, 3.0, 5.0],
+        pbc=True,
+    )
+
+
 def test_rotate_atoms_to_plane():
     atoms = bulk("Al", cubic=True)
     assert rotate_atoms_to_plane(atoms, plane="xy") is atoms
     assert is_cell_valid(rotate_atoms_to_plane(atoms, plane="xz"))
 
 
-def test_best_orthogonal_cell():
-    atoms = bulk("Al", cubic=True)
-    result = best_orthogonal_cell(np.array(atoms.cell))
-    assert result.shape == (3,) and np.all(result > 0)
+@pytest.mark.parametrize(
+    "plane, in_plane, normal", [("xz", (0, 2), 1), ("yz", (1, 2), 0), ("zx", (2, 0), 1)]
+)
+def test_rotate_atoms_to_plane_normal_along_z(plane, in_plane, normal):
+    # The first/second axis of the named plane become x/y, so the plane normal
+    # (the remaining axis) ends up along z, i.e. along the beam.
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    lengths = atoms.cell.lengths()
+    assert np.allclose(rotated.cell[:], np.diag(lengths[[*in_plane, normal]]))
+    assert np.allclose(rotated.positions[:, :2], atoms.positions[:, in_plane])
+    assert list(rotated.symbols) == list(atoms.symbols)
+
+
+def _signed_volume(positions):
+    return np.linalg.det(positions[1:4] - positions[0])
+
+
+@pytest.mark.parametrize(
+    "plane",
+    [
+        "yz",
+        "zx",
+        pytest.param(
+            "xz",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="rotate_atoms_to_plane permutes coordinate columns; the "
+                "odd permutations (xz, yx, zy) are reflections (det -1), so the "
+                "output is the mirror image of the input, not a rotation",
+            ),
+        ),
+    ],
+)
+def test_rotate_atoms_to_plane_is_proper_rotation(plane):
+    # A rotation preserves handedness: the signed volume spanned by a chiral
+    # motif is invariant (a reflection flips its sign).
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    assert np.isclose(_signed_volume(rotated.positions), _signed_volume(atoms.positions))
+
+
+@pytest.mark.parametrize(
+    "atoms, expected",
+    [
+        # fcc Al (a = 4.05 Å): both the conventional and the primitive cell have
+        # the conventional cubic cell as their smallest orthogonal supercell.
+        (bulk("Al", cubic=True), [4.05, 4.05, 4.05]),
+        (bulk("Al"), [4.05, 4.05, 4.05]),
+        # hcp Mg (a = 3.21, c = 5.21304 Å): orthorhombic cell (a, sqrt(3) a, c).
+        (bulk("Mg"), [3.21, np.sqrt(3) * 3.21, 5.21304]),
+    ],
+)
+def test_best_orthogonal_cell(atoms, expected):
+    assert np.allclose(best_orthogonal_cell(np.array(atoms.cell)), expected, rtol=1e-10)
+
+
+def test_best_orthogonal_cell_raises_for_degenerate_cell():
     with pytest.raises(RuntimeError):
         # Two zero-norm columns trigger the RuntimeError
         best_orthogonal_cell(np.array([[0., 0., 3.], [0., 0., 4.], [0., 0., 5.]]))

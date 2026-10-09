@@ -1460,16 +1460,31 @@ class _HasAberrations(HasAcceleratorMixin):
         aberration_coefficients : dict
             Mapping from aberration symbols to their corresponding values.
         """
-        for symbol, value in aberration_coefficients.items():
-            if symbol in ("defocus", "C10"):
-                if isinstance(value, str) and value.lower() == "scherzer":
-                    if self.energy is None:
-                        raise RuntimeError(
-                            "energy undefined, Scherzer defocus cannot be evaluated"
-                        )
-                    C30 = self._aberration_coefficients["C30"]
-                    assert isinstance(C30, SupportsFloat)
-                    value = scherzer_defocus(float(C30), self._valid_energy)
+        def is_scherzer(symbol, value):
+            return (
+                symbol in ("defocus", "C10")
+                and isinstance(value, str)
+                and value.lower() == "scherzer"
+            )
+
+        # The Scherzer defocus depends on C30, so resolve it only after every
+        # other coefficient has been set, whatever the order they were given in.
+        items = sorted(
+            aberration_coefficients.items(), key=lambda item: is_scherzer(*item)
+        )
+
+        for symbol, value in items:
+            if is_scherzer(symbol, value):
+                if self.energy is None:
+                    raise RuntimeError(
+                        "energy undefined, Scherzer defocus cannot be evaluated"
+                    )
+                C30 = self._aberration_coefficients["C30"]
+                assert isinstance(C30, SupportsFloat)
+                value = scherzer_defocus(float(C30), self._valid_energy)
+                if symbol == "C10":
+                    # scherzer_defocus returns a defocus; C10 = -defocus.
+                    value = -value
 
             if isinstance(value, str):
                 raise ValueError("string values only allowed for defocus")
