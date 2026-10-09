@@ -5139,13 +5139,34 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
-        geometry: tuple[np.ndarray, np.ndarray],
+        coordinates: tuple[np.ndarray, np.ndarray],
         centers: np.ndarray,
         weighting_function: str,
+        radial_sampling: float,
         width: float,
+        coordinate_dtype: np.dtype,
     ):
-        if weighting_function == "gaussian":
-            x, y = np.meshgrid(*geometry, indexing="ij")
+        xp = get_array_module(array)
+
+        if weighting_function == "step":
+            x, y = np.meshgrid(*coordinates, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
+            # Bin k holds r with k * radial_sampling - width / 2 <= r <
+            # k * radial_sampling + width / 2, that is first <= k <= last. The
+            # quotients are rounded as in safe_ceiling_int, so an edge at a
+            # decimal multiple of the sampling is not missed by rounding noise.
+            first, last = (
+                xp.asarray(np.floor(np.round(q, 7)), dtype=np.int32)
+                for q in (
+                    (r - width / 2) / radial_sampling + 1,
+                    (r + width / 2) / radial_sampling,
+                )
+            )
+        elif weighting_function == "gaussian":
+            x, y = np.meshgrid(
+                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
+                indexing="ij",
+            )
             r = np.sqrt(x**2 + y**2)
 
         # Follow the input dtype: the default float64 both ignores the
@@ -5154,7 +5175,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
-                first, last = geometry
                 mask = (first <= i) & (i <= last)
             elif weighting_function == "gaussian":
                 mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
@@ -5235,23 +5255,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         num_bins = safe_ceiling_int(max_angle / radial_sampling)
         centers = np.arange(num_bins) * radial_sampling
 
-        if weighting_function == "step":
-            x, y = np.meshgrid(*coordinates, indexing="ij")
-            r = np.sqrt(x**2 + y**2)
-            # Bin k holds r with k * radial_sampling - width / 2 <= r <
-            # k * radial_sampling + width / 2, that is first <= k <= last. The
-            # quotients are rounded as in safe_ceiling_int, so an edge at a
-            # decimal multiple of the sampling is not missed by rounding noise.
-            geometry = tuple(
-                xp.asarray(np.floor(np.round(q, 7)), dtype=np.int32)
-                for q in (
-                    (r - width / 2) / radial_sampling + 1,
-                    (r + width / 2) / radial_sampling,
-                )
-            )
-        else:
-            geometry = tuple(xp.asarray(c, dtype=get_dtype()) for c in coordinates)
-
         if self.is_lazy:
             base_axes = tuple(
                 range(
@@ -5261,10 +5264,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._azimuthal_average,
-                geometry=geometry,
+                coordinates=coordinates,
                 centers=centers,
                 weighting_function=weighting_function,
+                radial_sampling=radial_sampling,
                 width=width,
+                coordinate_dtype=get_dtype(),
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (len(centers),),
@@ -5273,10 +5278,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             array = self._azimuthal_average(
                 self.array,
-                geometry=geometry,
+                coordinates=coordinates,
                 centers=centers,
                 weighting_function=weighting_function,
+                radial_sampling=radial_sampling,
                 width=width,
+                coordinate_dtype=get_dtype(),
             )
 
         wavelength = energy2wavelength(self._get_energy())

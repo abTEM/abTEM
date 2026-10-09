@@ -1,5 +1,6 @@
 import math
 import operator
+import pickle
 import sys
 import types
 import warnings
@@ -1046,6 +1047,24 @@ def test_lazy_azimuthal_average_declares_its_bins(gpts, extent, radial_sampling)
     assert lazy.array.shape == eager.array.shape
     assert lazy.array.compute().shape == eager.array.shape
     assert np.array_equal(lazy.array[:, -1].compute(), eager.array[:, -1])
+
+
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
+    weighting_function,
+):
+    # A 512 x 512 pattern; arrays of its size in the graph would be megabytes.
+    patterns = DiffractionPatterns(
+        da.zeros((2, 512, 512), chunks=(1, 512, 512)),
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    profiles = patterns.azimuthal_average(weighting_function=weighting_function)
+
+    graph = dict(profiles.array.__dask_graph__())
+    assert len(pickle.dumps(graph)) < 200_000
 
 
 def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of_precision():
