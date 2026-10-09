@@ -100,14 +100,11 @@ def adjusted_gpts(
     tuple of float
         The new sampling [Å].
     """
-    new_sampling = tuple(
-        d * n / max(safe_ceiling_int(n * (d / d_target)), 1)
-        for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
-    )
     new_gpts = tuple(
         max(safe_ceiling_int(n * (d / d_target)), 1)
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
+    new_sampling = tuple(d * n / g for d, n, g in zip(old_sampling, old_gpts, new_gpts))
     return new_sampling, new_gpts
 
 
