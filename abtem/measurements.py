@@ -65,6 +65,7 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
     number_to_tuple,
+    safe_ceiling_int,
     safe_floor_int,
 )
 
@@ -2692,7 +2693,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = int(np.ceil(self.extent / sampling))
+            gpts = safe_ceiling_int(self.extent / sampling)
 
         if sampling is None:
             sampling = self.extent / gpts
@@ -3701,7 +3702,7 @@ def _image_resampling_gpts(
     `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
     if np.isscalar(sampling):
         sampling = (sampling,) * 2
-    return tuple(int(np.ceil(e / d)) for d, e in zip(sampling, extent))
+    return tuple(safe_ceiling_int(e / d) for d, e in zip(sampling, extent))
 
 
 def _diffraction_pattern_resampling_gpts(

@@ -19,7 +19,7 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -604,7 +604,7 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = int(np.ceil(self.extent / self.sampling))
+        self._gpts = safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint)
 
         self._adjust_sampling()
 

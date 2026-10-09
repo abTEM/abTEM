@@ -11,7 +11,7 @@ import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import device_name_from_array_module, get_array_module
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, safe_ceiling_int
 
 
 def _fast_fft_rounding_mode() -> str:
@@ -101,11 +101,11 @@ def adjusted_gpts(
         The new sampling [Å].
     """
     new_sampling = tuple(
-        d * n / int(np.ceil(n * (d / d_target)))
+        d * n / safe_ceiling_int(n * (d / d_target))
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
     new_gpts = tuple(
-        int(np.ceil(n * (d / d_target)))
+        safe_ceiling_int(n * (d / d_target))
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
     return new_sampling, new_gpts
@@ -325,7 +325,7 @@ class Grid(CopyMixin, EqualityMixin):
     ):
         if extent is not None and sampling is not None:
             self._gpts = tuple(
-                int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
+                safe_ceiling_int(r / d) + 1 if e else safe_ceiling_int(r / d)
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 

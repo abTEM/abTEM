@@ -1610,6 +1610,19 @@ def test_line_profiles_tile(data, reps, lazy, device):
     measurement.tile(reps).compute()
 
 
+def test_images_interpolate_to_a_sampling_that_divides_the_extent():
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
+    images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
+    assert images.interpolate(sampling=0.3).shape == (36, 18)
+
+
+def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
+    profiles = RealSpaceLineProfiles(
+        np.random.default_rng(0).random(10), sampling=1.08
+    )
+    assert profiles.interpolate(sampling=0.3).shape == (36,)
+
+
 @lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
     atoms = ase.build.bulk("Si", cubic=True)

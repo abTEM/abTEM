@@ -11,7 +11,12 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
-from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
 
 # How far outside the cell along z [Å] a non-periodic potential places an atom in
 # its face slice before warning. A thermal displacement is a few times its
@@ -430,8 +435,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = safe_ceiling_int(thickness / slice_thickness)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())
