@@ -1335,8 +1335,20 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _validate_max_batch_reduction(
         self, scan, max_batch_reduction: int | str = "auto"
     ):
-        shape = (len(scan),) + self.window_gpts
-        chunks = (max_batch_reduction, -1, -1)
+        if len(scan) == 1:
+            # a single position cannot be split, whatever its waves occupy
+            return 1
+
+        # each position is reduced to one wave per leading (ensemble and exit
+        # plane) member of the array block, hence an automatic batch holds the
+        # waves of all of them within the chunk size
+        leading = (
+            tuple(max(c) for c in self.array.chunks[:-3])
+            if self.is_lazy
+            else self.array.shape[:-3]
+        )
+        shape = (len(scan), int(np.prod(leading))) + self.window_gpts
+        chunks = (max_batch_reduction, -1, -1, -1)
 
         return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
 
@@ -1377,6 +1389,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : two int or str, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
@@ -1472,6 +1486,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -4222,17 +4238,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return self._upsample and self.interpolation != (1, 1)
 
     def _wave_vector_chunks(self, max_batch):
+        # each plane wave is propagated to every exit plane, hence an automatic
+        # batch holds the waves of all exit planes within the chunk size
+        exit_planes_shape, _ = self._exit_planes_shape_and_metadata
         if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, self.gpts)
+            max_batch = max_batch * reduce(operator.mul, exit_planes_shape + self.gpts)
 
         chunks = validate_chunks(
-            shape=(len(self),) + self.gpts,
-            chunks=("auto", -1, -1),
+            shape=(len(self),) + exit_planes_shape + self.gpts,
+            chunks=("auto",) + (-1,) * (len(exit_planes_shape) + 2),
             max_elements=max_batch,
             dtype=np.dtype("complex64"),
             device=self.device,
         )
-        return chunks
+        return chunks[:1] + chunks[-2:]
 
     @property
     def downsampled_gpts(self) -> tuple[int, int]:
@@ -4339,6 +4358,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -4878,6 +4899,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -5192,12 +5215,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5207,7 +5234,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -5647,12 +5675,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings
             "dask.chunk-size" and "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5662,7 +5694,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
