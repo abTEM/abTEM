@@ -1394,8 +1394,10 @@ class Waves(BaseWaves, ArrayObject):
                     [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float,
-            masks up to that scattering angle [mrad].
+            If True, block the direct beam: the bright-field disk and a margin for a
+            probe with a semiangle cutoff, otherwise the zero-frequency pixel (the rule
+            is in ``DiffractionPatterns._apply_block_direct``). If given as a float,
+            masks up to that scattering angle [mrad]. Default is False.
         fftshift : bool, optional
             If False, do not shift the direct beam to the center of the diffraction
             patterns (default is True).
@@ -1427,12 +1429,7 @@ class Waves(BaseWaves, ArrayObject):
             renormalize=renormalize,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
-        return diffraction_patterns
+        return diffraction_patterns._apply_block_direct(block_direct)
 
     def _diffraction_patterns(
         self,
@@ -1453,7 +1450,15 @@ class Waves(BaseWaves, ArrayObject):
         normalize = self._diffraction_pattern_should_normalize(metadata, renormalize)
 
         if self.is_lazy:
-            dtype = get_dtype(complex=return_complex)
+            # Declare the precision the blocks return, which follows the waves
+            # as in the eager branch: complex128 waves give float64 patterns
+            # under a float32 configuration. A declared dtype below the blocks'
+            # would make later dask reductions (e.g. sum) accumulate in it.
+            dtype = (
+                self.array.dtype
+                if return_complex
+                else np.finfo(self.array.dtype).dtype
+            )
 
             pattern = da.map_blocks(
                 self._diffraction_pattern,
@@ -1496,9 +1501,18 @@ class Waves(BaseWaves, ArrayObject):
 
         return diffraction_patterns
 
+    def elastic_diffuse_diffraction_patterns(self, **kwargs):
+        """Elastic, diffuse and total diffraction intensity from frozen-phonon
+        exit waves. See
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns` for full
+        documentation."""
+        from abtem.measurements import elastic_diffuse_diffraction_patterns
+
+        return elastic_diffuse_diffraction_patterns(self, **kwargs)
+
     def phonon_loss_diffraction_patterns(self, **kwargs):
-        """Compute inelastic (TDS) diffraction patterns from energy-resolved
-        frozen-phonon exit waves.  See
+        """Energy-resolved phonon-loss diffraction patterns from frozen-phonon
+        exit waves. See
         :func:`abtem.measurements.phonon_loss_diffraction_patterns` for full
         documentation."""
         from abtem.measurements import phonon_loss_diffraction_patterns

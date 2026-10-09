@@ -7,6 +7,7 @@ are grouped by the object they belong to rather than by symptom.
 from __future__ import annotations
 
 import functools
+import io
 import sys
 
 import ase
@@ -190,8 +191,9 @@ class TestRadialEquation:
         from gpaw.atom.aeatom import AllElectronAtom
         from scipy.interpolate import interp1d
 
-        AllElectronAtom.log = lambda self, *args, **kwargs: None
-        ae = AllElectronAtom("Si", xc="PBE", scalar_relativistic=False)
+        ae = AllElectronAtom(
+            "Si", xc="PBE", scalar_relativistic=False, log=io.StringIO()
+        )
         ae.run()
         ae.refine()
         rv = interp1d(
@@ -222,8 +224,7 @@ class TestAtomicPotentialTail:
             # Was 1.7e-3 Ry; measured <= 2e-7 Ry now.
             assert abs(rv(r) / r) < 1e-6, f"V({r} Bohr) = {rv(r) / r:.2e} Ry"
 
-        AllElectronAtom.log = lambda self, *args, **kwargs: None
-        ae = AllElectronAtom("Si", xc=xc)
+        ae = AllElectronAtom("Si", xc=xc, log=io.StringIO())
         ae.run()
         ae.scalar_relativistic = True
         ae.refine()
@@ -597,23 +598,19 @@ def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64,
 
 
 class TestFlexibleAnnularDetectorEnergyEnsemble:
-    """``FlexibleAnnularDetector._match_waves`` (abtem/detectors.py) used to
-    mutate ``self._outer`` in place, guarded only by ``if self.outer is
-    None`` -- which conflates "the user never gave an outer" with "already
-    matched", so it latched onto whichever waves it saw *first* and silently
-    ignored every later one. Eager splits an energy ensemble into per-energy
-    members before detection, so it saw member 0 first; lazy sizes its
-    output array from the full, un-indexed ensemble up front (``Waves.
-    angular_sampling`` resolves that to ``max(axis.values)``), so it saw the
-    highest energy first. The two conventions disagreed, and eager's answer
-    even depended on the order the energies were given in.
+    """A ``FlexibleAnnularDetector`` with an auto outer angle must not size
+    itself from whichever waves it sees first. Eager splits an energy ensemble
+    into per-energy members before detection, so it would see member 0 first;
+    lazy sizes its output array from the full, un-indexed ensemble up front
+    (``Waves.angular_sampling`` resolves that to ``max(axis.values)``), so it
+    would see the highest energy first. The two conventions disagree, and
+    eager's answer would depend on the order the energies were given in.
 
     A single radial axis cannot represent two different cutoff angles at
-    once, so the fix does not silently pick one convention (eager's,
-    lazy's, or a third) -- every one of those would just make the wrong
-    answer consistent instead of visible. It raises instead, identically
-    for eager and lazy and regardless of energy order, unless the caller
-    pins ``outer`` explicitly.
+    once, so no convention (eager's, lazy's, or a third) is picked silently
+    -- every one of those would just make the wrong answer consistent instead
+    of visible. It raises instead, identically for eager and lazy and
+    regardless of energy order, unless the caller pins ``outer`` explicitly.
     """
 
     @staticmethod

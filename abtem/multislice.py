@@ -693,9 +693,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        if potential.num_exit_planes == 1:
+        # The back-propagation sums the backscattered waves into the entrance
+        # plane, the first exit plane.
+        if potential.num_exit_planes == 1 or potential.exit_planes[0] != -1:
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes."
+                "Backscattering contributions require potential.exit_planes, "
+                "starting with the entrance plane -1."
             )
 
         # moved to MultisliceTransform
@@ -779,49 +782,75 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
+        # The sum of the slices of each exit-plane block, built as the forward
+        # pass goes, for the back-propagation of this configuration's
+        # backscattered waves: one slice is held per exit plane, not per slice.
+        blocks = []
+        block = None
 
-        for potential_chunk in potential_configuration.generate_chunked_slices(
-            chunk_size=potential_chunk_size
-        ):
-            for potential_slice, next_slice in lookahead(
-                potential_chunk.generate_slices()
-            ):
-                if algorithm.expansion_scope == "full":
-                    waves, backscatter_waves = multislice_step(
-                        waves, potential_slice, next_slice=next_slice
-                    )
-                else:
-                    waves = multislice_step(waves, potential_slice, next_slice=None)
-                tqdm_pbar.update_if_exists(int(n_waves))
+        # One stream of slices across the chunks: the last slice of a chunk
+        # looks ahead to the first slice of the next one, so only the exit
+        # face is stepped without a next slice.
+        potential_slices = (
+            potential_slice
+            for potential_chunk in potential_configuration.generate_chunked_slices(
+                chunk_size=potential_chunk_size
+            )
+            for potential_slice in potential_chunk.generate_slices()
+        )
 
-                depth += potential_slice.axes_metadata[0].values[0]
+        for potential_slice, next_slice in lookahead(potential_slices):
+            if algorithm.expansion_scope == "full":
+                waves, backscatter_waves = multislice_step(
+                    waves, potential_slice, next_slice=next_slice
+                )
+            else:
+                waves = multislice_step(waves, potential_slice, next_slice=None)
+            tqdm_pbar.update_if_exists(int(n_waves))
 
-                _update_plasmon_axes(waves, depth)
+            if return_backscattered:
+                block = _add_to_block(block, potential_slice)
 
-                if potential_slice.exit_planes:
-                    measurement_index = _validate_potential_ensemble_indices(
-                        potential_index, exit_plane_index, potential
-                    )
+            depth += potential_slice.axes_metadata[0].values[0]
 
-                    if measurements is not None:
-                        if algorithm.expansion_scope == "full" and return_backscattered:
-                            _update_measurements(
-                                waves,
-                                detectors[:-1],
-                                measurements[:-1],
-                                measurement_index,
-                            )
-                            _update_measurements(
-                                backscatter_waves,
-                                detectors[-1:],
-                                measurements[-1:],
-                                measurement_index,
-                            )
-                        else:
-                            _update_measurements(
-                                waves, detectors, measurements, measurement_index
-                            )
-                    exit_plane_index += 1
+            _update_plasmon_axes(waves, depth)
+
+            if potential_slice.exit_planes:
+                measurement_index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential
+                )
+
+                if measurements is not None:
+                    if algorithm.expansion_scope == "full" and return_backscattered:
+                        _update_measurements(
+                            waves,
+                            detectors[:-1],
+                            measurements[:-1],
+                            measurement_index,
+                        )
+                        _update_measurements(
+                            backscatter_waves,
+                            detectors[-1:],
+                            measurements[-1:],
+                            measurement_index,
+                        )
+                    else:
+                        _update_measurements(
+                            waves, detectors, measurements, measurement_index
+                        )
+                exit_plane_index += 1
+                if return_backscattered:
+                    blocks.append(block)
+                    block = None
+
+        if return_backscattered:
+            _back_propagate_backscattered_waves(
+                measurements[-1][  # type: ignore
+                    _validate_potential_ensemble_indices(potential_index, (), potential)
+                ],
+                blocks,
+                multislice_step,
+            )
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
@@ -831,81 +860,43 @@ def multislice_and_detect(
                 for detector in detectors
             ]
 
-    elif return_backscattered:
-        _back_propagate_backscattered_waves(
-            measurements[-1],  # type: ignore
-            potential,
-            multislice_step,
-        )
-
     tqdm_pbar.close_if_exists()
 
     return measurements
 
 
-def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
-    """
-    Group potential slices between exit_planes, summing their thicknesses.
+def _add_to_block(block, potential_slice):
+    """Add a slice to the sum of the slices of one exit-plane block, and its
+    thickness to the block's. The block starts as a copy of its first slice
+    (`block` is None)."""
+    if block is None:
+        return potential_slice.copy()
 
-    Parameters
-    ----------
-    potential_slices : list of PotentialSlice
-        Original slices along the beam direction.
-    exit_planes : list of int
-        Indices of exit planes (first can be -1 for entrance plane).
-
-    Returns
-    -------
-    effective_slices : list of PotentialSlice
-        Aggregated slices with summed potential arrays and summed thicknesses.
-    """
-
-    effective_slices = []
-
-    for i in range(0, len(exit_planes) - 1):
-        idx_start = exit_planes[i] + 1  # slice after previous exit plane
-        idx_end = exit_planes[i + 1] + 1  # include this exit plane
-
-        # Aggregate slices in this block
-        combined_slice = potential_slices[idx_start].copy()
-        thickness = combined_slice.slice_thickness[0]
-        # Add remaining slices in the block
-        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
-            combined_slice += in_bw_slice
-            thickness += in_bw_slice.slice_thickness[0]
-            combined_slice._slice_thickness = (thickness,)
-            combined_slice._slice_limits = [(0, thickness)]
-
-        effective_slices.append(combined_slice)
-
-    return effective_slices
+    thickness = block.slice_thickness[0] + potential_slice.slice_thickness[0]
+    block += potential_slice
+    block._slice_thickness = (thickness,)
+    block._slice_limits = [(0, thickness)]
+    return block
 
 
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    potential: BasePotential,
+    effective_slices: list[BasePotential],
     multislice_step: Callable,
 ) -> Waves:
     """
     For each slice in the multislice step, a small part of the wave get backscattered.
     This function runs the multislice in reverse for each backscattered wave summing
     them for a final backscattered wave result.
+
+    `backscattered_waves` are those of one configuration, with the exit-plane axis
+    first, and `effective_slices` are the sums of the slices its forward pass used
+    between consecutive exit planes.
     """
 
     xp = get_array_module(backscattered_waves.device)
-    potential_slices = [
-        slice
-        for _, config in _generate_potential_configurations(potential)
-        for slice in config.generate_slices()
-    ]
-
-    effective_slices = _aggregate_slices_by_exit_planes(
-        potential_slices, potential.exit_planes
-    )
 
     num_slices = len(effective_slices)
-    if len(backscattered_waves) != num_slices + 1:
-        raise ValueError("Wrong shapes")
 
     # zero intensity in incoming wave
     backscattered_waves[0]._array[:] = 0
