@@ -1774,7 +1774,7 @@ class TestPrismEelsReductionChunking:
     """
 
     @staticmethod
-    def _setup(n_rows, n_cols):
+    def _setup(n_rows, n_cols, interpolation=1):
         atoms = ase.Atoms(
             "Si2",
             positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
@@ -1785,7 +1785,10 @@ class TestPrismEelsReductionChunking:
             atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
         )
         s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+            potential=potential,
+            energy=ENERGY,
+            semiangle_cutoff=20,
+            interpolation=interpolation,
         )
         scan = abtem.GridScan(
             start=(0, 0),
@@ -1813,16 +1816,21 @@ class TestPrismEelsReductionChunking:
         return np.asarray(abtem.core.backend.asnumpy(measurement.array))
 
     @pytest.mark.parametrize("double_channel", [False, True])
-    # With this test's n_T=2 and 5 columns, these forced "position" budgets
-    # resolve (guess, then verified against the actual crop box) to row
-    # batches of 1, 2 and 4 respectively -- checked directly by recording
-    # minimum_crop's call sizes for each value. 7 rows is not a multiple of
-    # 2 or 4, so two of the three exercise an uneven last batch.
-    @pytest.mark.parametrize("forced_budget", [1, 25, 40])
+    # With this test's n_T=2 and 5 columns, the forced "position" budget 1
+    # resolves (guess, then verified against the actual crop box) to
+    # single-row batches at both interpolations, and 350 to row batches of 3, 3
+    # and 1 -- checked directly by recording the batch sizes of the reduction.
+    # 7 rows is not a multiple of 3, so the last batch is uneven. At
+    # interpolation 1 the reduction is on the cell itself; at 2 it crops a
+    # window around each batch.
+    @pytest.mark.parametrize("interpolation", [1, 2])
+    @pytest.mark.parametrize("forced_budget", [1, 350])
     def test_chunked_reduction_matches_a_single_whole_scan_batch(
-        self, monkeypatch, double_channel, forced_budget
+        self, monkeypatch, double_channel, forced_budget, interpolation
     ):
-        atoms, _, s_matrix, scan = self._setup(n_rows=7, n_cols=5)
+        atoms, _, s_matrix, scan = self._setup(
+            n_rows=7, n_cols=5, interpolation=interpolation
+        )
 
         monkeypatch.setattr(
             "abtem.inelastic.core_loss.estimate_scan_batch_size",
@@ -1855,7 +1863,10 @@ class TestPrismEelsReductionChunking:
         from abtem.prism.utils import minimum_crop as _real_minimum_crop
 
         n_rows, n_cols = 9, 6
-        atoms, _, s_matrix, scan = self._setup(n_rows=n_rows, n_cols=n_cols)
+        # A window smaller than the cell is cropped around each batch.
+        atoms, _, s_matrix, scan = self._setup(
+            n_rows=n_rows, n_cols=n_cols, interpolation=2
+        )
         n_positions = n_rows * n_cols
 
         call_sizes = []

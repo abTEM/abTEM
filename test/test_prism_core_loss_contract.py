@@ -16,10 +16,16 @@ ATOMS = ase.Atoms("B2", positions=[(2, 2, 1), (4, 5, 3)], cell=(8, 6, 8), pbc=Tr
 TOLERANCE = 1e-4
 
 
-def _potential(device, num_configs=None):
+def _potential(device, num_configs=None, ensemble_mean=True):
     atoms = ATOMS
     if num_configs:
-        atoms = abtem.FrozenPhonons(ATOMS, num_configs=num_configs, sigmas=0.1, seed=3)
+        atoms = abtem.FrozenPhonons(
+            ATOMS,
+            num_configs=num_configs,
+            sigmas=0.1,
+            seed=3,
+            ensemble_mean=ensemble_mean,
+        )
     return abtem.Potential(atoms, gpts=GPTS, slice_thickness=2, device=device)
 
 
@@ -39,6 +45,8 @@ def _detector(name):
         "pixelated": abtem.PixelatedDetector,
         "flexible": abtem.FlexibleAnnularDetector,
         "annular": lambda: abtem.AnnularDetector(5, 40),
+        "waves": abtem.WavesDetector,
+        "real-space": lambda: abtem.PixelatedDetector(reciprocal_space=False),
     }[name]()
 
 
@@ -86,9 +94,27 @@ def _multislice(potential, detector):
 
 
 @devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "num_configs, ensemble_mean", [(None, True), (3, True), (3, False)]
+)
+@pytest.mark.parametrize("detector", ["waves", "real-space"])
+def test_real_space_outputs_match_multislice(
+    device, detector, num_configs, ensemble_mean, lazy
+):
+    potential = _potential(device, num_configs, ensemble_mean)
+    measured = _prism(
+        potential, _detector(detector), lazy, interpolation=1, downsample=False
+    )
+    expected = _multislice(potential, _detector(detector))
+    assert measured.shape == expected.shape
+    _assert_close(measured, expected)
+
+
+@devices
 @pytest.mark.parametrize("interpolation, upsample", [(1, False), (2, False), (1, True)])
 @pytest.mark.parametrize("num_configs", [None, 3])
-@pytest.mark.parametrize("detector", ["pixelated", "flexible", "annular"])
+@pytest.mark.parametrize("detector", ["pixelated", "flexible", "annular", "waves"])
 def test_lazy_declared_shape_matches_computed_and_eager(
     device, detector, num_configs, interpolation, upsample
 ):

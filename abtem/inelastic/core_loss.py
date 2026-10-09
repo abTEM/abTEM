@@ -1947,8 +1947,9 @@ def prism_transition_potential_scan(
 
     Returns
     -------
-    BaseMeasurements or list of BaseMeasurements
-        One measurement per detector.
+    BaseMeasurements, Waves or list of them
+        One measurement per detector. A ``WavesDetector`` gives the ``Waves``
+        at each scan position, which keep every member of an ensemble.
     """
     import warnings
 
@@ -2209,13 +2210,27 @@ def prism_transition_potential_scan(
     # identical box for every batch on every one of those calls. Hoisting it
     # here, once per batch, turns that into O(n_batches) instead of
     # O(n_batches * n_sites * n_exit_planes).
-    row_batch_boxes = [
-        minimum_crop(
-            pixel_positions[row_start * row_cols : row_end * row_cols],
-            output_window_gpts,
-        )
-        for row_start, row_end in row_batches
-    ]
+    #
+    # A window spanning the whole cell is reduced on the cell itself, so each
+    # position is detected in the cell frame, as SMatrixArray.reduce does when
+    # its window is the whole grid; a smaller window is centred on the position.
+    if output_window_gpts == ds_gpts:
+        row_batch_boxes = [
+            (
+                (0, 0),
+                ds_gpts,
+                xp.zeros(((row_end - row_start) * row_cols, 2), dtype=int),
+            )
+            for row_start, row_end in row_batches
+        ]
+    else:
+        row_batch_boxes = [
+            minimum_crop(
+                pixel_positions[row_start * row_cols : row_end * row_cols],
+                output_window_gpts,
+            )
+            for row_start, row_end in row_batches
+        ]
 
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
@@ -2479,7 +2494,10 @@ def prism_transition_potential_scan(
     # method called below is only the second half, which is the half that
     # belongs per block. SMatrix.transition_potential_scan applies the first
     # half once, at the level the oracle uses.
-    measurements = [m.reduce_ensemble() for m in measurements]
+    measurements = [
+        m.reduce_ensemble() if hasattr(m, "reduce_ensemble") else m
+        for m in measurements
+    ]
 
     if len(measurements) == 1:
         return measurements[0]

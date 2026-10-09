@@ -5451,8 +5451,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        BaseMeasurements or list of BaseMeasurements
-            One measurement per detector.
+        BaseMeasurements, Waves or list of them
+            One measurement per detector. A ``WavesDetector`` gives the
+            ``Waves`` at each scan position, which keep every member of an
+            ensemble.
         """
         from abtem.inelastic.core_loss import _prism_eels_detected_waves
 
