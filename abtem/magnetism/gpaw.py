@@ -7,7 +7,12 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial.transform import Rotation as R  # type: ignore
 
-from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
+from abtem.atoms import (
+    _box_repetitions,
+    _box_strain_warning_silenced,
+    _cell_in_plane_frame,
+    plane_to_axes,
+)
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
@@ -21,7 +26,7 @@ from abtem.magnetism.iam import (
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
 from abtem.potentials.gpaw import _GPAW_LOCK, GPAWPotential
-from abtem.potentials.iam import PotentialArray, _FieldBuilder
+from abtem.potentials.iam import PotentialArray, _default_box, _FieldBuilder
 from abtem.slicing import is_number
 
 
@@ -187,18 +192,171 @@ def _real_space_slicing(
     return tuple(float(n * dz) for n in planes), tuple(int(n) for n in planes)
 
 
+def _fourier_slice_integrals(
+    array: np.ndarray, slice_limits: list[tuple[float, float]], depth: float
+) -> np.ndarray:
+    """
+    The integrals of `array` along its last axis between each pair of
+    `slice_limits` [Å], stacked along a new first axis.
+
+    The last axis holds evenly spaced samples of a field that is periodic over
+    `depth`, the first at height 0. The field between the samples is their
+    band-limited (trigonometric) interpolant, whose integral over a slice is exact
+    in Fourier space for any slice limits. The Nyquist term of an even number of
+    samples is taken as a cosine, as for a real field.
+    """
+    n = array.shape[-1]
+    spectrum = np.fft.fft(array, axis=-1)
+    k = np.fft.fftfreq(n, d=1.0 / n)
+    q = 2 * np.pi * k / depth
+    a, b = (np.array(limits, dtype=float) for limits in zip(*slice_limits))
+
+    weights = np.empty((n, len(a)), dtype=complex)
+    weights[0] = b - a
+    q = q[:, None]
+    weights[1:] = (np.exp(1j * q[1:] * b) - np.exp(1j * q[1:] * a)) / (1j * q[1:])
+    if n % 2 == 0:
+        q_nyquist = q[n // 2]
+        weights[n // 2] = (np.sin(q_nyquist * b) - np.sin(q_nyquist * a)) / q_nyquist
+
+    integrals = (spectrum @ weights).real / n
+    return np.moveaxis(integrals, -1, 0)
+
+
+def _is_skewed(cell) -> bool:
+    """Whether `cell` is not orthogonal by the tolerance of `orthogonalize_cell`:
+    off-diagonal components up to 1e-6 of the longest lattice vector are
+    round-off."""
+    cell = np.array(cell, dtype=float)
+    off_diagonal = cell[~np.eye(3, dtype=bool)]
+    return bool(np.abs(off_diagonal).max() > 1e-6 * np.linalg.norm(cell, axis=1).max())
+
+
+def _supercell_of_box(cell, box) -> tuple[np.ndarray, np.ndarray]:
+    """
+    The lattice vectors of the supercell of `cell` that fills `box` (an integer
+    matrix, rows along x, y and z, in units of the lattice vectors of `cell`), and
+    the rotation that `orthogonalize_cell` gives the vectors when it fits that
+    supercell into the box (acting on row vectors).
+
+    `orthogonalize_cell` keeps the fractional coordinates of the supercell: a point
+    at r goes to r @ A with A the map from the supercell onto the box, which is a
+    rotation times a strain. A vector field placed the same way turns its vectors
+    by the rotation; a strain has no single rule for the vectors and leaves them.
+    """
+    cell = _cell_in_plane_frame(cell, "xy")
+    vectors = _box_repetitions(cell, box)
+    transform = np.linalg.solve(vectors @ cell, np.diag(box))
+    u, _, vt = np.linalg.svd(transform)
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:
+        raise NotImplementedError(
+            "The cell of the calculator is left-handed, so its box mirrors the "
+            "field, which a magnetic field does not follow as a vector field does."
+        )
+    return vectors.astype(int), rotation
+
+
+def _box_grid(vectors: np.ndarray, shape: tuple[int, int, int]):
+    """
+    The grid of the box filled by the supercell with lattice vectors `vectors` that
+    holds every Fourier component of a field sampled on a grid of `shape` over the
+    cell, and where each component goes on it.
+
+    The component of the cell's frequency m (in units of its reciprocal lattice
+    vectors) is the component of frequency `vectors @ m` of the box. A box axis
+    made of one lattice vector that no other box axis uses takes the frequencies
+    of that axis alone, so it keeps their number of samples per period. The other
+    axes mix frequencies of several axes of the cell; the Nyquist component of an
+    even number of samples along these is split into halves at +N/2 and -N/2,
+    which is the same real field, and the box axis holds every frequency the mix
+    gives, so that no two components share a frequency of the box.
+
+    Returns the shape of the box grid and, for each axis of the cell, the indices
+    of the FFT output taken, their frequencies and their weights.
+    """
+    vectors = np.asarray(vectors, dtype=int)
+
+    alone = [False] * 3
+    box_shape = [0] * 3
+    for k in range(3):
+        (used,) = np.nonzero(vectors[k])
+        if len(used) == 1 and np.count_nonzero(vectors[:, used[0]]) == 1:
+            alone[used[0]] = True
+            box_shape[k] = abs(int(vectors[k, used[0]])) * shape[used[0]]
+
+    indices, frequencies, weights = [], [], []
+    for j, n in enumerate(shape):
+        index = np.arange(n)
+        frequency = np.fft.fftfreq(n, d=1.0 / n).astype(int)
+        weight = np.ones(n)
+        if not alone[j] and n % 2 == 0:
+            index = np.append(index, n // 2)
+            frequency = np.append(frequency, n // 2)
+            weight = np.append(weight, 0.5)
+            weight[n // 2] = 0.5
+        indices.append(index)
+        frequencies.append(frequency)
+        weights.append(weight)
+
+    for k in range(3):
+        if box_shape[k] == 0:
+            box_shape[k] = 1 + sum(
+                abs(int(vectors[k, j])) * int(np.ptp(frequencies[j])) for j in range(3)
+            )
+
+    return tuple(box_shape), indices, frequencies, weights
+
+
+def _map_to_box_grid(array: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    """
+    The field `array` (components first, then the three axes of a grid over the
+    cell along its lattice vectors) on the grid of the box filled by the supercell
+    with lattice vectors `vectors`, as `_box_grid` lays it out.
+
+    The field is placed in the fractional coordinates of the supercell, as
+    `orthogonalize_cell` places atoms. Each Fourier component moves to its
+    frequency on the box without interpolation, so the band-limited field is the
+    same at every point.
+    """
+    grid_shape = array.shape[-3:]
+    box_shape, indices, frequencies, weights = _box_grid(vectors, grid_shape)
+
+    spectrum = np.fft.fftn(array, axes=(-3, -2, -1))
+    spectrum = spectrum[(...,) + np.ix_(*indices)]
+    spectrum = spectrum * (
+        weights[0][:, None, None] * weights[1][None, :, None] * weights[2][None, None]
+    )
+
+    target = tuple(
+        (
+            vectors[k, 0] * frequencies[0][:, None, None]
+            + vectors[k, 1] * frequencies[1][None, :, None]
+            + vectors[k, 2] * frequencies[2][None, None]
+        )
+        % box_shape[k]
+        for k in range(3)
+    )
+
+    box_spectrum = np.zeros(array.shape[:-3] + box_shape, dtype=complex)
+    box_spectrum[(...,) + target] = spectrum
+    box_spectrum *= np.prod(box_shape) / np.prod(grid_shape)
+    return np.fft.ifftn(box_spectrum, axes=(-3, -2, -1)).real
+
+
 @runtime_checkable
 class GPAW(Protocol):
     @property
-    def atoms(self) -> Atoms:
-        ...
+    def atoms(self) -> Atoms: ...
 
-    def get_number_of_grid_points(self) -> np.ndarray:
-        ...
+    def get_number_of_grid_points(self) -> np.ndarray: ...
 
 
 class _GPAWMagnetics(_FieldBuilder):
     _supports_box_and_origin = False
+    # The slices computed from the calculator on first use, kept for the later
+    # calls of `generate_slices`; incidental state, never identity.
+    _eq_exclude = ("_slices",)
 
     def __init__(
         self,
@@ -237,31 +395,52 @@ class _GPAWMagnetics(_FieldBuilder):
 
         self._rotate_field = rotate_field
 
+        if projection not in ("fft", "real_space"):
+            raise ValueError(
+                f"projection must be 'fft' or 'real_space', got {projection!r}"
+            )
+
+        grid_shape = tuple(
+            int(n) * gridrefinement for n in calculators.get_number_of_grid_points()
+        )
+
+        # The grid of the calculator runs along the lattice vectors. For a skewed
+        # cell `generate_slices` moves the field onto a grid of the default box,
+        # whose lattice vectors in units of the cell's are `_box_vectors`.
+        self._box_vectors: Optional[np.ndarray] = None
+        self._box_rotation: Optional[np.ndarray] = None
+        if _is_skewed(cell):
+            # Raises the RuntimeError of a cell that cannot be rotated to `plane`.
+            default_box = _default_box(cell, plane)
+            if plane != "xy":
+                raise NotImplementedError(
+                    f"plane={plane!r} is not supported for the magnetic field of a "
+                    "non-orthogonal cell, whose vectors would have to be rotated "
+                    "with it; use plane='xy', or a calculation of an orthogonal cell."
+                )
+            self._box_vectors, self._box_rotation = _supercell_of_box(cell, default_box)
+            grid_shape = _box_grid(self._box_vectors, grid_shape)[0]
+            depth = float(default_box[2])
+        else:
+            depth = float(np.diag(cell)[plane_to_axes(plane)[2]])
+
         # The number of z planes of the density summed into each real-space slice.
         self._planes_per_slice: Optional[tuple[int, ...]] = None
 
         if projection == "real_space":
             # The slices are stacked along the third axis of `plane`, which is the
             # last axis of the field once `generate_slices` has moved its axes.
-            axis = plane_to_axes(plane)[2]
             slice_thickness, self._planes_per_slice = _real_space_slicing(
                 slice_thickness,
-                num_planes=int(calculators.get_number_of_grid_points()[axis])
-                * gridrefinement,
-                depth=float(np.diag(cell)[axis]),
-            )
-        elif not is_number(slice_thickness) and not np.allclose(
-            [float(t) for t in slice_thickness], float(slice_thickness[0]), rtol=1e-6
-        ):
-            # The fft projection samples the field on evenly spaced planes, one at
-            # the entrance of each slice, so it cannot follow other thicknesses.
-            raise NotImplementedError(
-                "Non-uniform slice thicknesses are not supported for the fft "
-                "projection; use projection='real_space', whose slice boundaries "
-                "may be any of the z grid planes."
+                num_planes=grid_shape[plane_to_axes(plane)[2]],
+                depth=depth,
             )
 
         self._projection = projection
+
+        # The slices of the whole field, (slice, component, x, y) on the host,
+        # computed from the calculator on the first call of `generate_slices`.
+        self._slices: Optional[np.ndarray] = None
 
         self._quantity = quantity
 
@@ -292,10 +471,9 @@ class _GPAWMagnetics(_FieldBuilder):
         assert isinstance(self._plane, str)
         return self._plane
 
-    def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
-        if last_slice is None:
-            last_slice = self.num_slices
-
+    def _field(self) -> np.ndarray:
+        """The field on the host, its components and axes in the frame of `plane`
+        and on a grid over the box, the slicing axis last."""
         vector_potential = get_vector_potential_from_gpaw(
             self._calculators, gridrefinement=self.gridrefinement
         )
@@ -306,6 +484,15 @@ class _GPAWMagnetics(_FieldBuilder):
             array = curl_fourier(vector_potential, self._calculators.atoms.cell)
         else:
             raise ValueError(f"Unknown quantity: {self._quantity}")
+
+        if self._box_rotation is not None and not np.allclose(
+            self._box_rotation, np.eye(3), rtol=0.0, atol=1e-12
+        ):
+            # `_apply_rotation_matrix` acts on column vectors.
+            array = _apply_rotation_matrix(array, self._box_rotation.T)
+            vector_potential = _apply_rotation_matrix(
+                vector_potential, self._box_rotation.T
+            )
 
         if self.plane != "xy":
             axes = plane_to_axes(self.plane)
@@ -322,11 +509,21 @@ class _GPAWMagnetics(_FieldBuilder):
         elif rotate_field:
             array = rotate_vector_field(array, rotate_field)
 
-        slice_thicknesses = np.array(self.slice_thickness)
-        slice_shape = (3,) + self._valid_gpts
-        # The density and its curl are computed on the host; each slice is moved to
-        # `device`.
-        xp = get_array_module(self.device)
+        if self._box_vectors is not None:
+            array = _map_to_box_grid(array, self._box_vectors)
+
+        return array
+
+    def _project(self) -> np.ndarray:
+        """
+        The field integrated through each slice, (slice, component, x, y) on the
+        host, in field units times Å.
+
+        The real-space projection sums the z planes of each slice times their
+        spacing. The fft projection integrates the band-limited field between the
+        limits of each slice in Fourier space, for any slice thicknesses.
+        """
+        array = self._field()
 
         if self._projection == "real_space":
             planes_per_slice = self._planes_per_slice
@@ -337,37 +534,44 @@ class _GPAWMagnetics(_FieldBuilder):
                     f"calculator's density has {array.shape[-1]}."
                 )
             bounds = np.cumsum((0,) + planes_per_slice)
+            dz = sum(self.slice_thickness) / array.shape[-1]
+            return np.stack(
+                [
+                    array[..., start:stop].sum(-1) * dz
+                    for start, stop in zip(bounds[:-1], bounds[1:])
+                ]
+            )
 
-            dz = slice_thicknesses.sum() / array.shape[-1]
+        return _fourier_slice_integrals(array, self.slice_limits, self.box[2])
 
-            for slice_idx in range(first_slice, last_slice):
-                start, stop = bounds[slice_idx], bounds[slice_idx + 1]
-                slice_array = array[..., start:stop].sum(-1) * dz
+    def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
+        if last_slice is None:
+            last_slice = self.num_slices
 
-                if self._valid_gpts != slice_array.shape[1:]:
-                    slice_array = fft_interpolate(slice_array, slice_shape)
+        # The field is computed from the calculator once and its slices kept, so
+        # that building or chunking the slices range by range does not repeat it.
+        if self._slices is None:
+            self._slices = self._project()
 
-                yield self._array_object(
-                    xp.asarray(slice_array[None]),
-                    extent=self.extent,
-                    slice_thickness=slice_thicknesses[slice_idx],
-                )
+        slice_thicknesses = np.array(self.slice_thickness)
+        slice_shape = (3,) + self._valid_gpts
+        # The slices are computed on the host; each is moved to `device`.
+        xp = get_array_module(self.device)
 
-        else:
-            shape = array.shape[:-1] + (self.num_slices,)
-            array = fft_interpolate(array, shape)
+        for slice_idx in range(first_slice, last_slice):
+            slice_array = self._slices[slice_idx]
 
-            for slice_idx in range(first_slice, last_slice):
-                slice_array = array[..., slice_idx]
+            if self._valid_gpts != slice_array.shape[1:]:
+                slice_array = fft_interpolate(slice_array, slice_shape)
+            else:
+                # Not a view of the kept slices, which a caller could write into.
+                slice_array = slice_array.copy()
 
-                if self._valid_gpts != slice_array.shape[1:]:
-                    slice_array = fft_interpolate(slice_array, slice_shape)
-
-                yield self._array_object(
-                    xp.asarray(slice_array[None]),
-                    extent=self.extent,
-                    slice_thickness=slice_thicknesses[slice_idx],
-                )
+            yield self._array_object(
+                xp.asarray(slice_array[None]),
+                extent=self.extent,
+                slice_thickness=slice_thicknesses[slice_idx],
+            )
 
     def build(
         self,
