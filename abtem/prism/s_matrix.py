@@ -1572,6 +1572,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             measurements = self._batch_reduce_to_measurements(
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
+            # Ensemble axes flagged ensemble_mean (frozen phonons by default, or
+            # a CTF ensemble) were returned unreduced, unlike the lazy branch,
+            # which averages them in _finalize_lazy_measurements.
+            measurements = [
+                (
+                    measurement.reduce_ensemble()
+                    if hasattr(measurement, "reduce_ensemble")
+                    else measurement
+                )
+                for measurement in measurements
+            ]
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         out = _wrap_measurements(measurements)
