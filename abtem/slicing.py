@@ -647,11 +647,16 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
+    """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
+    [0, height]."""
+    return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
+
+
 def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
     """Warn about atoms far enough outside [0, height] along z that placing them
     in the face slice is a guess at their depth, not a correction of it."""
-    outside = np.maximum(-z, z - height)
-    far = outside > FACE_SLICE_WARNING_DISTANCE
+    far = _far_outside_faces(z, height)
     if not np.any(far):
         return
 
