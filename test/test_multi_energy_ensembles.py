@@ -1,4 +1,5 @@
-"""Multi-energy ensembles: S-matrix scans (#502) and diffraction patterns (#503).
+"""Multi-energy ensembles: S-matrix scans and reductions (#502) and diffraction
+patterns (#503).
 
 Detectors are matched against the whole energy ensemble before it is split into
 energies, and the wavelength-dependent methods of a multi-energy
@@ -139,6 +140,57 @@ def test_multi_energy_prism_refuses_an_auto_sized_radial_detector(make):
     )
     with pytest.raises(RuntimeError, match="cannot auto-size its outer angle"):
         s_matrix.scan(scan=_scan(potential), detectors=make(), lazy=False)
+
+
+def _build_and_reduce(potential, energy, detectors, lazy=False, **kwargs):
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=20, **kwargs
+    )
+    out = s_matrix.build(lazy=lazy).reduce(scan=_scan(potential), detectors=detectors)
+    return out.compute(progress_bar=False) if lazy else out
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "kwargs",
+    [dict(), dict(interpolation=2)],
+    ids=["interpolation_1", "interpolation_2"],
+)
+def test_multi_energy_build_reduce_equals_single_energy_runs(kwargs, lazy):
+    """A multi-energy `SMatrix.build()` could not be reduced at all: the
+    `SMatrixArray` has no energy of its own and raised `EnergyUndefinedError`.
+    Each energy is now reduced from its own rows of the zero-padded expansion,
+    at its own wavelength, and the measurements are stacked."""
+
+    def detectors():
+        return [
+            abtem.AnnularDetector(30, 60),
+            abtem.AnnularDetector(30),
+            abtem.PixelatedDetector(max_angle=60),
+            abtem.WavesDetector(),
+        ]
+
+    potential = _potential()
+    multi = _build_and_reduce(potential, list(ENERGIES), detectors(), lazy, **kwargs)
+    singles = [
+        _build_and_reduce(potential, energy, detectors(), lazy, **kwargs)
+        for energy in ENERGIES
+    ]
+
+    assert len(multi) == len(detectors())
+    for j, measurement in enumerate(multi):
+        names = [type(a).__name__ for a in measurement.axes_metadata]
+        axis = names.index("EnergyAxis")
+        assert measurement.axes_metadata[axis].values == ENERGIES
+
+        for i, single in enumerate(singles):
+            member = measurement[(slice(None),) * axis + (i,)]
+            if member.shape == single[j].shape:
+                a, b = member.array, single[j].array
+            else:
+                # a max_angle in mrad crops to the highest energy's pixel count
+                a, b = _same_pixels(member, single[j])
+            _close(a, b, atol=1e-5 if lazy else 1e-10)
 
 
 # --- per-energy diffraction patterns (#503) -----------------------------------

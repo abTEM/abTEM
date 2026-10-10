@@ -86,6 +86,21 @@ def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
+def _stack_energies(results, energies, axis: int = 0):
+    """Stack the results of reducing each energy of a multi-energy ensemble
+    separately along an EnergyAxis. Each result is a measurement, or a list of
+    measurements with one per detector."""
+    energy_axis = EnergyAxis(values=tuple(float(e) for e in energies))
+    if isinstance(results[0], (list, ComputableList)):
+        return _wrap_measurements(
+            [
+                stack([r[i] for r in results], energy_axis, axis=axis)
+                for i in range(len(results[0]))
+            ]
+        )
+    return stack(results, energy_axis, axis=axis)
+
+
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
@@ -327,6 +342,22 @@ class BaseSMatrix(BaseWaves):
 
         return probes
 
+    def _match_detectors_to_energies(self, detectors, energies) -> list[BaseDetector]:
+        """Fix whatever about the detectors depends on the whole of a
+        multi-energy ensemble, as `apply_transform` does before it splits a
+        multi-energy ensemble. Each energy is then reduced with the same
+        detectors, so their measurements stack. The members detect on the
+        downsampled grid of the scattering matrix."""
+        ensemble = self.dummy_probes(
+            downsample=True,
+            energy=np.asarray(energies, dtype=float),
+            metadata={k: v for k, v in self.metadata.items() if k != "energy"},
+        ).build(lazy=True)
+        return [
+            detector._match_ensemble(ensemble)
+            for detector in validate_detectors(detectors)
+        ]
+
 
 def _validate_interpolation(interpolation: int | tuple[int, int]):
     if isinstance(interpolation, int):
@@ -358,6 +389,19 @@ def _pack_wave_vectors(wave_vectors):
     return tuple(
         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
     )
+
+
+def _aperture_frequency_indices(dummy_probes: Probe) -> tuple[np.ndarray, np.ndarray]:
+    """The integer Fourier-space indices of the plane waves of a PRISM expansion:
+    the pixels inside the aperture of `dummy_probes`, on the grid of its cropping
+    window, in the order the expansion lists them."""
+    aperture = dummy_probes.aperture._evaluate_kernel(dummy_probes)
+
+    indices = np.where(aperture > 0.0)
+
+    n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[indices[0]]
+    m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[indices[1]]
+    return n, m
 
 
 def _chunked_axis(s_matrix_array):
@@ -1324,6 +1368,114 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         return reduction_scheme
 
+    def _energy_axis(self) -> int | None:
+        """The index of the ensemble axis holding the energies of a multi-energy
+        build, or None for a single-energy scattering matrix."""
+        if self.energy is not None:
+            return None
+
+        for i, axis in enumerate(self.ensemble_axes_metadata):
+            if isinstance(axis, EnergyAxis) and len(axis.values) > 1:
+                return i
+
+        return None
+
+    def _energy_member(self, axis: int, index: int, energy: float) -> "SMatrixArray":
+        """The single-energy scattering matrix of one energy of a multi-energy
+        build.
+
+        :meth:`SMatrix.build` zero-pads the plane waves of every energy to the
+        union of the wave vectors of all energies. The rows of this energy are
+        selected again, in the order of its own expansion, so the member equals
+        a single-energy build: the zero rows would otherwise still take part in
+        the normalization of the expansion coefficients, wherever the CTF does
+        not vanish there.
+        """
+        # integer Fourier-space indices identify the wave vectors exactly,
+        # whatever floating point precision they are stored in
+        wave_vectors = self.wave_vectors
+        frequency_indices = np.rint(
+            asnumpy(wave_vectors) * np.array(self.extent) / np.array(self.interpolation)
+        ).astype(int)
+        union_index = {(n, m): i for i, (n, m) in enumerate(frequency_indices.tolist())}
+
+        metadata = {k: v for k, v in self.metadata.items() if k != "energy"}
+        n, m = _aperture_frequency_indices(
+            self.dummy_probes(device="cpu", energy=energy, metadata=metadata)
+        )
+        rows = np.array(
+            [union_index[(int(n_i), int(m_i))] for n_i, m_i in zip(n, m)], dtype=int
+        )
+
+        array = self.array[(slice(None),) * axis + (index,)]
+        array = array[(slice(None),) * (len(array.shape) - 3) + (rows,)]
+
+        kwargs = self._copy_kwargs(
+            exclude=(
+                "array",
+                "extent",
+                "wave_vectors",
+                "energy",
+                "ensemble_axes_metadata",
+                "metadata",
+            )
+        )
+        return self.__class__(
+            array,
+            extent=self.extent,
+            wave_vectors=wave_vectors[rows],
+            energy=energy,
+            ensemble_axes_metadata=[
+                axis_metadata
+                for i, axis_metadata in enumerate(self.ensemble_axes_metadata)
+                if i != axis
+            ],
+            metadata=metadata,
+            **kwargs,
+        )
+
+    def _reduce_per_energy(
+        self,
+        axis: int,
+        scan: BaseScan,
+        ctf: CTF,
+        detectors: list[BaseDetector],
+        max_batch_reduction: int | str,
+        reduction_scheme: str,
+    ):
+        """Reduce each energy of a multi-energy build separately and stack the
+        measurements along its EnergyAxis, as :meth:`SMatrix.reduce` does."""
+        energies = tuple(float(e) for e in self.ensemble_axes_metadata[axis].values)
+
+        # Resolve the scan and the detectors once against the whole ensemble, so
+        # the measurements of the energies stack (see SMatrix.reduce). A scan
+        # given as positions is resolved alike for every energy, and is left to
+        # each reduction, which squeezes it.
+        if isinstance(scan, BaseScan):
+            probe_ctf = (
+                CTF(semiangle_cutoff=self.semiangle_cutoff)
+                if ctf is None
+                else ctf.copy()
+            )
+            scan = validate_scan(
+                scan,
+                Probe._from_ctf(extent=self.extent, ctf=probe_ctf, energy=energies[0]),
+            )
+        detectors = self._match_detectors_to_energies(detectors, energies)
+
+        # each energy matches the CTF to its own energy, so each gets its own copy
+        results = [
+            self._energy_member(axis, i, energy).reduce(
+                scan=scan,
+                ctf=None if ctf is None else ctf.copy(),
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                reduction_scheme=reduction_scheme,
+            )
+            for i, energy in enumerate(energies)
+        ]
+        return _stack_energies(results, energies, axis=axis)
+
     def reduce(
         self,
         scan: BaseScan = None,
@@ -1354,6 +1506,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
         """
+
+        energy_axis = self._energy_axis()
+        if energy_axis is not None:
+            return self._reduce_per_energy(
+                energy_axis,
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                reduction_scheme=reduction_scheme,
+            )
 
         self.accelerator.check_is_defined()
 
@@ -4046,14 +4209,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             xp = get_array_module(self.device)
             return xp.asarray([kx.ravel()[mask], ky.ravel()[mask]]).T
 
-        dummy_probes = self.dummy_probes(device="cpu")
-
-        aperture = dummy_probes.aperture._evaluate_kernel(dummy_probes)
-
-        indices = np.where(aperture > 0.0)
-
-        n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[indices[0]]
-        m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[indices[1]]
+        n, m = _aperture_frequency_indices(self.dummy_probes(device="cpu"))
 
         w, h = self.extent
 
@@ -5336,7 +5492,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         Returns
         -------
         BaseMeasurements or list of BaseMeasurements
-            One measurement per detector.
+            One measurement per detector. For a multi-energy scattering matrix,
+            the measurements gain a leading :class:`.EnergyAxis` dimension.
         """
         from abtem.inelastic.core_loss import (
             prism_transition_potential_scan,
@@ -5348,6 +5505,32 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 end=self.extent,
                 sampling=self.dummy_probes().aperture.nyquist_sampling,
             )
+
+        # A multi-energy scattering matrix is split into its energies, each run
+        # through the single-energy path and the measurements stacked, as in
+        # :meth:`reduce`. The single-energy path builds and matches the
+        # transition potential to its own energy, so an unbuilt potential is
+        # built for each energy, and a built one raises for every energy but its
+        # own, as it does for a single-energy scattering matrix.
+        if len(self._energies) > 1:
+            # Resolve the scan and the detectors once against the whole
+            # ensemble, so the measurements of the energies stack (see reduce).
+            scan = validate_scan(scan, self)
+            detectors = self._match_detectors_to_energies(detectors, self._energies)
+
+            results = [
+                self._with_energy(float(e)).transition_potential_scan(
+                    transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
+                    lazy=lazy,
+                )
+                for e in self._energies
+            ]
+            return _stack_energies(results, self._energies)
 
         detectors = validate_detectors(detectors)
         scan = validate_scan(scan, self)
@@ -5593,19 +5776,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 scan = (self.extent[0] / 2, self.extent[1] / 2)
             scan = validate_scan(scan, self)
 
-            # Fix whatever depends on the whole ensemble, as `apply_transform`
-            # does before it splits a multi-energy ensemble: each energy is then
-            # reduced with the same detectors, whose measurements stack. The
-            # members detect on the downsampled grid of the S-matrix.
-            ensemble = self.dummy_probes(
-                downsample=True,
-                energy=self._energies,
-                metadata={k: v for k, v in self.metadata.items() if k != "energy"},
-            ).build(lazy=True)
-            detectors = [
-                detector._match_ensemble(ensemble)
-                for detector in validate_detectors(detectors)
-            ]
+            detectors = self._match_detectors_to_energies(detectors, self._energies)
 
             results = [
                 self._with_energy(float(e)).reduce(
@@ -5620,17 +5791,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 )
                 for e in self._energies
             ]
-            energy_axis = EnergyAxis(
-                values=tuple(float(e) for e in self._energies)
-            )
-            if isinstance(results[0], (list, ComputableList)):
-                return _wrap_measurements(
-                    [
-                        stack([r[i] for r in results], energy_axis)
-                        for i in range(len(results[0]))
-                    ]
-                )
-            return stack(results, energy_axis)
+            return _stack_energies(results, self._energies)
 
         if self._upsample_enabled:
             # the compressed scattering matrix spans the full downsampled grid

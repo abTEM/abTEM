@@ -901,6 +901,130 @@ class TestUnbuiltTransitionPotentialEnergyEnsemble:
         )
 
 
+class TestPrismEelsEnergyEnsemble:
+    """#523: ``SMatrix.transition_potential_scan`` did not split a multi-energy
+    S-matrix into its energies, unlike ``SMatrix.scan``. Its setup read
+    ``s_matrix.energy``, the first energy: lazily it returned one image, the
+    first energy's, with no ``EnergyAxis`` and no error; eagerly it failed with
+    a bare ``AssertionError``.
+
+    Each energy now runs through the single-energy path, and the measurements
+    are stacked along an ``EnergyAxis``. An unbuilt transition potential is
+    built for each energy, so every member must reproduce a separate
+    single-energy PRISM-EELS run; a built one has its form factors baked in at
+    one energy and is refused for any other, as for a single-energy S-matrix.
+    """
+
+    @staticmethod
+    def _atoms():
+        return ase.Atoms(
+            "BN",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
+            cell=(8, 8, 4),
+            pbc=True,
+        )
+
+    def _run(
+        self, energy, lazy, transition_potential=None, detectors=None, interpolation=1
+    ):
+        atoms = self._atoms()
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        if transition_potential is None:
+            # the energy of an unbuilt transition potential is matched to each
+            # energy of the S-matrix before it is built
+            transition_potential = _synthetic_unbuilt_transition_potential(
+                ENERGY,
+                extent=potential.extent,
+                gpts=potential.gpts,
+            )
+        if detectors is None:
+            detectors = [
+                abtem.AnnularDetector(inner=0.0, outer=30.0),
+                abtem.PixelatedDetector(max_angle="cutoff"),
+            ]
+        s_matrix = abtem.SMatrix(
+            potential=potential,
+            energy=energy,
+            semiangle_cutoff=20,
+            interpolation=interpolation,
+        )
+        m = s_matrix.transition_potential_scan(
+            transition_potential,
+            scan=abtem.GridScan(
+                start=(0, 0),
+                end=(1, 1),
+                gpts=(2, 2),
+                fractional=True,
+                potential=potential,
+            ),
+            detectors=detectors,
+            sites=atoms[atoms.numbers == 5],
+            lazy=lazy,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return m
+
+    @pytest.mark.parametrize("interpolation", [1, 2])
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("order", [(100e3, 200e3), (200e3, 100e3)])
+    def test_each_energy_reproduces_its_own_single_energy_run(
+        self, order, lazy, interpolation
+    ):
+        pytest.importorskip("sympy")
+        references = {
+            e: self._run(e, lazy=False, interpolation=interpolation) for e in order
+        }
+        multi = self._run(list(order), lazy, interpolation=interpolation)
+
+        assert len(multi) == 2
+        for j, measurement in enumerate(multi):
+            reference = {e: _as_array(references[e][j]) for e in order}
+            scale = max(np.abs(reference[e]).max() for e in order)
+
+            energy_axis = measurement.axes_metadata[0]
+            assert isinstance(energy_axis, EnergyAxis)
+            assert energy_axis.values == order
+
+            members = _energy_members(measurement)
+            assert len(members) == len(order)
+            for member, e in zip(members, order):
+                np.testing.assert_allclose(
+                    member,
+                    reference[e],
+                    rtol=1e-5,
+                    atol=scale * 1e-6,
+                )
+            # the two energies must give genuinely different results, or this
+            # test would pass with every member equal to the first energy's run
+            assert not np.allclose(
+                reference[order[0]],
+                reference[order[1]],
+                rtol=1e-3,
+                atol=scale * 1e-6,
+            )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_a_built_array_is_refused_against_an_energy_ensemble(self, lazy):
+        """The built array matches the first energy, which is the only one the
+        unsplit S-matrix used to check it against."""
+        transition_potential = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(64, 64), energy=ENERGY, n_transitions=2
+        )
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            self._run(
+                [ENERGY, 2 * ENERGY], lazy, transition_potential=transition_potential
+            )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_an_auto_sized_flexible_annular_detector_is_refused(self, lazy):
+        """As for ``SMatrix.scan``: no single radial axis fits the cutoff angle
+        of every energy."""
+        pytest.importorskip("sympy")
+        with pytest.raises(RuntimeError, match="cannot auto-size its outer angle"):
+            self._run([100e3, 200e3], lazy, detectors=abtem.FlexibleAnnularDetector())
+
+
 class TestScanEnergyEnsembleAxisOrder:
     """A probe's energy-ensemble stack used to land on the wrong axis of the
     result -- not scrambled values, a metadata/data mismatch. See
