@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 import pytest
@@ -43,6 +44,19 @@ settings.register_profile(
     phases=[Phase.explicit, Phase.reuse, Phase.generate, Phase.shrink],
 )
 settings.load_profile("dev")
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    # Warnings are errors here, and matplotlib warns once more than 20 pyplot
+    # figures are open. Without this, the figures that tests leave open pile up
+    # over a serial run until a test that opens one more fails; CI runs with
+    # `-n auto`, so no worker gets that far. Only a test that loaded pyplot can
+    # have opened one, so the others do not import it.
+    yield
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is not None:
+        plt.close("all")
 
 
 @pytest.fixture
