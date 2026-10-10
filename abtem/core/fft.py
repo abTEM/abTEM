@@ -9,6 +9,7 @@ from typing import Tuple, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.array.core import broadcast_chunks
 from threadpoolctl import threadpool_limits  # type: ignore
 
 from abtem.core import backend, config
@@ -798,6 +799,28 @@ def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
     return ifft2(x, overwrite_x=overwrite_x)
 
 
+def _chunk_kernel_like(kernel, x: da.core.Array) -> da.core.Array:
+    """
+    The kernel as a dask array chunked like `x` along every axis where both are
+    longer than 1, and in one chunk along the axes where either has length 1 or `x`
+    has no axis. The axes are aligned from the end, as in NumPy broadcasting.
+    """
+    # Raises the ValueError of the eager product for shapes that do not broadcast.
+    np.broadcast_shapes(x.shape, kernel.shape)
+    offset = x.ndim - kernel.ndim
+    chunks = []
+    for axis, n in enumerate(kernel.shape):
+        x_axis = axis + offset
+        if x_axis < 0 or n == 1 or x.shape[x_axis] == 1:
+            chunks.append((n,))
+        else:
+            chunks.append(x.chunks[x_axis])
+
+    if isinstance(kernel, da.core.Array):
+        return kernel.rechunk(tuple(chunks))
+    return da.from_array(kernel, chunks=tuple(chunks))
+
+
 @overload
 def fft2_convolve(
     x: np.ndarray, kernel: np.ndarray, overwrite_x: bool = False
@@ -836,11 +859,17 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
+        # The kernel goes in as a second dask array, so each block of x meets
+        # the matching block of the kernel. Passed whole, it is broadcast
+        # against every block, and a kernel axis longer than a block of x
+        # would make each block as long as the kernel.
+        kernel = _chunk_kernel_like(kernel, x)
         return da.map_blocks(
             _fft2_convolve,
             x,
-            kernel=kernel,
+            kernel,
             overwrite_x=overwrite_x,
+            chunks=broadcast_chunks(x.chunks, kernel.chunks),
             meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
