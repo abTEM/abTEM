@@ -979,8 +979,10 @@ class TestCrystalPotentialChunking:
             (False, (1, 1, 2), dict(num_frozen_phonons=3)),
             # a pool of 2 for 4 lateral tiles, enlarged in the pool's task
             (True, (2, 2, 2), dict()),
+            # one pool per member, each reseeded in its own task
+            (True, (1, 1, 2), dict(seeds=(1, 2, 3))),
         ],
-        ids=["unit", "enlarged pool"],
+        ids=["unit", "enlarged pool", "reseeded pools"],
     )
     def test_the_lazy_graph_carries_the_unit_once(
         self, frozen_phonons, repetitions, kwargs
@@ -1050,6 +1052,117 @@ class TestCrystalPotentialChunking:
                 result.compute(scheduler="synchronous")
 
         assert len(builds) == expected
+
+    @staticmethod
+    def _count_pool_builds(monkeypatch):
+        """The frozen-phonon seeds of every pool built, one entry per build."""
+        builds = []
+        build = Potential.build
+
+        def counting(self, *args, **kwargs):
+            builds.append(tuple(int(seed) for seed in self.frozen_phonons.seed))
+            return build(self, *args, **kwargs)
+
+        monkeypatch.setattr(Potential, "build", counting)
+        return builds
+
+    @pytest.mark.parametrize("scheduler", ["threads", "synchronous"])
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(seeds=(1, 2, 3)),
+            dict(num_frozen_phonons=3),
+            dict(seeds=(1, 2, 3), ensemble_mean=False),
+        ],
+        ids=["seeds", "num_frozen_phonons", "no ensemble mean"],
+    )
+    def test_a_reseeded_pool_is_built_once_in_a_lazy_scan(
+        self, monkeypatch, kwargs, scheduler
+    ):
+        """Every block of a lazy scan rebuilds its members, and each member that
+        reseeds its pool built it again, so 3 members over 4 scan blocks built 12
+        pools. Each member's pool is built once, however many blocks it runs in,
+        and the result is that of the eager scan."""
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+        scan_kwargs = dict(
+            scan=abtem.GridScan((0, 0), (3, 3), gpts=(3, 2)),
+            detectors=abtem.AnnularDetector(10, 30),
+        )
+        # Slices in chunks of 2, fewer than the crystal has, so that the crystal is
+        # not built for all blocks first (_prebuild_reused_potential) and each
+        # block runs its own multislice through it.
+        with abtem.config.set({"potential.slice-chunk-size": 2}):
+            crystal = _frozen_phonon_crystal(6, (2, 3, 3), **kwargs)
+            expected = probe.scan(crystal, lazy=False, max_batch=2, **scan_kwargs)
+
+            builds = self._count_pool_builds(monkeypatch)
+            num_blocks = {}
+            pools = {}
+            results = {}
+            for max_batch in (6, 2):
+                builds.clear()
+                lazy = probe.scan(
+                    crystal, lazy=True, max_batch=max_batch, **scan_kwargs
+                )
+                num_blocks[max_batch] = lazy.array.npartitions
+                results[max_batch] = lazy.compute(
+                    scheduler=scheduler, progress_bar=False
+                )
+                pools[max_batch] = list(builds)
+
+        # 1 and 4 scan blocks, each for every member without the ensemble mean
+        assert num_blocks[2] == 4 * num_blocks[6]
+        # one pool per member, each built once
+        assert len(pools[2]) == len(set(pools[2])) == 3
+        assert sorted(pools[2]) == sorted(pools[6])
+        for result in results.values():
+            np.testing.assert_array_equal(result.array, expected.array)
+
+    @pytest.mark.parametrize("scheduler", ["threads", "synchronous"])
+    def test_a_reseeded_pool_is_built_once_in_a_lazy_transition_potential_scan(
+        self, monkeypatch, scheduler
+    ):
+        """The core-loss multislice takes its slices from `generate_slices`."""
+        from abtem.core.axes import OrdinalAxis
+        from abtem.inelastic.core_loss import TransitionPotentialArray
+
+        crystal = _frozen_phonon_crystal(6, (2, 2, 2), seeds=(1, 2, 3))
+        rng = np.random.default_rng(0)
+        array = (
+            rng.standard_normal((2, 32, 32)) + 1j * rng.standard_normal((2, 32, 32))
+        ).astype(np.complex64)
+        transition_potentials = TransitionPotentialArray(
+            Z=14,
+            array=array,
+            energy=100e3,
+            extent=crystal.extent,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            metadata={"Z": 14, "n": 1, "l": 0},
+        )
+
+        def scan(lazy):
+            return abtem.Probe(
+                energy=100e3, semiangle_cutoff=20
+            ).transition_potential_scan(
+                potential=crystal,
+                transition_potentials=transition_potentials,
+                scan=abtem.GridScan((0, 0), (3, 3), gpts=(2, 2)),
+                detectors=abtem.PixelatedDetector(max_angle=40),
+                lazy=lazy,
+                max_batch=1,
+            )
+
+        # Slices in chunks of 2, as in the test above.
+        with abtem.config.set({"potential.slice-chunk-size": 2}):
+            expected = scan(lazy=False)
+
+            builds = self._count_pool_builds(monkeypatch)
+            lazy = scan(lazy=True)
+            assert lazy.array.npartitions == 4
+            result = lazy.compute(scheduler=scheduler, progress_bar=False)
+
+        assert len(builds) == len(set(builds)) == 3
+        np.testing.assert_array_equal(result.array, expected.array)
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("seeds", [None, (1, 2)])
