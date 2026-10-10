@@ -74,6 +74,7 @@ from abtem.waves import (
     Probe,
     Waves,
     _antialias_cutoff_gpts,
+    _squeeze_flagged_axes,
     reduce_ensemble,
 )
 
@@ -90,20 +91,13 @@ def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
-def _squeeze_flagged_axes(measurements):
-    # The first half of the module-level reduce_ensemble, which multislice applies
-    # to its result: validate_scan flags the position axis of a bare position
-    # (x, y) for squeezing. The ensemble mean is applied elsewhere.
-    return [
-        measurement.squeeze(
-            tuple(
-                i
-                for i, axis in enumerate(measurement.ensemble_axes_metadata)
-                if axis._squeeze
-            )
-        )
-        for measurement in measurements
-    ]
+def _squeezed(measurements):
+    # The public reductions remove the position axis of a bare position (x, y),
+    # as multislice does (reduce_ensemble); the private _reduce methods keep it
+    # for the code that assembles several reductions.
+    return _wrap_measurements(
+        [_squeeze_flagged_axes(m) for m in ensure_list(measurements)]
+    )
 
 
 def _averaged(measurement):
@@ -862,6 +856,9 @@ def _no_chunks_reduce(
 
     array = s_matrix_array.array
 
+    # every block is reduced with the axes metadata of the whole array, hence an
+    # axis whose metadata has per-member values (the exit planes) must be one
+    # chunk; SMatrix.build makes it one, as one multislice yields every plane
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
 
     chunks = array.chunks[:-3] + ctf_chunks + scan.shape
@@ -1344,8 +1341,20 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _validate_max_batch_reduction(
         self, scan, max_batch_reduction: int | str = "auto"
     ):
-        shape = (len(scan),) + self.window_gpts
-        chunks = (max_batch_reduction, -1, -1)
+        if len(scan) == 1:
+            # a single position cannot be split, whatever its waves occupy
+            return 1
+
+        # each position is reduced to one wave per leading (ensemble and exit
+        # plane) member of the array block, hence an automatic batch holds the
+        # waves of all of them within the chunk size
+        leading = (
+            tuple(max(c) for c in self.array.chunks[:-3])
+            if self.is_lazy
+            else self.array.shape[:-3]
+        )
+        shape = (len(scan), int(np.prod(leading))) + self.window_gpts
+        chunks = (max_batch_reduction, -1, -1, -1)
 
         return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
 
@@ -1386,11 +1395,26 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : two int or str, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
         """
+        return _squeezed(
+            self._reduce(scan, ctf, detectors, max_batch_reduction, reduction_scheme)
+        )
 
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        reduction_scheme: str = "auto",
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # reduce, keeping the position axis of a bare position for the caller
+        # that assembles the results of several reductions
         self.accelerator.check_is_defined()
 
         if ctf is None:
@@ -1401,10 +1425,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        # A scan the caller validated is squeezed by the caller, which assembles
-        # the blocks this reduction returns (SMatrix.reduce).
-        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -1445,8 +1465,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
             )
 
-        if squeeze:
-            measurements = _squeeze_flagged_axes(measurements)
         return _wrap_measurements(measurements)
 
     def scan(
@@ -1481,6 +1499,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -3050,8 +3070,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
         blend_taper: float = None,
-        _blend_component: str = None,
-        _blend_taper: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -3112,6 +3130,35 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
+        return _squeezed(
+            self._reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                max_batch_expansion=max_batch_expansion,
+                method=method,
+                blend_angle=blend_angle,
+                blend_window_gpts=blend_window_gpts,
+                blend_taper=blend_taper,
+            )
+        )
+
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        max_batch_expansion: int | str = None,
+        method: str = "auto",
+        blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
+        _blend_component: str = None,
+        _blend_taper: float = None,
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # as SMatrixArray._reduce
         self.accelerator.check_is_defined()
 
         explicit_blend = blend_angle is not None
@@ -3204,7 +3251,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method = "modes"
 
         if full_window and method == "expand" and max_batch_expansion == "auto":
-            return self._expanded_s_matrix_array().reduce(
+            return self._expanded_s_matrix_array()._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3219,9 +3266,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        # as in SMatrixArray.reduce
-        squeeze = not isinstance(scan, BaseScan)
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -3282,8 +3326,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     blend_taper=_blend_taper,
                 )
 
-        if squeeze:
-            measurements = _squeeze_flagged_axes(measurements)
         return _wrap_measurements(measurements)
 
     @property
@@ -3395,7 +3437,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     snap=False,
                 )
             elif component == "low":
-                measurements = self.reduce(
+                measurements = self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3408,7 +3450,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     min(-(-g // i), g)
                     for g, i in zip(self.gpts, self._interpolation)
                 )
-                measurements = self._with_window(period).reduce(
+                measurements = self._with_window(period)._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3454,7 +3496,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             for detector in detectors
         ]
         low_list = ensure_list(
-            self.reduce(
+            self._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=padded,
@@ -3483,7 +3525,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # a vanishing blend angle keeps the plane-wave branch whole except at
         # the zero-frequency pixel, which lies far below any usable cut
         high_list = ensure_list(
-            self._with_window(period).reduce(
+            self._with_window(period)._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3615,7 +3657,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 blend_angle, detectors, self._offset_rounding_margin
             )
 
-        low = self.reduce(
+        low = self._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -3646,7 +3688,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             singular_values=self._singular_values,
             reference_depth=self._reference_depth,
         )
-        high = high_array.reduce(
+        high = high_array._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -4231,17 +4273,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return self._upsample and self.interpolation != (1, 1)
 
     def _wave_vector_chunks(self, max_batch):
+        # each plane wave is propagated to every exit plane, hence an automatic
+        # batch holds the waves of all exit planes within the chunk size
+        exit_planes_shape, _ = self._exit_planes_shape_and_metadata
         if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, self.gpts)
+            max_batch = max_batch * reduce(operator.mul, exit_planes_shape + self.gpts)
 
         chunks = validate_chunks(
-            shape=(len(self),) + self.gpts,
-            chunks=("auto", -1, -1),
+            shape=(len(self),) + exit_planes_shape + self.gpts,
+            chunks=("auto",) + (-1,) * (len(exit_planes_shape) + 2),
             max_elements=max_batch,
             dtype=np.dtype("complex64"),
             device=self.device,
         )
-        return chunks
+        return chunks[:1] + chunks[-2:]
 
     @property
     def downsampled_gpts(self) -> tuple[int, int]:
@@ -4348,6 +4393,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -4887,6 +4934,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -5039,8 +5088,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             new_axes = {}
             if exit_planes_shape:
-                new_axes = {4: exit_planes_shape[0]}
-                symbols = symbols[:-3] + (4,) + symbols[-3:]
+                plane_symbol = max(symbols) + 1
+                new_axes = {plane_symbol: exit_planes_shape[0]}
+                symbols = symbols[:-3] + (plane_symbol,) + symbols[-3:]
 
             pbar = config.get("diagnostics.task_progress", False)
 
@@ -5201,12 +5251,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5216,7 +5270,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -5576,7 +5631,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             s_matrix = s_matrix.item()
             s_matrix_array = s_matrix.build(lazy=False)
 
-            new_measurements = s_matrix_array.reduce(
+            new_measurements = s_matrix_array._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
@@ -5650,12 +5705,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings
             "dask.chunk-size" and "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5665,7 +5724,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -5760,7 +5820,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 else measurement
                 for measurement in ensure_list(measurements)
             ]
-            return _wrap_measurements(_squeeze_flagged_axes(measurements))
+            return _squeezed(measurements)
 
         if disable_s_matrix_chunks:
             scan = validate_scan(scan, self)
@@ -5788,6 +5848,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 + len(ctf.ensemble_shape),
             )
 
+            # each task runs one multislice, which yields every exit plane
             chunks += exit_planes_shape + ctf.ensemble_shape + scan.shape
 
             arrays = blocks.map_blocks(
@@ -5815,15 +5876,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 arrays, waves, detectors, extra_axes_metadata
             )
 
-            return _wrap_measurements(_squeeze_flagged_axes(measurements))
+            return _squeezed(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-        measurements = s_matrix_array.reduce(
+        measurements = s_matrix_array._reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
-        # the multi-energy branch above passes a validated scan
-        return _wrap_measurements(_squeeze_flagged_axes(ensure_list(measurements)))
+        return _squeezed(measurements)

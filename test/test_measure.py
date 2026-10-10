@@ -290,6 +290,11 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     ).copy_to_device(device)
 
     operands = (operand, measurement) if reflected else (measurement, operand)
+    if device == "gpu" and isinstance(operand, np.ndarray):
+        # CuPy refuses NumPy arrays, 0-d ones included.
+        with pytest.raises(TypeError, match="copy_to_device"):
+            getattr(operator, ("i" if in_place else "") + op)(*operands)
+        return
     result = getattr(operator, ("i" if in_place else "") + op)(*operands)
 
     assert isinstance(result, Images)
@@ -305,47 +310,42 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     )
 
 
+@requires_gpu
 @lazy_params
-@devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize("reflected", [False, True])
 @pytest.mark.parametrize(
-    "operand_type", ["numpy_dask_array", "cpu_measurement", "lazy_cpu_measurement"]
+    "operand_type", ["array", "dask_array", "measurement", "lazy_measurement"]
 )
-def test_arithmetic_with_a_host_dask_array_or_cpu_measurement_operand(
-    operand_type, op, lazy, device
+@pytest.mark.parametrize("device", ["gpu", "cpu"])
+def test_arithmetic_between_cpu_and_gpu_data_raises(
+    device, operand_type, reflected, lazy
 ):
-    # Oracle: the same operation on the plain arrays in double precision. The
-    # operand stays on the host whatever the measurement's device, and the result
-    # is on the measurement's device. The dask operand broadcasts along the last
-    # axis, which is 3 long and the other 2.
+    # The operand is on the other device. CuPy refuses NumPy arrays, so the pair
+    # is refused in either order, eager or lazy, when the expression is built
+    # rather than when a lazy result is computed.
+    if reflected and operand_type.endswith("measurement"):
+        pytest.skip("the reflected pair is the forward pair with devices swapped")
+    other_device = "cpu" if device == "gpu" else "gpu"
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
-    other = np.array([[3.0, 1.0, 2.0], [5.0, 7.0, 11.0]], dtype=get_dtype())
     measurement = Images(
         da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
         sampling=(0.1, 0.2),
     ).copy_to_device(device)
-    if operand_type == "numpy_dask_array":
-        host = other[0]
-        operand = da.from_array(host, chunks=3)
-    else:
-        host = other
-        operand = Images(
-            da.from_array(other, chunks=(1, 3))
-            if operand_type == "lazy_cpu_measurement"
-            else other,
-            sampling=(0.1, 0.2),
-        )
-
-    result = getattr(operator, op)(measurement, operand)
-
-    assert isinstance(result, Images)
-    assert result.is_lazy == (lazy or operand_type != "cpu_measurement")
-    computed = result.compute().array
-    assert_array_matches_device(computed, device)
-    expected = getattr(operator, op)(array.astype(np.float64), host.astype(np.float64))
-    np.testing.assert_allclose(
-        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    operand_array = (
+        da.from_array(array, chunks=(1, 3))
+        if operand_type in ("dask_array", "lazy_measurement")
+        else array.copy()
     )
+    if operand_type.endswith("measurement"):
+        operand = Images(operand_array, sampling=(0.1, 0.2)).copy_to_device(
+            other_device
+        )
+    else:
+        operand = copy_to_device(operand_array, other_device)
+
+    operands = (operand, measurement) if reflected else (measurement, operand)
+    with pytest.raises(TypeError, match="copy_to_device"):
+        operator.add(*operands)
 
 
 def test_in_place_true_division_refuses_lazy_measurements():

@@ -1151,8 +1151,13 @@ def test_upsample_blend_taper_routing(device):
     high = to_host_array(
         built._with_window(
             tuple(-(-g // i) for g, i in zip(built.gpts, built._interpolation))
-        ).reduce(scan=scan, detectors=rings[1], blend_angle=cut - taper,
-                 _blend_component="high", _blend_taper=0.0)
+        )._reduce(
+            scan=scan,
+            detectors=rings[1],
+            blend_angle=cut - taper,
+            _blend_component="high",
+            _blend_taper=0.0,
+        )
     )
     lower = np.minimum(low, high) * (1 - 1e-4) - 1e-12
     upper = np.maximum(low, high) * (1 + 1e-4) + 1e-12
