@@ -15,7 +15,12 @@ from abtem.atoms import (
     is_cell_orthogonal,
     wrap_and_snap_atoms,
 )
-from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
 
 # How far outside the cell along z [Å] a non-periodic potential places an atom in
 # its face slice before warning. A thermal displacement is a few times its
@@ -334,7 +339,7 @@ def commensurate_gpts(
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = int(np.ceil(L / target_sampling))
+        n_target = safe_ceiling_int(L / target_sampling)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
@@ -434,8 +439,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())

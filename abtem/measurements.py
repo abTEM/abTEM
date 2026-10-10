@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
 )
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atom
@@ -66,6 +67,7 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
     number_to_tuple,
+    safe_ceiling_int,
     safe_floor_int,
 )
 
@@ -1380,7 +1382,12 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         if width:
             direction = xp.array(scan.end) - xp.array(scan.start)
-            direction = direction / xp.linalg.norm(direction)
+            length = xp.linalg.norm(direction)
+            if length == 0:
+                raise ValueError(
+                    "A line of zero length cannot be averaged over a width."
+                )
+            direction = direction / length
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
             # The offsets are spaced by min(sampling) along the perpendicular
@@ -2697,7 +2704,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = int(np.ceil(self.extent / sampling))
+            gpts = max(safe_ceiling_int(self.extent / sampling), 1)
 
         if sampling is None:
             sampling = self.extent / gpts
@@ -3706,7 +3713,7 @@ def _image_resampling_gpts(
     `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
     if np.isscalar(sampling):
         sampling = (sampling,) * 2
-    return tuple(int(np.ceil(e / d)) for d, e in zip(sampling, extent))
+    return tuple(max(safe_ceiling_int(e / d), 1) for d, e in zip(sampling, extent))
 
 
 def _diffraction_pattern_resampling_gpts(
@@ -5136,18 +5143,51 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_bounds(
+        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The first and last step bin of every pixel, as int32 arrays on the host.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
+        x, y = np.meshgrid(*coordinates, indexing="ij")
+        r = np.sqrt(x**2 + y**2)
+        del x, y
+        # Bin k holds r with k * radial_sampling - width / 2 <= r <
+        # k * radial_sampling + width / 2, that is first <= k <= last. The
+        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
+        # multiple of the sampling is not missed by rounding noise.
+        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
+        first = first.astype(np.int32)
+        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
+        last = last.astype(np.int32)
+        return first, last
+
+    @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
-        angular_coordinates: tuple[np.ndarray, np.ndarray],
-        max_angle: float,
-        radial_sampling: float,
+        centers: np.ndarray,
         weighting_function: str,
         width: float,
+        coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        coordinate_dtype: Optional[np.dtype] = None,
+        step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ):
-        x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
+        """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
-        centers = np.arange(0, max_angle, radial_sampling)
+        `step_bounds` are the first and last bin of every pixel for the step
+        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
+        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
+        weighting.
+        """
+        xp = get_array_module(array)
+
+        if weighting_function == "step":
+            first, last = (xp.asarray(bound) for bound in step_bounds)
+        else:
+            x, y = np.meshgrid(
+                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
+                indexing="ij",
+            )
+            r = np.sqrt(x**2 + y**2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
@@ -5155,11 +5195,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
-                mask = np.abs(r - center) < width
-            elif weighting_function == "gaussian":
-                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
+                mask = (first <= i) & (i <= last)
             else:
-                raise ValueError("weighting function must be 'step' or 'gaussian'")
+                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
 
             weight = np.sum(mask)
 
@@ -5180,23 +5218,39 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Calculate the azimuthal averages of the diffraction patterns.
 
+        The radial bins are centered at multiples of `radial_sampling`, starting at
+        zero. Radii are measured in units of the smallest angular sampling, from the
+        integer frequency indices of the pixels. The pixels of a step bin are chosen
+        from these radii in double precision on the host, with each pixel's position
+        in units of `radial_sampling` rounded to 7 decimals. A pixel on the edge of a
+        bin belongs to the bin above the edge, at every precision and pattern size.
+        With the default bins and equal sampling no pixel is on an edge; pixels are on
+        edges for other values of `radial_sampling` and `width`, and for ratios of the
+        x and y sampling whose denominator in lowest terms is even (3:2, 5:4).
+
         Parameters
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the azimuthal averages [mrad].
         radial_sampling : float, optional
-            The radial sampling of the azimuthal averages [mrad]. Default is equal to
-            the smallest value of the x and y component of the angular sampling.
+            The radial sampling of the azimuthal averages, as a multiple of the
+            smallest value of the x and y component of the angular sampling.
+            Default is 1.
         weighting_function : str
             The weighting function to determining how to average the diffraction
             patterns. The weighting function determines the shape of the mask that is
             applied to the diffraction patterns before averaging. The options are 'step'
             and 'gaussian'. Default is 'step'.
         width : float, optional
-            The width of the weighting function [mrad]. Default is 1.0.
-            For the 'step' weighting function, this is the width of the step function.
-            For the 'gaussian' weighting function, this is the standard deviation of the
-            Gaussian function.
+            The width of the weighting function, as a multiple of the smallest value
+            of the x and y component of the angular sampling. Default is 1.
+            For the 'step' weighting function, this is the full width of the ring: bin
+            `k` holds the pixels with
+            `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
+            so the default bins do not overlap.
+            For the 'gaussian' weighting function, the weight is
+            `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
+            of `width / 2`.
 
         Returns
         -------
@@ -5204,15 +5258,34 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The azimuthal averages of the diffraction patterns.
         """
 
-        if max_angle is None:
-            max_angle = -min(min(self.angular_limits))
+        if weighting_function not in ("step", "gaussian"):
+            raise ValueError("weighting function must be 'step' or 'gaussian'")
 
-        radial_sampling = radial_sampling * min(self.angular_sampling)
-        width = width * min(self.angular_sampling)
+        unit = min(self.angular_sampling)
+        xp = get_array_module(self.array)
+        coordinates = tuple(
+            np.rint(np.asarray(k) / d) * (a / unit)
+            for k, d, a in zip(self.coordinates, self.sampling, self.angular_sampling)
+        )
+
+        if max_angle is None:
+            max_angle = -min(c.min() for c in coordinates)
+        else:
+            max_angle = max_angle / unit
+
+        num_bins = safe_ceiling_int(max_angle / radial_sampling)
+        centers = np.arange(num_bins) * radial_sampling
+
+        if weighting_function == "step":
+            # One node shared by every block, which holds the pattern-sized bounds.
+            step_bounds = self._azimuthal_step_bounds
+            if self.is_lazy:
+                step_bounds = dask.delayed(step_bounds, pure=True)
+            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+        else:
+            kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
         if self.is_lazy:
-            xp = get_array_module(self.array)
-            n = int(max_angle / radial_sampling)
             base_axes = tuple(
                 range(
                     len(self.ensemble_shape),
@@ -5221,31 +5294,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._azimuthal_average,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                **kwargs,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (n,),
+                chunks=self.array.chunks[:-2] + (len(centers),),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._azimuthal_average(
                 self.array,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                **kwargs,
             )
 
         wavelength = energy2wavelength(self._get_energy())
 
         return ReciprocalSpaceLineProfiles(
             array,
-            sampling=radial_sampling / (wavelength * 1e3),
+            sampling=radial_sampling * unit / (wavelength * 1e3),
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )

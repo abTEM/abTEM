@@ -19,7 +19,7 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -449,6 +449,9 @@ class LineScan(BaseScan):
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
         Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
+        The number of positions is rounded up to fit the line, so the actual
+        sampling is at most the requested one. With `endpoint=True` the number
+        includes the end point.
         If not provided the sampling will match the Nyquist sampling of the Probe
         in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
@@ -544,7 +547,9 @@ class LineScan(BaseScan):
         gpts : int
             Number of grid points along the line.
         sampling : float
-            Sampling of grid points along the line [Å].
+            Sampling of grid points along the line [Å]. The number of positions is
+            rounded up to fit the line, so the actual sampling is at most the
+            requested one. With `endpoint=True` the number includes the end point.
         endpoint : bool
             Sets whether the ending position is included or not.
 
@@ -604,7 +609,9 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = int(np.ceil(self.extent / self.sampling))
+        self._gpts = max(
+            safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint), 1
+        )
 
         self._adjust_sampling()
 
@@ -742,7 +749,9 @@ class LineScan(BaseScan):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         direction = np.array(self.end) - np.array(self.start)
-        direction = direction / np.linalg.norm(direction, axis=0)
+        length = np.linalg.norm(direction)
+        if length > 0:
+            direction = direction / length
 
         cumchunks = tuple(np.cumsum(chunks[0]))
 

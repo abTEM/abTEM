@@ -4,11 +4,12 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given
-from utils import ensure_is_tuple
+from hypothesis import assume, example, given
+from utils import ensure_is_tuple, exactly_dividing_lengths
 
 from abtem.core import config
-from abtem.core.grid import Grid, GridUndefinedError
+from abtem.core.grid import Grid, GridUndefinedError, adjusted_gpts
+from abtem.core.utils import safe_ceiling_int
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
@@ -101,6 +102,8 @@ def test_extent_change(grid_data, new_extent):
 
 
 @given(grid_data=grid_data(), new_sampling=abtem_st.sampling())
+# 1.8 / 0.06 is 30.000000000000004 in floats; the grid has 30 points.
+@example(grid_data={"gpts": 32, "extent": 1.8}, new_sampling=0.06)
 def test_sampling_change(grid_data, new_sampling):
     # Pin the option: these assert the behaviour of the default mode,
     # which a user-level override of the config would otherwise change.
@@ -115,8 +118,9 @@ def test_sampling_change(grid_data, new_sampling):
                 else new_sampling
             )
         else:
-            adjusted_sampling = grid.extent / np.ceil(
-                np.array(grid.extent) / np.array(new_sampling)
+            adjusted_sampling = tuple(
+                e / safe_ceiling_int(e / d)
+                for e, d in zip(grid.extent, ensure_is_tuple(new_sampling, 2))
             )
             assert np.allclose(grid.sampling, adjusted_sampling)
 
@@ -199,3 +203,38 @@ def test_round_to_fast_fft_leaves_non_fft_grids_alone():
     scan_grid = Grid(extent=(131.15, 131.15), gpts=(2623, 2623), fft_grid=False)
     assert scan_grid.round_to_fast_fft() == (2623, 2623)
     assert scan_grid.gpts == (2623, 2623)
+
+
+def test_gpts_of_an_exactly_dividing_sampling():
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the grid still has 36 points.
+    for extent, sampling, count in exactly_dividing_lengths():
+        grid = Grid(extent=extent, sampling=sampling)
+        assert grid.gpts == (count, count), (extent, sampling, grid.gpts, count)
+
+
+@pytest.mark.parametrize("extent", [1.1, 3.7, 5.43, 7.3, 10.8, 13.37])
+def test_gpts_round_trip_through_the_sampling(extent):
+    for n in range(1, 200):
+        grid = Grid(extent=extent, sampling=extent / n)
+        assert grid.gpts == (n, n), (extent, n, grid.gpts)
+
+
+@pytest.mark.parametrize("extent", [36.001, 36.0000002])
+def test_gpts_still_round_up_a_genuine_remainder(extent):
+    assert Grid(extent=extent, sampling=1.0).gpts == (37, 37)
+
+
+def test_gpts_of_an_extent_far_below_the_sampling_is_one():
+    assert Grid(extent=1e-9, sampling=1.0).gpts == (1, 1)
+    assert Grid(extent=1e-9, sampling=1.0, endpoint=False).gpts == (1, 1)
+
+
+def test_gpts_of_a_zero_extent_axis_with_an_endpoint_is_one():
+    grid = Grid(extent=(2.0, 0.0), sampling=0.5, endpoint=True)
+    assert grid.gpts == (5, 1)
+
+
+def test_adjusted_gpts_of_a_target_far_above_the_sampling_is_one():
+    sampling, gpts = adjusted_gpts((1.0, 1.0), (1e-9, 1e-9), (1, 1))
+    assert gpts == (1, 1)
+    assert sampling == pytest.approx((1e-9, 1e-9))

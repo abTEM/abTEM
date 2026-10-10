@@ -12,6 +12,7 @@ from hypothesis import given
 from utils import (
     assert_array_matches_device,
     devices,
+    exactly_dividing_lengths,
     float64_devices,
     gpu,
     ignore_strain_warning,
@@ -35,6 +36,7 @@ from abtem.magnetism.gpaw import GPAWMagneticField, GPAWVectorPotential
 from abtem.magnetism.iam import MagneticField
 from abtem.potentials.charge_density import ChargeDensityPotential
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
+from abtem.slicing import _validate_slice_thickness
 
 
 def _build_with_numpy_fft(potential):
@@ -3400,6 +3402,25 @@ def test_auto_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
     assert potential.gpts == (160, 180)
 
 
+@pytest.mark.parametrize("rounding", [False, "auto"])
+@pytest.mark.parametrize("points", [48, 96])
+def test_auto_grid_of_an_extent_dividing_the_target_sampling(points, rounding):
+    # 48 * 0.05 is 2.4000000000000004, so the extent over 0.05 is 48.00000000000001
+    # in floats; the grid still has 48 points, as the numeric sampling 0.05 gives.
+    extent = points * 0.05
+    atoms = Atoms(
+        "C",
+        positions=[(0.5, 0.5, 1.0)],
+        cell=[extent, extent, 3.0],
+        pbc=NON_PERIODIC_XY,
+    )
+    with abtem.config.set({"grid.round-to-fast-fft": rounding}):
+        auto = abtem.Potential(atoms, sampling="auto")
+        numeric = abtem.Potential(atoms, sampling=0.05)
+    assert numeric.gpts == (points, points)
+    assert auto.gpts == numeric.gpts
+
+
 @pytest.mark.parametrize(
     "pbc, plane, gpts",
     [(NON_PERIODIC_XY, "xy", (80, 60)), (True, "xy", (80, 60)), (True, "xz", (80, 100))],
@@ -3407,3 +3428,39 @@ def test_auto_grid_of_non_periodic_atoms_with_a_box_is_unchanged():
 def test_auto_grid_that_was_right_is_unchanged(pbc, plane, gpts):
     potential = abtem.Potential(_co(pbc), sampling="auto", plane=plane)
     assert potential.gpts == gpts
+
+
+def _carbon_cell(depth):
+    return Atoms("C", positions=[(1.0, 1.0, 0.5)], cell=(4.0, 3.0, depth), pbc=True)
+
+
+def test_slice_count_of_an_exactly_dividing_thickness():
+    # 10.8 / 0.3 is 36.00000000000001 in floats; the count is still 36.
+    for depth, thickness, count in exactly_dividing_lengths():
+        slices = _validate_slice_thickness(thickness, thickness=depth)
+        assert len(slices) == count, (depth, thickness, len(slices), count)
+
+
+@pytest.mark.parametrize("depth, thickness", [(36.001, 1.0), (36.0000002, 1.0)])
+def test_slice_count_still_rounds_up_a_genuine_remainder(depth, thickness):
+    assert len(_validate_slice_thickness(thickness, thickness=depth)) == 37
+
+
+def test_slice_count_of_a_thickness_far_below_the_slice_thickness_is_one():
+    assert _validate_slice_thickness(1.0, thickness=1e-9) == (1e-9,)
+
+
+def test_potential_slice_count_of_an_exactly_dividing_thickness():
+    potential = Potential(_carbon_cell(10.8), gpts=(40, 30), slice_thickness=0.3)
+    assert potential.num_slices == 36
+    assert np.allclose(potential.slice_thickness, 0.3)
+
+
+def test_repeated_atoms_and_crystal_potential_have_the_same_slice_count():
+    unit = Potential(_carbon_cell(3.6), gpts=(40, 30), slice_thickness=0.3)
+    repeated = Potential(
+        _carbon_cell(3.6) * (1, 1, 3), gpts=(40, 30), slice_thickness=0.3
+    )
+    crystal = CrystalPotential(unit, repetitions=(1, 1, 3))
+    assert unit.num_slices == 12
+    assert repeated.num_slices == crystal.num_slices == 36
