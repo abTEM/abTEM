@@ -195,11 +195,18 @@ def test_gpaw_real_space_slices_use_every_z_plane_once(
     # `axes`, sliced along the last axis.
     expected = np.moveaxis(raw_field(calculator, gridrefinement=1), axis + 1, -1)
     expected = expected[list(axes)]
+    # Plane k stands for the field from (k - 1/2) dz to (k + 1/2) dz, so a slice
+    # takes its inner planes whole and half of each plane on its limits; the last
+    # slice ends on plane 17, which is plane 0.
     dz = 2.0 / 17
     bounds = np.cumsum((0,) + tuple(planes))
-    expected_slices = np.stack(
-        [expected[..., a:b].sum(-1) * dz for a, b in zip(bounds[:-1], bounds[1:])]
-    )
+    weights = np.zeros((len(planes), 17))
+    for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:])):
+        weights[i, a:b] = dz
+        weights[i, a] -= dz / 2
+        weights[i, b % 17] += dz / 2
+    np.testing.assert_allclose(weights.sum(0), dz, rtol=1e-12)
+    expected_slices = np.moveaxis(expected @ weights.T, -1, 0)
 
     built = field.build()
     assert get_array_module(built.array) is get_array_module(device)
@@ -332,14 +339,63 @@ def test_gpaw_fft_projection_integrates_through_the_slices(builder, raw_field):
         atol=1e-5 * scale,
     )
 
-    # The real-space projection sums the z planes of the density times their
-    # spacing, which through the whole cell is the same integral.
+    # The real-space projection integrates the z planes of the density, which
+    # through the whole cell is the same integral.
     slicing = (0.75, 1.0, 0.75, 0.75, 0.75)
     np.testing.assert_allclose(
         build("fft", slicing).sum(0),
         build("real_space", slicing).sum(0),
         rtol=0,
         atol=1e-5 * scale,
+    )
+
+
+@pytest.mark.parametrize("slice_thickness", [(0.75, 1.0, 0.75, 0.75, 0.75), 0.8])
+@pytest.mark.parametrize(
+    "builder, raw_field",
+    [
+        (GPAWMagneticField, get_magnetic_field_from_gpaw),
+        (GPAWVectorPotential, get_vector_potential_from_gpaw),
+    ],
+)
+def test_gpaw_real_space_slices_are_integrals_between_the_slice_limits(
+    builder, raw_field, slice_thickness
+):
+    # Plane k of the density is the sample at z = k dz and stands for the field
+    # from k dz - dz / 2 to k dz + dz / 2, so a slice is the integral of the field
+    # between its limits, as the fft projection computes it, up to the error of
+    # integrating from the planes. Summing whole planes from each lower limit (a
+    # left Riemann sum) put every slice integral dz / 2 below its slice, 20% (0.8 Å)
+    # and 24% (the uneven slicing) of the largest slice off here.
+    calculator = _SpinPolarizedCalculator()
+    field = builder(
+        calculator,
+        gpts=(12, 14),
+        gridrefinement=2,
+        slice_thickness=slice_thickness,
+        projection="real_space",
+        rotate_field=None,
+    )
+    real_space = asnumpy(field.build().array).astype(np.float64)
+
+    depth = 4.0
+    raw = raw_field(calculator, gridrefinement=2)
+    assert raw.shape[-1] == 16
+    exact = _fourier_slice_integrals(raw, field.slice_limits, depth)
+    scale = np.abs(exact).max()
+    assert scale > 0
+
+    # The field is a single harmonic along z, q = 2 pi / depth, with q dz = pi / 8.
+    # Integrated from its planes by the trapezoidal rule, its integral between any
+    # two planes is (q dz / 2) cot(q dz / 2) = 0.987 times the exact one: scaled,
+    # not shifted.
+    half_step = np.pi / 16
+    quadrature = half_step / np.tan(half_step)
+    np.testing.assert_allclose(
+        real_space, quadrature * exact, rtol=0, atol=1e-5 * scale
+    )
+    np.testing.assert_allclose(
+        real_space, exact, rtol=0, atol=(1 - quadrature) * scale + 1e-5 * scale
     )
 
 

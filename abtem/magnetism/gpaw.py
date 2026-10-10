@@ -162,8 +162,8 @@ def _real_space_slicing(
     slice_thickness: float | tuple[float, ...], num_planes: int, depth: float
 ) -> tuple[tuple[float, ...], tuple[int, ...]]:
     """
-    The slice thicknesses of a real-space projection and the number of z planes
-    of the density summed into each slice, which add up to `num_planes`.
+    The slice thicknesses of a real-space projection and the number of z plane
+    spacings of the density in each slice, which add up to `num_planes`.
 
     A single thickness is divided into slices of whole planes as evenly as the
     planes allow. A sequence of thicknesses must put every slice boundary on a
@@ -424,7 +424,7 @@ class _GPAWMagnetics(_FieldBuilder):
         else:
             depth = float(np.diag(cell)[plane_to_axes(plane)[2]])
 
-        # The number of z planes of the density summed into each real-space slice.
+        # The number of z plane spacings of the density in each real-space slice.
         self._planes_per_slice: Optional[tuple[int, ...]] = None
 
         if projection == "real_space":
@@ -519,9 +519,14 @@ class _GPAWMagnetics(_FieldBuilder):
         The field integrated through each slice, (slice, component, x, y) on the
         host, in field units times Å.
 
-        The real-space projection sums the z planes of each slice times their
-        spacing. The fft projection integrates the band-limited field between the
-        limits of each slice in Fourier space, for any slice thicknesses.
+        The real-space projection takes plane k, the sample at z = k dz, as the
+        field from k dz - dz / 2 to k dz + dz / 2, and integrates each slice over
+        the planes it covers. A slice boundary lies on a plane, which is split
+        between the slices on either side (the trapezoidal rule), so the integral
+        of a slice is centred on the slice; the last slice takes half of plane 0,
+        as the field is periodic along z. The fft projection integrates the
+        band-limited field between the limits of each slice in Fourier space, for
+        any slice thicknesses.
         """
         array = self._field()
 
@@ -533,11 +538,20 @@ class _GPAWMagnetics(_FieldBuilder):
                     f"The slices span {sum(planes_per_slice)} z planes, but the "
                     f"calculator's density has {array.shape[-1]}."
                 )
+            num_planes = array.shape[-1]
             bounds = np.cumsum((0,) + planes_per_slice)
-            dz = sum(self.slice_thickness) / array.shape[-1]
+            dz = sum(self.slice_thickness) / num_planes
+            # Summing the planes start:stop takes all of plane `start` and none of
+            # plane `stop`; half of each is moved across the boundary. Taking all
+            # of `start` (a left Riemann sum) put each slice integral dz / 2 below
+            # its slice.
             return np.stack(
                 [
-                    array[..., start:stop].sum(-1) * dz
+                    (
+                        array[..., start:stop].sum(-1)
+                        + (array[..., stop % num_planes] - array[..., start]) / 2
+                    )
+                    * dz
                     for start, stop in zip(bounds[:-1], bounds[1:])
                 ]
             )
