@@ -88,6 +88,7 @@ docs = [
 ]
 test = [
     "deepdiff>=8.6.1",
+    "hyperspy",
     "hypothesis>=6.151.5",
     "imageio>=2.37.2",
     "jupyter-client>=8.8.0",
@@ -96,6 +97,7 @@ test = [
     "pytest-xdist>=3.8.0",
     "sympy",
     "tox>=4.34.1",
+    "xarray",
 ]
 
 [tool.setuptools]

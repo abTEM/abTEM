@@ -3818,7 +3818,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
     fftshift : bool, optional
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
-        be at `(0, 0)`.
+        be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
@@ -3924,6 +3925,35 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 tex_label="$k_y$",
             ),
         ]
+
+    def _fftshifted(self) -> DiffractionPatterns:
+        """A copy of unshifted diffraction patterns with the zero frequency at the
+        centre, so that the coordinates of the base axes increase. The exports
+        convert these: the unshifted (``np.fft.fftfreq``) order is not a uniform
+        axis."""
+        if self.is_lazy:
+            array = da.fft.fftshift(self.array, axes=(-2, -1))
+        else:
+            array = get_array_module(self.array).fft.fftshift(self.array, axes=(-2, -1))
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        kwargs["fftshift"] = True
+        return self.__class__(**kwargs)
+
+    def to_hyperspy(self, transpose: bool = True):
+        if not self.fftshift:
+            return self._fftshifted().to_hyperspy(transpose)
+        return super().to_hyperspy(transpose)
+
+    def to_data_array(self):
+        if not self.fftshift:
+            return self._fftshifted().to_data_array()
+        return super().to_data_array()
+
+    def to_quantem(self):
+        if not self.fftshift:
+            return self._fftshifted().to_quantem()
+        return super().to_quantem()
 
     def tile_scan(self, repetitions: tuple[int, int]) -> DiffractionPatterns:
         """
