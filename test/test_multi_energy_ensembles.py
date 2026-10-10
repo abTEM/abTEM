@@ -218,6 +218,53 @@ def test_multi_energy_scan_with_a_ctf_uses_each_energys_wavelength(lazy):
         _close(multi[i].array, scan(energy).array, atol=1e-5 if lazy else 1e-10)
 
 
+def _frozen_phonon_potential():
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    frozen_phonons = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
+    return abtem.Potential(frozen_phonons, sampling=0.15, slice_thickness=2)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "kwargs",
+    [dict(), dict(interpolation=2)],
+    ids=["interpolation_1", "interpolation_2"],
+)
+def test_multi_energy_frozen_phonon_build_reduce_equals_single_energy_runs(
+    kwargs, lazy
+):
+    """A multi-energy `SMatrix.build()` over a frozen-phonon potential crashed:
+    it took the wave-vector axis to be the first, where the frozen-phonon axis
+    is. Eagerly the zero-padding to the union of the wave vectors failed with a
+    shape mismatch, lazily the union was taken from the wrong energy and the
+    wave-vector lookup raised a KeyError."""
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 60), abtem.PixelatedDetector(max_angle=60)]
+
+    potential = _frozen_phonon_potential()
+    multi = _build_and_reduce(potential, list(ENERGIES), detectors(), lazy, **kwargs)
+
+    for j, measurement in enumerate(multi):
+        names = [type(a).__name__ for a in measurement.axes_metadata]
+        assert names[0] == "EnergyAxis"
+        assert measurement.axes_metadata[0].values == ENERGIES
+
+    for i, energy in enumerate(ENERGIES):
+        # the same seed gives the same configurations
+        single = _build_and_reduce(
+            _frozen_phonon_potential(), energy, detectors(), lazy, **kwargs
+        )
+        for j, measurement in enumerate(multi):
+            member = measurement[i]
+            if member.shape == single[j].shape:
+                a, b = member.array, single[j].array
+            else:
+                # a max_angle in mrad crops to the highest energy's pixel count
+                a, b = _same_pixels(member, single[j])
+            _close(a, b, atol=1e-5 if lazy else 1e-10)
+
+
 # --- per-energy diffraction patterns (#503) -----------------------------------
 
 

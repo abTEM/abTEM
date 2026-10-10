@@ -5016,8 +5016,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
             # Wave-vector counts differ per energy (higher energy → more plane waves
             # within the semiangle cutoff).  The sets are nested subsets, so the
-            # result with the most wave vectors is the union.
-            n_wvs = [r.array.shape[0] for r in results]
+            # result with the most wave vectors is the union. The wave-vector axis
+            # is the third last: an ensemble potential (e.g. frozen phonons) puts
+            # its ensemble axes in front of it.
+            n_wvs = [r.array.shape[-3] for r in results]
             max_idx = int(np.argmax(n_wvs))
             union_wave_vectors = results[max_idx].wave_vectors
             n_union = len(union_wave_vectors)
@@ -5028,17 +5030,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             }
 
             def _embed_wave_vectors(arr, indices, n_union):
-                """Embed arr (n_wv, ...) into (n_union, ...) at the given indices."""
+                """Embed arr (..., n_wv, nx, ny) into (..., n_union, nx, ny) at the
+                given indices."""
                 # arr's own module: a NumPy array cannot take a CuPy block
                 out = get_array_module(arr).zeros(
-                    (n_union,) + arr.shape[1:], dtype=arr.dtype
+                    arr.shape[:-3] + (n_union,) + arr.shape[-2:], dtype=arr.dtype
                 )
-                out[indices] = arr
+                out[..., indices, :, :] = arr
                 return out
 
             embedded_arrays = []
             for r in results:
-                if r.array.shape[0] == n_union:
+                if r.array.shape[-3] == n_union:
                     embedded_arrays.append(r.array)
                 else:
                     indices = np.array(
@@ -5051,8 +5054,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                         # chunk along that axis so map_blocks cannot invoke it
                         # once per pre-existing block with only a chunk-sized
                         # arr.
-                        array = r.array.rechunk({0: -1})
-                        new_chunks = (n_union,) + array.chunks[1:]
+                        array = r.array.rechunk({-3: -1})
+                        new_chunks = (
+                            array.chunks[:-3] + ((n_union,),) + array.chunks[-2:]
+                        )
                         embedded = array.map_blocks(
                             _embed_wave_vectors,
                             dtype=array.dtype,
