@@ -265,10 +265,24 @@ def _same_elements_and_cell(atoms, other):
     )
 
 
-# Slice limits are cumulative float sums, so a limit that is a whole number of planes
-# can lie a few units of roundoff below it. A limit within this fraction of a plane
-# below a plane boundary counts as on the boundary.
-_PLANE_TOLERANCE = 1e-6
+def _sum_planes(array, start, stop):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[2]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
 
 
 def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
@@ -276,10 +290,15 @@ def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     Integrate the planes of `array` along its last axis between the heights `a`
     and `b`, and Fourier interpolate the result to `gpts`.
 
-    Plane k covers the heights from k * dz to (k + 1) * dz, with dz the plane
-    spacing. A slice takes the planes from floor(a / dz) up to, not including,
-    floor(b / dz), so consecutive slices share their limit and every plane belongs
-    to exactly one slice. A slice that contains no plane gets zero.
+    Plane k is the sample at the height k * dz, with dz the plane spacing, and
+    stands for the heights from k * dz - dz / 2 to k * dz + dz / 2; the grid is
+    periodic, so plane 0 also stands for the heights within dz / 2 below the
+    thickness. A slice takes each plane times the length of the plane's heights
+    that lie between `a` and `b`. Consecutive slices share their limit, so the
+    weights of every plane add up to dz. A limit on a plane splits it between the
+    slices on either side (the trapezoidal rule), so the integral of a slice is
+    centred on the slice. Taking the planes from floor(a / dz) to floor(b / dz)
+    whole (a left Riemann sum) put it dz / 2 below the slice.
 
     `array` is one period of a grid repeated `repetitions` times along its three
     axes, and `thickness` is the length of the repeated grid along the last axis.
@@ -287,33 +306,31 @@ def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     plane, which gives the same values as integrating the repeated grid, up to
     the order of the float sum.
     """
-    nz = array.shape[2] * repetitions[2]
+    n = array.shape[2]
+    nz = n * repetitions[2]
     dz = thickness / nz
-    na = int(np.floor(a / dz + _PLANE_TOLERANCE))
-    nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
+    # The limits in plane spacings, half a plane up, so that plane k stands for
+    # the interval from k to k + 1.
+    u = a / dz + 0.5
+    v = min(b / dz + 0.5, nz + 0.5)
 
-    if nb <= na:
+    if v <= u:
         return np.zeros(gpts, dtype=array.dtype)
 
-    # The planes na:nb of the repeated grid are the end of one period, whole periods
-    # and the start of one period. The partial periods are summed as views and the
-    # whole periods as `periods` times the sum of the grid, so no plane is copied.
-    n = array.shape[2]
-    head_end = min(nb, (na // n + 1) * n)
-    summed = np.sum(array[..., na % n : na % n + head_end - na], axis=-1)
-    periods, tail = divmod(nb - head_end, n)
-    if periods:
-        summed = summed + periods * np.sum(array, axis=-1)
-    if tail:
-        summed = summed + np.sum(array[..., :tail], axis=-1)
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        summed = (v - u) * array[..., first % n]
+    else:
+        first_plane, last_plane = array[..., first % n], array[..., last % n]
+        summed = (first + 1 - u) * first_plane + (v - last) * last_plane
+        if last > first + 1:
+            summed = summed + _sum_planes(array, first + 1, last)
+
     slice_array = np.tile(summed * dz, repetitions[:2])
-    new_shape = (nb - na,) + gpts
-    old_shape = (nb - na,) + slice_array.shape
+    old_shape = slice_array.shape
     slice_array = np.fft.fftn(slice_array)
     slice_array = fft_crop(slice_array, gpts)
-    slice_array = (
-        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
-    )
+    slice_array = np.fft.ifftn(slice_array).real * np.prod(gpts) / np.prod(old_shape)
     return slice_array
 
 

@@ -1166,6 +1166,35 @@ def test_projected_potential_sequence_slice_thickness(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_slices_are_centred_on_their_slices(lazy):
+    # One atom at the middle of the middle of three slices, which put m, k and m
+    # planes of the potential in the slices: the potential is mirror-symmetric
+    # about the atom, and so are the outer slices. Plane j stands for the heights
+    # within dz / 2 of it, so a slice limit on a plane splits it between the
+    # slices. Summing whole planes from each lower limit (a left Riemann sum) put
+    # each slice integral dz / 2 below its slice, so the outer slices differed.
+    cell = (3.0, 3.2, 4.0)
+
+    def structure_factor(z):
+        atoms = Atoms("C", positions=[(1.1, 1.3, z)], cell=cell, pbc=True)
+        return StructureFactor(atoms, g_max=4.0, thermal_sigma=0.1)
+
+    num_planes = structure_factor(0.0).get_potential_3d(lazy=False).shape[-1]
+    dz = cell[2] / num_planes
+    outer = num_planes // 3
+    planes = (outer, num_planes - 2 * outer, outer)
+    potential = structure_factor((outer + planes[1] / 2) * dz).get_projected_potential(
+        slice_thickness=[n * dz for n in planes], lazy=lazy
+    )
+    array = np.asarray(potential.compute().array)
+
+    assert len(array) == 3
+    scale = np.abs(array[0]).max()
+    assert scale > 0
+    np.testing.assert_allclose(array[0], array[2], rtol=0, atol=1e-5 * scale)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
 def test_projected_potential_sampling_and_integer_gpts(lazy):
     sf = _si_structure_factor()
     default = sf.get_projected_potential(slice_thickness=2.0, lazy=lazy)

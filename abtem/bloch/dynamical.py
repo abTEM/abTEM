@@ -418,12 +418,23 @@ def slice_potential(
         thickness / n for n, thickness in zip(slice_chunks, slice_thicknesses)
     )
 
-    start = np.cumsum((0,) + slice_chunks)
+    num_planes = potential_3d.shape[-1]
+    bounds = np.cumsum((0,) + slice_chunks)
 
+    # Plane k, the sample at z = k dz, stands for the heights within dz / 2 of it.
+    # The slice boundaries lie on planes, so each boundary plane is split between
+    # the slices on either side (the trapezoidal rule), and the last slice takes
+    # half of plane 0, as the potential is periodic along z. Summing all of plane
+    # `start` and none of plane `stop` (a left Riemann sum) put each slice integral
+    # dz / 2 below its slice.
     potential_sliced = np.stack(
         [
-            np.sum(potential_3d[..., start:stop], axis=-1) * dz
-            for start, stop, dz in zip(start[:-1], start[1:], z_samplings)
+            (
+                np.sum(potential_3d[..., start:stop], axis=-1)
+                + (potential_3d[..., stop % num_planes] - potential_3d[..., start]) / 2
+            )
+            * dz
+            for start, stop, dz in zip(bounds[:-1], bounds[1:], z_samplings)
         ],
         axis=-1,
     )
