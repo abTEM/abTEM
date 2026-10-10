@@ -648,3 +648,48 @@ class TestFftCropInterpolateEmptyNewShape:
             np.asarray(none_out.array), np.asarray(empty_out.array)
         )
         assert np.array_equal(np.asarray(empty_out.array), array)
+
+
+@pytest.mark.parametrize(
+    "shape, chunks, kernel_shape",
+    [
+        # the kernel spans the single block of x along every axis
+        ((3, 16, 20), (3, 16, 20), (3, 16, 20)),
+        ((3, 16, 20), (1, 16, 20), (16, 20)),
+        ((3, 16, 20), (1, 16, 20), (1, 16, 20)),
+        # the kernel spans several blocks of x
+        ((3, 16, 20), (1, 16, 20), (3, 16, 20)),
+        ((3, 16, 20), (2, 16, 20), (3, 1, 20)),
+        ((2, 3, 16, 20), (1, 2, 16, 20), (3, 16, 20)),
+        ((2, 3, 16, 20), (1, 3, 16, 20), (2, 1, 16, 20)),
+        # x broadcasts against a longer kernel axis
+        ((1, 16, 20), (1, 16, 20), (3, 16, 20)),
+    ],
+)
+def test_lazy_fft2_convolve_matches_eager(shape, chunks, kernel_shape):
+    """A lazy `fft2_convolve` gives the eager result, values and shape, also when
+    the kernel has an axis longer than a block of x. Each block of x used to be
+    convolved with the whole kernel, so it took the kernel's length along that
+    axis, and the computed array was longer than the declared one."""
+    import dask.array as da
+
+    from abtem.core.fft import fft2_convolve
+
+    rng = np.random.default_rng(0)
+    x = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex64
+    )
+    kernel = (
+        rng.standard_normal(kernel_shape) + 1j * rng.standard_normal(kernel_shape)
+    ).astype(np.complex64)
+
+    # The NumPy FFT, so that the blocks and the whole array are transformed alike
+    # whatever their alignment in memory.
+    with config.set({"fft": "numpy"}):
+        expected = fft2_convolve(x.copy(), kernel)
+        lazy = fft2_convolve(da.from_array(x, chunks=chunks), kernel)
+        assert lazy.shape == expected.shape
+        result = lazy.compute(scheduler="synchronous")
+
+    assert result.shape == expected.shape
+    np.testing.assert_array_equal(result, expected)
