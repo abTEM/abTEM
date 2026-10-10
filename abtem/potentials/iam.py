@@ -20,6 +20,7 @@ from ase.data import chemical_symbols
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     _box_strain_warning_silenced,
+    _box_strain_warning_suppressed,
     _cell_in_plane_frame,
     _rotate_atoms_to_plane,
     _stacklevel_outside_package,
@@ -61,9 +62,11 @@ from abtem.integrals import (
 )
 from abtem.measurements import Images
 from abtem.slicing import (
+    FACE_SLICE_WARNING_DISTANCE,
     BaseSlicedAtoms,
     SlicedAtoms,
     SliceIndexedAtoms,
+    _far_outside_faces,
     _validate_slice_thickness,
     commensurate_gpts,
     commensurate_slice_thickness,
@@ -928,6 +931,51 @@ def _in_cell(atoms: Atoms) -> np.ndarray:
     )
 
 
+def _fold_far_outside_faces(atoms: Atoms) -> None:
+    """Wrap along z, in place, the atoms more than `FACE_SLICE_WARNING_DISTANCE`
+    outside the orthogonal cell along z, onto their image in the cell."""
+    height = float(atoms.cell[2, 2])
+    z = atoms.positions[:, 2]
+    far = _far_outside_faces(z, height)
+    z[far] = np.mod(z[far], height)
+
+
+def _given_configurations(frozen_phonons: BaseFrozenPhonons) -> list[Atoms]:
+    """The atoms an ensemble is given, as far as they are known without
+    computing anything: every member of an AtomsEnsemble whose trajectory is in
+    memory, otherwise the atoms the ensemble displaces."""
+    trajectory = getattr(frozen_phonons, "trajectory", None)
+    if trajectory is None:
+        return [frozen_phonons.atoms]
+    if isinstance(trajectory, np.ndarray):
+        return list(trajectory.ravel())
+    return []
+
+
+def _warn_if_given_atoms_far_outside_along_z(
+    frozen_phonons: BaseFrozenPhonons,
+) -> None:
+    """Warn about the atoms given more than `FACE_SLICE_WARNING_DISTANCE`
+    outside the cell along z of a non-periodic potential that does not
+    transform its cell. They are folded into the cell as images of the repeated
+    structure, which is unlikely to be meant if the cell should enclose them."""
+    counts = []
+    for atoms in _given_configurations(frozen_phonons):
+        height = float(np.array(atoms.cell)[2, 2])
+        counts.append(int(_far_outside_faces(atoms.positions[:, 2], height).sum()))
+    if not any(counts):
+        return
+
+    warnings.warn(
+        f"{max(counts)} atom(s) are given more than {FACE_SLICE_WARNING_DISTANCE} "
+        f"Å outside the cell along z (0 to {height:.4g} Å). A non-periodic "
+        "potential is cut out of the repeated structure, so they are taken as "
+        "their images in the cell. If the cell should enclose them, make it "
+        "taller.",
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 class _FieldBuilderFromAtoms(_FieldBuilder):
     # _sliced_atoms is derived state: get_sliced_atoms() builds it lazily from
     # the atoms, the slicing and the cell, all of which are compared already.
@@ -990,6 +1038,22 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             box=box,
             periodic=periodic,
         )
+
+        # Every build folds atoms given far outside along z into the cell; this
+        # says so where the potential is made, which names the caller's line for
+        # a lazy build too. A builder rebuilt from this one (a lazy block) does
+        # not repeat it.
+        if (
+            not periodic
+            and not _box_strain_warning_suppressed.get()
+            and not _require_cell_transform(
+                self._frozen_phonons.cell,
+                box=self.box,
+                plane=self.plane,
+                origin=self.origin,
+            )
+        ):
+            _warn_if_given_atoms_far_outside_along_z(self._frozen_phonons)
 
     @property
     def frozen_phonons(self) -> BaseFrozenPhonons:
@@ -1132,13 +1196,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         the margin the integrator needs beyond the cell along each axis.
 
         The configuration is the transformed atoms, displaced, and wrapped
-        into the cell when the potential is periodic. When it is non-periodic
-        and the integrator is real-space in-plane (quadrature), the atoms that
-        the padding does not keep with all their images (`_wrap_far_atoms`) are
-        wrapped in-plane, before they are displaced. The atoms to slice add
-        the atoms within the margin outside the cell: images of the
-        configuration for a periodic potential, and for a non-periodic one the
-        surrounding atoms, displaced independently of those in the cell.
+        into the cell when the potential is periodic. When it is non-periodic,
+        atoms given outside the cell are images of the repeated structure it is
+        cut from, and are folded into the cell before they are displaced: the
+        atoms that the padding does not keep with all their images
+        (`_wrap_far_atoms`) are wrapped along the axes the integrator pads, and
+        for the infinite projection, which does not pad, the atoms given more
+        than `FACE_SLICE_WARNING_DISTANCE` outside the cell along z are wrapped
+        along z. An atom closer to a face than that keeps its position, and the
+        infinite projection puts it in the face slice, as it does an atom the
+        frozen phonons displace out of the cell. The atoms to slice add the
+        atoms within the margin outside the cell: images of the configuration
+        for a periodic potential, and for a non-periodic one the surrounding
+        atoms, displaced independently of those in the cell.
         """
         atoms, is_cut, frame = self._transform_atoms()
         margins = self._margins()
@@ -1162,11 +1232,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cut:
             in_cell = _in_cell(atoms)
         else:
-            if not self.integrator.periodic:
-                # A real-space integrator takes its in-plane images from
-                # pad_atoms, which does not reach an atom given far outside the
-                # cell, and the build is periodic in-plane.
-                _wrap_far_atoms(atoms, margins, "xy")
+            # The images of an atom given outside the cell come from pad_atoms,
+            # which does not reach an atom given far outside: in-plane for a
+            # real-space integrator (the build is periodic in-plane), and along
+            # z for every finite one.
+            directions = ("" if self.integrator.periodic else "xy") + (
+                "z" if self.integrator.finite else ""
+            )
+            _wrap_far_atoms(atoms, margins, directions)
+            if not self.integrator.finite:
+                _fold_far_outside_faces(atoms)
             atoms, in_cell = _pad_atoms_marking_images(atoms, margins)
 
         atoms = self._displace(atoms, frame)
@@ -1558,7 +1633,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         how the atomic structure is transformed. If True, the periodicity of the Atoms
         is preserved, which may require applying a small affine transformation to the
         atoms. If False, the transformed potential is effectively cut out of a larger
-        repeated potential, which may not preserve periodicity.
+        repeated potential, which may not preserve periodicity. Atoms given outside
+        the cell are then images of that repeated structure, folded into the cell,
+        except along `z` within 2 Å of a face: such an atom, as frozen phonons
+        displace them, is kept where it is, and the infinite projection puts it in
+        the face slice. The slice of an atom given outside along `z` therefore jumps
+        at 2 Å from the face slice to that of its image; the finite integrators
+        spread its potential over the atom and its images at any distance. Atoms
+        given more than 2 Å outside along `z` are reported when the potential is
+        made.
     integrator : ProjectionIntegrator, optional
         Provide a custom integrator for the projection integrals of the potential
         slicing.
