@@ -826,9 +826,8 @@ class _FieldBuilder(BaseField):
         lazy=False)``, so it has the sampling and ensemble axes of the built
         field. The caller discards a chunk after use, which bounds the memory
         (on a GPU, the VRAM) held at once to one chunk instead of the whole
-        slice axis of ``build()``. A builder whose ``generate_slices`` computes
-        the whole field on every call (the GPAW magnetic builders) repeats that
-        work for each chunk.
+        slice axis of ``build()``. The GPAW magnetic builders compute their
+        field once, on the first chunk, and keep its slices for the others.
 
         Parameters
         ----------
