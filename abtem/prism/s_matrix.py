@@ -100,6 +100,15 @@ def _squeezed(measurements):
     )
 
 
+def _averaged(measurement):
+    # A measurement whose leading ensemble axis is averaged block by block.
+    return (
+        isinstance(measurement, BaseMeasurements)
+        and measurement.axes_metadata
+        and measurement.axes_metadata[0]._ensemble_mean
+    )
+
+
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
@@ -4497,10 +4506,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = (
-                waves.antialias_cutoff_gpts
-            )
-
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
                 normalization="intensity",
@@ -5144,10 +5149,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             + self.base_axes_metadata[:1],
         )
 
-        if self.downsampled_gpts != self.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
-                self.window_gpts, self.sampling
-            )
+        waves.metadata.update(self._built_metadata)
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,
@@ -5321,85 +5323,117 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
+    @property
+    def _built_metadata(self) -> dict:
+        # What build adds to the metadata of a downsampled S-matrix: the antialias
+        # cutoff of the full grid, which sets the size of the pixelated and
+        # flexible annular detectors.
+        if self.downsampled_gpts == self.gpts:
+            return {}
+        return {
+            "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
+                self.window_gpts, self.sampling
+            )
+        }
+
     def _built_dummy_probes(self, scan, ctf=None):
         # The dummy probes of the built S-matrix. With upsample, building computes
         # the compression (and raises for ensemble potentials), so they come from
-        # the S-matrix itself, with the adjusted antialias cutoff that build
-        # records on a downsampled S-matrix; it sets the size of the pixelated
-        # and flexible annular detectors. They lack the other metadata that the
-        # dummy probes of the built array carry (reciprocal_space).
+        # the S-matrix itself, with the metadata that build adds. They lack the
+        # other metadata that the dummy probes of the built array carry
+        # (reciprocal_space).
         if not self._upsample_enabled:
             return self.build(lazy=True).dummy_probes(scan, ctf)
 
-        probes = self.dummy_probes(scan, ctf)
-        if self.downsampled_gpts != self.gpts:
-            probes._metadata = {
-                **probes.metadata,
-                "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
-                    self.window_gpts, self.sampling
-                ),
-            }
-        return probes
+        return self.dummy_probes(
+            scan, ctf, metadata={**self.metadata, **self._built_metadata}
+        )
 
-    def _eager_transition_potential_scan(
-        self, scan, detectors, transition_potentials, sites, double_channel,
-        inelastic_crop=None,
-        squeeze=True,
-    ):
-        from abtem.inelastic.core_loss import prism_transition_potential_scan
-
+    def _allocate_ensemble_measurements(self, waves, detectors):
+        """The measurements of every member of the S-matrix ensemble, detected on
+        ``waves``. Wave functions are not averaged over an ensemble
+        (reduce_ensemble averages measurements only), so they keep every member;
+        measurements keep a length-1 axis for each averaged ensemble axis."""
         extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
             self._build_ensemble_shape_metadata()
         )
-
-        if self.ensemble_shape:
-            dummy_waves = self._built_dummy_probes(scan)
-            measurements = allocate_multislice_measurements(
-                dummy_waves,
-                detectors,
-                extra_ensemble_axes_shape,
-                extra_ensemble_axes_metadata,
+        exit_planes_shape, _ = self._exit_planes_shape_and_metadata
+        measurements = []
+        for detector in detectors:
+            if issubclass(detector._out_type(waves)[0], BaseMeasurements):
+                shape = extra_ensemble_axes_shape
+            else:
+                shape = self.ensemble_shape + exit_planes_shape
+            measurements.append(
+                allocate_measurement(
+                    waves, detector, shape, extra_ensemble_axes_metadata
+                )
             )
-        else:
-            measurements = None
+        return measurements
+
+    def _detect_ensemble(self, waves, detectors, detect, squeeze):
+        """The measurements of ``detect(s_matrix)`` for every member of the
+        S-matrix ensemble, allocated on ``waves()``. A measurement whose leading
+        ensemble axis is flagged for the ensemble mean is averaged over it, and
+        that axis is squeezed with ``squeeze``; wave functions keep every
+        member."""
+        measurements = None
+        if self.ensemble_shape:
+            measurements = self._allocate_ensemble_measurements(waves(), detectors)
 
         num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-
-            new_measurements = ensure_list(
-                prism_transition_potential_scan(
-                    s_matrix=s_matrix,
-                    transition_potentials=transition_potentials,
-                    scan=scan,
-                    detectors=detectors,
-                    sites=sites,
-                    double_channel=double_channel,
-                    inelastic_crop=inelastic_crop,
-                )
-            )
+            new_measurements = ensure_list(detect(s_matrix.item()))
 
             if measurements is None:
                 measurements = new_measurements
             else:
-                for measurement, new_measurement in zip(
-                    measurements, new_measurements
-                ):
-                    if measurement.axes_metadata[0]._ensemble_mean:
+                for measurement, new_measurement in zip(measurements, new_measurements):
+                    if _averaged(measurement):
                         measurement.array[:] += new_measurement.array
                     else:
                         measurement.array[i] = new_measurement.array
 
             num_blocks += 1
 
-        for idx, measurement in enumerate(measurements):
-            if measurement.axes_metadata[0]._ensemble_mean:
+        for i, measurement in enumerate(measurements):
+            if _averaged(measurement):
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
                 if squeeze:
-                    measurements[idx] = measurement.squeeze((0,))
+                    measurements[i] = measurement.squeeze((0,))
 
         return measurements
+
+    def _eager_transition_potential_scan(
+        self,
+        scan,
+        detectors,
+        transition_potentials,
+        sites,
+        double_channel,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import (
+            _prism_eels_detected_waves,
+            prism_transition_potential_scan,
+        )
+
+        def detect(s_matrix):
+            return prism_transition_potential_scan(
+                s_matrix=s_matrix,
+                transition_potentials=transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
+            )
+
+        return self._detect_ensemble(
+            lambda: _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_transition_potential_scan(
@@ -5441,8 +5475,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         single- and double-channel modes. At ``interpolation=(1, 1)`` the
         result is bit-equivalent to ``Probe.transition_potential_scan``
         (float32 noise) against the matching ``double_channel`` setting.
-        At ``interpolation > 1`` the reduced wave functions are returned at
-        ``window_gpts`` size, matching the elastic :meth:`scan` convention.
+        At ``interpolation > 1`` the reduced wave functions are returned on the
+        grid of ``ceil(downsampled_gpts / interpolation)`` points. This is
+        ``window_gpts``, as in the elastic :meth:`scan`, except with ``upsample``,
+        where the elastic scan returns the upsampled window.
 
         See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan`
         for the algorithm details.
@@ -5478,12 +5514,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        BaseMeasurements or list of BaseMeasurements
-            One measurement per detector.
+        BaseMeasurements, Waves or list of them
+            One measurement per detector. A ``WavesDetector`` gives the
+            ``Waves`` at each scan position, which keep every member of an
+            ensemble.
         """
-        from abtem.inelastic.core_loss import (
-            prism_transition_potential_scan,
-        )
+        from abtem.inelastic.core_loss import _prism_eels_detected_waves
 
         if scan is None:
             scan = GridScan(
@@ -5569,7 +5605,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             meta=np.array((), dtype=object),
         )
 
-        waves = self._built_dummy_probes(scan)
+        waves = _prism_eels_detected_waves(self, scan)
 
         extra_axes_metadata = []
         if self.potential is not None:
@@ -5589,72 +5625,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return _wrap_measurements(reduce_ensemble(measurements))
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
-        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
-            self._build_ensemble_shape_metadata()
-        )
-
         detectors = validate_detectors(detectors)
 
-        if self.ensemble_shape:
-            dummy_probes = self._built_dummy_probes(scan, ctf)
-
-            # Wave functions are not averaged over an ensemble (reduce_ensemble
-            # averages measurements only), so they keep every member.
-            exit_planes_shape, _ = self._exit_planes_shape_and_metadata
-            measurements = []
-            for detector in detectors:
-                out_type = detector._out_type(dummy_probes)[0]
-                if issubclass(out_type, BaseMeasurements):
-                    shape = extra_ensemble_axes_shape
-                else:
-                    shape = self.ensemble_shape + exit_planes_shape
-                measurements.append(
-                    allocate_measurement(
-                        dummy_probes, detector, shape, extra_ensemble_axes_metadata
-                    )
-                )
-        else:
-            measurements = None
-
-        def averaged(measurement):
-            return (
-                isinstance(measurement, BaseMeasurements)
-                and measurement.axes_metadata
-                and measurement.axes_metadata[0]._ensemble_mean
-            )
-
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-            s_matrix_array = s_matrix.build(lazy=False)
-
-            new_measurements = s_matrix_array._reduce(
+        def detect(s_matrix):
+            return s_matrix.build(lazy=False)._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
-            new_measurements = ensure_list(new_measurements)
-
-            if measurements is None:
-                measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(measurements, new_measurements):
-                    if averaged(measurement):
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
-
-            num_blocks += 1
-
-        # measurements = list(measurements.values())
-
-        for i, measurement in enumerate(measurements):
-            if averaged(measurement):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze:
-                    measurements[i] = measurement.squeeze((0,))
-
-        return measurements
+        return self._detect_ensemble(
+            lambda: self._built_dummy_probes(scan, ctf), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_build_s_matrix_detect(s_matrix, scan, ctf, detectors):

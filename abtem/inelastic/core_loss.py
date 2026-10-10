@@ -1689,6 +1689,36 @@ def _extract_scattering_sites(potential, sites):
     return sites
 
 
+def _prism_eels_detected_waves(s_matrix, scan):
+    """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
+    the downsampled grid of ``s_matrix`` divided by its interpolation factor.
+    They carry the probe metadata of the elastic dummy probes (semiangle cutoff
+    and base tilt), which the detectors of the results read, but not their
+    ``adjusted_antialias_cutoff_gpts``. They only describe the grid; the array
+    is a broadcast zero, so no memory is allocated for it."""
+    from abtem.core.utils import safe_ceiling_int
+    from abtem.waves import Waves
+
+    xp = get_array_module(s_matrix.device)
+    ds_gpts = s_matrix.downsampled_gpts
+    gpts = tuple(
+        safe_ceiling_int(n / f) for n, f in zip(ds_gpts, s_matrix.interpolation)
+    )
+    extent = tuple(
+        g * length / n for g, length, n in zip(gpts, s_matrix.extent, ds_gpts)
+    )
+    array = xp.broadcast_to(
+        xp.zeros((), dtype=get_dtype(complex=True)), scan.shape + gpts
+    )
+    return Waves(
+        array,
+        energy=s_matrix.energy,
+        extent=extent,
+        ensemble_axes_metadata=scan.ensemble_axes_metadata,
+        metadata=s_matrix.dummy_probes().metadata,
+    )
+
+
 def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, sites):
     """Shared setup for the real-space and beam-basis PRISM-EELS drivers."""
     import types as _types
@@ -1917,8 +1947,9 @@ def prism_transition_potential_scan(
 
     Returns
     -------
-    BaseMeasurements or list of BaseMeasurements
-        One measurement per detector.
+    BaseMeasurements, Waves or list of them
+        One measurement per detector. A ``WavesDetector`` gives the ``Waves``
+        at each scan position, which keep every member of an ensemble.
     """
     import warnings
 
@@ -1982,17 +2013,12 @@ def prism_transition_potential_scan(
         safe_ceiling_int(gpts[0] / interpolation[0]),
         safe_ceiling_int(gpts[1] / interpolation[1]),
     )
-    output_window_gpts = (
-        safe_ceiling_int(ds_gpts[0] / interpolation[0]),
-        safe_ceiling_int(ds_gpts[1] / interpolation[1]),
-    )
+    detected_waves = _prism_eels_detected_waves(s_matrix, scan)
+    output_window_gpts = detected_waves.gpts
+    output_window_extent = detected_waves.extent
     scatter_window_extent = (
         scatter_window_gpts[0] * full_sampling[0],
         scatter_window_gpts[1] * full_sampling[1],
-    )
-    output_window_extent = (
-        output_window_gpts[0] * ds_sampling[0],
-        output_window_gpts[1] * ds_sampling[1],
     )
 
     # --- Inelastic crop window (Brown et al. Sec. IV B, independent of the
@@ -2101,14 +2127,8 @@ def prism_transition_potential_scan(
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
-    dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + output_window_gpts, dtype=complex_dtype),
-        energy=energy,
-        extent=output_window_extent,
-        ensemble_axes_metadata=scan_axes_metadata,
-    )
     measurements = allocate_multislice_measurements(
-        dummy_scan_waves,
+        detected_waves,
         detectors,
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
@@ -2190,13 +2210,27 @@ def prism_transition_potential_scan(
     # identical box for every batch on every one of those calls. Hoisting it
     # here, once per batch, turns that into O(n_batches) instead of
     # O(n_batches * n_sites * n_exit_planes).
-    row_batch_boxes = [
-        minimum_crop(
-            pixel_positions[row_start * row_cols : row_end * row_cols],
-            output_window_gpts,
-        )
-        for row_start, row_end in row_batches
-    ]
+    #
+    # A window spanning the whole cell is reduced on the cell itself, so each
+    # position is detected in the cell frame, as SMatrixArray.reduce does when
+    # its window is the whole grid; a smaller window is centred on the position.
+    if output_window_gpts == ds_gpts:
+        row_batch_boxes = [
+            (
+                (0, 0),
+                ds_gpts,
+                xp.zeros(((row_end - row_start) * row_cols, 2), dtype=int),
+            )
+            for row_start, row_end in row_batches
+        ]
+    else:
+        row_batch_boxes = [
+            minimum_crop(
+                pixel_positions[row_start * row_cols : row_end * row_cols],
+                output_window_gpts,
+            )
+            for row_start, row_end in row_batches
+        ]
 
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):
@@ -2460,7 +2494,10 @@ def prism_transition_potential_scan(
     # method called below is only the second half, which is the half that
     # belongs per block. SMatrix.transition_potential_scan applies the first
     # half once, at the level the oracle uses.
-    measurements = [m.reduce_ensemble() for m in measurements]
+    measurements = [
+        m.reduce_ensemble() if hasattr(m, "reduce_ensemble") else m
+        for m in measurements
+    ]
 
     if len(measurements) == 1:
         return measurements[0]
