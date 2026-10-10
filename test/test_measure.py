@@ -1,4 +1,6 @@
 import operator
+import sys
+import types
 import warnings
 
 import ase
@@ -1733,6 +1735,87 @@ def test_interpolate_periodic_spline_and_fft(lazy):
     )
 
 
+def _periodic_spline_interpolate(array, gpts, order, lazy, device):
+    images = abtem.Images(copy_to_device(array, device), sampling=0.1)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=gpts, method="spline", boundary="periodic", order=order
+    )
+    return asnumpy(interpolated.compute().array)
+
+
+@devices
+@lazy_params
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
+    lazy, order, device
+):
+    # A periodic interpolant commutes with rolling the image by whole pixels. The
+    # image has 40 x 30 pixels and is interpolated to 80 x 90, so one old pixel is
+    # 2 new pixels along x and 3 along y and the rolled output is a whole-pixel roll.
+    array = np.random.default_rng(0).random((40, 30))
+
+    interpolated_roll = _periodic_spline_interpolate(
+        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy, device
+    )
+    rolled_interpolation = np.roll(
+        _periodic_spline_interpolate(array, (80, 90), order, lazy, device),
+        (10, 21),
+        axis=(0, 1),
+    )
+
+    # The two sides agree to within 20 eps of the data scale in the dtype the device
+    # stores (float64 on the CPU, float32 on Metal and torch); the tolerance of 200 eps
+    # leaves a margin of 10 over that, and a roll that is off by one pixel differs by
+    # about 0.5 of the data scale.
+    eps = np.finfo(interpolated_roll.dtype).eps
+    np.testing.assert_allclose(
+        interpolated_roll, rolled_interpolation, rtol=0, atol=200 * eps * array.max()
+    )
+
+
+@devices
+@lazy_params
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
+    lazy, order, device
+):
+    # Interpolating a periodic field with a few Fourier components from 40 x 30 to
+    # 53 x 41 points (a factor that is not an integer) must give the field itself at
+    # the new positions j * extent / gpts. A constant shift of the coordinates, which
+    # a roll test does not see, moves the result by up to 0.2 of the amplitude for a
+    # shift of half a pixel. The spline's own error is 9e-4 at order 2 and 2e-4 at
+    # order 3.
+    extent = (4.0, 3.0)
+    gpts, new_gpts = (40, 30), (53, 41)
+
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x / extent[0] + y / extent[1] + 0.1)) + 0.5 * (
+            np.sin(2 * np.pi * (x / extent[0] - 3 * y / extent[1]))
+        )
+
+    def sample(points):
+        axes = [np.arange(n) * length / n for n, length in zip(points, extent)]
+        return field(*np.meshgrid(*axes, indexing="ij"))
+
+    sampling = tuple(e / n for e, n in zip(extent, gpts))
+    images = abtem.Images(copy_to_device(sample(gpts), device), sampling=sampling)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=new_gpts, method="spline", boundary="periodic", order=order
+    ).compute()
+
+    expected = sample(new_gpts)
+    np.testing.assert_allclose(
+        asnumpy(interpolated.array),
+        expected,
+        rtol=0,
+        atol=2e-3 * np.abs(expected).max(),
+    )
+
+
 @given(
     gpts=st.integers(min_value=16, max_value=32),
     extent=st.floats(min_value=5, max_value=10),
@@ -2306,3 +2389,44 @@ class TestReciprocalSpaceLineProfiles:
         profiles = ctf.profiles()
         assert len(profiles.base_shape) == 1
         assert profiles.base_shape[0] > 0
+
+
+def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
+    # The CuPy branch of the FFT convolution imports cupyx.scipy.signal under
+    # catch_warnings, which swaps the process-wide filter list; entered from
+    # dask's threads at once, it can leave the import's filter installed or drop
+    # the user's. Run that branch on NumPy blocks, with cupyx.scipy.signal
+    # stood in by an empty module, and count the entries.
+    import abtem.measurements as measurements
+
+    names = ("cupyx", "cupyx.scipy", "cupyx.scipy.signal")
+    modules = {name: types.ModuleType(name) for name in names}
+    modules["cupyx"].scipy = modules["cupyx.scipy"]
+    modules["cupyx.scipy"].signal = modules["cupyx.scipy.signal"]
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, modules[name])
+    monkeypatch.setattr(measurements, "cp", np)
+
+    entries = []
+
+    class CountingWarnings:
+        def __getattr__(self, name):
+            return getattr(warnings, name)
+
+        def catch_warnings(self, *args, **kwargs):
+            entries.append(None)
+            return warnings.catch_warnings(*args, **kwargs)
+
+    monkeypatch.setattr(measurements, "warnings", CountingWarnings())
+    # monkeypatch restores the flag, so the stand-in is not recorded as the real
+    # import
+    monkeypatch.setattr(measurements, "_cupyx_signal_imported", False)
+
+    images = Images(
+        da.ones((16, 32, 32), chunks=(1, 32, 32)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(16)))],
+    )
+    images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
+
+    assert len(entries) == 1

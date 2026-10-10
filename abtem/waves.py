@@ -64,7 +64,9 @@ from abtem.measurements import (
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
@@ -156,6 +158,17 @@ def _prebuild_reused_potential(
         potential = potential.build()
 
     return potential
+
+
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if multislice_func_kwargs.get("detectors_elastic"):
+        raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -452,6 +465,10 @@ class Waves(BaseWaves, ArrayObject):
     """
 
     _base_dims = 2
+
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
 
     def __init__(
         self,
@@ -821,6 +838,16 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         waves = self.__class__(**d)
         return waves
+
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
@@ -1592,15 +1619,12 @@ class Waves(BaseWaves, ArrayObject):
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
         **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
+        """Run the inelastic multislice algorithm from these wave functions; see
+        :meth:`Probe.transition_potential_scan` for the parameters."""
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
-        # Refuse here rather than only in the driver: abTEM is lazy by default,
-        # so a check inside the per-chunk worker lets the caller build a whole
-        # measurement object without complaint and only fail later, from inside
-        # a dask traceback.
-        if multislice_func_kwargs.get("detectors_elastic"):
-            raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         potential = validate_potential(potential, self)
 
@@ -2826,7 +2850,9 @@ class Probe(WavesBuilder):
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------
@@ -2839,6 +2865,8 @@ class Probe(WavesBuilder):
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
+
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         probe = self.copy()
         potential = validate_potential(potential)

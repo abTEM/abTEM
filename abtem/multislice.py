@@ -926,6 +926,20 @@ _DETECTORS_ELASTIC_MESSAGE = (
 )
 
 
+_FULL_EXPANSION_SCOPE_MESSAGE = (
+    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
+    "core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice(expansion_scope='propagator')."
+)
+
+
+def _is_full_expansion_scope(algorithm) -> bool:
+    return (
+        isinstance(algorithm, RealSpaceMultislice)
+        and algorithm.expansion_scope == "full"
+    )
+
+
 def transition_potential_multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -954,7 +968,8 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
+        Algorithm used for multislice operator (default is FourierMultislice()). A
+        RealSpaceMultislice must have ``expansion_scope="propagator"``.
 
     Returns
     -------
@@ -966,6 +981,9 @@ def transition_potential_multislice_and_detect(
         # Belt and braces: Waves.transition_potential_multislice refuses this
         # before a graph is built, but the driver is also a public entry point.
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(algorithm):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
@@ -1018,7 +1036,7 @@ def transition_potential_multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=algorithm.expansion_scope == "full",
+                fully_corrected=False,
             )
 
     if detectors is None:
@@ -1392,9 +1410,11 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_dtype(waves)[0] for detector in self.detectors)
 
     def _out_meta(self, waves: Waves) -> tuple[np.ndarray, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_meta(waves)[0] for detector in self.detectors)
 
     def _out_type(self, waves: Waves) -> tuple[type, ...]:
@@ -1577,6 +1597,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return transform
 
     def _calculate_new_array(self, waves: Waves):
+        # The slices are applied in place, so waves in another precision would
+        # be propagated and returned in that precision.
+        waves = waves._in_configured_precision()
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

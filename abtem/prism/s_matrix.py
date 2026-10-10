@@ -159,6 +159,18 @@ def _collected_angle_bounds(detector, margin: float = 0.0):
     return low, high
 
 
+def _grid_of_potential(potential: BasePotential) -> Grid:
+    """
+    The grid of an SMatrix of the potential. A builder's grid follows the SMatrix, so
+    they share it. The grid of a built potential belongs to its data, so the SMatrix
+    gets its own copy, and a mismatch is reported when the SMatrix is built or
+    scanned (see `SMatrix._from_partitioned_args`).
+    """
+    if isinstance(potential, ArrayObject):
+        return potential.grid.copy()
+    return potential.grid
+
+
 def _round_gpts_to_multiple_of_interpolation(
     gpts: tuple[int, int], interpolation: tuple[int, int]
 ) -> tuple[int, int]:
@@ -3839,7 +3851,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             potential = validate_potential(potential)
             self.grid.match(potential)
-            self._grid = potential.grid
+            self._grid = _grid_of_potential(potential)
 
         self._potential = potential
         self._interpolation = _validate_interpolation(interpolation)
@@ -4072,7 +4084,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     @potential.setter
     def potential(self, potential: BasePotential):
         self._potential = potential
-        self._grid = potential.grid
+        self._grid = _grid_of_potential(potential)
 
     @property
     def semiangle_cutoff(self) -> float:
@@ -4341,6 +4353,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return _wrap_with_array(s_matrix)
 
     def _from_partitioned_args(self, *args, **kwargs):
+        # Every build, scan and reduction, eager or lazy, takes its blocks from here.
+        if isinstance(self.potential, ArrayObject):
+            self.potential.grid.check_match(self)
+
         if self.potential is not None:
             potential_partial = self.potential._from_partitioned_args()
             kwargs = self._copy_kwargs(exclude=("potential", "sampling", "extent"))
