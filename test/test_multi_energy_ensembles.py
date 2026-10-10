@@ -1,8 +1,11 @@
-"""Multi-energy ensembles: S-matrix scans (#502) and diffraction patterns (#503).
+"""Multi-energy ensembles: S-matrix scans and reductions (#502) and diffraction
+patterns (#503).
 
 Detectors are matched against the whole energy ensemble before it is split into
 energies, and the wavelength-dependent methods of a multi-energy
-`DiffractionPatterns` are evaluated one energy at a time.
+`DiffractionPatterns` are evaluated one energy at a time. Reductions of
+frozen-phonon scattering matrices follow the frozen phonons' `ensemble_mean`,
+eager and lazy.
 """
 
 import ase.build
@@ -139,6 +142,182 @@ def test_multi_energy_prism_refuses_an_auto_sized_radial_detector(make):
     )
     with pytest.raises(RuntimeError, match="cannot auto-size its outer angle"):
         s_matrix.scan(scan=_scan(potential), detectors=make(), lazy=False)
+
+
+def _build_and_reduce(potential, energy, detectors, lazy=False, **kwargs):
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=20, **kwargs
+    )
+    out = s_matrix.build(lazy=lazy).reduce(scan=_scan(potential), detectors=detectors)
+    return out.compute(progress_bar=False) if lazy else out
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "kwargs",
+    [dict(), dict(interpolation=2)],
+    ids=["interpolation_1", "interpolation_2"],
+)
+def test_multi_energy_build_reduce_equals_single_energy_runs(kwargs, lazy):
+    """A multi-energy `SMatrix.build()` could not be reduced at all: the
+    `SMatrixArray` has no energy of its own and raised `EnergyUndefinedError`.
+    Each energy is now reduced from its own rows of the zero-padded expansion,
+    at its own wavelength, and the measurements are stacked."""
+
+    def detectors():
+        return [
+            abtem.AnnularDetector(30, 60),
+            abtem.AnnularDetector(30),
+            abtem.PixelatedDetector(max_angle=60),
+            abtem.WavesDetector(),
+        ]
+
+    potential = _potential()
+    multi = _build_and_reduce(potential, list(ENERGIES), detectors(), lazy, **kwargs)
+    singles = [
+        _build_and_reduce(potential, energy, detectors(), lazy, **kwargs)
+        for energy in ENERGIES
+    ]
+
+    assert len(multi) == len(detectors())
+    for j, measurement in enumerate(multi):
+        names = [type(a).__name__ for a in measurement.axes_metadata]
+        axis = names.index("EnergyAxis")
+        assert measurement.axes_metadata[axis].values == ENERGIES
+
+        for i, single in enumerate(singles):
+            member = measurement[(slice(None),) * axis + (i,)]
+            if member.shape == single[j].shape:
+                a, b = member.array, single[j].array
+            else:
+                # a max_angle in mrad crops to the highest energy's pixel count
+                a, b = _same_pixels(member, single[j])
+            _close(a, b, atol=1e-5 if lazy else 1e-10)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_multi_energy_scan_with_a_ctf_uses_each_energys_wavelength(lazy):
+    """Every energy of a multi-energy scan matched the same CTF object to its own
+    energy in place, so a lazy scan computed every energy with the last energy's
+    wavelength (the lowest energy was 15 % off its own run)."""
+
+    def scan(energy):
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=energy, semiangle_cutoff=20
+        )
+        ctf = abtem.CTF(defocus=50.0, semiangle_cutoff=20)
+        out = s_matrix.scan(
+            scan=_scan(potential),
+            detectors=abtem.AnnularDetector(30, 60),
+            ctf=ctf,
+            lazy=lazy,
+        )
+        return out.compute(progress_bar=False) if lazy else out
+
+    potential = _potential()
+    multi = scan(list(ENERGIES))
+    for i, energy in enumerate(ENERGIES):
+        _close(multi[i].array, scan(energy).array, atol=1e-5 if lazy else 1e-10)
+
+
+def _frozen_phonon_potential(ensemble_mean=True):
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    frozen_phonons = abtem.FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.1, seed=1, ensemble_mean=ensemble_mean
+    )
+    return abtem.Potential(frozen_phonons, sampling=0.15, slice_thickness=2)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "kwargs",
+    [dict(), dict(interpolation=2)],
+    ids=["interpolation_1", "interpolation_2"],
+)
+def test_multi_energy_frozen_phonon_build_reduce_equals_single_energy_runs(
+    kwargs, lazy
+):
+    """A multi-energy `SMatrix.build()` over a frozen-phonon potential crashed:
+    it took the wave-vector axis to be the first, where the frozen-phonon axis
+    is. Eagerly the zero-padding to the union of the wave vectors failed with a
+    shape mismatch, lazily the union was taken from the wrong energy and the
+    wave-vector lookup raised a KeyError."""
+
+    def detectors():
+        return [abtem.AnnularDetector(30, 60), abtem.PixelatedDetector(max_angle=60)]
+
+    potential = _frozen_phonon_potential()
+    multi = _build_and_reduce(potential, list(ENERGIES), detectors(), lazy, **kwargs)
+
+    for j, measurement in enumerate(multi):
+        names = [type(a).__name__ for a in measurement.axes_metadata]
+        assert names[0] == "EnergyAxis"
+        assert measurement.axes_metadata[0].values == ENERGIES
+
+    for i, energy in enumerate(ENERGIES):
+        # the same seed gives the same configurations
+        single = _build_and_reduce(
+            _frozen_phonon_potential(), energy, detectors(), lazy, **kwargs
+        )
+        for j, measurement in enumerate(multi):
+            member = measurement[i]
+            if member.shape == single[j].shape:
+                a, b = member.array, single[j].array
+            else:
+                # a max_angle in mrad crops to the highest energy's pixel count
+                a, b = _same_pixels(member, single[j])
+            _close(a, b, atol=1e-5 if lazy else 1e-10)
+
+
+def test_frozen_phonon_build_reduce_follows_ensemble_mean():
+    """An eager `SMatrixArray.reduce` returned the frozen-phonon axis unreduced,
+    while a lazy one averaged it, as `SMatrix.scan` and multislice do. Both
+    now average the configurations when the frozen phonons ask for the
+    ensemble mean (the default), and keep them otherwise."""
+    energy = ENERGIES[0]
+
+    def axis_names(measurement):
+        return [type(a).__name__ for a in measurement.axes_metadata]
+
+    for ensemble_mean in (True, False):
+        potential = _frozen_phonon_potential(ensemble_mean)
+        detector = abtem.AnnularDetector(30, 60)
+        eager = _build_and_reduce(potential, energy, detector)
+        lazy = _build_and_reduce(potential, energy, detector, lazy=True)
+        prism = _prism(potential, energy, detector)
+        probe = abtem.Probe(energy=energy, semiangle_cutoff=20)
+        multislice = probe.scan(
+            potential, scan=_scan(potential), detectors=detector, lazy=False
+        )
+
+        expected = ["RealSpaceAxis", "RealSpaceAxis"]
+        if not ensemble_mean:
+            expected = ["FrozenPhononsAxis"] + expected
+        for measurement in (eager, lazy, prism, multislice):
+            assert axis_names(measurement) == expected
+
+        # lazy blocks are computed in the default single precision
+        _close(lazy.array, eager.array, atol=1e-5)
+        _close(eager.array, prism.array, atol=1e-10)
+        # at interpolation 1 the PRISM reduction equals multislice
+        _close(eager.array, multislice.array, atol=1e-5)
+
+
+def test_multi_energy_frozen_phonon_build_reduce_averages_the_configurations():
+    """Each energy of an eager multi-energy reduction averages the
+    configurations, as a separate single-energy `SMatrix.scan` of the same
+    frozen phonons does. (A lazy reduction already averaged them.)"""
+    potential = _frozen_phonon_potential()
+    detector = abtem.AnnularDetector(30, 60)
+    multi = _build_and_reduce(potential, list(ENERGIES), detector)
+    assert [type(a).__name__ for a in multi.axes_metadata] == [
+        "EnergyAxis",
+        "RealSpaceAxis",
+        "RealSpaceAxis",
+    ]
+    for i, energy in enumerate(ENERGIES):
+        single = _prism(_frozen_phonon_potential(), energy, detector)
+        _close(multi[i].array, single.array, atol=1e-10)
 
 
 # --- per-energy diffraction patterns (#503) -----------------------------------
