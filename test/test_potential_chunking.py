@@ -1150,7 +1150,6 @@ class TestCrystalPotentialChunking:
                 detectors=abtem.PixelatedDetector(max_angle=40),
                 lazy=lazy,
                 max_batch=1,
-                double_channel=False,
             )
 
         # Slices in chunks of 2, as in the test above.

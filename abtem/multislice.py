@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import warnings
+import weakref
 from bisect import bisect_left
 from dataclasses import dataclass
 from functools import partial
@@ -1134,17 +1135,28 @@ def transition_potential_multislice_and_detect(
                 # never off the slice (compare standard_multislice_and_detect
                 # at multislice.py:672), so sharing TransmissionFunction
                 # instances across slice indices is safe here.
-                tx_dedup: dict[int, TransmissionFunction] = {}
+                # An id identifies an object only while the object lives: a
+                # generator that yields a new slice every time (a frozen-phonon
+                # mosaic, a Potential) frees each slice, and a later slice can
+                # get its id and with it the wrong transmission function. Each
+                # entry therefore keeps a weak reference to its slice and is used
+                # only while that slice is the one looked up. A weak reference,
+                # so that the cache holds no slice the generator has let go of.
+                tx_dedup: dict[
+                    int, tuple[weakref.ref[PotentialArray], TransmissionFunction]
+                ] = {}
                 slice_cache = []
                 for slice_obj in potential_configuration.generate_slices():
                     key = id(slice_obj)
-                    cached = tx_dedup.get(key)
-                    if cached is None:
+                    entry = tx_dedup.get(key)
+                    if entry is not None and entry[0]() is slice_obj:
+                        cached = entry[1]
+                    else:
                         cached = antialias_aperture.bandlimit(
                             slice_obj.transmission_function(energy=waves._valid_energy),
                             in_place=False,
                         )
-                        tx_dedup[key] = cached
+                        tx_dedup[key] = (weakref.ref(slice_obj), cached)
                     slice_cache.append(cached)
             else:
                 slice_cache = list(potential_configuration.generate_slices())
