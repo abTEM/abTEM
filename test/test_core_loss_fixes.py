@@ -1025,6 +1025,56 @@ class TestPrismEelsEnergyEnsemble:
             self._run([100e3, 200e3], lazy, detectors=abtem.FlexibleAnnularDetector())
 
 
+class TestPrismEelsDefaultDetector:
+    """``SMatrix.transition_potential_scan`` documents a
+    ``FlexibleAnnularDetector`` as its default, but passed ``detectors=None``
+    on to ``validate_detectors``, which made it a ``WavesDetector``. A scan
+    with no detectors then failed with ``AttributeError: 'Waves' object has
+    no attribute 'reduce_ensemble'``. The default is now the documented one,
+    as in ``SMatrix.scan``, and so a multi-energy S-matrix refuses it, as
+    ``SMatrix.scan`` does.
+    """
+
+    @staticmethod
+    def _scan(energy, lazy, **kwargs):
+        potential = abtem.Potential(_si2_atoms(), gpts=(64, 64), slice_thickness=4.0)
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=energy, semiangle_cutoff=20
+        )
+        transition_potential = synthetic_transition_potential(
+            extent=(8.0, 8.0), gpts=(64, 64), energy=ENERGY, n_transitions=2
+        )
+        m = s_matrix.transition_potential_scan(
+            transition_potential,
+            scan=abtem.GridScan(
+                start=(0, 0),
+                end=(1, 1),
+                gpts=(2, 2),
+                fractional=True,
+                potential=potential,
+            ),
+            sites=_si2_atoms(),
+            lazy=lazy,
+            **kwargs,
+        )
+        if lazy:
+            m = m.compute(progress_bar=False)
+        return m
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_the_default_is_a_flexible_annular_detector(self, lazy):
+        default = self._scan(ENERGY, lazy)
+        explicit = self._scan(ENERGY, lazy, detectors=abtem.FlexibleAnnularDetector())
+        assert type(default) is type(explicit)
+        assert default.axes_metadata == explicit.axes_metadata
+        np.testing.assert_array_equal(_as_array(default), _as_array(explicit))
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_a_multi_energy_s_matrix_refuses_the_default(self, lazy):
+        with pytest.raises(RuntimeError, match="cannot auto-size its outer angle"):
+            self._scan([ENERGY, 2 * ENERGY], lazy)
+
+
 class TestScanEnergyEnsembleAxisOrder:
     """A probe's energy-ensemble stack used to land on the wrong axis of the
     result -- not scrambled values, a metadata/data mismatch. See

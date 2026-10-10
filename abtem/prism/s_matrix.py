@@ -5511,6 +5511,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 sampling=self.dummy_probes().aperture.nyquist_sampling,
             )
 
+        # The documented default, as in :meth:`scan`. Left to validate_detectors,
+        # None became a WavesDetector, whose waves the PRISM-EELS driver cannot
+        # reduce over its ensemble. For a multi-energy scattering matrix the
+        # automatic outer angle of this default is refused, as in :meth:`scan`.
+        if detectors is None:
+            detectors = FlexibleAnnularDetector()
+
         # A multi-energy scattering matrix is split into its energies, each run
         # through the single-energy path and the measurements stacked, as in
         # :meth:`reduce`. The single-energy path builds and matches the
