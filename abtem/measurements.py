@@ -1896,6 +1896,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         overlay: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
+        suptitle: Optional[str] = None,
         units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
@@ -1947,6 +1948,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             title will be given by the
             value corresponding to the "name" key of the axes metadata dictionary, if
             this item exists.
+        suptitle : str, optional
+            An overall title for the whole figure (``Figure.suptitle``), distinct from
+            the per-panel/column titles set by ``title``. Not set by default.
         units : str
             The units used for the x and y axes. The given units must be compatible with
             the axes of the images.
@@ -1967,6 +1971,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             common_scale=common_color_scale,
             figsize=figsize,
             title=title,
+            suptitle=suptitle,
             aspect=True,
             share_x=True,
             share_y=True,
@@ -7005,7 +7010,9 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         explode: bool | Sequence[int] = (),
         figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
+        suptitle: Optional[str] = None,
         e_units: str = "meV",
+        rasterized: bool = True,
         **kwargs,
     ) -> tuple:
         """
@@ -7044,8 +7051,24 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         title : bool or str
             If a string, used as the (base) title. If True, a default title is
             generated. If False, no title is set.
+        suptitle : str, optional
+            An overall title for the whole figure (``Figure.suptitle``), distinct
+            from the per-panel ``title``. Not set by default. Note this is a named
+            parameter, not part of ``**kwargs`` -- ``kwargs`` here goes straight to
+            ``pcolormesh`` (an Axes/Artist-level call), which has no notion of a
+            whole-figure title, so passing ``suptitle`` that way raises an
+            ``AttributeError`` from matplotlib rather than doing what you want.
         e_units : str
             Units for the energy axis ('meV' or 'eV'). Default 'meV'.
+        rasterized : bool, optional
+            Rasterize the mesh (default True). ``pcolormesh`` draws each cell as
+            a separate vector polygon, which in vector output formats (PDF, SVG,
+            EPS -- not PNG, already raster) can show up as a fine grid of seams
+            between cells from anti-aliasing at their edges. Rasterizing embeds
+            the mesh as a bitmap instead, avoiding this; there is no benefit to
+            keeping a heatmap of this kind as scalable vector graphics. Passing
+            ``rasterized=False`` restores true vector output for every cell if
+            you specifically need it.
         kwargs
             Forwarded to :meth:`matplotlib.axes.Axes.pcolormesh`.
 
@@ -7167,12 +7190,15 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             for k, (idx, data_t) in enumerate(zip(indices, panels)):
                 a = axes_flat[k]
                 im = a.pcolormesh(
-                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm, **kwargs
+                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm,
+                    rasterized=rasterized, **kwargs
                 )
                 a.set_xlabel("q [mrad]")
                 a.set_ylabel(e_label)
                 parts = [
-                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title()
+                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title(
+                        include_label=(idx[j] == 0)
+                    )
                     for j, a_idx in enumerate(explode_axes)
                 ]
                 panel_title = ", ".join(parts)
@@ -7188,6 +7214,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             # above already makes them redundant on every other panel.
             for a in axes_flat[: len(indices)]:
                 a.label_outer()
+
+            if suptitle:
+                # Set before tight_layout() so it reserves room for it,
+                # rather than the title overlapping the top row of panels.
+                fig.suptitle(suptitle)
 
             # tight_layout() must run before fig.colorbar(): colorbar()
             # shrinks the given panel axes via their gridspec to make room for
@@ -7225,7 +7256,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
         norm = _get_norm(vmin=vmin, vmax=vmax, power=power, logscale=logscale)
         im = ax.pcolormesh(
-            q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
+            q, e, data.T, shading="nearest", cmap=cmap, norm=norm,
+            rasterized=rasterized, **kwargs
         )
         ax.set_xlabel("q [mrad]")
         ax.set_ylabel(e_label)
@@ -7235,6 +7267,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             ax.set_title("S(q, E)")
         if cbar:
             fig.colorbar(im, ax=ax, label=cbar_label)
+        if suptitle:
+            fig.suptitle(suptitle)
         fig.tight_layout()
         return fig, ax
 
@@ -7253,30 +7287,143 @@ def _validate_temperature(temperature) -> float:
     return temperature
 
 
+_SNAPSHOT_STATISTICS = ("quantum", "classical")
+
+#: Label of the axis stacking the parity-projected phonon-loss channels.
+#: Its presence is what marks a measurement as still holding all three
+#: channels, rather than one selected from them.
+_PHONON_ORDER_LABEL = "Phonon order"
+
+
+def _select_one_phonon_channel(measurement):
+    """Select the one-phonon channel of a parity-projected stack, or return
+    ``measurement`` unchanged when it carries no such stack.
+
+    Loss/gain unfolding is meaningful for the one-phonon channel alone: the
+    ``"multi"`` channel's energy axis is the bin's mode energy rather than
+    the energy transfer -- its same-mode two-phonon processes sit at ``+2E``,
+    ``0`` and ``-2E``, none at ``+/-E`` -- and ``"all"`` contains it. Since
+    ``"one"`` is therefore the only channel the weights *can* apply to, the
+    selection is unambiguous and is made here rather than pushed onto the
+    caller, which would otherwise have to index the axis by hand to unfold
+    a stack it is holding for every other purpose.
+
+    The returned measurement no longer carries the
+    :data:`_PHONON_ORDER_LABEL` axis, and its ``frozen_phonon_component``
+    metadata records which channel it is.
+    """
+    axes_metadata = measurement.ensemble_axes_metadata
+    for i, ax in enumerate(axes_metadata):
+        if getattr(ax, "label", None) != _PHONON_ORDER_LABEL:
+            continue
+        values = tuple(getattr(ax, "values", ()))
+        if "one" not in values:
+            raise ValueError(
+                f"the {_PHONON_ORDER_LABEL!r} axis has values {values}, with "
+                "no 'one' channel to unfold. Loss/gain unfolding applies to "
+                "the one-phonon channel only."
+            )
+        selected = measurement[
+            tuple(
+                values.index("one") if j == i else slice(None)
+                for j in range(len(axes_metadata))
+            )
+        ]
+        selected.metadata["frozen_phonon_component"] = "one"
+        return selected
+    return measurement
+
+
+def _validate_snapshot_statistics(snapshot_statistics: str) -> None:
+    """Check ``snapshot_statistics`` against the accepted names.
+
+    Called from the public entry points as well as from
+    :func:`_loss_gain_weights`, so that a misspelled name is rejected even
+    when no unfolding runs (``temperature=None``) and the argument would
+    otherwise be silently ignored.
+    """
+    if snapshot_statistics not in _SNAPSHOT_STATISTICS:
+        raise ValueError(
+            f"snapshot_statistics must be one of {_SNAPSHOT_STATISTICS}, got "
+            f"{snapshot_statistics!r}."
+        )
+
+
+def _loss_gain_weights(
+    e_values: np.ndarray, temperature: float, snapshot_statistics: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Loss and gain weights for energy magnitudes ``e_values`` [eV] at
+    ``temperature`` [K], given how the snapshot amplitudes were drawn.
+
+    A frozen-phonon snapshot is time-reversal symmetric, so one multislice
+    run per energy magnitude gives the combined loss + gain intensity; the
+    split is imposed afterwards from the Bose-Einstein occupation
+    ``n(E)``. What the combined intensity is proportional to depends on the
+    sampling of the mode amplitudes:
+
+    - ``"quantum"``: mode variance proportional to ``2n + 1`` (zero-point
+      motion included, e.g. `rattling` with ``quantum=True``). The combined
+      intensity is the quantum total ``(n + 1) + n``, so the weights are
+      ``(n + 1) / (2n + 1)`` and ``n / (2n + 1)``, summing to 1. At
+      ``T = 0`` (also where k_B T underflows) ``n = 0``: the whole signal is
+      loss.
+    - ``"classical"``: mode variance proportional to ``2 k_B T / E``
+      (equipartition, e.g. molecular-dynamics snapshots). With
+      ``x = E / (2 k_B T)`` the combined intensity is the classical total
+      ``2 n_cl = 1 / x``, and the weights are ``x (n + 1)`` and ``x n``.
+      They sum to ``x coth x``, the standard quantum correction of a
+      classical spectrum, tend to ``1/2`` each at high temperature, and
+      restore the zero-point contribution the classical sampling lacks at
+      low temperature. They diverge as ``T -> 0``, where the classical
+      amplitudes vanish, so a temperature at which ``x`` is not finite
+      raises.
+
+    Both choices satisfy detailed balance, ``loss / gain = exp(E / k_B T)``.
+    """
+    from ase import units
+
+    _validate_snapshot_statistics(snapshot_statistics)
+    k_t = units.kB * _validate_temperature(temperature)
+
+    if snapshot_statistics == "quantum":
+        if k_t == 0.0:
+            n_occ = np.zeros_like(e_values)
+        else:
+            # Where E / k_B T overflows the exponential, n -> 0 is the correct
+            # limit; expm1 keeps n finite where E / k_B T is tiny.
+            with np.errstate(over="ignore"):
+                n_occ = 1.0 / np.expm1(e_values / k_t)
+        loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
+        gain_weight = n_occ / (2.0 * n_occ + 1.0)
+        return loss_weight, gain_weight
+
+    with np.errstate(divide="ignore", over="ignore"):
+        x = e_values / (2.0 * k_t)
+    if not np.all(np.isfinite(x)):
+        raise ValueError(
+            "snapshot_statistics='classical' needs a temperature above 0 K, got "
+            f"{temperature!r}: equipartition amplitudes vanish at T = 0, and the "
+            "weights x (n + 1) and x n, with x = E / (2 k_B T), diverge."
+        )
+    with np.errstate(over="ignore"):
+        n_occ = 1.0 / np.expm1(2.0 * x)
+    return x * (n_occ + 1.0), x * n_occ
+
+
 def _thermal_weight_tds(
     I_tds: np.ndarray,
     e_values: np.ndarray,
     energy_axis_idx: int,
     temperature: float,
+    snapshot_statistics: str = "quantum",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Unfold a classical (loss/gain-symmetric) TDS intensity, computed at
-    energy magnitudes ``|E|`` only, into quantum loss (``+E``) and gain
-    (``-E``) sides via detailed balance.
-
-    A single frozen-phonon multislice run per energy magnitude already
-    contains the *combined* loss + gain intensity — the split between the
-    two sides is a quantum-statistical effect governed by the Bose-Einstein
-    phonon occupation ``n(E)``, not something the classical thermal sampling
-    distinguishes. The zero-energy bin is passed through unweighted: there is
-    no loss/gain asymmetry at zero energy transfer, and the classical
-    sampling already accounts for the thermal occupation there.
-
-    Loss and gain weights, ``(n+1)/(2n+1)`` and ``n/(2n+1)``, sum to 1, so
-    splitting preserves the total (loss + gain) spectral weight of the
-    unweighted input at each energy magnitude.
+    """Unfold a frozen-phonon (loss/gain-symmetric) TDS intensity, computed
+    at energy magnitudes ``|E|`` only, into loss (``+E``) and gain (``-E``)
+    sides with the weights of :func:`_loss_gain_weights`, which depend on
+    whether the snapshots were sampled with quantum or classical
+    statistics. The zero-energy bin is passed through unweighted: there is
+    no loss/gain asymmetry at zero energy transfer.
     """
-    from ase import units
-
     if e_values[0] != 0.0 or np.any(np.diff(e_values) <= 0):
         raise ValueError(
             "temperature-based loss/gain unfolding requires energies "
@@ -7290,18 +7437,9 @@ def _thermal_weight_tds(
     flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
-    k_t = units.kB * _validate_temperature(temperature)
-    if k_t == 0.0:
-        # The limit T -> 0, also where k_B T underflows: no thermal phonons
-        # (n = 0), so the whole signal is loss.
-        n_occ = np.zeros_like(nonzero_e)
-    else:
-        # Where E / k_B T overflows the exponential, n -> 0 is the correct limit;
-        # expm1 keeps n finite where E / k_B T is tiny.
-        with np.errstate(over="ignore"):
-            n_occ = 1.0 / np.expm1(nonzero_e / k_t)
-    loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
-    gain_weight = n_occ / (2.0 * n_occ + 1.0)
+    loss_weight, gain_weight = _loss_gain_weights(
+        nonzero_e, temperature, snapshot_statistics
+    )
 
     def _broadcast(weight):
         # In the intensities' precision, so that float32 intensities stay float32.
@@ -7337,6 +7475,168 @@ def _thermal_weight_tds(
     e_values_signed = np.concatenate([-nonzero_e[::-1], [0.0], nonzero_e])
 
     return result_array, e_values_signed
+
+
+def _unfold_loss_gain_array(
+    array, axes_metadata, energy_axis_idx, temperature, snapshot_statistics="quantum"
+):
+    """Core of the loss/gain unfolding: reweight ``array`` along
+    ``energy_axis_idx`` via :func:`_thermal_weight_tds` and replace that
+    axis's :class:`~abtem.core.axes.EnergyLossAxis` with its signed
+    unfolding. Shared by the public :func:`unfold_loss_gain` (operates on a
+    finished measurement object) and ``phonon_loss_diffraction_patterns``'s
+    inline ``temperature`` handling (operates mid-construction, before a
+    measurement object exists yet) so the two can't independently drift."""
+    from abtem.core.axes import EnergyLossAxis
+
+    energy_axis = axes_metadata[energy_axis_idx]
+    e_values = np.asarray(energy_axis.values, dtype=float)
+    array, e_values_signed = _thermal_weight_tds(
+        array, e_values, energy_axis_idx, temperature, snapshot_statistics
+    )
+    axes_metadata = list(axes_metadata)
+    axes_metadata[energy_axis_idx] = EnergyLossAxis(
+        values=tuple(e_values_signed), units=energy_axis.units
+    )
+    return array, axes_metadata
+
+
+def unfold_loss_gain(
+    measurement, temperature: float, snapshot_statistics: str = "quantum"
+):
+    """Unfold an energy-resolved TDS measurement, computed at energy
+    magnitudes ``|E|`` only, into signed loss (``+E``) and gain (``-E``)
+    sides using Bose-Einstein detailed balance.
+
+    A frozen-phonon run per energy bin gives the *combined* loss + gain
+    intensity of that bin; the split between the two sides is a quantum
+    statistical effect governed by the phonon occupation ``n(E)`` at
+    ``temperature``, with weights ``(n+1)/(2n+1)`` for loss and
+    ``n/(2n+1)`` for gain, which sum to 1 so the total spectral weight per
+    energy magnitude is preserved. The zero-energy bin is passed through
+    unweighted. This is what ``phonon_loss_diffraction_patterns(...,
+    temperature=...)`` does internally for ``components="diffuse"``.
+
+    Given a parity-projected result -- one still carrying the
+    ``"Phonon order"`` axis ``("all", "one", "multi")``, whether a
+    :class:`DiffractionPatterns` or a :class:`MomentumResolvedSpectrum`
+    built from one -- the one-phonon channel is selected automatically and
+    the returned measurement no longer carries that axis. One-phonon Bose
+    weights are meaningful for that channel alone, so there is nothing to
+    choose: ``"multi"``'s energy axis is the bin's mode energy rather than
+    the energy transfer, and ``"all"`` contains it. Passing the ``"one"``
+    slot explicitly gives the same result.
+
+    Parameters
+    ----------
+    measurement : ArrayObject
+        Any array object with an :class:`~abtem.core.axes.EnergyLossAxis`
+        among its ensemble axes (typically :class:`DiffractionPatterns`), or
+        a :class:`MomentumResolvedSpectrum`, whose energy is its last base
+        axis. The energies must start at 0 and strictly increase. Unfolding
+        commutes with :func:`momentum_resolved_spectrum`, since the spectrum
+        integrates every energy independently.
+    temperature : float
+        Sample temperature [K].
+    snapshot_statistics : {"quantum", "classical"}
+        How the frozen-phonon snapshot amplitudes were sampled. ``"quantum"``
+        (default): mode variance proportional to ``2n + 1``, zero-point
+        motion included; weights ``(n+1)/(2n+1)`` and ``n/(2n+1)``.
+        ``"classical"``: equipartition variance ``2 k_B T / E``, as in
+        molecular-dynamics snapshots; weights ``x (n+1)`` and ``x n`` with
+        ``x = E / (2 k_B T)``, which together apply the quantum correction
+        ``x coth x`` to the classical intensity. Both obey detailed balance.
+
+    Returns
+    -------
+    unfolded : same type as ``measurement``
+        With the ``EnergyLossAxis`` replaced by its signed unfolding
+        (``-E_max, ..., 0, ..., +E_max``).
+    """
+    from abtem.core.axes import EnergyLossAxis
+
+    # up front, so a misspelled name is reported as such rather than behind
+    # whichever validation of the energies happens to fail first
+    _validate_snapshot_statistics(snapshot_statistics)
+    # before either branch: the stacked channels survive into the spectrum,
+    # and only the one-phonon one can be unfolded
+    measurement = _select_one_phonon_channel(measurement)
+
+    if isinstance(measurement, MomentumResolvedSpectrum):
+        # the energy is the last *base* axis here, not an ensemble axis
+        array, e_values_signed = _thermal_weight_tds(
+            measurement.array,
+            np.asarray(measurement.e_values, dtype=float),
+            measurement.array.ndim - 1,
+            temperature,
+            snapshot_statistics,
+        )
+        kwargs = measurement._copy_kwargs(exclude=("array", "e_values"))
+        return measurement.__class__(array, e_values=e_values_signed, **kwargs)
+
+    energy_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(measurement.ensemble_axes_metadata)
+            if isinstance(ax, EnergyLossAxis)
+        ),
+        None,
+    )
+    if energy_axis_idx is None:
+        raise ValueError(
+            "unfold_loss_gain requires an EnergyLossAxis among the ensemble "
+            f"axes, got {measurement.ensemble_axes_metadata}."
+        )
+
+    array, ensemble_axes_metadata = _unfold_loss_gain_array(
+        measurement.array,
+        measurement.ensemble_axes_metadata,
+        energy_axis_idx,
+        temperature,
+        snapshot_statistics,
+    )
+    kwargs = measurement._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
+    return measurement.__class__(
+        array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs
+    )
+
+
+def _find_fp_and_energy_axes(
+    axes_metadata: list,
+) -> tuple[Optional[int], Optional[int]]:
+    """Locate the ``FrozenPhononsAxis`` and ``EnergyLossAxis`` in
+    ``axes_metadata``, returning ``None`` for either that is absent.
+
+    Lookup only: the two phonon-loss entry points report a missing axis
+    differently -- the non-parity path names each axis separately and can
+    suggest ``ensemble_mean=False``, the parity path reports both together
+    and relative to the parity axis -- so raising is left to the caller and
+    only the scan itself is shared.
+    """
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
+
+    fp_axis_idx = None
+    energy_axis_idx = None
+    for i, ax in enumerate(axes_metadata):
+        if isinstance(ax, FrozenPhononsAxis):
+            fp_axis_idx = i
+        if isinstance(ax, EnergyLossAxis):
+            energy_axis_idx = i
+    return fp_axis_idx, energy_axis_idx
+
+
+def _require_complex_waves(exit_waves) -> None:
+    """Refuse exit waves that hold intensities rather than wave functions.
+
+    Every phonon-loss channel is built from complex amplitudes -- the parity
+    combinations and the elastic/diffuse split alike -- so intensities
+    would silently produce a meaningless result rather than fail.
+    """
+    if not np.iscomplexobj(exit_waves.array):
+        raise ValueError(
+            "exit_waves must contain complex wave functions (not intensities). "
+            "Pass the Waves object directly, not DiffractionPatterns."
+        )
 
 
 FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
@@ -7540,11 +7840,7 @@ def elastic_diffuse_diffraction_patterns(
             "waves with a WavesDetector."
         )
 
-    if not np.iscomplexobj(exit_waves.array):
-        raise ValueError(
-            "exit_waves must contain complex wave functions (not intensities). "
-            "Pass the Waves object directly, not DiffractionPatterns."
-        )
+    _require_complex_waves(exit_waves)
 
     N = exit_waves.shape[fp_axis_idx]
     needs_diffuse = _needs_the_diffuse_part(names, unbiased)
@@ -7609,6 +7905,285 @@ def elastic_diffuse_diffraction_patterns(
     return result._apply_block_direct(block_direct)
 
 
+def _finalize_phonon_loss_result(
+    result_array,
+    reference_dp: "DiffractionPatterns",
+    remaining_axes: list,
+    frozen_phonon_component: str,
+    block_direct: bool | float,
+) -> "DiffractionPatterns":
+    """Shared tail of ``phonon_loss_diffraction_patterns`` and its parity-
+    projection helper: stamp metadata, build the ``DiffractionPatterns``
+    result (reusing ``reference_dp``'s sampling/fftshift/metadata, since
+    both call sites derive ``result_array`` from a diffraction pattern
+    computed with the same ``max_angle``/``parity``), and apply
+    ``block_direct``. Factored out so the two call sites can't silently
+    diverge on this bookkeeping the way they once did."""
+    metadata = dict(reference_dp.metadata)
+    metadata["frozen_phonon_component"] = frozen_phonon_component
+
+    result = DiffractionPatterns(
+        result_array,
+        sampling=reference_dp.sampling,
+        fftshift=reference_dp.fftshift,
+        ensemble_axes_metadata=remaining_axes or None,
+        metadata=metadata,
+    )
+
+    return result._apply_block_direct(block_direct)
+
+
+def _phonon_loss_diffraction_patterns_parity_projection(
+    exit_waves,
+    parity_axis_idx: int,
+    max_angle: str | float,
+    parity: str,
+    block_direct: bool | float,
+    temperature: Optional[float],
+    snapshot_statistics: str = "quantum",
+) -> "DiffractionPatterns":
+    """Separate one-phonon from multi-phonon scattering (issue #373) from
+    ``exit_waves`` carrying a ``("real", "twin")``
+    :class:`~abtem.core.axes.PhononParityAxis` -- see
+    :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble`'s
+    ``parity_projection``.
+
+    With ``psi_real_j = psi[+u_j]`` and ``psi_twin_j = psi[-u_j]`` for
+    configuration ``j``, define the odd and even parts
+
+        psi_odd_j  = (psi_real_j - psi_twin_j) / 2     # u, u^3, ...
+        psi_even_j = (psi_real_j + psi_twin_j) / 2     # u^0, u^2, u^4, ...
+
+    Returns an ensemble of diffraction patterns stacked along a new
+    ``"Phonon order"`` axis with values ``("all", "one", "multi")``:
+
+    - ``"one"`` (one-phonon): ``mean_j |FT psi_odd_j|^2``. No coherent
+      subtraction is needed: the elastic/Bragg term is even in the
+      displacement, so it cancels exactly, and the mean of ``psi_odd`` over
+      the symmetric ``(+u, -u)`` set vanishes identically.
+    - ``"multi"`` (multi-phonon): the variance of the even part over
+      configurations, ``mean_j |FT psi_even_j|^2 - |FT mean_j psi_even_j|^2``.
+      The subtraction is essential: ``mean_j psi_even_j`` is the bin's
+      coherent (Debye-Waller-damped) elastic wave, and its intensity -- an
+      O(u^4) term living on the reciprocal-lattice points -- is elastic,
+      not multi-phonon, and is of the same order as the two-phonon signal.
+      The variance involves a cancellation of O(1) intensities at the
+      Bragg positions down to O(u^4), which single precision cannot
+      resolve, so this channel is evaluated in complex128 regardless of the
+      configured precision (an upcast of the exit waves for the
+      diffraction-pattern step only; the multislice itself is unchanged)
+      and cast back to the working precision afterwards.
+    - ``"all"``: ``one + multi``. For the symmetric ``(+u, -u)`` set this is
+      *exactly* the ordinary ``I_incoherent - I_coherent`` TDS estimator
+      evaluated over all ``2 N`` members (the odd part of the mean and the
+      odd-even cross term in the intensity cancel pairwise), so it uses
+      twice the statistics of the real configurations alone and needs no
+      further diffraction-pattern passes.
+
+    ``components``, ``unbiased`` and ``reduction_dtype`` are not exposed here:
+    once the parity axis has forced ``ensemble_mean=False`` the
+    elastic/diffuse split is no longer the interesting choice, and the
+    multi-phonon channel is always formed in complex128 with the biased
+    variance.
+    """
+    from abtem.core.axes import (
+        EnergyLossAxis,
+        OrdinalAxis,
+        PhononParityAxis,
+        PhononRestParityAxis,
+    )
+    from abtem.core.utils import get_dtype
+
+    rest_axis_idx = next(
+        (
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononRestParityAxis)
+        ),
+        None,
+    )
+    # With rest fields but no static reference only the one-phonon channel
+    # is computed (see below); one-phonon Bose weights are right for it, so
+    # temperature unfolding is allowed in that case.
+    one_phonon_only = rest_axis_idx is not None and tuple(
+        exit_waves.ensemble_axes_metadata[parity_axis_idx].values
+    ) == ("real", "twin")
+
+    if temperature is not None and not one_phonon_only:
+        raise ValueError(
+            "temperature-based loss/gain unfolding is not available for a "
+            "parity-projected ensemble. The unfolding splits the intensity "
+            "of energy bin E into +E and -E with one-phonon Bose weights; "
+            "that is meaningful for the 'one' channel only. The 'multi' "
+            "channel's energy axis is the mode energy of the bin, not the "
+            "energy transfer -- its same-mode two-phonon processes sit at "
+            "+2E, 0 and -2E with weights (n+1)^2, 2n(n+1) and n^2 over "
+            "(2n+1)^2, none at +/-E -- so unfolding it with one-phonon "
+            "weights mislabels it. Call this function without temperature, "
+            "select the 'one' slot of the 'Phonon order' axis, and apply "
+            "abtem.measurements.unfold_loss_gain(one, temperature) to it."
+        )
+
+    # --- rest parity: keep only the part even in the rest displacement ---
+    # Averaging the complex waves over the ("plus", "minus") rest axis
+    # retains the Debye-Waller damping of the bin's one-phonon amplitude by
+    # all other modes (even orders in u_rest) and cancels the mis-binned
+    # one-bin-phonon-plus-one-rest-phonon term (odd in u_rest) exactly.
+    if rest_axis_idx is not None:
+        rest_axis = exit_waves.ensemble_axes_metadata[rest_axis_idx]
+        if tuple(rest_axis.values) != ("plus", "minus"):
+            raise ValueError(
+                "PhononRestParityAxis must have values ('plus', 'minus'), got "
+                f"{tuple(rest_axis.values)}."
+            )
+        summed = exit_waves.sum(axis=rest_axis_idx)
+        exit_waves = summed.__class__(
+            summed.array / 2, **summed._copy_kwargs(exclude=("array",))
+        )
+        parity_axis_idx = next(
+            i
+            for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+            if isinstance(ax, PhononParityAxis)
+        )
+
+    parity_axis = exit_waves.ensemble_axes_metadata[parity_axis_idx]
+    parity_values = tuple(parity_axis.values)
+    expected_values = (
+        (("real", "twin"), ("real", "twin", "static"))
+        if rest_axis_idx is not None
+        else (("real", "twin"),)
+    )
+    if parity_values not in expected_values:
+        raise ValueError(
+            "phonon_loss_diffraction_patterns requires a PhononParityAxis "
+            f"with values in {expected_values}, got {parity_values}. Build "
+            "the Potential from a parity_projection=True "
+            "EnergyResolvedAtomsEnsemble and run multislice (with a "
+            "WavesDetector, so the exit waves stay complex) before calling "
+            "this function."
+        )
+
+    _require_complex_waves(exit_waves)
+
+    n_axes = len(exit_waves.ensemble_axes_metadata)
+
+    def _select(index):
+        slicing = tuple(
+            index if j == parity_axis_idx else slice(None) for j in range(n_axes)
+        )
+        return exit_waves[slicing]
+
+    waves_real = _select(0)
+    waves_twin = _select(1)
+    # With rest fields, the "static" member is the rest-displaced structure
+    # without the bin displacement, per realization. Subtracting it from the
+    # even part cancels the two-rest-phonon fluctuations (order u_rest^4,
+    # usually larger than the bin's own two-phonon signal) that would
+    # otherwise dominate the multi-phonon channel. Without rest fields the
+    # reference is a constant and drops out of the variance, so none is
+    # needed.
+    waves_static = _select(2) if parity_values == ("real", "twin", "static") else None
+
+    fp_axis_idx, energy_axis_idx = _find_fp_and_energy_axes(
+        waves_real.ensemble_axes_metadata
+    )
+    if fp_axis_idx is None or energy_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have both a FrozenPhononsAxis and an "
+            "EnergyLossAxis in addition to the PhononParityAxis."
+        )
+
+    N = waves_real.shape[fp_axis_idx]
+    # Only the multi-phonon channel is a variance across configurations; the
+    # one-phonon channel is a plain mean of |FT psi_odd|^2 and is well
+    # defined for a single configuration. So this is required except in the
+    # one-phonon-only mode (rest fields without the static reference), which
+    # never forms the variance -- mirroring how the non-parity path scopes the
+    # same guard to the components that need the diffuse part.
+    if N < 2 and not one_phonon_only:
+        raise ValueError(
+            "parity projection requires at least 2 frozen-phonon "
+            f"configurations per energy, got N={N}. The multi-phonon channel "
+            "is the variance of the even part of the exit wave across "
+            "configurations, which is identically zero for a single "
+            "configuration."
+        )
+
+    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
+    wave_kwargs = waves_real._copy_kwargs(exclude=("array",))
+    real_dtype = get_dtype(complex=False)
+
+    # --- "one": psi_odd = (real - twin) / 2, no coherent subtraction ---
+    psi_odd = (waves_real.array - waves_twin.array) / 2
+    dp_one = waves_real.__class__(psi_odd, **wave_kwargs).diffraction_patterns(
+        **dp_kwargs
+    )
+    I_one = dp_one.array.mean(axis=fp_axis_idx)
+    # Full real-space (uncropped) grid, no longer needed once dp_one (the
+    # much smaller, already max_angle-cropped result) exists -- freed here
+    # rather than left alive for the rest of the function, which would
+    # otherwise coexist in memory with psi_even below.
+    del psi_odd
+
+    remaining_axes = [
+        ax for i, ax in enumerate(waves_real.ensemble_axes_metadata) if i != fp_axis_idx
+    ]
+
+    if one_phonon_only:
+        # Rest fields without the static reference: the multi-phonon channel
+        # would be dominated by two-rest-phonon fluctuations, so only the
+        # one-phonon channel is returned -- a plain DiffractionPatterns, as
+        # components="diffuse" returns, with no "Phonon order" axis.
+        if temperature is not None:
+            remaining_energy_axis_idx = next(
+                i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
+            )
+            I_one, remaining_axes = _unfold_loss_gain_array(
+                I_one, remaining_axes, remaining_energy_axis_idx, temperature,
+                snapshot_statistics,
+            )
+        return _finalize_phonon_loss_result(
+            I_one, dp_one, remaining_axes, "one", block_direct
+        )
+
+    # --- "multi": variance of psi_even = (real + twin) / 2, in complex128 ---
+    psi_even = ((waves_real.array + waves_twin.array) / 2).astype(np.complex128)
+    if waves_static is not None:
+        psi_even = psi_even - waves_static.array.astype(np.complex128)
+    waves_even = waves_real.__class__(psi_even, **wave_kwargs)
+    # The intensities below are float64, eagerly and lazily: diffraction
+    # patterns keep the precision of complex128 waves.
+    #   total of the even part = sum_j |FT psi_even_j|^2 / N
+    I_even_total = waves_even.diffraction_patterns(**dp_kwargs).array.mean(
+        axis=fp_axis_idx
+    )
+    #   elastic of the even part = |FT sum_j psi_even_j|^2 / N^2
+    I_even_elastic = (
+        waves_even.sum(axis=fp_axis_idx).diffraction_patterns(**dp_kwargs).array
+        / N**2
+    )
+    I_multi = (I_even_total - I_even_elastic).astype(real_dtype)
+    # Full real-space (uncropped), complex128-upcast grid -- twice the
+    # working precision's byte size -- no longer needed once I_multi exists.
+    del psi_even, waves_even
+
+    # --- "all" = one + multi, exact for the symmetric (+u, -u) set ---
+    I_all = I_one + I_multi
+
+    xp = get_array_module(I_one)
+    stack_fn = _array_module_fn(I_one, xp, "stack")
+    result_array = stack_fn([I_all, I_one, I_multi], axis=0)
+
+    phonon_order_axis = OrdinalAxis(
+        label=_PHONON_ORDER_LABEL, values=("all", "one", "multi")
+    )
+    remaining_axes = [phonon_order_axis] + remaining_axes
+
+    return _finalize_phonon_loss_result(
+        result_array, dp_one, remaining_axes, "parity_projection", block_direct
+    )
+
+
 def phonon_loss_diffraction_patterns(
     exit_waves,
     components: str | Sequence[str] = "diffuse",
@@ -7616,6 +8191,7 @@ def phonon_loss_diffraction_patterns(
     parity: str = "odd",
     block_direct: bool | float = False,
     temperature: Optional[float] = None,
+    snapshot_statistics: str = "quantum",
     *,
     unbiased: bool = False,
     reduction_dtype=None,
@@ -7669,6 +8245,20 @@ def phonon_loss_diffraction_patterns(
         is unweighted. Must be finite and non-negative; at 0 the whole signal is on
         the loss side. Default is None (no unfolding — the returned energies are
         the ones in ``exit_waves``).
+        For a parity-projected ensemble it is accepted only when the result
+        is the one-phonon channel alone (rest fields without the static
+        reference); otherwise it raises, because the one-phonon weights are
+        wrong for the ``"multi"`` channel, whose energy axis is the bin's
+        mode energy rather than the energy transfer -- select the ``"one"``
+        slot and apply :func:`unfold_loss_gain` to it instead.
+    snapshot_statistics : {"quantum", "classical"}
+        How the snapshot amplitudes were sampled, used by the unfolding:
+        ``"quantum"`` (default) for amplitudes drawn with the Bose-Einstein
+        variance ``2n + 1`` (zero-point motion included), ``"classical"``
+        for equipartition amplitudes such as molecular-dynamics snapshots,
+        in which case the unfolding also applies the quantum correction
+        ``x coth x``, ``x = E / (2 k_B T)``, and needs a temperature above
+        0 K. See :func:`unfold_loss_gain`.
     unbiased : bool, optional
         See :func:`elastic_diffuse_diffraction_patterns`.
     reduction_dtype : {None, 'float32', 'float64'}, optional
@@ -7679,9 +8269,55 @@ def phonon_loss_diffraction_patterns(
     DiffractionPatterns
         Intensity patterns with the ``FrozenPhononsAxis`` removed and the
         ``EnergyLossAxis`` preserved (or replaced by its signed loss/gain
-        unfolding if ``temperature`` is given).
+        unfolding if ``temperature`` is given). If ``exit_waves`` carries a
+        :class:`~abtem.core.axes.PhononParityAxis` (built from a
+        ``parity_projection=True``
+        :class:`~abtem.inelastic.phonons.EnergyResolvedAtomsEnsemble` and
+        run through multislice), this instead returns an ensemble stacked
+        along a new ``"Phonon order"`` axis with values ``("all", "one",
+        "multi")`` -- separating one-phonon from multi-phonon scattering
+        (issue #373). In that case ``components`` is ignored, and ``unbiased``
+        and ``reduction_dtype`` must be left at their defaults: ``"one"`` is
+        the odd-in-displacement intensity, ``"multi"`` the variance of the
+        even part, and ``"all"`` their sum, which equals the ordinary TDS
+        estimator over the full ``(+u, -u)`` set. If the ensemble also
+        carries a :class:`~abtem.core.axes.PhononRestParityAxis` (built with
+        ``rest_snapshots``), the exit waves are first averaged over it,
+        which keeps the Debye-Waller damping of the one-phonon channel by the
+        modes outside the bin and removes the mis-binned one-bin-phonon plus
+        one-rest-phonon term.
     """
-    from abtem.core.axes import EnergyLossAxis
+    from abtem.core.axes import EnergyLossAxis, PhononParityAxis
+
+    # Validated before the parity-axis dispatch below: a PhononParityAxis makes
+    # the parity-projection path ignore `components` (see the Returns section
+    # above), but an invalid value (e.g. a typo or a renamed component such as
+    # 'tds') must still be caught rather than silently accepted and dropped.
+    names, stacked = _validate_frozen_phonon_components(components)
+
+    # Likewise: `snapshot_statistics` is only consumed by the unfolding, so with
+    # `temperature=None` a typo would otherwise be accepted and silently ignored.
+    _validate_snapshot_statistics(snapshot_statistics)
+    if temperature is not None:
+        temperature = _validate_temperature(temperature)
+
+    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
+        if isinstance(ax, PhononParityAxis):
+            if unbiased or reduction_dtype is not None:
+                raise ValueError(
+                    "unbiased and reduction_dtype do not apply to a "
+                    "parity-projected ensemble: its multi-phonon channel is "
+                    "always formed in complex128 with the biased variance."
+                )
+            return _phonon_loss_diffraction_patterns_parity_projection(
+                exit_waves,
+                i,
+                max_angle=max_angle,
+                parity=parity,
+                block_direct=block_direct,
+                temperature=temperature,
+                snapshot_statistics=snapshot_statistics,
+            )
 
     energy_axis_idx = next(
         (
@@ -7696,15 +8332,10 @@ def phonon_loss_diffraction_patterns(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    # Validated before the temperature check, so that a renamed component such
-    # as 'tds' gets the error that names its replacement.
-    names, stacked = _validate_frozen_phonon_components(components)
     if temperature is not None and (stacked or names != ("diffuse",)):
         raise ValueError(
             "temperature-based loss/gain unfolding requires components='diffuse'."
         )
-    if temperature is not None:
-        temperature = _validate_temperature(temperature)
 
     result = elastic_diffuse_diffraction_patterns(
         exit_waves,
@@ -7719,19 +8350,17 @@ def phonon_loss_diffraction_patterns(
     )
 
     if temperature is not None:
-        ensemble_axes_metadata = list(result.ensemble_axes_metadata)
         remaining_energy_axis_idx = next(
             i
-            for i, ax in enumerate(ensemble_axes_metadata)
+            for i, ax in enumerate(result.ensemble_axes_metadata)
             if isinstance(ax, EnergyLossAxis)
         )
-        energy_axis = ensemble_axes_metadata[remaining_energy_axis_idx]
-        e_values = np.asarray(energy_axis.values, dtype=float)
-        array, e_values_signed = _thermal_weight_tds(
-            result.array, e_values, remaining_energy_axis_idx, temperature
-        )
-        ensemble_axes_metadata[remaining_energy_axis_idx] = EnergyLossAxis(
-            values=tuple(e_values_signed), units=energy_axis.units
+        array, ensemble_axes_metadata = _unfold_loss_gain_array(
+            result.array,
+            result.ensemble_axes_metadata,
+            remaining_energy_axis_idx,
+            temperature,
+            snapshot_statistics,
         )
         result = DiffractionPatterns(
             array,
