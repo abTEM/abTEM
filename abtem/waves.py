@@ -201,7 +201,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
-        """List of AxisMetadata for the base axes in real space."""
+        """AxisMetadata of the real-space grid the waves are defined on, also when
+        `reciprocal_space` is True."""
         self.grid.check_is_defined()
         assert self.sampling is not None
         return [
@@ -455,7 +456,10 @@ class Waves(BaseWaves, ArrayObject):
         Sampling of wave functions in `x` and `y` [Å].
     reciprocal_space : bool, optional
         If True, the wave functions are assumed to be represented in reciprocal space
-        instead of real space (default is False).
+        instead of real space (default is False). Their exports (`to_data_array`,
+        `to_hyperspy`, `to_quantem`) are those of the corresponding
+        `DiffractionPatterns` [1/Å]: the fftshifted Fourier coefficients on
+        spatial-frequency axes `kx` and `ky`, with the zero frequency at the centre.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -650,6 +654,47 @@ class Waves(BaseWaves, ArrayObject):
             ensemble_axes_metadata=axes_metadata[:-2],
             metadata=metadata,
         )
+
+    def _as_diffraction_patterns(self) -> DiffractionPatterns:
+        """The Fourier coefficients of reciprocal-space waves, as unshifted
+        diffraction patterns on spatial-frequency axes [1/Å]."""
+        return DiffractionPatterns(
+            self.array,
+            sampling=self.reciprocal_space_sampling,
+            fftshift=False,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=copy(self.metadata),
+        )
+
+    def to_hyperspy(self, transpose: bool = True):
+        """Convert to a Hyperspy signal, see `ArrayObject.to_hyperspy`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_hyperspy(transpose)
+        return super().to_hyperspy(transpose)
+
+    def to_data_array(self):
+        """Convert to a xarray DataArray, see `ArrayObject.to_data_array`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_data_array()
+        return super().to_data_array()
+
+    def to_quantem(self):
+        """Convert to a quantem Dataset, see `ArrayObject.to_quantem`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_quantem()
+        return super().to_quantem()
 
     def convolve(
         self,

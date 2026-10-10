@@ -18,7 +18,7 @@ from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -245,7 +245,7 @@ def _interpolate_between_cells(
 
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
     dz_charge = cell[2, 2] / array.shape[2]
-    nz = max(int(np.ceil((b - a) / dz_charge)), 2)
+    nz = max(safe_ceiling_int((b - a) / dz_charge), 2)
     slice_shape = gpts + (nz,)
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))

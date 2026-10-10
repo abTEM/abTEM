@@ -12,7 +12,9 @@ from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.charge_density import (
     ChargeDensityPotential,
     _interpolate_between_cells,
+    _interpolate_slice,
 )
+from abtem.slicing import slice_limits
 
 
 @pytest.fixture
@@ -391,3 +393,29 @@ def test_charge_density_potential_with_an_approximate_default_box_reports_it_onc
         lazy = asnumpy(potential.build(lazy=True).compute().array)
     assert len([r for r in records if "abTEM chose" in str(r.message)]) == 1
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
+
+
+def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
+    # Cumulative slice limits of 0.9 A give b - a = 0.9000000000000004 from the
+    # sixth slice on, a hair above nine grid steps of 0.1 A: the repeated cell
+    # must still sample every slice at nine points, as the one cell does.
+    z = np.arange(90) / 90
+    x, y = np.meshgrid(np.arange(8) / 8, np.arange(6) / 6, indexing="ij")
+    array = (
+        1
+        + 0.3 * np.cos(2 * np.pi * x)[..., None] * np.sin(2 * np.pi * y)[..., None]
+        + 0.5 * np.cos(2 * np.pi * z)
+        + 0.2 * np.sin(6 * np.pi * z)
+    )
+    gpts, sampling = (8, 6), (0.5, 0.5)
+
+    def slices(array, height, num_slices):
+        cell = np.diag([4.0, 3.0, height])
+        limits = slice_limits((0.9,) * num_slices)
+        return np.array(
+            [_interpolate_slice(array, cell, gpts, sampling, a, b) for a, b in limits]
+        )
+
+    one = slices(array, 9.0, 10)
+    repeated = slices(np.tile(array, (1, 1, 3)), 27.0, 30)
+    np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
