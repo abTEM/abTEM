@@ -5782,7 +5782,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 self._with_energy(float(e)).reduce(
                     scan=scan,
                     detectors=detectors,
-                    ctf=ctf,
+                    # Each energy matches the CTF to its own energy in place; a
+                    # lazy graph shared one CTF and computed every energy with
+                    # the last energy's wavelength.
+                    ctf=None if ctf is None else ctf.copy(),
                     reduction_scheme=reduction_scheme,
                     max_batch_multislice=max_batch_multislice,
                     max_batch_reduction=max_batch_reduction,

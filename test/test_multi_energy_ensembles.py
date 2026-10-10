@@ -193,6 +193,31 @@ def test_multi_energy_build_reduce_equals_single_energy_runs(kwargs, lazy):
             _close(a, b, atol=1e-5 if lazy else 1e-10)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_multi_energy_scan_with_a_ctf_uses_each_energys_wavelength(lazy):
+    """Every energy of a multi-energy scan matched the same CTF object to its own
+    energy in place, so a lazy scan computed every energy with the last energy's
+    wavelength (the lowest energy was 15 % off its own run)."""
+
+    def scan(energy):
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=energy, semiangle_cutoff=20
+        )
+        ctf = abtem.CTF(defocus=50.0, semiangle_cutoff=20)
+        out = s_matrix.scan(
+            scan=_scan(potential),
+            detectors=abtem.AnnularDetector(30, 60),
+            ctf=ctf,
+            lazy=lazy,
+        )
+        return out.compute(progress_bar=False) if lazy else out
+
+    potential = _potential()
+    multi = scan(list(ENERGIES))
+    for i, energy in enumerate(ENERGIES):
+        _close(multi[i].array, scan(energy).array, atol=1e-5 if lazy else 1e-10)
+
+
 # --- per-energy diffraction patterns (#503) -----------------------------------
 
 
