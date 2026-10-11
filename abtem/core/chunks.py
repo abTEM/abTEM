@@ -415,7 +415,7 @@ def generate_chunks(
 
 
 def estimate_potential_chunk_size(
-    gpts: tuple[int, int],
+    slice_shape: tuple[int, ...],
     device: str = "cpu",
     dtype: np.dtype = None,
 ) -> int:
@@ -448,8 +448,11 @@ def estimate_potential_chunk_size(
 
     Parameters
     ----------
-    gpts : tuple of int
-        The number of grid points (y, x).
+    slice_shape : tuple of int
+        The shape of what one slice allocates: the number of grid points
+        (y, x), preceded by the length of a component axis for a field with
+        components, and by the shape of the ensemble axes when a chunk holds
+        every member of an ensemble.
     device : str
         The device ('cpu' or 'gpu').
     dtype : numpy.dtype, optional
@@ -471,7 +474,7 @@ def estimate_potential_chunk_size(
     if chunk_size_setting != "auto":
         return int(chunk_size_setting)
 
-    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
+    slice_bytes = int(np.prod(slice_shape)) * dtype.itemsize
 
     if device == "gpu":
         # Deliberately no Bluestein-overhead factor here, unlike the sibling

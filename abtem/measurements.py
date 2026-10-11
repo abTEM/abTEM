@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import inspect
 import itertools
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -3691,6 +3692,58 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _per_energy(method=None, *, shared_outer: bool = False):
+    """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
+    ensemble on its own, and restack the results along the energy axis.
+
+    The angular sampling of diffraction patterns scales with the wavelength, and
+    an `EnergyAxis` of several energies has no single wavelength: the sampling of
+    the ensemble as a whole is that of its highest energy (see
+    `BaseMeasurements._get_energy`). A method that takes or returns scattering
+    angles must therefore see one energy at a time.
+
+    Parameters
+    ----------
+    shared_outer : bool
+        The method has radial bins up to its `outer` argument. The default, the
+        maximum angle, differs between energies, and the members stack along one
+        radial axis, so it is resolved once for the whole ensemble, to the
+        maximum angle of its highest energy, which every energy reaches.
+    """
+
+    def decorator(method):
+        signature = inspect.signature(method)
+
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            from abtem.array import _multi_energy_axis
+
+            index = _multi_energy_axis(self)
+            if index is None:
+                return method(self, *args, **kwargs)
+
+            if shared_outer:
+                bound = signature.bind(self, *args, **kwargs)
+                bound.apply_defaults()
+                if bound.arguments["outer"] is None:
+                    bound.arguments["outer"] = min(self.max_angles)
+                args, kwargs = bound.args[1:], bound.kwargs
+
+            axis = self.ensemble_axes_metadata[index]
+            members = [
+                method(self[(slice(None),) * index + (j,)], *args, **kwargs)
+                for j in range(len(axis.values))
+            ]
+            # A method may move ensemble axes into the base (the scan axes of a
+            # center of mass), which can only be ones that follow the energy axis.
+            position = min(index, len(members[0].ensemble_shape))
+            return stack(members, axis, axis=position)
+
+        return wrapper
+
+    return decorator if method is None else decorator(method)
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -4576,6 +4629,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return result.reshape(new_shape)
 
+    @_per_energy(shared_outer=True)
     def polar_binning(
         self,
         nbins_radial: int,
@@ -4605,7 +4659,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad] (default is 0.0).
         outer : float
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches.
         rotation : float
             Rotation of the bins around the origin [rad] (default is 0.0).
         offset : two float
@@ -4676,6 +4732,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
+    @_per_energy(shared_outer=True)
     def radial_binning(
         self, step_size: float = 1.0, inner: float = 0.0, outer: Optional[float] = None
     ) -> PolarMeasurements:
@@ -4695,10 +4752,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad]. Default is 0.0.
         outer : float, optional
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern. Every bin is
-            ``step_size`` wide, so if ``outer - inner`` is not a multiple of
-            ``step_size`` the trailing partial step is dropped and the last bin ends
-            at ``inner + n * step_size``.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches. Every bin is ``step_size`` wide, so if
+            ``outer - inner`` is not a multiple of ``step_size`` the trailing partial
+            step is dropped and the last bin ends at ``inner + n * step_size``.
 
         Returns
         -------
@@ -4733,6 +4791,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return xp.sum(array * bins, axis=(-2, -1))
 
+    @_per_energy
     def integrate_radial(
         self,
         inner: float,
@@ -4837,6 +4896,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com = com_x + 1.0j * com_y
         return com
 
+    @_per_energy
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
         """
         Calculate center-of-mass images or line profiles from diffraction patterns.
@@ -4900,6 +4960,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array * block
 
+    @_per_energy
     def bandlimit(
         self, inner: float = 0.0, outer: float = np.inf
     ) -> DiffractionPatterns:
@@ -5152,6 +5213,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     #     )
     #     return fsc
 
+    @_per_energy
     def block_direct(
         self, radius: Optional[float] = None, margin: Optional[bool] = None
     ) -> DiffractionPatterns:
