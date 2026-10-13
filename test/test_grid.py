@@ -88,7 +88,7 @@ def test_gpts_change(grid_data, new_gpts):
 
 
 @given(grid_data=grid_data(), new_extent=abtem_st.extent())
-def test_gpts_change(grid_data, new_extent):
+def test_extent_change(grid_data, new_extent):
     grid = Grid(**grid_data)
 
     grid.extent = new_extent

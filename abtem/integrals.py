@@ -17,7 +17,9 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
+from abtem.core import backend
 from abtem.core.backend import (
+    asnumpy,
     cp,
     cupyx,
     device_name_from_array_module,
@@ -218,6 +220,10 @@ def _device_cache_key(device, like=None) -> str | tuple[str, int]:
     xp = get_array_module(device)
     if xp is np:
         return "cpu"
+    if backend.tp is not None and xp is backend.tp:
+        # Metal exposes a single device, so its identity needs no index -- and
+        # a torch device carries no `id` to read one from.
+        return "mps"
     if like is not None and get_array_module(like) is not np:
         return ("gpu", int(like.device.id))
     return ("gpu", int(xp.cuda.Device().id))
@@ -351,6 +357,10 @@ def _sinc_on_device(gpts, sampling, device, device_key):
     """``sinc`` built inside the context of the device its key names."""
     if device_key == "cpu":
         return sinc(gpts, sampling, "cpu")
+
+    if device_key == "mps":
+        # one Metal device, and no context to enter
+        return sinc(gpts, sampling, "mps")
 
     import cupy as cp  # noqa: PLC0415 -- optional dependency
 
@@ -919,6 +929,12 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         """
         if device_key == "cpu":
             return self._calculate_scattering_factor(symbol, gpts, sampling, "cpu")
+
+        if device_key == "mps":
+            # Metal has one device and no context to enter, so the allocation
+            # needs no steering -- the concern this method exists for does not
+            # arise there.
+            return self._calculate_scattering_factor(symbol, gpts, sampling, "mps")
 
         import cupy as cp  # noqa: PLC0415 -- optional dependency
 
@@ -1495,7 +1511,12 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_device)[None]
             )
 
-            if len(self._parametrization.sigmas):
+            # An element with a smoothing width is accumulated into its own
+            # buffer, smoothed, and then added; every other element goes
+            # straight into the slice.
+            symbol = chemical_symbols[number]
+            smoothed = symbol in self._parametrization.sigmas
+            if smoothed:
                 temp = xp.zeros(gpts, dtype=fp_dtype)
             else:
                 temp = array
@@ -1557,6 +1578,24 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                             chunk_offset=start,
                         )
                         del disk_chunk
+            elif device_name_from_array_module(xp) == "mps":
+                # The threaded interpolation is a numba routine over host
+                # memory and Metal has no kernel of its own, so it runs on the
+                # host and the result is added back. Finite projections are
+                # thereby available on Metal rather than unsupported; the
+                # multislice they feed still runs on the device.
+                host_temp = np.zeros(temp.shape, dtype=fp_dtype)
+                _threaded_interpolate_radial_functions(
+                    array=host_temp,
+                    positions=asnumpy(positions),
+                    disk_indices=disk,
+                    disk_counts=disk_counts,
+                    sampling=sampling,
+                    radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
+                    radial_functions=asnumpy(radial_potential),
+                    radial_derivative=asnumpy(radial_potential_derivative),
+                )
+                temp += xp.asarray(host_temp)
             else:
                 _threaded_interpolate_radial_functions(
                     array=temp,
@@ -1569,9 +1608,7 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            symbol = chemical_symbols[number]
-
-            if symbol in self._parametrization.sigmas:
+            if smoothed:
                 sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"
