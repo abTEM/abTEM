@@ -5386,15 +5386,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     def _detect_ensemble(self, waves, detectors, detect, squeeze):
         """The measurements of ``detect(s_matrix)`` for every member of the
-        S-matrix ensemble, allocated on ``waves()``. ``waves`` is a function
-        because it is called only for an ensemble: the waves of the built S-matrix
-        come from building it, which hashes the potential. A measurement whose
-        leading ensemble axis is flagged for the ensemble mean is averaged over
-        it, and that axis is squeezed with ``squeeze``; wave functions keep every
+        S-matrix ensemble, allocated on ``waves``. A measurement whose leading
+        ensemble axis is flagged for the ensemble mean is averaged over it, and
+        that axis is squeezed with ``squeeze``; wave functions keep every
         member."""
         measurements = None
         if self.ensemble_shape:
-            measurements = self._allocate_ensemble_measurements(waves(), detectors)
+            measurements = self._allocate_ensemble_measurements(waves, detectors)
 
         num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
@@ -5447,7 +5445,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         return self._detect_ensemble(
-            lambda: _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
+            _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
         )
 
     @staticmethod
@@ -5648,7 +5646,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         return self._detect_ensemble(
-            lambda: self._built_dummy_probes(scan, ctf), detectors, detect, squeeze
+            self._built_dummy_probes(scan, ctf), detectors, detect, squeeze
         )
 
     @staticmethod
