@@ -59,6 +59,18 @@ def minimum_crop(positions: np.ndarray, shape):
     return crop_corner, size, corners
 
 
+def window_crop(positions: np.ndarray, window_gpts, gpts):
+    """The crop box of windows of ``window_gpts`` points centred on ``positions``
+    (in pixels of a grid of ``gpts`` points), as ``minimum_crop`` returns it, except
+    that a window as large as the grid is the whole grid for every position, with
+    each window's corner at the origin (the cell frame)."""
+    if tuple(window_gpts) == tuple(gpts):
+        xp = get_array_module(positions)
+        return (0, 0), tuple(gpts), xp.zeros(positions.shape, dtype=int)
+
+    return minimum_crop(positions, window_gpts)
+
+
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
     """Two slices covering ``[start, stop)`` on a periodic axis of length ``n``.
 

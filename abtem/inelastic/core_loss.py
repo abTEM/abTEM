@@ -1970,7 +1970,7 @@ def prism_transition_potential_scan(
     )
     from abtem.prism.utils import (
         batch_crop_2d,
-        minimum_crop,
+        window_crop,
         wrapped_crop_2d,
     )
     from abtem.waves import Waves, _average_ensemble_axes
@@ -2142,13 +2142,13 @@ def prism_transition_potential_scan(
 
     # --- Chunk the reduction over scan positions ---
     #
-    # minimum_crop's bounding box spans every position handed to it, so
-    # cropping around the *whole* scan (as a single reduce_and_record call
-    # used to) makes the box -- and the tensordot below -- scale with the
-    # scan's spatial extent rather than with output_window_gpts. Peak memory
-    # is n_positions * (scan_span + window)^2, growing with both factors as
-    # the field of view grows; a production-sized PRISM-EELS scan can demand
-    # a single allocation in the hundreds of GB.
+    # A window smaller than the cell is cropped around the positions of a batch
+    # (window_crop), and the bounding box of that crop spans every position
+    # handed to it. Cropping around the *whole* scan would make the box -- and
+    # the tensordot below -- scale with the scan's spatial extent rather than
+    # with output_window_gpts: peak memory n_positions * (scan_span + window)^2,
+    # growing with both factors as the field of view grows, which for a
+    # production-sized PRISM-EELS scan is a single allocation of hundreds of GB.
     #
     # Chunking over spatially contiguous blocks of scan rows shrinks the
     # bounding box along with the block -- a strided block scheme would keep
@@ -2157,8 +2157,9 @@ def prism_transition_potential_scan(
     # flattened in scan-raster order (positions_np above), so a contiguous
     # range of the flat axis is a contiguous range of whole rows of
     # scan_shape's leading axis for any scan dimensionality, including the
-    # 0-d single-point case (n_rows = row_cols = 1 below, one batch, no
-    # behaviour change).
+    # 0-d single-point case (n_rows = row_cols = 1 below, one batch). A window
+    # as large as the cell is reduced on the cell itself, so its box is the
+    # cell for every batch.
     n_rows = scan_shape[0] if scan_shape else 1
     row_cols = int(np.prod(scan_shape[1:])) if len(scan_shape) > 1 else 1
     n_T_estimate = transition_potential.array.shape[0]
@@ -2176,15 +2177,11 @@ def prism_transition_potential_scan(
     )
     rows_per_batch = min(rows_per_batch, n_rows)
 
-    # The guess above assumes the ideal case (no bounding-box growth), which
-    # is exactly wrong when the batch covers a large fraction of the scan --
-    # that is where the box is at its largest. This must run even when the
-    # guess already covers the whole scan (rows_per_batch == n_rows): gating
-    # it on rows_per_batch < n_rows skipped verification in precisely that
-    # case, silently reproducing the original whole-scan-as-one-block defect
-    # whenever the naive per-position estimate happened to clear the row
-    # count (a large output_window_gpts -- e.g. interpolation=1, no PRISM
-    # downsampling -- makes this the common case, not a corner one).
+    # The guess ignores the scattered window held over the whole box and, for
+    # a window smaller than the cell, the growth of the box with the batch --
+    # largest when the batch covers a large fraction of the scan. It is
+    # therefore verified even when it already covers the whole scan
+    # (rows_per_batch == n_rows).
     if rows_per_batch > 1:
         # Verify the guess against the actual box a batch of this size
         # produces -- translation-invariant for a regular raster scan, so
@@ -2196,7 +2193,7 @@ def prism_transition_potential_scan(
 
         def _batch_bytes(rows):
             end = min(n_rows, rows) * row_cols
-            _, size, _ = minimum_crop(pixel_positions[:end], output_window_gpts)
+            _, size, _ = window_crop(pixel_positions[:end], output_window_gpts, ds_gpts)
             size_px = int(np.prod(size))
             # bbox_scattered (n_T, n_k, *size) plus the dominant ``reduced``
             # tensor (end, n_T, *size) -- see _reduce_and_record below.
@@ -2210,33 +2207,18 @@ def prism_transition_potential_scan(
         for r in range(0, n_rows, rows_per_batch)
     ]
 
-    # minimum_crop's result for a given batch depends only on that batch's
-    # own positions, never on the site or exit plane -- but _reduce_and_record
-    # runs once per (site, exit plane), so computing it there recomputed the
-    # identical box for every batch on every one of those calls. Hoisting it
-    # here, once per batch, turns that into O(n_batches) instead of
-    # O(n_batches * n_sites * n_exit_planes).
-    #
-    # A window spanning the whole cell is reduced on the cell itself, so each
-    # position is detected in the cell frame, as SMatrixArray.reduce does when
-    # its window is the whole grid; a smaller window is centred on the position.
-    if output_window_gpts == ds_gpts:
-        row_batch_boxes = [
-            (
-                (0, 0),
-                ds_gpts,
-                xp.zeros(((row_end - row_start) * row_cols, 2), dtype=int),
-            )
-            for row_start, row_end in row_batches
-        ]
-    else:
-        row_batch_boxes = [
-            minimum_crop(
-                pixel_positions[row_start * row_cols : row_end * row_cols],
-                output_window_gpts,
-            )
-            for row_start, row_end in row_batches
-        ]
+    # window_crop's result for a given batch depends only on that batch's own
+    # positions, never on the site or exit plane -- but _reduce_and_record
+    # runs once per (site, exit plane), so it is computed once per batch here
+    # rather than in every one of those calls.
+    row_batch_boxes = [
+        window_crop(
+            pixel_positions[row_start * row_cols : row_end * row_cols],
+            output_window_gpts,
+            ds_gpts,
+        )
+        for row_start, row_end in row_batches
+    ]
 
     # --- Reduce, detect, accumulate helper ---
     def _reduce_and_record(scattered_window, site_xy, exit_idx):

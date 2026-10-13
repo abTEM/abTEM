@@ -425,3 +425,69 @@ class TestWrappedCrop2D:
                 to_host_array(copy_to_device(got, "cpu")),
                 self._reference(array, corner, (11, 11)),
             )
+
+
+class TestWindowCrop:
+    """``window_crop`` is ``minimum_crop``, except that a window as large as the
+    grid is the whole grid for every position."""
+
+    GPTS = (64, 48)
+
+    @staticmethod
+    def _positions(device):
+        from abtem.core.backend import copy_to_device
+
+        # Pixel positions inside the grid, and far outside it.
+        positions = np.array([[3.2, 40.7], [31.5, 10.1], [-20.0, 90.0], [70.3, 5.5]])
+        return copy_to_device(positions, device)
+
+    @devices
+    def test_a_window_the_size_of_the_grid_is_the_whole_grid(self, device):
+        from abtem.prism.utils import window_crop
+
+        positions = self._positions(device)
+        crop_corner, size, corners = window_crop(positions, self.GPTS, self.GPTS)
+
+        assert crop_corner == (0, 0)
+        assert size == self.GPTS
+        assert_array_matches_device(corners, device)
+        assert corners.shape == positions.shape
+        assert not np.any(to_host_array(corners))
+
+    @devices
+    def test_a_window_the_size_of_the_grid_in_one_direction_is_cropped(self, device):
+        """A window equal to the grid along one axis only is centred on each
+        position, as ``interpolation=(1, 2)`` gives."""
+        from abtem.prism.utils import minimum_crop, window_crop
+
+        positions = self._positions(device)
+        window = (self.GPTS[0], self.GPTS[1] // 2)
+        got = window_crop(positions, window, self.GPTS)
+        expected = minimum_crop(positions, window)
+
+        assert got[0] == expected[0]
+        assert got[1] == expected[1]
+        assert np.array_equal(to_host_array(got[2]), to_host_array(expected[2]))
+        assert np.any(to_host_array(got[2]))
+
+    @devices
+    def test_a_smaller_window_is_cropped_around_the_positions(self, device):
+        from abtem.prism.utils import minimum_crop, window_crop
+
+        positions = self._positions(device)
+        window = (16, 12)
+        got = window_crop(positions, window, self.GPTS)
+        expected = minimum_crop(positions, window)
+
+        assert got[0] == expected[0]
+        assert got[1] == expected[1]
+        assert np.array_equal(to_host_array(got[2]), to_host_array(expected[2]))
+
+    def test_a_single_position(self):
+        from abtem.prism.utils import window_crop
+
+        positions = np.array([[10.0, 20.0]])
+        assert window_crop(positions, self.GPTS, self.GPTS)[2].shape == (1, 2)
+        crop_corner, size, corners = window_crop(positions, (16, 12), self.GPTS)
+        assert size == (16, 12)
+        assert not np.any(corners)

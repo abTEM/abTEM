@@ -66,7 +66,7 @@ from abtem.multislice import (
     multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, validate_potential
-from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
+from abtem.prism.utils import batch_crop_2d, plane_waves, window_crop, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
 from abtem.waves import (
@@ -1142,24 +1142,19 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             position_coefficients, dtype=get_dtype(complex=True)
         )
 
-        if self.window_gpts != self.gpts:
-            pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
-                self.window_offset
-            )
+        pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
+            self.window_offset
+        )
 
-            crop_corner, size, corners = minimum_crop(pixel_positions, self.window_gpts)
+        crop_corner, size, corners = window_crop(
+            pixel_positions, self.window_gpts, self.gpts
+        )
 
-            array = wrapped_crop_2d(array, crop_corner, size)
+        array = wrapped_crop_2d(array, crop_corner, size)
 
-            array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
-            array = _ensemble_axes_first(array, num_ensemble_axes)
-            array = batch_crop_2d(array, corners, self.window_gpts)
-
-        else:
-            array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
-            array = _ensemble_axes_first(array, num_ensemble_axes)
-
-        return array
+        array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
+        array = _ensemble_axes_first(array, num_ensemble_axes)
+        return batch_crop_2d(array, corners, self.window_gpts)
 
     def _calculate_positions_coefficients(self, scan):
         xp = get_array_module(self.wave_vectors)

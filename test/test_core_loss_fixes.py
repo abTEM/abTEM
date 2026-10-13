@@ -1817,14 +1817,16 @@ class TestPrismEelsReductionChunking:
 
     @pytest.mark.parametrize("double_channel", [False, True])
     # With this test's n_T=2 and 5 columns, the forced "position" budget 1
-    # resolves (guess, then verified against the actual crop box) to
-    # single-row batches at both interpolations, and 350 to row batches of 3, 3
-    # and 1 -- checked directly by recording the batch sizes of the reduction.
-    # 7 rows is not a multiple of 3, so the last batch is uneven. At
-    # interpolation 1 the reduction is on the cell itself; at 2 it crops a
-    # window around each batch.
-    @pytest.mark.parametrize("interpolation", [1, 2])
-    @pytest.mark.parametrize("forced_budget", [1, 350])
+    # resolves (guess, then verified against the actual box) to single-row
+    # batches at both interpolations. At interpolation 1 the reduction is on
+    # the cell itself, whose box is the same for every batch, so 207 gives row
+    # batches of 3, 3 and 1 (7 rows is not a multiple of 3, so the last batch
+    # is uneven) and 350 a single batch. At interpolation 2 the box is cropped
+    # around each batch and grows with it, so 350 gives batches of 3, 3 and 1.
+    # Checked directly by recording the batch sizes of the reduction.
+    @pytest.mark.parametrize(
+        "interpolation, forced_budget", [(1, 1), (1, 207), (1, 350), (2, 1), (2, 350)]
+    )
     def test_chunked_reduction_matches_a_single_whole_scan_batch(
         self, monkeypatch, double_channel, forced_budget, interpolation
     ):
@@ -1906,13 +1908,12 @@ class TestPrismEelsReductionChunking:
         no-growth estimate, so this triggers whenever the naive guess merely
         reaches the row count, not only when it wildly overshoots it.
 
-        A scan physically wider than the ~8 A window (unlike this class's
-        other tests, whose scans are drawn in the same few Angstrom as the
-        window and never exercise real box growth) with a budget picked to
-        land the naive guess exactly at the row count reproduces this
-        directly: found by running the fix's own benchmark script against a
-        real GPU, where interpolation=1 (a large, undownsampled window) hit
-        it immediately.
+        A scan physically wider than the window (unlike this class's other
+        tests, whose scans are drawn in the same few Angstrom as the window
+        and never exercise real box growth) with a budget picked to land the
+        naive guess exactly at the row count reproduces this directly. The
+        window is smaller than the cell (interpolation 2), so the box is
+        cropped around each batch and grows with it.
         """
         from abtem.prism.utils import minimum_crop as _real_minimum_crop
 
@@ -1924,7 +1925,7 @@ class TestPrismEelsReductionChunking:
             atoms, gpts=(64, 64), slice_thickness=2.0, exit_planes=1
         )
         s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
+            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=2
         )
         n_rows, n_cols = 9, 6
         n_positions = n_rows * n_cols
@@ -1968,6 +1969,61 @@ class TestPrismEelsReductionChunking:
             f"unchunked (all calls: {call_sizes})"
         )
 
+    def test_the_batch_size_is_estimated_from_the_box_the_reduction_uses(
+        self, monkeypatch
+    ):
+        """At interpolation 1 the window is the cell, and the reduction runs on
+        the cell for every batch, so the box does not grow with the number of
+        rows. The batch size is estimated from that box: a budget that holds
+        the whole scan on the cell gives one batch, and one position less gives
+        more. Sizing the box as ``minimum_crop`` does, around the batch's
+        positions and growing with their span, splits this wide scan into
+        several batches under the same budget.
+        """
+        from abtem.prism import utils
+
+        n_rows, n_cols, n_T = 9, 6, 2
+        atoms, potential, s_matrix, _ = self._setup(n_rows=1, n_cols=1)
+        scan = abtem.GridScan(
+            start=(0, 0),
+            end=(40, 30),
+            gpts=(n_rows, n_cols),
+            fractional=False,
+            potential=potential,
+        )
+
+        batch_rows = []
+        real_batch_crop = utils.batch_crop_2d
+
+        def _recording_batch_crop(array, corners, shape):
+            batch_rows.append(len(corners) // n_cols)
+            return real_batch_crop(array, corners, shape)
+
+        monkeypatch.setattr("abtem.prism.utils.batch_crop_2d", _recording_batch_crop)
+
+        def _run_with_budget(budget):
+            monkeypatch.setattr(
+                "abtem.inelastic.core_loss.estimate_scan_batch_size",
+                lambda *a, **k: budget,
+                raising=False,
+            )
+            batch_rows.clear()
+            return self._run(atoms, s_matrix, scan)
+
+        reference = _run_with_budget(10**9)
+        assert set(batch_rows) == {n_rows}
+
+        # One batch needs (n_T * n_k + n_positions * n_T) cell-sized planes: the
+        # scattered window of every transition and plane wave, and the reduced
+        # waves of every position.
+        fitting_budget = n_T * (len(s_matrix) + n_rows * n_cols)
+        got = _run_with_budget(fitting_budget)
+        assert set(batch_rows) == {n_rows}
+        assert np.array_equal(got, reference)
+
+        _run_with_budget(fitting_budget - 1)
+        assert max(batch_rows) < n_rows
+
     def test_minimum_crop_does_not_scale_with_the_number_of_sites(
         self, monkeypatch
     ):
@@ -1998,7 +2054,7 @@ class TestPrismEelsReductionChunking:
             )
             s_matrix = abtem.SMatrix(
                 potential=potential, energy=ENERGY, semiangle_cutoff=20,
-                interpolation=1,
+                interpolation=2,
             )
             scan = abtem.GridScan(
                 start=(0, 0), end=(7, 5), gpts=(7, 5), fractional=False,
@@ -2018,6 +2074,53 @@ class TestPrismEelsReductionChunking:
             return len(calls)
 
         assert _call_count(n_sites=2) == _call_count(n_sites=8)
+
+    @pytest.mark.parametrize(
+        "interpolation, cell_frame", [(1, True), ((1, 2), False), (2, False)]
+    )
+    def test_elastic_and_core_loss_reductions_share_the_cell_frame_rule(
+        self, monkeypatch, interpolation, cell_frame
+    ):
+        """A window as large as the grid in both directions is the cell for
+        every position, in the elastic reduction and in the core-loss one. A
+        window smaller along one direction only, ``interpolation=(1, 2)``, is
+        centred on each position in both."""
+        from abtem.prism import s_matrix as s_matrix_module
+        from abtem.prism import utils
+
+        real_window_crop = utils.window_crop
+        boxes = {"elastic": [], "core loss": []}
+
+        def _recording(name):
+            def window_crop(positions, window_gpts, gpts):
+                boxes[name].append(real_window_crop(positions, window_gpts, gpts))
+                return boxes[name][-1]
+
+            return window_crop
+
+        monkeypatch.setattr(s_matrix_module, "window_crop", _recording("elastic"))
+        monkeypatch.setattr(utils, "window_crop", _recording("core loss"))
+
+        atoms, potential, s_matrix, _ = self._setup(
+            n_rows=1, n_cols=1, interpolation=interpolation
+        )
+        scan = abtem.GridScan(
+            start=(1, 1),
+            end=(3, 3),
+            gpts=(2, 2),
+            fractional=False,
+            potential=potential,
+        )
+        s_matrix.reduce(scan=scan, detectors=abtem.WavesDetector(), lazy=False)
+        self._run(atoms, s_matrix, scan)
+
+        for name, recorded in boxes.items():
+            assert recorded, name
+            for crop_corner, size, corners in recorded:
+                assert (not np.any(corners)) == cell_frame, name
+                if cell_frame:
+                    assert crop_corner == (0, 0), name
+                    assert size == s_matrix.downsampled_gpts, name
 
     def test_matches_reference_with_a_custom_scans_positions_axis(
         self, monkeypatch
