@@ -344,3 +344,22 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     assert gpts[0] <= n_target * 1.12
     # The period is what the fallback exists to preserve, so it survives.
     assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0
+
+
+@pytest.mark.parametrize("round_to_fast_fft", [False, True])
+@pytest.mark.parametrize("points", [48, 96])
+def test_target_grid_of_an_extent_dividing_the_target_sampling(
+    points, round_to_fast_fft
+):
+    # 48 * 0.05 is 2.4000000000000004, so the extent over 0.05 is 48.00000000000001
+    # in floats; the target is still 48 points, which is itself a fast size.
+    extent = points * 0.05
+    positions = _plane_positions(np.array([0.5]), np.array([0.5]))
+    gpts = commensurate_gpts(
+        (extent, extent),
+        positions,
+        target_sampling=0.05,
+        round_to_fast_fft=round_to_fast_fft,
+    )
+    assert is_fast_fft_size(points)
+    assert gpts == (points, points)
