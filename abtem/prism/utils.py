@@ -9,6 +9,13 @@ from abtem.core.utils import expand_dims_to_broadcast
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
+    """Crop ``new_shape`` windows from the last two axes of ``array`` at ``corners``.
+    A window as large as the array can only sit at the origin, so ``array`` itself
+    is returned, not a copy."""
+
+    if tuple(new_shape) == tuple(array.shape[-2:]):
+        return array
+
     xp = get_array_module(array)
 
     if len(array.shape) > 3:

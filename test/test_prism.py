@@ -491,3 +491,29 @@ class TestWindowCrop:
         crop_corner, size, corners = window_crop(positions, (16, 12), self.GPTS)
         assert size == (16, 12)
         assert not np.any(corners)
+
+
+class TestBatchCrop2D:
+    @devices
+    def test_a_window_the_size_of_the_array_is_not_copied(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import batch_crop_2d
+
+        array = copy_to_device(np.arange(3 * 4 * 6 * 5.0).reshape(3, 4, 6, 5), device)
+        corners = copy_to_device(np.zeros((3, 2), dtype=int), device)
+        assert batch_crop_2d(array, corners, (6, 5)) is array
+
+    @devices
+    def test_smaller_windows_are_cropped_at_their_corners(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import batch_crop_2d
+
+        array = np.arange(3 * 6 * 5.0).reshape(3, 6, 5)
+        corners = np.array([[0, 0], [2, 1], [3, 3]])
+        got = batch_crop_2d(
+            copy_to_device(array, device), copy_to_device(corners, device), (3, 2)
+        )
+        for i, (cx, cy) in enumerate(corners):
+            assert np.array_equal(
+                to_host_array(got)[i], array[i, cx : cx + 3, cy : cy + 2]
+            )

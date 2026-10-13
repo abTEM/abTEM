@@ -2195,9 +2195,15 @@ def prism_transition_potential_scan(
             end = min(n_rows, rows) * row_cols
             _, size, _ = window_crop(pixel_positions[:end], output_window_gpts, ds_gpts)
             size_px = int(np.prod(size))
-            # bbox_scattered (n_T, n_k, *size) plus the dominant ``reduced``
-            # tensor (end, n_T, *size) -- see _reduce_and_record below.
-            return (n_T_estimate * n_k + end * n_T_estimate) * size_px * itemsize
+            # A box as large as the window is not cropped (batch_crop_2d).
+            uncropped = tuple(size) == tuple(output_window_gpts)
+            window_px = 0 if uncropped else int(np.prod(output_window_gpts))
+            # bbox_scattered (n_T, n_k, *size), the dominant ``reduced`` tensor
+            # (end, n_T, *size) and its cropped windows (end, n_T, *window) --
+            # see _reduce_and_record below.
+            planes = n_T_estimate * n_k * size_px
+            planes += end * n_T_estimate * (size_px + window_px)
+            return planes * itemsize
 
         while rows_per_batch > 1 and _batch_bytes(rows_per_batch) > budget_bytes:
             rows_per_batch = max(1, rows_per_batch // 2)
