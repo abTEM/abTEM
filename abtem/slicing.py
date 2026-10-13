@@ -10,8 +10,17 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
-from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
+from abtem.atoms import (
+    _stacklevel_outside_package,
+    is_cell_orthogonal,
+    wrap_and_snap_atoms,
+)
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
 
 # How far outside the cell along z [Å] a non-periodic potential places an atom in
 # its face slice before warning. A thermal displacement is a few times its
@@ -330,7 +339,7 @@ def commensurate_gpts(
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = int(np.ceil(L / target_sampling))
+        n_target = safe_ceiling_int(L / target_sampling)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
@@ -430,8 +439,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())
@@ -643,11 +652,16 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
+    """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
+    [0, height]."""
+    return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
+
+
 def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
     """Warn about atoms far enough outside [0, height] along z that placing them
     in the face slice is a guess at their depth, not a correction of it."""
-    outside = np.maximum(-z, z - height)
-    far = outside > FACE_SLICE_WARNING_DISTANCE
+    far = _far_outside_faces(z, height)
     if not np.any(far):
         return
 
@@ -658,7 +672,7 @@ def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
         "is right for a small displacement such as a frozen phonon, but puts an "
         "atom this far out at the wrong depth. Check the atomic positions against "
         "the cell height.",
-        stacklevel=3,
+        stacklevel=_stacklevel_outside_package(),
     )
 
 

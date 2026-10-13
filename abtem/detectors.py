@@ -314,7 +314,7 @@ class _AbstractRadialDetector(BaseDetector):
         """Spacing between the azimuthal detector bins [mrad]."""
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
         matched = self._matched(waves)
@@ -791,9 +791,6 @@ class AnnularDetector(_AbstractRadialDetector):
     # each energy would; the result has no radial axis to share. (The metadata of
     # an AnnularDetector result never records an outer angle.)
     _sizes_outer_per_energy = True
-
-    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
 
     def _out_type(
         self, waves: WavesType
@@ -1286,7 +1283,7 @@ class SpectralSlitDetector(BaseDetector):
         return (_scan_shape(waves),)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_type(
         self, waves: WavesType
@@ -1924,17 +1921,19 @@ class PixelatedDetector(BaseDetector):
     def _match_ensemble(self, waves: WavesType) -> PixelatedDetector:
         """Fix the crop size of a multi-energy ensemble.
 
-        Cropped to `max_angle`, each energy has its own number of pixels, since
-        the angular sampling scales with the wavelength. Every energy is cropped
+        Cropped to a `max_angle` in mrad, each energy has its own number of pixels,
+        since the angular sampling scales with the wavelength. Every energy is cropped
         to the pixel count of the whole ensemble instead, before any resampling,
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
         from abtem.array import _multi_energy_axis, _without_scalar_energy
 
+        # A string max_angle crops every energy to the same pixels already.
         if (
             self._ensemble_gpts is not None
             or not self.reciprocal_space
+            or isinstance(self.max_angle, str)
             or _multi_energy_axis(waves) is None
         ):
             return self
@@ -2045,7 +2044,10 @@ class PixelatedDetector(BaseDetector):
         return (self._real_space_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
+        if self.resample and not self.reciprocal_space:
+            # Images.interpolate resamples in the configured precision
+            return (get_dtype(complex=False),)
+        return (np.finfo(waves.dtype).dtype,)
 
     def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
         if self.reciprocal_space:
@@ -2184,6 +2186,12 @@ class WavesDetector(BaseDetector):
     def gpts(self) -> Optional[tuple[int, int]]:
         """Number of grid points of the detected wave functions."""
         return self._gpts
+
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
+        if self._gpts is not None:
+            # fft_interpolate works in the configured precision
+            return (get_dtype(complex=True),)
+        return (waves.dtype,)
 
     def _out_type(self, waves: Waves) -> tuple[Type[Waves]]:
         from abtem.waves import Waves

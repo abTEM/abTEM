@@ -89,6 +89,39 @@ class TestPlaneWaveEnergyEnsemble:
         result = pw.multislice(potential, **kwargs).compute()
         assert result.array.shape[0] == 3
 
+    @pytest.mark.parametrize(
+        "algorithm", [None, RealSpaceMultislice(order=1)], ids=["default", "realspace"]
+    )
+    @lazy_params
+    def test_multislice_members_match_single_energy(self, algorithm, lazy):
+        """Oracle: each member of an energy ensemble is an independent
+        simulation at that energy; the ensemble must reproduce each
+        single-energy run, not just have the right shape. The energies give
+        exit waves that differ by O(1), so a member computed with another
+        member's wavelength, interaction constant or propagator is caught."""
+        potential = abtem.Potential(
+            _srtio3_atoms(), sampling=0.1, projection="finite"
+        )
+        kwargs = {} if algorithm is None else {"algorithm": algorithm}
+        energies = [100e3, 200e3, 300e3]
+
+        def run(energy):
+            plane_wave = abtem.PlaneWave(energy=energy).match_grid(potential)
+            return plane_wave.multislice(potential, lazy=lazy, **kwargs).compute()
+
+        ensemble = run(energies)
+        assert ensemble.shape[0] == len(energies)
+        members = [np.asarray(run(energy).array) for energy in energies]
+        # the members really are distinguishable
+        assert np.abs(members[0] - members[-1]).max() > 0.1
+        for i, member in enumerate(members):
+            # the same single-precision operations in the same order; the
+            # bound only allows for a different batching of the FFTs
+            np.testing.assert_allclose(
+                np.asarray(ensemble.array[i]), member, rtol=0, atol=1e-5,
+                err_msg=f"energy member {i} ({energies[i]:g} eV)",
+            )
+
 
 class TestProbeEnergyEnsemble:
     def test_ensemble_shape(self):
@@ -134,6 +167,40 @@ class TestProbeEnergyEnsemble:
         ]
         assert len(energy_axes) == 1
         assert tuple(energy_axes[0].values) == (40e3, 60e3, 80e3)
+
+    @lazy_params
+    def test_multislice_members_match_single_energy(self, lazy):
+        """Oracle: each energy member equals an independent single-energy
+        probe simulation, for a scanned (off-centre, non-square) set of probe
+        positions, so the aperture (in mrad, hence energy dependent in
+        1/A), the propagator and the interaction constant must all use the
+        member's own energy."""
+        potential = abtem.Potential(
+            _srtio3_atoms(), sampling=0.1, projection="finite"
+        )
+        energies = [60e3, 100e3, 200e3]
+        positions = [(0.7, 1.3), (2.2, 0.4)]
+
+        def run(energy):
+            probe = Probe(energy=energy, semiangle_cutoff=20).match_grid(potential)
+            return probe.multislice(potential, scan=positions, lazy=lazy).compute()
+
+        ensemble = run(energies)
+        energy_axis = [
+            i for i, axis in enumerate(ensemble.ensemble_axes_metadata)
+            if isinstance(axis, EnergyAxis)
+        ]
+        assert len(energy_axis) == 1
+        ensemble = np.moveaxis(np.asarray(ensemble.array), energy_axis[0], 0)
+        assert ensemble.shape[:2] == (len(energies), len(positions))
+        members = [np.asarray(run(energy).array) for energy in energies]
+        scale = max(np.abs(member).max() for member in members)
+        assert np.abs(members[0] - members[-1]).max() > 0.1 * scale
+        for i, member in enumerate(members):
+            np.testing.assert_allclose(
+                ensemble[i], member, rtol=0, atol=1e-5 * scale,
+                err_msg=f"energy member {i} ({energies[i]:g} eV)",
+            )
 
 
 class TestWavesBuilderEnergyProperty:
@@ -916,6 +983,41 @@ class TestBlochWavesEnergyEnsemble:
         assert bw._energy_hkl_masks is None
         result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0])
         assert isinstance(result, IndexedDiffractionPatterns)
+
+    def test_members_match_single_energy(self, dp_single, ew_single):
+        """Oracle: each energy member is an independent Bloch-wave calculation
+        at that energy. Its beams (on the union beam set) must equal those of a
+        single-energy run on that energy's own beam set, and its exit wave the
+        single-energy exit wave."""
+        for i, energy in enumerate(BLOCH_ENERGIES):
+            single = BlochWaves(
+                _srtio3_atoms(), energy=energy, sg_max=BLOCH_SG_MAX,
+                g_max=BLOCH_G_MAX,
+            )
+            dp = single.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
+            ew = single.calculate_exit_waves(BLOCH_THICKNESS[0]).compute()
+
+            union = {
+                tuple(hkl): j for j, hkl in enumerate(dp_single.miller_indices)
+            }
+            indices = [union[tuple(hkl)] for hkl in dp.miller_indices]
+            member = np.asarray(dp_single.array[i])
+            np.testing.assert_allclose(
+                member[indices], np.asarray(dp.array), rtol=0,
+                atol=1e-6 * np.abs(np.asarray(dp.array)).max(),
+                err_msg=f"diffraction member {i} ({energy:g} eV)",
+            )
+            # every beam outside the single-energy set carries no intensity
+            outside = np.ones(len(member), dtype=bool)
+            outside[indices] = False
+            np.testing.assert_array_equal(member[outside], 0.0)
+
+            reference = np.asarray(ew.array)
+            np.testing.assert_allclose(
+                np.asarray(ew_single.array[i]), reference, rtol=0,
+                atol=1e-5 * np.abs(reference).max(),
+                err_msg=f"exit-wave member {i} ({energy:g} eV)",
+            )
 
     def test_union_mask_is_superset(self, bw_multi):
         """The union _hkl_mask must be at least as large as each per-energy mask."""
