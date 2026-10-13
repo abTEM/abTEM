@@ -308,7 +308,9 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     if in_place or device == "mps":
         assert asnumpy(computed).dtype == get_dtype()
     host_operands = (array.astype(np.float64), np.asarray(host_operand, np.float64))
-    expected = getattr(operator, op)(*(host_operands[::-1] if reflected else host_operands))
+    expected = getattr(operator, op)(
+        *(host_operands[::-1] if reflected else host_operands)
+    )
     np.testing.assert_allclose(
         asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
     )
