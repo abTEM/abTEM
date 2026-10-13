@@ -17,7 +17,9 @@ cite Kirkland (2010), Eq. 2.22):
   and the phase-aberration kernel is ``exp(-i chi)``.
 * ``defocus = -C10``. With this, for C10 and C30 only,
   ``chi(k) = pi lambda k^2 (Cs lambda^2 k^2 / 2 - defocus)``, which is
-  Kirkland's (2010) axial form with positive defocus = underfocus.
+  Kirkland's (2010) axial form with defocus equal to his Delta f. Positive
+  defocus moves the focus into the cell (+z), as in the conventions page of
+  the user guide.
 * ``alpha = lambda k`` and ``phi = arctan2(ky, kx)``: the azimuth is measured
   counter-clockwise from +kx (array axis 0) toward +ky (array axis 1), and phi_nm
   is the azimuth of a maximum of the corresponding cos term.
@@ -416,7 +418,8 @@ def test_spatial_envelope_equals_gaussian_tilt_average():
 def test_scherzer_defocus_textbook(energy, Cs):
     # abTEM uses the extended-Scherzer variant Delta_f = sqrt(1.5 Cs lambda)
     # (= 1.22 sqrt(Cs lambda); textbook rounding "1.2 sqrt(Cs lambda)").
-    # With defocus = -C10 this must be an *underfocus*: C10 < 0 for Cs > 0.
+    # With defocus = -C10, C10 < 0 for Cs > 0: the defocus is positive, so the
+    # focus moves into the cell.
     wavelength = relativistic_wavelength(energy)
     ctf = CTF(energy=energy, Cs=Cs, defocus="scherzer")
     assert np.isclose(ctf.defocus, np.sqrt(1.5 * Cs * wavelength), rtol=1e-6)
@@ -459,8 +462,9 @@ def test_scherzer_first_zero_and_phase_minimum(energy, Cs):
 
 
 def test_scherzer_string_via_C10_symbol():
-    # "scherzer" given as C10 must produce the same (underfocused) lens as
-    # "scherzer" given as defocus, since defocus = -C10.
+    # "scherzer" given as C10 must produce the same lens as "scherzer" given as
+    # defocus, since defocus = -C10: a positive defocus, with the focus moved
+    # into the cell.
     wavelength = relativistic_wavelength(ENERGY)
     ab = Aberrations(energy=ENERGY, Cs=1e7, C10="scherzer")
     assert np.isclose(ab.C10, -np.sqrt(1.5 * 1e7 * wavelength), rtol=1e-6)
