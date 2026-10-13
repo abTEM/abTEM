@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import pytest
 
-from utils import requires_gpu
+from utils import gpu, requires_gpu
 
 from abtem.core import config
 from abtem.core import fft as abtem_fft
@@ -806,46 +806,117 @@ class TestFftCropInterpolateEmptyNewShape:
         assert np.array_equal(np.asarray(empty_out.array), array)
 
 
-@pytest.mark.parametrize(
-    "shape, chunks, kernel_shape",
-    [
-        # the kernel spans the single block of x along every axis
-        ((3, 16, 20), (3, 16, 20), (3, 16, 20)),
-        ((3, 16, 20), (1, 16, 20), (16, 20)),
-        ((3, 16, 20), (1, 16, 20), (1, 16, 20)),
-        # the kernel spans several blocks of x
-        ((3, 16, 20), (1, 16, 20), (3, 16, 20)),
-        ((3, 16, 20), (2, 16, 20), (3, 1, 20)),
-        ((2, 3, 16, 20), (1, 2, 16, 20), (3, 16, 20)),
-        ((2, 3, 16, 20), (1, 3, 16, 20), (2, 1, 16, 20)),
-        # x broadcasts against a longer kernel axis
-        ((1, 16, 20), (1, 16, 20), (3, 16, 20)),
-    ],
-)
-def test_lazy_fft2_convolve_matches_eager(shape, chunks, kernel_shape):
+_LAZY_CONVOLVE_CASES = [
+    # the kernel spans the single block of x along every axis
+    ((3, 16, 20), (3, 16, 20), (3, 16, 20)),
+    ((3, 16, 20), (1, 16, 20), (16, 20)),
+    ((3, 16, 20), (1, 16, 20), (1, 16, 20)),
+    # the kernel spans several blocks of x
+    ((3, 16, 20), (1, 16, 20), (3, 16, 20)),
+    ((3, 16, 20), (2, 16, 20), (3, 1, 20)),
+    ((2, 3, 16, 20), (1, 2, 16, 20), (3, 16, 20)),
+    ((2, 3, 16, 20), (1, 3, 16, 20), (2, 1, 16, 20)),
+    # x broadcasts against a longer kernel axis
+    ((1, 16, 20), (1, 16, 20), (3, 16, 20)),
+]
+
+
+def _random_complex(rng, shape, dtype=np.complex64):
+    return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(dtype)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("shape, chunks, kernel_shape", _LAZY_CONVOLVE_CASES)
+def test_lazy_fft2_convolve_matches_eager(shape, chunks, kernel_shape, device):
     """A lazy `fft2_convolve` gives the eager result, values and shape, also when
     the kernel has an axis longer than a block of x. Each block of x used to be
     convolved with the whole kernel, so it took the kernel's length along that
     axis, and the computed array was longer than the declared one."""
     import dask.array as da
 
+    from abtem.core.backend import asnumpy, copy_to_device
     from abtem.core.fft import fft2_convolve
 
     rng = np.random.default_rng(0)
-    x = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
-        np.complex64
-    )
-    kernel = (
-        rng.standard_normal(kernel_shape) + 1j * rng.standard_normal(kernel_shape)
-    ).astype(np.complex64)
+    x = copy_to_device(_random_complex(rng, shape), device)
+    kernel = copy_to_device(_random_complex(rng, kernel_shape), device)
 
-    # The NumPy FFT, so that the blocks and the whole array are transformed alike
-    # whatever their alignment in memory.
+    # On the CPU the NumPy FFT, so that the blocks and the whole array are
+    # transformed alike whatever their alignment in memory, and the results are
+    # compared exactly; a device FFT may differ in the last bits by batch size.
     with config.set({"fft": "numpy"}):
-        expected = fft2_convolve(x.copy(), kernel)
+        expected = asnumpy(fft2_convolve(x.copy(), kernel))
         lazy = fft2_convolve(da.from_array(x, chunks=chunks), kernel)
         assert lazy.shape == expected.shape
-        result = lazy.compute(scheduler="synchronous")
+        result = asnumpy(lazy.compute(scheduler="synchronous"))
 
     assert result.shape == expected.shape
-    np.testing.assert_array_equal(result, expected)
+    if device == "cpu":
+        np.testing.assert_array_equal(result, expected)
+    else:
+        np.testing.assert_allclose(
+            result, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+        )
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("shape, chunks, kernel_shape", _LAZY_CONVOLVE_CASES)
+def test_lazy_fft2_convolve_declares_the_dtype_it_computes(
+    shape, chunks, kernel_shape, device
+):
+    """With a complex128 kernel and complex64 x, the product is taken in place,
+    keeping complex64, unless x is the side that broadcasts; then it is promoted
+    to complex128, as eagerly. The lazy result declares what its blocks give."""
+    import dask.array as da
+
+    from abtem.core.backend import copy_to_device
+    from abtem.core.fft import fft2_convolve
+
+    rng = np.random.default_rng(0)
+    x = copy_to_device(_random_complex(rng, shape), device)
+    kernel = copy_to_device(_random_complex(rng, kernel_shape, np.complex128), device)
+
+    lazy = fft2_convolve(da.from_array(x, chunks=chunks), kernel)
+    computed = lazy.compute(scheduler="synchronous")
+
+    assert lazy.dtype == computed.dtype == fft2_convolve(x.copy(), kernel).dtype
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("kernel_shape", [(16, 20), (1, 16, 20), (3, 16, 20)])
+def test_lazy_fft2_convolve_of_unknown_chunk_sizes(kernel_shape, device):
+    """An x whose leading axis has unknown chunk sizes (NaN, as after filtering)
+    is convolved block by block, with the kernel whole where its blocks cannot be
+    matched to those of x."""
+    import dask.array as da
+
+    from abtem.core.backend import asnumpy, copy_to_device
+    from abtem.core.fft import fft2_convolve
+
+    rng = np.random.default_rng(0)
+    array = _random_complex(rng, (3, 16, 20))
+    kernel = _random_complex(rng, kernel_shape)
+    if len(kernel_shape) == 3 and kernel_shape[0] == 3:
+        # A kernel axis longer than 1 against the unknown axis must fit every
+        # block, so x is in a single block along it.
+        chunks = (3, 16, 20)
+    else:
+        chunks = (1, 16, 20)
+    known = copy_to_device(da.from_array(array, chunks=chunks), device)
+    x = da.Array(
+        known.dask,
+        known.name,
+        chunks=((np.nan,) * len(known.chunks[0]),) + known.chunks[1:],
+        meta=known._meta,
+    )
+    assert np.isnan(x.shape[0])
+    kernel = copy_to_device(kernel, device)
+
+    with config.set({"fft": "numpy"}):
+        expected = asnumpy(fft2_convolve(copy_to_device(array, device), kernel))
+        result = asnumpy(fft2_convolve(x, kernel).compute(scheduler="synchronous"))
+
+    np.testing.assert_allclose(
+        result, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
