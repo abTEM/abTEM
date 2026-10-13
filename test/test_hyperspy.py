@@ -13,7 +13,7 @@ from utils import devices, lazy_params
 import abtem.array
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
-from abtem.measurements import Images
+from abtem.measurements import Images, PolarMeasurements
 from abtem.waves import Waves
 
 try:
@@ -325,6 +325,38 @@ def test_real_space_waves_export_real_space_axes(lazy, device):
         )
         assert data_array.coords[dim].attrs["units"] == "Å"
     np.testing.assert_array_equal(_host(data_array.data), _stored(waves))
+
+
+@lazy_params
+@devices
+def test_polar_measurements_to_diffraction_patterns_export_centred(lazy, device):
+    # to_diffraction_patterns draws the polar bins on a centred grid, so it must
+    # set fftshift=True: unflagged, the exports would shift the centred data a
+    # second time and put the innermost bin at the corner.
+    pytest.importorskip("xarray")
+    nbins_radial, nbins_azimuthal = 5, 4
+    array = np.repeat(
+        10.0 * np.arange(1, nbins_radial + 1, dtype=np.float32)[:, None],
+        nbins_azimuthal,
+        axis=1,
+    )
+    polar = PolarMeasurements(
+        da.from_array(array) if lazy else array,
+        radial_sampling=5.0,
+        azimuthal_sampling=2 * np.pi / nbins_azimuthal,
+        metadata={"energy": 100e3, "label": "intensity", "units": "arb. unit"},
+    ).copy_to_device(device)
+
+    patterns = polar.to_diffraction_patterns(gpts=64)
+    assert patterns.fftshift
+    stored = _host(patterns.compute().array)
+    assert stored[32, 32] == array[0, 0]
+
+    data_array = patterns.to_data_array()
+    assert float(data_array.sel(kx=0, ky=0)) == array[0, 0]
+    np.testing.assert_array_equal(_host(data_array.data), stored)
+    if hyperspy is not None:
+        np.testing.assert_array_equal(_host(patterns.to_hyperspy().data), stored)
 
 
 @lazy_params

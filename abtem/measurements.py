@@ -3819,7 +3819,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
         be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
-        export an fftshifted copy, with increasing `kx` and `ky` coordinates.
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates, so
+        data that are already centred must be given with True: with the default
+        they are shifted a second time on export.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
@@ -6042,6 +6044,7 @@ class PolarMeasurements(BaseMeasurements):
         return DiffractionPatterns(
             new_array,
             sampling=sampling,
+            fftshift=True,  # the regions are built centred (fftshift=True above)
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
