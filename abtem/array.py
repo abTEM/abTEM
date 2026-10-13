@@ -2630,14 +2630,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             coords[axis.label] = dr
 
-        attrs = self.metadata
-        attrs["long_name"] = self.metadata["label"]
+        attrs = copy.deepcopy(self.metadata)
+        if "label" in attrs:
+            attrs["long_name"] = attrs["label"]
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
     def to_quantem(self):
         """
-        Convert ArrayObject to quantem Dataset object.
+        Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
+        origin is the coordinate of its first sample, in the units of the sampling; other
+        axes get origin 0 and sampling 1.
         """
 
         if em is None:
@@ -2667,7 +2670,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            origin.append(0.0)
+            origin.append(getattr(axis, "offset", 0.0))
 
         if self.is_lazy:
             self.compute()

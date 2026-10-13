@@ -148,3 +148,30 @@ def test_device_cache_is_thread_safe_under_churn():
 
     info = M._radial_binning_device_arrays_cached.cache_info()
     assert info.currsize <= info.maxsize
+
+
+def test_bin_sums_do_not_depend_on_where_the_result_is_allocated():
+    """The CPU bin sum is the same wherever ``result`` sits relative to
+    ``array``, including just past the end of ``array``."""
+    rng = np.random.default_rng(0)
+    rows, n = 3, 1000
+    separators = np.array([0, 7, 120, 121, 480, 1000])  # 5 unequal bins, != rows
+    separators.flags.writeable = False
+    n_bins = len(separators) - 1
+    array = rng.random((rows, n)).astype(np.float32)
+
+    expected = np.zeros((rows, n_bins), np.float32)
+    M._sum_run_length_encoded(array, expected, separators)
+
+    buffer = np.zeros(2 * rows * n + rows * n_bins, np.float32)
+    buffer[: rows * n] = array.ravel()
+    in_buffer = buffer[: rows * n].reshape(rows, n)
+    differing = []
+    for offset in range(0, rows * n, 7):
+        start = rows * n + offset
+        result = buffer[start : start + rows * n_bins].reshape(rows, n_bins)
+        result[...] = 0
+        M._sum_run_length_encoded(in_buffer, result, separators)
+        if not np.array_equal(result, expected):
+            differing.append(offset)
+    assert not differing, f"{len(differing)} placements differ, e.g. {differing[:5]}"
