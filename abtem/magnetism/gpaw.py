@@ -16,6 +16,7 @@ from abtem.atoms import (
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
+from abtem.core.utils import get_dtype
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.magnetism.iam import (
     BaseMagneticField,
@@ -27,7 +28,7 @@ from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
 from abtem.potentials.gpaw import _GPAW_LOCK, GPAWPotential
 from abtem.potentials.iam import PotentialArray, _default_box, _FieldBuilder
-from abtem.slicing import is_number
+from abtem.slicing import _integrate_planes, is_number
 
 
 def _calculate_non_periodic_magnetic_vector_potential():
@@ -206,30 +207,35 @@ def _fourier_slice_integrals(
     samples is taken as a cosine, as for a real field.
     """
     n = array.shape[-1]
-    spectrum = np.fft.fft(array, axis=-1)
-    k = np.fft.fftfreq(n, d=1.0 / n)
-    q = 2 * np.pi * k / depth
+    q = (2 * np.pi * np.arange(n // 2 + 1) / depth)[:, None]
     a, b = (np.array(limits, dtype=float) for limits in zip(*slice_limits))
 
-    weights = np.empty((n, len(a)), dtype=complex)
+    # The field is real, so the half spectrum of `rfft` holds it: the term of each
+    # positive frequency stands for itself and its conjugate at the negative one,
+    # twice its real part. The zero frequency and the Nyquist term of an even
+    # number of samples stand for themselves.
+    weights = np.empty((len(q), len(a)), dtype=complex)
     weights[0] = b - a
-    q = q[:, None]
     weights[1:] = (np.exp(1j * q[1:] * b) - np.exp(1j * q[1:] * a)) / (1j * q[1:])
+    weights[1:] *= 2
     if n % 2 == 0:
-        q_nyquist = q[n // 2]
-        weights[n // 2] = (np.sin(q_nyquist * b) - np.sin(q_nyquist * a)) / q_nyquist
+        q_nyquist = q[-1]
+        weights[-1] = (np.sin(q_nyquist * b) - np.sin(q_nyquist * a)) / q_nyquist
+    weights /= n
 
-    integrals = (spectrum @ weights).real / n
+    # One component at a time, so that only one of their spectra is held at once.
+    integrals = np.empty(array.shape[:-1] + (len(a),))
+    for component in np.ndindex(array.shape[:-3]):
+        integrals[component] = (np.fft.rfft(array[component], axis=-1) @ weights).real
     return np.moveaxis(integrals, -1, 0)
 
 
 def _is_skewed(cell) -> bool:
-    """Whether `cell` is not orthogonal by the tolerance of `orthogonalize_cell`:
-    off-diagonal components up to 1e-6 of the longest lattice vector are
-    round-off."""
-    cell = np.array(cell, dtype=float)
-    off_diagonal = cell[~np.eye(3, dtype=bool)]
-    return bool(np.abs(off_diagonal).max() > 1e-6 * np.linalg.norm(cell, axis=1).max())
+    """Whether `cell` is not orthogonal as `orthogonalize_cell` sees it, which
+    zeroes components below 1e-6 Å (`_cell_in_plane_frame`). `_supercell_of_box`
+    maps the field from that same frame, so the two agree on every cell."""
+    cell = _cell_in_plane_frame(cell, "xy")
+    return bool(np.any(cell[~np.eye(3, dtype=bool)] != 0.0))
 
 
 def _supercell_of_box(cell, box) -> tuple[np.ndarray, np.ndarray]:
@@ -271,6 +277,13 @@ def _box_grid(vectors: np.ndarray, shape: tuple[int, int, int]):
     even number of samples along these is split into halves at +N/2 and -N/2,
     which is the same real field, and the box axis holds every frequency the mix
     gives, so that no two components share a frequency of the box.
+
+    A smaller grid can keep the components apart too (for a bcc or fcc primitive
+    cell in its cubic box, one more sample per axis than the cell has), but only
+    by folding frequencies past its Nyquist frequency: its samples are those of the
+    field, yet the band-limited interpolant between them, which the slice
+    integrals of the `fft` projection and the interpolation to `gpts` both use, is
+    not. Holding every frequency of the mix keeps that interpolant the field.
 
     Returns the shape of the box grid and, for each axis of the cell, the indices
     of the FFT output taken, their frequencies and their weights.
@@ -322,9 +335,10 @@ def _map_to_box_grid(array: np.ndarray, vectors: np.ndarray) -> np.ndarray:
     grid_shape = array.shape[-3:]
     box_shape, indices, frequencies, weights = _box_grid(vectors, grid_shape)
 
-    spectrum = np.fft.fftn(array, axes=(-3, -2, -1))
-    spectrum = spectrum[(...,) + np.ix_(*indices)]
-    spectrum = spectrum * (
+    # The spectrum of the cell's grid is as large as the field; the box's, built
+    # below, is the largest array here.
+    spectrum = np.fft.fftn(array, axes=(-3, -2, -1))[(...,) + np.ix_(*indices)]
+    spectrum *= (
         weights[0][:, None, None] * weights[1][None, :, None] * weights[2][None, None]
     )
 
@@ -338,10 +352,16 @@ def _map_to_box_grid(array: np.ndarray, vectors: np.ndarray) -> np.ndarray:
         for k in range(3)
     )
 
-    box_spectrum = np.zeros(array.shape[:-3] + box_shape, dtype=complex)
-    box_spectrum[(...,) + target] = spectrum
-    box_spectrum *= np.prod(box_shape) / np.prod(grid_shape)
-    return np.fft.ifftn(box_spectrum, axes=(-3, -2, -1)).real
+    # One component at a time, so that only one complex spectrum of the box, the
+    # largest array here, is held at once.
+    scale = np.prod(box_shape) / np.prod(grid_shape)
+    mapped = np.empty(array.shape[:-3] + box_shape)
+    for component in np.ndindex(array.shape[:-3]):
+        box_spectrum = np.zeros(box_shape, dtype=complex)
+        box_spectrum[target] = spectrum[component]
+        box_spectrum *= scale
+        mapped[component] = np.fft.ifftn(box_spectrum).real
+    return mapped
 
 
 @runtime_checkable
@@ -438,8 +458,9 @@ class _GPAWMagnetics(_FieldBuilder):
 
         self._projection = projection
 
-        # The slices of the whole field, (slice, component, x, y) on the host,
-        # computed from the calculator on the first call of `generate_slices`.
+        # The slices of the whole field, (slice, component, x, y) on the host in
+        # the configured precision, computed from the calculator on the first call
+        # of `generate_slices`.
         self._slices: Optional[np.ndarray] = None
 
         self._quantity = quantity
@@ -538,20 +559,11 @@ class _GPAWMagnetics(_FieldBuilder):
                     f"The slices span {sum(planes_per_slice)} z planes, but the "
                     f"calculator's density has {array.shape[-1]}."
                 )
-            num_planes = array.shape[-1]
             bounds = np.cumsum((0,) + planes_per_slice)
-            dz = sum(self.slice_thickness) / num_planes
-            # Summing the planes start:stop takes all of plane `start` and none of
-            # plane `stop`; half of each is moved across the boundary. Taking all
-            # of `start` (a left Riemann sum) put each slice integral dz / 2 below
-            # its slice.
+            dz = sum(self.slice_thickness) / array.shape[-1]
             return np.stack(
                 [
-                    (
-                        array[..., start:stop].sum(-1)
-                        + (array[..., stop % num_planes] - array[..., start]) / 2
-                    )
-                    * dz
+                    _integrate_planes(array, start, stop) * dz
                     for start, stop in zip(bounds[:-1], bounds[1:])
                 ]
             )
@@ -564,8 +576,11 @@ class _GPAWMagnetics(_FieldBuilder):
 
         # The field is computed from the calculator once and its slices kept, so
         # that building or chunking the slices range by range does not repeat it.
-        if self._slices is None:
-            self._slices = self._project()
+        # Kept in the configured precision, the precision of the slices handed out,
+        # rather than the float64 of the calculator's grid; computed again if the
+        # configured precision has changed since.
+        if self._slices is None or self._slices.dtype != get_dtype():
+            self._slices = self._project().astype(get_dtype(), copy=False)
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
@@ -781,13 +796,13 @@ class GPAWMagneticFields:
 
         panels = [
             (self.potential.project(), "$V$", "$Å^{-3}$"),
-            (self.vector_potential.project()[0], "$A_x$", "ÅT"),
-            (self.vector_potential.project()[2], "$A_z$", "ÅT"),
+            (self.vector_potential.project()[0], "$A_x$", "Å²T"),
+            (self.vector_potential.project()[2], "$A_z$", "Å²T"),
         ]
         if self.magnetic_field is not None:
             panels += [
-                (self.magnetic_field.project()[0], "$B_x$", "T"),
-                (self.magnetic_field.project()[2], "$B_z$", "T"),
+                (self.magnetic_field.project()[0], "$B_x$", "ÅT"),
+                (self.magnetic_field.project()[2], "$B_z$", "ÅT"),
             ]
 
         # Create the figure with pyplot's interactive auto-display off, then

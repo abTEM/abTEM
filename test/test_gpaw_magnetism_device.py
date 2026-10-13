@@ -508,6 +508,49 @@ def test_gpaw_field_of_a_hexagonal_cell_is_that_of_its_orthogonal_supercell(
     )
 
 
+# A bcc primitive cell, whose default box is its cubic cell: every box axis, z
+# included, mixes two lattice vectors of the cell.
+_BCC_A = 2.87
+_BCC_PRIMITIVE = _BCC_A / 2 * np.array([[-1, 1, 1], [1, -1, 1], [1, 1, -1]])
+_BCC_CUBIC = np.diag([_BCC_A] * 3)
+
+
+@pytest.mark.parametrize("projection", ["fft", "real_space"])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_of_a_bcc_primitive_cell_is_that_of_its_cubic_cell(
+    builder, projection
+):
+    # The box's z axis mixes lattice vectors, so its grid holds the frequencies of
+    # two axes of the cell: 1 + 8 + 8 = 17 planes for 8 along each. The cubic
+    # calculator has 17 z planes as well, so that the real-space slices sum the
+    # same planes; both grids resolve every component of the density.
+    kwargs = dict(
+        sampling=0.25,
+        slice_thickness=0.7,
+        gridrefinement=1,
+        projection=projection,
+        rotate_field=None,
+    )
+    primitive_calculator = _LatticeCalculator(_BCC_PRIMITIVE, (8, 8, 8))
+    vectors, turn = _supercell_of_box(_BCC_PRIMITIVE, np.diag(_BCC_CUBIC))
+    np.testing.assert_array_equal(np.abs(vectors), 1 - np.eye(3, dtype=int))
+    np.testing.assert_allclose(turn, np.eye(3), rtol=0, atol=1e-12)
+
+    primitive = builder(primitive_calculator, **kwargs).build()
+    cubic = builder(
+        _LatticeCalculator(_BCC_CUBIC, (12, 12, 17), lattice=_BCC_PRIMITIVE), **kwargs
+    ).build()
+
+    assert primitive.shape == cubic.shape
+    assert len(primitive.slice_thickness) > 1
+    expected = asnumpy(cubic.array)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        asnumpy(primitive.array), expected, rtol=0, atol=1e-5 * scale
+    )
+
+
 def test_box_of_a_rotated_cell_turns_the_field_back():
     # A field placed on the box as orthogonalize_cell places the atoms turns its
     # vectors by the rotation that maps the supercell onto the box.

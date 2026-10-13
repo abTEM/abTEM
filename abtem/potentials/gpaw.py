@@ -43,6 +43,7 @@ from abtem.inelastic.phonons import (
 from abtem.parametrizations import LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.slicing import _integrate_planes
 
 try:
     from gpaw import GPAW
@@ -265,26 +266,6 @@ def _same_elements_and_cell(atoms, other):
     )
 
 
-def _sum_planes(array, start, stop):
-    """
-    The sum of the planes `start` up to, not including, `stop` of the grid that
-    repeats `array` along its last axis, taken from the one period.
-    """
-    # The planes start:stop of the repeated grid are the end of one period, whole
-    # periods and the start of one period. The partial periods are summed as views
-    # and the whole periods as `periods` times the sum of the grid, so no plane is
-    # copied.
-    n = array.shape[2]
-    head_end = min(stop, (start // n + 1) * n)
-    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
-    periods, tail = divmod(stop - head_end, n)
-    if periods:
-        summed = summed + periods * np.sum(array, axis=-1)
-    if tail:
-        summed = summed + np.sum(array[..., :tail], axis=-1)
-    return summed
-
-
 def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     """
     Integrate the planes of `array` along its last axis between the heights `a`
@@ -306,25 +287,15 @@ def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     plane, which gives the same values as integrating the repeated grid, up to
     the order of the float sum.
     """
-    n = array.shape[2]
-    nz = n * repetitions[2]
+    nz = array.shape[2] * repetitions[2]
     dz = thickness / nz
-    # The limits in plane spacings, half a plane up, so that plane k stands for
-    # the interval from k to k + 1.
-    u = a / dz + 0.5
-    v = min(b / dz + 0.5, nz + 0.5)
+    # The limits in plane spacings; the repeated grid ends at plane nz.
+    start, stop = a / dz, min(b / dz, nz)
 
-    if v <= u:
+    if stop <= start:
         return np.zeros(gpts, dtype=array.dtype)
 
-    first, last = int(np.floor(u)), int(np.floor(v))
-    if first == last:
-        summed = (v - u) * array[..., first % n]
-    else:
-        first_plane, last_plane = array[..., first % n], array[..., last % n]
-        summed = (first + 1 - u) * first_plane + (v - last) * last_plane
-        if last > first + 1:
-            summed = summed + _sum_planes(array, first + 1, last)
+    summed = _integrate_planes(array, start, stop)
 
     slice_array = np.tile(summed * dz, repetitions[:2])
     old_shape = slice_array.shape
