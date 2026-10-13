@@ -76,11 +76,11 @@ def test_ensembles(data, ensemble):
     if len(ensemble.ensemble_shape) > 0:
         assert len(blocks.shape) == len(ensemble.ensemble_shape)
 
-    try:
-        for i, _, fp in ensemble.generate_blocks(chunks):
-            assert blocks[i] == fp.item()
-    except NotImplementedError:
-        pass
+    # Every ensemble type listed above implements generate_blocks; this used
+    # to be wrapped in `except NotImplementedError: pass`, which would have
+    # silently skipped the check for a whole type.
+    for i, _, fp in ensemble.generate_blocks(chunks):
+        assert blocks[i] == fp.item()
 
 
 @settings(max_examples=5)
@@ -134,6 +134,9 @@ def test_array_waves_transform(data, ensemble, chunks):
 def test_apply_waves_transform(data, ensemble, lazy):
     ensemble = data.draw(ensemble())
     waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)
+    if getattr(ensemble, "energy", None) is not None:
+        # A fixed energy must be that of the wave functions.
+        ensemble.energy = waves.energy
 
     ensemble_shape = ensemble._out_ensemble_shape(waves)[0]
     waves = ensemble.apply(waves)

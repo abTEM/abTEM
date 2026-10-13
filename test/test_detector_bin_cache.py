@@ -101,7 +101,10 @@ def test_radial_detectors_give_unchanged_results():
     """The cache must not change what a detector produces."""
     from abtem.core import config
 
-    with config.set({"device": "cpu"}):
+    # NumPy's FFT, not FFTW: on x86 an FFTW plan's codelets depend on where the
+    # input buffer happened to be allocated, so two detect() calls can differ at
+    # float32 epsilon for reasons unrelated to the cache, depending on test order.
+    with config.set({"device": "cpu", "fft": "numpy"}):
         probe = abtem.Probe(
             energy=100e3, semiangle_cutoff=20, gpts=(64, 64), extent=(10.0, 10.0)
         )
