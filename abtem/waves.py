@@ -858,7 +858,8 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions as an image.
         """
         waves = self.ensure_real_space()
-        array = waves.array.copy()
+        # The inverse FFT of reciprocal-space waves is already a new array.
+        array = waves.array.copy() if waves is self else waves.array
         metadata = copy(waves.metadata)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
