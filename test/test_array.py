@@ -836,3 +836,56 @@ def test_arithmetic_with_array_of_own_device(device):
     ):
         assert_array_matches_device(result.array, device)
         np.testing.assert_allclose(result.to_cpu().array, expected)
+
+
+def test_to_data_array_without_a_label_leaves_the_metadata_alone():
+    xr = pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64), energy=100e3, sampling=0.1
+    )
+    assert "label" not in waves.metadata
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert isinstance(data_array, xr.DataArray)
+    assert "long_name" not in data_array.attrs
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_with_a_label_sets_long_name_on_the_copy_only():
+    pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"label": "psi"},
+    )
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert data_array.attrs["long_name"] == "psi"
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_does_not_share_nested_metadata_values():
+    # elastic_diffuse_diffraction_patterns records its component names as a list
+    # in the metadata.
+    pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"components": ["total", "elastic"]},
+    )
+
+    waves.to_data_array().attrs["components"].append("diffuse")
+
+    assert waves.metadata["components"] == ["total", "elastic"]
