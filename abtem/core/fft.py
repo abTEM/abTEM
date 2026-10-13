@@ -230,15 +230,52 @@ def _fft_name_to_fftw_direction(name: str) -> str:
     return direction
 
 
-def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
-    dummy = np.zeros_like(array)
+def _fftw_aligned_copy(array: np.ndarray) -> np.ndarray:
+    """A C-contiguous copy of ``array`` aligned for FFTW's SIMD codelets."""
+    copy = pyfftw.empty_aligned(array.shape, dtype=array.dtype)
+    copy[...] = array
+    return copy
+
+
+def _fftw_aligned(array: np.ndarray) -> np.ndarray:
+    """
+    ``array`` in the one layout the FFTW plans in this module are made for.
+
+    pyfftw quietly adds ``FFTW_UNALIGNED`` to a plan whose buffer is not
+    ``pyfftw.simd_alignment``-aligned, and an unaligned plan selects different
+    codelets that round differently (~1e-7 relative, the order of float32
+    epsilon). That alignment is 32 bytes on x86 while malloc only guarantees 16,
+    so planning for whatever buffer arrives would make the result depend on
+    where malloc happened to place it. Every buffer is instead brought to an
+    aligned, C-contiguous layout -- by copying when it is not in it already,
+    which changes no arithmetic -- so that it always gets the same plan.
+
+    A copy is a new buffer, so a caller passing ``overwrite_x=True`` must use the
+    returned result rather than expect its own array to hold it.
+    """
+    if array.flags.c_contiguous and pyfftw.is_byte_aligned(array):
+        return array
+    return _fftw_aligned_copy(array)
+
+
+def _new_fftw_object(
+    array: np.ndarray,
+    name: str,
+    flags: tuple[str, ...] = (),
+    axes: tuple[int, ...] = (-2, -1),
+):
+    # Planning overwrites the buffer, hence the scratch array. It must be laid out
+    # like `array` and as aligned (see `_fftw_aligned`), both for
+    # `update_arrays` to accept `array` and for the wisdom it leaves behind to be
+    # the wisdom for `array`'s plan.
+    dummy = pyfftw.zeros_aligned(array.shape, dtype=array.dtype)
 
     direction = _fft_name_to_fftw_direction(name)
 
     fftw_object = pyfftw.FFTW(
         dummy,
         dummy,
-        axes=(-2, -1),
+        axes=axes,
         direction=direction,
         threads=config.get("fftw.threads"),
         flags=(config.get("fftw.planning_effort"),) + flags,
@@ -282,15 +319,11 @@ class CachedFFTWConvolution:
     hit is the previous call's array, so the cached plans are re-pointed at the
     current array on every call and not only when they are built.
 
-    The plans are deliberately built with the same flags every time, never flags
-    derived from the buffer being transformed. An ``FFTW_UNALIGNED`` plan
-    selects different codelets and so returns slightly different numbers (~1e-7
-    relative, the order of float32 epsilon) than an aligned one. Since malloc
-    only guarantees 16-byte alignment while FFTW's ``simd_alignment`` is 32 on
-    x86, choosing the flag from the incoming array would make the result depend
-    on where the buffer happened to land -- two runs differing only in chunking
-    would then disagree. A buffer the plan will not accept is aligned by copying
-    instead, which changes no arithmetic.
+    The plans are always built for an aligned, C-contiguous buffer, and the
+    input is brought to that layout by ``_fftw_aligned`` rather than planned for
+    as it is: an ``FFTW_UNALIGNED`` plan rounds differently, so the result would
+    otherwise depend on where the buffer happened to land -- two runs differing
+    only in chunking would then disagree.
 
     The cache is thread-local. Dask's threaded scheduler can drive a single
     shared propagator from several worker threads at once, and because a plan
@@ -331,23 +364,14 @@ class CachedFFTWConvolution:
     def __call__(
         self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool
     ) -> np.ndarray:
-        if not overwrite_x:
-            array = array.copy()
+        array = _fftw_aligned(array) if overwrite_x else _fftw_aligned_copy(array)
 
         fftw_objects = self._get_fftw_objects(array)
 
-        try:
-            # A cache hit returns plans still bound to an earlier call's buffer,
-            # so they must be re-pointed even though nothing was rebuilt.
-            for fftw_object in fftw_objects.values():
-                fftw_object.update_arrays(array, array)
-        except ValueError:
-            # The plan demands more alignment than this buffer has. Align the
-            # buffer rather than re-planning for it: a copy preserves the
-            # arithmetic, a differently aligned plan would not.
-            array = pyfftw.byte_align(array)
-            for fftw_object in fftw_objects.values():
-                fftw_object.update_arrays(array, array)
+        # A cache hit returns plans still bound to an earlier call's buffer,
+        # so they must be re-pointed even though nothing was rebuilt.
+        for fftw_object in fftw_objects.values():
+            fftw_object.update_arrays(array, array)
 
         array = fftw_objects["fft2"]()
         array *= kernel
@@ -363,8 +387,13 @@ def get_fftw_object(
     axes: tuple[int, ...] = (-2, -1),
 ):
     """
-    Get a pyfftw object for a given array and a given FFT function.
-    The object is cached and reused if the array shape is the same.
+    Get an in-place pyfftw object for a given array and a given FFT function.
+    The plan is made from FFTW wisdom, which is created and kept the first time a
+    layout is seen.
+
+    The object transforms ``array`` itself if it is aligned and C-contiguous, and
+    otherwise an aligned copy of it (see ``_fftw_aligned``), so the result must be
+    taken from calling the object, not read back from ``array``.
 
     Parameters
     ----------
@@ -376,12 +405,15 @@ def get_fftw_object(
         Allow new wisdom to be created.
     overwrite_x : bool, optional
         Allow the input array to be overwritten.
+    axes : tuple of int, optional
+        Axes over which to compute the FFT.
 
     Returns
     -------
     pyfftw.FFTW
         FFTW object.
     """
+    array = _fftw_aligned(array)
 
     direction = _fft_name_to_fftw_direction(name)
 
@@ -403,12 +435,12 @@ def get_fftw_object(
             raise
 
         if not allow_new_wisdom and config.get("fftw.allow_fallback"):
-            return getattr(pyfftw.builders, name)(array)
+            return getattr(pyfftw.builders, name)(array, axes=axes)
 
         elif not allow_new_wisdom:
             raise
 
-        _new_fftw_object(array, name, flags=flags)
+        _new_fftw_object(array, name, flags=flags, axes=axes)
 
         return get_fftw_object(
             array, name, allow_new_wisdom=False, overwrite_x=overwrite_x, axes=axes
@@ -434,7 +466,8 @@ def _fftw_dispatch(
         _raise_fft_lib_not_present("pyfftw")
 
     if not overwrite_x:
-        x = x.copy()
+        # the copy is made aligned, so `get_fftw_object` need not copy again
+        x = _fftw_aligned_copy(x)
 
     return get_fftw_object(x, func_name, overwrite_x=overwrite_x, **kwargs)()
 
