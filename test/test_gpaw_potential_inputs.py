@@ -30,6 +30,7 @@ from scipy.interpolate import interp1d
 import abtem
 import abtem.potentials.gpaw as gpaw_module
 from abtem.potentials.gpaw import GPAWPotential, _DummyGPAW
+from abtem.potentials.iam import CrystalPotential
 from utils import synthetic_transition_potential
 
 GPTS = (16, 16)
@@ -394,7 +395,10 @@ def test_loaded_calculators_between_paths(fake_gpaw, monkeypatch):
     assert max(counter.alive_while_slicing) == 1
 
 
-def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypatch):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_crystal_of_a_path_list_holds_one_read_calculator(
+    fake_gpaw, monkeypatch, lazy
+):
     counter = _CountReads(monkeypatch)
     crystal = abtem.CrystalPotential(
         GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS),
@@ -403,10 +407,11 @@ def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypat
         seeds=(1, 2, 3),
     )
 
-    abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=False)
+    result = abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=lazy)
+    if lazy:
+        result.compute(scheduler="threads")
 
-    # Each member may build the unit again (two reads per member).
-    assert counter.reads <= 6
+    assert counter.reads == 2
     assert max(counter.alive_while_slicing) == 1
 
 
@@ -488,3 +493,78 @@ def test_gpaw_single_calculator_multislice(gpw_paths, kind, wave, lazy):
     assert result.shape == expected.shape == (32, 32)
     scale = np.abs(expected.array).max()
     np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)
+
+
+def _gpaw_crystal(num_configs, repetitions, **kwargs):
+    unit = GPAWPotential(
+        "a.gpw",
+        gpts=GPTS,
+        frozen_phonons=abtem.FrozenPhonons(
+            _atoms(), num_configs=num_configs, sigmas=0.1, seed=1
+        ),
+    )
+    return CrystalPotential(unit, repetitions, **kwargs)
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+@pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (4, (2, 1, 2), dict(num_frozen_phonons=2, seeds=(5, 6))),  # reseeded
+        (2, (3, 1, 2), dict()),  # unseeded, pool enlarged from 2 to 3
+    ],
+    ids=["seeded", "enlarged"],
+)
+def test_a_crystal_of_a_frozen_phonon_gpaw_unit_builds(
+    fake_gpaw, num_configs, repetitions, kwargs
+):
+    crystal = _gpaw_crystal(num_configs, repetitions, **kwargs)
+
+    built = crystal.build(lazy=False)
+
+    assert built.shape[-3] == len(crystal)
+    assert np.abs(built.array).max() > 0
+
+
+def test_the_pool_unit_of_a_member_is_the_unit_with_the_seed_of_the_member(fake_gpaw):
+    crystal = _gpaw_crystal(4, (2, 1, 2), num_frozen_phonons=2, seeds=(5, 6))
+
+    for seed in (5, 6):
+        pool_unit = crystal._pool_unit_for_member(seed)
+        expected = GPAWPotential(
+            "a.gpw",
+            gpts=GPTS,
+            frozen_phonons=abtem.FrozenPhonons(
+                _atoms(), num_configs=4, sigmas=0.1, seed=seed
+            ),
+        )
+
+        assert pool_unit.calculators is crystal.potential_unit.calculators
+        np.testing.assert_array_equal(
+            pool_unit.build(lazy=False).array, expected.build(lazy=False).array
+        )
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (4, (2, 1, 2), dict(num_frozen_phonons=2, seeds=(5, 6), ensemble_mean=False)),
+        (2, (3, 1, 2), dict()),
+    ],
+    ids=["seeded", "enlarged"],
+)
+def test_a_crystal_of_a_frozen_phonon_gpaw_unit_simulates_as_it_builds(
+    fake_gpaw, num_configs, repetitions, kwargs, lazy
+):
+    expected = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs).build(lazy=False),
+        lazy=False,
+    )
+    result = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs), lazy=lazy
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    _assert_equal(result, expected)

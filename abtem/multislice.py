@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import warnings
+import weakref
 from bisect import bisect_left
 from dataclasses import dataclass
 from functools import partial
@@ -908,6 +909,20 @@ _DETECTORS_ELASTIC_MESSAGE = (
 )
 
 
+_FULL_EXPANSION_SCOPE_MESSAGE = (
+    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
+    "core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice(expansion_scope='propagator')."
+)
+
+
+def _is_full_expansion_scope(algorithm) -> bool:
+    return (
+        isinstance(algorithm, RealSpaceMultislice)
+        and algorithm.expansion_scope == "full"
+    )
+
+
 def transition_potential_multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -936,7 +951,8 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
+        Algorithm used for multislice operator (default is FourierMultislice()). A
+        RealSpaceMultislice must have ``expansion_scope="propagator"``.
 
     Returns
     -------
@@ -948,6 +964,9 @@ def transition_potential_multislice_and_detect(
         # Belt and braces: Waves.transition_potential_multislice refuses this
         # before a graph is built, but the driver is also a public entry point.
         raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(algorithm):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
@@ -1000,7 +1019,7 @@ def transition_potential_multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=algorithm.expansion_scope == "full",
+                fully_corrected=False,
             )
 
     if detectors is None:
@@ -1098,17 +1117,28 @@ def transition_potential_multislice_and_detect(
                 # never off the slice (compare standard_multislice_and_detect
                 # at multislice.py:672), so sharing TransmissionFunction
                 # instances across slice indices is safe here.
-                tx_dedup: dict[int, TransmissionFunction] = {}
+                # An id identifies an object only while the object lives: a
+                # generator that yields a new slice every time (a frozen-phonon
+                # mosaic, a Potential) frees each slice, and a later slice can
+                # get its id and with it the wrong transmission function. Each
+                # entry therefore keeps a weak reference to its slice and is used
+                # only while that slice is the one looked up. A weak reference,
+                # so that the cache holds no slice the generator has let go of.
+                tx_dedup: dict[
+                    int, tuple[weakref.ref[PotentialArray], TransmissionFunction]
+                ] = {}
                 slice_cache = []
                 for slice_obj in potential_configuration.generate_slices():
                     key = id(slice_obj)
-                    cached = tx_dedup.get(key)
-                    if cached is None:
+                    entry = tx_dedup.get(key)
+                    if entry is not None and entry[0]() is slice_obj:
+                        cached = entry[1]
+                    else:
                         cached = antialias_aperture.bandlimit(
                             slice_obj.transmission_function(energy=waves._valid_energy),
                             in_place=False,
                         )
-                        tx_dedup[key] = cached
+                        tx_dedup[key] = (weakref.ref(slice_obj), cached)
                     slice_cache.append(cached)
             else:
                 slice_cache = list(potential_configuration.generate_slices())
@@ -1374,9 +1404,11 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_dtype(waves)[0] for detector in self.detectors)
 
     def _out_meta(self, waves: Waves) -> tuple[np.ndarray, ...]:
+        waves = waves._in_configured_precision()
         return tuple(detector._out_meta(waves)[0] for detector in self.detectors)
 
     def _out_type(self, waves: Waves) -> tuple[type, ...]:
@@ -1559,6 +1591,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return transform
 
     def _calculate_new_array(self, waves: Waves):
+        # The slices are applied in place, so waves in another precision would
+        # be propagated and returned in that precision.
+        waves = waves._in_configured_precision()
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

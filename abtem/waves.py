@@ -64,7 +64,9 @@ from abtem.measurements import (
 )
 from abtem.multislice import (
     _DETECTORS_ELASTIC_MESSAGE,
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
@@ -158,6 +160,17 @@ def _prebuild_reused_potential(
     return potential
 
 
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if multislice_func_kwargs.get("detectors_elastic"):
+        raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
+
+
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
     """Base class of all wave functions.
 
@@ -188,7 +201,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
-        """List of AxisMetadata for the base axes in real space."""
+        """AxisMetadata of the real-space grid the waves are defined on, also when
+        `reciprocal_space` is True."""
         self.grid.check_is_defined()
         assert self.sampling is not None
         return [
@@ -442,7 +456,10 @@ class Waves(BaseWaves, ArrayObject):
         Sampling of wave functions in `x` and `y` [Å].
     reciprocal_space : bool, optional
         If True, the wave functions are assumed to be represented in reciprocal space
-        instead of real space (default is False).
+        instead of real space (default is False). Their exports (`to_data_array`,
+        `to_hyperspy`, `to_quantem`) are those of the corresponding
+        `DiffractionPatterns` [1/Å]: the fftshifted Fourier coefficients on
+        spatial-frequency axes `kx` and `ky`, with the zero frequency at the centre.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
@@ -452,6 +469,10 @@ class Waves(BaseWaves, ArrayObject):
     """
 
     _base_dims = 2
+
+    # The dtype of the array, as for every ArrayObject. BaseWaves.dtype, the
+    # precision a builder builds in, would otherwise precede it in the MRO.
+    dtype = ArrayObject.dtype
 
     def __init__(
         self,
@@ -633,6 +654,47 @@ class Waves(BaseWaves, ArrayObject):
             ensemble_axes_metadata=axes_metadata[:-2],
             metadata=metadata,
         )
+
+    def _as_diffraction_patterns(self) -> DiffractionPatterns:
+        """The Fourier coefficients of reciprocal-space waves, as unshifted
+        diffraction patterns on spatial-frequency axes [1/Å]."""
+        return DiffractionPatterns(
+            self.array,
+            sampling=self.reciprocal_space_sampling,
+            fftshift=False,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=copy(self.metadata),
+        )
+
+    def to_hyperspy(self, transpose: bool = True):
+        """Convert to a Hyperspy signal, see `ArrayObject.to_hyperspy`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_hyperspy(transpose)
+        return super().to_hyperspy(transpose)
+
+    def to_data_array(self):
+        """Convert to a xarray DataArray, see `ArrayObject.to_data_array`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_data_array()
+        return super().to_data_array()
+
+    def to_quantem(self):
+        """Convert to a quantem Dataset, see `ArrayObject.to_quantem`.
+
+        Reciprocal-space waves are exported as described under `reciprocal_space` in
+        `Waves`.
+        """
+        if self.reciprocal_space:
+            return self._as_diffraction_patterns().to_quantem()
+        return super().to_quantem()
 
     def convolve(
         self,
@@ -821,6 +883,16 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         waves = self.__class__(**d)
         return waves
+
+    def _in_configured_precision(self) -> Waves:
+        # The multislice algorithm runs in the configured precision.
+        dtype = get_dtype(complex=True)
+        if self.array.dtype == dtype:
+            return self
+
+        d = self._copy_kwargs(exclude=("array",))
+        d["array"] = self.array.astype(dtype)
+        return self.__class__(**d)
 
     def phase_shift(self, amount: float) -> Waves:
         """Shift the phase of the wave functions.
@@ -1614,15 +1686,12 @@ class Waves(BaseWaves, ArrayObject):
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
         **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
+        """Run the inelastic multislice algorithm from these wave functions; see
+        :meth:`Probe.transition_potential_scan` for the parameters."""
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
-        # Refuse here rather than only in the driver: abTEM is lazy by default,
-        # so a check inside the per-chunk worker lets the caller build a whole
-        # measurement object without complaint and only fail later, from inside
-        # a dask traceback.
-        if multislice_func_kwargs.get("detectors_elastic"):
-            raise NotImplementedError(_DETECTORS_ELASTIC_MESSAGE)
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         potential = validate_potential(potential, self)
 
@@ -2848,7 +2917,9 @@ class Probe(WavesBuilder):
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------
@@ -2861,6 +2932,8 @@ class Probe(WavesBuilder):
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
+
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         probe = self.copy()
         potential = validate_potential(potential)
