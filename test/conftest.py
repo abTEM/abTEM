@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 import pytest
@@ -10,9 +11,9 @@ from utils import requires_multigpu as _requires_multigpu
 
 config.set({"diagnostics.progress_bar": False})
 
-# The literal device string that actually exercises an accelerator (e.g.
-# "gpu", or "mps" once abTEM/abTEM#414 lands) -- whatever `gpu` in
-# test/utils.py currently resolves to.
+# The literal device string that actually exercises an accelerator -- "gpu"
+# with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
+# currently resolves to.
 _GPU_DEVICE = _gpu_param.values[0]
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
@@ -37,9 +38,34 @@ settings.register_profile(
     print_blob=True,
     deadline=None,
     suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.filter_too_much),
-    phases=[Phase.generate],
+    # Not just Phase.generate: without `explicit` every @example is silently
+    # skipped, without `reuse` a failure found once is never replayed from the
+    # example database, and without `shrink` it is reported unminimised.
+    phases=[Phase.explicit, Phase.reuse, Phase.generate, Phase.shrink],
 )
 settings.load_profile("dev")
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    # Warnings are errors here, and matplotlib warns once more than 20 pyplot
+    # figures are open. Without this, the figures that tests leave open pile up
+    # over a serial run until a test that opens one more fails; CI runs with
+    # `-n auto`, so no worker gets that far. Only a test that loaded pyplot can
+    # have opened one, so the others do not import it.
+    yield
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is not None:
+        plt.close("all")
+
+
+@pytest.fixture
+def float64_config(device):
+    # Its 'mps' case never gets here: `float64_devices` in test/utils.py also
+    # applies the `float64` marker, which pytest_collection_modifyitems below
+    # skips on Metal.
+    with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
+        yield
 
 
 def pytest_addoption(parser):
@@ -61,9 +87,48 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "gpu: applied by requires_gpu/requires_multigpu; a presence-only "
-        "marker for the GPU-worker-grouping hook below, not meant to be "
-        "applied directly",
+        "gpu: runs on an accelerator (CuPy or Metal); applied by the `gpu` "
+        "device parameter and by requires_gpu/requires_multigpu, not meant "
+        "to be applied directly. Deselect with -m 'not gpu'.",
+    )
+    for name in ("torch", "mps", "metal"):
+        config.addinivalue_line(
+            "markers",
+            f"{name}: the torch backend (device 'mps'): Apple Metal, or torch's CPU "
+            "device with ABTEM_TORCH__DEVICE=cpu; see `gpu` in test/utils.py.",
+        )
+    config.addinivalue_line(
+        "markers",
+        "float64: the test runs in double precision, set in its body or by a "
+        "fixture rather than by a parameter; its 'mps' case is skipped.",
+    )
+
+
+# Metal is a single-precision backend -- torch refuses a float64 tensor on the
+# MPS device outright -- so a test parametrized on both the 'mps' device and
+# double precision is asking for something the hardware cannot do. Skipping is
+# the honest outcome; letting it fail would bury real Metal regressions under
+# noise that no amount of backend work can clear. Double precision is seen in
+# the test's parameters, or declared with the `float64` marker by a test that
+# sets it in its body or a fixture, which no parameter shows.
+_DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+_METAL_DOUBLE_SKIP_REASON = (
+    "Metal (MPS) is single precision; float64 cannot run on this device"
+)
+
+
+def _is_double_precision_on_metal(item) -> bool:
+    callspec = getattr(item, "callspec", None)
+    if callspec is None:
+        return False
+
+    # Only string parameters are of interest, and restricting to them also
+    # keeps unhashable ones (arrays, Atoms) away from the set membership test.
+    values = [value for value in callspec.params.values() if isinstance(value, str)]
+    if "mps" not in values:
+        return False
+    return item.get_closest_marker("float64") is not None or any(
+        value in _DOUBLE_PRECISION_PARAMS for value in values
     )
 
 
@@ -74,8 +139,8 @@ def pytest_configure(config):
 # grouping silently never happens for any test.
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """Skip slow tests by default, and confine every GPU-touching test to a
-    single pytest-xdist worker.
+    """Skip slow and impossible tests, and confine every GPU-touching test to
+    a single pytest-xdist worker.
 
     ``-n auto`` sizes the worker pool from the CPU core count, with no idea
     that a "device" parametrization means real VRAM. Each worker that lands a
@@ -96,11 +161,15 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+    skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:
         if not runslow and "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+        if _is_double_precision_on_metal(item):
+            item.add_marker(skip_metal_double)
 
         callspec = getattr(item, "callspec", None)
         is_gpu_param = callspec is not None and any(
