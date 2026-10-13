@@ -409,6 +409,144 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     assert diffraction_patterns.array.dtype == np.float32
 
 
+@pytest.mark.parametrize("block_direct", [True, np.True_], ids=["bool", "numpy_bool"])
+def test_diffraction_patterns_block_direct_true_blocks_up_to_the_semiangle_cutoff(
+    block_direct,
+):
+    """block_direct=True blocks what DiffractionPatterns.block_direct() blocks: the
+    bright-field disk of a 20 mrad probe and a margin, not a radius of 1 mrad."""
+    import abtem
+
+    probe = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=(4.8, 6.0), gpts=(48, 60)
+    )
+    waves = probe.build(lazy=False)
+    patterns = waves.diffraction_patterns()
+    expected = patterns.block_direct()
+    one_mrad = patterns.block_direct(radius=1.0)
+    assert np.abs(expected.array).max() < 1e-6 * np.abs(one_mrad.array).max()
+
+    blocked = waves.diffraction_patterns(block_direct=block_direct)
+
+    np.testing.assert_array_equal(blocked.array, expected.array)
+
+
+@pytest.mark.parametrize(
+    "semiangle_cutoff",
+    [None, 0.0, 1e-6, 1e-3, 1.0, np.inf],
+    ids=["plane_wave", "zero", "1e-6", "1e-3", "1.0", "infinite"],
+)
+def test_diffraction_patterns_block_direct_true_of_a_plane_wave_blocks_one_pixel(
+    semiangle_cutoff,
+):
+    """Without a semiangle cutoff (a plane wave), or with one smaller than the
+    angular sampling (6.4 mrad here) or an infinite one, block_direct=True blocks
+    the zero-angle pixel alone. In a one-unit-cell SrTiO3 pattern the pixels next to
+    it are the (100) and (010) reflections, which are kept."""
+    from ase import Atoms
+
+    import abtem
+
+    a = 3.905
+    atoms = Atoms(
+        "SrTiO3",
+        scaled_positions=[
+            (0, 0, 0),
+            (0.5, 0.5, 0.5),
+            (0.5, 0.5, 0),
+            (0.5, 0, 0.5),
+            (0, 0.5, 0.5),
+        ],
+        cell=[a, a, a],
+        pbc=True,
+    ) * (1, 1, 4)
+    with abtem.config.set({"device": "cpu"}):
+        potential = abtem.Potential(atoms, gpts=(48, 48), slice_thickness=a / 2)
+        if semiangle_cutoff in (None, np.inf):
+            beam = abtem.PlaneWave(energy=200e3)
+        else:
+            beam = abtem.Probe(energy=200e3, semiangle_cutoff=semiangle_cutoff)
+        waves = beam.multislice(potential, lazy=False)
+    if semiangle_cutoff == np.inf:
+        # A CTF without an aperture records an infinite semiangle cutoff.
+        waves = waves.apply_ctf(abtem.CTF())
+        assert waves.metadata["semiangle_cutoff"] == np.inf
+    patterns = waves.diffraction_patterns()
+    center = tuple(n // 2 for n in patterns.shape[-2:])
+    unblocked = np.asarray(patterns.array)
+    assert unblocked[center[0] + 1, center[1]] > 0
+    assert unblocked[center[0], center[1] + 1] > 0
+
+    blocked = np.asarray(waves.diffraction_patterns(block_direct=True).array)
+
+    assert blocked[center] == 0
+    keep = np.ones(unblocked.shape, dtype=bool)
+    keep[center] = False
+    np.testing.assert_array_equal(blocked[keep], unblocked[keep])
+
+
+def _zero_frequency_pixel(shape, fftshift):
+    """The index of the zero frequency, from NumPy's FFT conventions alone."""
+    index = []
+    for n in shape:
+        frequencies = np.fft.fftfreq(n)
+        if fftshift:
+            frequencies = np.fft.fftshift(frequencies)
+        index.append(int(np.flatnonzero(frequencies == 0)[0]))
+    return tuple(index)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
+@pytest.mark.parametrize("fftshift", [True, False], ids=["shifted", "unshifted"])
+@pytest.mark.parametrize(
+    "semiangle_cutoff",
+    [None, 0.0, 1e-3, np.inf, np.array([10.0, 20.0])],
+    ids=["none", "zero", "1e-3", "infinite", "array"],
+)
+@pytest.mark.parametrize(
+    "gpts, extent",
+    [
+        ((45, 64), (20.0, 26.0)),
+        ((64, 45), (26.0, 20.0)),
+        ((45, 51), (20.0, 23.0)),
+        ((64, 80), (26.0, 32.0)),
+    ],
+    ids=["odd_even", "even_odd", "odd_odd", "even_even"],
+)
+def test_diffraction_patterns_block_direct_true_blocks_the_zero_frequency_pixel(
+    gpts, extent, semiangle_cutoff, fftshift, lazy, device
+):
+    """Without a scalar semiangle cutoff larger than half the angular sampling,
+    block_direct=True zeroes the zero-frequency pixel and nothing else, for every
+    pattern shape, with and without fftshift."""
+    from abtem.waves import Waves
+
+    rng = np.random.default_rng(0)
+    array = (5 + rng.normal(size=gpts) + 1j * rng.normal(size=gpts)).astype(
+        np.complex64
+    )
+    metadata = (
+        {} if semiangle_cutoff is None else {"semiangle_cutoff": semiangle_cutoff}
+    )
+    waves = Waves(array, energy=200e3, extent=extent, metadata=metadata)
+    waves = waves.copy_to_device(device)
+    if lazy:
+        waves = waves.ensure_lazy()
+    kwargs = dict(max_angle="full", parity="same", fftshift=fftshift)
+    unblocked = waves.diffraction_patterns(**kwargs).compute().to_cpu().array
+    assert unblocked.shape == gpts and np.all(unblocked > 0)
+
+    blocked = waves.diffraction_patterns(block_direct=True, **kwargs).compute()
+
+    blocked = blocked.to_cpu().array
+    pixel = _zero_frequency_pixel(gpts, fftshift)
+    assert blocked[pixel] == 0
+    keep = np.ones(gpts, dtype=bool)
+    keep[pixel] = False
+    np.testing.assert_array_equal(blocked[keep], unblocked[keep])
+
+
 @given(
     data=st.data(),
     repetitions=st.tuples(
@@ -589,3 +727,48 @@ def test_depth_profile_finite_depth(exit_plane_waves):
 def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
     profile = exit_plane_waves.depth_profile(convert_complex=convert_complex)
     assert profile.array.shape[-2:] == (exit_plane_waves.shape[-1], exit_plane_waves.shape[0])
+
+
+@devices
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("reciprocal_space", [False, True])
+def test_phase_shift_keeps_the_space_of_the_waves(
+    reciprocal_space, lazy, precision, device
+):
+    import dask.array as da
+
+    from abtem.core.axes import OrdinalAxis
+    from abtem.core.utils import get_dtype
+
+    amount = 0.3
+    with abtem.config.set({"precision": precision}):
+        dtype = get_dtype(complex=True)
+        rng = np.random.default_rng(0)
+        psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
+        psi = psi.astype(dtype)
+        array = np.fft.fft2(psi).astype(dtype) if reciprocal_space else psi
+        if lazy:
+            array = da.from_array(array, chunks=(1, -1, -1))
+        waves = Waves(
+            array,
+            energy=100e3,
+            sampling=0.1,
+            reciprocal_space=reciprocal_space,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        ).copy_to_device(device)
+
+        shifted = waves.phase_shift(amount)
+
+        assert shifted.reciprocal_space == reciprocal_space
+        assert shifted.is_lazy == lazy
+        # The phase factor must not widen the waves: a NumPy complex128 scalar
+        # promotes complex64 waves to complex128 under NEP 50.
+        assert shifted.array.dtype == dtype
+        result = shifted.ensure_real_space().compute()
+        assert result.array.dtype == dtype
+        result = asnumpy(result.array)
+
+    expected = np.exp(1j * amount) * psi
+    atol = 100 * np.finfo(dtype).eps * np.abs(psi).max()
+    assert np.allclose(result, expected, rtol=0, atol=atol)

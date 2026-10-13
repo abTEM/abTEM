@@ -16,6 +16,7 @@ from abtem.waves import Waves
 ENERGIES = (50e3, 60e3, 70e3)
 
 pytestmark = [
+    pytest.mark.float64,
     pytest.mark.filterwarnings(
         "ignore:The interpolation factor does not exactly divide:UserWarning"
     ),
@@ -68,8 +69,6 @@ def _close(a, b, atol=1e-12):
 )
 @devices
 def test_matched_is_a_copy_and_leaves_the_detector_unsized(make, device):
-    if device == "mps":
-        pytest.skip("Metal is single precision; this test runs in float64")
     waves = _plane_waves(device)
     detector = make()
     matched = detector._matched(waves)

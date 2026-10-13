@@ -831,6 +831,8 @@ def test_arithmetic_with_array_of_own_device(device):
         (images * xp.asarray(factor), host * factor),
         (images - xp.asarray(factor), host - factor),
         (images / xp.asarray(factor), host / factor),
+        (xp.asarray(factor) * images, factor * host),
+        (xp.asarray(factor) - images, factor - host),
     ):
         assert_array_matches_device(result.array, device)
         np.testing.assert_allclose(result.to_cpu().array, expected)

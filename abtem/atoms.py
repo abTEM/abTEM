@@ -1051,12 +1051,12 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
 
     If `default` is true, `box` is the one abTEM chose because none was given: the
     warning says so, names the ways to avoid the strain, and a box that holds no
-    whole repetition, or a cell that cannot be rotated to `plane`, is not an error
-    here but silent: the potential reports it when it places the atoms, if it does.
+    whole repetition is not an error here but silent: the potential reports it when
+    it places the atoms, if it does.
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except (ValueError, RuntimeError):
+    except ValueError:
         if default:
             return
         raise
@@ -1352,7 +1352,7 @@ def cut_cell(
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell,
     ignoring periodicity. If the given atoms do not originally fill the cell, they are
-    first repeated until they do.
+    first repeated until they do, also when some of them lie outside the cell.
 
     Parameters
     ----------
@@ -1410,15 +1410,48 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
+    floor_min = np.floor(scaled_corners.min(axis=0))
+
     new_atoms = atoms * repetitions
 
-    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    center_translate = np.dot(floor_min, atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
 
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
+
+    # The repetitions are the lattice shifts [first, first + repetitions). They reach
+    # every image in the region kept of an atom given in the cell, except in a
+    # non-orthogonal cell with a margin, and at a face within rounding. They miss
+    # those of an atom given outside the cell. Those images are placed directly, at
+    # the lattice shifts the region kept needs, and follow the atoms of the
+    # repetitions, which are as they would be without them. Their number is set by
+    # the box, not by how far outside the cell the atom is.
+    first = floor_min - scaled_margin.sum(0)
+    # The region kept is the one `atoms_in_cell` keeps, which allows 1e-12 of the box
+    # length at both faces of the box.
+    kept = scaled_corners - np.linalg.solve(
+        atoms.cell.T, np.array(margin) + 1e-12 * np.array(cell)
+    )
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    unreached = np.flatnonzero(
+        np.any(
+            (scaled_positions < kept.max(axis=0) - first - repetitions)
+            | (scaled_positions >= kept.min(axis=0) - first + 1),
+            axis=1,
+        )
+    )
+    # The region kept spans fewer than `repetitions` shifts along each axis.
+    steps = np.indices(repetitions).reshape(3, -1).T
+    shifts = np.ceil(kept.min(axis=0) - scaled_positions[unreached])[:, None] + steps
+    shifts = shifts.reshape(-1, 3)
+    reached = np.all((shifts >= first) & (shifts < first + repetitions), axis=1)
+    missed = atoms[np.repeat(unreached, len(steps))[~reached]]
+    missed.positions[:] += np.dot(shifts[~reached], atoms.cell)
+    missed.cell = cell
+    new_atoms.extend(atoms_in_cell(missed, margin=margin))
 
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
@@ -1479,6 +1512,43 @@ def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
     return atoms
 
 
+def _pad_images(margin: float, length: float) -> int:
+    """The number of cell lengths `pad_atoms` repeats a cell to each side."""
+    return int(np.ceil(margin / length))
+
+
+def _wrap_far_atoms(
+    atoms: Atoms, margins: tuple[float, float, float], directions: str = "xy"
+) -> None:
+    """
+    Wrap into the cell, in place, the atoms that `pad_atoms` would not keep with all
+    their images, along the given directions.
+
+    `pad_atoms` repeats the cell `_pad_images` times to each side and crops to the
+    margin. The images of an atom given outside the cell are all in the repetitions
+    only up to the distance they reach less the margin, and the atom itself is kept
+    only up to the margin. Wrapping the atoms further out, by whole cell lengths,
+    leaves the periodic structure unchanged. An atom closer to the cell is not moved.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to wrap, with an orthogonal cell.
+    margins : tuple of three floats
+        The padding margin along `x`, `y` and `z`.
+    directions : str
+        The directions to wrap along, as for `pad_atoms`.
+    """
+    for direction in directions:
+        axis = "xyz".index(direction)
+        length = atoms.cell[axis, axis]
+        reach = _pad_images(margins[axis], length) * length
+        slack = min(reach - margins[axis], margins[axis])
+        positions = atoms.positions[:, axis]
+        far = (positions < -slack) | (positions >= length + slack)
+        positions[far] = np.mod(positions[far], length)
+
+
 def pad_atoms(
     atoms: Atoms,
     margins: SupportsFloat | tuple[float, float, float],
@@ -1532,7 +1602,7 @@ def pad_atoms(
 
     reps = [1, 1, 1]
     for axis in axes:
-        reps[axis] = int(1 + 2 * np.ceil(margins[axis] / atoms.cell[axis, axis]))
+        reps[axis] = 1 + 2 * _pad_images(margins[axis], atoms.cell[axis, axis])
 
     if not any([rep > 1 for rep in reps]):
         return atoms

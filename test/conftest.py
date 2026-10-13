@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 import pytest
@@ -45,9 +46,25 @@ settings.register_profile(
 settings.load_profile("dev")
 
 
+@pytest.fixture(autouse=True)
+def _close_figures():
+    # Warnings are errors here, and matplotlib warns once more than 20 pyplot
+    # figures are open. Without this, the figures that tests leave open pile up
+    # over a serial run until a test that opens one more fails; CI runs with
+    # `-n auto`, so no worker gets that far. Only a test that loaded pyplot can
+    # have opened one, so the others do not import it.
+    yield
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is not None:
+        plt.close("all")
+
+
 @pytest.fixture
-def cpu_float64_config():
-    with config.set({"device": "cpu", "precision": "float64", "fft": "numpy"}):
+def float64_config(device):
+    # Its 'mps' case never gets here: `float64_devices` in test/utils.py also
+    # applies the `float64` marker, which pytest_collection_modifyitems below
+    # skips on Metal.
+    with config.set({"device": device, "precision": "float64", "fft": "numpy"}):
         yield
 
 
@@ -80,14 +97,24 @@ def pytest_configure(config):
             f"{name}: the torch backend (device 'mps'): Apple Metal, or torch's CPU "
             "device with ABTEM_TORCH__DEVICE=cpu; see `gpu` in test/utils.py.",
         )
+    config.addinivalue_line(
+        "markers",
+        "float64: the test runs in double precision, set in its body or by a "
+        "fixture rather than by a parameter; its 'mps' case is skipped.",
+    )
 
 
 # Metal is a single-precision backend -- torch refuses a float64 tensor on the
 # MPS device outright -- so a test parametrized on both the 'mps' device and
 # double precision is asking for something the hardware cannot do. Skipping is
 # the honest outcome; letting it fail would bury real Metal regressions under
-# noise that no amount of backend work can clear.
+# noise that no amount of backend work can clear. Double precision is seen in
+# the test's parameters, or declared with the `float64` marker by a test that
+# sets it in its body or a fixture, which no parameter shows.
 _DOUBLE_PRECISION_PARAMS = frozenset({"float64", "complex128"})
+_METAL_DOUBLE_SKIP_REASON = (
+    "Metal (MPS) is single precision; float64 cannot run on this device"
+)
 
 
 def _is_double_precision_on_metal(item) -> bool:
@@ -98,7 +125,9 @@ def _is_double_precision_on_metal(item) -> bool:
     # Only string parameters are of interest, and restricting to them also
     # keeps unhashable ones (arrays, Atoms) away from the set membership test.
     values = [value for value in callspec.params.values() if isinstance(value, str)]
-    return "mps" in values and any(
+    if "mps" not in values:
+        return False
+    return item.get_closest_marker("float64") is not None or any(
         value in _DOUBLE_PRECISION_PARAMS for value in values
     )
 
@@ -132,9 +161,7 @@ def pytest_collection_modifyitems(config, items):
     access even more, not less).
     """
     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-    skip_metal_double = pytest.mark.skip(
-        reason="Metal (MPS) is single precision; float64 cannot run on this device"
-    )
+    skip_metal_double = pytest.mark.skip(reason=_METAL_DOUBLE_SKIP_REASON)
     runslow = config.getoption("--runslow")
 
     for item in items:

@@ -17,6 +17,9 @@ ATOMS = Atoms(
 )
 
 
+pytestmark = pytest.mark.float64
+
+
 @pytest.fixture(autouse=True)
 def _config():
     with abtem.config.set({"precision": "float64", "fft": "numpy"}):
@@ -56,8 +59,6 @@ RANGES = [(0, 2), (0, 4), (2, 6), (5, None), (0, None)]
 @pytest.mark.parametrize("first_slice, last_slice", RANGES)
 @pytest.mark.parametrize("lazy", [False, True])
 def test_slice_range_values(name, first_slice, last_slice, lazy, device):
-    if device == "mps":
-        pytest.skip("Metal is single precision; this test runs in float64")
     with abtem.config.set({"device": device}):
         potential = _potentials()[name]
         expected = to_host_array(potential.build(lazy=False))
@@ -110,8 +111,6 @@ def test_slice_range_exit_planes(exit_planes, first_slice, last_slice, lazy):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("exit_planes", [None, 3, (2,)])
 def test_multislice_of_a_lazy_slice_range(exit_planes, device):
-    if device == "mps":
-        pytest.skip("Metal is single precision; this test runs in float64")
     with abtem.config.set({"device": device}):
         potential = _potentials(exit_planes)["Potential"]
         wave = abtem.PlaneWave(energy=100e3)
