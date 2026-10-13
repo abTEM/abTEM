@@ -354,6 +354,14 @@ def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
     )
 
 
+def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble with its axes flagged for averaging averaged, without squeezing
+    any axis. Wave functions keep every member of an ensemble."""
+    if isinstance(ensemble, BaseMeasurements):
+        return ensemble.reduce_ensemble()
+    return ensemble
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -397,22 +405,17 @@ def reduce_ensemble(
 
     output = _squeeze_flagged_axes(ensemble)
 
-    reduced_output: Waves | BaseMeasurements
-    if isinstance(output, BaseMeasurements):
-        reduced_output = output.reduce_ensemble()
-    else:
-        if any(
-            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
-            for ax in output.ensemble_axes_metadata
-        ):
-            warnings.warn(
-                "ensemble_mean=False returns the full frozen-phonon ensemble as "
-                "individual wave functions. Use detectors to obtain averaged "
-                "measurements."
-            )
-        reduced_output = output
+    if not isinstance(output, BaseMeasurements) and any(
+        isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+        for ax in output.ensemble_axes_metadata
+    ):
+        warnings.warn(
+            "ensemble_mean=False returns the full frozen-phonon ensemble as "
+            "individual wave functions. Use detectors to obtain averaged "
+            "measurements."
+        )
 
-    return reduced_output
+    return _average_ensemble_axes(output)
 
 
 class _WavesNormalization(WavesToWavesTransform):

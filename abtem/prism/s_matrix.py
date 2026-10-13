@@ -74,6 +74,7 @@ from abtem.waves import (
     Probe,
     Waves,
     _antialias_cutoff_gpts,
+    _average_ensemble_axes,
     _squeeze_flagged_axes,
     reduce_ensemble,
 )
@@ -154,10 +155,7 @@ def _finalize_lazy_measurements(
             array, axes_metadata=axes_metadata, metadata=metadata
         )
 
-        if hasattr(measurement, "reduce_ensemble"):
-            measurement = measurement.reduce_ensemble()
-
-        measurements.append(measurement)
+        measurements.append(_average_ensemble_axes(measurement))
 
     return measurements
 
@@ -5563,7 +5561,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
             # Squeeze once, here, on the assembled measurements -- the level
             # Waves.transition_potential_multislice uses. The per-configuration
-            # driver deliberately no longer does it.
+            # driver does not squeeze.
             return _wrap_measurements(reduce_ensemble(measurements))
 
         blocks = self.ensemble_blocks(1)
@@ -5641,7 +5639,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         # Squeeze once, here, on the assembled measurements -- the level
         # Waves.transition_potential_multislice uses. The per-configuration
-        # driver deliberately no longer does it.
+        # driver does not squeeze.
         return _wrap_measurements(reduce_ensemble(measurements))
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
@@ -5826,9 +5824,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # above, but CTF ensemble axes flagged ensemble_mean were returned
             # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
             measurements = [
-                measurement.reduce_ensemble()
-                if hasattr(measurement, "reduce_ensemble")
-                else measurement
+                _average_ensemble_axes(measurement)
                 for measurement in ensure_list(measurements)
             ]
             return _squeezed(measurements)

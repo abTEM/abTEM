@@ -1973,7 +1973,7 @@ def prism_transition_potential_scan(
         minimum_crop,
         wrapped_crop_2d,
     )
-    from abtem.waves import Waves
+    from abtem.waves import Waves, _average_ensemble_axes
 
     ctx = _prism_eels_common_setup(
         s_matrix, transition_potentials, scan, detectors, sites
@@ -2480,30 +2480,15 @@ def prism_transition_potential_scan(
                         sw_out, site_xys[s_idx], ep_idx
                     )
 
-    # Reduce the ensemble mean, but do NOT squeeze here.
-    #
-    # This function is the per-configuration driver: SMatrix calls it once per
-    # dask block and once per potential-ensemble member. The multislice path
-    # this used to imitate squeezes at the *outer* level instead --
-    # Waves.transition_potential_multislice ends in the module-level
-    # reduce_ensemble on the assembled result -- so blocks and declared chunks
-    # keep the axis and only the finished object loses it.
-    #
-    # Squeezing per block dropped the scan axis underneath two consumers that
-    # still expected it: the lazy branch declares ``chunks += scan.shape``, and
-    # the eager branch pre-allocates from ``dummy_probes(scan)``. A
-    # single-position non-BaseScan scan -- ``(x, y)``, ``[(x, y)]``,
-    # ``np.array([[x, y]])`` -- therefore came back one axis too wide, and
-    # whether it did depended on whether the potential was an ensemble.
-    #
-    # The module-level reduce_ensemble is squeeze-then-ensemble-mean; the
-    # method called below is only the second half, which is the half that
-    # belongs per block. SMatrix.transition_potential_scan applies the first
-    # half once, at the level the oracle uses.
-    measurements = [
-        m.reduce_ensemble() if hasattr(m, "reduce_ensemble") else m
-        for m in measurements
-    ]
+    # Average the ensemble axes, but do not squeeze: SMatrix calls this driver
+    # once per dask block and per potential-ensemble member, and both keep the
+    # scan axis (the lazy branch declares ``chunks += scan.shape``, the eager
+    # branch allocates from the detected waves of the scan). A single-position
+    # scan therefore keeps its position axis here, and
+    # SMatrix.transition_potential_scan squeezes it once on the assembled
+    # result with the module-level reduce_ensemble, as
+    # Waves.transition_potential_multislice does.
+    measurements = [_average_ensemble_axes(m) for m in measurements]
 
     if len(measurements) == 1:
         return measurements[0]
