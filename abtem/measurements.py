@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import functools
+import inspect
 import itertools
+import threading
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
@@ -22,6 +24,7 @@ from typing import (
     TypeVar,
 )
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atom
@@ -49,7 +52,7 @@ from abtem.core.backend import (
 )
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
     polar_spatial_frequencies,
@@ -64,6 +67,7 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
     number_to_tuple,
+    safe_ceiling_int,
     safe_floor_int,
 )
 
@@ -542,10 +546,17 @@ def _polar_detector_bins_uncached(
 
 @jit(nopython=True, nogil=True, fastmath=True)
 def _sum_run_length_encoded(array, result, separators):
+    # Accumulate in a local, not in result[i, x]: a store to ``result`` inside
+    # the loop makes LLVM guard the vectorised (under fastmath, reassociated)
+    # sum with a runtime check that ``result`` does not overlap ``array``, and
+    # run the scalar loop, which rounds differently, when the check fails --
+    # so a bin's sum would depend on where ``result`` happens to be allocated.
     for x in range(result.shape[1]):
         for i in range(result.shape[0]):
+            total = result[i, x]
             for j in range(separators[x], separators[x + 1]):
-                result[i, x] += array[i, j]
+                total += array[i, j]
+            result[i, x] = total
 
 
 def _cupy_safe_coordinates(array, coordinates):
@@ -585,9 +596,16 @@ def _interpolate_stack(
         positions = positions % xp.asarray(old_shape[-2:], dtype=positions.dtype)
 
     array = array.reshape((-1,) + array.shape[-2:])
-    array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
-    positions = _cupy_safe_coordinates(array, positions + 2 * order)
+    if mode == "grid-wrap":
+        # The spline is periodic with the array length: no padding is needed.
+        padding = 0
+        kwargs = {**kwargs, "mode": "grid-wrap"}
+    else:
+        padding = 2 * order
+        array = xp.pad(array, ((0, 0), (padding,) * 2, (padding,) * 2), mode=mode)
+
+    positions = _cupy_safe_coordinates(array, positions + padding)
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
@@ -1364,7 +1382,12 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         if width:
             direction = xp.array(scan.end) - xp.array(scan.start)
-            direction = direction / xp.linalg.norm(direction)
+            length = xp.linalg.norm(direction)
+            if length == 0:
+                raise ValueError(
+                    "A line of zero length cannot be averaged over a width."
+                )
+            direction = direction / length
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
             # The offsets are spaced by min(sampling) along the perpendicular
@@ -2150,8 +2173,15 @@ class Images(_BaseMeasurement2D):
                 # Real on purpose, unlike the dtype-preserving map_blocks
                 # elsewhere: the input is required to be complex (its real and
                 # imaginary parts are the two gradient components) and
-                # _integrate_gradient_2d returns xp.real(...) of the result.
-                meta=xp.array((), dtype=get_dtype(complex=False)),
+                # _integrate_gradient_2d returns xp.real(...) of the result,
+                # in the precision of the gradient combined with the frequency
+                # grid.
+                meta=xp.array(
+                    (),
+                    dtype=np.result_type(
+                        np.finfo(self.array.dtype).dtype, xp.fft.fftfreq(1).dtype
+                    ),
+                ),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -2313,7 +2343,7 @@ class Images(_BaseMeasurement2D):
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         if boundary == "periodic":
-            boundary = "wrap"
+            boundary = "grid-wrap"
 
         array = None
         if self.is_lazy:
@@ -2326,7 +2356,10 @@ class Images(_BaseMeasurement2D):
                     new_shape=gpts,
                     normalization=normalization,
                     chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                    meta=xp.array((), dtype=self.array.dtype),
+                    # fft_interpolate works in the configured precision
+                    meta=xp.array(
+                        (), dtype=get_dtype(complex=np.iscomplexobj(self.array))
+                    ),
                 )
 
             elif method == "spline":
@@ -2449,9 +2482,11 @@ class Images(_BaseMeasurement2D):
             )
             # Real on purpose, unlike the dtype-preserving map_blocks
             # elsewhere: _diffractograms returns xp.abs(...), so the output is
-            # a power spectrum even when the image itself is complex.
+            # a power spectrum even when the image itself is complex, with the
+            # precision of the image's FFT.
             array = array.map_blocks(
-                self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
+                self._diffractograms,
+                meta=xp.array((), dtype=np.finfo(_fft_dtype(self.array.dtype)).dtype),
             )
         else:
             array = self._diffractograms(self.array)
@@ -2671,7 +2706,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             sampling = self.sampling
 
         if gpts is None:
-            gpts = int(np.ceil(self.extent / sampling))
+            gpts = max(safe_ceiling_int(self.extent / sampling), 1)
 
         if sampling is None:
             sampling = self.extent / gpts
@@ -3235,6 +3270,29 @@ def _crop_kernel_to_extent(kernel_2d, kernels_1d, extent):
     return cropped, None, float(kernel_2d.sum() - cropped.sum())
 
 
+_cupyx_signal_lock = threading.Lock()
+_cupyx_signal_imported = False
+
+
+def _import_cupyx_signal() -> None:
+    # cupyx.scipy does not import its signal submodule itself, and importing it
+    # loads cuBLAS (about 150 MB resident on CUDA), so it is imported on first
+    # use rather than with abtem. The import warns that the cupyx.jit interface
+    # it uses is experimental. catch_warnings swaps the process-wide filter
+    # list, so the import runs once per process: the first caller imports under
+    # the lock, and later callers, concurrent ones included, return without
+    # entering catch_warnings.
+    global _cupyx_signal_imported
+    if _cupyx_signal_imported:
+        return
+    with _cupyx_signal_lock:
+        if not _cupyx_signal_imported:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                import cupyx.scipy.signal  # noqa: F401, PLC0415
+            _cupyx_signal_imported = True
+
+
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1d=None):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
@@ -3266,6 +3324,8 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0, kernels_1
     :func:`_crop_kernel_to_extent`.
     """
     xp = get_array_module(array)
+    if xp is cp:
+        _import_cupyx_signal()
     scipy_signal = get_scipy_module(array).signal
 
     if kernels_1d is not None:
@@ -3655,7 +3715,7 @@ def _image_resampling_gpts(
     `Images.interpolate` resamples them; the sampling becomes `extent / gpts`."""
     if np.isscalar(sampling):
         sampling = (sampling,) * 2
-    return tuple(int(np.ceil(e / d)) for d, e in zip(sampling, extent))
+    return tuple(max(safe_ceiling_int(e / d), 1) for d, e in zip(sampling, extent))
 
 
 def _diffraction_pattern_resampling_gpts(
@@ -3693,6 +3753,58 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _per_energy(method=None, *, shared_outer: bool = False):
+    """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
+    ensemble on its own, and restack the results along the energy axis.
+
+    The angular sampling of diffraction patterns scales with the wavelength, and
+    an `EnergyAxis` of several energies has no single wavelength: the sampling of
+    the ensemble as a whole is that of its highest energy (see
+    `BaseMeasurements._get_energy`). A method that takes or returns scattering
+    angles must therefore see one energy at a time.
+
+    Parameters
+    ----------
+    shared_outer : bool
+        The method has radial bins up to its `outer` argument. The default, the
+        maximum angle, differs between energies, and the members stack along one
+        radial axis, so it is resolved once for the whole ensemble, to the
+        maximum angle of its highest energy, which every energy reaches.
+    """
+
+    def decorator(method):
+        signature = inspect.signature(method)
+
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            from abtem.array import _multi_energy_axis
+
+            index = _multi_energy_axis(self)
+            if index is None:
+                return method(self, *args, **kwargs)
+
+            if shared_outer:
+                bound = signature.bind(self, *args, **kwargs)
+                bound.apply_defaults()
+                if bound.arguments["outer"] is None:
+                    bound.arguments["outer"] = min(self.max_angles)
+                args, kwargs = bound.args[1:], bound.kwargs
+
+            axis = self.ensemble_axes_metadata[index]
+            members = [
+                method(self[(slice(None),) * index + (j,)], *args, **kwargs)
+                for j in range(len(axis.values))
+            ]
+            # A method may move ensemble axes into the base (the scan axes of a
+            # center of mass), which can only be ones that follow the energy axis.
+            position = min(index, len(members[0].ensemble_shape))
+            return stack(members, axis, axis=position)
+
+        return wrapper
+
+    return decorator if method is None else decorator(method)
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -3708,7 +3820,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
     fftshift : bool, optional
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
-        be at `(0, 0)`.
+        be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates, so
+        data that are already centred must be given with True: with the default
+        they are shifted a second time on export.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
@@ -3814,6 +3929,35 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 tex_label="$k_y$",
             ),
         ]
+
+    def _fftshifted(self) -> DiffractionPatterns:
+        """A copy of unshifted diffraction patterns with the zero frequency at the
+        centre, so that the coordinates of the base axes increase. The exports
+        convert these: the unshifted (``np.fft.fftfreq``) order is not a uniform
+        axis."""
+        if self.is_lazy:
+            array = da.fft.fftshift(self.array, axes=(-2, -1))
+        else:
+            array = get_array_module(self.array).fft.fftshift(self.array, axes=(-2, -1))
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        kwargs["fftshift"] = True
+        return self.__class__(**kwargs)
+
+    def to_hyperspy(self, transpose: bool = True):
+        if not self.fftshift:
+            return self._fftshifted().to_hyperspy(transpose)
+        return super().to_hyperspy(transpose)
+
+    def to_data_array(self):
+        if not self.fftshift:
+            return self._fftshifted().to_data_array()
+        return super().to_data_array()
+
+    def to_quantem(self):
+        if not self.fftshift:
+            return self._fftshifted().to_quantem()
+        return super().to_quantem()
 
     def tile_scan(self, repetitions: tuple[int, int]) -> DiffractionPatterns:
         """
@@ -4232,7 +4376,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         old_sums = array.sum((-2, -1), keepdims=True)
 
         if xp is cp:
-            array = interpolate_bilinear_cuda(array, v, u, vw, uw)
+            # the kernel types the pattern and the weights alike
+            array = interpolate_bilinear_cuda(
+                array, v, u, vw.astype(array.dtype), uw.astype(array.dtype)
+            )
         elif xp is np:
             array = _interpolate_bilinear(array, v, u, vw, uw)
         else:
@@ -4273,8 +4420,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.sampling, self.base_shape, sampling, gpts, adjust_sampling=False
         )
 
+        array = self.array
+        if np.issubdtype(array.dtype, np.integer):
+            # counts, e.g. from a detector, are interpolated in the configured
+            # precision
+            array = array.astype(get_dtype(complex=False))
+
         if self.is_lazy:
-            array = self.array.map_blocks(
+            array = array.map_blocks(
                 self._batch_interpolate_bilinear,
                 sampling=self.sampling,
                 new_sampling=sampling,
@@ -4283,13 +4436,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 # explicit: inference calls the function on a zero-size block,
                 # which it cannot interpolate, and would fall back to a NumPy
                 # meta, so a CuPy result would report its device as "cpu"
-                meta=get_array_module(self.array).array(
-                    (), dtype=get_dtype(complex=False)
-                ),
+                meta=get_array_module(array).array((), dtype=array.dtype),
             )
         else:
             array = self._batch_interpolate_bilinear(
-                self.array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
+                array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
             )
 
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -4553,9 +4704,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., flat_indices]
 
-        # Use the configured floating-point precision, not a hardcoded float32.
-        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
-        # the result dtype must match to avoid a silent precision downgrade.
+        # The sums keep the precision of the patterns, as _AbstractRadialDetector's
+        # declared output dtype does (the real counterpart of the waves' precision).
         fp_dtype = array.dtype
         result = xp.zeros(
             (
@@ -4578,6 +4728,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return result.reshape(new_shape)
 
+    @_per_energy(shared_outer=True)
     def polar_binning(
         self,
         nbins_radial: int,
@@ -4607,7 +4758,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad] (default is 0.0).
         outer : float
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches.
         rotation : float
             Rotation of the bins around the origin [rad] (default is 0.0).
         offset : two float
@@ -4678,6 +4831,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
+    @_per_energy(shared_outer=True)
     def radial_binning(
         self, step_size: float = 1.0, inner: float = 0.0, outer: Optional[float] = None
     ) -> PolarMeasurements:
@@ -4697,10 +4851,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Inner integration limit of the bins [mrad]. Default is 0.0.
         outer : float, optional
             Outer integration limit of the bins [mrad]. If not specified, this is set to
-            be the maximum detected angle of the diffraction pattern. Every bin is
-            ``step_size`` wide, so if ``outer - inner`` is not a multiple of
-            ``step_size`` the trailing partial step is dropped and the last bin ends
-            at ``inner + n * step_size``.
+            be the maximum detected angle of the diffraction pattern. For a
+            multi-energy ensemble it is the maximum angle of the highest energy, which
+            every energy reaches. Every bin is ``step_size`` wide, so if
+            ``outer - inner`` is not a multiple of ``step_size`` the trailing partial
+            step is dropped and the last bin ends at ``inner + n * step_size``.
 
         Returns
         -------
@@ -4735,6 +4890,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return xp.sum(array * bins, axis=(-2, -1))
 
+    @_per_energy
     def integrate_radial(
         self,
         inner: float,
@@ -4839,6 +4995,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com = com_x + 1.0j * com_y
         return com
 
+    @_per_energy
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
         """
         Calculate center-of-mass images or line profiles from diffraction patterns.
@@ -4878,7 +5035,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
+                self._com,
+                x=x,
+                y=y,
+                drop_axis=base_axes,
+                dtype=np.result_type(self.array.dtype, x.dtype, y.dtype, np.complex64),
             )
         else:
             array = self._com(self.array, x=x, y=y)
@@ -4902,6 +5063,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array * block
 
+    @_per_energy
     def bandlimit(
         self, inner: float = 0.0, outer: float = np.inf
     ) -> DiffractionPatterns:
@@ -5015,18 +5177,51 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_bounds(
+        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The first and last step bin of every pixel, as int32 arrays on the host.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
+        x, y = np.meshgrid(*coordinates, indexing="ij")
+        r = np.sqrt(x**2 + y**2)
+        del x, y
+        # Bin k holds r with k * radial_sampling - width / 2 <= r <
+        # k * radial_sampling + width / 2, that is first <= k <= last. The
+        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
+        # multiple of the sampling is not missed by rounding noise.
+        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
+        first = first.astype(np.int32)
+        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
+        last = last.astype(np.int32)
+        return first, last
+
+    @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
-        angular_coordinates: tuple[np.ndarray, np.ndarray],
-        max_angle: float,
-        radial_sampling: float,
+        centers: np.ndarray,
         weighting_function: str,
         width: float,
+        coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        coordinate_dtype: Optional[np.dtype] = None,
+        step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
     ):
-        x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
+        """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
-        centers = np.arange(0, max_angle, radial_sampling)
+        `step_bounds` are the first and last bin of every pixel for the step
+        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
+        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
+        weighting.
+        """
+        xp = get_array_module(array)
+
+        if weighting_function == "step":
+            first, last = (xp.asarray(bound) for bound in step_bounds)
+        else:
+            x, y = np.meshgrid(
+                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
+                indexing="ij",
+            )
+            r = np.sqrt(x**2 + y**2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
@@ -5034,11 +5229,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
-                mask = np.abs(r - center) < width
-            elif weighting_function == "gaussian":
-                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
+                mask = (first <= i) & (i <= last)
             else:
-                raise ValueError("weighting function must be 'step' or 'gaussian'")
+                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
 
             weight = np.sum(mask)
 
@@ -5059,23 +5252,39 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Calculate the azimuthal averages of the diffraction patterns.
 
+        The radial bins are centered at multiples of `radial_sampling`, starting at
+        zero. Radii are measured in units of the smallest angular sampling, from the
+        integer frequency indices of the pixels. The pixels of a step bin are chosen
+        from these radii in double precision on the host, with each pixel's position
+        in units of `radial_sampling` rounded to 7 decimals. A pixel on the edge of a
+        bin belongs to the bin above the edge, at every precision and pattern size.
+        With the default bins and equal sampling no pixel is on an edge; pixels are on
+        edges for other values of `radial_sampling` and `width`, and for ratios of the
+        x and y sampling whose denominator in lowest terms is even (3:2, 5:4).
+
         Parameters
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the azimuthal averages [mrad].
         radial_sampling : float, optional
-            The radial sampling of the azimuthal averages [mrad]. Default is equal to
-            the smallest value of the x and y component of the angular sampling.
+            The radial sampling of the azimuthal averages, as a multiple of the
+            smallest value of the x and y component of the angular sampling.
+            Default is 1.
         weighting_function : str
             The weighting function to determining how to average the diffraction
             patterns. The weighting function determines the shape of the mask that is
             applied to the diffraction patterns before averaging. The options are 'step'
             and 'gaussian'. Default is 'step'.
         width : float, optional
-            The width of the weighting function [mrad]. Default is 1.0.
-            For the 'step' weighting function, this is the width of the step function.
-            For the 'gaussian' weighting function, this is the standard deviation of the
-            Gaussian function.
+            The width of the weighting function, as a multiple of the smallest value
+            of the x and y component of the angular sampling. Default is 1.
+            For the 'step' weighting function, this is the full width of the ring: bin
+            `k` holds the pixels with
+            `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
+            so the default bins do not overlap.
+            For the 'gaussian' weighting function, the weight is
+            `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
+            of `width / 2`.
 
         Returns
         -------
@@ -5083,15 +5292,34 @@ class DiffractionPatterns(_BaseMeasurement2D):
             The azimuthal averages of the diffraction patterns.
         """
 
-        if max_angle is None:
-            max_angle = -min(min(self.angular_limits))
+        if weighting_function not in ("step", "gaussian"):
+            raise ValueError("weighting function must be 'step' or 'gaussian'")
 
-        radial_sampling = radial_sampling * min(self.angular_sampling)
-        width = width * min(self.angular_sampling)
+        unit = min(self.angular_sampling)
+        xp = get_array_module(self.array)
+        coordinates = tuple(
+            np.rint(np.asarray(k) / d) * (a / unit)
+            for k, d, a in zip(self.coordinates, self.sampling, self.angular_sampling)
+        )
+
+        if max_angle is None:
+            max_angle = -min(c.min() for c in coordinates)
+        else:
+            max_angle = max_angle / unit
+
+        num_bins = safe_ceiling_int(max_angle / radial_sampling)
+        centers = np.arange(num_bins) * radial_sampling
+
+        if weighting_function == "step":
+            # One node shared by every block, which holds the pattern-sized bounds.
+            step_bounds = self._azimuthal_step_bounds
+            if self.is_lazy:
+                step_bounds = dask.delayed(step_bounds, pure=True)
+            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+        else:
+            kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
         if self.is_lazy:
-            xp = get_array_module(self.array)
-            n = int(max_angle / radial_sampling)
             base_axes = tuple(
                 range(
                     len(self.ensemble_shape),
@@ -5100,31 +5328,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._azimuthal_average,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                **kwargs,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (n,),
+                chunks=self.array.chunks[:-2] + (len(centers),),
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             array = self._azimuthal_average(
                 self.array,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
+                centers=centers,
                 weighting_function=weighting_function,
                 width=width,
+                **kwargs,
             )
 
         wavelength = energy2wavelength(self._get_energy())
 
         return ReciprocalSpaceLineProfiles(
             array,
-            sampling=radial_sampling / (wavelength * 1e3),
+            sampling=radial_sampling * unit / (wavelength * 1e3),
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
@@ -5154,6 +5380,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     #     )
     #     return fsc
 
+    @_per_energy
     def block_direct(
         self, radius: Optional[float] = None, margin: Optional[bool] = None
     ) -> DiffractionPatterns:
@@ -5811,6 +6038,7 @@ class PolarMeasurements(BaseMeasurements):
         return DiffractionPatterns(
             new_array,
             sampling=sampling,
+            fftshift=True,  # the regions are built centred (fftshift=True above)
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )

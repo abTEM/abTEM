@@ -182,6 +182,18 @@ def _collected_angle_bounds(detector, margin: float = 0.0):
     return low, high
 
 
+def _grid_of_potential(potential: BasePotential) -> Grid:
+    """
+    The grid of an SMatrix of the potential. A builder's grid follows the SMatrix, so
+    they share it. The grid of a built potential belongs to its data, so the SMatrix
+    gets its own copy, and a mismatch is reported when the SMatrix is built or
+    scanned (see `SMatrix._from_partitioned_args`).
+    """
+    if isinstance(potential, ArrayObject):
+        return potential.grid.copy()
+    return potential.grid
+
+
 def _round_gpts_to_multiple_of_interpolation(
     gpts: tuple[int, int], interpolation: tuple[int, int]
 ) -> tuple[int, int]:
@@ -326,6 +338,7 @@ class BaseSMatrix(BaseWaves):
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
+        energy = kwargs.pop("energy", self.energy)
         kwargs = {**default_kwargs, **kwargs}
 
         if downsample:
@@ -340,7 +353,7 @@ class BaseSMatrix(BaseWaves):
             extent=self.window_extent,
             gpts=window_gpts,
             ctf=ctf,
-            energy=self.energy,
+            energy=energy,
             **kwargs,
         )
 
@@ -3918,7 +3931,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             potential = validate_potential(potential)
             self.grid.match(potential)
-            self._grid = potential.grid
+            self._grid = _grid_of_potential(potential)
 
         self._potential = potential
         self._interpolation = _validate_interpolation(interpolation)
@@ -4151,7 +4164,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     @potential.setter
     def potential(self, potential: BasePotential):
         self._potential = potential
-        self._grid = potential.grid
+        self._grid = _grid_of_potential(potential)
 
     @property
     def semiangle_cutoff(self) -> float:
@@ -4347,7 +4360,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def window_gpts(self):
         """The number of grid points describing the cropping window of the reduced
         wave functions."""
-        if self._upsample:
+        # the C-PRISM window belongs to the compressed reduction; at an
+        # interpolation of (1, 1) there is no compression and the plain PRISM
+        # reduction, which does not rescale a cropped window, is used instead
+        if self._upsample_enabled:
             if self._window_gpts == "full":
                 return self.downsampled_gpts
             if self._window_gpts is None:
@@ -4448,6 +4464,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return _wrap_with_array(s_matrix)
 
     def _from_partitioned_args(self, *args, **kwargs):
+        # Every build, scan and reduction, eager or lazy, takes its blocks from here.
+        if isinstance(self.potential, ArrayObject):
+            self.potential.grid.check_match(self)
+
         if self.potential is not None:
             potential_partial = self.potential._from_partitioned_args()
             kwargs = self._copy_kwargs(exclude=("potential", "sampling", "extent"))
@@ -5727,6 +5747,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if scan is None:
                 scan = (self.extent[0] / 2, self.extent[1] / 2)
             scan = validate_scan(scan, self)
+
+            # Fix whatever depends on the whole ensemble, as `apply_transform`
+            # does before it splits a multi-energy ensemble: each energy is then
+            # reduced with the same detectors, whose measurements stack. The
+            # members detect on the downsampled grid of the S-matrix.
+            ensemble = self.dummy_probes(
+                downsample=True,
+                energy=self._energies,
+                metadata={k: v for k, v in self.metadata.items() if k != "energy"},
+            ).build(lazy=True)
+            detectors = [
+                detector._match_ensemble(ensemble)
+                for detector in validate_detectors(detectors)
+            ]
 
             results = [
                 self._with_energy(float(e)).reduce(

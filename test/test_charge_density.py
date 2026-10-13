@@ -4,11 +4,17 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import graphene
-from utils import cpu_float64
+from utils import float64_devices
 
 import abtem
+from abtem.core.backend import asnumpy
 from abtem.inelastic.phonons import FrozenPhonons
-from abtem.potentials.charge_density import ChargeDensityPotential
+from abtem.potentials.charge_density import (
+    ChargeDensityPotential,
+    _interpolate_between_cells,
+    _interpolate_slice,
+)
+from abtem.slicing import slice_limits
 
 
 @pytest.fixture
@@ -111,6 +117,87 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
     assert pot.repetitions == reps
 
 
+# A periodic field on a hexagonal cell, sampled on a grid whose size differs along every
+# axis. Its exact values are known everywhere, so the interpolation can be checked
+# against the field itself and against the invariances of a periodic interpolant.
+_HEX_A, _HEX_C = 2.5, 4.0
+_HEX_CELL = np.array(
+    [[_HEX_A, 0, 0], [-_HEX_A / 2, _HEX_A * np.sqrt(3) / 2, 0], [0, 0, _HEX_C]]
+)
+_HEX_BOX = np.diag([_HEX_A, _HEX_A * np.sqrt(3), _HEX_C])
+_HEX_GPTS = (24, 20, 40)
+
+
+def _periodic_field(fractional):
+    reciprocal = 2 * np.pi * np.linalg.inv(_HEX_CELL).T
+    terms = zip(
+        [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)],
+        [1.0, 0.7, 0.5, 0.4],
+        [0.3, 1.1, 2.0, 0.7],
+    )
+    positions = fractional @ _HEX_CELL
+    return sum(
+        amplitude * np.cos(positions @ (np.array(hkl) @ reciprocal) + phase)
+        for hkl, amplitude, phase in terms
+    )
+
+
+def _fractional_grid(shape):
+    axes = [np.arange(n) / n for n in shape]
+    return np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+
+
+@pytest.fixture(scope="module")
+def hexagonal_field():
+    return _periodic_field(_fractional_grid(_HEX_GPTS)).reshape(_HEX_GPTS)
+
+
+def test_interpolation_between_cells_reproduces_a_periodic_field(hexagonal_field):
+    """Against the exact field, including the target points next to the cell faces."""
+    shape = (25, 43, 40)
+    interpolated = _interpolate_between_cells(
+        hexagonal_field, shape, _HEX_CELL, _HEX_BOX
+    )
+    fractional = _fractional_grid(shape) @ _HEX_BOX @ np.linalg.inv(_HEX_CELL)
+    exact = _periodic_field(fractional % 1.0).reshape(shape)
+
+    scale = np.abs(hexagonal_field).max()
+    assert np.abs(interpolated - exact).max() < 3e-4 * scale
+
+
+def test_interpolation_between_cells_is_invariant_to_whole_point_rolls(
+    hexagonal_field,
+):
+    shape = (25, 43, 40)
+    rolls = (5, 7, 9)
+    shift = np.array(rolls) / np.array(_HEX_GPTS) @ _HEX_CELL
+
+    rolled = _interpolate_between_cells(
+        np.roll(hexagonal_field, rolls, axis=(0, 1, 2)),
+        shape,
+        _HEX_CELL,
+        _HEX_BOX,
+        offset=shift,
+    )
+    original = _interpolate_between_cells(hexagonal_field, shape, _HEX_CELL, _HEX_BOX)
+
+    scale = np.abs(hexagonal_field).max()
+    np.testing.assert_allclose(rolled, original, rtol=0, atol=1e-12 * scale)
+
+
+def test_interpolation_between_cells_is_invariant_to_tiling(hexagonal_field):
+    shape = (25, 43, 40)
+    tiled_cell = _HEX_CELL * np.array([[2], [1], [1]])
+
+    tiled = _interpolate_between_cells(
+        np.tile(hexagonal_field, (2, 1, 1)), shape, tiled_cell, _HEX_BOX
+    )
+    original = _interpolate_between_cells(hexagonal_field, shape, _HEX_CELL, _HEX_BOX)
+
+    scale = np.abs(hexagonal_field).max()
+    np.testing.assert_allclose(tiled, original, rtol=0, atol=1e-12 * scale)
+
+
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
 @pytest.mark.parametrize(
     "charge_densities", [1, 3], ids=["shared", "per_configuration"]
@@ -138,6 +225,34 @@ def test_build_from_frozen_phonons(
         expected = expected.build(lazy=False)
         np.testing.assert_allclose(
             built.array[i], expected.array, rtol=0, atol=1e-6 * expected.array.max()
+        )
+
+
+def test_chunks_of_frozen_phonons_hold_every_configuration(
+    carbon_atoms, charge_density_3d
+):
+    """The chunks of an unbuilt potential with frozen phonons hold every
+    configuration, each equal to the potential of its displaced atoms built alone."""
+    frozen_phonons = FrozenPhonons(
+        carbon_atoms, num_configs=3, sigmas=0.1, seed=4, ensemble_mean=False
+    )
+    potential = ChargeDensityPotential(
+        frozen_phonons, charge_density_3d, sampling=0.2, slice_thickness=1.0
+    )
+
+    chunks = list(potential.generate_chunked_slices(chunk_size=2))
+
+    assert len(potential) == 5
+    assert [chunk.shape[:2] for chunk in chunks] == [(3, 1), (3, 2), (3, 2)]
+    for i, atoms in enumerate(frozen_phonons):
+        expected = ChargeDensityPotential(
+            atoms, charge_density_3d, sampling=0.2, slice_thickness=1.0
+        ).build(lazy=False)
+        np.testing.assert_allclose(
+            np.concatenate([chunk.array[i] for chunk in chunks]),
+            expected.array,
+            rtol=0,
+            atol=1e-6 * expected.array.max(),
         )
 
 
@@ -224,14 +339,14 @@ REPETITION_CASES = [
 ]
 
 
-@cpu_float64
+@float64_devices
 @pytest.mark.parametrize("case", REPETITION_CASES, ids=lambda c: c[0])
 def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
     name, make_atoms, repetitions, unit_gpts = case
     atoms, rho = make_atoms(), _charge_density()
 
     unit = ChargeDensityPotential(atoms, rho, gpts=unit_gpts, slice_thickness=1.0)
-    unit_array = unit.build(lazy=False).array
+    unit_array = asnumpy(unit.build(lazy=False).array)
     repeated = ChargeDensityPotential(
         atoms,
         rho,
@@ -247,23 +362,23 @@ def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
 
     nx, ny, nz = (round(float(repeated.box[i] / unit.box[i])) for i in range(3))
     tiled = np.tile(unit_array, (nz, nx, ny))
-    actual = repeated.build(lazy=False).array
+    actual = asnumpy(repeated.build(lazy=False).array)
     assert actual.shape == tiled.shape
     np.testing.assert_allclose(actual, tiled, rtol=0, atol=1e-4 * np.abs(tiled).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_repetitions_lazy_equals_eager_on_bn():
     atoms, rho = _bn(), _charge_density()
     potential = ChargeDensityPotential(
         atoms, rho, gpts=(50, 135), slice_thickness=1.0, repetitions=(2, 3, 2)
     )
-    eager = potential.build(lazy=False).array
-    lazy = potential.build(lazy=True).compute().array
+    eager = asnumpy(potential.build(lazy=False).array)
+    lazy = asnumpy(potential.build(lazy=True).compute().array)
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
 
 
-@cpu_float64
+@float64_devices
 def test_charge_density_potential_with_an_approximate_default_box_reports_it_once():
     # The default box of BN x (3, 1, 1) is reached by a strain of about 1 %. The
     # potential reports it when it is constructed; the Ewald potential it builds
@@ -274,7 +389,33 @@ def test_charge_density_potential_with_an_approximate_default_box_reports_it_onc
         potential = ChargeDensityPotential(
             atoms, rho, sampling=0.2, slice_thickness=1.0, repetitions=(3, 1, 1)
         )
-        eager = potential.build(lazy=False).array
-        lazy = potential.build(lazy=True).compute().array
+        eager = asnumpy(potential.build(lazy=False).array)
+        lazy = asnumpy(potential.build(lazy=True).compute().array)
     assert len([r for r in records if "abTEM chose" in str(r.message)]) == 1
     np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-10 * np.abs(eager).max())
+
+
+def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
+    # Cumulative slice limits of 0.9 A give b - a = 0.9000000000000004 from the
+    # sixth slice on, a hair above nine grid steps of 0.1 A: the repeated cell
+    # must still sample every slice at nine points, as the one cell does.
+    z = np.arange(90) / 90
+    x, y = np.meshgrid(np.arange(8) / 8, np.arange(6) / 6, indexing="ij")
+    array = (
+        1
+        + 0.3 * np.cos(2 * np.pi * x)[..., None] * np.sin(2 * np.pi * y)[..., None]
+        + 0.5 * np.cos(2 * np.pi * z)
+        + 0.2 * np.sin(6 * np.pi * z)
+    )
+    gpts, sampling = (8, 6), (0.5, 0.5)
+
+    def slices(array, height, num_slices):
+        cell = np.diag([4.0, 3.0, height])
+        limits = slice_limits((0.9,) * num_slices)
+        return np.array(
+            [_interpolate_slice(array, cell, gpts, sampling, a, b) for a, b in limits]
+        )
+
+    one = slices(array, 9.0, 10)
+    repeated = slices(np.tile(array, (1, 1, 3)), 27.0, 30)
+    np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
