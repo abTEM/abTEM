@@ -1059,6 +1059,92 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
     )
 
 
+def _double_channel_scan(potential):
+    rng = np.random.default_rng(0)
+    array = (
+        rng.standard_normal((2, 32, 32)) + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    transition_potentials = TransitionPotentialArray(
+        Z=14,
+        array=array,
+        energy=100e3,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+    result = Probe(energy=100e3, semiangle_cutoff=20).transition_potential_scan(
+        potential=potential,
+        transition_potentials=transition_potentials,
+        scan=abtem.GridScan((0, 0), (3, 3), gpts=(2, 2)),
+        detectors=abtem.PixelatedDetector(max_angle=40),
+        double_channel=True,
+        lazy=False,
+    )
+    return np.asarray(result.array)
+
+
+@pytest.mark.parametrize("seeds", [(1,), (1, 2, 3)])
+def test_double_channel_transmissions_belong_to_their_slices(monkeypatch, seeds):
+    """The double-channel driver shares a transmission function between slices
+    that are one object, found by id. A generator that yields a new slice every
+    time (a frozen-phonon mosaic, a Potential) frees each slice, so a later slice
+    could get its id and the transmission function of another slice: repeated
+    runs differed, by up to 11% of the maximum. The result does not depend on
+    the lifetime of the slices: it equals that of slices all kept alive."""
+    from abtem.potentials.iam import CrystalPotential, Potential
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = Potential(
+        abtem.FrozenPhonons(atoms, 6, sigmas=0.1, seed=1),
+        gpts=(16, 16),
+        slice_thickness=atoms.cell[2, 2] / 4,
+    )
+    potential = CrystalPotential(unit, (2, 2, 2), seeds=seeds)
+
+    first = _double_channel_scan(potential)
+    second = _double_channel_scan(potential)
+
+    # The slices of every configuration are kept alive until all are generated,
+    # so no slice can take the id of another.
+    cls = type(potential)
+    generate_slices = cls.generate_slices
+    monkeypatch.setattr(
+        cls,
+        "generate_slices",
+        lambda self, *args, **kwargs: iter(
+            list(generate_slices(self, *args, **kwargs))
+        ),
+    )
+    expected = _double_channel_scan(potential)
+
+    np.testing.assert_array_equal(first, second)
+    np.testing.assert_array_equal(first, expected)
+
+
+def test_double_channel_shares_the_transmissions_of_shared_slices(monkeypatch):
+    """A crystal without frozen phonons yields one slice object for every
+    z-repetition of a unit slice, and the driver builds one transmission
+    function for each of them."""
+    from abtem.potentials.iam import PotentialArray
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    unit = abtem.Potential(atoms, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 2)
+    crystal = abtem.CrystalPotential(unit, repetitions=(2, 2, 5))
+
+    calls = []
+    transmission_function = PotentialArray.transmission_function
+
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return transmission_function(self, *args, **kwargs)
+
+    monkeypatch.setattr(PotentialArray, "transmission_function", counting)
+    _double_channel_scan(crystal)
+
+    assert len(crystal) == 10
+    assert len(calls) == len(unit) == 2
+
+
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.slow
 def test_subshell_transitions_real_gpaw_pipeline():

@@ -85,6 +85,21 @@ def test_scalar_keeps_zero_dimensions():
     assert xp.asarray([20.0]).shape == (1,)
 
 
+def test_read_only_array_is_copied():
+    # A read-only array, such as the shared cache of polar detector bins, must
+    # not be shared with the tensor: on torch's CPU device a write to the tensor
+    # would reach the array, and torch warns about it.
+    xp = get_array_module("mps")
+    array = np.arange(4, dtype=np.float32)
+    array.flags.writeable = False
+
+    on_device = xp.asarray(array)
+    on_device[0] = 10.0
+
+    assert array[0] == 0.0
+    assert asnumpy(on_device)[0] == 10.0
+
+
 def test_inferred_double_precision_is_narrowed():
     # A Python float is float64 to NumPy, but Metal has no float64; an inferred
     # dtype narrows rather than failing.
