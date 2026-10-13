@@ -309,18 +309,6 @@ def test_k_edge_ml_components_carry_angular_momentum_minus_ml(square_k_edge):
         assert np.abs(_rotate_90(f) - expected).max() <= 1e-9 * np.abs(f).max()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "1s -> eps-s monopole channel does not vanish as q -> 0: the bound "
-        "(gpaw AllElectron) and continuum (AllElectronAtom, scalar-relativistic, "
-        "with the 1.02 factor in radial_schroedinger_equation) states are not "
-        "orthogonal -- <eps s|1s> = -3.7e-3 for C at eps = 50 eV (+9.2e-5 "
-        "without the 1.02) -- giving a spurious 1/q^4 monopole term: "
-        "monopole/dipole = 0.57 (C) and 0.063 (Si) at the central pixel at "
-        "300 kV. With the 1.02 set to 1.00 both cases pass"
-    ),
-)
 @pytest.mark.parametrize("Z", [6, 14])
 def test_k_edge_monopole_channel_vanishes_at_small_q(Z):
     """The dipole-forbidden 1s -> eps-s channel is negligible as q -> 0.
@@ -580,15 +568,6 @@ def test_k_edge_dipole_intensity_is_lorentzian_in_theta(Z, energy):
     assert fitted == pytest.approx(theta_e, rel=0.01)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "spurious 1s -> eps-s monopole (non-orthogonal bound and continuum "
-        "states, see test_k_edge_monopole_channel_vanishes_at_small_q) adds a "
-        "1/q^4 term that pulls the fitted theta_E of the full C K edge 22% "
-        "low at 300 kV (12% at 100 kV)"
-    ),
-)
 def test_k_edge_total_intensity_is_lorentzian_in_theta():
     """As above, but for the full K edge including the l' = 0 channel.
 
