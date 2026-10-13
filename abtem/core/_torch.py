@@ -625,7 +625,11 @@ def asarray(data, dtype=None):
     inferred = dtype is None
     if inferred:
         dtype = data.dtype
-    if not data.flags["C_CONTIGUOUS"] or any(stride < 0 for stride in data.strides):
+    if (
+        not data.flags["C_CONTIGUOUS"]
+        or any(stride < 0 for stride in data.strides)
+        or not data.flags["WRITEABLE"]
+    ):
         # The stride test is not redundant: NumPy calls a size-1 array
         # contiguous whatever its stride sign, so `argsort(...)[::-1]` of a
         # single element passes the flag while still carrying a negative
@@ -633,6 +637,10 @@ def asarray(data, dtype=None):
         # for the same reason -- asarray believes the flag and declines to
         # copy -- and rather than np.ascontiguousarray, which would promote a
         # 0-d scalar to shape (1,) and add a dimension to every scalar.
+        # A read-only array (such as the shared cache of polar detector bins)
+        # is copied too: from_numpy would share its buffer, which torch warns
+        # about, and on torch's CPU device writing to the tensor would write
+        # to the array.
         data = data.copy(order="C")
     # from_numpy avoids a host-side copy before the device transfer
     tensor = torch.from_numpy(data)
