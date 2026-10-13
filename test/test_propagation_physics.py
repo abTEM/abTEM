@@ -71,6 +71,7 @@ def _roundoff_bound(num_slices, gpts, precision):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("order", ["exact", 1, 2])
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error:UserWarning")
 def test_plane_wave_unchanged_by_vacuum(order, device):
@@ -94,6 +95,7 @@ def test_plane_wave_unchanged_by_vacuum(order, device):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("order", ["exact", 1, 2])
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error:UserWarning")
 def test_vacuum_propagation_is_a_defocus_change(order, device):
@@ -168,6 +170,7 @@ def _first_harmonic_shift(intensity, reference, extent):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("tilt", [(20.0, 0.0), (0.0, -15.0), (12.0, 17.0)])
 def test_tilt_translates_beam_by_thickness_times_tan_theta(tilt, device):
     # Oracle: geometry. A beam travelling at angle theta to the optic axis is
@@ -194,6 +197,7 @@ def test_tilt_translates_beam_by_thickness_times_tan_theta(tilt, device):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("n", [2, 3])
 def test_tilted_plane_wave_matches_explicit_phase_ramp(n, device):
     # Oracle: frame invariance. abTEM represents a tilted beam in the frame
@@ -286,6 +290,7 @@ def _unitarity_potential(device):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("order", ["exact", 1, 2])
 @pytest.mark.parametrize("wave", ["plane_wave", "probe"])
 @pytest.mark.filterwarnings("ignore:Maximum propagator phase error:UserWarning")
@@ -416,6 +421,7 @@ def test_prism_scan_matches_probe_scan(lazy, device):
 
 
 @devices
+@pytest.mark.float64
 @pytest.mark.parametrize("order", [1, 3])
 @pytest.mark.filterwarnings("ignore::numba.core.errors.NumbaPerformanceWarning")
 def test_realspace_plane_wave_unchanged_by_vacuum(order, device):
