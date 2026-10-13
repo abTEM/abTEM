@@ -1779,6 +1779,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
+        elif cp is not None and get_array_module(self.array) is cp:
+            # CuPy refuses a host array as an operand, a 0-d one included,
+            # though it takes a NumPy scalar. On the device the array keeps its
+            # dtype, so the result is promoted as NumPy promotes it on the CPU.
+            if isinstance(other_array, np.ndarray):
+                other_array = cp.asarray(other_array)
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands

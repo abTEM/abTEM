@@ -837,12 +837,16 @@ class Waves(BaseWaves, ArrayObject):
         """
 
         def _phase_shift(array):
-            xp = get_array_module(self.array)
-            return xp.exp(1.0j * amount) * array
+            # np.exp of a Python complex is a NumPy complex128 scalar, which
+            # under NEP 50 promotes complex64 waves to complex128 (and that
+            # dtype is refused outright by the Metal backend). The factor is a
+            # host scalar in the waves' own dtype, which every backend and dask
+            # multiply into the array without changing its dtype.
+            factor = np.exp(1.0j * amount).astype(array.dtype)
+            return factor * array
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = _phase_shift(self.array)
-        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:

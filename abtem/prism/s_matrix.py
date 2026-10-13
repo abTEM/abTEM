@@ -303,6 +303,7 @@ class BaseSMatrix(BaseWaves):
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
+        energy = kwargs.pop("energy", self.energy)
         kwargs = {**default_kwargs, **kwargs}
 
         if downsample:
@@ -317,7 +318,7 @@ class BaseSMatrix(BaseWaves):
             extent=self.window_extent,
             gpts=window_gpts,
             ctf=ctf,
-            energy=self.energy,
+            energy=energy,
             **kwargs,
         )
 
@@ -4264,7 +4265,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def window_gpts(self):
         """The number of grid points describing the cropping window of the reduced
         wave functions."""
-        if self._upsample:
+        # the C-PRISM window belongs to the compressed reduction; at an
+        # interpolation of (1, 1) there is no compression and the plain PRISM
+        # reduction, which does not rescale a cropped window, is used instead
+        if self._upsample_enabled:
             if self._window_gpts == "full":
                 return self.downsampled_gpts
             if self._window_gpts is None:
@@ -5591,6 +5595,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if scan is None:
                 scan = (self.extent[0] / 2, self.extent[1] / 2)
             scan = validate_scan(scan, self)
+
+            # Fix whatever depends on the whole ensemble, as `apply_transform`
+            # does before it splits a multi-energy ensemble: each energy is then
+            # reduced with the same detectors, whose measurements stack. The
+            # members detect on the downsampled grid of the S-matrix.
+            ensemble = self.dummy_probes(
+                downsample=True,
+                energy=self._energies,
+                metadata={k: v for k, v in self.metadata.items() if k != "energy"},
+            ).build(lazy=True)
+            detectors = [
+                detector._match_ensemble(ensemble)
+                for detector in validate_detectors(detectors)
+            ]
 
             results = [
                 self._with_energy(float(e)).reduce(
