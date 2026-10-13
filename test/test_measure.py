@@ -266,9 +266,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     # promotes a single-precision measurement to double with any of these
     # operands; the torch backend holds single precision only and must give the
     # single-precision result instead, eager and lazy alike. An in-place
-    # operation keeps single precision on every backend.
-    if in_place and lazy:
-        pytest.skip("in-place arithmetic refuses lazy measurements")
+    # operation keeps single precision on every backend, and refuses a lazy
+    # measurement rather than silently returning a new (lazy) object.
     if in_place and reflected:
         pytest.skip("an in-place operation has the measurement on the left")
     xp = get_array_module(device)
@@ -289,12 +288,12 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         sampling=(0.1, 0.2),
     ).copy_to_device(device)
 
-    operands = (operand, measurement) if reflected else (measurement, operand)
-    if device == "gpu" and isinstance(operand, np.ndarray):
-        # CuPy refuses NumPy arrays, 0-d ones included.
-        with pytest.raises(TypeError, match="copy_to_device"):
-            getattr(operator, ("i" if in_place else "") + op)(*operands)
+    if in_place and lazy:
+        with pytest.raises(RuntimeError, match="inplace"):
+            getattr(operator, "i" + op)(measurement, operand)
         return
+
+    operands = (operand, measurement) if reflected else (measurement, operand)
     result = getattr(operator, ("i" if in_place else "") + op)(*operands)
 
     assert isinstance(result, Images)
@@ -317,12 +316,12 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     "operand_type", ["array", "dask_array", "measurement", "lazy_measurement"]
 )
 @pytest.mark.parametrize("device", ["gpu", "cpu"])
-def test_arithmetic_between_cpu_and_gpu_data_raises(
+def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
     device, operand_type, reflected, lazy
 ):
-    # The operand is on the other device. CuPy refuses NumPy arrays, so the pair
-    # is refused in either order, eager or lazy, when the expression is built
-    # rather than when a lazy result is computed.
+    # The operand is on the other device. CuPy refuses NumPy arrays, so the side
+    # on the host is moved to the device: the pair gives the same GPU result in
+    # either order, eager or lazy.
     if reflected and operand_type.endswith("measurement"):
         pytest.skip("the reflected pair is the forward pair with devices swapped")
     other_device = "cpu" if device == "gpu" else "gpu"
@@ -344,16 +343,14 @@ def test_arithmetic_between_cpu_and_gpu_data_raises(
         operand = copy_to_device(operand_array, other_device)
 
     operands = (operand, measurement) if reflected else (measurement, operand)
-    with pytest.raises(TypeError, match="copy_to_device"):
-        operator.add(*operands)
+    result = operator.add(*operands)
 
-
-def test_in_place_true_division_refuses_lazy_measurements():
-    # Like the other in-place operators, /= must refuse a lazy measurement
-    # rather than silently returning a new (lazy) object.
-    measurement = Images(da.ones((4, 4), chunks=2), sampling=0.1)
-    with pytest.raises(RuntimeError, match="inplace"):
-        measurement /= 2.0
+    assert isinstance(result, Images)
+    lazy_operand = operand_type in ("dask_array", "lazy_measurement")
+    assert result.is_lazy == (lazy or lazy_operand)
+    computed = result.compute().array
+    assert_array_matches_device(computed, "gpu")
+    np.testing.assert_array_equal(asnumpy(computed), 2 * array)
 
 
 @settings(max_examples=5)

@@ -252,9 +252,15 @@ requires_gpu = _GpuRequirement(pytest.mark.skipif(_gpu_count() < 1, reason="no g
 devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
-# Runs a test in double precision on the CPU with the numpy FFT, which the
-# comparisons at 1e-10 of the maximum need (fixture in conftest.py).
-cpu_float64 = pytest.mark.usefixtures("cpu_float64_config")
+
+def float64_devices(function):
+    """Parametrize a test over `device` and run it in double precision with the
+    numpy FFT, which the comparisons at 1e-10 of the maximum need (the
+    `float64_config` fixture of conftest.py). The `float64` marker makes the
+    collection hook of conftest.py skip the Metal case."""
+    function = pytest.mark.usefixtures("float64_config")(function)
+    return devices(pytest.mark.float64(function))
+
 
 # A box that strains the atoms is reported by a warning, which only the tests of
 # the warning look at.
@@ -291,14 +297,14 @@ requires_multigpu = _GpuRequirement(
 
 
 # Marks for the torch backend, which -- like CUDA -- is exercised whenever the
-# machine has it: Metal on Apple silicon, or torch's CPU device with
+# machine has it: Metal on macOS, or torch's CPU device with
 # ABTEM_TORCH__DEVICE=cpu. A list, for `pytestmark = requires_mps`, with the
 # same markers as the `gpu` parameter above.
 requires_mps = [
     pytest.mark.skipif(
         not _mps_is_usable(),
         reason=(
-            "requires the torch backend: Metal on macOS on Apple silicon, or "
+            "requires the torch backend: Metal on macOS, or "
             "ABTEM_TORCH__DEVICE=cpu, with PyTorch installed"
         ),
     ),
