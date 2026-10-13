@@ -674,7 +674,8 @@ def multislice_and_detect(
         Algorithm used for multislice operator (default is FourierMultislice()).
     return_backscattered : bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
-        backscattered components are also returned. Requires potential exit_planes.
+        backscattered components are also returned. Requires an exit plane after
+        every slice (potential exit_planes=1).
     pbar : bool, optional
         If True, display a progress bar.
     potential_chunk_size : int or str, optional
@@ -693,12 +694,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        # The back-propagation sums the backscattered waves into the entrance
-        # plane, the first exit plane.
-        if potential.num_exit_planes == 1 or potential.exit_planes[0] != -1:
+        # A slice's backscattered wave is kept only at an exit plane, and the
+        # back-propagation sums the kept waves into the entrance plane.
+        if tuple(potential.exit_planes) != tuple(range(-1, potential.num_slices)):
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes, "
-                "starting with the entrance plane -1."
+                "Backscattering contributions require potential.exit_planes after "
+                "every slice, starting with the entrance plane -1 (exit_planes=1)."
             )
 
         # moved to MultisliceTransform
@@ -782,11 +783,9 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
-        # The sum of the slices of each exit-plane block, built as the forward
-        # pass goes, for the back-propagation of this configuration's
-        # backscattered waves: one slice is held per exit plane, not per slice.
-        blocks = []
-        block = None
+        # The slices of this configuration's forward pass, for the
+        # back-propagation of its backscattered waves.
+        forward_slices = []
 
         # One stream of slices across the chunks: the last slice of a chunk
         # looks ahead to the first slice of the next one, so only the exit
@@ -809,7 +808,8 @@ def multislice_and_detect(
             tqdm_pbar.update_if_exists(int(n_waves))
 
             if return_backscattered:
-                block = _add_to_block(block, potential_slice)
+                # a copy, so no view keeps the potential chunk alive
+                forward_slices.append(potential_slice.copy())
 
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -839,16 +839,13 @@ def multislice_and_detect(
                             waves, detectors, measurements, measurement_index
                         )
                 exit_plane_index += 1
-                if return_backscattered:
-                    blocks.append(block)
-                    block = None
 
         if return_backscattered:
             _back_propagate_backscattered_waves(
                 measurements[-1][  # type: ignore
                     _validate_potential_ensemble_indices(potential_index, (), potential)
                 ],
-                blocks,
+                forward_slices,
                 multislice_step,
             )
 
@@ -865,23 +862,9 @@ def multislice_and_detect(
     return measurements
 
 
-def _add_to_block(block, potential_slice):
-    """Add a slice to the sum of the slices of one exit-plane block, and its
-    thickness to the block's. The block starts as a copy of its first slice
-    (`block` is None)."""
-    if block is None:
-        return potential_slice.copy()
-
-    thickness = block.slice_thickness[0] + potential_slice.slice_thickness[0]
-    block += potential_slice
-    block._slice_thickness = (thickness,)
-    block._slice_limits = [(0, thickness)]
-    return block
-
-
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    effective_slices: list[BasePotential],
+    forward_slices: list[BasePotential],
     multislice_step: Callable,
 ) -> Waves:
     """
@@ -889,24 +872,23 @@ def _back_propagate_backscattered_waves(
     This function runs the multislice in reverse for each backscattered wave summing
     them for a final backscattered wave result.
 
-    `backscattered_waves` are those of one configuration, with the exit-plane axis
-    first, and `effective_slices` are the sums of the slices its forward pass used
-    between consecutive exit planes.
+    `backscattered_waves` are those of one configuration, with one exit plane after
+    every slice and the entrance plane first, and `forward_slices` are the slices its
+    forward pass used. The wave at plane `i + 1`, after slice `i`, crosses slice `i`
+    to reach plane `i`.
     """
 
     xp = get_array_module(backscattered_waves.device)
-
-    num_slices = len(effective_slices)
 
     # zero intensity in incoming wave
     backscattered_waves[0]._array[:] = 0
 
     # Go through potential in reverse
-    for i in range(num_slices - 2, -1, -1):
+    for i in range(len(forward_slices) - 1, -1, -1):
         contribution_at_slice = backscattered_waves[i + 1].copy()
         contribution_at_slice.array = xp.conj(contribution_at_slice.array)
         contribution_at_slice, _ = multislice_step(
-            contribution_at_slice, effective_slices[i + 1], next_slice=None
+            contribution_at_slice, forward_slices[i], next_slice=None
         )
         backscattered_waves[i].array += xp.conj(contribution_at_slice.array)
 
