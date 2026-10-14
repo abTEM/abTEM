@@ -334,6 +334,7 @@ def test_multi_energy_frozen_phonon_build_reduce_averages_the_configurations():
         lambda p: p.center_of_mass(units="mrad"),
         lambda p: p.block_direct(),
         lambda p: p.bandlimit(30, 100),
+        lambda p: p.azimuthal_average(radial_sampling=5),
     ],
     ids=[
         "polar_binning",
@@ -342,6 +343,7 @@ def test_multi_energy_frozen_phonon_build_reduce_averages_the_configurations():
         "center_of_mass_mrad",
         "block_direct",
         "bandlimit",
+        "azimuthal_average",
     ],
 )
 def test_diffraction_pattern_methods_equal_single_energy_runs(
@@ -386,6 +388,53 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
             np.take(asnumpy(annular.array), i, axis=annular_axis),
             atol=1e-6,
         )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_cropping_to_an_angle_is_refused_for_several_energies(lazy, device):
+    # the pixels within an angle differ between the energies, so the crops would
+    # not stack; cropping every energy to the highest energy's pixel count instead
+    # cut the lower energies at a smaller angle than asked for
+    potential = _potential(device)
+    multi = _exit_waves(potential, list(ENERGIES)).diffraction_patterns(
+        max_angle="full"
+    )
+    if lazy:
+        multi = multi.lazy()
+    with pytest.raises(ValueError, match="several energies"):
+        multi.crop(max_angle=100)
+
+    # a single energy is cropped to the angle, however the ensemble was indexed
+    single = _exit_waves(potential, ENERGIES[1]).diffraction_patterns(max_angle="full")
+    cropped = single.crop(max_angle=100)
+    assert cropped.angular_limits[0][1] == pytest.approx(
+        100, abs=single.angular_sampling[0]
+    )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "arguments", [{"max_frequency": 0.8}, {"gpts": (21, 31)}], ids=["frequency", "gpts"]
+)
+def test_cropping_to_a_frequency_or_pixel_count_serves_several_energies(
+    arguments, lazy, device
+):
+    potential = _potential(device)
+    multi = _exit_waves(potential, list(ENERGIES)).diffraction_patterns(
+        max_angle="full"
+    )
+    if lazy:
+        multi = multi.lazy()
+    result = multi.crop(**arguments)
+    result = result.compute(progress_bar=False) if lazy else result
+
+    axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
+    for i, energy in enumerate(ENERGIES):
+        single = _exit_waves(potential, energy).diffraction_patterns(max_angle="full")
+        single = single.crop(**arguments)
+        _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
 
 
 @devices
