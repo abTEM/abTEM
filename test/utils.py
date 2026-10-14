@@ -288,12 +288,18 @@ def plane_rotation_by_hand(plane):
 
 def rotated_by_hand(atoms, plane):
     """The atoms of an orthogonal cell as `plane` sees them, rotated by hand with
-    `plane_rotation_by_hand` and wrapped into the rotated cell."""
+    `plane_rotation_by_hand` and wrapped into the rotated cell. Magnetic moments
+    turn with the atoms: the rotation is proper, so these pseudovectors turn as
+    vectors do."""
     rotation = plane_rotation_by_hand(plane)
     lengths = np.abs(np.diag(atoms.cell) @ rotation)
     rotated = ase.Atoms(
         atoms.numbers, positions=atoms.positions @ rotation, cell=lengths, pbc=True
     )
+    if atoms.has("magnetic_moments"):
+        rotated.set_array(
+            "magnetic_moments", atoms.get_array("magnetic_moments") @ rotation
+        )
     rotated.wrap()
     return rotated
 

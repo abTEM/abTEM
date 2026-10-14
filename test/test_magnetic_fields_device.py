@@ -7,12 +7,16 @@ array and the build raised (issue #541). It also pinned every array to
 float32, ignoring ``abtem.config["precision"]``.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 from ase import Atoms
-from utils import gpu
+from ase.build import graphene
+from utils import gpu, plane_rotation_by_hand, rotated_by_hand
 
 import abtem
+from abtem.atoms import orthogonalize_cell
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.magnetism.iam import MagneticField, VectorPotential
 
@@ -88,3 +92,132 @@ def test_integral_table_follows_precision_change(cls):
     with abtem.config.set({"precision": "float64"}):
         assert field._integrator.get_integral_table("Fe").dtype == np.float64
         assert field.build(lazy=False).array.dtype == np.float64
+
+
+# Magnetic moments rotated with the atoms
+
+
+def _chiral_magnetic_atoms() -> Atoms:
+    # Three iron atoms spanning a triangle off every symmetry plane of a cell of
+    # three different lengths, with moments along no axis, so that a moment left
+    # unrotated, or rotated about the wrong axis, changes the field.
+    atoms = Atoms(
+        "Fe3",
+        positions=[(0.6, 0.5, 1.1), (2.9, 2.1, 1.6), (1.4, 0.9, 3.9)],
+        cell=[4.0, 3.0, 5.0],
+        pbc=True,
+    )
+    atoms.set_array(
+        "magnetic_moments",
+        np.array([[0.3, -0.4, 2.0], [0.0, 1.0, -1.5], [-1.2, 0.5, 0.7]]),
+    )
+    return atoms
+
+
+@pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
+@pytest.mark.parametrize("plane", ["yz", "zx", "xz", "yx", "zy"])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_field_in_a_plane_is_that_of_the_atoms_and_moments_rotated_by_hand(
+    cls, plane, device
+):
+    """The field built with `plane` is the field of the atoms rotated by hand to
+    that plane, their positions and their magnetic moments, built in the xy plane.
+    A moment left along its input axes gives the field of a different magnet."""
+    atoms = _chiral_magnetic_atoms()
+    kwargs = dict(sampling=0.2, slice_thickness=1.0, device=device)
+
+    actual = cls(atoms, plane=plane, **kwargs).build(lazy=False)
+    expected = cls(rotated_by_hand(atoms, plane), **kwargs).build(lazy=False)
+
+    actual, expected = asnumpy(actual.array), asnumpy(expected.array)
+    assert actual.shape == expected.shape
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-4 * scale)
+
+
+def _rotation_about(axis, angle):
+    unit_vectors = Atoms(positions=np.eye(3))
+    unit_vectors.rotate(angle, axis)
+    return unit_vectors.positions
+
+
+def test_orthogonalize_cell_rotates_the_moments_of_a_rotated_cell():
+    """A hexagonal cell rotated about z by 17 degrees: orthogonalize_cell repeats
+    it into a supercell close to the axes, then turns and strains that onto its
+    box. Each moment of the result is the moment of the atom it is a copy of,
+    turned by the rotation part of that map (here about 0.9 degrees)."""
+    atoms = graphene(vacuum=2.0)
+    atoms.rotate(17.0, "z", rotate_cell=True)
+    moments = np.array([[1.0, 0.0, 0.5], [0.0, -1.0, 0.25]])
+    atoms.set_array("magnetic_moments", moments)
+    atoms.set_array("source", np.arange(len(atoms)))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        orthogonal, transform = orthogonalize_cell(
+            atoms, return_transform_matrix=True
+        )
+
+    u, _, vt = np.linalg.svd(transform)
+    rotation = u @ vt
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+    # a rotation about z, and not the identity, so a moment left alone fails
+    np.testing.assert_allclose(rotation[2], [0.0, 0.0, 1.0], atol=1e-12)
+    assert abs(rotation[0, 1]) > 1e-3
+    assert len(orthogonal) > len(atoms)
+    np.testing.assert_allclose(
+        orthogonal.get_array("magnetic_moments"),
+        moments[orthogonal.get_array("source")] @ rotation,
+        rtol=0,
+        atol=1e-10,
+    )
+
+
+def test_orthogonalize_cell_rotates_the_moments_in_another_plane():
+    """An orthorhombic cell rotated about y by 30 degrees, rotated to plane "xz":
+    the rotation about the beam that `standardize_cell` undoes turns the moments
+    too, so they are the moments of the unrotated cell rotated to "xz"."""
+    atoms = _chiral_magnetic_atoms()
+    moments = atoms.get_array("magnetic_moments")
+    rotated = atoms.copy()
+    rotated.rotate(30.0, "y", rotate_cell=True)
+    rotated.set_array("magnetic_moments", moments @ _rotation_about("y", 30.0))
+
+    orthogonal = orthogonalize_cell(rotated, plane="xz")
+
+    np.testing.assert_allclose(
+        orthogonal.get_array("magnetic_moments"),
+        moments @ plane_rotation_by_hand("xz"),
+        rtol=0,
+        atol=1e-10,
+    )
+
+
+def test_a_strain_leaves_the_moments_and_a_rotation_turns_them():
+    """A sheared cell strained into its box: the strain has no rule for a moment,
+    so only the rotation part of the map turns it, and its length is kept."""
+    atoms = Atoms(
+        "Fe",
+        positions=[(2.0, 2.0, 2.5)],
+        cell=[[4.0, 0.0, 0.0], [0.4, 4.0, 0.0], [0.0, 0.0, 5.0]],
+        pbc=True,
+    )
+    moments = np.array([[0.6, -0.8, 0.0]])
+    atoms.set_array("magnetic_moments", moments)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        strained, transform = orthogonalize_cell(
+            atoms, box=(4.0, 4.0, 5.0), return_transform_matrix=True
+        )
+
+    # the map from the sheared cell onto the box: a rotation about z times a
+    # strain in the xy plane
+    assert not np.allclose(transform, np.eye(3))
+    rotated = strained.get_array("magnetic_moments")
+    np.testing.assert_allclose(np.linalg.norm(rotated, axis=1), 1.0, atol=1e-12)
+    np.testing.assert_allclose(rotated[:, 2], 0.0, atol=1e-12)
+    # the rotation part is the closest rotation to the map
+    u, _, vt = np.linalg.svd(transform)
+    np.testing.assert_allclose(rotated, moments @ (u @ vt), atol=1e-12)
