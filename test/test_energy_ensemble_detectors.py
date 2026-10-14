@@ -288,8 +288,6 @@ def test_pixelated_detector_with_a_multi_energy_scan(
             "waves",
         )
         for chunks in (None, 3, (2, 1))
-        # a lazy SegmentedDetector.detect needs an `offset` attribute
-        if not (detector == "segmented" and chunks is not None)
     ],
     ids=str,
 )
