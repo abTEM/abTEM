@@ -5,10 +5,17 @@ import numpy as np
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
+    """Crop ``new_shape`` windows from the last two axes of ``array`` at ``corners``.
+    A window as large as the array can only sit at the origin, so ``array`` itself
+    is returned, not a copy."""
+
+    if tuple(new_shape) == tuple(array.shape[-2:]):
+        return array
+
     xp = get_array_module(array)
 
     if len(array.shape) > 3:
@@ -57,6 +64,18 @@ def minimum_crop(positions: np.ndarray, shape):
 
     corners -= xp.asarray(crop_corner)
     return crop_corner, size, corners
+
+
+def window_crop(positions: np.ndarray, window_gpts, gpts):
+    """The crop box of windows of ``window_gpts`` points centred on ``positions``
+    (in pixels of a grid of ``gpts`` points), as ``minimum_crop`` returns it, except
+    that a window as large as the grid is the whole grid for every position, with
+    each window's corner at the origin (the cell frame)."""
+    if tuple(window_gpts) == tuple(gpts):
+        xp = get_array_module(positions)
+        return (0, 0), tuple(gpts), xp.zeros(positions.shape, dtype=int)
+
+    return minimum_crop(positions, window_gpts)
 
 
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
@@ -183,13 +202,14 @@ def prism_wave_vectors(
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
-    n = np.arange(-n_max, n_max + 1, dtype=np.float32)
-    w = np.asarray(extent[0], dtype=np.float32)
-    m = np.arange(-m_max, m_max + 1, dtype=np.float32)
-    h = np.asarray(extent[1], dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    n = np.arange(-n_max, n_max + 1, dtype=dtype)
+    w = np.asarray(extent[0], dtype=dtype)
+    m = np.arange(-m_max, m_max + 1, dtype=dtype)
+    h = np.asarray(extent[1], dtype=dtype)
 
-    kx = n / w * np.float32(interpolation[0])
-    ky = m / h * np.float32(interpolation[1])
+    kx = n / w * dtype(interpolation[0])
+    ky = m / h * dtype(interpolation[1])
 
     mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
 
@@ -206,8 +226,9 @@ def plane_waves(
     reverse: bool = False,
 ) -> np.ndarray:
     xp = get_array_module(wave_vectors)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=dtype)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=dtype)
 
     sign = -1.0 if reverse else 1.0
 

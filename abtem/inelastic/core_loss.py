@@ -1669,9 +1669,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 def _extract_scattering_sites(potential, sites):
     """Extract scattering sites from a potential, or validate provided sites.
 
-    Handles ``Potential`` (via ``get_sliced_atoms``), ``FrozenPhonons``-wrapped
-    potentials (via ``atoms``), and ``CrystalPotential`` (via
-    ``potential_unit.get_transformed_atoms`` tiled by ``repetitions``).
+    Handles ``Potential`` and ``CrystalPotential`` (via ``get_sliced_atoms``;
+    for a frozen-phonon ensemble these are the sites of its first member, see
+    `_resolve_scattering_sites`) and ``FrozenPhonons``-wrapped potentials (via
+    ``atoms``).
     """
     from abtem.slicing import SliceIndexedAtoms
 
@@ -1679,10 +1680,6 @@ def _extract_scattering_sites(potential, sites):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
         sites = potential.atoms
-    elif sites is None and hasattr(potential, "potential_unit"):
-        if hasattr(potential.potential_unit, "get_transformed_atoms"):
-            unit_atoms = potential.potential_unit.get_transformed_atoms()
-            sites = unit_atoms * potential.repetitions
 
     if isinstance(sites, Atoms):
         # Follow the potential's own convention, so explicitly passed sites
@@ -1700,6 +1697,195 @@ def _extract_scattering_sites(potential, sites):
         )
 
     return sites
+
+
+class _SitesPerConfiguration:
+    """The scattering sites of each configuration of a potential ensemble.
+
+    Holds an object array with the ensemble shape of the potential, one
+    ``SliceIndexedAtoms`` per configuration. The core-loss multislice indexes
+    it with the same ensemble index it runs that configuration's slices under,
+    so each configuration ionises its own displaced atoms (abTEM issue #581).
+
+    No ``__len__`` or ``__getitem__``, on purpose: numpy would then take an
+    instance for a sequence when it is stored as one element of an object array.
+    """
+
+    def __init__(self, sites: np.ndarray):
+        self._sites = sites
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self._sites.shape
+
+    def configuration(self, index: tuple[int, ...]):
+        """The sites of the configuration at ensemble index ``index``."""
+        return self._sites[index]
+
+    def configurations(self) -> list:
+        """The sites of every configuration."""
+        return list(self._sites.flat)
+
+    def _pair_with_potential_blocks(
+        self, potential_args: tuple, chunks: tuple[tuple[int, ...], ...], lazy: bool
+    ) -> tuple:
+        """Attach to each block of a potential's partitioned argument the sites of
+        the configurations in that block, as a ``(potential_block, sites)`` pair.
+
+        The two cannot be passed as separate partitioned arguments: each
+        partitioned argument of a transform gets its own output dimensions, so
+        dask would pair every potential block with every block of sites rather
+        than with its own.
+        """
+        from abtem.core.chunks import iterate_chunk_ranges
+        from abtem.core.ensemble import _wrap_with_array
+        from abtem.core.utils import itemset
+
+        if len(potential_args) != 1:
+            raise NotImplementedError(
+                "per-configuration scattering sites need a potential that "
+                "partitions into a single argument"
+            )
+        (potential_blocks,) = potential_args
+
+        numblocks = tuple(len(c) for c in chunks)
+        if tuple(potential_blocks.shape) != numblocks:
+            raise RuntimeError(
+                f"the potential partitions into blocks of shape "
+                f"{tuple(potential_blocks.shape)}, its sites into {numblocks}"
+            )
+
+        site_blocks = np.empty(numblocks, dtype=object)
+        for block_indices, chunk_range in iterate_chunk_ranges(chunks):
+            itemset(
+                site_blocks,
+                block_indices,
+                _SitesPerConfiguration(self._sites[chunk_range]),
+            )
+
+        if not lazy:
+            paired = np.empty(numblocks, dtype=object)
+            for index in np.ndindex(numblocks):
+                itemset(paired, index, (potential_blocks[index], site_blocks[index]))
+            return (paired,)
+
+        import dask.array as da
+
+        ndims = len(numblocks)
+
+        # One graph node per block of sites, so a task receives the sites of
+        # its own configurations only.
+        def _nested(prefix):
+            if len(prefix) == ndims:
+                return da.from_delayed(
+                    dask.delayed(_wrap_with_array)(site_blocks[prefix], ndims),
+                    shape=(1,) * ndims,
+                    dtype=object,
+                )
+            return [_nested(prefix + (i,)) for i in range(numblocks[len(prefix)])]
+
+        lazy_site_blocks = da.block(_nested(()))
+
+        def _pair(potential_block, sites_block):
+            return _wrap_with_array((potential_block, sites_block.item()), ndims)
+
+        index = tuple(range(ndims))
+        paired = da.blockwise(
+            _pair,
+            index,
+            potential_blocks,
+            index,
+            lazy_site_blocks,
+            index,
+            align_arrays=False,
+            concatenate=True,
+            dtype=object,
+            meta=np.array((), dtype=object),
+        )
+        return (paired,)
+
+
+def _sites_differ_per_configuration(potential) -> bool:
+    """Whether each configuration of ``potential`` has sites of its own.
+
+    True for an atom-based potential with more than one configuration, e.g.
+    frozen phonons, whose ``get_sliced_atoms`` displaces the atoms of the
+    first configuration only.
+
+    A ``CrystalPotential`` ensemble qualifies when its unit is a pool of
+    displaced configurations: every member draws its own mosaic of them, and
+    its sites are the displaced atoms of that mosaic (abTEM issue #582, see
+    ``CrystalPotential.get_sliced_atoms``). The members of a crystal whose unit
+    has no frozen phonons all tile the same atoms, so their sites are resolved
+    once.
+    """
+    from abtem.potentials.iam import CrystalPotential
+
+    if isinstance(potential, CrystalPotential) and not potential._has_displaced_atoms:
+        return False
+
+    return (
+        hasattr(potential, "get_sliced_atoms")
+        and getattr(potential, "num_configurations", 1) > 1
+    )
+
+
+def _resolve_scattering_sites(potential, sites):
+    """The scattering sites of ``potential``, per configuration where they differ.
+
+    With ``sites=None`` and a potential whose configurations have sites of
+    their own (see ``_sites_differ_per_configuration``), returns a
+    ``_SitesPerConfiguration``, each configuration's sites taken from that
+    ensemble member's own atoms, i.e. those its slices are built from.
+    Resolved once for the whole ensemble, they were the first configuration's
+    for every configuration (abTEM issue #581). Otherwise, and for sites that
+    are already resolved, returns what ``_extract_scattering_sites`` does.
+    """
+    from abtem.core.utils import itemset
+
+    if isinstance(sites, _SitesPerConfiguration):
+        return sites
+
+    if sites is not None or not _sites_differ_per_configuration(potential):
+        return _extract_scattering_sites(potential, sites)
+
+    per_configuration = np.empty(potential.ensemble_shape, dtype=object)
+    for index, _, member in potential.generate_blocks(1):
+        itemset(
+            per_configuration, index, _extract_scattering_sites(member.item(), None)
+        )
+
+    return _SitesPerConfiguration(per_configuration)
+
+
+def _prism_eels_detected_waves(s_matrix, scan):
+    """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
+    the downsampled grid of ``s_matrix`` divided by its interpolation factor.
+    They carry the probe metadata of the elastic dummy probes (semiangle cutoff
+    and base tilt), which the detectors of the results read, but not their
+    ``adjusted_antialias_cutoff_gpts``. They only describe the grid; the array
+    is a broadcast zero, so no memory is allocated for it."""
+    from abtem.core.utils import safe_ceiling_int
+    from abtem.waves import Waves
+
+    xp = get_array_module(s_matrix.device)
+    ds_gpts = s_matrix.downsampled_gpts
+    gpts = tuple(
+        safe_ceiling_int(n / f) for n, f in zip(ds_gpts, s_matrix.interpolation)
+    )
+    extent = tuple(
+        g * length / n for g, length, n in zip(gpts, s_matrix.extent, ds_gpts)
+    )
+    array = xp.broadcast_to(
+        xp.zeros((), dtype=get_dtype(complex=True)), scan.shape + gpts
+    )
+    return Waves(
+        array,
+        energy=s_matrix.energy,
+        extent=extent,
+        ensemble_axes_metadata=scan.ensemble_axes_metadata,
+        metadata=s_matrix.dummy_probes().metadata,
+    )
 
 
 def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, sites):
@@ -1930,8 +2116,9 @@ def prism_transition_potential_scan(
 
     Returns
     -------
-    BaseMeasurements or list of BaseMeasurements
-        One measurement per detector.
+    BaseMeasurements, Waves or list of them
+        One measurement per detector. A ``WavesDetector`` gives the ``Waves``
+        at each scan position, which keep every member of an ensemble.
     """
     import warnings
 
@@ -1946,10 +2133,10 @@ def prism_transition_potential_scan(
     )
     from abtem.prism.utils import (
         batch_crop_2d,
-        minimum_crop,
+        window_crop,
         wrapped_crop_2d,
     )
-    from abtem.waves import Waves
+    from abtem.waves import Waves, _average_ensemble_axes
 
     ctx = _prism_eels_common_setup(
         s_matrix, transition_potentials, scan, detectors, sites
@@ -1995,17 +2182,12 @@ def prism_transition_potential_scan(
         safe_ceiling_int(gpts[0] / interpolation[0]),
         safe_ceiling_int(gpts[1] / interpolation[1]),
     )
-    output_window_gpts = (
-        safe_ceiling_int(ds_gpts[0] / interpolation[0]),
-        safe_ceiling_int(ds_gpts[1] / interpolation[1]),
-    )
+    detected_waves = _prism_eels_detected_waves(s_matrix, scan)
+    output_window_gpts = detected_waves.gpts
+    output_window_extent = detected_waves.extent
     scatter_window_extent = (
         scatter_window_gpts[0] * full_sampling[0],
         scatter_window_gpts[1] * full_sampling[1],
-    )
-    output_window_extent = (
-        output_window_gpts[0] * ds_sampling[0],
-        output_window_gpts[1] * ds_sampling[1],
     )
 
     # --- Inelastic crop window (Brown et al. Sec. IV B, independent of the
@@ -2114,14 +2296,8 @@ def prism_transition_potential_scan(
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
-    dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + output_window_gpts, dtype=complex_dtype),
-        energy=energy,
-        extent=output_window_extent,
-        ensemble_axes_metadata=scan_axes_metadata,
-    )
     measurements = allocate_multislice_measurements(
-        dummy_scan_waves,
+        detected_waves,
         detectors,
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
@@ -2129,13 +2305,13 @@ def prism_transition_potential_scan(
 
     # --- Chunk the reduction over scan positions ---
     #
-    # minimum_crop's bounding box spans every position handed to it, so
-    # cropping around the *whole* scan (as a single reduce_and_record call
-    # used to) makes the box -- and the tensordot below -- scale with the
-    # scan's spatial extent rather than with output_window_gpts. Peak memory
-    # is n_positions * (scan_span + window)^2, growing with both factors as
-    # the field of view grows; a production-sized PRISM-EELS scan can demand
-    # a single allocation in the hundreds of GB.
+    # A window smaller than the cell is cropped around the positions of a batch
+    # (window_crop), and the bounding box of that crop spans every position
+    # handed to it. Cropping around the *whole* scan would make the box -- and
+    # the tensordot below -- scale with the scan's spatial extent rather than
+    # with output_window_gpts: peak memory n_positions * (scan_span + window)^2,
+    # growing with both factors as the field of view grows, which for a
+    # production-sized PRISM-EELS scan is a single allocation of hundreds of GB.
     #
     # Chunking over spatially contiguous blocks of scan rows shrinks the
     # bounding box along with the block -- a strided block scheme would keep
@@ -2144,8 +2320,9 @@ def prism_transition_potential_scan(
     # flattened in scan-raster order (positions_np above), so a contiguous
     # range of the flat axis is a contiguous range of whole rows of
     # scan_shape's leading axis for any scan dimensionality, including the
-    # 0-d single-point case (n_rows = row_cols = 1 below, one batch, no
-    # behaviour change).
+    # 0-d single-point case (n_rows = row_cols = 1 below, one batch). A window
+    # as large as the cell is reduced on the cell itself, so its box is the
+    # cell for every batch.
     n_rows = scan_shape[0] if scan_shape else 1
     row_cols = int(np.prod(scan_shape[1:])) if len(scan_shape) > 1 else 1
     n_T_estimate = transition_potential.array.shape[0]
@@ -2163,15 +2340,11 @@ def prism_transition_potential_scan(
     )
     rows_per_batch = min(rows_per_batch, n_rows)
 
-    # The guess above assumes the ideal case (no bounding-box growth), which
-    # is exactly wrong when the batch covers a large fraction of the scan --
-    # that is where the box is at its largest. This must run even when the
-    # guess already covers the whole scan (rows_per_batch == n_rows): gating
-    # it on rows_per_batch < n_rows skipped verification in precisely that
-    # case, silently reproducing the original whole-scan-as-one-block defect
-    # whenever the naive per-position estimate happened to clear the row
-    # count (a large output_window_gpts -- e.g. interpolation=1, no PRISM
-    # downsampling -- makes this the common case, not a corner one).
+    # The guess ignores the scattered window held over the whole box and, for
+    # a window smaller than the cell, the growth of the box with the batch --
+    # largest when the batch covers a large fraction of the scan. It is
+    # therefore verified even when it already covers the whole scan
+    # (rows_per_batch == n_rows).
     if rows_per_batch > 1:
         # Verify the guess against the actual box a batch of this size
         # produces -- translation-invariant for a regular raster scan, so
@@ -2183,11 +2356,17 @@ def prism_transition_potential_scan(
 
         def _batch_bytes(rows):
             end = min(n_rows, rows) * row_cols
-            _, size, _ = minimum_crop(pixel_positions[:end], output_window_gpts)
+            _, size, _ = window_crop(pixel_positions[:end], output_window_gpts, ds_gpts)
             size_px = int(np.prod(size))
-            # bbox_scattered (n_T, n_k, *size) plus the dominant ``reduced``
-            # tensor (end, n_T, *size) -- see _reduce_and_record below.
-            return (n_T_estimate * n_k + end * n_T_estimate) * size_px * itemsize
+            # A box as large as the window is not cropped (batch_crop_2d).
+            uncropped = tuple(size) == tuple(output_window_gpts)
+            window_px = 0 if uncropped else int(np.prod(output_window_gpts))
+            # bbox_scattered (n_T, n_k, *size), the dominant ``reduced`` tensor
+            # (end, n_T, *size) and its cropped windows (end, n_T, *window) --
+            # see _reduce_and_record below.
+            planes = n_T_estimate * n_k * size_px
+            planes += end * n_T_estimate * (size_px + window_px)
+            return planes * itemsize
 
         while rows_per_batch > 1 and _batch_bytes(rows_per_batch) > budget_bytes:
             rows_per_batch = max(1, rows_per_batch // 2)
@@ -2197,16 +2376,15 @@ def prism_transition_potential_scan(
         for r in range(0, n_rows, rows_per_batch)
     ]
 
-    # minimum_crop's result for a given batch depends only on that batch's
-    # own positions, never on the site or exit plane -- but _reduce_and_record
-    # runs once per (site, exit plane), so computing it there recomputed the
-    # identical box for every batch on every one of those calls. Hoisting it
-    # here, once per batch, turns that into O(n_batches) instead of
-    # O(n_batches * n_sites * n_exit_planes).
+    # window_crop's result for a given batch depends only on that batch's own
+    # positions, never on the site or exit plane -- but _reduce_and_record
+    # runs once per (site, exit plane), so it is computed once per batch here
+    # rather than in every one of those calls.
     row_batch_boxes = [
-        minimum_crop(
+        window_crop(
             pixel_positions[row_start * row_cols : row_end * row_cols],
             output_window_gpts,
+            ds_gpts,
         )
         for row_start, row_end in row_batches
     ]
@@ -2453,27 +2631,15 @@ def prism_transition_potential_scan(
                         sw_out, site_xys[s_idx], ep_idx
                     )
 
-    # Reduce the ensemble mean, but do NOT squeeze here.
-    #
-    # This function is the per-configuration driver: SMatrix calls it once per
-    # dask block and once per potential-ensemble member. The multislice path
-    # this used to imitate squeezes at the *outer* level instead --
-    # Waves.transition_potential_multislice ends in the module-level
-    # reduce_ensemble on the assembled result -- so blocks and declared chunks
-    # keep the axis and only the finished object loses it.
-    #
-    # Squeezing per block dropped the scan axis underneath two consumers that
-    # still expected it: the lazy branch declares ``chunks += scan.shape``, and
-    # the eager branch pre-allocates from ``dummy_probes(scan)``. A
-    # single-position non-BaseScan scan -- ``(x, y)``, ``[(x, y)]``,
-    # ``np.array([[x, y]])`` -- therefore came back one axis too wide, and
-    # whether it did depended on whether the potential was an ensemble.
-    #
-    # The module-level reduce_ensemble is squeeze-then-ensemble-mean; the
-    # method called below is only the second half, which is the half that
-    # belongs per block. SMatrix.transition_potential_scan applies the first
-    # half once, at the level the oracle uses.
-    measurements = [m.reduce_ensemble() for m in measurements]
+    # Average the ensemble axes, but do not squeeze: SMatrix calls this driver
+    # once per dask block and per potential-ensemble member, and both keep the
+    # scan axis (the lazy branch declares ``chunks += scan.shape``, the eager
+    # branch allocates from the detected waves of the scan). A single-position
+    # scan therefore keeps its position axis here, and
+    # SMatrix.transition_potential_scan squeezes it once on the assembled
+    # result with the module-level reduce_ensemble, as
+    # Waves.transition_potential_multislice does.
+    measurements = [_average_ensemble_axes(m) for m in measurements]
 
     if len(measurements) == 1:
         return measurements[0]

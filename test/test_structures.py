@@ -7,10 +7,12 @@ import pytest
 from ase import Atoms, build
 from ase.build import bulk, cut, graphene
 from scipy.spatial import cKDTree
-from utils import float64_devices, ignore_strain_warning
+from utils import float64_devices, ignore_strain_warning, plane_rotation_by_hand
 
 import abtem
 from abtem.atoms import (
+    _ODD_PLANE_REVERSED_AXIS,
+    _rotate_atoms_to_plane,
     _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
@@ -441,12 +443,15 @@ def test_rotate_atoms_to_plane():
 )
 def test_rotate_atoms_to_plane_normal_along_z(plane, in_plane, normal):
     # The first/second axis of the named plane become x/y, so the plane normal
-    # (the remaining axis) ends up along z, i.e. along the beam.
+    # (the remaining axis) ends up along z, i.e. along the beam. For "xz" one of
+    # the axes is also reversed, which the wrap into the cell takes up.
     atoms = _orthorhombic_test_atoms()
     rotated = rotate_atoms_to_plane(atoms, plane=plane)
-    lengths = atoms.cell.lengths()
-    assert np.allclose(rotated.cell[:], np.diag(lengths[[*in_plane, normal]]))
-    assert np.allclose(rotated.positions[:, :2], atoms.positions[:, in_plane])
+    lengths = atoms.cell.lengths()[[*in_plane, normal]]
+    assert np.allclose(rotated.cell[:], np.diag(lengths))
+    signs = plane_rotation_by_hand(plane).sum(axis=0)
+    expected = np.mod(atoms.positions[:, [*in_plane, normal]] * signs, lengths)
+    assert np.allclose(rotated.positions[:, :2], expected[:, :2])
     assert list(rotated.symbols) == list(atoms.symbols)
 
 
@@ -454,28 +459,72 @@ def _signed_volume(positions):
     return np.linalg.det(positions[1:4] - positions[0])
 
 
-@pytest.mark.parametrize(
-    "plane",
-    [
-        "yz",
-        "zx",
-        pytest.param(
-            "xz",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="rotate_atoms_to_plane permutes coordinate columns; the "
-                "odd permutations (xz, yx, zy) are reflections (det -1), so the "
-                "output is the mirror image of the input, not a rotation",
-            ),
-        ),
-    ],
-)
+ALL_PLANES = ["xy", "yz", "zx", "xz", "yx", "zy"]
+
+
+@pytest.mark.parametrize("plane", ALL_PLANES)
 def test_rotate_atoms_to_plane_is_proper_rotation(plane):
     # A rotation preserves handedness: the signed volume spanned by a chiral
-    # motif is invariant (a reflection flips its sign).
+    # motif is invariant (a reflection flips its sign). The motif is well inside
+    # the cell, so wrapping translates all of it by the same lattice vector.
     atoms = _orthorhombic_test_atoms()
     rotated = rotate_atoms_to_plane(atoms, plane=plane)
     assert np.isclose(_signed_volume(rotated.positions), _signed_volume(atoms.positions))
+
+
+def _minimum_image_distances(atoms):
+    return atoms.get_all_distances(mic=True)
+
+
+@pytest.mark.parametrize("plane", ALL_PLANES)
+def test_rotate_atoms_to_plane_applies_a_rotation_and_a_lattice_translation(plane):
+    """Oracle, written out by hand rather than from plane_to_axes: the named axes
+    become x and y and the remaining axis z, with one axis reversed where that is
+    a reflection. The map is then a rotation (orthogonal, determinant +1), the
+    atoms are its image up to a translation by the rotated cell, and all
+    distances are kept."""
+    rotation = plane_rotation_by_hand(plane)
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+
+    atoms = _orthorhombic_test_atoms()
+    rotated, frame = _rotate_atoms_to_plane(atoms, plane)
+
+    np.testing.assert_allclose(frame, rotation, atol=1e-12)
+    np.testing.assert_allclose(frame @ frame.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(frame) == pytest.approx(1.0)
+
+    lengths = np.abs(np.array(atoms.cell) @ rotation).sum(axis=0)
+    np.testing.assert_allclose(rotated.cell[:], np.diag(lengths), atol=1e-12)
+    # inside the rotated cell ...
+    assert np.all(rotated.positions >= -1e-12)
+    assert np.all(rotated.positions < lengths)
+    # ... and the rotated atoms translated by a lattice vector
+    difference = rotated.positions - atoms.positions @ rotation
+    np.testing.assert_allclose(
+        difference - lengths * np.round(difference / lengths), 0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        _minimum_image_distances(rotated), _minimum_image_distances(atoms), atol=1e-12
+    )
+    assert list(rotated.symbols) == list(atoms.symbols)
+
+
+@pytest.mark.parametrize("plane", ["xz", "yx", "zy"])
+def test_odd_planes_reverse_exactly_one_axis(plane):
+    """For "xz", "yx" and "zy" keeping every axis in its direction would be a
+    reflection: exactly one axis, `_ODD_PLANE_REVERSED_AXIS`, is the negative of
+    the axis it comes from, wrapped into the cell, and the others are unchanged."""
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    axes = plane_to_axes(plane)
+    for new, old in enumerate(axes):
+        length = atoms.cell[old, old]
+        sign = -1.0 if new == _ODD_PLANE_REVERSED_AXIS else 1.0
+        np.testing.assert_allclose(
+            rotated.positions[:, new],
+            np.mod(sign * atoms.positions[:, old], length),
+            atol=1e-12,
+        )
 
 
 @pytest.mark.parametrize(
@@ -979,7 +1028,15 @@ CELL = (4.0, 4.6, 5.3)
 
 
 # plane: the axis that becomes the beam direction, and the permutation of the axes
-PLANES = {"xz": ("y", (0, 2, 1)), "yz": ("x", (1, 2, 0)), "zx": ("y", (2, 0, 1))}
+# (for "xz", "yx" and "zy" one of them is also reversed, see
+# `plane_rotation_by_hand`)
+PLANES = {
+    "xz": ("y", (0, 2, 1)),
+    "yz": ("x", (1, 2, 0)),
+    "zx": ("y", (2, 0, 1)),
+    "yx": ("z", (1, 0, 2)),
+    "zy": ("x", (2, 1, 0)),
+}
 
 
 ANGLES = [30.0, 150.0]  # 150: the diagonal of the permuted cell is (-, -, +)
@@ -1008,11 +1065,17 @@ def _lengths(plane):
     return np.array(CELL)[list(PLANES[plane][1])]
 
 
+def _unrotated_in_plane(num_atoms, plane):
+    """The positions of the unrotated atoms in the frame of `plane`, up to
+    translations by the cell."""
+    return _unrotated(num_atoms).positions @ plane_rotation_by_hand(plane)
+
+
 def _assert_is_the_unrotated_atoms_in_plane(transformed, num_atoms, plane):
     lengths = _lengths(plane)
     np.testing.assert_allclose(transformed.cell[:], np.diag(lengths), rtol=0, atol=1e-12)
     assert len(transformed) == num_atoms
-    expected = _unrotated(num_atoms).positions[:, list(PLANES[plane][1])]
+    expected = _unrotated_in_plane(num_atoms, plane)
     difference = transformed.positions - expected
     difference -= lengths * np.round(difference / lengths)
     # positions are a few A; a rotation by round-off moves them by ~1e-15 A
@@ -1139,7 +1202,7 @@ def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(
     lengths = _lengths(plane)
     np.testing.assert_allclose(cut.cell[:], np.diag(lengths), rtol=0, atol=1e-12)
     assert len(cut) == num_atoms
-    expected = _unrotated(num_atoms).positions[:, list(PLANES[plane][1])]
+    expected = _unrotated_in_plane(num_atoms, plane)
     # the atoms of the cut are in any order: each expected atom has one of them
     difference = cut.positions[None, :, :] - expected[:, None, :]
     difference -= lengths * np.round(difference / lengths)

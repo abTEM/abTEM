@@ -54,7 +54,7 @@ from abtem.core.utils import (
 from abtem.detectors import BaseDetector, FlexibleAnnularDetector
 from abtem.inelastic.core_loss import (
     BaseTransitionPotential,
-    _extract_scattering_sites,
+    _resolve_scattering_sites,
 )
 from abtem.measurements import (
     BaseMeasurements,
@@ -342,6 +342,26 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         return alpha, phi
 
 
+def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble without its axes flagged ``_squeeze`` (the position axis of a
+    bare scan position)."""
+    return ensemble.squeeze(
+        tuple(
+            i
+            for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
+            if axes_metadata._squeeze
+        )
+    )
+
+
+def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
+    """The ensemble with its axes flagged for averaging averaged, without squeezing
+    any axis. Wave functions keep every member of an ensemble."""
+    if isinstance(ensemble, BaseMeasurements):
+        return ensemble.reduce_ensemble()
+    return ensemble
+
+
 @overload
 def reduce_ensemble(ensemble: Waves) -> Waves: ...
 
@@ -383,35 +403,34 @@ def reduce_ensemble(
 
         return outputs
 
-    squeeze = tuple(
-        i
-        for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
-        if axes_metadata._squeeze
-    )
-    output = ensemble.squeeze(squeeze)
+    output = _squeeze_flagged_axes(ensemble)
 
-    reduced_output: Waves | BaseMeasurements
-    if isinstance(output, BaseMeasurements):
-        reduced_output = output.reduce_ensemble()
-    else:
-        if any(
-            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
-            for ax in output.ensemble_axes_metadata
-        ):
-            warnings.warn(
-                "ensemble_mean=False returns the full frozen-phonon ensemble as "
-                "individual wave functions. Use detectors to obtain averaged "
-                "measurements."
-            )
-        reduced_output = output
+    if not isinstance(output, BaseMeasurements) and any(
+        isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+        for ax in output.ensemble_axes_metadata
+    ):
+        warnings.warn(
+            "ensemble_mean=False returns the full frozen-phonon ensemble as "
+            "individual wave functions. Use detectors to obtain averaged "
+            "measurements."
+        )
 
-    return reduced_output
+    return _average_ensemble_axes(output)
 
 
 class _WavesNormalization(WavesToWavesTransform):
     def __init__(self, space: str, in_place: bool):
         self._space = space
         self._in_place = in_place
+        super().__init__()
+
+    @property
+    def space(self) -> str:
+        return self._space
+
+    @property
+    def in_place(self) -> bool:
+        return self._in_place
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         array = waves._eager_array
@@ -786,7 +805,8 @@ class Waves(BaseWaves, ArrayObject):
             The normalized wave functions.
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
-        return transform.apply(self)
+        # The norm sums over the whole grid, so a lazy block must hold all of it.
+        return transform.apply(self.no_base_chunks())
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.
@@ -1698,7 +1718,11 @@ class Waves(BaseWaves, ArrayObject):
         # Resolve sites from the potential's atoms before it is potentially
         # pre-built into a bare PotentialArray below, which carries no atoms
         # and would otherwise make site extraction fail (abTEM issue #340).
-        sites = _extract_scattering_sites(potential, sites)
+        # With sites=None, a frozen-phonon ensemble gets the sites of each of
+        # its configurations, which the multislice pairs with that
+        # configuration's slices (abTEM issue #581). Resolved once for the
+        # ensemble, every configuration ionised the first one's atoms.
+        sites = _resolve_scattering_sites(potential, sites)
 
         potential = _prebuild_reused_potential(potential, self)
 

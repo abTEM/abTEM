@@ -60,9 +60,13 @@ from abtem.detectors import (
     validate_detectors,
 )
 from abtem.measurements import BaseMeasurements
-from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
+from abtem.multislice import (
+    allocate_measurement,
+    allocate_multislice_measurements,
+    multislice_and_detect,
+)
 from abtem.potentials.iam import BasePotential, validate_potential
-from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
+from abtem.prism.utils import batch_crop_2d, plane_waves, window_crop, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
 from abtem.waves import (
@@ -70,6 +74,8 @@ from abtem.waves import (
     Probe,
     Waves,
     _antialias_cutoff_gpts,
+    _average_ensemble_axes,
+    _squeeze_flagged_axes,
     reduce_ensemble,
 )
 
@@ -84,6 +90,24 @@ def _extract_measurement(array, index):
 
 def _wrap_measurements(measurements):
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
+
+
+def _squeezed(measurements):
+    # The public reductions remove the position axis of a bare position (x, y),
+    # as multislice does (reduce_ensemble); the private _reduce methods keep it
+    # for the code that assembles several reductions.
+    return _wrap_measurements(
+        [_squeeze_flagged_axes(m) for m in ensure_list(measurements)]
+    )
+
+
+def _averaged(measurement):
+    # A measurement whose leading ensemble axis is averaged block by block.
+    return (
+        isinstance(measurement, BaseMeasurements)
+        and measurement.axes_metadata
+        and measurement.axes_metadata[0]._ensemble_mean
+    )
 
 
 def _stack_energies(results, energies, axis: int = 0):
@@ -146,10 +170,7 @@ def _finalize_lazy_measurements(
             array, axes_metadata=axes_metadata, metadata=metadata
         )
 
-        if hasattr(measurement, "reduce_ensemble"):
-            measurement = measurement.reduce_ensemble()
-
-        measurements.append(measurement)
+        measurements.append(_average_ensemble_axes(measurement))
 
     return measurements
 
@@ -397,6 +418,17 @@ def _validate_prism_semiangle_cutoff(semiangle_cutoff: float) -> None:
         )
 
 
+def _ensemble_axes_first(array, num_ensemble_axes: int):
+    # tensordot of the (..., n) coefficients with an (*ensemble, n, ny, nx)
+    # S-matrix puts the ensemble axes after the coefficient axes; the waves
+    # carry them in front, as every multislice result does.
+    if not num_ensemble_axes:
+        return array
+    xp = get_array_module(array)
+    source = tuple(range(-2 - num_ensemble_axes, -2))
+    return xp.moveaxis(array, source, tuple(range(num_ensemble_axes)))
+
+
 def _pack_wave_vectors(wave_vectors):
     return tuple(
         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
@@ -530,13 +562,13 @@ def _map_blocks(array, scans, block_indices, window_offset=(0, 0), **kwargs):
             new_axis=new_axis,
             chunks=new_chunks,
             **kwargs,
-            meta=np.array((), dtype=np.complex64),
+            meta=np.array((), dtype=get_dtype(complex=True)),
         )
 
         if len(scan) == 0:
             block = da.zeros(
                 (0,) * len(block.shape),
-                dtype=np.complex64,
+                dtype=get_dtype(complex=True),
             )
 
         blocks += (block,)
@@ -802,7 +834,7 @@ def _single_rechunk_reduce(
                 (0,) * len(array.shape[:-3]) + indices,
                 da.zeros(
                     (0,) * len(blocks.shape),
-                    dtype=np.complex64,
+                    dtype=get_dtype(complex=True),
                 ),
             )
             continue
@@ -840,7 +872,7 @@ def _single_rechunk_reduce(
             drop_axis=drop_axis,
             chunks=new_chunks,
             **kwargs,
-            meta=np.array((), dtype=np.complex64),
+            meta=np.array((), dtype=get_dtype(complex=True)),
         )
 
         itemset(blocks, (0,) * len(array.shape[:-3]) + indices, new_block)
@@ -879,6 +911,9 @@ def _no_chunks_reduce(
 
     array = s_matrix_array.array
 
+    # every block is reduced with the axes metadata of the whole array, hence an
+    # axis whose metadata has per-member values (the exit planes) must be one
+    # chunk; SMatrix.build makes it one, as one multislice yields every plane
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
 
     chunks = array.chunks[:-3] + ctf_chunks + scan.shape
@@ -901,7 +936,7 @@ def _no_chunks_reduce(
         new_axis=new_axis,
         chunks=chunks,
         **kwargs,
-        meta=np.array((), dtype=np.complex64),
+        meta=np.array((), dtype=get_dtype(complex=True)),
     )
 
     dummy_probes = s_matrix_array.dummy_probes(scan=scan, ctf=ctf)
@@ -1006,7 +1041,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
-        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=np.float32)
+        kwargs["wave_vectors"] = np.array(
+            kwargs["wave_vectors"], dtype=get_dtype(complex=False)
+        )
         return kwargs
 
         # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
@@ -1145,33 +1182,25 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         if self._device == "gpu" and isinstance(array, np.ndarray):
             array = xp.asarray(array)
 
+        num_ensemble_axes = len(array.shape) - 3
+
         position_coefficients = xp.array(
             position_coefficients, dtype=get_dtype(complex=True)
         )
 
-        if self.window_gpts != self.gpts:
-            pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
-                self.window_offset
-            )
+        pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
+            self.window_offset
+        )
 
-            crop_corner, size, corners = minimum_crop(pixel_positions, self.window_gpts)
+        crop_corner, size, corners = window_crop(
+            pixel_positions, self.window_gpts, self.gpts
+        )
 
-            array = wrapped_crop_2d(array, crop_corner, size)
+        array = wrapped_crop_2d(array, crop_corner, size)
 
-            array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
-
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
-
-            array = batch_crop_2d(array, corners, self.window_gpts)
-
-        else:
-            array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
-
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
-
-        return array
+        array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
+        array = _ensemble_axes_first(array, num_ensemble_axes)
+        return batch_crop_2d(array, corners, self.window_gpts)
 
     def _calculate_positions_coefficients(self, scan):
         xp = get_array_module(self.wave_vectors)
@@ -1364,10 +1393,23 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _validate_max_batch_reduction(
         self, scan, max_batch_reduction: int | str = "auto"
     ):
-        shape = (len(scan),) + self.window_gpts
-        chunks = (max_batch_reduction, -1, -1)
+        if len(scan) == 1:
+            # a single position cannot be split, whatever its waves occupy
+            return 1
 
-        return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
+        # each position is reduced to one wave per leading (ensemble and exit
+        # plane) member of the array block, hence an automatic batch holds the
+        # waves of all of them within the chunk size
+        leading = (
+            tuple(max(c) for c in self.array.chunks[:-3])
+            if self.is_lazy
+            else self.array.shape[:-3]
+        )
+        shape = (len(scan), int(np.prod(leading))) + self.window_gpts
+        chunks = (max_batch_reduction, -1, -1, -1)
+
+        dtype = np.dtype(self._complex_dtype)
+        return validate_chunks(shape, chunks, dtype=dtype)[0][0]
 
     def _validate_reduction_scheme(self, reduction_scheme):
         if self.interpolation == (1, 1) and reduction_scheme == "no-chunks":
@@ -1461,8 +1503,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         # Resolve the scan and the detectors once against the whole ensemble, so
         # the measurements of the energies stack (see SMatrix.reduce). A scan
-        # given as positions is resolved alike for every energy, and is left to
-        # each reduction, which squeezes it.
+        # given as positions is resolved alike for every energy and left to each
+        # reduction; the energies are reduced with `_reduce`, which keeps the
+        # position axis of a bare position, so that the stacked result is
+        # squeezed once, by the public `reduce`.
         if isinstance(scan, BaseScan):
             probe_ctf = (
                 CTF(semiangle_cutoff=self.semiangle_cutoff)
@@ -1477,7 +1521,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         # each energy matches the CTF to its own energy, so each gets its own copy
         results = [
-            self._energy_member(axis, i, energy).reduce(
+            self._energy_member(axis, i, energy)._reduce(
                 scan=scan,
                 ctf=None if ctf is None else ctf.copy(),
                 detectors=detectors,
@@ -1514,11 +1558,26 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : two int or str, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly
             partitioned chunks. Should be equal to or greater than the interpolation.
         """
+        return _squeezed(
+            self._reduce(scan, ctf, detectors, max_batch_reduction, reduction_scheme)
+        )
 
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        reduction_scheme: str = "auto",
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # reduce, keeping the position axis of a bare position for the caller
+        # that assembles the results of several reductions
         energy_axis = self._energy_axis()
         if energy_axis is not None:
             return self._reduce_per_energy(
@@ -1540,11 +1599,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
-        if not isinstance(scan, BaseScan):
-            squeeze = (-3,)
-        else:
-            squeeze = ()
 
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
@@ -1596,9 +1650,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 for measurement in measurements
             ]
 
-        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
-        out = _wrap_measurements(measurements)
-        return out
+        return _wrap_measurements(measurements)
 
     def scan(
         self,
@@ -1632,6 +1684,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -3201,8 +3255,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
         blend_taper: float = None,
-        _blend_component: str = None,
-        _blend_taper: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -3263,6 +3315,35 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
+        return _squeezed(
+            self._reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                max_batch_expansion=max_batch_expansion,
+                method=method,
+                blend_angle=blend_angle,
+                blend_window_gpts=blend_window_gpts,
+                blend_taper=blend_taper,
+            )
+        )
+
+    def _reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        max_batch_expansion: int | str = None,
+        method: str = "auto",
+        blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
+        _blend_component: str = None,
+        _blend_taper: float = None,
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        # as SMatrixArray._reduce
         self.accelerator.check_is_defined()
 
         explicit_blend = blend_angle is not None
@@ -3355,7 +3436,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method = "modes"
 
         if full_window and method == "expand" and max_batch_expansion == "auto":
-            return self._expanded_s_matrix_array().reduce(
+            return self._expanded_s_matrix_array()._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3371,8 +3452,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         if ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
 
-        squeeze = () if isinstance(scan, BaseScan) else (-3,)
-
         if scan is None:
             scan = self.extent[0] / 2, self.extent[1] / 2
 
@@ -3387,7 +3466,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         shape = (len(scan),) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1)
         validated_max_batch_reduction = validate_chunks(
-            shape, chunks, dtype=np.dtype("complex64")
+            shape, chunks, dtype=np.dtype(self._complex_dtype)
         )[0][0]
 
         pbar = config.get("diagnostics.task_progress", False)
@@ -3432,7 +3511,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     blend_taper=_blend_taper,
                 )
 
-        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
 
     @property
@@ -3544,7 +3622,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     snap=False,
                 )
             elif component == "low":
-                measurements = self.reduce(
+                measurements = self._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3557,7 +3635,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     min(-(-g // i), g)
                     for g, i in zip(self.gpts, self._interpolation)
                 )
-                measurements = self._with_window(period).reduce(
+                measurements = self._with_window(period)._reduce(
                     scan=scan,
                     ctf=ctf,
                     detectors=subset,
@@ -3603,7 +3681,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             for detector in detectors
         ]
         low_list = ensure_list(
-            self.reduce(
+            self._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=padded,
@@ -3632,7 +3710,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # a vanishing blend angle keeps the plane-wave branch whole except at
         # the zero-frequency pixel, which lies far below any usable cut
         high_list = ensure_list(
-            self._with_window(period).reduce(
+            self._with_window(period)._reduce(
                 scan=scan,
                 ctf=ctf,
                 detectors=detectors,
@@ -3764,7 +3842,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 blend_angle, detectors, self._offset_rounding_margin
             )
 
-        low = self.reduce(
+        low = self._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -3795,7 +3873,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             singular_values=self._singular_values,
             reference_depth=self._reference_depth,
         )
-        high = high_array.reduce(
+        high = high_array._reduce(
             scan=scan,
             ctf=ctf,
             detectors=detectors,
@@ -3816,7 +3894,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     "detectors whose measurements do not depend on the "
                     "reduction window (for example annular detectors)."
                 )
-            low_measurement.array[:] += high_measurement.array
+            low_measurement.array[...] += high_measurement.array
 
         return low if not isinstance(low, list) else _wrap_measurements(low_list)
 
@@ -4373,17 +4451,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return self._upsample and self.interpolation != (1, 1)
 
     def _wave_vector_chunks(self, max_batch):
+        # each plane wave is propagated to every exit plane, hence an automatic
+        # batch holds the waves of all exit planes within the chunk size
+        exit_planes_shape, _ = self._exit_planes_shape_and_metadata
         if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, self.gpts)
+            max_batch = max_batch * reduce(operator.mul, exit_planes_shape + self.gpts)
 
         chunks = validate_chunks(
-            shape=(len(self),) + self.gpts,
-            chunks=("auto", -1, -1),
+            shape=(len(self),) + exit_planes_shape + self.gpts,
+            chunks=("auto",) + (-1,) * (len(exit_planes_shape) + 2),
             max_elements=max_batch,
-            dtype=np.dtype("complex64"),
+            dtype=np.dtype(self._complex_dtype),
             device=self.device,
         )
-        return chunks
+        return chunks[:1] + chunks[-2:]
 
     @property
     def downsampled_gpts(self) -> tuple[int, int]:
@@ -4493,6 +4574,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -4506,6 +4589,29 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     @property
     def _default_ensemble_chunks(self):
         return self.potential._default_ensemble_chunks
+
+    def _check_upsample_exit_planes(self):
+        # The compression interpolates every beam referenced to one depth, the
+        # exit of the potential (_reference_depth), so it has one basis per
+        # S-matrix, not one per exit plane.
+        if self._upsample_enabled and self._exit_planes_shape_and_metadata[0]:
+            raise NotImplementedError(
+                "upsample=True does not support a potential with more than one "
+                "exit plane; use upsample=False or a single exit plane."
+            )
+
+    @property
+    def _exit_planes_shape_and_metadata(
+        self,
+    ) -> tuple[tuple[int, ...], list[AxisMetadata]]:
+        # Each plane wave's multislice returns one exit wave per exit plane, on
+        # an axis between the potential ensemble axes and the expansion axis,
+        # as multislice.py's _potential_ensemble_shape_and_metadata places it.
+        if self.potential is None or len(self.potential.exit_planes) < 2:
+            return (), []
+        return (len(self.potential.exit_planes),), [
+            self.potential._get_exit_planes_axes_metadata()
+        ]
 
     def _partition_args(self, chunks=(1,), lazy: bool = True):
         if self.potential is not None:
@@ -4562,7 +4668,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         xp = get_array_module(s_matrix.device)
 
-        wave_vectors = xp.asarray(s_matrix.wave_vectors, dtype=xp.float32)
+        wave_vectors = xp.asarray(
+            s_matrix.wave_vectors, dtype=get_dtype(complex=False)
+        )
 
         array = plane_waves(
             wave_vectors[wave_vector_range], s_matrix.extent, s_matrix.gpts
@@ -4585,10 +4693,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = (
-                waves.antialias_cutoff_gpts
-            )
-
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
                 normalization="intensity",
@@ -5013,6 +5117,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
 
         Returns
         -------
@@ -5036,6 +5142,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "over the potential ensemble."
             )
 
+        self._check_upsample_exit_planes()
+
         lazy = validate_lazy(lazy)
 
         # --- Multi-energy path ---
@@ -5046,10 +5154,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
             # Wave-vector counts differ per energy (higher energy → more plane waves
             # within the semiangle cutoff).  The sets are nested subsets, so the
-            # result with the most wave vectors is the union. The wave-vector axis
-            # is the third last: an ensemble potential (e.g. frozen phonons) puts
-            # its ensemble axes in front of it.
-            n_wvs = [r.array.shape[-3] for r in results]
+            # result with the most wave vectors is the union.
+            n_wvs = [len(r.wave_vectors) for r in results]
             max_idx = int(np.argmax(n_wvs))
             union_wave_vectors = results[max_idx].wave_vectors
             n_union = len(union_wave_vectors)
@@ -5060,8 +5166,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             }
 
             def _embed_wave_vectors(arr, indices, n_union):
-                """Embed arr (..., n_wv, nx, ny) into (..., n_union, nx, ny) at the
-                given indices."""
+                """Embed arr (..., n_wv, ny, nx) into (..., n_union, ny, nx) at the
+                given indices; the leading axes are the potential ensemble and
+                the exit planes."""
                 # arr's own module: a NumPy array cannot take a CuPy block
                 out = get_array_module(arr).zeros(
                     arr.shape[:-3] + (n_union,) + arr.shape[-2:], dtype=arr.dtype
@@ -5071,7 +5178,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             embedded_arrays = []
             for r in results:
-                if r.array.shape[-3] == n_union:
+                if len(r.wave_vectors) == n_union:
                     embedded_arrays.append(r.array)
                 else:
                     indices = np.array(
@@ -5084,7 +5191,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                         # chunk along that axis so map_blocks cannot invoke it
                         # once per pre-existing block with only a chunk-sized
                         # arr.
-                        array = r.array.rechunk({-3: -1})
+                        array = r.array.rechunk({r.array.ndim - 3: -1})
                         new_chunks = (
                             array.chunks[:-3] + ((n_union,),) + array.chunks[-2:]
                         )
@@ -5121,6 +5228,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         # --- Single-energy path (unchanged) ---
         downsampled_gpts = self.downsampled_gpts
+
+        exit_planes_shape, exit_planes_metadata = self._exit_planes_shape_and_metadata
 
         s_matrix_blocks = self.ensemble_blocks(1)
 
@@ -5160,6 +5269,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.potential is None or not self.potential.ensemble_shape:
                 symbols = symbols[1:]
 
+            new_axes = {}
+            if exit_planes_shape:
+                plane_symbol = max(symbols) + 1
+                new_axes = {plane_symbol: exit_planes_shape[0]}
+                symbols = symbols[:-3] + (plane_symbol,) + symbols[-3:]
+
             pbar = config.get("diagnostics.task_progress", False)
 
             array = da.blockwise(
@@ -5171,6 +5286,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 (0, 1, 2, 3),
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
+                new_axes=new_axes,
                 pbar=pbar,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
@@ -5180,23 +5296,25 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
+            shape = (
+                self.ensemble_shape
+                + exit_planes_shape
+                + (len(self),)
+                + self.downsampled_gpts
+            )
             if self.store_on_host:
-                array = np.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
+                array = np.zeros(shape, dtype=get_dtype(complex=True))
             else:
-                array = xp.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
+                array = xp.zeros(shape, dtype=get_dtype(complex=True))
 
             pbar = config.get("diagnostics.task_progress", False)
 
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
-                    items = (slice(start, stop),)
+                    items = (slice(None),) * len(exit_planes_shape) + (
+                        slice(start, stop),
+                    )
                     if self.ensemble_shape:
                         items = i + items
 
@@ -5205,7 +5323,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     )
 
                     if self.store_on_host:
-                        new_array = xp.asnumpy(new_array)
+                        new_array = asnumpy(new_array)
 
                     array[items] = new_array
 
@@ -5214,13 +5332,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             energy=self.energy,
             extent=self.extent,
             ensemble_axes_metadata=self.ensemble_axes_metadata
+            + exit_planes_metadata
             + self.base_axes_metadata[:1],
         )
 
-        if self.downsampled_gpts != self.gpts:
-            waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
-                self.window_gpts, self.sampling
-            )
+        waves.metadata.update(self._built_metadata)
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,
@@ -5315,12 +5431,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size is automatically
             chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5330,7 +5450,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -5389,65 +5510,117 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
         return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
-    def _eager_transition_potential_scan(
-        self, scan, detectors, transition_potentials, sites, double_channel,
-        inelastic_crop=None,
-        squeeze=True,
-    ):
-        from abtem.inelastic.core_loss import prism_transition_potential_scan
+    @property
+    def _built_metadata(self) -> dict:
+        # What build adds to the metadata of a downsampled S-matrix: the antialias
+        # cutoff of the full grid, which sets the size of the pixelated and
+        # flexible annular detectors.
+        if self.downsampled_gpts == self.gpts:
+            return {}
+        return {
+            "adjusted_antialias_cutoff_gpts": _antialias_cutoff_gpts(
+                self.window_gpts, self.sampling
+            )
+        }
 
+    def _built_dummy_probes(self, scan, ctf=None):
+        # The dummy probes of the built S-matrix. With upsample, building computes
+        # the compression (and raises for ensemble potentials), so they come from
+        # the S-matrix itself, with the metadata that build adds. They lack the
+        # other metadata that the dummy probes of the built array carry
+        # (reciprocal_space).
+        if not self._upsample_enabled:
+            return self.build(lazy=True).dummy_probes(scan, ctf)
+
+        return self.dummy_probes(
+            scan, ctf, metadata={**self.metadata, **self._built_metadata}
+        )
+
+    def _allocate_ensemble_measurements(self, waves, detectors):
+        """The measurements of every member of the S-matrix ensemble, detected on
+        ``waves``. Wave functions are not averaged over an ensemble
+        (reduce_ensemble averages measurements only), so they keep every member;
+        measurements keep a length-1 axis for each averaged ensemble axis."""
         extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
             self._build_ensemble_shape_metadata()
         )
-
-        if self.ensemble_shape:
-            dummy_waves = self.build(lazy=True).dummy_probes(scan)
-            measurements = allocate_multislice_measurements(
-                dummy_waves,
-                detectors,
-                extra_ensemble_axes_shape,
-                extra_ensemble_axes_metadata,
+        exit_planes_shape, _ = self._exit_planes_shape_and_metadata
+        measurements = []
+        for detector in detectors:
+            if issubclass(detector._out_type(waves)[0], BaseMeasurements):
+                shape = extra_ensemble_axes_shape
+            else:
+                shape = self.ensemble_shape + exit_planes_shape
+            measurements.append(
+                allocate_measurement(
+                    waves, detector, shape, extra_ensemble_axes_metadata
+                )
             )
-        else:
-            measurements = None
+        return measurements
+
+    def _detect_ensemble(self, waves, detectors, detect, squeeze):
+        """The measurements of ``detect(s_matrix)`` for every member of the
+        S-matrix ensemble, allocated on ``waves``. A measurement whose leading
+        ensemble axis is flagged for the ensemble mean is averaged over it, and
+        that axis is squeezed with ``squeeze``; wave functions keep every
+        member."""
+        measurements = None
+        if self.ensemble_shape:
+            measurements = self._allocate_ensemble_measurements(waves, detectors)
 
         num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-
-            new_measurements = ensure_list(
-                prism_transition_potential_scan(
-                    s_matrix=s_matrix,
-                    transition_potentials=transition_potentials,
-                    scan=scan,
-                    detectors=detectors,
-                    sites=sites,
-                    double_channel=double_channel,
-                    inelastic_crop=inelastic_crop,
-                )
-            )
+            new_measurements = ensure_list(detect(s_matrix.item()))
 
             if measurements is None:
                 measurements = new_measurements
             else:
-                for measurement, new_measurement in zip(
-                    measurements, new_measurements
-                ):
-                    if measurement.axes_metadata[0]._ensemble_mean:
+                for measurement, new_measurement in zip(measurements, new_measurements):
+                    if _averaged(measurement):
                         measurement.array[:] += new_measurement.array
                     else:
                         measurement.array[i] = new_measurement.array
 
             num_blocks += 1
 
-        for idx, measurement in enumerate(measurements):
-            if measurement.axes_metadata[0]._ensemble_mean:
+        for i, measurement in enumerate(measurements):
+            if _averaged(measurement):
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
                 if squeeze:
-                    measurements[idx] = measurement.squeeze((0,))
+                    measurements[i] = measurement.squeeze((0,))
 
         return measurements
+
+    def _eager_transition_potential_scan(
+        self,
+        scan,
+        detectors,
+        transition_potentials,
+        sites,
+        double_channel,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import (
+            _prism_eels_detected_waves,
+            prism_transition_potential_scan,
+        )
+
+        def detect(s_matrix):
+            return prism_transition_potential_scan(
+                s_matrix=s_matrix,
+                transition_potentials=transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
+            )
+
+        return self._detect_ensemble(
+            _prism_eels_detected_waves(self, scan), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_transition_potential_scan(
@@ -5489,8 +5662,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         single- and double-channel modes. At ``interpolation=(1, 1)`` the
         result is bit-equivalent to ``Probe.transition_potential_scan``
         (float32 noise) against the matching ``double_channel`` setting.
-        At ``interpolation > 1`` the reduced wave functions are returned at
-        ``window_gpts`` size, matching the elastic :meth:`scan` convention.
+        At ``interpolation > 1`` the reduced wave functions are returned on the
+        grid of ``ceil(downsampled_gpts / interpolation)`` points. This is
+        ``window_gpts``, as in the elastic :meth:`scan`, except with ``upsample``,
+        where the elastic scan returns the upsampled window.
 
         See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan`
         for the algorithm details.
@@ -5526,13 +5701,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        BaseMeasurements or list of BaseMeasurements
-            One measurement per detector. For a multi-energy scattering matrix,
-            the measurements gain a leading :class:`.EnergyAxis` dimension.
+        BaseMeasurements, Waves or list of them
+            One measurement per detector. A ``WavesDetector`` gives the
+            ``Waves`` at each scan position, which keep every member of an
+            ensemble. For a multi-energy scattering matrix, the measurements
+            gain a leading :class:`.EnergyAxis` dimension.
         """
-        from abtem.inelastic.core_loss import (
-            prism_transition_potential_scan,
-        )
+        from abtem.inelastic.core_loss import _prism_eels_detected_waves
 
         if scan is None:
             scan = GridScan(
@@ -5542,9 +5717,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
 
         # The documented default, as in :meth:`scan`. Left to validate_detectors,
-        # None became a WavesDetector, whose waves the PRISM-EELS driver cannot
-        # reduce over its ensemble. For a multi-energy scattering matrix the
-        # automatic outer angle of this default is refused, as in :meth:`scan`.
+        # None became a WavesDetector, so a scan with no detectors gave the
+        # waves at each position instead of the documented measurement. For a
+        # multi-energy scattering matrix the automatic outer angle of this
+        # default is refused, as in :meth:`scan`.
         if detectors is None:
             detectors = FlexibleAnnularDetector()
 
@@ -5589,7 +5765,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             )
             # Squeeze once, here, on the assembled measurements -- the level
             # Waves.transition_potential_multislice uses. The per-configuration
-            # driver deliberately no longer does it.
+            # driver does not squeeze.
             return _wrap_measurements(reduce_ensemble(measurements))
 
         blocks = self.ensemble_blocks(1)
@@ -5651,7 +5827,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             meta=np.array((), dtype=object),
         )
 
-        waves = self.build(lazy=True).dummy_probes(scan=scan)
+        waves = _prism_eels_detected_waves(self, scan)
 
         extra_axes_metadata = []
         if self.potential is not None:
@@ -5667,69 +5843,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         # Squeeze once, here, on the assembled measurements -- the level
         # Waves.transition_potential_multislice uses. The per-configuration
-        # driver deliberately no longer does it.
+        # driver does not squeeze.
         return _wrap_measurements(reduce_ensemble(measurements))
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
-        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
-            self._build_ensemble_shape_metadata()
-        )
-
         detectors = validate_detectors(detectors)
 
-        if self.ensemble_shape:
-            if self._upsample_enabled:
-                # building would compute the compression of a single ensemble
-                # member eagerly (and raises for ensemble potentials); the
-                # builder's dummy probes carry the same grid and metadata
-                dummy_probes = self.dummy_probes(scan, ctf)
-            else:
-                dummy_probes = self.build(lazy=True).dummy_probes(scan, ctf)
-
-            measurements = allocate_multislice_measurements(
-                dummy_probes,
-                detectors,
-                extra_ensemble_axes_shape,
-                extra_ensemble_axes_metadata,
-            )
-        else:
-            measurements = None
-
-        num_blocks = 0
-        for i, _, s_matrix in self.generate_blocks(1):
-            s_matrix = s_matrix.item()
-            s_matrix_array = s_matrix.build(lazy=False)
-
-            new_measurements = s_matrix_array.reduce(
+        def detect(s_matrix):
+            return s_matrix.build(lazy=False)._reduce(
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
-            new_measurements = ensure_list(new_measurements)
-
-            if measurements is None:
-                measurements = new_measurements
-            else:
-                for measurement, new_measurement in zip(measurements, new_measurements):
-                    if measurement.axes_metadata[0]._ensemble_mean:
-                        measurement.array[:] += new_measurement.array
-                    else:
-                        measurement.array[i] = new_measurement.array
-
-            num_blocks += 1
-
-        # measurements = list(measurements.values())
-
-        for i, measurement in enumerate(measurements):
-            if (
-                measurement.axes_metadata
-                and measurement.axes_metadata[0]._ensemble_mean
-            ):
-                if num_blocks > 1:
-                    measurement.array[:] /= num_blocks
-                if squeeze:
-                    measurements[i] = measurement.squeeze((0,))
-
-        return measurements
+        return self._detect_ensemble(
+            self._built_dummy_probes(scan, ctf), detectors, detect, squeeze
+        )
 
     @staticmethod
     def _lazy_build_s_matrix_detect(s_matrix, scan, ctf, detectors):
@@ -5777,12 +5904,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             If 'auto' (default), the batch size is automatically chosen based on the
             abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+            If 'auto', a batch holds the waves of every exit plane within the
+            chunk size.
         max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions
             better utilize thread parallelization, but requires more memory and floating
             point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings
             "dask.chunk-size" and "dask.chunk-size-gpu".
+            If 'auto', a batch holds the reduced waves of every exit plane and
+            S-matrix ensemble member within the chunk size.
         reduction_scheme : str, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from
             chunking along the expansion axis to chunking over the spatial axes.
@@ -5792,7 +5923,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks : bool, optional
             If True, each S-Matrix is kept as a single chunk, thus lowering the
             communication overhead, but providing fewer opportunities for
-            parallelization.
+            parallelization. Each task then holds a whole S-matrix,
+            including every exit plane.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
@@ -5856,6 +5988,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         elif isinstance(ctf, dict):
             ctf = CTF(semiangle_cutoff=self.semiangle_cutoff, **ctf)
 
+        self._check_upsample_exit_planes()
+
         if self._upsample_enabled:
             # the compression requires the scattering matrix in memory, hence each
             # member of the potential ensemble is built and reduced as one task
@@ -5875,34 +6009,39 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # above, but CTF ensemble axes flagged ensemble_mean were returned
             # unreduced, unlike the lazy branch (_finalize_lazy_measurements).
             measurements = [
-                measurement.reduce_ensemble()
-                if hasattr(measurement, "reduce_ensemble")
-                else measurement
+                _average_ensemble_axes(measurement)
                 for measurement in ensure_list(measurements)
             ]
-            return _wrap_measurements(measurements)
+            return _squeezed(measurements)
 
         if disable_s_matrix_chunks:
             scan = validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
 
+            exit_planes_shape, exit_planes_metadata = (
+                self._exit_planes_shape_and_metadata
+            )
+
             chunks = ()
             drop_axis = ()
             if not self.ensemble_shape:
                 blocks = blocks[None]  # expand 0-d to 1-d so drop_axis=(0,) is valid
                 drop_axis = (0,)
-                new_axis = tuple_range(
-                    offset=0, length=len(scan.shape) + len(ctf.ensemble_shape)
-                )
+                offset = 0
             else:
                 chunks += blocks.chunks
-                new_axis = tuple_range(
-                    offset=len(blocks.shape),
-                    length=len(scan.shape) + len(ctf.ensemble_shape),
-                )
+                offset = len(blocks.shape)
 
-            chunks += ctf.ensemble_shape + scan.shape
+            new_axis = tuple_range(
+                offset=offset,
+                length=len(exit_planes_shape)
+                + len(scan.shape)
+                + len(ctf.ensemble_shape),
+            )
+
+            # each task runs one multislice, which yields every exit plane
+            chunks += exit_planes_shape + ctf.ensemble_shape + scan.shape
 
             arrays = blocks.map_blocks(
                 self._lazy_build_s_matrix_detect,
@@ -5915,30 +6054,28 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 meta=np.array((), dtype=object),
             )
 
-            if self._upsample_enabled:
-                # building would compute the compression eagerly; the builder's
-                # dummy probes carry the same grid and metadata
-                waves = self.dummy_probes(scan=scan)
-            else:
-                waves = self.build(lazy=True).dummy_probes(scan=scan)
+            waves = self._built_dummy_probes(scan)
 
             extra_axes_metadata = []
             if self.potential is not None:
                 extra_axes_metadata = self.potential.ensemble_axes_metadata
 
-            extra_axes_metadata = extra_axes_metadata + ctf.ensemble_axes_metadata
+            extra_axes_metadata = (
+                extra_axes_metadata + exit_planes_metadata + ctf.ensemble_axes_metadata
+            )
 
             measurements = _finalize_lazy_measurements(
                 arrays, waves, detectors, extra_axes_metadata
             )
 
-            return _wrap_measurements(measurements)
+            return _squeezed(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-        return s_matrix_array.reduce(
+        measurements = s_matrix_array._reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
+        return _squeezed(measurements)

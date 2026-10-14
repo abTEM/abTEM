@@ -1612,12 +1612,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         i.e. provided plane is perpendicular to the propagation direction. If string,
         it must be a concatenation of two of 'x', 'y' and 'z'; the default value 'xy'
         indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first.
-        Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing
-        'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also be specified with two
+        arbitrary 3D vectors, which are mapped to the `x` and `y` directions of the
+        potential, respectively. The length of the vectors has no influence. If the
+        vectors are not perpendicular, the second vector is rotated in the plane to
+        become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         This is equivalent to translating the atoms. The default is (0., 0., 0.).
@@ -2770,24 +2772,24 @@ class CrystalPotential(_PotentialBuilder):
         The atoms of the full crystal grouped into the slices given by the slice
         thicknesses.
 
-        The atoms are reconstructed by tiling the unit potential's transformed
-        (orthogonalised) atoms by the crystal repetitions. This makes
-        ``CrystalPotential`` work with any code path that derives atomic sites
-        from a potential via ``get_sliced_atoms`` -- e.g. the core-loss EELS
-        driver's automatic site extraction -- without special-casing the
-        repeating-unit structure.
+        The atoms are those of the crystal that `generate_slices` builds. A unit
+        without frozen phonons is tiled: its transformed (orthogonalised) atoms
+        are repeated by the crystal repetitions. A unit with frozen phonons is a
+        pool of displaced configurations, and every repeated unit (each lateral
+        tile of every `z`-repetition) takes the displaced atoms of the pool
+        configuration its slices are built from, at the offset of that unit.
+        This makes ``CrystalPotential`` work with any code path that derives
+        atomic sites from a potential via ``get_sliced_atoms`` -- e.g. the
+        core-loss EELS drivers' automatic site extraction, whose sites then sit
+        on the displaced atoms the elastic slices hold, as for ``Potential``.
 
         Notes
         -----
-        - **Frozen phonons are not displaced.** ``get_transformed_atoms``
-          returns the equilibrium (mean) positions, so the returned sites are
-          the un-displaced atomic columns. This is deliberate: a
-          ``CrystalPotential`` ensemble draws an independent random unit
-          configuration per z-repetition, so there is no single displaced
-          realisation to return, and atomic-column site identification (the
-          main consumer) wants the equilibrium column positions anyway. This
-          differs from ``Potential.get_sliced_atoms``, which applies the
-          frozen-phonon displacement of its single configuration.
+        - The atoms are those of one crystal: of the first member of a
+          frozen-phonon ensemble (`seeds`), whose slices `generate_slices`
+          yields, as ``Potential.get_sliced_atoms`` returns those of its first
+          configuration. Each member of an ensemble is a crystal of its own,
+          and the core-loss drivers take the sites of each member from it.
         - The result is cached; the tile is non-trivial for large supercells.
 
         Returns
@@ -2805,14 +2807,66 @@ class CrystalPotential(_PotentialBuilder):
                 "PotentialArray). Pass the scattering sites explicitly instead."
             )
 
-        unit_atoms = self._potential_unit.get_transformed_atoms()
-        tiled_atoms = unit_atoms * self._repetitions
+        if self._has_displaced_atoms:
+            tiled_atoms = self._displaced_atoms()
+        else:
+            unit_atoms = self._potential_unit.get_transformed_atoms()
+            tiled_atoms = unit_atoms * self._repetitions
 
         self._sliced_atoms = SliceIndexedAtoms(
             tiled_atoms, slice_thickness=self.slice_thickness
         )
 
         return self._sliced_atoms
+
+    @property
+    def _has_displaced_atoms(self) -> bool:
+        """Whether the unit is a pool of displaced configurations of atoms it
+        can return (see `_displaced_atoms`): the crystals of the members of an
+        ensemble then differ in their atoms."""
+        frozen_phonons = getattr(self._potential_unit, "frozen_phonons", None)
+        return (
+            hasattr(self._potential_unit, "to_atoms_ensemble")
+            and isinstance(frozen_phonons, BaseFrozenPhonons)
+            and not isinstance(frozen_phonons, DummyFrozenPhonons)
+        )
+
+    def _displaced_atoms(self) -> Atoms:
+        """The displaced atoms of the crystal `generate_slices` builds: for
+        every repeated unit, the configuration of the pool that `_draw_mosaic`
+        draws for it, translated to the offset of the unit."""
+        member_seed = None if self.seeds is None else int(self.seeds[0])
+        pool_unit = self._pool_unit_for_member(member_seed)
+        # The configurations of the pool, in the order its build stacks them:
+        # transformed to the unit's box, displaced, and wrapped into it (see
+        # Potential.to_atoms_ensemble), exactly as the pool's slices hold them.
+        configurations = list(
+            np.asarray(pool_unit.to_atoms_ensemble().trajectory, dtype=object).ravel()
+        )
+        drawn_tiles = self._draw_mosaic(len(configurations))
+        if drawn_tiles is None:
+            drawn_tiles = np.zeros(
+                (self.repetitions[2],) + tuple(self.repetitions[:2]), dtype=int
+            )
+
+        # The unit's box, as the mosaic places it: lateral tile (a, b) of
+        # z-repetition k is offset by (a, b, k) times the box.
+        box = np.asarray(pool_unit.box, dtype=float)
+        arrays: dict[str, list[np.ndarray]] = {
+            key: [] for key in configurations[0].arrays
+        }
+        for (k, a, b), config_idx in np.ndenumerate(drawn_tiles):
+            configuration = configurations[config_idx]
+            offset = box * (a, b, k)
+            for key in arrays:
+                value = configuration.arrays[key]
+                arrays[key].append(value + offset if key == "positions" else value)
+
+        displaced = Atoms(cell=np.diag(box * np.array(self.repetitions)), pbc=True)
+        for key, values in arrays.items():
+            displaced.arrays[key] = np.concatenate(values)
+        displaced.arrays.pop(SOURCE_INDEX, None)
+        return displaced
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -3126,6 +3180,74 @@ class CrystalPotential(_PotentialBuilder):
         # and CuPy kernels from running concurrently.
         return potentials.ensure_computed(scheduler="synchronous", progress_bar=False)
 
+    def _draw_mosaic(self, n_configs: int) -> Optional[np.ndarray]:
+        """The pool configuration of every repeated unit of the crystal, drawn
+        from a pool of `n_configs` configurations: an index into the pool for
+        every lateral tile of every z-repetition, with axes z-repetition,
+        ``repetitions[0]`` and ``repetitions[1]``. None for a pool of one
+        configuration, which is tiled instead.
+
+        The draws come from the seed of the first member, as the pool does (see
+        `_built_pool`), or, without seeds, from the crystal's root seed, so
+        every call draws the same mosaic. `generate_slices` assembles the slices
+        from it and `get_sliced_atoms` places the displaced atoms on it; both
+        must take it from here, or the core-loss sites stop following the
+        configurations the elastic slices are built from.
+        """
+        if n_configs <= 1:
+            return None
+
+        if self.seeds is None:
+            rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
+        else:
+            rng = np.random.default_rng(int(self.seeds[0]))
+
+        tile_xy = self.repetitions[:2]
+        n_tiles = tile_xy[0] * tile_xy[1]
+
+        # Balanced global drawing: every pool configuration receives a total
+        # usage budget of floor/ceil(total_slots / n_configs) over the whole
+        # crystal (all lateral tiles x all z-repetitions), and each z-layer
+        # draws the ``n_tiles`` configurations with the most budget remaining
+        # (random tie-breaking keeps assignments uniform). Drawing each layer
+        # independently instead (i.e. with replacement across z) lets the
+        # same configuration recur in many layers even when the pool is large
+        # enough to avoid it, correlating slices along z and measurably
+        # inflating thermal-diffuse statistics above the tiled-atoms ground
+        # truth. With budgets, reuse is the minimum the pool size allows and
+        # is spread evenly: once ``n_configs >= n_tiles * repetitions[2]``
+        # every unit cell in the crystal receives a distinct configuration --
+        # statistically identical to tiling the displaced atoms directly.
+        # Within a layer draws remain distinct whenever the pool allows (no
+        # in-plane duplication), as before.
+        total_slots = n_tiles * self.repetitions[2]
+        base, extra = divmod(total_slots, n_configs)
+        budgets = np.full(n_configs, base, dtype=np.int64)
+        if extra:
+            budgets[rng.permutation(n_configs)[:extra]] += 1
+
+        def _draw_config_tiles() -> np.ndarray:
+            if n_configs >= n_tiles:
+                # The ``n_tiles`` most-underused configurations, in random
+                # order (permute first; the stable sort then orders by budget
+                # only, keeping ties shuffled).
+                order = rng.permutation(n_configs)
+                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
+            else:
+                # Pool smaller than a single layer: in-plane repeats are
+                # unavoidable; cycle freshly shuffled permutations to spread
+                # them as evenly as possible.
+                n_perms = -(-n_tiles // n_configs)  # ceil
+                chosen = np.concatenate(
+                    [rng.permutation(n_configs) for _ in range(n_perms)]
+                )[:n_tiles]
+            np.subtract.at(budgets, chosen, 1)
+            return chosen.reshape(tile_xy)
+
+        # One layer after another, in z order: the draws of a layer depend on
+        # the budgets the layers before it left.
+        return np.stack([_draw_config_tiles() for _ in range(self.repetitions[2])])
+
     def generate_slices(
         self,
         first_slice: int = 0,
@@ -3149,13 +3271,7 @@ class CrystalPotential(_PotentialBuilder):
         slices : generator of numpy.ndarray
             Generator for the array of slices.
         """
-        member_seed = None if self.seeds is None else int(self.seeds[0])
         potentials = self._built_pool()
-
-        if member_seed is None:
-            rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
-        else:
-            rng = np.random.default_rng(member_seed)
 
         if last_slice is None:
             last_slice = len(self)
@@ -3223,60 +3339,16 @@ class CrystalPotential(_PotentialBuilder):
                 extent=self.extent,
             )
 
-        n_tiles = tile_xy[0] * tile_xy[1]
-
-        # Balanced global drawing: every pool configuration receives a total
-        # usage budget of floor/ceil(total_slots / n_configs) over the whole
-        # crystal (all lateral tiles x all z-repetitions), and each z-layer
-        # draws the ``n_tiles`` configurations with the most budget remaining
-        # (random tie-breaking keeps assignments uniform). Drawing each layer
-        # independently instead (i.e. with replacement across z) lets the
-        # same configuration recur in many layers even when the pool is large
-        # enough to avoid it, correlating slices along z and measurably
-        # inflating thermal-diffuse statistics above the tiled-atoms ground
-        # truth. With budgets, reuse is the minimum the pool size allows and
-        # is spread evenly: once ``n_configs >= n_tiles * repetitions[2]``
-        # every unit cell in the crystal receives a distinct configuration --
-        # statistically identical to tiling the displaced atoms directly.
-        # Within a layer draws remain distinct whenever the pool allows (no
-        # in-plane duplication), as before.
-        if n_configs > 1:
-            total_slots = n_tiles * self.repetitions[2]
-            base, extra = divmod(total_slots, n_configs)
-            budgets = np.full(n_configs, base, dtype=np.int64)
-            if extra:
-                budgets[rng.permutation(n_configs)[:extra]] += 1
-
-        def _draw_config_tiles() -> np.ndarray:
-            if n_configs >= n_tiles:
-                # The ``n_tiles`` most-underused configurations, in random
-                # order (permute first; the stable sort then orders by budget
-                # only, keeping ties shuffled).
-                order = rng.permutation(n_configs)
-                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
-            else:
-                # Pool smaller than a single layer: in-plane repeats are
-                # unavoidable; cycle freshly shuffled permutations to spread
-                # them as evenly as possible.
-                n_perms = -(-n_tiles // n_configs)  # ceil
-                chosen = np.concatenate(
-                    [rng.permutation(n_configs) for _ in range(n_perms)]
-                )[:n_tiles]
-            np.subtract.at(budgets, chosen, 1)
-            return chosen.reshape(tile_xy)
+        # The whole mosaic is drawn up front, whatever the requested window, so
+        # that different chunks of the same crystal see the same per-layer
+        # configuration draws (see _draw_mosaic).
+        drawn_tiles = self._draw_mosaic(n_configs)
 
         for i in range(self.repetitions[2]):
-            # Draw an independent displaced realisation per unit cell in the x,
-            # y and z supercell directions. For a single-config pool this
+            # An independent displaced realisation per unit cell in the x, y
+            # and z supercell directions. For a single-config pool this
             # collapses to the cheap cached ``.tile()`` path below.
-            # Always draw (even for z-repetitions skipped below) so the
-            # frozen-phonon sequence and the pool budget accounting stay
-            # consistent regardless of first_slice -- different chunks of the
-            # same crystal must see the same per-layer configuration draws.
-            if n_configs > 1:
-                config_tiles = _draw_config_tiles()
-            else:
-                config_tiles = None
+            config_tiles = None if drawn_tiles is None else drawn_tiles[i]
 
             if global_idx + unit_slices <= first_slice:
                 # This entire z-repetition is before the requested window;

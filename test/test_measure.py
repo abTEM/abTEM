@@ -251,6 +251,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
 
 @lazy_params
 @devices
+@pytest.mark.parametrize("reflected", [False, True])
 @pytest.mark.parametrize("in_place", [False, True])
 @pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
 @pytest.mark.parametrize(
@@ -264,7 +265,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
     ],
 )
 def test_arithmetic_with_a_numpy_or_device_operand(
-    operand_type, op, in_place, lazy, device
+    operand_type, op, in_place, reflected, lazy, device
 ):
     # Oracle: the same operation on the plain arrays in double precision. NumPy
     # promotes a single-precision measurement to double with any of these
@@ -272,6 +273,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     # single-precision result instead, eager and lazy alike. An in-place
     # operation keeps single precision on every backend, and refuses a lazy
     # measurement rather than silently returning a new (lazy) object.
+    if in_place and reflected:
+        pytest.skip("an in-place operation has the measurement on the left")
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -295,7 +298,8 @@ def test_arithmetic_with_a_numpy_or_device_operand(
             getattr(operator, "i" + op)(measurement, operand)
         return
 
-    result = getattr(operator, ("i" if in_place else "") + op)(measurement, operand)
+    operands = (operand, measurement) if reflected else (measurement, operand)
+    result = getattr(operator, ("i" if in_place else "") + op)(*operands)
 
     assert isinstance(result, Images)
     assert result.is_lazy == lazy
@@ -303,12 +307,57 @@ def test_arithmetic_with_a_numpy_or_device_operand(
     assert_array_matches_device(computed, device)
     if in_place or device == "mps":
         assert asnumpy(computed).dtype == get_dtype()
+    host_operands = (array.astype(np.float64), np.asarray(host_operand, np.float64))
     expected = getattr(operator, op)(
-        array.astype(np.float64), np.asarray(host_operand, dtype=np.float64)
+        *(host_operands[::-1] if reflected else host_operands)
     )
     np.testing.assert_allclose(
         asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
     )
+
+
+@requires_gpu
+@lazy_params
+@pytest.mark.parametrize("reflected", [False, True])
+@pytest.mark.parametrize(
+    "operand_type", ["array", "dask_array", "measurement", "lazy_measurement"]
+)
+@pytest.mark.parametrize("device", ["gpu", "cpu"])
+def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
+    device, operand_type, reflected, lazy
+):
+    # The operand is on the other device. CuPy refuses NumPy arrays, so the side
+    # on the host is moved to the device: the pair gives the same GPU result in
+    # either order, eager or lazy.
+    if reflected and operand_type.endswith("measurement"):
+        pytest.skip("the reflected pair is the forward pair with devices swapped")
+    other_device = "cpu" if device == "gpu" else "gpu"
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+        sampling=(0.1, 0.2),
+    ).copy_to_device(device)
+    operand_array = (
+        da.from_array(array, chunks=(1, 3))
+        if operand_type in ("dask_array", "lazy_measurement")
+        else array.copy()
+    )
+    if operand_type.endswith("measurement"):
+        operand = Images(operand_array, sampling=(0.1, 0.2)).copy_to_device(
+            other_device
+        )
+    else:
+        operand = copy_to_device(operand_array, other_device)
+
+    operands = (operand, measurement) if reflected else (measurement, operand)
+    result = operator.add(*operands)
+
+    assert isinstance(result, Images)
+    lazy_operand = operand_type in ("dask_array", "lazy_measurement")
+    assert result.is_lazy == (lazy or lazy_operand)
+    computed = result.compute().array
+    assert_array_matches_device(computed, "gpu")
+    np.testing.assert_array_equal(asnumpy(computed), 2 * array)
 
 
 @settings(max_examples=5)
@@ -1875,6 +1924,20 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     )
     assume(len(_scan_sampling(measurement)) > 1)
     measurement.integrated_center_of_mass().compute()
+
+
+@pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
+def test_integrate_gradient_offset_is_per_member(chunks):
+    rng = np.random.default_rng(0)
+    gradient = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    gradient *= np.array([1.0, 5.0, 0.3])[:, None, None]
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))])
+
+    eager = Images(gradient, **kwargs).integrate_gradient()
+    lazy = Images(da.from_array(gradient, chunks=chunks), **kwargs).integrate_gradient()
+
+    np.testing.assert_allclose(eager.array.min(axis=(-2, -1)), 0.0, atol=1e-12)
+    np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
 
 
 @given(data=st.data())

@@ -1768,7 +1768,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
-        if backend.tp is not None and get_array_module(self.array) is backend.tp:
+        self_array = self.array
+        if backend.tp is not None and get_array_module(self_array) is backend.tp:
             # dask infers a lazy result's dtype with NumPy's rules, under which a
             # NumPy scalar or array is strongly typed (float32 times np.float64(2)
             # is float64), and Metal holds no double precision. A Python scalar
@@ -1779,12 +1780,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
-        elif cp is not None and get_array_module(self.array) is cp:
+        elif (
+            cp is not None
+            and isinstance(other_array, (np.ndarray, cp.ndarray, da.core.Array))
+            and {get_array_module(self_array), get_array_module(other_array)}
+            == {np, cp}
+        ):
             # CuPy refuses a host array as an operand, a 0-d one included,
-            # though it takes a NumPy scalar. On the device the array keeps its
-            # dtype, so the result is promoted as NumPy promotes it on the CPU.
-            if isinstance(other_array, np.ndarray):
-                other_array = cp.asarray(other_array)
+            # though it takes a NumPy scalar. The side on the host, measurement
+            # or operand, is moved to the device, so both operand orders give
+            # the same result there. On the device an array keeps its dtype, so
+            # the result is promoted as NumPy promotes it on the CPU. A lazy
+            # host operand is copied to the device block by block when the
+            # result is computed.
+            if get_array_module(self_array) is cp:
+                other_array = copy_to_device(other_array, "gpu")
+            else:
+                self_array = copy_to_device(self_array, "gpu")
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands
@@ -1792,9 +1804,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         # supports raises TypeError.
         name = func.strip("_")
         if hasattr(operator, name):
-            array = getattr(operator, name)(self.array, other_array)
+            array = getattr(operator, name)(self_array, other_array)
         else:  # a reflected operation: "__rtruediv__" is other / self
-            array = getattr(operator, name[1:])(other_array, self.array)
+            array = getattr(operator, name[1:])(other_array, self_array)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array

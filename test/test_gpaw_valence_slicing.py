@@ -11,6 +11,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 from ase import Atoms
+from utils import rotated_by_hand
 
 import abtem
 from abtem.potentials.gpaw import integrate_slice
@@ -315,4 +316,45 @@ def test_repeated_gpaw_potential_in_thin_slices_is_the_one_cell_potential_tiled(
     assert repeated.array.shape == tiled.shape
     np.testing.assert_allclose(
         repeated.array, tiled, rtol=0, atol=1e-5 * np.abs(tiled).max()
+    )
+
+
+def _converged_calculator(atoms):
+    atoms = atoms.copy()
+    atoms.calc = GPAW(
+        mode=PW(250),
+        h=0.2,
+        txt=None,
+        symmetry="off",
+        convergence={"density": 1e-8, "eigenstates": 1e-12},
+    )
+    atoms.get_potential_energy()
+    return atoms.calc
+
+
+@needs_gpaw
+@pytest.mark.slow
+def test_gpaw_potential_in_plane_xz_is_that_of_the_calculation_rotated_by_hand(
+    double_precision_numpy_fft,
+):
+    """Oracle independent of how the valence potential is moved: a second DFT
+    calculation of the atoms rotated by hand to "xz", built in the xy plane, gives
+    the same slices as the first built with plane="xz". The mirror image, whose
+    axes are only permuted, differs from it within each slice."""
+    atoms = Atoms(
+        "CO", positions=[(0.6, 0.8, 1.0), (1.9, 1.5, 2.4)], cell=CELL, pbc=True
+    )
+    kwargs = dict(gpts=(32, 36), slice_thickness=0.7)
+
+    in_plane = GPAWPotential(
+        _converged_calculator(atoms), plane="xz", **kwargs
+    ).build(lazy=False)
+    rotated = GPAWPotential(
+        _converged_calculator(rotated_by_hand(atoms, "xz")), **kwargs
+    ).build(lazy=False)
+
+    assert in_plane.array.shape == rotated.array.shape
+    scale = np.abs(rotated.array).max()
+    np.testing.assert_allclose(
+        in_plane.array, rotated.array, rtol=0, atol=1e-4 * scale
     )

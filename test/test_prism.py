@@ -242,6 +242,99 @@ def test_s_matrix_store_on_host(data, lazy):
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
+@pytest.mark.parametrize("store_on_host", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_s_matrix_build_dtype_follows_the_precision(precision, lazy, store_on_host):
+    from ase.build import bulk
+
+    import abtem
+    from abtem.core.utils import get_dtype
+
+    with abtem.config.set({"precision": precision, "device": "cpu"}):
+        potential = abtem.Potential(
+            bulk("Si", cubic=True), gpts=32, slice_thickness=2.7
+        )
+        s_matrix = abtem.SMatrix(
+            energy=100e3,
+            semiangle_cutoff=20,
+            potential=potential,
+            interpolation=1,
+            store_on_host=store_on_host,
+        )
+        expected = get_dtype(complex=True)
+        built = s_matrix.build(lazy=lazy)
+
+        assert expected == (np.complex128 if precision == "float64" else np.complex64)
+        assert built.array.dtype == expected
+        assert built.compute().array.dtype == expected
+
+
+def _single_precision_plane_waves(wave_vectors, extent, gpts, interpolation, xp):
+    """The plane-wave expansion as it was built before it followed the precision:
+    float32 wave vectors and coordinates throughout."""
+    from abtem.core.complex import complex_exponential
+
+    wave_vectors = xp.asarray(wave_vectors, dtype=xp.float32)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    array = complex_exponential(
+        1.0 * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
+    ) * complex_exponential(
+        1.0 * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]
+    )
+    array *= np.prod(interpolation) / np.prod(array.shape[-2:])
+    return array
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("interpolation", [1, 2])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_plane_wave_expansion_follows_the_precision(
+    precision, interpolation, lazy, device
+):
+    # Without a potential the S-matrix is its plane-wave expansion,
+    # exp(2 pi i k.r) normalised by f^2 / N. In double precision it is the
+    # analytic value to round-off; in single precision it is bitwise the float32
+    # expansion the S-matrix has always had.
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    extent, gpts = (8.2, 9.4), (64, 72)
+    with abtem.config.set({"precision": precision}):
+        s_matrix = abtem.SMatrix(
+            energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts,
+            interpolation=interpolation, downsample=False, device=device,
+        )
+        complex_dtype = np.complex128 if precision == "float64" else np.complex64
+        built = s_matrix.build(lazy=lazy)
+        assert built.array.dtype == complex_dtype
+        array = to_host_array(built)
+        assert array.dtype == complex_dtype
+
+        wave_vectors = to_host_array(s_matrix.wave_vectors)
+        if precision == "float32":
+            xp = get_array_module(device)
+            expected = _single_precision_plane_waves(
+                wave_vectors, extent, gpts, (interpolation,) * 2, xp
+            )
+            np.testing.assert_array_equal(array, to_host_array(expected))
+            return
+
+    assert wave_vectors.dtype == np.float64
+    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
+    phase = (
+        wave_vectors[:, 0, None, None] * x[:, None]
+        + wave_vectors[:, 1, None, None] * y[None, :]
+    )
+    expected = np.exp(2j * np.pi * phase) * interpolation**2 / np.prod(gpts)
+    np.testing.assert_allclose(
+        array, expected, rtol=0, atol=1e-12 * np.abs(expected).max()
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @devices
@@ -396,4 +489,96 @@ class TestWrappedCrop2D:
             assert np.allclose(
                 to_host_array(copy_to_device(got, "cpu")),
                 self._reference(array, corner, (11, 11)),
+            )
+
+
+class TestWindowCrop:
+    """``window_crop`` is ``minimum_crop``, except that a window as large as the
+    grid is the whole grid for every position."""
+
+    GPTS = (64, 48)
+
+    @staticmethod
+    def _positions(device):
+        from abtem.core.backend import copy_to_device
+
+        # Pixel positions inside the grid, and far outside it.
+        positions = np.array([[3.2, 40.7], [31.5, 10.1], [-20.0, 90.0], [70.3, 5.5]])
+        return copy_to_device(positions, device)
+
+    @devices
+    def test_a_window_the_size_of_the_grid_is_the_whole_grid(self, device):
+        from abtem.prism.utils import window_crop
+
+        positions = self._positions(device)
+        crop_corner, size, corners = window_crop(positions, self.GPTS, self.GPTS)
+
+        assert crop_corner == (0, 0)
+        assert size == self.GPTS
+        assert_array_matches_device(corners, device)
+        assert corners.shape == positions.shape
+        assert not np.any(to_host_array(corners))
+
+    @devices
+    def test_a_window_the_size_of_the_grid_in_one_direction_is_cropped(self, device):
+        """A window equal to the grid along one axis only is centred on each
+        position, as ``interpolation=(1, 2)`` gives."""
+        from abtem.prism.utils import minimum_crop, window_crop
+
+        positions = self._positions(device)
+        window = (self.GPTS[0], self.GPTS[1] // 2)
+        got = window_crop(positions, window, self.GPTS)
+        expected = minimum_crop(positions, window)
+
+        assert got[0] == expected[0]
+        assert got[1] == expected[1]
+        assert np.array_equal(to_host_array(got[2]), to_host_array(expected[2]))
+        assert np.any(to_host_array(got[2]))
+
+    @devices
+    def test_a_smaller_window_is_cropped_around_the_positions(self, device):
+        from abtem.prism.utils import minimum_crop, window_crop
+
+        positions = self._positions(device)
+        window = (16, 12)
+        got = window_crop(positions, window, self.GPTS)
+        expected = minimum_crop(positions, window)
+
+        assert got[0] == expected[0]
+        assert got[1] == expected[1]
+        assert np.array_equal(to_host_array(got[2]), to_host_array(expected[2]))
+
+    def test_a_single_position(self):
+        from abtem.prism.utils import window_crop
+
+        positions = np.array([[10.0, 20.0]])
+        assert window_crop(positions, self.GPTS, self.GPTS)[2].shape == (1, 2)
+        crop_corner, size, corners = window_crop(positions, (16, 12), self.GPTS)
+        assert size == (16, 12)
+        assert not np.any(corners)
+
+
+class TestBatchCrop2D:
+    @devices
+    def test_a_window_the_size_of_the_array_is_not_copied(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import batch_crop_2d
+
+        array = copy_to_device(np.arange(3 * 4 * 6 * 5.0).reshape(3, 4, 6, 5), device)
+        corners = copy_to_device(np.zeros((3, 2), dtype=int), device)
+        assert batch_crop_2d(array, corners, (6, 5)) is array
+
+    @devices
+    def test_smaller_windows_are_cropped_at_their_corners(self, device):
+        from abtem.core.backend import copy_to_device
+        from abtem.prism.utils import batch_crop_2d
+
+        array = np.arange(3 * 6 * 5.0).reshape(3, 6, 5)
+        corners = np.array([[0, 0], [2, 1], [3, 3]])
+        got = batch_crop_2d(
+            copy_to_device(array, device), copy_to_device(corners, device), (3, 2)
+        )
+        for i, (cx, cy) in enumerate(corners):
+            assert np.array_equal(
+                to_host_array(got)[i], array[i, cx : cx + 3, cy : cy + 2]
             )
