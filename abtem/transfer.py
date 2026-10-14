@@ -806,7 +806,7 @@ class Bullseye(BaseAperture):
         edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
         k_corner = float(self._corner_radius) / 1e3
 
-        aperture = xp.zeros(self.gpts, dtype=float)
+        aperture = xp.zeros(self.gpts, dtype=get_dtype(complex=False))
 
         for a0 in range(self.num_rings):
             k_inner = a0 * (ds + d0)
@@ -863,7 +863,7 @@ class Bullseye(BaseAperture):
             aper = _ramp01((-d_keep) / edge_w)
             aperture += aper
         aperture = xp.clip(aperture, 0, 1)
-        return aperture
+        return aperture.astype(get_dtype(complex=False))
 
 
 class Vortex(BaseAperture):
@@ -1208,7 +1208,7 @@ class RadialPhasePlate(BaseAperture):
         phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
         phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
 
-        return phase_shift
+        return phase_shift.astype(get_dtype(complex=True))
 
 
 class TemporalEnvelope(BaseTransferFunction):
@@ -1719,7 +1719,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
             * (dchi_dk**2 + dchi_dphi**2)
         )
 
-        return array
+        return array.astype(get_dtype(complex=False))
 
 
 class Aberrations(BaseTransferFunction, _HasAberrations):
