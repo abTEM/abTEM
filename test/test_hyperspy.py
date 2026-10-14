@@ -353,7 +353,9 @@ def test_polar_measurements_to_diffraction_patterns_export_centred(lazy, device)
     assert stored[32, 32] == array[0, 0]
 
     data_array = patterns.to_data_array()
-    assert float(data_array.sel(kx=0, ky=0)) == array[0, 0]
+    # to_data_array keeps the device array, and CuPy refuses the implicit
+    # conversion float() would ask for.
+    assert float(_host(data_array.sel(kx=0, ky=0).data)) == array[0, 0]
     np.testing.assert_array_equal(_host(data_array.data), stored)
     if hyperspy is not None:
         np.testing.assert_array_equal(_host(patterns.to_hyperspy().data), stored)
