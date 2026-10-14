@@ -408,3 +408,91 @@ def test_transition_potential_multislice_of_waves_runs_in_the_configured_precisi
     np.testing.assert_array_equal(
         in_double_precision.array, in_configured_precision.array
     )
+
+
+def _prism_atoms():
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True)
+    atoms.rattle(0.02, seed=1)
+    return atoms
+
+
+def _prism_scan(potential):
+    return abtem.GridScan(
+        (0, 0), (1, 1), gpts=(2, 3), fractional=True, endpoint=False,
+        potential=potential,
+    )
+
+
+def _prism_reduce(detector):
+    def reduce(s_matrix, potential, lazy):
+        built = s_matrix.build(lazy=lazy)
+        return built.reduce(scan=_prism_scan(potential), detectors=detector)
+
+    return reduce
+
+
+def _prism_transition_potential_scan(s_matrix, potential, lazy):
+    transition_potential = synthetic_transition_potential(
+        gpts=potential.gpts, extent=potential.extent, device=potential.device
+    )
+    return s_matrix.transition_potential_scan(
+        transition_potential,
+        scan=_prism_scan(potential),
+        detectors=FlexibleAnnularDetector(),
+        sites=_prism_atoms(),
+        lazy=lazy,
+        double_channel=False,
+    )
+
+
+PRISM_ENTRY_POINTS = {
+    "build": lambda s_matrix, potential, lazy: s_matrix.build(lazy=lazy),
+    "reduce_annular": _prism_reduce(AnnularDetector(0, 20)),
+    "reduce_flexible_annular": _prism_reduce(FlexibleAnnularDetector()),
+    "reduce_segmented": _prism_reduce(SegmentedDetector(2, 4, 0, 30)),
+    "reduce_pixelated": _prism_reduce(PixelatedDetector()),
+    "reduce_waves": _prism_reduce(WavesDetector()),
+    "scan": lambda s_matrix, potential, lazy: s_matrix.scan(
+        scan=_prism_scan(potential), detectors=AnnularDetector(0, 20), lazy=lazy
+    ),
+    "transition_potential_scan": _prism_transition_potential_scan,
+}
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("vacuum", [False, True], ids=["potential", "vacuum"])
+@pytest.mark.parametrize("interpolation", [1, 2])
+@pytest.mark.parametrize("config", ["float32", "float64"])
+@pytest.mark.parametrize("name", PRISM_ENTRY_POINTS)
+def test_lazy_prism_results_declare_their_block_precision(
+    name, config, interpolation, vacuum, device
+):
+    # Without a potential (and without downsampling) the S-matrix is the bare
+    # plane-wave expansion, whose dtype no multislice step promotes.
+    if vacuum and name == "transition_potential_scan":
+        pytest.skip("core-loss PRISM needs a potential")
+    entry_point = PRISM_ENTRY_POINTS[name]
+    with abtem.config.set({"precision": config, "fft": "numpy"}):
+        potential = abtem.Potential(
+            _prism_atoms(), gpts=(32, 40), slice_thickness=1.4, device=device
+        )
+        s_matrix = abtem.SMatrix(
+            potential=None if vacuum else potential,
+            extent=potential.extent if vacuum else None,
+            gpts=potential.gpts if vacuum else None,
+            energy=100e3,
+            semiangle_cutoff=20,
+            interpolation=interpolation,
+            downsample=False,
+            device=device,
+        )
+        lazy = entry_point(s_matrix, potential, lazy=True)
+        eager = entry_point(s_matrix, potential, lazy=False)
+        assert lazy.is_lazy and not eager.is_lazy
+        expected = np.dtype(config)
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager)

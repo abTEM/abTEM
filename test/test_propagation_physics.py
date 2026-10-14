@@ -323,24 +323,7 @@ def test_multislice_conserves_intensity(wave, order, device):
 
 
 @devices
-@pytest.mark.parametrize(
-    "precision",
-    [
-        "float32",
-        pytest.param(
-            "float64",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="SMatrix ignores config['precision']: the plane-wave "
-                "expansion is always built in complex64 (float32 wave vectors "
-                "and coordinates in prism/utils.py prism_wave_vectors and "
-                "plane_waves, and in SMatrix._build_s_matrix), so a float64 "
-                "PRISM run loses ~7e-6 of the intensity over 40 slices, the "
-                "single-precision round-off, instead of ~1e-14",
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("precision", ["float32", "float64"])
 def test_prism_conserves_intensity(precision, device):
     # Oracle: PRISM at interpolation 1 is a linear combination of plane waves
     # each propagated by (unitary) multislice, so the reduced exit wave has
@@ -413,6 +396,63 @@ def test_prism_scan_matches_probe_scan(lazy, device):
         np.testing.assert_allclose(
             measurement, expected, rtol=0, atol=bound * np.abs(expected).max()
         )
+
+
+@devices
+@pytest.mark.float64
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("interpolation", [1, 2])
+def test_float64_prism_matches_float64_multislice(interpolation, lazy, device):
+    # Oracle: an independent method. At interpolation f the expansion holds the
+    # plane waves of the 1/f sub-cell, so the PRISM probe is the probe of that
+    # sub-cell tiled f x f, and by linearity of multislice the reduced exit wave
+    # is the multislice exit wave of the tiled probe, cropped to the window
+    # around the probe. In double precision both agree to round-off, far below
+    # the ~1e-6 error of a plane-wave expansion built in single precision.
+    position = (3.1, 4.3)
+    with abtem.config.set({"precision": "float64"}):
+        potential = abtem.Potential(
+            _general_position_cell() * (2, 2, 4), gpts=(64, 72),
+            slice_thickness=1.1, device=device,
+        )
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=100e3, semiangle_cutoff=20,
+            interpolation=interpolation, downsample=False, device=device,
+        )
+        assert s_matrix.wave_vectors.dtype == np.float64
+        built = s_matrix.build(lazy=lazy)
+        assert built.array.dtype == np.complex128
+        exit_wave = built.reduce(
+            scan=abtem.CustomScan([position]), detectors=abtem.WavesDetector()
+        )
+        assert exit_wave.array.dtype == np.complex128
+        exit_wave = to_host_array(exit_wave.compute() if lazy else exit_wave)
+        assert exit_wave.dtype == np.complex128
+
+        sub_extent = tuple(e / interpolation for e in potential.extent)
+        sub_gpts = tuple(n // interpolation for n in potential.gpts)
+        probe = abtem.Probe(
+            energy=100e3, semiangle_cutoff=20, extent=sub_extent, gpts=sub_gpts,
+            device=device,
+        )
+        sub_position = tuple(p % e for p, e in zip(position, sub_extent))
+        incident = to_host_array(probe.build(scan=[sub_position], lazy=False))
+        incident = np.tile(incident.reshape(sub_gpts), (interpolation,) * 2)
+        incident = abtem.Waves(incident, energy=100e3, extent=potential.extent)
+        incident = incident.copy_to_device(device)
+        expected = to_host_array(incident.multislice(potential))
+
+    exit_wave = exit_wave.reshape(exit_wave.shape[-2:])
+    if exit_wave.shape != expected.shape:
+        # the window is centred on the nearest pixel of the probe
+        corner = np.round(np.array(position) / potential.sampling).astype(int)
+        corner -= np.array(exit_wave.shape) // 2
+        expected = np.roll(expected, tuple(-corner), axis=(0, 1))
+        expected = expected[: exit_wave.shape[0], : exit_wave.shape[1]]
+
+    np.testing.assert_allclose(
+        exit_wave, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
+    )
 
 
 # ---------------------------------------------------------------------------

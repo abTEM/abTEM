@@ -270,6 +270,71 @@ def test_s_matrix_build_dtype_follows_the_precision(precision, lazy, store_on_ho
         assert built.compute().array.dtype == expected
 
 
+def _single_precision_plane_waves(wave_vectors, extent, gpts, interpolation, xp):
+    """The plane-wave expansion as it was built before it followed the precision:
+    float32 wave vectors and coordinates throughout."""
+    from abtem.core.complex import complex_exponential
+
+    wave_vectors = xp.asarray(wave_vectors, dtype=xp.float32)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    array = complex_exponential(
+        1.0 * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
+    ) * complex_exponential(
+        1.0 * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]
+    )
+    array *= np.prod(interpolation) / np.prod(array.shape[-2:])
+    return array
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("interpolation", [1, 2])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_plane_wave_expansion_follows_the_precision(
+    precision, interpolation, lazy, device
+):
+    # Without a potential the S-matrix is its plane-wave expansion,
+    # exp(2 pi i k.r) normalised by f^2 / N. In double precision it is the
+    # analytic value to round-off; in single precision it is bitwise the float32
+    # expansion the S-matrix has always had.
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    extent, gpts = (8.2, 9.4), (64, 72)
+    with abtem.config.set({"precision": precision}):
+        s_matrix = abtem.SMatrix(
+            energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts,
+            interpolation=interpolation, downsample=False, device=device,
+        )
+        complex_dtype = np.complex128 if precision == "float64" else np.complex64
+        built = s_matrix.build(lazy=lazy)
+        assert built.array.dtype == complex_dtype
+        array = to_host_array(built)
+        assert array.dtype == complex_dtype
+
+        wave_vectors = to_host_array(s_matrix.wave_vectors)
+        if precision == "float32":
+            xp = get_array_module(device)
+            expected = _single_precision_plane_waves(
+                wave_vectors, extent, gpts, (interpolation,) * 2, xp
+            )
+            np.testing.assert_array_equal(array, to_host_array(expected))
+            return
+
+    assert wave_vectors.dtype == np.float64
+    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
+    phase = (
+        wave_vectors[:, 0, None, None] * x[:, None]
+        + wave_vectors[:, 1, None, None] * y[None, :]
+    )
+    expected = np.exp(2j * np.pi * phase) * interpolation**2 / np.prod(gpts)
+    np.testing.assert_allclose(
+        array, expected, rtol=0, atol=1e-12 * np.abs(expected).max()
+    )
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @devices

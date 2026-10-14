@@ -5,7 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
@@ -202,13 +202,14 @@ def prism_wave_vectors(
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
-    n = np.arange(-n_max, n_max + 1, dtype=np.float32)
-    w = np.asarray(extent[0], dtype=np.float32)
-    m = np.arange(-m_max, m_max + 1, dtype=np.float32)
-    h = np.asarray(extent[1], dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    n = np.arange(-n_max, n_max + 1, dtype=dtype)
+    w = np.asarray(extent[0], dtype=dtype)
+    m = np.arange(-m_max, m_max + 1, dtype=dtype)
+    h = np.asarray(extent[1], dtype=dtype)
 
-    kx = n / w * np.float32(interpolation[0])
-    ky = m / h * np.float32(interpolation[1])
+    kx = n / w * dtype(interpolation[0])
+    ky = m / h * dtype(interpolation[1])
 
     mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
 
@@ -225,8 +226,9 @@ def plane_waves(
     reverse: bool = False,
 ) -> np.ndarray:
     xp = get_array_module(wave_vectors)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=dtype)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=dtype)
 
     sign = -1.0 if reverse else 1.0
 
