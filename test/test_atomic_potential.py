@@ -25,18 +25,13 @@ from abtem.parametrizations import (
 
 @given(atomic_number=st.integers(min_value=1, max_value=98))
 @pytest.mark.parametrize(
-    "parametrization_a",
+    "parametrization_a, parametrization_b",
     [
-        LobatoParametrization(),
-        KirklandParametrization(),
-        PengParametrization(),
+        (LobatoParametrization(), KirklandParametrization()),
+        (LobatoParametrization(), PengParametrization()),
+        (KirklandParametrization(), PengParametrization()),
     ],
-    ids=["lobato", "kirkland", "peng"],
-)
-@pytest.mark.parametrize(
-    "parametrization_b",
-    [LobatoParametrization(), KirklandParametrization(), PengParametrization()],
-    ids=["lobato", "kirkland", "peng"],
+    ids=["lobato-kirkland", "lobato-peng", "kirkland-peng"],
 )
 def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
     k = np.linspace(0, 5, 100)
