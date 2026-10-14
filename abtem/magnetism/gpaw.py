@@ -7,7 +7,11 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial.transform import Rotation as R  # type: ignore
 
-from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
+from abtem.atoms import (
+    _box_strain_warning_silenced,
+    _vector_field_to_plane,
+    plane_to_axes,
+)
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.fft import fft_interpolate
@@ -308,12 +312,11 @@ class _GPAWMagnetics(_FieldBuilder):
             raise ValueError(f"Unknown quantity: {self._quantity}")
 
         if self.plane != "xy":
-            axes = plane_to_axes(self.plane)
-            moved_axes = (axes[0] + 1, axes[1] + 1)
-            array = np.moveaxis(array, moved_axes, (1, 2))[axes, ...]
-            vector_potential = np.moveaxis(vector_potential, moved_axes, (1, 2))[
-                axes, ...
-            ]
+            # The fields are rotated with the atoms: their grids are moved and
+            # their components rotated by the same proper rotation, which reverses
+            # one axis and its component for the planes that need it.
+            array = _vector_field_to_plane(array, self.plane)
+            vector_potential = _vector_field_to_plane(vector_potential, self.plane)
 
         rotate_field = self._rotate_field
         if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:

@@ -110,6 +110,76 @@ def plane_to_axes(plane: str) -> tuple[int, ...]:
     return axes + (last_axis.pop(),)
 
 
+#: The axis of the potential (0 for `x`, 1 for `y`, 2 for `z`) that is reversed
+#: when a plane given as a string is an odd permutation of the axes ("xz", "yx" and
+#: "zy"). A permutation of the axes alone would be a reflection; reversing one axis
+#: makes it a rotation. The second image axis `y` is reversed, so the beam keeps
+#: the direction and the entry face it had when the axes were only permuted (for
+#: "xz" it runs along +`y` of the atoms and enters at their y = 0 face); only the
+#: projected image is reversed along its second axis. Every site that rotates
+#: atoms, grids or vector components to a plane takes the reversed axis from
+#: `_plane_rotation`. Reversing `x` instead (0) would also need `_standardize_cell`
+#: changed: for a cell rotated about the beam it rotates the first in-plane
+#: lattice vector onto +`x`, which turns a reversed `x` into a reversed `y`.
+_ODD_PLANE_REVERSED_AXIS = 1
+
+
+def _plane_rotation(plane: str) -> np.ndarray:
+    """
+    The proper rotation `rotate_atoms_to_plane` applies to the atoms for a plane
+    given as a string, as a 3x3 matrix acting on row vectors (its columns are the
+    new axes in the frame of the atoms).
+
+    The first axis named by `plane` becomes `x`, the second `y`, and the remaining
+    axis `z`. For "xy", "yz" and "zx" that is a rotation. For "xz", "yx" and "zy"
+    it is a reflection, so the axis `_ODD_PLANE_REVERSED_AXIS` is also reversed.
+    """
+    axes = plane_to_axes(plane)
+    rotation = np.eye(3)[:, list(axes)]
+    if np.linalg.det(rotation) < 0.0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1.0
+    return rotation
+
+
+def _plane_reversed_axes(plane: str) -> list[int]:
+    """The axes of the frame of `plane` that point against the axis of the atoms
+    they come from."""
+    return [int(i) for i in np.flatnonzero(_plane_rotation(plane).sum(axis=0) < 0.0)]
+
+
+def _grid_to_plane(array, plane: str, first_axis: int = 0):
+    """
+    The values of a periodic grid over an orthogonal cell, as on the grid over the
+    cell rotated to `plane` by `rotate_atoms_to_plane`.
+
+    The three spatial axes of `array` start at `first_axis`. Grid point k sits at k
+    times the spacing, so along a reversed axis the point k goes to -k modulo the
+    number of points, as a position does when it is wrapped back into the cell.
+    """
+    axes = plane_to_axes(plane)
+    spatial = [first_axis + i for i in range(3)]
+    array = np.moveaxis(array, [first_axis + axis for axis in axes], spatial)
+    for axis in _plane_reversed_axes(plane):
+        array = np.roll(np.flip(array, axis=spatial[axis]), 1, axis=spatial[axis])
+    return array
+
+
+def _vector_field_to_plane(array, plane: str):
+    """
+    A vector field of shape (3, nx, ny, nz) on a periodic grid over an orthogonal
+    cell, as on the grid over the cell rotated to `plane`: the grid is moved as by
+    `_grid_to_plane` and the components are rotated with the positions.
+
+    The rotation is proper, so a pseudovector, such as a magnetic field, rotates the
+    same way as a vector.
+    """
+    array = _grid_to_plane(array, plane, first_axis=1)
+    array = array[list(plane_to_axes(plane))]
+    for axis in _plane_reversed_axes(plane):
+        array[axis] = -array[axis]
+    return array
+
+
 def is_cell_hexagonal(atoms: Atoms | Cell) -> bool:
     """
     Check whether the cell of given atoms is hexagonal.
@@ -679,7 +749,15 @@ def rotate_atoms_to_plane(
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
 ) -> Atoms:
     """
-    Rotate atoms so that their `xy` plane is rotated into a given plane.
+    Rotate atoms so that a given plane becomes their `xy` plane.
+
+    The first axis named by `plane` becomes `x`, the second `y` and the remaining
+    axis `z`, the propagation direction. The result is a rotation, never a mirror
+    image: for "xz", "yx" and "zy", where those axes alone would be a reflection,
+    the new `y` is the second named axis reversed. For "xz" the new `x` is `x`,
+    the new `y` is -`z` and the new `z` is `y` of the given atoms, so the beam
+    runs along +`y` and the image is reversed along its second axis. The atoms are
+    wrapped into the rotated cell.
 
     Parameters
     ----------
@@ -708,16 +786,21 @@ def _rotate_atoms_to_plane(
     if plane == "xy":
         return atoms, np.eye(3)
 
+    if not isinstance(plane, str):
+        raise NotImplementedError("plane must be given as a string, such as 'xz'.")
+
     atoms = atoms.copy()
-    if isinstance(plane, str):
-        axes = plane_to_axes(plane)
+    rotation = _plane_rotation(plane)
 
-    atoms.positions[:] = atoms.positions[:][:, list(axes)]
-    atoms.cell[:] = atoms.cell[:][:, list(axes)]
+    # A reversed axis gives the cell a negative lattice vector and the atoms
+    # negative coordinates along it; `_standardize_cell` makes the vector positive
+    # and wraps the atoms back into the cell, which translates them by it.
+    atoms.positions[:] = atoms.positions @ rotation
+    atoms.cell[:] = np.array(atoms.cell) @ rotation
 
-    atoms, rotation = _standardize_cell(atoms)
+    atoms, standard_rotation = _standardize_cell(atoms)
 
-    return atoms, np.eye(3)[:, list(axes)] @ rotation
+    return atoms, rotation @ standard_rotation
 
 
 def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
@@ -1150,21 +1233,27 @@ def orthogonalize_cell(
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         This is equivalent to translating the atoms. The default is (0., 0., 0.).

@@ -14,6 +14,7 @@ import ase
 import ase.build
 import numpy as np
 import pytest
+from utils import plane_rotation_by_hand
 
 import abtem
 from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis
@@ -149,8 +150,9 @@ def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(directions, perio
 
     r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))[0]
     in_input_axes = np.array(sigmas, dtype=np.float32) * r
-    # potential axes (x, y, z) are input axes (x, z, y)
-    expected = in_input_axes[[0, 2, 1]]
+    # potential axes (x, y, z) are input axes (x, z, y), one of them reversed by
+    # the rotation to "xz"
+    expected = in_input_axes @ plane_rotation_by_hand("xz")
     if directions == "xy":
         expected[2] = 0.0
     np.testing.assert_allclose(displacement, expected, rtol=0, atol=1e-12)

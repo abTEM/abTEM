@@ -270,6 +270,34 @@ ignore_strain_warning = pytest.mark.filterwarnings(
 )
 
 
+def plane_rotation_by_hand(plane):
+    """The rotation of the atoms to a plane given as a string, written out by hand
+    as a matrix acting on row vectors whose columns are the new axes: the first
+    named axis becomes x, the second y and the remaining axis z. Where that is a
+    reflection ("xz", "yx" and "zy") the axis `_ODD_PLANE_REVERSED_AXIS` of abtem
+    is reversed, so that it is a rotation; the tests follow that one choice."""
+    from abtem.atoms import _ODD_PLANE_REVERSED_AXIS
+
+    unit = {"x": np.eye(3)[0], "y": np.eye(3)[1], "z": np.eye(3)[2]}
+    (remaining,) = set("xyz") - set(plane)
+    rotation = np.stack([unit[plane[0]], unit[plane[1]], unit[remaining]], axis=1)
+    if np.linalg.det(rotation) < 0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1
+    return rotation
+
+
+def rotated_by_hand(atoms, plane):
+    """The atoms of an orthogonal cell as `plane` sees them, rotated by hand with
+    `plane_rotation_by_hand` and wrapped into the rotated cell."""
+    rotation = plane_rotation_by_hand(plane)
+    lengths = np.abs(np.diag(atoms.cell) @ rotation)
+    rotated = ase.Atoms(
+        atoms.numbers, positions=atoms.positions @ rotation, cell=lengths, pbc=True
+    )
+    rotated.wrap()
+    return rotated
+
+
 try:
     import dask_cuda as _dask_cuda  # noqa: F401
 

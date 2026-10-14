@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
@@ -274,8 +274,9 @@ def _generate_slices(
         last_slice = len(ewald_potential)
 
     if ewald_potential.plane != "xy":
-        axes = plane_to_axes(ewald_potential.plane)
-        charge = np.moveaxis(charge, axes[:2], (0, 1))
+        # The charge density is rotated with the atoms, including the reversal of
+        # the axis that `_plane_rotation` reverses for the planes that need it.
+        charge = _grid_to_plane(charge, ewald_potential.plane)
         atoms, _, frame = ewald_potential._transform_atoms()
     else:
         atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
@@ -358,11 +359,14 @@ class ChargeDensityPotential(_PotentialBuilder):
         potential, i.e. the propagation direction will be perpendicular to the provided
         plane. If str, must be a concatenation of two of 'x', 'y' and 'z'; the default
         value 'xy' indicates that potential slices are cuts parallel to the 'xy'-plane.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. A value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also be specified with two
+        arbitrary 3D vectors, which are mapped to the `x` and `y` directions of the
+        potential, respectively. The length of the vectors has no influence. If the
+        vectors are not perpendicular, the second vector is rotated in the plane to
+        become perpendicular to the first. A value of ((1., 0., 0.), (0., 1., 0.)) is
+        equivalent to 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         Only the default (0., 0., 0.) is supported; any other origin raises a

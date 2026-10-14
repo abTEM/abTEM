@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.utils import get_dtype
@@ -13,8 +14,9 @@ from abtem.magnetism.gpaw import (
     get_magnetic_field_from_gpaw,
     get_vector_potential_from_gpaw,
 )
+from abtem.potentials.charge_density import curl_fourier
 from abtem.potentials.iam import PotentialArray
-from utils import devices
+from utils import devices, plane_rotation_by_hand
 
 
 class _SpinPolarizedCalculator:
@@ -157,7 +159,14 @@ class _NonDividingCalculator(_SpinPolarizedCalculator):
         return np.stack([up, 0.5 * up])[spin]
 
 
-_REAL_SPACE_PLANES = {"xy": ((0, 1, 2), 2), "xz": ((0, 2, 1), 1)}
+# plane: the axes of the calculator that become x, y and z, and the slicing axis.
+# Planes that slice along x are left out: the fields of the calculator's density
+# add up to zero along x.
+_REAL_SPACE_PLANES = {
+    "xy": ((0, 1, 2), 2),
+    "xz": ((0, 2, 1), 1),
+    "yx": ((1, 0, 2), 2),
+}
 
 
 @devices
@@ -189,9 +198,18 @@ def test_gpaw_real_space_slices_use_every_z_plane_once(
     assert field.slice_thickness == pytest.approx(thicknesses, rel=1e-12)
 
     # The field in the frame of `plane`: its components and axes in the order of
-    # `axes`, sliced along the last axis.
-    expected = np.moveaxis(raw_field(calculator, gridrefinement=1), axis + 1, -1)
+    # `axes`, sliced along the last axis. The rotation to "xz" and "yx" also
+    # reverses one axis, which takes the grid point at -k (modulo the number of
+    # points) to k and reverses that component.
+    expected = raw_field(calculator, gridrefinement=1).transpose(
+        (0,) + tuple(a + 1 for a in axes)
+    )
     expected = expected[list(axes)]
+    signs = plane_rotation_by_hand(plane).sum(axis=0)
+    for reversed_axis in np.flatnonzero(signs < 0):
+        n = expected.shape[reversed_axis + 1]
+        expected = np.take(expected, -np.arange(n), axis=reversed_axis + 1)
+        expected[reversed_axis] = -expected[reversed_axis]
     dz = 2.0 / 17
     bounds = np.cumsum((0,) + tuple(planes))
     expected_slices = np.stack(
@@ -212,6 +230,71 @@ def test_gpaw_real_space_slices_use_every_z_plane_once(
 
     part = asnumpy(field.build(first_slice=2, last_slice=5).array)
     np.testing.assert_allclose(part, array[2:5], rtol=0, atol=atol)
+
+
+class _ProjectableCalculator(_SpinPolarizedCalculator):
+    """A spin density with terms constant along each axis, so that its fields have
+    a nonzero projection along any of them."""
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self.get_number_of_grid_points() * gridrefinement)
+        x, y, z = np.meshgrid(
+            *(2 * np.pi * np.arange(n) / n for n in shape), indexing="ij"
+        )
+        up = (
+            1.0
+            + 0.3 * np.sin(x) * np.cos(y)
+            + 0.3 * np.sin(x) * np.cos(z)
+            + 0.3 * np.cos(y) * np.sin(z)
+            + 0.2 * np.cos(x) * np.sin(2 * y) * np.sin(2 * z)
+        )
+        return np.stack([up, 0.5 * up])[spin]
+
+
+@devices
+@pytest.mark.parametrize("plane", ["xy", "xz", "yx", "zy", "yz", "zx"])
+def test_gpaw_magnetic_field_in_a_plane_is_the_curl_of_its_vector_potential(
+    plane, device
+):
+    """B = curl A holds in the frame of the plane only if the field, a
+    pseudovector, and the vector potential are rotated by the same proper rotation.
+    A reflection of both, such as a permutation of the axes of "xz", "yx" or "zy",
+    reverses the sign of the curl relative to the reflected field.
+
+    The fields are projected through the whole cell, where the derivatives along
+    the projection add up to zero: the projected field is the in-plane curl of the
+    projected vector potential."""
+    calculator = _ProjectableCalculator()
+    axes = plane_to_axes(plane)
+    gpts = tuple(int(calculator.get_number_of_grid_points()[a]) for a in axes[:2])
+    lengths = np.diag(calculator.atoms.cell)[list(axes)]
+    kwargs = dict(
+        gpts=gpts,
+        slice_thickness=float(lengths[2]),
+        gridrefinement=1,
+        projection="real_space",
+        plane=plane,
+        rotate_field=None,
+        device=device,
+    )
+
+    magnetic_field = asnumpy(GPAWMagneticField(calculator, **kwargs).build().array)
+    vector_potential = asnumpy(
+        GPAWVectorPotential(calculator, **kwargs).build().array
+    )
+    assert magnetic_field.shape == vector_potential.shape == (1, 3) + gpts
+
+    in_plane_curl = curl_fourier(
+        vector_potential[0][..., None], Atoms(cell=lengths).cell
+    )[..., 0]
+
+    # A reflection would reverse the sign of the whole curl, so any nonzero field
+    # tells the two apart.
+    scale = np.abs(magnetic_field).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        magnetic_field[0], in_plane_curl, rtol=0, atol=1e-5 * scale
+    )
 
 
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])

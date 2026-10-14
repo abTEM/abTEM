@@ -1613,12 +1613,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         i.e. provided plane is perpendicular to the propagation direction. If string,
         it must be a concatenation of two of 'x', 'y' and 'z'; the default value 'xy'
         indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first.
-        Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing
-        'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also be specified with two
+        arbitrary 3D vectors, which are mapped to the `x` and `y` directions of the
+        potential, respectively. The length of the vectors has no influence. If the
+        vectors are not perpendicular, the second vector is rotated in the plane to
+        become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         This is equivalent to translating the atoms. The default is (0., 0., 0.).
