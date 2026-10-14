@@ -593,18 +593,23 @@ def _single_carbon_atoms():
     )
 
 
-def _inelastic_and_elastic_centres(potential, device):
-    """Centres of the scattered intensity and of the elastic phase, per config.
+def _single_transition():
+    """The 1s -> p, ml' = 0 transition of carbon at 100 keV, built.
 
-    A single transition (1s -> p, ml' = 0) is used so that the WavesDetector's
-    coherent sum over the transition axis is just that one wave.
+    A single transition, so that the WavesDetector's coherent sum over the
+    transition axis is just that one wave.
     """
     tp = _transition_potential(6, 100e3, GPTS, EXTENT).build()
-    tp = tp[[i for i in range(len(tp)) if _final_state(tp, i) == (1, 0)]]
+    return tp[[i for i in range(len(tp)) if _final_state(tp, i) == (1, 0)]]
+
+
+def _inelastic_and_elastic_centres(potential, device, lazy=False):
+    """Centres of the scattered intensity and of the elastic phase, per config."""
+    tp = _single_transition()
 
     waves = abtem.PlaneWave(
         energy=100e3, gpts=GPTS, extent=EXTENT, device=device
-    ).build(lazy=False)
+    ).build(lazy=lazy)
     inelastic = waves.transition_potential_multislice(
         potential, tp, detectors=abtem.WavesDetector(), double_channel=False
     ).compute()
@@ -618,19 +623,10 @@ def _inelastic_and_elastic_centres(potential, device):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Waves.transition_potential_multislice resolves sites=None once, from "
-        "the whole frozen-phonon ensemble (abtem/waves.py, before "
-        "_prebuild_reused_potential), and FrozenPhonons.randomize uses seed[0]: "
-        "every configuration scatters at configuration 0's displaced position "
-        "while its elastic potential uses its own"
-    ),
-)
 @devices
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.filterwarnings("ignore:ensemble_mean=False")
-def test_sites_follow_frozen_phonon_displacements_potential(device):
+def test_sites_follow_frozen_phonon_displacements_potential(device, lazy):
     """With sites=None, each configuration ionises its own displaced atom.
 
     Oracle (independent read-out): the displaced positions are read from the
@@ -650,7 +646,7 @@ def test_sites_follow_frozen_phonon_displacements_potential(device):
     ) > 0.05
 
     potential = abtem.Potential(fp, gpts=GPTS, slice_thickness=2.0, device=device)
-    inelastic, elastic = _inelastic_and_elastic_centres(potential, device)
+    inelastic, elastic = _inelastic_and_elastic_centres(potential, device, lazy)
     assert len(inelastic) == len(displaced) == len(elastic)
 
     for position, centre in zip(displaced, elastic):
@@ -661,6 +657,137 @@ def test_sites_follow_frozen_phonon_displacements_potential(device):
         np.testing.assert_array_less(
             _periodic_distance(centre, position, EXTENT), 5e-3
         )
+
+
+def _frozen_phonon_potential(device):
+    """Four distinguishable displaced configurations of one C atom, and the
+    displaced atoms of each, read from the FrozenPhonons object itself."""
+    fp = abtem.FrozenPhonons(
+        _single_carbon_atoms(), num_configs=4, sigmas=0.3, directions="xy",
+        ensemble_mean=False, seed=7,
+    )
+    configurations = list(fp)
+    displaced = [atoms.positions[0, :2].copy() for atoms in configurations]
+    assert min(
+        _periodic_distance(displaced[0], d, EXTENT).max() for d in displaced[1:]
+    ) > 0.05
+
+    potential = abtem.Potential(fp, gpts=GPTS, slice_thickness=2.0, device=device)
+    return potential, configurations, displaced
+
+
+def _core_loss_scan(potential, method, lazy, device, sites=None):
+    """Core-loss scan over the whole cell, one diffraction pattern per position.
+
+    The lazy multislice scan is split into several chunks of probes, so the
+    potential is pre-built once for all of them (#339).
+    """
+    scan = abtem.GridScan(
+        start=(0, 0), end=(1, 1), gpts=(24, 20), fractional=True,
+        potential=potential, endpoint=False,
+    )
+    detector = abtem.PixelatedDetector(max_angle=None, to_cpu=True)
+
+    if method == "multislice":
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=25, device=device)
+        probe.grid.match(potential)
+        result = probe.transition_potential_scan(
+            potential, _single_transition(), scan=scan, detectors=detector,
+            sites=sites, double_channel=False, lazy=lazy, max_batch=40,
+        )
+    else:
+        s_matrix = abtem.SMatrix(
+            potential=potential, energy=100e3, semiangle_cutoff=25,
+            interpolation=1, downsample=False, device=device,
+        )
+        result = s_matrix.transition_potential_scan(
+            _single_transition(), scan=scan, detectors=detector, sites=sites,
+            lazy=lazy,
+        )
+
+    return asnumpy(result.compute().array)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("method", ["multislice", "prism"])
+@pytest.mark.filterwarnings("ignore:ensemble_mean=False")
+def test_scan_sites_follow_frozen_phonon_displacements(device, lazy, method):
+    """With sites=None, each configuration's core-loss scan image is centred on
+    its own displaced atom (#581), eagerly and lazily, for the multislice
+    scan (whose lazy form pre-builds the potential for all its chunks) and
+    for PRISM-EELS.
+
+    Oracle as in the plane-wave test above: one atom and an aberration-free
+    probe make each configuration's image inversion-symmetric about its
+    displaced atom, which the scan grid covers periodically, so the circular
+    centroid of the image must sit on that atom.
+    """
+    potential, _, displaced = _frozen_phonon_potential(device)
+
+    if method == "multislice" and lazy:
+        # Precondition: the potential is pre-built, so the sites of each
+        # configuration must travel with that configuration's block of a
+        # PotentialArray, which carries no atoms.
+        from abtem.waves import _prebuild_reused_potential
+
+        probe = abtem.Probe(energy=100e3, semiangle_cutoff=25, device=device)
+        probe.grid.match(potential)
+        waves = probe.build(
+            scan=abtem.GridScan(
+                start=(0, 0), end=(1, 1), gpts=(24, 20), fractional=True,
+                potential=potential, endpoint=False,
+            ),
+            max_batch=40, lazy=True,
+        )
+        assert isinstance(
+            _prebuild_reused_potential(potential, waves), abtem.PotentialArray
+        )
+
+    images = _core_loss_scan(potential, method, lazy, device).sum((-2, -1))
+    assert len(images) == len(displaced)
+
+    for position, image in zip(displaced, images):
+        np.testing.assert_array_less(
+            _periodic_distance(_circular_centroid(image, EXTENT), position, EXTENT),
+            5e-3,
+        )
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("method", ["multislice", "prism"])
+@pytest.mark.parametrize("explicit_sites", [False, True])
+@pytest.mark.filterwarnings("ignore:ensemble_mean=False")
+def test_frozen_phonon_configurations_equal_their_own_runs(
+    device, lazy, method, explicit_sites
+):
+    """Each configuration of a frozen-phonon core-loss scan equals, bit for bit,
+    a scan of a plain Potential of that configuration's displaced atoms.
+
+    With sites=None, that run takes its sites from its own atoms, which is
+    what each configuration of the ensemble must do (#581). With explicit
+    sites, every configuration scatters at those same sites, as before the
+    fix: the explicit-sites path is unchanged.
+    """
+    potential, configurations, _ = _frozen_phonon_potential(device)
+
+    sites = None
+    if explicit_sites:
+        sites = ase.Atoms(
+            "C", positions=[(_FP_SITE[0], _FP_SITE[1], 1.0)],
+            cell=(EXTENT[0], EXTENT[1], 2.0), pbc=True,
+        )
+
+    ensemble = _core_loss_scan(potential, method, lazy, device, sites=sites)
+    assert len(ensemble) == len(configurations)
+
+    for atoms, configuration in zip(configurations, ensemble):
+        single = abtem.Potential(
+            atoms, gpts=GPTS, slice_thickness=2.0, device=device
+        )
+        expected = _core_loss_scan(single, method, lazy, device, sites=sites)
+        np.testing.assert_array_equal(configuration, expected)
 
 
 @pytest.mark.xfail(

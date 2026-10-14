@@ -32,7 +32,12 @@ from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator
 from abtem.finite_difference import multislice_step as realspace_multislice_step
-from abtem.inelastic.core_loss import TransitionPotential, TransitionPotentialArray
+from abtem.inelastic.core_loss import (
+    TransitionPotential,
+    TransitionPotentialArray,
+    _resolve_scattering_sites,
+    _SitesPerConfiguration,
+)
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
@@ -1061,13 +1066,22 @@ def transition_potential_multislice_and_detect(
 
     transition_potential = transition_potential.copy_to_device(waves.device)
 
-    from abtem.inelastic.core_loss import _extract_scattering_sites
+    # With sites=None, the sites of a frozen-phonon ensemble are resolved per
+    # configuration: each configuration ionises its own displaced atoms, not
+    # those of the first (abTEM issue #581).
+    sites = _resolve_scattering_sites(potential, sites)
 
-    sites = _extract_scattering_sites(potential, sites)
+    if isinstance(sites, _SitesPerConfiguration):
+        if sites.shape != tuple(potential.ensemble_shape):
+            raise RuntimeError(
+                f"scattering sites for an ensemble of shape {sites.shape} given "
+                f"for a potential ensemble of shape {potential.ensemble_shape}"
+            )
+        all_sites = sites.configurations()
+    else:
+        all_sites = [sites]
 
-    n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
-
-    if n_sites == 0:
+    if not all(np.any(s.atoms.numbers == transition_potential.Z) for s in all_sites):
         raise RuntimeError(
             "No scattering sites matching transition potential for element"
             f"{transition_potential.Z}"
@@ -1087,6 +1101,11 @@ def transition_potential_multislice_and_detect(
         potential_configuration,
     ) in _generate_potential_configurations(potential):
         waves = waves_input.copy()
+
+        if isinstance(sites, _SitesPerConfiguration):
+            configuration_sites = sites.configuration(potential_index)
+        else:
+            configuration_sites = sites
 
         # The entrance exit plane at t = 0 stays zero: no material has been
         # traversed, so no ionisation has happened. Detecting the incident
@@ -1159,7 +1178,7 @@ def transition_potential_multislice_and_detect(
 
             _update_plasmon_axes(waves, depth)
 
-            sites_slice = sites.get_atoms_in_slices(
+            sites_slice = configuration_sites.get_atoms_in_slices(
                 scatter_index, atomic_number=transition_potential.Z
             )
 
@@ -1500,6 +1519,11 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             if self._multislice_func_kwargs.get(key) is not None
         )
 
+    def _pairs_sites_with_potential(self) -> bool:
+        return isinstance(
+            self._multislice_func_kwargs.get("sites"), _SitesPerConfiguration
+        )
+
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
@@ -1507,6 +1531,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             chunks = chunks[:-1]
 
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
+
+        # Scattering sites resolved per configuration travel with the block of
+        # the potential holding those configurations. See
+        # _SitesPerConfiguration._pair_with_potential_blocks.
+        if self._pairs_sites_with_potential():
+            args = self._multislice_func_kwargs["sites"]._pair_with_potential_blocks(
+                args, chunks, lazy
+            )
 
         if len(self._potential.exit_planes) > 1:
             args = (args[0][..., None],)
@@ -1526,9 +1558,16 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         *args,
         potential_partial: Callable,
         graph_node_keys: tuple[str, ...] = (),
+        paired_sites: bool = False,
         **kwargs,
     ):
         args = unpack_blockwise_args(args)
+
+        if paired_sites:
+            # The potential's block arrives paired with the sites of its
+            # configurations; see _partition_args.
+            potential_block, kwargs["sites"] = args[0]
+            args = unpack_blockwise_args((potential_block,)) + args[1:]
 
         if graph_node_keys:
             # The trailing args are the values _partition_args shipped as
@@ -1563,10 +1602,16 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             for key, value in self._multislice_func_kwargs.items()
             if key not in graph_node_keys
         }
+        # Sites paired with the potential's blocks arrive with them, the sites
+        # of each block's configurations only.
+        paired_sites = self._pairs_sites_with_potential()
+        if paired_sites:
+            del func_kwargs["sites"]
         return partial(
             self._multislice_transform_member,
             potential_partial=potential_partial,
             graph_node_keys=graph_node_keys,
+            paired_sites=paired_sites,
             detectors=self._user_detectors,
             multislice_func=self.multislice_func,
             **func_kwargs,

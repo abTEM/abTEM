@@ -54,7 +54,7 @@ from abtem.core.utils import (
 from abtem.detectors import BaseDetector, FlexibleAnnularDetector
 from abtem.inelastic.core_loss import (
     BaseTransitionPotential,
-    _extract_scattering_sites,
+    _resolve_scattering_sites,
 )
 from abtem.measurements import (
     BaseMeasurements,
@@ -1718,7 +1718,11 @@ class Waves(BaseWaves, ArrayObject):
         # Resolve sites from the potential's atoms before it is potentially
         # pre-built into a bare PotentialArray below, which carries no atoms
         # and would otherwise make site extraction fail (abTEM issue #340).
-        sites = _extract_scattering_sites(potential, sites)
+        # With sites=None, a frozen-phonon ensemble gets the sites of each of
+        # its configurations, which the multislice pairs with that
+        # configuration's slices (abTEM issue #581). Resolved once for the
+        # ensemble, every configuration ionised the first one's atoms.
+        sites = _resolve_scattering_sites(potential, sites)
 
         potential = _prebuild_reused_potential(potential, self)
 

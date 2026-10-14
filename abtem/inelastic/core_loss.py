@@ -1702,6 +1702,164 @@ def _extract_scattering_sites(potential, sites):
     return sites
 
 
+class _SitesPerConfiguration:
+    """The scattering sites of each configuration of a potential ensemble.
+
+    Holds an object array with the ensemble shape of the potential, one
+    ``SliceIndexedAtoms`` per configuration. The core-loss multislice indexes
+    it with the same ensemble index it runs that configuration's slices under,
+    so each configuration ionises its own displaced atoms (abTEM issue #581).
+
+    No ``__len__`` or ``__getitem__``, on purpose: numpy would then take an
+    instance for a sequence when it is stored as one element of an object array.
+    """
+
+    def __init__(self, sites: np.ndarray):
+        self._sites = sites
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self._sites.shape
+
+    def configuration(self, index: tuple[int, ...]):
+        """The sites of the configuration at ensemble index ``index``."""
+        return self._sites[index]
+
+    def configurations(self) -> list:
+        """The sites of every configuration."""
+        return list(self._sites.flat)
+
+    def _pair_with_potential_blocks(
+        self, potential_args: tuple, chunks: tuple[tuple[int, ...], ...], lazy: bool
+    ) -> tuple:
+        """Attach to each block of a potential's partitioned argument the sites of
+        the configurations in that block, as a ``(potential_block, sites)`` pair.
+
+        The two cannot be passed as separate partitioned arguments: each
+        partitioned argument of a transform gets its own output dimensions, so
+        dask would pair every potential block with every block of sites rather
+        than with its own.
+        """
+        from abtem.core.chunks import iterate_chunk_ranges
+        from abtem.core.ensemble import _wrap_with_array
+        from abtem.core.utils import itemset
+
+        if len(potential_args) != 1:
+            raise NotImplementedError(
+                "per-configuration scattering sites need a potential that "
+                "partitions into a single argument"
+            )
+        (potential_blocks,) = potential_args
+
+        numblocks = tuple(len(c) for c in chunks)
+        if tuple(potential_blocks.shape) != numblocks:
+            raise RuntimeError(
+                f"the potential partitions into blocks of shape "
+                f"{tuple(potential_blocks.shape)}, its sites into {numblocks}"
+            )
+
+        site_blocks = np.empty(numblocks, dtype=object)
+        for block_indices, chunk_range in iterate_chunk_ranges(chunks):
+            itemset(
+                site_blocks,
+                block_indices,
+                _SitesPerConfiguration(self._sites[chunk_range]),
+            )
+
+        if not lazy:
+            paired = np.empty(numblocks, dtype=object)
+            for index in np.ndindex(numblocks):
+                itemset(paired, index, (potential_blocks[index], site_blocks[index]))
+            return (paired,)
+
+        import dask.array as da
+
+        ndims = len(numblocks)
+
+        # One graph node per block of sites, so a task receives the sites of
+        # its own configurations only.
+        def _nested(prefix):
+            if len(prefix) == ndims:
+                return da.from_delayed(
+                    dask.delayed(_wrap_with_array)(site_blocks[prefix], ndims),
+                    shape=(1,) * ndims,
+                    dtype=object,
+                )
+            return [_nested(prefix + (i,)) for i in range(numblocks[len(prefix)])]
+
+        lazy_site_blocks = da.block(_nested(()))
+
+        def _pair(potential_block, sites_block):
+            return _wrap_with_array((potential_block, sites_block.item()), ndims)
+
+        index = tuple(range(ndims))
+        paired = da.blockwise(
+            _pair,
+            index,
+            potential_blocks,
+            index,
+            lazy_site_blocks,
+            index,
+            align_arrays=False,
+            concatenate=True,
+            dtype=object,
+            meta=np.array((), dtype=object),
+        )
+        return (paired,)
+
+
+def _sites_differ_per_configuration(potential) -> bool:
+    """Whether each configuration of ``potential`` has sites of its own.
+
+    True for an atom-based potential with more than one configuration, e.g.
+    frozen phonons, whose ``get_sliced_atoms`` displaces the atoms of the
+    first configuration only.
+
+    ``CrystalPotential`` is left out: its sites are the undisplaced atoms of
+    every configuration (see ``CrystalPotential.get_sliced_atoms``), so a
+    resolution per configuration would only repeat the tiling. That those
+    sites ignore the displacements is abTEM issue #582; once its sites follow
+    each configuration, this exclusion should go.
+    """
+    from abtem.potentials.iam import CrystalPotential
+
+    if isinstance(potential, CrystalPotential):
+        return False
+
+    return (
+        hasattr(potential, "get_sliced_atoms")
+        and getattr(potential, "num_configurations", 1) > 1
+    )
+
+
+def _resolve_scattering_sites(potential, sites):
+    """The scattering sites of ``potential``, per configuration where they differ.
+
+    With ``sites=None`` and a potential whose configurations have sites of
+    their own (see ``_sites_differ_per_configuration``), returns a
+    ``_SitesPerConfiguration``, each configuration's sites taken from that
+    ensemble member's own atoms, i.e. those its slices are built from.
+    Resolved once for the whole ensemble, they were the first configuration's
+    for every configuration (abTEM issue #581). Otherwise, and for sites that
+    are already resolved, returns what ``_extract_scattering_sites`` does.
+    """
+    from abtem.core.utils import itemset
+
+    if isinstance(sites, _SitesPerConfiguration):
+        return sites
+
+    if sites is not None or not _sites_differ_per_configuration(potential):
+        return _extract_scattering_sites(potential, sites)
+
+    per_configuration = np.empty(potential.ensemble_shape, dtype=object)
+    for index, _, member in potential.generate_blocks(1):
+        itemset(
+            per_configuration, index, _extract_scattering_sites(member.item(), None)
+        )
+
+    return _SitesPerConfiguration(per_configuration)
+
+
 def _prism_eels_detected_waves(s_matrix, scan):
     """The waves the PRISM-EELS reduction detects, one per position of ``scan``:
     the downsampled grid of ``s_matrix`` divided by its interpolation factor.
