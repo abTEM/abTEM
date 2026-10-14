@@ -434,14 +434,6 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert all(a > 0 for a in dp.angular_sampling)
         assert all(a > 0 for a in dp.max_angles)
 
-    def test_index_diffraction_spots(self):
-        """index_diffraction_spots() no longer raises TypeError on energy-ensemble patterns."""
-        from ase.build import bulk
-        atoms = bulk("Al", cubic=True)
-        dp = self._exit_waves().diffraction_patterns()
-        result = dp.index_diffraction_spots(cell=atoms.cell)
-        assert result is not None
-
 
 class TestEnergyEnsembleSpotIndexing:
     """index_diffraction_spots on an un-indexed energy ensemble must index each
@@ -980,8 +972,11 @@ class TestBlochWavesEnergyEnsemble:
         atoms = _srtio3_atoms()
         bw = BlochWaves(atoms, energy=100e3, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
         assert bw._energy_hkl_masks is None
-        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0])
+        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
         assert isinstance(result, IndexedDiffractionPatterns)
+        # one pattern over the beams, with no energy axis
+        assert result.array.shape == (int(bw._hkl_mask.sum()),)
+        assert not any(isinstance(a, EnergyAxis) for a in result.axes_metadata)
 
     def test_members_match_single_energy(self, dp_single, ew_single):
         """Oracle: each energy member is an independent Bloch-wave calculation

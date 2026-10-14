@@ -558,7 +558,9 @@ def test_the_users_detectors_are_not_changed():
     probe = abtem.Probe(energy=ENERGIES, semiangle_cutoff=20)
     probe.grid.match(potential)
     detectors = [detector, abtem.AnnularDetector(30, 100)]
-    probe.scan(potential, scan=_scan("gridscan", potential), detectors=detectors)
+    probe.scan(
+        potential, scan=_scan("gridscan", potential), detectors=detectors
+    ).compute(progress_bar=False)
 
     assert detector._ensemble_gpts is None
     assert detectors[0] is detector and len(detectors) == 2

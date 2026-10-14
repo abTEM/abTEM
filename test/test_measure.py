@@ -82,9 +82,11 @@ def test_scanned_measurement_type():
         ensemble_axes_metadata=ensemble_axes_metadata,
         metadata={"energy": 100e3},
     )
-
-    # with pytest.raises(RuntimeError):
-    #    measurement.integrate_radial(inner=0, outer=10)
+    # Scan axes ahead of another ensemble axis still become the image axes.
+    images = measurement.integrate_radial(inner=0, outer=10)
+    assert isinstance(images, Images)
+    assert images.shape == (10, 10, 10)
+    assert isinstance(images.ensemble_axes_metadata[0], OrdinalAxis)
 
 
 @settings(max_examples=5)
