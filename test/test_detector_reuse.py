@@ -60,12 +60,6 @@ def _probe(potential, energy, detector, lazy):
     return out.compute(progress_bar=False) if lazy else out
 
 
-_MULTI_ENERGY_AUTO_OUTER_ERRORS = (
-    "cannot auto-size its outer angle for a multi-energy ensemble",
-    "number of values for ordinal axis",
-)
-
-
 def _assert_equal_to_fresh(reused, fresh):
     np.testing.assert_allclose(
         reused, fresh, rtol=0, atol=1e-12 * np.abs(fresh).max()
@@ -180,21 +174,7 @@ def test_prism_auto_outer_is_the_dummy_probes_cutoff(kwargs):
 def test_annular_detector_reused_after_prism_matches_a_fresh_one_for_each_energy(
     lazy,
 ):
-    # An auto-sized outer angle for a multi-energy probe scan exists only where the
-    # energy-ensemble detector convention does. Elsewhere a new detector is refused
-    # (eager) or fails on the energy axis (lazy), and there is no reference to
-    # compare a reused one against. Any other error is a failure.
     potential = _potential()
-    try:
-        _probe(potential, list(ENERGIES), abtem.AnnularDetector(20), lazy)
-    except RuntimeError as error:
-        if not any(text in str(error) for text in _MULTI_ENERGY_AUTO_OUTER_ERRORS):
-            raise
-        pytest.skip(
-            "multi-energy probe scans with an auto outer angle are refused (eager) "
-            "or fail on the energy axis (lazy)"
-        )
-
     detector = abtem.AnnularDetector(20)
     _prism(potential, 60e3, detector)
     reused = _probe(potential, list(ENERGIES), detector, lazy)

@@ -174,10 +174,8 @@ def test_crystal_potential_builds(data, potential_unit, tile, lazy):
     crystal_potential = CrystalPotential(potential_unit, tile)
     crystal_potential = crystal_potential.build(lazy=lazy).compute()
 
-    try:
+    if not isinstance(potential_unit, PotentialArray):
         potential_unit = potential_unit.build().compute()
-    except RuntimeError:
-        pass
 
     tiled_potential = potential_unit.compute().tile(tile)
     assert crystal_potential == tiled_potential
