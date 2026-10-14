@@ -1042,7 +1042,8 @@ PLANES = {
 ANGLES = [30.0, 150.0]  # 150: the diagonal of the permuted cell is (-, -, +)
 
 
-NUM_ATOMS = [2, 3, 5]  # 3 is the only count dev does not raise for
+# standardize_cell used to raise an IndexError for every count but 3
+NUM_ATOMS = [2, 3, 5]
 
 
 def _unrotated(num_atoms):

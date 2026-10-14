@@ -60,7 +60,6 @@ def _with_cell_noise(atoms):
 
 TRANSFORMS = {
     "plane_xz": (ase.build.bulk("Si", cubic=True), {"plane": "xz"}),
-    # three atoms: with any other number standardize_cell raises an IndexError
     "rotated_cell_plane_xz": (_rectangular_rotated_about_y(3), {"plane": "xz"}),
     "plane_yz": (ase.build.bulk("Si", cubic=True), {"plane": "yz"}),
     "hexagonal": (ase.build.mx2("WSe2", vacuum=2), {}),
