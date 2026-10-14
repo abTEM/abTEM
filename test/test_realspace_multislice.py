@@ -559,14 +559,15 @@ class TestBackscatteringEnsemble:
     """The backscattered waves of an ensemble potential are those of each
     configuration run on its own."""
 
-    @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize(
-        "num_configs, slices_per_cell, scan, lazy",
+        "num_configs, slices_per_cell, scan, lazy, device",
         [
             pytest.param(
                 *case,
                 lazy,
-                marks=[pytest.mark.slow] if lazy and case[0] == 3 else [],
+                device.values[0] if device is gpu else device,
+                marks=[pytest.mark.slow] * (lazy and case[0] == 3)
+                + (list(gpu.marks) if device is gpu else []),
             )
             for case in [
                 (2, 2, None),  # 3 exit planes
@@ -574,12 +575,11 @@ class TestBackscatteringEnsemble:
                 (2, 3, None),  # 4 exit planes
                 (3, 2, [(1.0, 1.0), (2.0, 3.0)]),  # two probe positions
             ]
-            for lazy in (False, True)
+            # lazy device runs are covered by TestFullExpansionChunking
+            for lazy, device in ((False, "cpu"), (False, gpu), (True, "cpu"))
         ],
     )
     def test_frozen_phonons(self, num_configs, slices_per_cell, scan, lazy, device):
-        if lazy and device != "cpu":
-            pytest.skip("lazy device runs are covered by TestFullExpansionChunking")
         atoms = ase.build.bulk("Si", cubic=True)
         frozen_phonons = abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1)
         kwargs = dict(
