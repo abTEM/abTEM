@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
 from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.utils import get_dtype
@@ -10,11 +11,14 @@ from abtem.magnetism.gpaw import (
     GPAWMagneticField,
     GPAWMagneticFields,
     GPAWVectorPotential,
+    _fourier_slice_integrals,
+    _supercell_of_box,
     get_magnetic_field_from_gpaw,
     get_vector_potential_from_gpaw,
 )
+from abtem.potentials.charge_density import curl_fourier
 from abtem.potentials.iam import PotentialArray
-from utils import devices
+from utils import devices, plane_rotation_by_hand
 
 
 class _SpinPolarizedCalculator:
@@ -93,8 +97,9 @@ def test_show_draws_fields_built_on_a_device(device):
         ("real_space", 0.8, 2),
         # ... or any thicknesses whose boundaries are on z pixels
         ("real_space", (0.75, 1.0, 0.75, 0.75, 0.75), 2),
-        # the fft projection takes uniform slices only
         ("fft", 0.8, 1),
+        # the fft projection integrates between any slice limits
+        ("fft", (0.4, 1.2, 0.8, 1.0, 0.6), 5),
     ],
 )
 @pytest.mark.parametrize("first_slice, last_slice", [(1, 4), (2, None)])
@@ -157,7 +162,14 @@ class _NonDividingCalculator(_SpinPolarizedCalculator):
         return np.stack([up, 0.5 * up])[spin]
 
 
-_REAL_SPACE_PLANES = {"xy": ((0, 1, 2), 2), "xz": ((0, 2, 1), 1)}
+# plane: the axes of the calculator that become x, y and z, and the slicing axis.
+# Planes that slice along x are left out: the fields of the calculator's density
+# add up to zero along x.
+_REAL_SPACE_PLANES = {
+    "xy": ((0, 1, 2), 2),
+    "xz": ((0, 2, 1), 1),
+    "yx": ((1, 0, 2), 2),
+}
 
 
 @devices
@@ -189,14 +201,30 @@ def test_gpaw_real_space_slices_use_every_z_plane_once(
     assert field.slice_thickness == pytest.approx(thicknesses, rel=1e-12)
 
     # The field in the frame of `plane`: its components and axes in the order of
-    # `axes`, sliced along the last axis.
-    expected = np.moveaxis(raw_field(calculator, gridrefinement=1), axis + 1, -1)
+    # `axes`, sliced along the last axis. The rotation to "xz" and "yx" also
+    # reverses one axis, which takes the grid point at -k (modulo the number of
+    # points) to k and reverses that component.
+    expected = raw_field(calculator, gridrefinement=1).transpose(
+        (0,) + tuple(a + 1 for a in axes)
+    )
     expected = expected[list(axes)]
+    signs = plane_rotation_by_hand(plane).sum(axis=0)
+    for reversed_axis in np.flatnonzero(signs < 0):
+        n = expected.shape[reversed_axis + 1]
+        expected = np.take(expected, -np.arange(n), axis=reversed_axis + 1)
+        expected[reversed_axis] = -expected[reversed_axis]
+    # Plane k stands for the field from (k - 1/2) dz to (k + 1/2) dz, so a slice
+    # takes its inner planes whole and half of each plane on its limits; the last
+    # slice ends on plane 17, which is plane 0.
     dz = 2.0 / 17
     bounds = np.cumsum((0,) + tuple(planes))
-    expected_slices = np.stack(
-        [expected[..., a:b].sum(-1) * dz for a, b in zip(bounds[:-1], bounds[1:])]
-    )
+    weights = np.zeros((len(planes), 17))
+    for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:])):
+        weights[i, a:b] = dz
+        weights[i, a] -= dz / 2
+        weights[i, b % 17] += dz / 2
+    np.testing.assert_allclose(weights.sum(0), dz, rtol=1e-12)
+    expected_slices = np.moveaxis(expected @ weights.T, -1, 0)
 
     built = field.build()
     assert get_array_module(built.array) is get_array_module(device)
@@ -212,6 +240,71 @@ def test_gpaw_real_space_slices_use_every_z_plane_once(
 
     part = asnumpy(field.build(first_slice=2, last_slice=5).array)
     np.testing.assert_allclose(part, array[2:5], rtol=0, atol=atol)
+
+
+class _ProjectableCalculator(_SpinPolarizedCalculator):
+    """A spin density with terms constant along each axis, so that its fields have
+    a nonzero projection along any of them."""
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self.get_number_of_grid_points() * gridrefinement)
+        x, y, z = np.meshgrid(
+            *(2 * np.pi * np.arange(n) / n for n in shape), indexing="ij"
+        )
+        up = (
+            1.0
+            + 0.3 * np.sin(x) * np.cos(y)
+            + 0.3 * np.sin(x) * np.cos(z)
+            + 0.3 * np.cos(y) * np.sin(z)
+            + 0.2 * np.cos(x) * np.sin(2 * y) * np.sin(2 * z)
+        )
+        return np.stack([up, 0.5 * up])[spin]
+
+
+@devices
+@pytest.mark.parametrize("plane", ["xy", "xz", "yx", "zy", "yz", "zx"])
+def test_gpaw_magnetic_field_in_a_plane_is_the_curl_of_its_vector_potential(
+    plane, device
+):
+    """B = curl A holds in the frame of the plane only if the field, a
+    pseudovector, and the vector potential are rotated by the same proper rotation.
+    A reflection of both, such as a permutation of the axes of "xz", "yx" or "zy",
+    reverses the sign of the curl relative to the reflected field.
+
+    The fields are projected through the whole cell, where the derivatives along
+    the projection add up to zero: the projected field is the in-plane curl of the
+    projected vector potential."""
+    calculator = _ProjectableCalculator()
+    axes = plane_to_axes(plane)
+    gpts = tuple(int(calculator.get_number_of_grid_points()[a]) for a in axes[:2])
+    lengths = np.diag(calculator.atoms.cell)[list(axes)]
+    kwargs = dict(
+        gpts=gpts,
+        slice_thickness=float(lengths[2]),
+        gridrefinement=1,
+        projection="real_space",
+        plane=plane,
+        rotate_field=None,
+        device=device,
+    )
+
+    magnetic_field = asnumpy(GPAWMagneticField(calculator, **kwargs).build().array)
+    vector_potential = asnumpy(
+        GPAWVectorPotential(calculator, **kwargs).build().array
+    )
+    assert magnetic_field.shape == vector_potential.shape == (1, 3) + gpts
+
+    in_plane_curl = curl_fourier(
+        vector_potential[0][..., None], Atoms(cell=lengths).cell
+    )[..., 0]
+
+    # A reflection would reverse the sign of the whole curl, so any nonzero field
+    # tells the two apart.
+    scale = np.abs(magnetic_field).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        magnetic_field[0], in_plane_curl, rtol=0, atol=1e-5 * scale
+    )
 
 
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
@@ -242,119 +335,321 @@ def test_gpaw_real_space_projection_rejects_thicknesses_off_the_z_grid(builder):
         )
 
 
-@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-def test_gpaw_fft_projection_takes_uniform_slice_thicknesses_only(builder):
-    kwargs = dict(sampling=0.25, gridrefinement=2, projection="fft")
-    with pytest.raises(NotImplementedError, match="Non-uniform slice thicknesses"):
-        builder(
-            _SpinPolarizedCalculator(),
-            slice_thickness=(0.4, 1.2, 0.8, 1.0, 0.6),
-            **kwargs,
+def test_fourier_slice_integrals_are_exact_for_a_trigonometric_polynomial():
+    depth, n = 4.0, 8
+    k = 2 * np.pi / depth
+    z = np.arange(n) * depth / n
+    # 4 k is the Nyquist frequency of 8 samples, which is taken as a cosine.
+    samples = (
+        1.0
+        + 0.5 * np.sin(k * z)
+        + 0.3 * np.cos(2 * k * z + 0.4)
+        + 0.2 * np.cos(4 * k * z)
+    )
+
+    def antiderivative(z):
+        return (
+            z
+            - 0.5 / k * np.cos(k * z)
+            + 0.3 / (2 * k) * np.sin(2 * k * z + 0.4)
+            + 0.2 / (4 * k) * np.sin(4 * k * z)
         )
 
-    uniform = builder(_SpinPolarizedCalculator(), slice_thickness=(0.8,) * 5, **kwargs)
-    np.testing.assert_array_equal(
-        asnumpy(uniform.build().array),
-        asnumpy(
-            builder(_SpinPolarizedCalculator(), slice_thickness=0.8, **kwargs)
-            .build()
-            .array
-        ),
+    limits = [(0.0, 0.3), (0.3, 1.7), (1.7, 4.0)]
+    integrals = _fourier_slice_integrals(samples[None], limits, depth)
+
+    assert integrals.shape == (3, 1)
+    np.testing.assert_allclose(
+        integrals[:, 0],
+        [antiderivative(b) - antiderivative(a) for a, b in limits],
+        rtol=0,
+        atol=1e-14,
     )
 
 
-def _local_exit_planes(global_exit_planes, offset, length):
-    return tuple(
-        i - offset for i in global_exit_planes if offset <= i < offset + length
-    )
-
-
-@devices
 @pytest.mark.parametrize(
-    "projection, slice_thickness",
+    "builder, raw_field",
     [
-        # 3, 4, 3, 3, 3 z pixels
-        ("real_space", (0.75, 1.0, 0.75, 0.75, 0.75)),
-        ("fft", 0.8),
+        (GPAWMagneticField, get_magnetic_field_from_gpaw),
+        (GPAWVectorPotential, get_vector_potential_from_gpaw),
     ],
 )
-@pytest.mark.parametrize(
-    "first_slice, last_slice, chunk_size", [(0, None, 2), (2, 5, 2)]
-)
-@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-def test_gpaw_field_chunked_slices_match_the_full_build(
-    builder, projection, slice_thickness, first_slice, last_slice, chunk_size, device
-):
-    xp = get_array_module(device)
-    field = builder(
-        _SpinPolarizedCalculator(),
-        sampling=0.25,
-        slice_thickness=slice_thickness,
-        gridrefinement=2,
-        projection=projection,
-        exit_planes=2,
-        device=device,
-    )
-    full = field.build()
-    stop = len(full) if last_slice is None else last_slice
+def test_gpaw_fft_projection_integrates_through_the_slices(builder, raw_field):
+    # A slice is the field integrated through it, in field units times Å, as the
+    # slices of MagneticField and VectorPotential and the projected potential that
+    # adjust_coulomb_potential subtracts A_z from. It used to be a point sample of
+    # the field at the slice's entrance.
+    calculator = _SpinPolarizedCalculator()
+    kwargs = dict(gpts=(12, 14), gridrefinement=2, rotate_field=None)
 
-    chunks = list(
-        field.generate_chunked_slices(first_slice, last_slice, chunk_size=chunk_size)
-    )
-
-    assert len(full) == 5
-    assert len(chunks) > 1
-    assert len({len(chunk) for chunk in chunks}) > 1
-    assert all(type(chunk) is type(full) for chunk in chunks)
-    assert all(get_array_module(chunk.array) is xp for chunk in chunks)
-    assert all(chunk.sampling == full.sampling for chunk in chunks)
-    scale = np.abs(asnumpy(full.array)).max()
-    assert scale > 0
-    np.testing.assert_allclose(
-        asnumpy(xp.concatenate([chunk.array for chunk in chunks])),
-        asnumpy(full.array[first_slice:stop]),
-        rtol=0,
-        atol=1e-6 * scale,
-    )
-    assert (
-        sum((chunk.slice_thickness for chunk in chunks), ())
-        == full.slice_thickness[first_slice:stop]
-    )
-    offset = first_slice
-    for chunk in chunks:
-        assert chunk.exit_planes == _local_exit_planes(
-            full.exit_planes, offset, len(chunk)
+    def build(projection, slice_thickness):
+        field = builder(
+            calculator,
+            projection=projection,
+            slice_thickness=slice_thickness,
+            **kwargs,
         )
-        offset += len(chunk)
+        return asnumpy(field.build().array).astype(np.float64)
+
+    # The varying part of the density goes as cos(q z), q = 2 pi / depth, so the
+    # field is C cos(q z) + S sin(q z) (the z derivative of the curl gives the
+    # sine), with C the field at z = 0 and S that at a quarter of the depth, the
+    # 4th of 16 planes. A slice from a to b is the integral of that.
+    depth = 4.0
+    thicknesses = (0.4, 1.2, 0.8, 1.0, 0.6)
+    limits = np.cumsum((0.0,) + thicknesses)
+    a, b = limits[:-1, None, None, None], limits[1:, None, None, None]
+    q = 2 * np.pi / depth
+    field = raw_field(calculator, gridrefinement=2)
+    assert field.shape[-1] == 16
+    cosine, sine = field[..., 0], field[..., 4]
+    expected = (
+        cosine * (np.sin(q * b) - np.sin(q * a))
+        + sine * (np.cos(q * a) - np.cos(q * b))
+    ) / q
+    scale = np.abs(expected).max()
+    assert scale > 0
+    fft = build("fft", thicknesses)
+    np.testing.assert_allclose(fft, expected, rtol=0, atol=1e-5 * scale)
+
+    # Integrals add up: each slice is the sum of the 0.2 Å slices it spans.
+    fine = build("fft", 0.2)
+    bounds = np.rint(limits / 0.2).astype(int)
+    np.testing.assert_allclose(
+        fft,
+        np.stack([fine[a:b].sum(0) for a, b in zip(bounds[:-1], bounds[1:])]),
+        rtol=0,
+        atol=1e-5 * scale,
+    )
+
+    # The real-space projection integrates the z planes of the density, which
+    # through the whole cell is the same integral.
+    slicing = (0.75, 1.0, 0.75, 0.75, 0.75)
+    np.testing.assert_allclose(
+        build("fft", slicing).sum(0),
+        build("real_space", slicing).sum(0),
+        rtol=0,
+        atol=1e-5 * scale,
+    )
 
 
-@devices
-@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-def test_built_gpaw_field_iterates_and_chunks_its_own_slices(builder, device):
-    xp = get_array_module(device)
-    full = builder(
-        _SpinPolarizedCalculator(),
-        sampling=0.25,
-        slice_thickness=(0.75, 1.0, 0.75, 0.75, 0.75),
+@pytest.mark.parametrize("slice_thickness", [(0.75, 1.0, 0.75, 0.75, 0.75), 0.8])
+@pytest.mark.parametrize(
+    "builder, raw_field",
+    [
+        (GPAWMagneticField, get_magnetic_field_from_gpaw),
+        (GPAWVectorPotential, get_vector_potential_from_gpaw),
+    ],
+)
+def test_gpaw_real_space_slices_are_integrals_between_the_slice_limits(
+    builder, raw_field, slice_thickness
+):
+    # Plane k of the density is the sample at z = k dz and stands for the field
+    # from k dz - dz / 2 to k dz + dz / 2, so a slice is the integral of the field
+    # between its limits, as the fft projection computes it, up to the error of
+    # integrating from the planes. Summing whole planes from each lower limit (a
+    # left Riemann sum) put every slice integral dz / 2 below its slice, 20% (0.8 Å)
+    # and 24% (the uneven slicing) of the largest slice off here.
+    calculator = _SpinPolarizedCalculator()
+    field = builder(
+        calculator,
+        gpts=(12, 14),
         gridrefinement=2,
+        slice_thickness=slice_thickness,
         projection="real_space",
-        device=device,
+        rotate_field=None,
+    )
+    real_space = asnumpy(field.build().array).astype(np.float64)
+
+    depth = 4.0
+    raw = raw_field(calculator, gridrefinement=2)
+    assert raw.shape[-1] == 16
+    exact = _fourier_slice_integrals(raw, field.slice_limits, depth)
+    scale = np.abs(exact).max()
+    assert scale > 0
+
+    # The field is a single harmonic along z, q = 2 pi / depth, with q dz = pi / 8.
+    # Integrated from its planes by the trapezoidal rule, its integral between any
+    # two planes is (q dz / 2) cot(q dz / 2) = 0.987 times the exact one: scaled,
+    # not shifted.
+    half_step = np.pi / 16
+    quadrature = half_step / np.tan(half_step)
+    np.testing.assert_allclose(
+        real_space, quadrature * exact, rtol=0, atol=1e-5 * scale
+    )
+    np.testing.assert_allclose(
+        real_space, exact, rtol=0, atol=(1 - quadrature) * scale + 1e-5 * scale
+    )
+
+
+class _CountingCalculator(_SpinPolarizedCalculator):
+    def __init__(self):
+        self.density_calls = 0
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        self.density_calls += 1
+        return super().get_all_electron_density(spin, gridrefinement)
+
+
+@pytest.mark.parametrize("projection", ["fft", "real_space"])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_is_computed_once_for_every_slice_range(builder, projection):
+    calculator = _CountingCalculator()
+    field = builder(
+        calculator, sampling=0.25, slice_thickness=0.5, projection=projection
+    )
+    full = asnumpy(field.build().array)
+
+    for i in range(len(field)):
+        (slic,) = field.generate_slices(i, i + 1)
+        np.testing.assert_array_equal(asnumpy(slic.array), full[i : i + 1])
+    chunks = list(field.generate_chunked_slices(chunk_size=1))
+    np.testing.assert_array_equal(
+        np.concatenate([asnumpy(chunk.array) for chunk in chunks]), full
+    )
+
+    assert len(chunks) == len(field) == 8
+    assert calculator.density_calls == 1
+
+    # The slices handed out are not the ones the builder keeps.
+    (slic,) = field.generate_slices(0, 1)
+    slic.array[:] = 0.0
+    np.testing.assert_array_equal(asnumpy(field.build().array), full)
+    # The kept slices are not part of what the builder is.
+    assert field == builder(
+        calculator, sampling=0.25, slice_thickness=0.5, projection=projection
+    )
+
+
+# A hexagonal cell and its orthogonal supercell (a, sqrt(3) a, c), which is the
+# default box of the hexagonal cell, with the same spin density.
+_A, _C = 2.5, 4.0
+_HEXAGONAL = np.array([[_A, 0, 0], [-_A / 2, _A * np.sqrt(3) / 2, 0], [0, 0, _C]])
+_ORTHOGONAL = np.diag([_A, _A * np.sqrt(3), _C])
+
+
+class _LatticeCalculator:
+    """A spin-polarized calculator of any cell whose density is a few Fourier
+    components in the fractional coordinates of `lattice`, a cell of the same
+    lattice as `cell`, so that calculators of equivalent cells describe the same
+    field. Each component is resolved by the grids used below."""
+
+    _components = [
+        ((1, 0, 0), 0.3, 0.7),
+        ((0, 1, 0), 0.2, 0.0),
+        ((1, 1, 1), 0.25, 0.4),
+        ((2, -1, 0), 0.15, 1.4),
+        ((-1, 2, 1), 0.1, -0.7),
+    ]
+
+    def __init__(self, cell, gpts, lattice=None):
+        cell = np.array(cell, dtype=float)
+        self.atoms = Atoms("Co", positions=[(0.1, 0.2, 0.3)], cell=cell, pbc=True)
+        self._gpts = np.array(gpts)
+        self._lattice = cell if lattice is None else np.array(lattice, dtype=float)
+
+    def get_number_of_grid_points(self):
+        return self._gpts
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self._gpts * gridrefinement)
+        s = np.stack(
+            np.meshgrid(*(np.arange(n) / n for n in shape), indexing="ij"), axis=-1
+        )
+        fractional = s @ np.array(self.atoms.cell) @ np.linalg.inv(self._lattice)
+        up = np.ones(shape)
+        for m, amplitude, phase in self._components:
+            up += amplitude * np.cos(2 * np.pi * fractional @ np.array(m) + phase)
+        return np.stack([up, 0.5 * up])[spin]
+
+
+@pytest.mark.parametrize("projection", ["fft", "real_space"])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_of_a_hexagonal_cell_is_that_of_its_orthogonal_supercell(
+    builder, projection
+):
+    # The grid of a hexagonal calculator runs along its lattice vectors; the field
+    # used to be placed on the box as if they were Cartesian.
+    kwargs = dict(
+        sampling=0.25,
+        slice_thickness=1.0,
+        gridrefinement=1,
+        projection=projection,
+        rotate_field=None,
+    )
+    hexagonal = builder(_LatticeCalculator(_HEXAGONAL, (12, 12, 8)), **kwargs).build()
+    orthogonal = builder(
+        _LatticeCalculator(_ORTHOGONAL, (12, 24, 8), lattice=_HEXAGONAL), **kwargs
     ).build()
 
-    slices = list(full)
-
-    assert len(set(full.slice_thickness)) == 2
-    assert [type(s) for s in slices] == [type(full)] * len(full)
-    np.testing.assert_array_equal(
-        asnumpy(xp.concatenate([s.array for s in slices])), asnumpy(full.array)
+    assert hexagonal.shape == orthogonal.shape == (4, 3, 10, 18)
+    expected = asnumpy(orthogonal.array)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        asnumpy(hexagonal.array), expected, rtol=0, atol=1e-5 * scale
     )
-    assert [s.slice_thickness for s in slices] == [(t,) for t in full.slice_thickness]
 
-    chunks = list(full.generate_chunked_slices(2, 5, chunk_size=2))
 
-    assert [len(c) for c in chunks] == [1, 2]
-    assert [type(c) for c in chunks] == [type(full)] * len(chunks)
-    np.testing.assert_array_equal(
-        asnumpy(xp.concatenate([c.array for c in chunks])), asnumpy(full.array[2:5])
+# A bcc primitive cell, whose default box is its cubic cell: every box axis, z
+# included, mixes two lattice vectors of the cell.
+_BCC_A = 2.87
+_BCC_PRIMITIVE = _BCC_A / 2 * np.array([[-1, 1, 1], [1, -1, 1], [1, 1, -1]])
+_BCC_CUBIC = np.diag([_BCC_A] * 3)
+
+
+@pytest.mark.parametrize("projection", ["fft", "real_space"])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_of_a_bcc_primitive_cell_is_that_of_its_cubic_cell(
+    builder, projection
+):
+    # The box's z axis mixes lattice vectors, so its grid holds the frequencies of
+    # two axes of the cell: 1 + 8 + 8 = 17 planes for 8 along each. The cubic
+    # calculator has 17 z planes as well, so that the real-space slices sum the
+    # same planes; both grids resolve every component of the density.
+    kwargs = dict(
+        sampling=0.25,
+        slice_thickness=0.7,
+        gridrefinement=1,
+        projection=projection,
+        rotate_field=None,
     )
-    assert sum((c.slice_thickness for c in chunks), ()) == full.slice_thickness[2:5]
+    primitive_calculator = _LatticeCalculator(_BCC_PRIMITIVE, (8, 8, 8))
+    vectors, turn = _supercell_of_box(_BCC_PRIMITIVE, np.diag(_BCC_CUBIC))
+    np.testing.assert_array_equal(np.abs(vectors), 1 - np.eye(3, dtype=int))
+    np.testing.assert_allclose(turn, np.eye(3), rtol=0, atol=1e-12)
+
+    primitive = builder(primitive_calculator, **kwargs).build()
+    cubic = builder(
+        _LatticeCalculator(_BCC_CUBIC, (12, 12, 17), lattice=_BCC_PRIMITIVE), **kwargs
+    ).build()
+
+    assert primitive.shape == cubic.shape
+    assert len(primitive.slice_thickness) > 1
+    expected = asnumpy(cubic.array)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        asnumpy(primitive.array), expected, rtol=0, atol=1e-5 * scale
+    )
+
+
+def test_box_of_a_rotated_cell_turns_the_field_back():
+    # A field placed on the box as orthogonalize_cell places the atoms turns its
+    # vectors by the rotation that maps the supercell onto the box.
+    angle = 0.2
+    rotation = np.array(
+        [
+            [np.cos(angle), np.sin(angle), 0.0],
+            [-np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+
+    vectors, turn = _supercell_of_box(_ORTHOGONAL @ rotation, np.diag(_ORTHOGONAL))
+
+    np.testing.assert_array_equal(vectors, np.eye(3, dtype=int))
+    np.testing.assert_allclose(turn, rotation.T, rtol=0, atol=1e-12)
+    vectors, turn = _supercell_of_box(_HEXAGONAL, np.diag(_ORTHOGONAL))
+    np.testing.assert_array_equal(vectors, [[1, 0, 0], [1, 2, 0], [0, 0, 1]])
+    np.testing.assert_allclose(turn, np.eye(3), rtol=0, atol=1e-12)

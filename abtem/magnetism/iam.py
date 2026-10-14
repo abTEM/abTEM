@@ -644,7 +644,8 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
     ):
         if metadata is None:
             metadata = {}
-        metadata = {"label": "magnetic field", "units": "T", **metadata}
+        # Each slice is the field integrated through the slice, in tesla times Å.
+        metadata = {"label": "magnetic field", "units": "ÅT", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -680,7 +681,9 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
     ):
         if metadata is None:
             metadata = {}
-        metadata = {"label": "vector potential", "units": "ÅT", **metadata}
+        # Each slice is the vector potential (in Å T) integrated through the
+        # slice, in Å² T.
+        metadata = {"label": "vector potential", "units": "Å²T", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,

@@ -16,6 +16,8 @@ from utils import (
     float64_devices,
     gpu,
     ignore_strain_warning,
+    plane_rotation_by_hand,
+    rotated_by_hand,
     si_cubic_atoms,
     si_diamond_atoms,
 )
@@ -2332,14 +2334,37 @@ def _two_atoms():
     )
 
 
+def _rotated_to_xz(atoms):
+    # x stays x, z becomes y, y becomes the beam axis, and one of them is reversed.
+    return rotated_by_hand(atoms, "xz")
+
+
 def _permuted_two_atoms():
-    # `_two_atoms()` with the y and z axes exchanged, as plane="xz" sees it.
-    atoms = _two_atoms()
+    # `_two_atoms()` as plane="xz" sees it.
+    return _rotated_to_xz(_two_atoms())
+
+
+def _chiral_atoms():
+    # Four different atoms spanning a tetrahedron well inside a cell of three
+    # different lengths: its mirror image is not a rotation of it.
     return Atoms(
-        atoms.numbers,
-        positions=atoms.positions[:, [0, 2, 1]],
-        cell=[4.0, 5.0, 3.0],
+        "CNOSi",
+        positions=[(0.6, 0.5, 1.1), (2.9, 2.1, 1.6), (1.4, 0.9, 3.9), (3.1, 1.2, 2.8)],
+        cell=[4.0, 3.0, 5.0],
         pbc=True,
+    )
+
+
+@float64_devices
+@pytest.mark.parametrize("plane", ["xz", "yx", "zy", "yz", "zx"])
+def test_potential_in_a_plane_is_that_of_the_atoms_rotated_by_hand(plane):
+    """The potential built with `plane` is the potential of the atoms rotated by
+    hand to that plane and built in the xy plane. For "xz", "yx" and "zy" it is
+    not the potential of the mirror image, whose axes are only permuted."""
+    atoms = _chiral_atoms()
+    _assert_same(
+        _array(atoms, plane=plane, **GRID),
+        _array(rotated_by_hand(atoms, plane), **GRID),
     )
 
 
@@ -2406,6 +2431,50 @@ def test_charge_density_potential_accepts_its_own_box():
         potential.build(lazy=False).array,
         ChargeDensityPotential(atoms, rho, **GRID).build(lazy=False).array,
     )
+
+
+def _chiral_charge_density_at(x, y, z):
+    # A density at fractional coordinates with terms odd along each axis, so that
+    # reversing any axis changes it.
+    return (
+        0.3
+        + 0.1 * np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y)
+        + 0.05 * np.cos(4 * np.pi * z)
+        + 0.04 * np.sin(2 * np.pi * x) * np.sin(2 * np.pi * z)
+        + 0.03 * np.sin(2 * np.pi * (x + 2 * y + z))
+    )
+
+
+def _sampled_density(shape, rotation=np.eye(3)):
+    # The density on a grid of `shape` over the cell rotated by `rotation`: the
+    # fractional coordinates of a point along the original axes are its fractional
+    # coordinates along the rotated axes mapped back by the signed permutation.
+    new = np.meshgrid(*[np.arange(n) / n for n in shape], indexing="ij")
+    old = [sum(rotation[i, j] * new[j] for j in range(3)) for i in range(3)]
+    return _chiral_charge_density_at(*old)
+
+
+@float64_devices
+@pytest.mark.parametrize("plane", ["xz", "yx", "zy", "yz", "zx"])
+def test_charge_density_potential_in_a_plane_is_that_of_the_rotated_system(plane):
+    """Atoms and charge density rotated together: the potential built with
+    `plane` is that of the atoms and density rotated by hand and built in the xy
+    plane. The density grid is sampled anew in the rotated frame, not moved."""
+    atoms = _chiral_atoms()
+    shape = (16, 12, 20)
+    rotation = plane_rotation_by_hand(plane)
+    rotated_shape = tuple(int(n) for n in np.abs(np.array(shape) @ rotation))
+
+    actual = ChargeDensityPotential(
+        atoms, _sampled_density(shape), plane=plane, **GRID
+    ).build(lazy=False)
+    expected = ChargeDensityPotential(
+        rotated_by_hand(atoms, plane),
+        _sampled_density(rotated_shape, rotation),
+        **GRID,
+    ).build(lazy=False)
+
+    _assert_same(actual.array, expected.array)
 
 
 @ignore_strain_warning
@@ -2607,12 +2676,7 @@ def test_origin_with_a_plane_translates_the_permuted_atoms():
     translated = atoms.copy()
     translated.translate(-np.array(origin))
     translated.wrap()
-    permuted = Atoms(
-        translated.numbers,
-        positions=translated.positions[:, [0, 2, 1]],
-        cell=[4.0, 5.0, 3.0],
-        pbc=True,
-    )
+    permuted = _rotated_to_xz(translated)
 
     _assert_same(
         _array(atoms, plane="xz", origin=origin, **GRID), _array(permuted, **GRID)
@@ -2846,12 +2910,7 @@ def test_plane_box_and_origin_together():
     translated = atoms.copy()
     translated.translate(-np.array(origin))
     translated.wrap()
-    permuted = Atoms(
-        translated.numbers,
-        positions=translated.positions[:, [0, 2, 1]],
-        cell=[4.0, 5.0, 3.0],
-        pbc=True,
-    )
+    permuted = _rotated_to_xz(translated)
 
     potential = abtem.Potential(
         atoms, plane="xz", box=(8.0, 10.0, 3.0), origin=origin, **GRID
