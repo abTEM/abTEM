@@ -1,4 +1,3 @@
-import sys
 import warnings
 from types import SimpleNamespace
 
@@ -36,18 +35,25 @@ except ImportError:
         abtem_st.waves,
     ],
 )
-@pytest.mark.skipif("hyperspy" not in sys.modules, reason="requires hyperspy")
+@pytest.mark.skipif(hyperspy is None, reason="requires hyperspy")
 def test_hyperspy(data, measurement, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device))
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         hyperspy_signal = measurement.to_hyperspy()
-        expected = measurement.to_cpu().to_hyperspy().data
+
+    # HyperSpy orders the signal axes the other way round: the stored array
+    # with its base axes reversed.
+    base_dims = measurement._base_dims
+    assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims
+    stored = _host(measurement.array)
+    base = tuple(range(stored.ndim - base_dims, stored.ndim))
+    expected = np.moveaxis(stored, base, base[::-1])
 
     signal_data = hyperspy_signal.data
     if lazy:
-        signal_data, expected = signal_data.compute(), expected.compute()
+        signal_data = signal_data.compute()
     if device == "mps":
         # HyperSpy cannot hold torch backend arrays.
         assert isinstance(signal_data, np.ndarray)
