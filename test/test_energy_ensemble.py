@@ -922,23 +922,22 @@ def _srtio3_atoms():
     )
 
 
-BLOCH_SG_MAX = 0.1
-BLOCH_G_MAX = 8.0
+# g_max/sg_max are as small as they can be while the two energies below still
+# give clearly distinct active-beam sets: a 373-beam union, of which 40 % / 42 %
+# are inactive at 100 / 200 keV (test_inactive_beams_are_zero needs > 10 %).
+# g_max = 3 is too small (only ~7 % inactive at 200 keV). The previous g_max = 8,
+# sg_max = 0.1 gave a ~4200-beam union, i.e. ~2400 x 2400 eigenproblems that
+# made these classes the critical path of the whole --runslow suite (~9 min).
+BLOCH_SG_MAX = 0.03
+BLOCH_G_MAX = 4.5
 BLOCH_THICKNESS = [20.0, 40.0]
 
-# Unlike TEST_ENERGIES' consumers (PlaneWave/SMatrix), BlochWaves does one real
-# dynamical-diffraction eigenproblem per energy per fixture, so each extra
-# energy here costs seconds, not microseconds. 2 energies is the minimum that
-# exercises "a list of energies" (vs. the scalar-energy code path already
-# covered by test_scalar_energy_unchanged) and still gives distinct per-energy
-# active-beam sets for test_inactive_beams_are_zero to check against -- verified
-# empirically (1832/1756 inactive beams out of a 4205-beam union at 100/200 keV)
-# before trimming this from 3 energies, which cut this class's runtime by ~40%.
+# 2 energies is the minimum that exercises "a list of energies" (vs. the
+# scalar-energy code path covered by test_scalar_energy_unchanged) and gives
+# distinct per-energy active-beam sets for test_inactive_beams_are_zero.
 BLOCH_ENERGIES = [100e3, 200e3]
 
 
-@pytest.mark.slow
-@pytest.mark.xdist_group("bloch_energy_ensemble")
 class TestBlochWavesEnergyEnsemble:
     """Verify that BlochWaves accepts a list of energies and returns correctly
     shaped, stacked results without requiring manual loops."""
@@ -1075,7 +1074,7 @@ class TestBlochWavesEnergyEnsemble:
             inactive = ~sub  # positions active in union but NOT at energy i
             # A large fraction inactive at every energy is what makes this
             # test meaningful; BLOCH_ENERGIES was last verified to give
-            # ~35-55% inactive beams per energy (out of a ~4200-beam union).
+            # 40-42 % inactive beams per energy (out of a 373-beam union).
             assert inactive.sum() > 0.1 * n_union, (
                 f"Energy index {i} has only {inactive.sum()}/{n_union} inactive "
                 "beams -- BLOCH_ENERGIES may no longer give distinct enough "
@@ -1090,8 +1089,6 @@ class TestBlochWavesEnergyEnsemble:
 BLOCH_ENSEMBLE_N_ROTATIONS = 4
 
 
-@pytest.mark.slow
-@pytest.mark.xdist_group("bloch_energy_ensemble")
 class TestBlochwaveEnsembleEnergyEnsemble:
     """BlochWaves.rotate() with a rotation ensemble returns a BlochwaveEnsemble,
     a different class from BlochWaves with its own calculate_diffraction_patterns.
@@ -1127,6 +1124,14 @@ class TestBlochwaveEnsembleEnergyEnsemble:
             BLOCH_THICKNESS, lazy=False
         )
 
+    @pytest.fixture(scope="class")
+    @classmethod
+    def dp_scalar(cls, rotated_multi_energy):
+        """Cached scalar-thickness diffraction patterns."""
+        return rotated_multi_energy.calculate_diffraction_patterns(
+            BLOCH_THICKNESS[0], lazy=False
+        )
+
     def test_diffraction_patterns_shape_with_thicknesses(self, dp_multi):
         n_rot = BLOCH_ENSEMBLE_N_ROTATIONS
         n_energies, n_thick = len(BLOCH_ENERGIES), len(BLOCH_THICKNESS)
@@ -1134,12 +1139,9 @@ class TestBlochwaveEnsembleEnergyEnsemble:
         assert isinstance(dp_multi.ensemble_axes_metadata[1], EnergyAxis)
         assert isinstance(dp_multi.ensemble_axes_metadata[2], ThicknessAxis)
 
-    def test_diffraction_patterns_shape_scalar_thickness(self, rotated_multi_energy):
-        result = rotated_multi_energy.calculate_diffraction_patterns(
-            BLOCH_THICKNESS[0], lazy=False
-        )
+    def test_diffraction_patterns_shape_scalar_thickness(self, dp_scalar):
         n_rot, n_energies = BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_ENERGIES)
-        assert result.array.shape[:-1] == (n_rot, n_energies)
+        assert dp_scalar.array.shape[:-1] == (n_rot, n_energies)
 
     def test_getitem_after_multi_energy(self, dp_multi):
         """__getitem__ zips items against reciprocal_lattice_vectors.shape
