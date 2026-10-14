@@ -92,22 +92,26 @@ def _cap_threads_per_worker(config):
     cores**2 threads, and the context switching more than doubled the CPU
     time of the suite. Runs in the controller before the workers are started,
     so they inherit the environment before importing numba, dask or BLAS.
-    Variables already set are left alone. Numba and dask keep at least 2
-    threads, so tests on the threaded scheduler still run concurrently.
+    Variables already set are left alone.
+
+    BLAS/OpenMP get one thread per worker: the arrays in the tests are small,
+    and GPAW warns (an error here) when OMP_NUM_THREADS > 1 in PW mode. Numba
+    and dask share the cores, keeping at least 2 threads, so tests on the
+    threaded scheduler still run concurrently.
     """
     workers = getattr(config.option, "numprocesses", None)
     if not isinstance(workers, int) or workers < 2:
         return
-    threads = max((os.cpu_count() or 1) // workers, 1)
     for name in (
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
         "VECLIB_MAXIMUM_THREADS",
     ):
-        os.environ.setdefault(name, str(threads))
+        os.environ.setdefault(name, "1")
+    threads = max((os.cpu_count() or 1) // workers, 2)
     for name in ("NUMBA_NUM_THREADS", "DASK_NUM_WORKERS"):
-        os.environ.setdefault(name, str(max(threads, 2)))
+        os.environ.setdefault(name, str(threads))
 
 
 def pytest_configure(config):
