@@ -14,25 +14,17 @@ from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhononsAxis
-from abtem.scan import CustomScan
 
 
-# @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True], ids=["not_lazy"])
 @devices
-@pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
     "waves_builder",
     [
         abtem_st.probe,
-        # abtem_st.plane_wave,
-        # abtem_st.s_matrix,
     ],
 )
-def test_multislice_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
-):
+def test_multislice_with_frozen_phonons(data, waves_builder, device):
     waves = data.draw(waves_builder(device=device))
     frozen_phonons = data.draw(abtem_st.frozen_phonons())
     exit_waves = waves.multislice(frozen_phonons)
@@ -70,7 +62,6 @@ def test_multislice_detect_with_frozen_phonons(
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
@@ -80,7 +71,7 @@ def test_multislice_detect_with_frozen_phonons(
     ],
 )
 def test_s_matrix_multislice_detect_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
+    data, waves_builder, device, ensemble_mean
 ):
     waves = data.draw(waves_builder(device=device, allow_distribution=False))
     frozen_phonons = data.draw(abtem_st.frozen_phonons(ensemble_mean=ensemble_mean))
@@ -143,36 +134,23 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
     ],
 )
 def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons, lazy):
-    probe = data.draw(waves_builder(allow_distribution=False))
+    probe = data.draw(waves_builder(allow_distribution=False, device=device))
     detector = data.draw(detector())
     scan = data.draw(scan())
 
     potential = data.draw(
-        abtem_st.potential(no_frozen_phonons=not frozen_phonons, ensemble_mean=False)
+        abtem_st.potential(
+            no_frozen_phonons=not frozen_phonons, ensemble_mean=False, device=device
+        )
     )
-    # scan.match_probe(probe)
     probe.grid.match(potential)
 
     measurement_shape = detector._out_shape(probe)[0]
 
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    # if isinstance(scan, CustomScan) and scan.shape == (1,):
-    #    expected_shape = potential.ensemble_shape + measurement_shape
-    # else:
     expected_shape = potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-
-    # print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
-    # print(measurement.shape)
-    # try:
     assert measurement.shape == expected_shape
-    #     )
-    # except:
-    #     print(frozen_phonons)
-    #     print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
-    #     print(measurement.shape)
-    #     raise
-
     assert measurement.dtype == detector._out_dtype(probe)[0]
     assert type(measurement) == detector._out_type(probe.build(scan))[0]
 
