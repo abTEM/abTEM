@@ -1,3 +1,4 @@
+import os
 import sys
 import warnings
 
@@ -5,6 +6,7 @@ import pytest
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
+from utils import _ACCELERATOR
 from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
 from utils import requires_multigpu as _requires_multigpu
@@ -15,6 +17,15 @@ config.set({"diagnostics.progress_bar": False})
 # with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
 # currently resolves to.
 _GPU_DEVICE = _gpu_param.values[0]
+
+# Only tests on a real device need to share one xdist worker (see
+# pytest_collection_modifyitems): with no accelerator every `gpu` case is a
+# skip, and on torch's CPU device (ABTEM_TORCH__DEVICE=cpu, the CI torch job)
+# there is no device memory to exhaust -- grouping would only run the whole
+# `-m torch` selection on a single worker.
+_SERIALIZE_GPU_TESTS = _ACCELERATOR == "gpu" or (
+    _ACCELERATOR == "mps" and str(config.get("torch.device")).lower() == "mps"
+)
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
 # alongside their skipif (see their definitions in test/utils.py) -- that
@@ -74,7 +85,33 @@ def pytest_addoption(parser):
     )
 
 
+def _cap_threads_per_worker(config):
+    """Share the cores between pytest-xdist workers instead of letting each
+    start one thread per core for BLAS/OpenMP, Numba, dask's threaded
+    scheduler and abTEM's interpolation pool -- with `-n auto` that is
+    cores**2 threads, and the context switching more than doubled the CPU
+    time of the suite. Runs in the controller before the workers are started,
+    so they inherit the environment before importing numba, dask or BLAS.
+    Variables already set are left alone. Numba and dask keep at least 2
+    threads, so tests on the threaded scheduler still run concurrently.
+    """
+    workers = getattr(config.option, "numprocesses", None)
+    if not isinstance(workers, int) or workers < 2:
+        return
+    threads = max((os.cpu_count() or 1) // workers, 1)
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        os.environ.setdefault(name, str(threads))
+    for name in ("NUMBA_NUM_THREADS", "DASK_NUM_WORKERS"):
+        os.environ.setdefault(name, str(max(threads, 2)))
+
+
 def pytest_configure(config):
+    _cap_threads_per_worker(config)
     config.addinivalue_line("markers", "slow: mark test as slow to run")
     # Ignore specific warnings globally
     warnings.filterwarnings(
@@ -183,5 +220,7 @@ def pytest_collection_modifyitems(config, items):
             mark.name == "skipif" and mark.kwargs.get("reason") in _GPU_SKIP_REASONS
             for mark in item.iter_markers()
         )
-        if is_gpu_param or is_gpu_marked or "multigpu" in item.keywords:
+        if _SERIALIZE_GPU_TESTS and (
+            is_gpu_param or is_gpu_marked or "multigpu" in item.keywords
+        ):
             item.add_marker(pytest.mark.xdist_group("gpu"))
