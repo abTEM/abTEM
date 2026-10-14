@@ -224,12 +224,11 @@ def test_prism_scan(
     )
     assert measurement.dtype == detector._out_dtype(probe)[0]
 
-    # measurement = measurement.compute()
-    # assert (
-    #     measurement.shape
-    #     == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-    # )
-    # assert measurement.dtype == detector._out_dtype(probe)
+    # A lazy result only promises its shape and dtype; computing checks them.
+    if lazy:
+        computed = measurement.compute()
+        assert computed.shape == measurement.shape
+        assert computed.dtype == measurement.dtype
 
 
 @given(data=st.data())
@@ -237,8 +236,10 @@ def test_prism_scan(
 @requires_gpu
 def test_s_matrix_store_on_host(data, lazy):
     potential = data.draw(abtem_st.potential(device="gpu", ensemble_mean=False))
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
-    s_matrix = s_matrix.build().compute()
+    s_matrix = data.draw(
+        abtem_st.s_matrix(potential=potential, device="gpu", store_on_host=True)
+    )
+    s_matrix = s_matrix.build(lazy=lazy).compute()
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
