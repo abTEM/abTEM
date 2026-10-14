@@ -1,5 +1,5 @@
+import contextlib
 import os
-import sys
 import warnings
 
 import numpy as np
@@ -19,80 +19,96 @@ try:
     from gpaw.utilities.ps2ae import PS2AE
 
     from abtem.potentials.gpaw import GPAWPotential
-
-    # GPAW's own gpaw/utilities/ps2ae.py (add_potential_correction) is
-    # written against the old-style Density API and unconditionally does:
-    #
-    #     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
-    #     ...
-    #     dens.Q_aL.redistribute(dens.atom_partition)
-    #
-    # `calc.density` (a @property) builds a fresh `FakeDensity` compat shim
-    # (gpaw.new.backwards_compatibility.FakeDensity) for GPAW's new PW
-    # backend, and that shim never defines `Q_aL` at all -- only its
-    # renamed replacement `ccc_aL` (see FakeDensity.__init__: `self.ccc_aL =
-    # density.calculate_compensation_charge_coefficients()`). This is a gap
-    # in GPAW's own ps2ae.py/FakeDensity compatibility layer, not an abTEM
-    # bug (abtem/potentials/gpaw.py already has its own Q_aL/ccc_aL
-    # fallback for its own code paths; this shim is only needed because the
-    # tests call GPAW's PS2AE utility directly).
-    #
-    # `.redistribute()` exists to gather each atom's data onto rank 0
-    # before a local calculation and scatter it back afterwards, for MPI
-    # runs where atoms are split across domains/ranks. In a genuinely
-    # serial (single-process) run -- as in these tests -- every atom is
-    # already local to the one and only rank (atom_partition.rank_a is all
-    # zeros, comm.size == 1), so redistributing is provably a no-op: there
-    # is nothing to gather or scatter. The shim below asserts that
-    # invariant explicitly and refuses to silently no-op (raising instead)
-    # if it is ever exercised under real multi-rank parallelism, where
-    # skipping the actual gather would silently corrupt the result.
-    from gpaw.new.backwards_compatibility import FakeDensity
-
-    class _SerialCompensationChargeCoefficientsAsQaL:
-        """Adapts a new-backend `ccc_aL` (AtomArrays) to look like the
-        old-style `Q_aL` (dict-like ArrayDict) that both ps2ae.py and
-        abtem/potentials/gpaw.py (`dict(Q_aL)`) expect, valid only for
-        single-process (serial) GPAW calculations."""
-
-        def __init__(self, ccc_aL):
-            self._ccc_aL = ccc_aL
-
-        def __getitem__(self, a):
-            return self._ccc_aL[a]
-
-        def __getattr__(self, name):
-            # Delegate dict-like access (keys/items/get/values/...) to the
-            # underlying AtomArrays so e.g. `dict(Q_aL)` (used in
-            # abtem/potentials/gpaw.py) keeps working. `redistribute`
-            # below is defined on the class, so it takes precedence over
-            # this fallback rather than being delegated.
-            return getattr(self._ccc_aL, name)
-
-        def redistribute(self, partition):
-            if partition.comm.size != 1:
-                raise NotImplementedError(
-                    "Q_aL/ccc_aL compatibility shim (see test_gpaw.py) only "
-                    "supports serial (single-process) GPAW calculations; "
-                    f"got comm.size={partition.comm.size}. Redistributing "
-                    "compensation charge coefficients across real MPI "
-                    "ranks is not implemented here."
-                )
-            # comm.size == 1 => every atom is already local to the only
-            # rank, so redistributing to any partition on this comm is a
-            # genuine no-op.
-            return self
-
-    if not hasattr(FakeDensity, "Q_aL"):
-        FakeDensity.Q_aL = property(
-            lambda self: _SerialCompensationChargeCoefficientsAsQaL(
-                self.ccc_aL
-            )
-        )
 except ImportError:
-    pass
+    GPAW = None
 
-pytestmark = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+try:
+    from gpaw.new.backwards_compatibility import FakeDensity
+except ImportError:
+    FakeDensity = None
+
+# GPAW's own gpaw/utilities/ps2ae.py (add_potential_correction) is
+# written against the old-style Density API and unconditionally does:
+#
+#     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
+#     ...
+#     dens.Q_aL.redistribute(dens.atom_partition)
+#
+# `calc.density` (a @property) builds a fresh `FakeDensity` compat shim
+# (gpaw.new.backwards_compatibility.FakeDensity) for GPAW's new PW
+# backend, and that shim never defines `Q_aL` at all -- only its
+# renamed replacement `ccc_aL` (see FakeDensity.__init__: `self.ccc_aL =
+# density.calculate_compensation_charge_coefficients()`). This is a gap
+# in GPAW's own ps2ae.py/FakeDensity compatibility layer, not an abTEM
+# bug (abtem/potentials/gpaw.py already has its own Q_aL/ccc_aL
+# fallback for its own code paths; this shim is only needed because the
+# tests call GPAW's PS2AE utility directly). It is installed only around
+# those calls (_ps2ae_compatible_density), so that every GPAWPotential in
+# this module -- built in every xdist worker -- goes through abTEM's own
+# fallback rather than through the shim.
+#
+# `.redistribute()` exists to gather each atom's data onto rank 0
+# before a local calculation and scatter it back afterwards, for MPI
+# runs where atoms are split across domains/ranks. In a genuinely
+# serial (single-process) run -- as in these tests -- every atom is
+# already local to the one and only rank (atom_partition.rank_a is all
+# zeros, comm.size == 1), so redistributing is provably a no-op: there
+# is nothing to gather or scatter. The shim below asserts that
+# invariant explicitly and refuses to silently no-op (raising instead)
+# if it is ever exercised under real multi-rank parallelism, where
+# skipping the actual gather would silently corrupt the result.
+
+
+class _SerialCompensationChargeCoefficientsAsQaL:
+    """Adapts a new-backend `ccc_aL` (AtomArrays) to look like the
+    old-style `Q_aL` (dict-like ArrayDict) that both ps2ae.py and
+    abtem/potentials/gpaw.py (`dict(Q_aL)`) expect, valid only for
+    single-process (serial) GPAW calculations."""
+
+    def __init__(self, ccc_aL):
+        self._ccc_aL = ccc_aL
+
+    def __getitem__(self, a):
+        return self._ccc_aL[a]
+
+    def __getattr__(self, name):
+        # Delegate dict-like access (keys/items/get/values/...) to the
+        # underlying AtomArrays so e.g. `dict(Q_aL)` (used in
+        # abtem/potentials/gpaw.py) keeps working. `redistribute`
+        # below is defined on the class, so it takes precedence over
+        # this fallback rather than being delegated.
+        return getattr(self._ccc_aL, name)
+
+    def redistribute(self, partition):
+        if partition.comm.size != 1:
+            raise NotImplementedError(
+                "Q_aL/ccc_aL compatibility shim (see test_gpaw.py) only "
+                "supports serial (single-process) GPAW calculations; "
+                f"got comm.size={partition.comm.size}. Redistributing "
+                "compensation charge coefficients across real MPI "
+                "ranks is not implemented here."
+            )
+        # comm.size == 1 => every atom is already local to the only
+        # rank, so redistributing to any partition on this comm is a
+        # genuine no-op.
+        return self
+
+
+@contextlib.contextmanager
+def _ps2ae_compatible_density():
+    if FakeDensity is None or hasattr(FakeDensity, "Q_aL"):
+        yield
+        return
+    FakeDensity.Q_aL = property(
+        lambda self: _SerialCompensationChargeCoefficientsAsQaL(self.ccc_aL)
+    )
+    try:
+        yield
+    finally:
+        del FakeDensity.Q_aL
+
+
+pytestmark = pytest.mark.skipif(GPAW is None, reason="requires gpaw")
 
 
 @pytest.fixture(scope="module")
@@ -121,18 +137,12 @@ def gpaw_calculator_bonding():
     return atoms.calc
 
 
-# @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
-# def test_all_electron_density(gpaw_calculator_no_bonding):
-#     abtem_ae_density = GPAWPotential(gpaw_calculator_no_bonding)._get_all_electron_density()
-#     gpaw_ae_density = gpaw_calculator_no_bonding.get_all_electron_density(gridrefinement=4)
-#     assert np.all(abtem_ae_density == gpaw_ae_density)
-
-
 def assert_psae_matches_abtem(calc):
-    ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
-    ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
-        rcgauss=0.01 * units.Bohr, ae=True
-    )
+    with _ps2ae_compatible_density():
+        ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
+        ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
+            rcgauss=0.01 * units.Bohr, ae=True
+        )
     ps2ae_potential = (
         -ps2ae_potential.sum(-1) * calc.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
     )
