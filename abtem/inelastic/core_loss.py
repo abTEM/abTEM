@@ -1669,9 +1669,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 def _extract_scattering_sites(potential, sites):
     """Extract scattering sites from a potential, or validate provided sites.
 
-    Handles ``Potential`` (via ``get_sliced_atoms``), ``FrozenPhonons``-wrapped
-    potentials (via ``atoms``), and ``CrystalPotential`` (via
-    ``potential_unit.get_transformed_atoms`` tiled by ``repetitions``).
+    Handles ``Potential`` and ``CrystalPotential`` (via ``get_sliced_atoms``;
+    for a frozen-phonon ensemble these are the sites of its first member, see
+    `_resolve_scattering_sites`) and ``FrozenPhonons``-wrapped potentials (via
+    ``atoms``).
     """
     from abtem.slicing import SliceIndexedAtoms
 
@@ -1679,10 +1680,6 @@ def _extract_scattering_sites(potential, sites):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
         sites = potential.atoms
-    elif sites is None and hasattr(potential, "potential_unit"):
-        if hasattr(potential.potential_unit, "get_transformed_atoms"):
-            unit_atoms = potential.potential_unit.get_transformed_atoms()
-            sites = unit_atoms * potential.repetitions
 
     if isinstance(sites, Atoms):
         # Follow the potential's own convention, so explicitly passed sites
@@ -1815,15 +1812,16 @@ def _sites_differ_per_configuration(potential) -> bool:
     frozen phonons, whose ``get_sliced_atoms`` displaces the atoms of the
     first configuration only.
 
-    ``CrystalPotential`` is left out: its sites are the undisplaced atoms of
-    every configuration (see ``CrystalPotential.get_sliced_atoms``), so a
-    resolution per configuration would only repeat the tiling. That those
-    sites ignore the displacements is abTEM issue #582; once its sites follow
-    each configuration, this exclusion should go.
+    A ``CrystalPotential`` ensemble qualifies when its unit is a pool of
+    displaced configurations: every member draws its own mosaic of them, and
+    its sites are the displaced atoms of that mosaic (abTEM issue #582, see
+    ``CrystalPotential.get_sliced_atoms``). The members of a crystal whose unit
+    has no frozen phonons all tile the same atoms, so their sites are resolved
+    once.
     """
     from abtem.potentials.iam import CrystalPotential
 
-    if isinstance(potential, CrystalPotential):
+    if isinstance(potential, CrystalPotential) and not potential._has_displaced_atoms:
         return False
 
     return (

@@ -3,6 +3,7 @@
 import sys
 import types
 
+import ase
 import numpy as np
 import pytest
 
@@ -1214,7 +1215,7 @@ def _drawn_tiles(crystal):
     the built crystal, found by exact match against the member's pool; axes:
     member, z-repetition, repetitions[0], repetitions[1]."""
     repetitions = crystal.repetitions
-    built = crystal.build(lazy=False).array
+    built = asnumpy(crystal.build(lazy=False).array)
     if crystal.seeds is None:
         built, members = built[None], [None]
     else:
@@ -1222,7 +1223,10 @@ def _drawn_tiles(crystal):
 
     drawn = np.empty((len(members), repetitions[2]) + repetitions[:2], dtype=int)
     for m, seed in enumerate(members):
-        pool = crystal._pool_unit_for_member(seed).build(lazy=False).array
+        pool = asnumpy(crystal._pool_unit_for_member(seed).build(lazy=False).array)
+        if pool.ndim == 3:
+            # a pool of one configuration, built without a configuration axis
+            pool = pool[None]
         n_sub, uy, ux = pool.shape[1:]
         for i in range(repetitions[2]):
             layer = built[m, n_sub * i : n_sub * (i + 1)].reshape(
@@ -1234,6 +1238,256 @@ def _drawn_tiles(crystal):
                     assert d.min() == 0
                     drawn[m, i, a, b] = np.argmin(d)
     return drawn
+
+
+def _displaced_crystal_atoms(crystal):
+    """The displaced atoms of every member of a frozen-phonon crystal, read
+    out independently of `CrystalPotential.get_sliced_atoms`: the pool
+    configuration of every tile is found in the built slices (`_drawn_tiles`),
+    and its atoms are those of the pool's frozen phonons, iterated directly,
+    wrapped into the unit and translated to the tile."""
+    repetitions = crystal.repetitions
+    members = [None] if crystal.seeds is None else [int(s) for s in crystal.seeds]
+    box = np.array(crystal.potential_unit.box)
+    crystals = []
+    for seed, drawn in zip(members, _drawn_tiles(crystal)):
+        configurations = list(crystal._pool_unit_for_member(seed).frozen_phonons)
+        positions, numbers = [], []
+        for k in range(repetitions[2]):
+            for a in range(repetitions[0]):
+                for b in range(repetitions[1]):
+                    configuration = configurations[drawn[k, a, b]]
+                    positions.append(
+                        np.mod(configuration.positions, box) + box * (a, b, k)
+                    )
+                    numbers.append(configuration.numbers)
+        crystals.append(
+            ase.Atoms(
+                numbers=np.concatenate(numbers),
+                positions=np.concatenate(positions),
+                cell=np.diag(box * repetitions),
+                pbc=True,
+            )
+        )
+    return crystals
+
+
+def _members(crystal, lazy):
+    """The crystal of every member, from the partition the drivers receive."""
+    if lazy:
+        blocks = np.asarray(
+            crystal.ensemble_blocks(1).compute(scheduler="synchronous")
+        ).ravel()
+        return list(blocks)
+    return [block.item() for _, _, block in crystal.generate_blocks(1)]
+
+
+def _match_sites(sites, atoms):
+    """Pair every site with an atom: the distance to it, in the periodic cell,
+    and its index."""
+    from scipy.spatial import cKDTree
+
+    box = np.diag(atoms.cell)
+
+    def wrapped(positions):
+        return np.mod(np.mod(positions, box), box)
+
+    tree = cKDTree(wrapped(atoms.positions), boxsize=box)
+    return tree.query(wrapped(sites.positions))
+
+
+_DISPLACED_SITES_CASES = pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (6, (2, 3, 2), {}),
+        (6, (2, 3, 2), dict(seeds=(5, 6))),
+        (12, (2, 3, 2), dict(num_frozen_phonons=2)),
+        (4, (3, 1, 3), dict(seeds=(7,))),
+        (2, (2, 2, 3), {}),
+        (1, (2, 1, 2), {}),
+    ],
+    ids=["shared pool", "seeds", "num_frozen_phonons", "z", "enlarged", "one"],
+)
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+class TestCrystalPotentialDisplacedSites:
+    """The sites of a frozen-phonon crystal are its displaced atoms: every tile
+    of every z-repetition takes those of the pool configuration its slices are
+    built from (abTEM issue #582)."""
+
+    @devices
+    @pytest.mark.parametrize("lazy", [False, True])
+    @_DISPLACED_SITES_CASES
+    def test_every_site_lies_on_a_displaced_atom_of_its_tile(
+        self, num_configs, repetitions, kwargs, lazy, device
+    ):
+        crystal = _frozen_phonon_crystal(
+            num_configs, repetitions, device=device, **kwargs
+        )
+        expected = _displaced_crystal_atoms(crystal)
+        members = _members(crystal, lazy)
+        assert len(members) == len(expected)
+
+        for member, atoms in zip(members, expected):
+            sites = member.get_sliced_atoms()
+            distances, indices = _match_sites(sites.atoms, atoms)
+            assert len(sites.atoms) == len(atoms)
+            # one site on every atom, of its element
+            assert np.max(distances) < 1e-6
+            assert len(np.unique(indices)) == len(atoms)
+            np.testing.assert_array_equal(sites.atoms.numbers, atoms.numbers[indices])
+
+            # Precondition: the displaced atoms are not the equilibrium ones.
+            equilibrium = crystal.potential_unit.get_transformed_atoms() * repetitions
+            assert np.max(_match_sites(sites.atoms, equilibrium)[0]) > 0.05
+
+    @_DISPLACED_SITES_CASES
+    def test_the_slices_of_every_site_hold_its_atom(
+        self, num_configs, repetitions, kwargs
+    ):
+        """Each slice holds the sites of the displaced atoms whose z is in it."""
+        crystal = _frozen_phonon_crystal(num_configs, repetitions, **kwargs)
+        edges = np.cumsum(crystal.slice_thickness)
+        for member, atoms in zip(
+            _members(crystal, lazy=False), _displaced_crystal_atoms(crystal)
+        ):
+            sites = member.get_sliced_atoms()
+            assert sites.num_slices == len(edges)
+            expected = np.bincount(
+                np.searchsorted(edges, atoms.positions[:, 2], side="right"),
+                minlength=len(edges),
+            )
+            counts = [len(sites.get_atoms_in_slices(i)) for i in range(len(edges))]
+            np.testing.assert_array_equal(counts, expected)
+
+    @_DISPLACED_SITES_CASES
+    def test_the_elastic_slices_are_those_of_the_tiles_the_sites_take(
+        self, num_configs, repetitions, kwargs
+    ):
+        """The sites take the mosaic generate_slices assembles; both draw it
+        from `_draw_mosaic`, and the mosaic of the built slices is it."""
+        crystal = _frozen_phonon_crystal(num_configs, repetitions, **kwargs)
+        drawn = _drawn_tiles(crystal)
+        for member, tiles in zip(_members(crystal, lazy=False), drawn):
+            n_configs = member._built_pool().shape[0]
+            mosaic = member._draw_mosaic(n_configs)
+            if mosaic is None:
+                assert n_configs == 1
+                mosaic = np.zeros_like(tiles)
+            np.testing.assert_array_equal(mosaic, tiles)
+
+    def test_a_crystal_without_frozen_phonons_tiles_the_unit(self):
+        """A unit without frozen phonons keeps the tiled equilibrium atoms."""
+        atoms = bulk("Si", cubic=True)
+        unit = Potential(atoms, gpts=(16, 16), slice_thickness=atoms.cell[2, 2] / 4)
+        crystal = CrystalPotential(unit, (2, 3, 2), num_frozen_phonons=2)
+        sites = crystal.get_sliced_atoms().atoms
+        expected = unit.get_transformed_atoms() * (2, 3, 2)
+        np.testing.assert_array_equal(sites.numbers, expected.numbers)
+        distances, _ = _match_sites(sites, expected)
+        assert np.max(distances) < 1e-9
+
+    @staticmethod
+    def _transition_potentials(crystal, device):
+        from abtem.core.axes import OrdinalAxis
+        from abtem.core.backend import get_array_module
+        from abtem.inelastic.core_loss import TransitionPotentialArray
+
+        rng = np.random.default_rng(0)
+        shape = (2,) + tuple(crystal.gpts)
+        array = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        return TransitionPotentialArray(
+            Z=14,
+            array=get_array_module(device).asarray(array.astype(np.complex64)),
+            energy=100e3,
+            extent=crystal.extent,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            metadata={"Z": 14, "n": 1, "l": 0},
+        )
+
+    @staticmethod
+    def _core_loss(potential, transition_potentials, sites, lazy, method, device):
+        scan = abtem.GridScan((0, 0), (3, 3), gpts=(2, 2))
+        detectors = abtem.AnnularDetector(0, 30)
+        if method == "multislice":
+            result = abtem.Probe(
+                energy=100e3, semiangle_cutoff=20, device=device
+            ).transition_potential_scan(
+                potential,
+                transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                lazy=lazy,
+                max_batch=1,
+            )
+        else:
+            result = abtem.SMatrix(
+                potential=potential,
+                energy=100e3,
+                semiangle_cutoff=20,
+                interpolation=1,
+                device=device,
+            ).transition_potential_scan(
+                transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                lazy=lazy,
+            )
+        if lazy:
+            result = result.compute(scheduler="synchronous", progress_bar=False)
+        return asnumpy(result.array)
+
+    @devices
+    @pytest.mark.parametrize("method", ["multislice", "prism"])
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize(
+        "kwargs",
+        [dict(seeds=(5, 6)), dict(num_frozen_phonons=2)],
+        ids=["seeds", "num_frozen_phonons"],
+    )
+    def test_core_loss_scatters_at_the_displaced_atoms_of_each_member(
+        self, kwargs, lazy, method, device
+    ):
+        """Without sites, every member of an ensemble scatters at its own
+        displaced atoms: as a crystal of that member alone does, given them."""
+        crystal = _frozen_phonon_crystal(
+            6, (2, 2, 2), ensemble_mean=False, device=device, **kwargs
+        )
+        transition_potentials = self._transition_potentials(crystal, device)
+        result = self._core_loss(
+            crystal, transition_potentials, None, lazy, method, device
+        )
+        assert result.shape[0] == len(crystal.seeds)
+
+        for m, (seed, atoms) in enumerate(
+            zip(crystal.seeds, _displaced_crystal_atoms(crystal))
+        ):
+            member = _frozen_phonon_crystal(
+                6, (2, 2, 2), seeds=(int(seed),), device=device
+            )
+            expected = self._core_loss(
+                member, transition_potentials, atoms, lazy, method, device
+            )
+            expected = expected.reshape(result.shape[1:])
+            np.testing.assert_allclose(
+                result[m], expected, rtol=1e-5, atol=1e-6 * np.abs(expected).max()
+            )
+
+            # Precondition: the equilibrium sites give another result.
+            equilibrium = self._core_loss(
+                member,
+                transition_potentials,
+                crystal.potential_unit.get_transformed_atoms() * crystal.repetitions,
+                lazy,
+                method,
+                device,
+            ).reshape(result.shape[1:])
+            assert np.abs(equilibrium - expected).max() > 1e-3 * np.abs(
+                expected
+            ).max()
 
 
 class TestComplexExponential:

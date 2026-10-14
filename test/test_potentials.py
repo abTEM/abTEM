@@ -343,29 +343,6 @@ def test_crystal_potential_get_sliced_atoms_is_cached():
     assert cryst.get_sliced_atoms() is cryst.get_sliced_atoms()
 
 
-def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
-    """For a frozen-phonon CrystalPotential, get_sliced_atoms returns the
-    equilibrium (un-displaced) atoms, because the ensemble draws an independent
-    random unit configuration per z-repetition (no single displaced
-    realisation) and column identification wants equilibrium positions."""
-    import numpy as np
-
-    import abtem
-
-    unit_atoms = si_cubic_atoms()
-    fp = abtem.FrozenPhonons(unit_atoms, num_configs=3, sigmas=0.1, seed=7)
-    unit_pot = Potential(fp, gpts=(32, 32), slice_thickness=5.43)
-    # The unit already carries frozen phonons; CrystalPotential draws one of its
-    # configs per repeated unit, so there is no single displaced realisation.
-    cryst = CrystalPotential(unit_pot, repetitions=(2, 2, 2))
-
-    sa = cryst.get_sliced_atoms()
-    expected = (unit_atoms * (2, 2, 2)).positions
-    assert np.allclose(
-        np.sort(sa.atoms.positions, axis=0), np.sort(expected, axis=0)
-    )
-
-
 @devices
 def test_eager_build_populates_all_frozen_phonon_configs(device):
     """Eager ``build(lazy=False)`` of a multi-config frozen-phonon potential must

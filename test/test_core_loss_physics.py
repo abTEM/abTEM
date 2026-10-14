@@ -790,16 +790,6 @@ def test_frozen_phonon_configurations_equal_their_own_runs(
         np.testing.assert_array_equal(configuration, expected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CrystalPotential.get_sliced_atoms (and _extract_scattering_sites' "
-        "potential_unit branch) tile potential_unit.get_transformed_atoms(), "
-        "the equilibrium positions, while the elastic slices are built from "
-        "the displaced pool configurations: the TP sits at (3.370, 2.910) Å "
-        "while the atom it should ionise is at (3.404, 2.734) Å"
-    ),
-)
 @devices
 def test_sites_follow_frozen_phonon_displacements_crystal_potential(device):
     """A CrystalPotential of one displaced unit ionises the displaced atom.

@@ -285,11 +285,10 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
     result as a regular Potential built from a manually-tiled supercell.
 
     The tutorial uses regular Potential, but CrystalPotential is the natural
-    way to express large repeating crystals cheaply. Without the
-    ``hasattr(potential, "potential_unit")`` branch in
-    transition_potential_multislice_and_detect, ``sites=None`` raises bare
-    ValueError because CrystalPotential exposes neither ``get_sliced_atoms``
-    nor ``atoms``. This test guards both correctness and the auto-extraction.
+    way to express large repeating crystals cheaply. With ``sites=None`` the
+    sites come from ``CrystalPotential.get_sliced_atoms``, which tiles the
+    unit's atoms when it has no frozen phonons. This test guards both
+    correctness and the auto-extraction.
     """
     xp = get_array_module(device)
 
