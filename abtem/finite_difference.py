@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import njit  # type: ignore
+from numba import njit, prange  # type: ignore
 
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
@@ -261,6 +261,30 @@ def _init_laplace_stencil_kernels():
         _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
 
 
+@njit(parallel=True, fastmath=True)
+def _laplace_stencil_cpu_kernel(a, c, n):
+    """The 5-point-per-axis Laplacian stencil of `_laplace_operator_stencil` on
+    the CPU, for a stack of 2D arrays. `c` holds the coefficients rolled so that
+    c[k] is that of offset k, and only the interior (n from each edge) is written.
+
+    Module level, with the coefficients as arguments, so that Numba compiles it
+    once per array type: as a closure over them it was compiled anew -- ~1 s
+    with parallel=True -- every time an operator was made, once per dask task
+    of a lazy real-space multislice.
+    """
+    M, H, W = a.shape
+    out = a.copy()
+    out[:] = 0
+    for m in prange(M):
+        for i in range(n, H - n):
+            for j in range(n, W - n):
+                cumul = c[0] * 0
+                for k in range(-n, n + 1):
+                    cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+                out[m, i, j] = cumul
+    return out
+
+
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
@@ -273,21 +297,8 @@ def _laplace_operator_stencil(
     n = len(c) // 2
     padding = n + 1
 
-    from numba import prange  # type: ignore
-
-    @njit(parallel=True, fastmath=True)
     def _laplace_stencil_cpu_batch(a):
-        M, H, W = a.shape
-        out = a.copy()
-        out[:] = 0
-        for m in prange(M):
-            for i in range(n, H - n):
-                for j in range(n, W - n):
-                    cumul = dtype(0.0)
-                    for k in range(-n, n + 1):
-                        cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
-                    out[m, i, j] = cumul
-        return out
+        return _laplace_stencil_cpu_kernel(a, c, n)
 
     if device == "gpu":
         check_cupy_is_installed()
