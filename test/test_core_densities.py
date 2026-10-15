@@ -8,12 +8,10 @@ from abtem.potentials.core_densities import (
 )
 
 
-@pytest.mark.parametrize(
-    "symbol, expected",
-    [("H", 0), ("B", 2), ("N", 2), ("O", 2), ("S", 10), ("Ti", 18), ("Mo", 36)],
-)
-def test_conventional_core_is_the_largest_smaller_noble_gas(symbol, expected):
-    assert conventional_core_electrons(symbol) == expected
+def test_conventional_core_is_the_largest_smaller_noble_gas():
+    expected = {"H": 0, "B": 2, "N": 2, "O": 2, "S": 10, "Ti": 18, "Mo": 36}
+    found = {symbol: conventional_core_electrons(symbol) for symbol in expected}
+    assert found == expected
 
 
 def test_cores_are_filled_by_shell_not_by_aufbau_energy():
@@ -26,18 +24,15 @@ def test_cores_are_filled_by_shell_not_by_aufbau_energy():
     assert not any(n == 4 for n, _, _ in configuration)
 
 
-@pytest.mark.parametrize("symbol, core", [("B", 2), ("S", 10), ("Sr", 28), ("Mo", 36)])
-def test_form_factor_equals_the_core_electron_count_at_zero(symbol, core):
-    G = np.linspace(0.0, 50.0, 200)
-    assert slater_core_form_factor(symbol, core, G)[0] == pytest.approx(core, rel=1e-6)
-
-
-@pytest.mark.parametrize("symbol, core", [("B", 2), ("S", 10), ("Mo", 36)])
-def test_form_factor_decays_monotonically(symbol, core):
+def test_form_factor_is_the_core_electron_count_at_zero_and_decays():
+    """f(0) is the core electron count, and f decays monotonically to below half
+    of it by G = 60 / Å."""
     G = np.linspace(0.0, 60.0, 300)
-    f = slater_core_form_factor(symbol, core, G)
-    assert np.all(np.diff(f) < 1e-9)
-    assert f[-1] < 0.5 * core
+    for symbol, core in [("B", 2), ("S", 10), ("Sr", 28), ("Mo", 36)]:
+        f = slater_core_form_factor(symbol, core, G)
+        assert f[0] == pytest.approx(core, rel=1e-6), symbol
+        assert np.all(np.diff(f) < 1e-9), symbol
+        assert f[-1] < 0.5 * core, symbol
 
 
 def test_no_core_gives_no_correction():
