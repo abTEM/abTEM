@@ -814,7 +814,7 @@ def test_all_modes_agree_on_skew_grid_bragg_intensities():
     PRISM S-matrix.
 
     The check sweeps *every* Bloch reflection with l = 0 and intensity above a
-    threshold (~30 reflections), not a hand-picked few. With c perpendicular to ab,
+    threshold (~20 reflections), not a hand-picked few. With c perpendicular to ab,
     the Bloch reciprocal basis vectors b_i_3D have zero z-components, so
     Bloch hkl = (h, k, 0) corresponds one-to-one to the multislice FFT pixel
     (h, k) -- a clean per-reflection comparison."""
@@ -835,11 +835,16 @@ def test_all_modes_agree_on_skew_grid_bragg_intensities():
         "C2", cell=hexcell, pbc=True,
         scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
     )
-    energy, nc = 100e3, 12
+    # Sized for speed: 8 cells, 0.04 A sampling, 0.2 A slices and g_max = 8 / A
+    # (~1000 Bloch beams; 2356 at g_max = 12). Measured Bloch-vs-multislice max/mean
+    # relative errors 1.1e-2/6.8e-3 (bounds 5e-2/2e-2), real-space vs Fourier
+    # 2.5e-3 (bound 2e-2), hex mirror 4e-5 (bound 5e-4): no closer to the bounds
+    # than the 12-cell, 0.03 A, 0.1 A, g_max = 12 problem this replaces.
+    energy, nc = 100e3, 8
 
     # Bloch reference (matched parametrization, no DW)
     sf = abtem.StructureFactor(
-        hexC, g_max=12.0, parametrization="lobato", centering="auto",
+        hexC, g_max=8.0, parametrization="lobato", centering="auto",
         thermal_sigma=0.0,
     )
     bw = abtem.BlochWaves(sf, energy=energy, sg_max=0.6)
@@ -852,11 +857,14 @@ def test_all_modes_agree_on_skew_grid_bragg_intensities():
     param = LobatoParametrization(sigmas={"C": 0.0})
     atoms = hexC * (1, 1, nc)
     pot = abtem.Potential(
-        atoms, sampling=0.030, slice_thickness=0.1,
+        atoms, sampling=0.04, slice_thickness=0.2,
         projection="finite", parametrization=param,
     )
     N0, N1 = pot.gpts
     assert not pot.grid.is_orthogonal
+    # built once and shared by the three engines below, which would otherwise each
+    # rebuild it
+    pot = pot.build(lazy=False)
 
     def bragg(w):
         I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
@@ -1006,12 +1014,18 @@ def test_all_modes_agree_on_fully_triclinic_cell():
 
     param = LobatoParametrization(sigmas={"C": 0.0})
     atoms = triC * (1, 1, nc)
+    # 0.04 A sampling and 0.2 A slices (63 x 63 x 134, was 84 x 84 x 268 at 0.03 A
+    # and 0.1 A): measured 61 above-threshold pixels, Fourier vs PRISM 7.5e-5 (bound
+    # 5e-4), real-space vs Fourier max/mean 8.2e-2/1.2e-2 (bounds 0.10/0.02) -- the
+    # same margins as the larger problem (8.5e-2/1.4e-2).
     pot = abtem.Potential(
-        atoms, sampling=0.030, slice_thickness=0.1,
+        atoms, sampling=0.04, slice_thickness=0.2,
         projection="finite", parametrization=param,
     )
     N0, N1 = pot.gpts
     assert not pot.grid.is_orthogonal, "in-plane grid should be skewed"
+    # built once and shared by the three engines below
+    pot = pot.build(lazy=False)
 
     def bragg(w):
         I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
