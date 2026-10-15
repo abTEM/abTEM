@@ -1240,8 +1240,7 @@ def test_potential_interpolate_line_projected_matches_project(device, lazy):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("lazy", [True, False])
-def test_potential_interpolate_line_3d_lazy_matches_eager(device, lazy):
+def test_potential_interpolate_line_3d_lazy_matches_eager(device):
     from ase.build import bulk
 
     from abtem.core.backend import asnumpy
@@ -1345,18 +1344,33 @@ def test_potential_interpolate_line_fractional(si_potential):
 
 
 def test_potential_interpolate_line_at_position(si_potential):
+    """A line at a position is the line from center - extent / 2 along the angle to
+    center + extent / 2, both projected and at constant depth."""
     pot = si_potential.build(lazy=False)
     center = (pot.extent[0] / 2, pot.extent[1] / 2)
+    half = 2.5 * np.array([np.cos(np.deg2rad(30.0)), np.sin(np.deg2rad(30.0))])
 
     projected = pot.interpolate_line_at_position(
         center=center, angle=30.0, extent=5.0, gpts=20
     )
     assert projected.shape == (20,)
+    explicit = pot.interpolate_line(
+        start=tuple(center - half), end=tuple(center + half), gpts=20, endpoint=True
+    )
+    np.testing.assert_allclose(projected.array, explicit.array)
 
     volumetric = pot.interpolate_line_at_position(
         center=center + (1.0,), angle=30.0, extent=5.0, gpts=20, projected=False
     )
     assert volumetric.shape == (20,)
+    explicit_3d = pot.interpolate_line(
+        start=tuple(center - half) + (1.0,),
+        end=tuple(center + half) + (1.0,),
+        gpts=20,
+        endpoint=True,
+        projected=False,
+    )
+    np.testing.assert_allclose(volumetric.array, explicit_3d.array)
 
 
 def test_potential_interpolate_line_at_position_rejects_3d_center_when_projected(
@@ -1377,6 +1391,10 @@ def test_potential_interpolate_line_at_position_rejects_3d_center_when_projected
         center=atom_center, angle=30.0, extent=5.0, gpts=10
     )
     assert profile.shape == (10,)
+    lateral = pot.interpolate_line_at_position(
+        center=center[:2], angle=30.0, extent=5.0, gpts=10
+    )
+    np.testing.assert_allclose(profile.array, lateral.array)
 
 
 def test_potential_interpolate_line_lazy_delegation(si_potential):
@@ -1409,30 +1427,23 @@ def hex_skew_potential():
     return potential, np.array(cell)[:2, :2], np.array([1 / 3, 1 / 3]) @ np.array(cell)[:2, :2]
 
 
-def test_potential_interpolate_line_projected_locates_atom_on_skew_grid(
-    hex_skew_potential,
-):
-    potential, _, atom1_xy = hex_skew_potential
-    built = potential.build(lazy=False)
-
-    eps = 0.5
-    start = (atom1_xy[0] - eps, atom1_xy[1])
-    end = (atom1_xy[0] + eps, atom1_xy[1])
-    profile = built.interpolate_line(start=start, end=end, gpts=101, endpoint=True)
-
-    assert np.argmax(profile.array) == 50
-
-
-def test_potential_interpolate_line_3d_locates_atom_on_skew_grid(hex_skew_potential):
+def test_potential_interpolate_line_locates_atom_on_skew_grid(hex_skew_potential):
+    """A line through atom 1 peaks at the atom, both projected and (eager and
+    lazy) at the atom's depth."""
     potential, _, atom1_xy = hex_skew_potential
     built_eager = potential.build(lazy=False)
     built_lazy = potential.build(lazy=True)
     atom1_z = 0.5 * built_eager.thickness
 
     eps = 0.5
-    start = (atom1_xy[0] - eps, atom1_xy[1], atom1_z)
-    end = (atom1_xy[0] + eps, atom1_xy[1], atom1_z)
+    start = (atom1_xy[0] - eps, atom1_xy[1])
+    end = (atom1_xy[0] + eps, atom1_xy[1])
+    projected = built_eager.interpolate_line(
+        start=start, end=end, gpts=101, endpoint=True
+    )
+    assert np.argmax(projected.array) == 50
 
+    start, end = start + (atom1_z,), end + (atom1_z,)
     profile_eager = built_eager.interpolate_line(
         start=start, end=end, gpts=101, endpoint=True, projected=False
     )
@@ -1447,6 +1458,10 @@ def test_potential_interpolate_line_3d_locates_atom_on_skew_grid(hex_skew_potent
 def test_potential_interpolate_line_fractional_skew_matches_cartesian(
     hex_skew_potential,
 ):
+    """A fractional end point resolves through the true (skewed) cell rather than
+    a plain per-axis extent scaling, both at depth (the potential's own
+    effective-cell conversion) and projected (LineScan's own fractional
+    handling)."""
     potential, _, atom1_xy = hex_skew_potential
     built = potential.build(lazy=False)
     atom1_z = 0.5 * built.thickness
@@ -1467,17 +1482,6 @@ def test_potential_interpolate_line_fractional_skew_matches_cartesian(
         projected=False,
     )
     np.testing.assert_allclose(frac_profile.array, cartesian_profile.array)
-
-
-def test_potential_interpolate_line_fractional_skew_matches_cartesian_projected(
-    hex_skew_potential,
-):
-    """Same as test_potential_interpolate_line_fractional_skew_matches_cartesian, but
-    for the projected=True (2D) path -- this goes through LineScan's own fractional
-    handling rather than the potential's own effective-cell conversion, and must
-    likewise use the true (skewed) cell rather than a plain per-axis extent scaling."""
-    potential, _, atom1_xy = hex_skew_potential
-    built = potential.build(lazy=False)
 
     frac_profile = built.interpolate_line(
         start=(0.0, 0.0),
