@@ -700,20 +700,6 @@ def test_images_coordinates_spaced_by_sampling():
     assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
 
 
-def _delta_probe_image(gpts=64, lazy=False):
-    """A throwaway probe-intensity image for the filter tests below -- only
-    a non-trivial 2D image is needed, not any particular physics."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=gpts)
-    return wave.build((0, 0), lazy=lazy).intensity()
-
-
-def test_lorentzian_filter_changes_image():
-    """Lorentzian filter with a non-trivial HWHM should change the image."""
-    images = _delta_probe_image()
-    filtered = images.lorentzian_filter(0.5)
-    assert not np.allclose(filtered.array, images.array)
-
-
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 def test_lorentzian_filter_respects_precision_config(precision):
     """The Lorentzian family of filters must honour ``abtem.config['precision']``.
@@ -788,13 +774,6 @@ def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwarg
         )
 
 
-def test_voigtian_filter_changes_image():
-    """Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert not np.allclose(filtered.array, images.array)
-
-
 def _unit_delta_image(shape=(64, 96), device="cpu"):
     """A unit delta on an anisotropically sampled grid, so each filter's
     output is its own (normalized) impulse response with peak << 1 but
@@ -845,13 +824,6 @@ def test_voigtian_filter_pure_lorentzian_limit(device):
     out = _unit_delta_image(device=device).voigtian_filter(0.0, _LIMIT_HW)
     expected = _reference_impulse_response(_analytic_lorentzian_kernel(_LIMIT_HW_PIXELS))
     _assert_matches_reference(out.array, expected)
-
-
-def test_pseudo_voigtian_filter_changes_image():
-    """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert not np.allclose(filtered.array, images.array)
 
 
 @pytest.mark.parametrize("eta", [0.0, 0.3, 1.0])
@@ -1328,16 +1300,6 @@ def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_b
     assert np.flatnonzero(profiles.array).tolist() == [2116]
 
 
-def test_filter_boundary_modes():
-    """All four filter methods accept all three boundary modes without error."""
-    images = _delta_probe_image(gpts=32)
-    for boundary in ("periodic", "reflect", "constant"):
-        images.gaussian_filter(0.3, boundary=boundary).array
-        images.lorentzian_filter(0.3, boundary=boundary).array
-        images.voigtian_filter(0.3, 0.3, boundary=boundary).array
-        images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
-
-
 @requires_gpu
 @pytest.mark.parametrize("boundary", ["periodic", "reflect", "constant"])
 @lazy_params
@@ -1455,27 +1417,6 @@ def test_gaussian_source_size_lazy_matches_eager_at_edges():
         .array
     )
     np.testing.assert_allclose(lazy, eager, atol=1e-10)
-
-
-def test_lorentzian_filter_lazy():
-    """Lorentzian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.lorentzian_filter(0.5)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_voigtian_filter_lazy():
-    """Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_pseudo_voigtian_filter_lazy():
-    """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert np.isfinite(filtered.array.compute()).all()
 
 
 # @given(data=st.data())
