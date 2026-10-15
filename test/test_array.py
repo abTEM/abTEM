@@ -42,24 +42,39 @@ HAS_ARRAY_NO_POTENTIAL = [
 @given(data=st.data())
 @lazy_params
 @devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL + [abtem_st.s_matrix_array])
 def test_indexing(data, has_array, lazy, device):
+    """Only ensemble axes can be indexed: an index over the base axes raises.
+
+    The index is drawn over the whole shape, so it covers both cases; an index one
+    longer than the ensemble shape is also checked on every draw, so the raise is
+    asserted even when the draw stays within the ensemble axes. PotentialArray
+    indexes its slices as well and has its own test below."""
     has_array = data.draw(has_array(lazy=lazy, device=device))
+    ensemble_ndim = len(has_array.ensemble_shape)
+
+    with pytest.raises(RuntimeError, match="too many indices"):
+        has_array[(0,) * (ensemble_ndim + 1)]
 
     indices = data.draw(
         numpy_st.basic_indices(
-            has_array.ensemble_shape, allow_newaxis=False, allow_ellipsis=False
+            has_array.shape, allow_newaxis=False, allow_ellipsis=False
         )
     )
 
     if isinstance(indices, Number):
-        num_lost_axes = 1
+        num_indices, num_lost_axes = 1, 1
     elif isinstance(indices, slice):
-        num_lost_axes = 0
+        num_indices, num_lost_axes = 1, 0
     else:
+        num_indices = len(indices)
         num_lost_axes = sum(1 for i in indices if isinstance(i, Number))
 
-    assert len(has_array[indices].shape) == len(has_array.shape) - num_lost_axes
+    if num_indices > ensemble_ndim:
+        with pytest.raises(RuntimeError, match="too many indices"):
+            has_array[indices]
+    else:
+        assert len(has_array[indices].shape) == len(has_array.shape) - num_lost_axes
 
 
 @given(data=st.data())
@@ -88,74 +103,45 @@ def test_indexing_potential(data, has_array, lazy, device):
 @given(data=st.data())
 @lazy_params
 @devices
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_indexing_raises(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    indices = data.draw(
-        numpy_st.basic_indices(
-            has_array.shape, allow_newaxis=False, allow_ellipsis=False
-        )
-    )
-
-    if (
-        isinstance(indices, tuple) and len(indices) > len(has_array.ensemble_shape)
-    ) or (isinstance(indices, int) and len(has_array.ensemble_shape) == 0):
-        with pytest.raises(RuntimeError):
-            has_array[indices]
-
-
-@given(data=st.data())
-@lazy_params
-@devices
 @pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_shape(data, has_array, lazy, device):
+def test_shape_bookkeeping(data, has_array, lazy, device):
+    """The shape is the ensemble shape followed by the base shape, with one axis
+    metadata each, and expand_dims, squeeze and ensure_lazy keep that."""
     has_array = data.draw(has_array(lazy=lazy, device=device))
     assert len(has_array.base_shape) == has_array._base_dims
     assert has_array.shape == has_array.ensemble_shape + has_array.base_shape
     assert len(has_array.base_axes_metadata) == len(has_array.base_shape)
     assert len(has_array.ensemble_axes_metadata) == len(has_array.ensemble_shape)
 
+    expanded = has_array.expand_dims((0,))
+    assert expanded.shape == (1,) + has_array.shape
+    expanded = expanded.expand_dims((1,))
+    assert expanded.shape == (1, 1) + has_array.shape
 
-@given(data=st.data())
-@lazy_params
-@devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_ensure_lazy(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    has_array = has_array.ensure_lazy()
-    assert has_array.is_lazy
-    assert_array_matches_laziness(has_array.array, True)
+    squeezed = has_array.squeeze()
+    assert (
+        remove_dummy_dimensions(has_array.ensemble_shape) + has_array.base_shape
+        == squeezed.shape
+    )
+
+    made_lazy = has_array.ensure_lazy()
+    assert made_lazy.is_lazy
+    assert_array_matches_laziness(made_lazy.array, True)
 
 
 @settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
+@given(
+    data=st.data(),
+    # A directory store or, for a .zip suffix, a Zarr 3 zip store.
+    url=st.one_of(
+        abtem_st.temporary_path(allow_none=False),
+        abtem_st.temporary_path_zip(allow_none=False),
+    ),
+)
 @lazy_params
 @devices
 @pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    has_array.to_zarr(url)
-    has_array_from_zarr = has_array.from_zarr(url)
-    assert has_array_from_zarr.is_lazy
-    assert_array_objects_equal(has_array_from_zarr, has_array)
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@lazy_params
-@devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_to_zarr_from_zarr_zip(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
     has_array_from_zarr = has_array.from_zarr(url)
@@ -297,13 +283,16 @@ def test_from_zarr_auto_chunks_never_splits_base_axes(tmp_path):
     assert loaded.array.chunks[-2:] == ((64,), (64,))
 
 
-@pytest.mark.parametrize("suffix", ["", ".zip"])
-def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
+def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch):
     """Regression: the spatial (base) axes of a DiffractionPatterns are much
     larger than its ensemble (energy) axis here, so a naive "always shrink
     the largest axis" policy would chunk the spatial plane first -- which
     several lazy dask operations (e.g. interpolate_line) silently compute
-    wrong results against. to_zarr must chunk only the ensemble axis."""
+    wrong results against. to_zarr must chunk only the ensemble axis.
+
+    The directory and zip writers take their chunks from the same
+    _safe_zarr_chunks call, so one store type is enough here; the test below
+    writes several chunks to both."""
     import zarr
 
     import abtem.array as abtem_array_module
@@ -311,21 +300,12 @@ def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
     monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 1_000_000)
 
     dp, _ = _make_dp(n_energy=8, gpts=256)
-    url = str(tmp_path / f"dp_base{suffix}")
+    url = str(tmp_path / "dp_base")
     dp.to_zarr(url)
 
-    if suffix == ".zip":
-        store = zarr.storage.ZipStore(url, mode="r")
-        root = zarr.open(store=store, mode="r")
-    else:
-        root = zarr.open(url, mode="r")
-
-    zarr_array = root["array0"]
+    zarr_array = zarr.open(url, mode="r")["array0"]
     assert zarr_array.chunks[-2:] == zarr_array.shape[-2:]
     assert zarr_array.chunks[0] < zarr_array.shape[0]
-
-    if suffix == ".zip":
-        store.close()
 
 
 @pytest.mark.parametrize("suffix", ["", ".zip"])
@@ -386,33 +366,10 @@ def test_to_zarr_cleans_up_on_failed_write(tmp_path, monkeypatch, suffix):
 @given(data=st.data())
 @lazy_params
 @devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_expand_dims(data, has_array, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    expanded = waves.expand_dims((0,))
-    assert expanded.shape[0] == 1
-    expanded = expanded.expand_dims((1,))
-    assert expanded.shape[1] == 1
-
-
-@given(data=st.data())
-@lazy_params
-@devices
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
-def test_squeeze(data, has_array, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    squeezed = waves.squeeze()
-    assert (
-        remove_dummy_dimensions(waves.ensemble_shape) + waves.base_shape
-        == squeezed.shape
-    )
-
-
-@given(data=st.data())
-@lazy_params
-@devices
 @pytest.mark.parametrize("destination", ["cpu", gpu])
-@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
+# copy_to_device is ArrayObject's own for every class but SMatrixArray, which also
+# moves its wave vectors.
+@pytest.mark.parametrize("has_array", [abtem_st.images, abtem_st.s_matrix_array])
 def test_to_cpu(data, has_array, lazy, device, destination):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array = has_array.copy_to_device(device=destination)
