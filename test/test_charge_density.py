@@ -336,20 +336,19 @@ def test_core_subtraction_makes_the_cell_neutral(carbon_atoms, charge_density_3d
     """The point that motivates the whole correction: adding each atom's full Z to a
     valence-only density leaves a net +Nc per atom, which the Poisson solve can only
     absorb into a uniform background. A net charge contributes q / (eps0 k^2), so the
-    error lands at low spatial frequency -- in the low-order structure factors."""
+    error lands at low spatial frequency -- in the low-order structure factors.
+
+    By default the conventional frozen core is subtracted: 2 electrons for carbon."""
     density = np.asarray(charge_density_3d, dtype=float)
     potential = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert potential.core_electrons == {"C": 2}
 
-    without = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
-    without._core_density_correction = None
-
-    assert _total_charge(without, carbon_atoms, density) == pytest.approx(2.0, abs=0.05)
     assert _total_charge(potential, carbon_atoms, density) == pytest.approx(0.0, abs=0.05)
 
-
-def test_conventional_core_is_used_by_default(carbon_atoms, charge_density_3d):
-    potential = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
-    assert potential.core_electrons == {"C": 2}
+    # constructing the potential tabulates the core form factor (~0.5 s); remove the
+    # correction from the same one instead of building a second
+    potential._core_density_correction = None
+    assert _total_charge(potential, carbon_atoms, density) == pytest.approx(2.0, abs=0.05)
 
 
 def test_explicit_valence_electrons_override_the_table(carbon_atoms):
