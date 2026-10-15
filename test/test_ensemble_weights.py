@@ -109,13 +109,13 @@ def test_stem_probe_defocus_ensemble_matches_brute_force(case, lazy, device):
     _assert_close_to(reduced.array, reference)
 
 
-@pytest.mark.parametrize("case", ["gaussian", "asymmetric"])
+# The gaussian factory's weights are checked by the probe test above and in (b);
+# the scan and HRTEM paths below treat every distribution alike, so they run the
+# asymmetric one, which a reversal or misalignment of the weights would change.
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_stem_scan_defocus_ensemble_matches_brute_force(
-    case, lazy, device, tiny_potential
-):
-    dist, values, weights = _distribution_cases()[case]
+def test_stem_scan_defocus_ensemble_matches_brute_force(lazy, device, tiny_potential):
+    dist, values, weights = _distribution_cases()["asymmetric"]
     scan = abtem.GridScan((0, 0), (4, 4), gpts=(3, 3))
     detectors = [abtem.AnnularDetector(10, 60), abtem.PixelatedDetector()]
 
@@ -323,11 +323,10 @@ def exit_wave():
     return PlaneWave(energy=100e3, gpts=48).multislice(atoms).compute()
 
 
-@pytest.mark.parametrize("case", ["gaussian", "asymmetric"])
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_hrtem_ctf_defocus_ensemble_matches_brute_force(case, lazy, device, exit_wave):
-    dist, values, weights = _distribution_cases()[case]
+def test_hrtem_ctf_defocus_ensemble_matches_brute_force(lazy, device, exit_wave):
+    dist, values, weights = _distribution_cases()["asymmetric"]
     waves = exit_wave.copy_to_device(device)
     if lazy:
         waves = waves.ensure_lazy()
@@ -761,9 +760,11 @@ def test_visualization_range_sum_applies_weights():
     )
 
 
-@pytest.mark.parametrize("max_batch", [1, 2, "auto"])
-@pytest.mark.parametrize("lazy", [True, False])
-def test_zero_weight_members(max_batch, lazy):
+# An eager build ignores max_batch, so it runs once.
+@pytest.mark.parametrize(
+    "lazy, max_batch", [(True, 1), (True, 2), (True, "auto"), (False, "auto")]
+)
+def test_zero_weight_members(lazy, max_batch):
     # Zero-weight members are legal (empty bins of a measured spectrum or a
     # histogrammed spread). A lazy build divides the distribution into blocks, and
     # a block holding only zero-weight members must not be rejected as an
