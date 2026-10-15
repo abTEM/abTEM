@@ -50,7 +50,7 @@ def test_rotated_atoms_ensemble_conserves_atom_count_across_angles(si_disk):
     assert max(counts) / min(counts) < 1.1
 
 
-def test_rotation_series_orientation_matrices_shape(si_disk):
+def test_rotation_series_orientation_matrices_shape():
     angles = (0.0, 1.0, 2.0)
     R = rotation_series_orientation_matrices(angles, rotation_axis=25.0)
     assert R.shape == (3, 3, 3)
@@ -106,8 +106,10 @@ def test_rotation_series_ms_and_bw_agree(si_disk):
         .compute()
     )
 
+    # g_max=4 covers the stored g_max=2 beams' couplings: r1 0.0318 and
+    # correlation 0.99982, as with g_max=6, at a quarter of the Bloch-wave cost
     structure_factor = StructureFactor(
-        atoms, g_max=6.0, parametrization="lobato", thermal_sigma=0.078, centering="F"
+        atoms, g_max=4.0, parametrization="lobato", thermal_sigma=0.078, centering="F"
     )
     bloch_waves = BlochWaves(
         structure_factor=structure_factor, energy=energy, sg_max=0.2, use_wave_eq=True
@@ -161,11 +163,19 @@ def _fill(atoms, box, z_max=None):
 
 # tilted orientations only: untilted, quartz's c axis and Si rows run parallel
 # to the faces of this narrow box, and whole rows falling in or out of it move
-# the atom count by a few percent with every atom still on a lattice site
+# the atom count by a few percent with every atom still on a lattice site.
+# Each case catches one of the two bugs: the tall box the disk's lattice
+# sizing (top 20 A slab 80 % filled at 20 deg before the fix), the box wider
+# along y than the range mask's old (y, z) test allowed for at azimuth -40 deg
+# (~540 atoms missing from the restricted disk per angle before the fix).
 @pytest.mark.parametrize(
-    "rotation_axis, rotation_range", [(25.0, (15.0, 20.0)), (-40.0, (5.0, 30.0))]
+    "rotation_axis, rotation_range, box",
+    [
+        (25.0, (15.0, 20.0), (30.0, 30.0, 300.0)),
+        (-40.0, (20.0, 25.0), (60.0, 20.0, 60.0)),
+    ],
 )
-def test_cut_disk_fills_the_box_for_a_hexagonal_cell(rotation_axis, rotation_range):
+def test_cut_disk_fills_the_box_for_a_hexagonal_cell(rotation_axis, rotation_range, box):
     """A tilted, tall box must stay filled, entrance and exit included, for a
     non-cubic cell and an axis off x -- and the rotation_range-restricted disk
     must put exactly the same atoms in the box as the full disk. Both failed
@@ -173,7 +183,6 @@ def test_cut_disk_fills_the_box_for_a_hexagonal_cell(rotation_axis, rotation_ran
     wrong way (a corner of it missing, its axis skewed), and the range mask
     ignored the axis azimuth."""
     quartz = _alpha_quartz()
-    box = (30.0, 30.0, 300.0)
     angles = np.linspace(*rotation_range, 4)
 
     full = rotated_atoms_ensemble(
