@@ -1,3 +1,5 @@
+import itertools
+
 import numpy as np
 import pytest
 import strategies as abtem_st
@@ -306,21 +308,23 @@ def test_retrieve_coupling_structure_factors_rejects_missing_differences():
         )
 
 
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
-@pytest.mark.parametrize("solver", ["eigh", "expm"])
-@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
-def test_estimate_bloch_wave_memory_scales_with_the_matrix(device, solver, dtype):
-    guaranteed, expected = estimate_bloch_wave_memory(
-        1000, dtype, device=device, solver=solver
-    )
-    matrix_bytes = 1000**2 * np.dtype(dtype).itemsize
+def test_estimate_bloch_wave_memory_scales_with_the_matrix():
+    # one code path (a lookup in _BLOCH_WAVE_MEMORY_FACTORS) for every
+    # combination, so check each table entry in a loop rather than one test ID each
+    for device, solver, dtype in itertools.product(
+        ("cpu", "gpu"), ("eigh", "expm"), (np.complex64, np.complex128)
+    ):
+        case = f"{device}, {solver}, {np.dtype(dtype).name}"
+        guaranteed, expected = estimate_bloch_wave_memory(
+            1000, dtype, device=device, solver=solver
+        )
+        matrix_bytes = 1000**2 * np.dtype(dtype).itemsize
 
-    # the structure matrix itself plus at least the solver's output
-    assert 2 * matrix_bytes <= guaranteed <= expected
-    assert estimate_bloch_wave_memory(2000, dtype, device=device, solver=solver) == (
-        4 * guaranteed,
-        4 * expected,
-    )
+        # the structure matrix itself plus at least the solver's output
+        assert 2 * matrix_bytes <= guaranteed <= expected, case
+        assert estimate_bloch_wave_memory(
+            2000, dtype, device=device, solver=solver
+        ) == (4 * guaranteed, 4 * expected), case
 
 
 def test_estimate_bloch_wave_memory_is_dtype_aware():
