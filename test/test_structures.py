@@ -424,7 +424,8 @@ def test_cut_ball_invariant_under_input_cell_rotation():
     assert abs(n - reference) / reference < 0.1
 
 
-@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+# scale 1.0 would compare the base box with itself
+@pytest.mark.parametrize("scale", [1.5, 2.0])
 def test_cut_ball_atom_count_scales_with_volume(scale):
     atoms = bulk("Si", "diamond", a=5.43, cubic=True)
     base_box = np.array((20.0, 20.0, 20.0))
