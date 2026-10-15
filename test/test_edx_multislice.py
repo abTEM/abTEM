@@ -451,16 +451,6 @@ class TestJointEelsAndEdx:
             lazy=False,
         )
 
-    def test_two_detectors_return_a_list(self):
-        potential, probe = _si_setup()
-        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
-
-        eels = abtem.AnnularDetector(inner=0.0, outer=30.0)
-        edx = abtem.AnnularDetector(inner=0.0, outer=None)
-
-        both = self._run(potential, probe, scan, [eels, edx])
-        assert isinstance(both, list) and len(both) == 2
-
     def test_joint_pass_matches_separate_passes(self):
         potential, probe = _si_setup()
         scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
@@ -469,36 +459,22 @@ class TestJointEelsAndEdx:
         edx = abtem.AnnularDetector(inner=0.0, outer=None)
 
         both = self._run(potential, probe, scan, [eels, edx])
+        assert isinstance(both, list) and len(both) == 2
+        joint_eels = np.asarray(both[0].compute().array)
+        joint_edx = np.asarray(both[1].compute().array)
+
         alone_eels = self._run(potential, probe, scan, eels)
         alone_edx = self._run(potential, probe, scan, edx)
 
         np.testing.assert_allclose(
-            np.asarray(both[0].compute().array),
-            np.asarray(alone_eels.compute().array),
-            rtol=1e-6,
+            joint_eels, np.asarray(alone_eels.compute().array), rtol=1e-6
         )
         np.testing.assert_allclose(
-            np.asarray(both[1].compute().array),
-            np.asarray(alone_edx.compute().array),
-            rtol=1e-6,
+            joint_edx, np.asarray(alone_edx.compute().array), rtol=1e-6
         )
 
-    def test_aperture_captures_less_than_all_angles(self):
-        potential, probe = _si_setup()
-        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
-
-        both = self._run(
-            potential,
-            probe,
-            scan,
-            [
-                abtem.AnnularDetector(inner=0.0, outer=30.0),
-                abtem.AnnularDetector(inner=0.0, outer=None),
-            ],
-        )
-        eels = np.asarray(both[0].compute().array)
-        edx = np.asarray(both[1].compute().array)
-        assert np.all(eels < edx)
+        # The EELS aperture captures less than all angles.
+        assert np.all(joint_eels < joint_edx)
 
     def test_multiple_detectors_with_multiple_edges(self):
         potential, probe = _si_setup()
@@ -607,58 +583,43 @@ class TestPrecisionConfig:
             mu = tp.effective_ionization_potential(np.array([[1.0, 2.0]]))
             assert mu.dtype == real
 
-    @pytest.mark.parametrize(
-        "precision, real, complex_",
-        [("float32", np.float32, np.complex64), ("float64", np.float64, np.complex128)],
-    )
-    def test_both_drivers_follow_the_config(self, precision, real, complex_):
-        with abtem.config.set({"precision": precision}):
-            potential, probe = self._setup()
-            scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
-
-            def make_tp():
-                tp = _transition_potential(
-                    potential.extent, potential.gpts, band_limited=True
-                )
-                tp._array = tp.array.astype(complex_)
-                return tp
-
-            waves = probe.build(scan).compute()
-            assert waves.array.dtype == complex_
-
-            effective = effective_ionization_multislice_and_detect(
-                waves, potential, make_tp()
-            )[0]
-            assert effective.array.dtype == real
-
-            scattered = probe.transition_potential_scan(
-                potential=potential,
-                transition_potentials=make_tp(),
-                scan=scan,
-                detectors=abtem.AnnularDetector(inner=0.0, outer=None),
-                double_channel=False,
-                lazy=False,
-            ).compute()
-            assert scattered.array.dtype == real
-
-    def test_single_and_double_precision_agree(self):
+    def test_both_drivers_follow_the_config_and_agree(self):
         results = {}
-        for precision, complex_ in [
-            ("float32", np.complex64),
-            ("float64", np.complex128),
+        for precision, real, complex_ in [
+            ("float32", np.float32, np.complex64),
+            ("float64", np.float64, np.complex128),
         ]:
             with abtem.config.set({"precision": precision}):
                 potential, probe = self._setup()
                 scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
-                tp = _transition_potential(
-                    potential.extent, potential.gpts, band_limited=True
-                )
-                tp._array = tp.array.astype(complex_)
-                got = effective_ionization_multislice_and_detect(
-                    probe.build(scan).compute(), potential, tp
-                )[0]
-                results[precision] = np.asarray(got.array, dtype=np.float64)
 
+                def make_tp():
+                    tp = _transition_potential(
+                        potential.extent, potential.gpts, band_limited=True
+                    )
+                    tp._array = tp.array.astype(complex_)
+                    return tp
+
+                waves = probe.build(scan).compute()
+                assert waves.array.dtype == complex_, precision
+
+                effective = effective_ionization_multislice_and_detect(
+                    waves, potential, make_tp()
+                )[0]
+                assert effective.array.dtype == real, precision
+                results[precision] = np.asarray(effective.array, dtype=np.float64)
+
+                scattered = probe.transition_potential_scan(
+                    potential=potential,
+                    transition_potentials=make_tp(),
+                    scan=scan,
+                    detectors=abtem.AnnularDetector(inner=0.0, outer=None),
+                    double_channel=False,
+                    lazy=False,
+                ).compute()
+                assert scattered.array.dtype == real, precision
+
+        # Single and double precision agree.
         np.testing.assert_allclose(
             results["float32"], results["float64"], rtol=1e-5
         )
@@ -737,7 +698,7 @@ class TestPrismEffectiveIonization:
         np.testing.assert_allclose(
             np.asarray(abtem.core.backend.asnumpy(got.array)),
             np.asarray(abtem.core.backend.asnumpy(reference.array)),
-            rtol=1e-4,
+            rtol=1e-6 if device == "cpu" else 1e-4,
         )
 
     def test_exit_planes_are_resolved_and_monotonic(self):
@@ -821,15 +782,17 @@ class TestPrismEffectiveIonization:
                 sites=atoms,
             )
 
-    @pytest.mark.parametrize("interpolation", [1, 2])
-    def test_interpolation_matches_multislice(self, interpolation):
+    def test_interpolation_matches_multislice(self):
         """Interpolation replicates the PRISM wave function across the cell.
 
         Two corrections are needed and both are exact: each probe may only see
         the sites inside its own window, and the reduction normalises every
         replica to unit intensity so the cell carries prod(interpolation) times
-        one probe's worth.
+        one probe's worth. A missing 1/prod(interpolation) showed up here as an
+        exact factor of 4. Interpolation 1 is test_matches_multislice_at_
+        interpolation_one.
         """
+        interpolation = 2
         atoms, potential = self._setup()
         probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20.0)
         probe.grid.match(potential)
@@ -858,35 +821,9 @@ class TestPrismEffectiveIonization:
         # potential interpolation 2 runs about 4 % low with 15 % at the worst
         # position, which is the PRISM interpolation error for a delocalised
         # potential rather than a defect here.
-        rtol = 1e-6 if interpolation == 1 else 2e-2
         np.testing.assert_allclose(
-            np.asarray(got.array), np.asarray(reference.array), rtol=rtol
+            np.asarray(got.array), np.asarray(reference.array), rtol=2e-2
         )
-
-    def test_interpolation_does_not_scale_the_signal(self):
-        """A missing 1/prod(interpolation) showed up as an exact factor of 4."""
-        atoms, potential = self._setup()
-        scan = abtem.GridScan(start=(0, 0), end=(2.7, 2.7), gpts=(2, 2))
-
-        def run(interpolation):
-            s_matrix = abtem.SMatrix(
-                potential=potential,
-                energy=ENERGY,
-                semiangle_cutoff=20.0,
-                interpolation=interpolation,
-                downsample=False,
-            )
-            return np.asarray(
-                s_matrix.ionization_scan(
-                    _transition_potential(
-                        potential.extent, potential.gpts, band_limited=True
-                    ),
-                    scan=scan,
-                    sites=atoms,
-                ).array
-            )
-
-        np.testing.assert_allclose(run(2), run(1), rtol=2e-2)
 
     def test_window_assigns_a_boundary_site_to_one_probe_only(self):
         """A symmetric window double-counted sites sitting on the boundary."""
@@ -1101,26 +1038,7 @@ class TestPlaneWaveEntryPoint:
             np.asarray(got.array), np.asarray(expected.array), rtol=1e-6
         )
 
-    def test_lazy_matches_eager(self):
-        atoms, potential = self._setup()
-        plane_wave = abtem.PlaneWave(energy=ENERGY)
-        plane_wave.grid.match(potential)
-
-        def run(lazy):
-            return plane_wave.ionization_multislice(
-                potential,
-                _transition_potential(
-                    potential.extent, potential.gpts, band_limited=True
-                ),
-                sites=atoms,
-                lazy=lazy,
-            )
-
-        np.testing.assert_allclose(
-            np.asarray(run(True).compute().array),
-            np.asarray(run(False).compute().array),
-            rtol=1e-6,
-        )
+    # Lazy versus eager is TestLazyMatchesEagerEverywhere.test_plane_wave.
 
     def test_signal_is_positive_and_scales_with_thickness(self):
         unit = ase.build.bulk("Si", cubic=True)
@@ -1166,41 +1084,51 @@ class TestPlaneWaveEntryPoint:
         )
 
 
+@pytest.fixture(scope="module")
+def si_k_mu():
+    """Effective ionisation potential of a real Si K edge in a 10 A cell, on a
+    128 and a 256 px grid, keyed by gpts.
+
+    One GPAW solve shared by the window tests; the two grids reuse the solved
+    states rather than solving them again for each build.
+    """
+    pytest.importorskip("gpaw")
+    from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+
+    subshell = SubshellTransitions(14, 1, 0, epsilon=25.0)
+    transitions = subshell.get_transitions()
+    weights = subshell.get_transition_weights()
+    return {
+        gpts: TransitionPotential(
+            14, transitions, weights=weights, extent=10.0, gpts=gpts, energy=ENERGY
+        )
+        .build()
+        .effective_ionization_potential()
+        for gpts in (128, 256)
+    }
+
+
 class TestIonizationWindow:
     """The S^dagger diag(mu) S integral only needs a window around each site."""
 
-    def test_window_is_a_physical_size_not_a_pixel_count(self):
-        from abtem.inelastic.core_loss import (
-            SubshellTransitions,
-            _ionization_window_gpts,
-        )
+    def test_window_is_a_physical_size_not_a_pixel_count(self, si_k_mu):
+        from abtem.inelastic.core_loss import _ionization_window_gpts
 
-        pytest.importorskip("gpaw")
-
-        sizes = []
-        for extent, gpts in [(10.0, 128), (10.0, 256)]:
-            tp = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
-                extent=extent, gpts=gpts, energy=ENERGY
-            ).build()
-            window = _ionization_window_gpts(tp.effective_ionization_potential())
-            sizes.append(window[0] * extent / gpts)
+        sizes = [
+            _ionization_window_gpts(mu)[0] * 10.0 / gpts
+            for gpts, mu in si_k_mu.items()
+        ]
 
         # Same physical window from both grids, to within a pixel or two.
         assert sizes[0] == pytest.approx(sizes[1], rel=0.1)
 
-    def test_window_shrinks_for_a_localised_potential(self):
-        from abtem.inelastic.core_loss import (
-            SubshellTransitions,
-            _ionization_window_gpts,
-        )
+    def test_window_shrinks_for_a_localised_potential(self, si_k_mu):
+        from abtem.inelastic.core_loss import _ionization_window_gpts
 
-        pytest.importorskip("gpaw")
-
-        tp = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
-            extent=20.0, gpts=256, energy=ENERGY
-        ).build()
-        window = _ionization_window_gpts(tp.effective_ionization_potential())
-        assert np.prod(window) < 0.25 * np.prod(tp.gpts)
+        # A real Si K window in a 10 A cell is ~3.75 A across, 14 % of the grid.
+        mu = si_k_mu[128]
+        window = _ionization_window_gpts(mu)
+        assert np.prod(window) < 0.25 * np.prod(mu.shape)
 
     def test_delocalised_potential_keeps_the_whole_grid(self):
         from abtem.inelastic.core_loss import _ionization_window_gpts
@@ -1210,18 +1138,10 @@ class TestIonizationWindow:
         window = _ionization_window_gpts(tp.effective_ionization_potential())
         assert window == (64, 64)
 
-    def test_tighter_tolerance_gives_a_larger_window(self):
-        from abtem.inelastic.core_loss import (
-            SubshellTransitions,
-            _ionization_window_gpts,
-        )
+    def test_tighter_tolerance_gives_a_larger_window(self, si_k_mu):
+        from abtem.inelastic.core_loss import _ionization_window_gpts
 
-        pytest.importorskip("gpaw")
-
-        mu = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
-            extent=20.0, gpts=256, energy=ENERGY
-        ).build().effective_ionization_potential()
-
+        mu = si_k_mu[128]
         loose = _ionization_window_gpts(mu, tolerance=1e-2)
         tight = _ionization_window_gpts(mu, tolerance=1e-4)
         assert np.prod(tight) > np.prod(loose)
