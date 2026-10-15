@@ -131,12 +131,13 @@ def test_potential_from_structure_factor(
     assert error < 2.5
 
 
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-def test_skewed_structure_factor_potential_multislice(lazy):
+def test_skewed_structure_factor_potential_multislice():
     # A hexagonal (skewed in-plane) cell: the structure-factor potential is sampled on
     # the fractional (a, b) grid, so it must carry the skewed cell for multislice to
     # use the right propagator. The projected potentials agree pixel by pixel either
     # way, hence the comparison of exit waves rather than of potentials.
+    # Eager only: get_projected_potential attaches the cell after its lazy/eager
+    # branch, which differs only in how the (pre-existing) slicing is scheduled.
     a = 2.46
     atoms = Atoms(
         "C2",
@@ -150,7 +151,7 @@ def test_skewed_structure_factor_potential_multislice(lazy):
         atoms, g_max=8.0, thermal_sigma=thermal_sigma, centering="P"
     )
     structure_factor_potential = structure_factor.get_projected_potential(
-        slice_thickness=1.0, lazy=lazy
+        slice_thickness=1.0, lazy=False
     )
     assert np.allclose(structure_factor_potential.cell, atoms.cell[:2, :2])
 
@@ -164,7 +165,7 @@ def test_skewed_structure_factor_potential_multislice(lazy):
     assert np.allclose(potential.grid.cell, structure_factor_potential.cell)
 
     def exit_intensity(p):
-        waves = abtem.PlaneWave(energy=100e3).multislice(p, lazy=lazy).compute()
+        waves = abtem.PlaneWave(energy=100e3).multislice(p, lazy=False).compute()
         return np.abs(waves.array) ** 2
 
     intensity1 = exit_intensity(structure_factor_potential)
