@@ -660,9 +660,12 @@ def test_realspace_multislice_non_orthogonal():
     cell = np.array(
         [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
     )
-    atoms = ase.Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, nz)
-    pot = abtem.Potential(atoms, gpts=(144, 144), slice_thickness=st)
+    # 2 x 2 cells on 64 x 64 (was 3 x 3 on 144 x 144): measured rel 0.022 against
+    # the 0.05 bound (was 0.028). Built once rather than once per algorithm.
+    atoms = ase.Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (2, 2, nz)
+    pot = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=st)
     assert not pot.grid.is_orthogonal
+    pot = pot.build(lazy=False)
 
     fourier = to_host_array(
         abtem.PlaneWave(energy=100e3)
