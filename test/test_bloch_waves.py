@@ -430,16 +430,18 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     g_max=st.floats(min_value=10, max_value=16),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 def test_potential_from_structure_factor(
-    atoms, sampling, thermal_sigma, g_max, slice_thickness, lazy
+    atoms, sampling, thermal_sigma, g_max, slice_thickness
 ):
+    # Eager only: StructureFactor.get_projected_potential builds with its lazy
+    # argument and hands over to the built array, whose lazy and eager results
+    # test_structure_factor_array_projected_potential_honors_lazy compares.
     structure_factor = abtem.StructureFactor(
         atoms, g_max=g_max, thermal_sigma=thermal_sigma
     )
 
     structure_factor_potential = structure_factor.get_projected_potential(
-        slice_thickness=slice_thickness, sampling=sampling, lazy=lazy
+        slice_thickness=slice_thickness, sampling=sampling, lazy=False
     )
 
     parametrization = abtem.parametrizations.LobatoParametrization(sigmas=thermal_sigma)
@@ -472,7 +474,7 @@ def test_potential_from_structure_factor(
     )
 
     structure_factor_potential = structure_factor_potential.project().compute()
-    potential = potential.build(lazy=lazy).project().compute()
+    potential = potential.build(lazy=False).project().compute()
 
     # sampling is honoured (to within fitting the grid to the cell)
     assert np.allclose(structure_factor_potential.sampling, sampling, rtol=0.05)
