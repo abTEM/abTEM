@@ -28,6 +28,38 @@ requires_gpaw = pytest.mark.skipif(
     "gpaw" not in sys.modules, reason="requires gpaw"
 )
 
+# 1s binding energies [eV] of C and Cu, close to what GPAW's all-electron
+# solver gives. Only the energies enter the kinematic and delocalisation checks.
+C_1S = -284.0
+CU_1S = -8979.0
+
+
+def _synthetic_potential(bound_energy, continuum_energies, **kwargs):
+    """1s -> p transition potential from analytic radial functions.
+
+    ``TransitionPotential.build`` reads only the state energies for its
+    kinematic and delocalisation checks, and the radial functions only through
+    the overlap integral, so a hydrogen-like 1s and a free spherical wave
+    exercise the same code as a GPAW solve -- in a fraction of the time, and
+    without GPAW.
+    """
+    from abtem.inelastic.core_loss import AtomicWaveFunction, RadialWavefunction
+
+    r = np.linspace(1e-6, 10.0, 2000)
+    bound = RadialWavefunction(
+        n=1, l=0, energy=bound_energy, radial_grid=r, radial_values=r * np.exp(-r)
+    )
+    transitions = []
+    for epsilon in continuum_energies:
+        excited = RadialWavefunction(
+            n=None, l=1, energy=epsilon, radial_grid=r, radial_values=np.sin(r)
+        )
+        transitions += [
+            (AtomicWaveFunction(bound, 0), AtomicWaveFunction(excited, ml))
+            for ml in (-1, 0, 1)
+        ]
+    return TransitionPotential(14, transitions, **kwargs)
+
 
 class TestEnergyIntegral:
     def test_nodes_lie_inside_the_interval(self):
@@ -288,22 +320,6 @@ class TestRadialWavefunctionBound:
 class TestPrecisionConfig:
     """The transition potential must follow ``config['precision']``."""
 
-    @staticmethod
-    def _fake_transitions():
-        return TestTransitionPotentialWeights._fake_transitions(2)
-
-    @pytest.mark.parametrize(
-        "precision, expected",
-        [("float32", np.complex64), ("float64", np.complex128)],
-    )
-    def test_build_allocates_at_the_configured_precision(self, precision, expected):
-        import abtem
-        from abtem.core.utils import get_dtype
-
-        with abtem.config.set({"precision": precision}):
-            assert get_dtype(complex=True) is expected
-
-    @requires_gpaw
     @pytest.mark.parametrize(
         "precision, expected",
         [("float32", np.complex64), ("float64", np.complex128)],
@@ -312,9 +328,8 @@ class TestPrecisionConfig:
         import abtem
 
         with abtem.config.set({"precision": precision}):
-            transitions = SubshellTransitions(14, 1, 0, epsilon=25.0)
-            potential = transitions.get_transition_potentials(
-                extent=6.0, gpts=64, energy=100e3
+            potential = _synthetic_potential(
+                CU_1S, [25.0], extent=6.0, gpts=32, energy=100e3
             ).build()
             assert potential.array.dtype == expected
 
@@ -326,50 +341,39 @@ def test_dead_set_threshold_is_gone():
     assert not hasattr(TransitionPotentialArray, "set_threshold")
 
 
-@requires_gpaw
 class TestKinematicLimit:
     """The energy loss cannot exceed the beam energy."""
 
-    def test_excessive_epsilon_range_raises_clearly(self):
-        # Cu K threshold is ~8.8 keV; stop = 60 keV puts the loss past a 30 keV beam.
-        transitions = SubshellTransitions(
-            29, 1, 0, epsilon=EnergyIntegral(stop=60000.0, num=4)
-        )
-        with pytest.raises(ValueError, match="exceeds the beam energy"):
-            transitions.get_transition_potentials(
-                extent=6.0, gpts=64, energy=30e3
-            ).build()
+    # Cu K threshold is ~9 keV; continuum energies up to 60 keV put the loss
+    # past a 30 keV beam.
+    EPSILONS = EnergyIntegral(stop=60000.0, num=4).energies
 
-    def test_message_names_the_threshold_and_the_remedy(self):
-        transitions = SubshellTransitions(
-            29, 1, 0, epsilon=EnergyIntegral(stop=60000.0, num=4)
+    def test_excessive_epsilon_range_raises_clearly(self):
+        potential = _synthetic_potential(
+            CU_1S, self.EPSILONS, extent=6.0, gpts=32, energy=30e3
         )
-        with pytest.raises(ValueError) as excinfo:
-            transitions.get_transition_potentials(
-                extent=6.0, gpts=64, energy=30e3
-            ).build()
+        with pytest.raises(ValueError, match="exceeds the beam energy") as excinfo:
+            potential.build()
+        # The message names the threshold and the remedy.
         message = str(excinfo.value)
         assert "ionisation threshold" in message
         assert "EnergyIntegral" in message
 
     def test_a_workable_range_still_builds(self):
-        transitions = SubshellTransitions(
-            29, 1, 0, epsilon=EnergyIntegral(stop=20000.0, num=4)
-        )
-        potential = transitions.get_transition_potentials(
-            extent=6.0, gpts=64, energy=200e3
+        potential = _synthetic_potential(
+            CU_1S, self.EPSILONS, extent=6.0, gpts=32, energy=200e3
         ).build()
         assert np.isfinite(potential.array).all()
+        assert np.abs(potential.array).max() > 0.0
 
 
-@requires_gpaw
 class TestDelocalisationWarning:
     """A cell smaller than a few delocalisation lengths truncates the potential."""
 
     @staticmethod
-    def _build(extent, energy, Z=6):
-        return SubshellTransitions(Z, 1, 0, epsilon=25.0).get_transition_potentials(
-            extent=extent, gpts=128, energy=energy
+    def _build(extent, energy, bound_energy=C_1S):
+        return _synthetic_potential(
+            bound_energy, [25.0], extent=extent, gpts=32, energy=energy
         ).build()
 
     def test_small_cell_warns(self):
@@ -391,5 +395,5 @@ class TestDelocalisationWarning:
 
         with _warnings.catch_warnings(record=True) as caught:
             _warnings.simplefilter("always")
-            self._build(extent=8.0, energy=300e3, Z=29)
+            self._build(extent=8.0, energy=300e3, bound_energy=CU_1S)
         assert not [w for w in caught if "delocalisation" in str(w.message)]
