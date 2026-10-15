@@ -1034,22 +1034,37 @@ class TestBlochWavesEnergyEnsemble:
                 err_msg=f"Inactive beams non-zero at energy index {i}",
             )
 
-    def test_diffraction_patterns_eager_matches_lazy(self, bw_multi, dp_multi):
-        """lazy=False takes a separate code path through the same _embed_beams/
-        stack helpers (used directly, not via da.stack/map_blocks) -- this is
-        the path BlochwaveEnsemble._run_calculate_diffraction_patterns actually
-        calls (it always computes eagerly per dask block), so a bug specific
-        to it doesn't show up through dp_multi/dp_single above, which only
-        exercise the lazy branch via .compute(). On CPU both branches use
-        numpy either way; the eager branch additionally needs to allocate its
-        zero-padding array on whatever device the per-energy result is
-        actually on, rather than assuming numpy, since it runs unconditionally
-        for every _run_calculate_diffraction_patterns block regardless of
-        device."""
-        eager = bw_multi.calculate_diffraction_patterns(BLOCH_THICKNESS, lazy=False)
-        assert isinstance(eager, IndexedDiffractionPatterns)
-        assert eager.array.shape == dp_multi.array.shape
-        np.testing.assert_array_equal(eager.array, dp_multi.array)
+
+def test_bloch_waves_multi_energy_diffraction_patterns_eager_matches_lazy():
+    """lazy=False takes a separate code path through the same _embed_beams/
+    stack helpers (used directly, not via da.stack/map_blocks) -- this is
+    the path BlochwaveEnsemble._run_calculate_diffraction_patterns actually
+    calls (it always computes eagerly per dask block), so a bug specific
+    to it doesn't show up through TestBlochWavesEnergyEnsemble's dp_multi/
+    dp_single, which only exercise the lazy branch via .compute(). On CPU both
+    branches use numpy either way; the eager branch additionally needs to
+    allocate its zero-padding array on whatever device the per-energy result
+    is actually on, rather than assuming numpy, since it runs unconditionally
+    for every _run_calculate_diffraction_patterns block regardless of
+    device.
+
+    g_max=3 instead of the class's BLOCH_G_MAX=8 (413 instead of ~4200 beams):
+    the energies still have different active-beam sets (289 and 385 of the
+    413), so the zero-padding is exercised, at a fraction of the cost."""
+    bw = BlochWaves(
+        _srtio3_atoms(), energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=3.0
+    )
+    n_union = int(bw._hkl_mask.sum())
+    assert all(int(sub.sum()) < n_union for sub in bw._energy_hkl_masks), (
+        "every energy must leave some beams of the union inactive, or the "
+        "zero-padding this test is about is not exercised"
+    )
+
+    lazy = bw.calculate_diffraction_patterns(BLOCH_THICKNESS).compute()
+    eager = bw.calculate_diffraction_patterns(BLOCH_THICKNESS, lazy=False)
+    assert isinstance(eager, IndexedDiffractionPatterns)
+    assert eager.array.shape == lazy.array.shape
+    np.testing.assert_array_equal(eager.array, lazy.array)
 
 
 BLOCH_ENSEMBLE_N_ROTATIONS = 4
