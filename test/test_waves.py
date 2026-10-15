@@ -20,25 +20,6 @@ from abtem.core.energy import energy2wavelength
 from abtem.prism.s_matrix import BaseSMatrix
 from abtem.waves import Waves
 
-# @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
-# @given(grid_data=grid_data())
-# def test_grid_raises(grid_data, builder):
-#     probe = builder(**grid_data)
-#     try:
-#         probe.grid.check_is_defined()
-#     except GridUndefinedError:
-#         with pytest.raises(GridUndefinedError):
-#             probe.build()
-#
-#
-# @given(grid_data=grid_data(), energy=core_st.energy(allow_none=True))
-# @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
-# def test_energy_raises(grid_data, energy, builder):
-#     probe = builder(energy=energy, **grid_data)
-#     assume(energy is None)
-#     with pytest.raises(EnergyUndefinedError):
-#         probe.build()
-
 
 @pytest.mark.parametrize(
     "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
