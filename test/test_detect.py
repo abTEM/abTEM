@@ -501,8 +501,10 @@ def test_margin_window_with_an_energy_ensemble(lazy):
     so each member still equals the single-energy detection."""
     from ase.build import bulk
 
-    atoms = bulk("Si", cubic=True).repeat((3, 3, 2))
-    potential = abtem.Potential(atoms, sampling=0.05, slice_thickness=2.0)
+    # small and coarse (136 x 136 gpts): still 50 pixels within max_angle at
+    # 300 keV, and an ensemble crop taken before the margin gives 70
+    atoms = bulk("Si", cubic=True).repeat((2, 2, 1))
+    potential = abtem.Potential(atoms, sampling=0.08, slice_thickness=2.0)
     energies = [100e3, 300e3]
     detector = abtem.PixelatedDetector(max_angle=60, margin=1.5, window_func="hann")
 
