@@ -467,7 +467,13 @@ def test_skew_probe_positioning():
 
 
 def test_skew_stem_scan_runs():
-    """A full STEM scan (probe + annular detector) runs end-to-end on a skew grid."""
+    """A full STEM scan (probe + annular detector) runs end-to-end on a skew grid, and
+    positions one lattice vector apart give the same signal.
+
+    On a skew grid a GridScan's start/end are along-axis (a, b) coordinates, so a
+    4 x 4 scan over 2a x 2b has period two pixels along both axes. Mapping the scan
+    positions as Cartesian (x, y) instead puts (0, a) off the lattice and fails this
+    by the full on-/off-atom contrast (~40%)."""
     import numpy as np
     from ase import Atoms
 
@@ -480,10 +486,16 @@ def test_skew_stem_scan_runs():
     atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, 6)
     pot = abtem.Potential(atoms, gpts=(96, 96), slice_thickness=cz)
     probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)  # cell comes from the potential
-    scan = abtem.GridScan(start=(0, 0), end=(a * 1.5, a * 1.5), gpts=(5, 5))
+    scan = abtem.GridScan(start=(0, 0), end=(a * 2, a * 2), gpts=(4, 4))
     images = probe.scan(pot, scan=scan, detectors=abtem.AnnularDetector(20, 80)).compute()
-    assert images.array.shape == (5, 5)
-    assert np.all(np.isfinite(images.array))
+    image = np.asarray(images.array)
+    assert image.shape == (4, 4)
+    assert np.all(np.isfinite(image))
+    # the scan resolves the lattice: on-atom vs off-atom contrast is ~40%
+    assert (image.max() - image.min()) / image.max() > 0.2
+    # measured 1e-7 relative
+    for axis in (0, 1):
+        assert np.allclose(image, np.roll(image, 2, axis=axis), rtol=1e-5, atol=0)
 
 
 def test_reused_wave_does_not_leak_cell_across_potentials():
