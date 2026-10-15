@@ -149,36 +149,18 @@ def test_detect(data, detector, lazy, device):
 #     assert np.allclose(measurement1.array, measurement2.array)
 
 
-@pytest.mark.parametrize("lazy", [False, True])
-def test_radial_sensitivity(lazy):
+def test_radial_sensitivity():
     """A radially varying detector sensitivity weights the diffraction pattern by
     ``w(alpha)`` before integration. Verify against a manually computed ground truth and
     that uniform sensitivity reproduces the unweighted detector."""
     from abtem.detectors import RadialSensitivity
 
     probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, extent=20, gpts=256)
-    waves = probe.build(lazy=lazy)
 
     def value(measurement):
         if measurement.is_lazy:
             measurement = measurement.compute()
         return np.asarray(measurement.array)
-
-    plain = value(abtem.AnnularDetector(inner=0, outer=20).detect(waves))
-    unit = value(
-        abtem.AnnularDetector(
-            inner=0, outer=20, sensitivity=lambda a: np.ones_like(a)
-        ).detect(waves)
-    )
-    assert np.allclose(plain, unit)
-
-    linear = value(
-        abtem.AnnularDetector(
-            inner=0, outer=20, sensitivity=lambda a: a / 20.0
-        ).detect(waves)
-    )
-    # Down-weighting with w(alpha) <= 1 must reduce the signal.
-    assert linear < plain
 
     # Manual ground truth from the raw diffraction pattern.
     dp = value(
@@ -192,23 +174,45 @@ def test_radial_sensitivity(lazy):
     alpha = np.sqrt(kx**2 + ky**2)
     mask = alpha < 20
     manual = (dp * mask * (alpha / 20.0)).sum()
-    assert np.isclose(manual, linear, rtol=1e-4)
 
-    # The (angles, values) lookup form matches the equivalent callable.
-    lookup = value(
-        abtem.AnnularDetector(
-            inner=0, outer=20, sensitivity=([0, 10, 20], [0.0, 0.5, 1.0])
+    # Detection with a sensitivity goes through detect's eager and lazy
+    # (map_blocks) paths; the checks after this loop do not detect lazy waves.
+    for lazy in (False, True):
+        waves = probe.build(lazy=lazy)
+
+        plain = value(abtem.AnnularDetector(inner=0, outer=20).detect(waves))
+        unit = value(
+            abtem.AnnularDetector(
+                inner=0, outer=20, sensitivity=lambda a: np.ones_like(a)
+            ).detect(waves)
+        )
+        assert np.allclose(plain, unit), f"lazy={lazy}"
+
+        linear = value(
+            abtem.AnnularDetector(
+                inner=0, outer=20, sensitivity=lambda a: a / 20.0
+            ).detect(waves)
+        )
+        # Down-weighting with w(alpha) <= 1 must reduce the signal.
+        assert linear < plain, f"lazy={lazy}"
+        assert np.isclose(manual, linear, rtol=1e-4), f"lazy={lazy}"
+
+        # The (angles, values) lookup form matches the equivalent callable.
+        lookup = value(
+            abtem.AnnularDetector(
+                inner=0, outer=20, sensitivity=([0, 10, 20], [0.0, 0.5, 1.0])
+            ).detect(waves)
+        )
+        assert np.isclose(lookup, linear, rtol=1e-4), f"lazy={lazy}"
+
+        # The FlexibleAnnularDetector weights per-pixel before binning, so
+        # integrating its polar bins reproduces the sensitivity-weighted annular
+        # detector.
+        flexible = abtem.FlexibleAnnularDetector(
+            step_size=0.5, inner=0, outer=20, sensitivity=lambda a: a / 20.0
         ).detect(waves)
-    )
-    assert np.isclose(lookup, linear, rtol=1e-4)
-
-    # The FlexibleAnnularDetector weights per-pixel before binning, so integrating its
-    # polar bins reproduces the sensitivity-weighted annular detector.
-    flexible = abtem.FlexibleAnnularDetector(
-        step_size=0.5, inner=0, outer=20, sensitivity=lambda a: a / 20.0
-    ).detect(waves)
-    flexible_img = value(flexible.integrate_radial(0, 20))
-    assert np.isclose(flexible_img, linear, rtol=2e-2)
+        flexible_img = value(flexible.integrate_radial(0, 20))
+        assert np.isclose(flexible_img, linear, rtol=2e-2), f"lazy={lazy}"
 
     # The sensitivity survives a copy (and thus ensemble partitioning).
     detector = abtem.AnnularDetector(
