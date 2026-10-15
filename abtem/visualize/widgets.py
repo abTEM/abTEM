@@ -9,7 +9,8 @@ import numpy as np
 from traitlets.traitlets import link
 
 from abtem.core import config
-from abtem.core.axes import AxisMetadata, ThicknessAxis
+from abtem.core.axes import AxisMetadata
+from abtem.visualize.visualizations import default_ensemble_index  # noqa: F401
 
 if TYPE_CHECKING:
     pass
@@ -39,18 +40,6 @@ def _format_options(options):
             formatted_options.append(option)
 
     return formatted_options
-
-
-def default_ensemble_index(axis_metadata: AxisMetadata, length: int) -> int:
-    """Index shown for an ensemble axis that is not explicitly indexed.
-
-    Thickness series default to their last plane (the exit surface): with an integer
-    ``exit_planes``, the first plane is the entrance surface at zero thickness, i.e.
-    the unscattered incident wave.
-    """
-    if isinstance(axis_metadata, ThicknessAxis):
-        return length - 1
-    return 0
 
 
 def slider_from_axes_metadata(

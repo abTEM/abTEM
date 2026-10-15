@@ -86,12 +86,6 @@ except ImportError:
     pass
 
 
-xr: Optional[ModuleType] = None
-try:
-    import xarray as xr  # type: ignore
-except ImportError:
-    pass
-
 em: Optional[ModuleType] = None
 try:
     import quantem as em  # type: ignore
@@ -2618,10 +2612,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ImportError
             If xarray is not installed.
         """
-        if xr is None:
+        # Imported here: xarray (with pandas) adds ~0.4 s to `import abtem`.
+        try:
+            import xarray as xr  # type: ignore
+        except ImportError as error:
             raise ImportError(
                 "This functionality of *ab*TEM requires xarray, see https://xarray.dev/."
-            )
+            ) from error
 
         coords = {}
         dims = []

@@ -75,7 +75,6 @@ from abtem.core.utils import (
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import LinesArtist
 from abtem.visualize.visualizations import Visualization
-from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
 interpolate_bilinear_cuda: Optional[Callable] = None
 sum_run_length_encoded: Optional[Callable] = None
@@ -83,18 +82,6 @@ sum_run_length_encoded_cuda: Optional[Callable] = None
 if cp is not None:
     from abtem.core._cuda import interpolate_bilinear as interpolate_bilinear_cuda
     from abtem.core._cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
-
-xr: Optional[ModuleType] = None
-try:
-    import xarray as xr
-except ImportError:
-    xr = None
-
-pd: Optional[ModuleType] = None
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pd = None
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -2005,6 +1992,8 @@ class _BaseMeasurement2D(BaseMeasurements):
         )
 
         if interact:
+            from abtem.visualize.widgets import ImageGUI
+
             visualization.interact(ImageGUI, display=display)
 
         return visualization
@@ -2807,6 +2796,8 @@ class _BaseMeasurement1D(BaseMeasurements):
         )
 
         if interact:
+            from abtem.visualize.widgets import LinesGUI
+
             visualization.interact(LinesGUI, display=display)
 
         if common_scale is False and visualization._explode:
@@ -6680,8 +6671,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         data_array_of_indexed_spots : xarray.DataArray
         """
-        if xr is None:
-            raise RuntimeError("xarray is required to convert to DataArray.")
+        try:
+            import xarray as xr
+        except ImportError as error:
+            raise RuntimeError("xarray is required to convert to DataArray.") from error
 
         coords = []
         for axes_metadata, n in zip(self.ensemble_axes_metadata, self.ensemble_shape):
@@ -6728,8 +6721,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         data_frame : pd.DataFrame
 
         """
-        if pd is None:
-            raise RuntimeError("pandas is required to convert to DataFrame.")
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError as error:
+            raise RuntimeError("pandas is required to convert to DataFrame.") from error
 
         if self.ensemble_shape:
             if len(self.ensemble_shape) > 1:
@@ -6908,6 +6903,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
         if interact:
+            from abtem.visualize.widgets import ScatterGUI
+
             visualization.interact(ScatterGUI, display=display)
 
         return visualization
