@@ -1213,7 +1213,9 @@ def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
     """
     from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
 
-    for Z, n, l in [(14, 1, 0), (14, 2, 1), (22, 3, 2)]:
+    # Not l = 0: there 4*l+2 is the spin factor 2 as well, so it cannot tell
+    # the two apart.
+    for Z, n, l in [(14, 2, 1), (22, 3, 2)]:
         transitions = SubshellTransitions(Z, n, l, epsilon=25.0)
         one_ml_transitions = [
             t for t in transitions.get_transitions() if t[0].ml == 0
