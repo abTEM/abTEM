@@ -53,22 +53,30 @@ def _gaussian_core_density(Nc, a, n_r=2000, r_max_factor=10):
     return r, core_density
 
 
+#: The fake POTCAR's species, as (core electron count Nc, Gaussian width a [Å]).
+_FAKE_CORES = {"C": (2.0, 0.8), "O": (6.0, 1.3)}
+
+
 @pytest.fixture
 def fake_potcar(tmp_path):
-    r_c, rho_c = _gaussian_core_density(Nc=2.0, a=0.8)
-    r_o, rho_o = _gaussian_core_density(Nc=6.0, a=1.3)
     path = tmp_path / "POTCAR_fake"
-    _write_fake_potcar(path, {"C": (r_c, rho_c), "O": (r_o, rho_o)})
+    cores = {s: _gaussian_core_density(Nc, a) for s, (Nc, a) in _FAKE_CORES.items()}
+    _write_fake_potcar(path, cores)
     return path
 
 
 def test_parse_potcar_roundtrip(fake_potcar):
+    """The parsed grid and core density are the arrays written, to the 12
+    significant digits the file stores."""
     elements = parse_potcar(fake_potcar)
-    assert set(elements) == {"C", "O"}
-    for symbol in ("C", "O"):
-        assert elements[symbol]["grid"].shape == (2000,)
-        assert elements[symbol]["core_density"].shape == (2000,)
-        assert elements[symbol]["nmax"] == 2000
+    assert set(elements) == set(_FAKE_CORES)
+    for symbol, (Nc, a) in _FAKE_CORES.items():
+        r, core_density = _gaussian_core_density(Nc, a)
+        assert elements[symbol]["nmax"] == len(r)
+        np.testing.assert_allclose(elements[symbol]["grid"], r, rtol=1e-11)
+        np.testing.assert_allclose(
+            elements[symbol]["core_density"], core_density, rtol=1e-11, atol=1e-11
+        )
 
 
 def test_core_density_fourier_transform_matches_gaussian_analytic():
@@ -84,45 +92,34 @@ def test_core_density_fourier_transform_matches_gaussian_analytic():
     assert f_numeric == pytest.approx(f_analytic, rel=1e-5)
 
 
-def test_fourier_transform_at_zero_equals_core_electron_count(fake_potcar):
-    """f(G=0) integrates the core density over all space, i.e. the core electron
-    count -- this is what makes the correction physically meaningful."""
-    elements = parse_potcar(fake_potcar)
-    interp_c, Nc_c = get_core_density_fourier_interpolator("C", elements)
-    interp_o, Nc_o = get_core_density_fourier_interpolator("O", elements)
+def test_core_density_interpolator_is_the_gaussian_transform_in_inverse_angstrom(
+    fake_potcar,
+):
+    """For each fake species the interpolator reproduces the analytic transform
+    `Nc * exp(-(a * G / 2) ** 2)`, with G in 1 / Å, out to G = 20 / Å where it
+    has decayed to zero.
 
-    assert Nc_c == pytest.approx(2.0, rel=1e-4)
-    assert Nc_o == pytest.approx(6.0, rel=1e-4)
-    assert interp_c(0.0) == pytest.approx(Nc_c)
-    assert interp_o(0.0) == pytest.approx(Nc_o)
+    f(G=0) integrates the core density over all space, i.e. the core electron
+    count -- this is what makes the correction physically meaningful.
 
-
-def test_interpolator_g_axis_is_inverse_angstrom(fake_potcar):
-    """The POTCAR radial grid is in Ångström (VASP's own internal length unit),
-    so the interpolator's argument must be an angular wavenumber in 1 / Å.
-
-    The fixture's oxygen core is a Gaussian of width `a = 1.3` (in grid units),
-    whose l=0 transform is `Nc * exp(-(a * G / 2) ** 2)`. Reading the grid as
-    Bohr instead would rescale the G axis by 1 / 0.529, compressing the core
-    density in real space and driving `V_core(0)` ~1.9x too high.
+    The POTCAR radial grid is in Ångström (VASP's own internal length unit), so
+    the interpolator's argument must be an angular wavenumber in 1 / Å. Reading
+    the grid as Bohr instead would rescale the G axis by 1 / 0.529, compressing
+    the core density in real space and driving `V_core(0)` ~1.9x too high.
     """
     elements = parse_potcar(fake_potcar)
-    interp, Nc = get_core_density_fourier_interpolator("O", elements)
+    G = np.linspace(0.0, 20.0, 81)  # 1 / Å
 
-    a = 1.3  # Å, matching the fixture
-    G = np.linspace(0.0, 4.0, 25)  # 1 / Å
-    # The tolerance is set by the fixture's own trapezoid quadrature; misreading
-    # the grid as Bohr would miss by ~0.9 here, some 450x larger.
-    assert interp(G) == pytest.approx(Nc * np.exp(-((a * G / 2) ** 2)), abs=2e-3)
+    for symbol, (Nc_written, a) in _FAKE_CORES.items():
+        interp, Nc = get_core_density_fourier_interpolator(symbol, elements)
 
-
-def test_interpolator_decays_with_increasing_g(fake_potcar):
-    elements = parse_potcar(fake_potcar)
-    interp, Nc = get_core_density_fourier_interpolator("O", elements)
-    G = np.array([0.0, 1.0, 5.0, 20.0])
-    f = interp(G)
-    assert f[0] == pytest.approx(Nc)
-    assert np.all(np.diff(f) < 0)
+        assert Nc == pytest.approx(Nc_written, rel=1e-4), symbol
+        assert interp(0.0) == pytest.approx(Nc), symbol
+        # The fixture's trapezoid quadrature is good to 3e-5 here; misreading
+        # the grid as Bohr would miss by 0.9 (C) and 2.6 (O).
+        assert interp(G) == pytest.approx(
+            Nc * np.exp(-((a * G / 2) ** 2)), abs=2e-3
+        ), symbol
 
 
 @pytest.fixture
