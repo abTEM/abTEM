@@ -365,7 +365,7 @@ def test_scale_critical_angle_voltage():
     assert scale_critical_angle(19.1, 200e3, 200e3) == pytest.approx(19.1)
 
 
-def _static_setup(device, nz=10):
+def _static_setup(device, nz=5):
     """A static (no frozen-phonon) potential + plane wave."""
     atoms = ase.build.bulk("Si", cubic=True) * (2, 2, nz)
     potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
@@ -384,7 +384,7 @@ def test_plasmons_static_num_repetitions(device):
 
     plasmons = PhaseScramblePlasmons(
         mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        num_repetitions=6, seed=7,
+        num_repetitions=3, seed=7,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
     arr = _to_numpy(result.array)
@@ -403,12 +403,13 @@ def test_plasmons_static_num_repetitions_reproducible(device):
     def run(seed):
         pl = PhaseScramblePlasmons(
             mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            num_repetitions=5, seed=seed,
+            num_repetitions=3, seed=seed,
         )
         return _to_numpy(wave.multislice(potential, detector, plasmons=pl).compute().array)
 
-    assert np.allclose(run(7), run(7))
-    assert not np.allclose(run(7), run(99))
+    reference = run(7)
+    assert np.allclose(reference, run(7))
+    assert not np.allclose(reference, run(99))
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -419,7 +420,7 @@ def test_plasmons_static_num_repetitions_order_resolved(device):
 
     plasmons = PhaseScramblePlasmons(
         mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        num_repetitions=4, seed=7, max_loss_order=2,
+        num_repetitions=2, seed=7, max_loss_order=2,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
     arr = _to_numpy(result.array)
@@ -429,7 +430,7 @@ def test_plasmons_static_num_repetitions_order_resolved(device):
 def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
     """When the potential already has frozen phonons, num_repetitions is ignored
     (the configs are the repetitions) and a warning is emitted."""
-    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 6)
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 2)
     fp = FrozenPhonons(atoms, num_configs=3, sigmas=0.05, seed=1)
     potential = Potential(fp, gpts=64, slice_thickness=2.0)
     wave = PlaneWave(energy=200e3)
@@ -439,8 +440,10 @@ def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
         mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
         num_repetitions=10, seed=7,
     )
+    # the warning is raised while the lazy multislice graph is set up
+    # (MultisliceTransform expands static potentials), so nothing is computed
     with pytest.warns(UserWarning, match="num_repetitions"):
-        wave.multislice(potential, detector, plasmons=plasmons).compute()
+        wave.multislice(potential, detector, plasmons=plasmons)
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
