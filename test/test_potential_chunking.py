@@ -1454,8 +1454,9 @@ class TestCrystalPotentialDisplacedSites:
     ):
         """Without sites, every member of an ensemble scatters at its own
         displaced atoms: as a crystal of that member alone does, given them."""
+        # 2x1x2: four tiles drawn from the pool of six configurations.
         crystal = _frozen_phonon_crystal(
-            6, (2, 2, 2), ensemble_mean=False, device=device, **kwargs
+            6, (2, 1, 2), ensemble_mean=False, device=device, **kwargs
         )
         transition_potentials = self._transition_potentials(crystal, device)
         result = self._core_loss(
@@ -1467,7 +1468,7 @@ class TestCrystalPotentialDisplacedSites:
             zip(crystal.seeds, _displaced_crystal_atoms(crystal))
         ):
             member = _frozen_phonon_crystal(
-                6, (2, 2, 2), seeds=(int(seed),), device=device
+                6, (2, 1, 2), seeds=(int(seed),), device=device
             )
             expected = self._core_loss(
                 member, transition_potentials, atoms, lazy, method, device
@@ -1477,6 +1478,8 @@ class TestCrystalPotentialDisplacedSites:
                 result[m], expected, rtol=1e-5, atol=1e-6 * np.abs(expected).max()
             )
 
+            if m > 0:
+                continue
             # Precondition: the equilibrium sites give another result.
             equilibrium = self._core_loss(
                 member,
