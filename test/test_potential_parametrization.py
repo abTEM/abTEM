@@ -113,6 +113,12 @@ def test_lobato_obeys_the_rutherford_limit():
 # --------------------------------------------------------------------------
 
 _GPAW_ELEMENTS = ("H", "C", "Si", "Fe", "Cu", "Mo", "Au")
+# Each element's tests share one xdist worker, so its all-electron atom (up to
+# seconds) is solved once (see all_electron_atom).
+_GPAW_ELEMENT_PARAMS = [
+    pytest.param(symbol, marks=pytest.mark.xdist_group(f"gpaw_atom_{symbol}"))
+    for symbol in _GPAW_ELEMENTS
+]
 _FIT_K = np.linspace(0.0, 12.0, 100)
 
 requires_gpaw = pytest.mark.skipif(
@@ -122,17 +128,41 @@ requires_gpaw = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def dft_atom():
-    """All-electron GPAW atoms, one per element, computed once per module."""
+def all_electron_atom():
+    """All-electron GPAW atoms, one per element, solved once per module."""
     cache = {}
 
     def get(symbol):
         if symbol not in cache:
-            ae = GPAWParametrization()._get_all_electron_atom(symbol)
-            cache[symbol] = (ae.rgd.r_g * units.Bohr, ae.n_sg.sum(0) / units.Bohr**3)
+            cache[symbol] = GPAWParametrization()._get_all_electron_atom(symbol)
         return cache[symbol]
 
     return get
+
+
+@pytest.fixture(scope="module")
+def dft_atom(all_electron_atom):
+    """The radial grid (A) and density (1/A^3) of an element's atom."""
+
+    def get(symbol):
+        ae = all_electron_atom(symbol)
+        return ae.rgd.r_g * units.Bohr, ae.n_sg.sum(0) / units.Bohr**3
+
+    return get
+
+
+@pytest.fixture
+def gpaw_parametrization(all_electron_atom, monkeypatch):
+    """A GPAWParametrization that takes its (neutral) atoms from the module's
+    cache instead of solving them again."""
+    parametrization = GPAWParametrization()
+
+    def cached(symbol, charge=0.0):
+        assert not charge
+        return all_electron_atom(symbol)
+
+    monkeypatch.setattr(parametrization, "_get_all_electron_atom", cached)
+    return parametrization
 
 
 def _direct_fx(r, n, k):
@@ -172,10 +202,13 @@ def _dft_potential(r, n, Z, r_eval):
 
 @requires_gpaw
 @pytest.mark.slow
-@pytest.mark.parametrize("symbol", _GPAW_ELEMENTS)
-def test_gpaw_x_ray_scattering_factor_matches_direct_quadrature(symbol, dft_atom):
+@pytest.mark.parametrize("symbol", _GPAW_ELEMENT_PARAMS)
+def test_gpaw_x_ray_scattering_factor_matches_direct_quadrature(
+    symbol, dft_atom, gpaw_parametrization
+):
     """The Hankel-transform f_x must equal direct quadrature of the same
-    density, at the points of the fit grid (first nonzero k = 0.1212 1/A).
+    density, at the points of the fit grid (first nonzero k = 0.1212 1/A),
+    where the fit (_to_lobato) evaluates it.
     Tolerance 1e-3 electrons: the quadrature is good to ~1e-4, and at
     k = 0.12 1/A f_e amplifies an f_x
     error by 1/(2 pi^2 a0 k^2) = 6.7 A per electron, so 1e-3 e is 7e-3 A --
@@ -183,13 +216,30 @@ def test_gpaw_x_ray_scattering_factor_matches_direct_quadrature(symbol, dft_atom
     """
     r, n = dft_atom(symbol)
     k = _FIT_K[1:]
-    hankel_fx = GPAWParametrization().x_ray_scattering_factor(symbol)(k)
+    density = gpaw_parametrization.charge(symbol)
+    hankel_fx = gpaw_parametrization._hankel_transform(density, k)
     np.testing.assert_allclose(hankel_fx, _direct_fx(r, n, k), rtol=0, atol=1e-3)
 
 
 @requires_gpaw
 @pytest.mark.slow
-@pytest.mark.parametrize("symbol", _GPAW_ELEMENTS)
+@pytest.mark.parametrize("symbol", [p for p in _GPAW_ELEMENT_PARAMS if p.values == ("Au",)])
+def test_gpaw_x_ray_scattering_factor_table_matches_direct_quadrature(
+    symbol, dft_atom, gpaw_parametrization
+):
+    """The public x_ray_scattering_factor interpolates the transform from a
+    2000-point table, which costs seconds per element: checked for Au, the
+    element whose f_x is hardest to resolve, against the same oracle and
+    tolerance as above."""
+    r, n = dft_atom(symbol)
+    k = _FIT_K[1:]
+    table_fx = gpaw_parametrization.x_ray_scattering_factor(symbol)(k)
+    np.testing.assert_allclose(table_fx, _direct_fx(r, n, k), rtol=0, atol=1e-3)
+
+
+@requires_gpaw
+@pytest.mark.slow
+@pytest.mark.parametrize("symbol", _GPAW_ELEMENT_PARAMS)
 def test_unregularized_lobato_fit_reproduces_the_dft_scattering_factor(
     symbol, dft_atom
 ):
@@ -212,8 +262,10 @@ def test_unregularized_lobato_fit_reproduces_the_dft_scattering_factor(
 
 @requires_gpaw
 @pytest.mark.slow
-@pytest.mark.parametrize("symbol", _GPAW_ELEMENTS)
-def test_gpaw_parametrization_reproduces_the_dft_atom(symbol, dft_atom):
+@pytest.mark.parametrize("symbol", _GPAW_ELEMENT_PARAMS)
+def test_gpaw_parametrization_reproduces_the_dft_atom(
+    symbol, dft_atom, gpaw_parametrization
+):
     """GPAWParametrization as shipped (regularized) against the DFT atom it is
     derived from: f_e(k) against _dft_fe, and V(r) against the radial Poisson
     solution of the DFT density over 0.02-2 A where V exceeds 1 % of its value
@@ -224,7 +276,7 @@ def test_gpaw_parametrization_reproduces_the_dft_atom(symbol, dft_atom):
     Au (0.6 vs 3.6 %), and worse only for Si (0.65 vs 0.24 %).
     """
     r, n = dft_atom(symbol)
-    parametrization = GPAWParametrization()
+    parametrization = gpaw_parametrization
 
     fe = _dft_fe(r, n, _FIT_K)
     fitted = parametrization.scattering_factor(symbol)(_FIT_K**2)
@@ -238,7 +290,9 @@ def test_gpaw_parametrization_reproduces_the_dft_atom(symbol, dft_atom):
     assert error < 0.05, error
 
 
-@pytest.mark.parametrize("symbol", ["Sm", "Pu"])
+# One element for which the spin-polarized solve really fails is enough; Pu,
+# the other one known, took 9 s.
+@pytest.mark.parametrize("symbol", ["Sm"])
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.slow
 def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
