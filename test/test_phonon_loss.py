@@ -115,13 +115,13 @@ def test_invalid_components_raise_for_parity_projected_input():
         phonon_loss_diffraction_patterns(waves, components="tds")
 
 
-@pytest.mark.parametrize("kwargs", [{"unbiased": True}, {"reduction_dtype": "float64"}])
-def test_component_options_raise_for_parity_projected_input(kwargs):
+def test_component_options_raise_for_parity_projected_input():
     """unbiased and reduction_dtype shape the elastic/diffuse split, which the
     parity path does not form; passing them must raise rather than be ignored."""
     waves = _make_parity_exit_waves([0.02, 0.05])
-    with pytest.raises(ValueError, match="do not apply to a parity-projected"):
-        phonon_loss_diffraction_patterns(waves, **kwargs)
+    for kwargs in ({"unbiased": True}, {"reduction_dtype": "float64"}):
+        with pytest.raises(ValueError, match="do not apply to a parity-projected"):
+            phonon_loss_diffraction_patterns(waves, **kwargs)
 
 
 @pytest.mark.parametrize(
