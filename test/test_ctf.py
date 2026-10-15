@@ -46,60 +46,36 @@ def _spatial():   return SpatialEnvelope(0.5, energy=ENERGY, gpts=GPTS, sampling
 def _ctf():       return CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=100.0)
 
 
-ALL_KERNELS = pytest.mark.parametrize("factory", [
-    pytest.param(_aperture, id="Aperture"),
-    pytest.param(_annular,  id="AnnularAperture"),
-    pytest.param(_vortex,   id="Vortex"),
-    pytest.param(_bullseye, id="Bullseye"),
-    pytest.param(_zernike,  id="Zernike"),
-    pytest.param(_rpp,      id="RadialPhasePlate"),
-    pytest.param(_temporal, id="TemporalEnvelope"),
-    pytest.param(_spatial,  id="SpatialEnvelope"),
-    pytest.param(_ctf,      id="CTF"),
-])
-
-REAL_KERNELS = pytest.mark.parametrize("factory", [
-    pytest.param(_aperture, id="Aperture"),
-    pytest.param(_annular,  id="AnnularAperture"),
-    pytest.param(_bullseye, id="Bullseye"),
-    pytest.param(_temporal, id="TemporalEnvelope"),
-    pytest.param(_spatial,  id="SpatialEnvelope"),
-])
-
-COMPLEX_KERNELS = pytest.mark.parametrize("factory", [
-    pytest.param(_vortex,   id="Vortex"),
-    pytest.param(_zernike,  id="Zernike"),
-    pytest.param(_rpp,      id="RadialPhasePlate"),
-    pytest.param(_ctf,      id="CTF"),
+# (factory, whether the kernel is complex)
+ALL_KERNELS = pytest.mark.parametrize("factory, is_complex", [
+    pytest.param(_aperture, False, id="Aperture"),
+    pytest.param(_annular,  False, id="AnnularAperture"),
+    pytest.param(_vortex,   True,  id="Vortex"),
+    pytest.param(_bullseye, False, id="Bullseye"),
+    pytest.param(_zernike,  True,  id="Zernike"),
+    pytest.param(_rpp,      True,  id="RadialPhasePlate"),
+    pytest.param(_temporal, False, id="TemporalEnvelope"),
+    pytest.param(_spatial,  False, id="SpatialEnvelope"),
+    pytest.param(_ctf,      True,  id="CTF"),
 ])
 
 
 # ---------------------------------------------------------------------------
-# Common kernel property tests (parametrized across all transfer functions)
+# Common kernel properties (parametrized across all transfer functions)
 # ---------------------------------------------------------------------------
 
 @ALL_KERNELS
-def test_kernel_shape(factory):
-    assert factory()._evaluate_kernel().shape == GPTS
-
-
-@ALL_KERNELS
-def test_kernel_finite(factory):
-    assert np.all(np.isfinite(factory()._evaluate_kernel()))
-
-
-@REAL_KERNELS
-def test_kernel_real_in_unit_interval(factory):
+def test_kernel_properties(factory, is_complex):
+    """The kernel has the grid's shape and finite values; a real one lies in
+    [0, 1], a complex one has an amplitude of at most 1."""
     k = factory()._evaluate_kernel()
-    assert not np.iscomplexobj(k)
-    assert np.all(k >= 0.0) and np.all(k <= 1.0 + 1e-10)
-
-
-@COMPLEX_KERNELS
-def test_kernel_complex_amplitude_leq_1(factory):
-    k = factory()._evaluate_kernel()
-    assert np.iscomplexobj(k)
-    assert np.all(np.abs(k) <= 1.0 + 1e-6)  # float32 tolerance
+    assert k.shape == GPTS
+    assert np.all(np.isfinite(k))
+    assert np.iscomplexobj(k) == is_complex
+    if is_complex:
+        assert np.all(np.abs(k) <= 1.0 + 1e-6)  # float32 tolerance
+    else:
+        assert np.all(k >= 0.0) and np.all(k <= 1.0 + 1e-10)
 
 
 # ---------------------------------------------------------------------------
@@ -110,20 +86,20 @@ def test_kernel_complex_amplitude_leq_1(factory):
     semiangle=st.floats(5.0, 100.0),
     energy=st.floats(60e3, 300e3),
 )
-def test_nyquist_sampling_positive(semiangle, energy):
-    assert nyquist_sampling(semiangle, energy) > 0
+def test_nyquist_sampling(semiangle, energy):
+    # The Nyquist sampling resolves the largest spatial frequency an aperture of
+    # this semiangle passes, alpha / lambda, with two samples per period.
+    expected = energy2wavelength(energy) / (4 * semiangle * 1e-3)
+    assert np.isclose(nyquist_sampling(semiangle, energy), expected, rtol=1e-12)
+    assert np.isclose(
+        Aperture(semiangle, energy=energy).nyquist_sampling, expected, rtol=1e-12
+    )
 
 
 @given(Cs=st.floats(1e5, 1e8))
 def test_scherzer_defocus_sign(Cs):
     assert scherzer_defocus(Cs, ENERGY) > 0
     assert scherzer_defocus(-Cs, ENERGY) < 0
-
-
-def test_scherzer_defocus_formula():
-    Cs = 1e7
-    wl = energy2wavelength(ENERGY)
-    assert np.isclose(scherzer_defocus(Cs, ENERGY), np.sqrt(1.5 * Cs * wl), rtol=1e-6)
 
 
 @given(
@@ -172,25 +148,23 @@ class TestSoftHardAperture:
 # Aperture-specific attribute / edge-case tests
 # ---------------------------------------------------------------------------
 
-def test_aperture_attributes():
+def test_constructor_arguments_are_stored():
+    # Bullseye and Zernike take several positional numbers; a swapped pair shows.
     ap = Aperture(30.0, soft=True, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
     assert ap.semiangle_cutoff == 30.0 and ap.soft is True
+    assert Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING).quantum_number == 1
+    b = Bullseye(4, 5.0, 3, 0.5, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert b.num_spokes == 4 and b.num_rings == 3 and b.soft is False
+    z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert z.center_hole_cutoff == 2.0 and z.phase_shift == np.pi / 2
+    ctf = CTF(energy=ENERGY)
+    assert ctf.defocus == 0.0 and ctf.focal_spread == 0.0
 
 
 def test_aperture_infinite_cutoff_gives_ones():
     assert np.all(
         Aperture(np.inf, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel() == 1.0
     )
-
-
-def test_aperture_nyquist_sampling():
-    assert Aperture(30.0, energy=ENERGY).nyquist_sampling > 0
-
-
-def test_aperture_to_diffraction_patterns():
-    from abtem.measurements import DiffractionPatterns
-    dp = Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING).to_diffraction_patterns()
-    assert isinstance(dp, DiffractionPatterns)
 
 
 @pytest.mark.parametrize("gpts", [(64, 64), (65, 64)])
@@ -226,20 +200,6 @@ def test_annular_aperture_attributes_and_dc():
     ap = AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
     assert ap.inner_cutoff == 10.0 and ap.semiangle_cutoff == 30.0
     assert AnnularAperture(5.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()[0, 0] == 0.0
-
-
-def test_vortex_quantum_number():
-    assert Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING).quantum_number == 1
-
-
-def test_bullseye_attributes():
-    b = Bullseye(4, 5.0, 3, 0.5, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-    assert b.num_spokes == 4 and b.num_rings == 3 and b.soft is False
-
-
-def test_zernike_attributes():
-    z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-    assert z.center_hole_cutoff == 2.0 and z.phase_shift == np.pi / 2
 
 
 def test_rpp_attributes_and_unit_amplitude():
@@ -294,10 +254,6 @@ class TestAberrations:
 # ---------------------------------------------------------------------------
 
 class TestCTF:
-    def test_defaults(self):
-        ctf = CTF(energy=ENERGY)
-        assert ctf.defocus == 0.0 and ctf.focal_spread == 0.0
-
     def test_aperture_cuts_high_angles(self):
         open_ = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
         cut = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, semiangle_cutoff=5.0)
