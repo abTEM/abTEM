@@ -711,7 +711,7 @@ def test_prism_eels_inelastic_crop_window(device):
     atoms = unit_atoms * (1, 1, 2)
     slice_thickness = float(unit_atoms.cell[2, 2])
     potential = abtem.Potential(
-        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device=device
+        atoms, gpts=(64, 64), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -721,16 +721,16 @@ def test_prism_eels_inelastic_crop_window(device):
     # carries real signal and a tighter window measurably truncates it.
     from abtem.inelastic.core_loss import energy2sigma
     rng = np.random.default_rng(7)
-    sampling = tuple(e / g for e, g in zip(potential.extent, (128, 128)))
+    sampling = tuple(e / g for e, g in zip(potential.extent, (64, 64)))
     yy, xx = np.meshgrid(
-        np.arange(128).astype(np.float32) * sampling[0],
-        np.arange(128).astype(np.float32) * sampling[1],
+        np.arange(64).astype(np.float32) * sampling[0],
+        np.arange(64).astype(np.float32) * sampling[1],
         indexing="ij",
     )
     gauss = np.exp(-(xx ** 2 + yy ** 2) / (2 * 0.5 ** 2)).astype(np.float32)
     raw = (
-        rng.standard_normal((2, 128, 128))
-        + 1j * rng.standard_normal((2, 128, 128))
+        rng.standard_normal((2, 64, 64))
+        + 1j * rng.standard_normal((2, 64, 64))
     ).astype(np.complex64)
     tp_array = (np.fft.fft2(raw * gauss[None]) / energy2sigma(energy)).astype(
         np.complex64
@@ -744,7 +744,7 @@ def test_prism_eels_inelastic_crop_window(device):
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
         start=(0, 0), end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
-        sampling=0.5, endpoint=False,
+        sampling=1.0, endpoint=False,
     )
 
     s2 = abtem.SMatrix(
