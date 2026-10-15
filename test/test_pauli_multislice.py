@@ -1051,11 +1051,14 @@ def test_split_exit_planes(device):
         ), f"exit plane at {k} slices does not match an independent run"
 
 
-@pytest.mark.parametrize("method", ["series", "split"])
-def test_z_periodic_fields(method):
+def test_z_periodic_fields():
     """Fields covering one z-period of a repeating potential are cycled
     modulo their slice count, matching explicitly z-tiled fields; also a
-    CrystalPotential smoke test for the same workflow."""
+    CrystalPotential smoke test for the same workflow.
+
+    Run with the split scheme only: the modulo slice lookup and the
+    divisibility check happen before the series/split dispatch, and the
+    series scheme took 7x longer here."""
     from abtem.potentials.iam import CrystalPotential
 
     atoms = bulk("Fe", "bcc", a=2.87, cubic=True)
@@ -1090,7 +1093,7 @@ def test_z_periodic_fields(method):
         vector_potential=A_unit,
         magnetic_field=B_unit,
         average_field=(0, 0, 2.2),
-        algorithm=ALGORITHMS[method],
+        algorithm=FourierMultislice(),
     )
     out_tiled = pauli_multislice(
         spinor_input.copy(),
@@ -1098,7 +1101,7 @@ def test_z_periodic_fields(method):
         vector_potential=A_tiled,
         magnetic_field=B_tiled,
         average_field=(0, 0, 2.2),
-        algorithm=ALGORITHMS[method],
+        algorithm=FourierMultislice(),
     )
 
     a1, a2 = to_numpy(out_periodic.array), to_numpy(out_tiled.array)
@@ -1113,7 +1116,7 @@ def test_z_periodic_fields(method):
             crystal,
             vector_potential=A_bad,
             magnetic_field=B_unit,
-            algorithm=ALGORITHMS[method],
+            algorithm=FourierMultislice(),
         )
 
 
