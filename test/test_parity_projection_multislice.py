@@ -50,24 +50,6 @@ def _run(equilibrium, snapshots, energies, lazy=False, **ensemble_kwargs):
     return abtem.PlaneWave(energy=100e3).multislice(potential, lazy=lazy)
 
 
-def test_multislice_keeps_parity_axis_length_two(equilibrium):
-    """The PhononParityAxis is exactly ("real", "twin"); nothing else is
-    attached to the exit waves -- no static/equilibrium wave is needed."""
-    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
-    exit_waves = _run(
-        equilibrium, snapshots, [0.02, 0.05],
-        equilibrium_atoms=equilibrium, parity_projection=True,
-    )
-
-    parity_axis = next(
-        ax for ax in exit_waves.ensemble_axes_metadata
-        if isinstance(ax, PhononParityAxis)
-    )
-    assert parity_axis.values == ("real", "twin")
-    assert exit_waves.array.shape[0] == 2
-    assert not hasattr(exit_waves, "static_exit_wave")
-
-
 def test_branches_match_independent_direct_multislice(equilibrium):
     snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=1)
     potential_kwargs = dict(sampling=0.1, slice_thickness=equilibrium.cell[2, 2])
@@ -121,6 +103,9 @@ def test_all_equals_ordinary_tds_over_full_parity_set(equilibrium):
         exit_waves_full = _run(equilibrium, full_set, energies, ensemble_mean=False)
         dp_full = phonon_loss_diffraction_patterns(exit_waves_full, components="diffuse")
 
+    assert dp.array.shape[0] == 3  # all, one, multi
+    assert dp_full.array.shape == dp.array.shape[1:]
+    assert np.all(np.isfinite(dp.array)) and np.all(np.isfinite(dp_full.array))
     scale = np.abs(dp.array[1]).max()
     np.testing.assert_allclose(dp.array[0], dp_full.array, atol=1e-9 * scale, rtol=0)
     np.testing.assert_allclose(
@@ -132,7 +117,9 @@ def test_multi_channel_float32_matches_float64(equilibrium):
     """The multi-phonon channel is a variance whose Bragg-position
     cancellation single precision cannot resolve; it is therefore evaluated
     in complex128 internally regardless of the configured precision. A
-    float32 session must reproduce the float64 result closely."""
+    float32 session must reproduce the float64 result closely, and its "one"
+    (a plain mean of |.|**2) and "multi" (a variance) channels can never go
+    negative beyond rounding."""
     snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=4, scale=0.08)
     results = {}
     for precision in ("float64", "float32"):
@@ -145,6 +132,10 @@ def test_multi_channel_float32_matches_float64(equilibrium):
                 phonon_loss_diffraction_patterns(exit_waves).array, dtype=np.float64
             )
 
+    assert np.all(np.isfinite(results["float32"]))
+    tiny = 1e-6 * np.abs(results["float32"][1:]).max()
+    assert np.all(results["float32"][1:] >= -tiny)
+
     scale = results["float64"][1].max()
     for slot in range(3):
         np.testing.assert_allclose(
@@ -153,35 +144,21 @@ def test_multi_channel_float32_matches_float64(equilibrium):
         )
 
 
-def test_full_pipeline_end_to_end(equilibrium):
-    """Ensemble -> Potential -> multislice -> phonon_loss_diffraction_patterns,
-    all the way through, with enough configs for a non-trivial (if noisy)
-    signal; and a plain (non-parity) ensemble must keep working unchanged."""
-    snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=8, scale=0.08)
-    exit_waves = _run(
-        equilibrium, snapshots, [0.02, 0.05],
-        equilibrium_atoms=equilibrium, parity_projection=True,
-    )
-    dp = phonon_loss_diffraction_patterns(exit_waves)
-
-    assert dp.array.shape[0] == 3  # all, one, multi
-    assert np.all(np.isfinite(dp.array))
-    # "one" is a plain mean of |.|**2 and "multi" a variance, so neither can
-    # go negative beyond float rounding
-    tiny = 1e-6 * np.abs(dp.array[1:]).max()
-    assert np.all(dp.array[1:] >= -tiny)
-
-    exit_waves_plain = _run(equilibrium, snapshots, [0.02, 0.05], ensemble_mean=False)
-    dp_plain = phonon_loss_diffraction_patterns(exit_waves_plain, components="diffuse")
-    assert dp_plain.array.shape == dp.array.shape[1:]
-    assert np.all(np.isfinite(dp_plain.array))
-
-
 def test_lazy_pipeline_matches_eager(equilibrium):
+    """Lazy and eager runs agree, and the eager exit waves carry a parity axis
+    of exactly ("real", "twin") -- no static/equilibrium wave is attached."""
     snapshots = _make_snapshots(equilibrium, n_energies=2, n_configs=3)
     kwargs = dict(equilibrium_atoms=equilibrium, parity_projection=True)
     exit_waves_lazy = _run(equilibrium, snapshots, [0.02, 0.05], lazy=True, **kwargs)
     exit_waves = _run(equilibrium, snapshots, [0.02, 0.05], lazy=False, **kwargs)
+
+    parity_axis = next(
+        ax for ax in exit_waves.ensemble_axes_metadata
+        if isinstance(ax, PhononParityAxis)
+    )
+    assert parity_axis.values == ("real", "twin")
+    assert exit_waves.array.shape[0] == 2
+    assert not hasattr(exit_waves, "static_exit_wave")
 
     assert isinstance(exit_waves_lazy.array, da.core.Array)
     dp_lazy = phonon_loss_diffraction_patterns(exit_waves_lazy)
