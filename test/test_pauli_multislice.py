@@ -888,13 +888,15 @@ def test_iam_noncollinear_smoke():
     """End-to-end run with quasi-dipole IAM fields from canted atomic
     moments: finite result, near-unit norm, and a magnetic signal that
     vanishes when the moments are removed."""
-    atoms = bulk("Fe", "bcc", a=2.87, cubic=True) * (2, 2, 2)
+    # (2, 2, 1) on 32^2 shows the same as (2, 2, 2) on 64^2: norm loss 0.9%
+    # vs 0.8% (limit 5%), magnetic difference 5e-7 vs 2e-7 (limit 1e-8)
+    atoms = bulk("Fe", "bcc", a=2.87, cubic=True) * (2, 2, 1)
     moments = np.zeros((len(atoms), 3))
     moments[:, 0] = 2.2 * np.sign(np.cos(np.arange(len(atoms))))  # canted/alternating
     moments[:, 2] = 2.2
     set_magnetic_moments(atoms, moments)
 
-    gpts, dz = 64, 0.5
+    gpts, dz = 32, 0.5
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=dz).build(
         lazy=False
     )
