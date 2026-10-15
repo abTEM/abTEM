@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import json
 import operator
 import warnings
@@ -72,25 +73,28 @@ if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
 
 
+# Optional dependencies, imported on first use by _optional_module rather than
+# here: importing them made every `import abtem` slower, whether or not it ever
+# exported a TIFF, a HyperSpy signal or a quantem Dataset. A module set here
+# (as the tests do with stand-ins) is used as it is.
 tifffile: Optional[ModuleType] = None
-try:
-    import tifffile  # type: ignore
-except ImportError:
-    pass
-
-
 hs: Optional[ModuleType] = None
-try:
-    import hyperspy.api as hs  # type: ignore
-except ImportError:
-    pass
-
-
 em: Optional[ModuleType] = None
-try:
-    import quantem as em  # type: ignore
-except ImportError:
-    pass
+
+
+def _optional_module(
+    attribute: str, name: str, message: str, error: type[Exception] = ImportError
+) -> ModuleType:
+    """The module `name`, imported once into this module's `attribute`; raises
+    `error` with `message` if it is not installed."""
+    module = globals()[attribute]
+    if module is None:
+        try:
+            module = importlib.import_module(name)
+        except ImportError as import_error:
+            raise error(message) from import_error
+        globals()[attribute] = module
+    return module
 
 
 ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
@@ -2224,10 +2228,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs :
             Keyword arguments passed to `tifffile.imwrite`.
         """
-        if tifffile is None:
-            raise RuntimeError(
-                "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile."
-            )
+        tifffile = _optional_module(
+            "tifffile",
+            "tifffile",
+            "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile.",
+            error=RuntimeError,
+        )
 
         array = self.array
         if self.is_lazy:
@@ -2538,10 +2544,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         This method requires Hyperspy to be installed. You can find more information
         about Hyperspy at https://hyperspy.org.
         """
-        if hs is None:
-            raise ImportError(
-                "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
-            )
+        hs = _optional_module(
+            "hs",
+            "hyperspy.api",
+            "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org.",
+        )
 
         if self._base_dims == 1:
             signal_type = hs.signals.Signal1D
@@ -2652,10 +2659,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axes get origin 0 and sampling 1.
         """
 
-        if em is None:
-            raise ImportError(
-                "This functionality of *ab*TEM requires quantem, see https://github.com/electronmicroscopy/quantem."
-            )
+        em = _optional_module(
+            "em",
+            "quantem",
+            "This functionality of *ab*TEM requires quantem, see https://github.com/electronmicroscopy/quantem.",
+        )
 
         def _normalize_unit(unit):
             if unit is None:
