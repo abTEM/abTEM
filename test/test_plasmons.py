@@ -455,8 +455,8 @@ def test_plasmons_prism_matches_single_probe(device):
     renormalization is applied to the recombined probe (issue #296). With
     interpolation=1 and downsampling disabled the two share a grid and must
     agree to machine precision for a single static configuration and seed."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
-    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 3)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
     energy, semiangle = 200e3, 20.0
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
@@ -492,8 +492,8 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
     """Order-resolved PRISM reproduces the single-probe order-resolved result:
     each loss-order probe is the linear recombination of that order's S-matrix
     channel, and the orders share a single renormalization scale."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
-    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 3)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
     energy, semiangle = 200e3, 20.0
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
@@ -532,8 +532,8 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
 
 def test_plasmons_prism_order_resolved_lazy_matches_eager():
     """Lazy and eager order-resolved PRISM builds give identical results."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
-    potential = Potential(atoms, gpts=96, slice_thickness=2.0)
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 3)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0)
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
 
@@ -560,10 +560,10 @@ def test_plasmons_prism_order_resolved_multiconfig_averages():
     """Order-resolved PRISM over a frozen-phonon ensemble averages the
     configurations (the phase-scramble repetitions) while preserving the
     loss-order axis; eager and lazy agree."""
-    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 3)
     fp = Potential(
         FrozenPhonons(atoms, num_configs=3, sigmas=0.0, seed=1),
-        gpts=96, slice_thickness=2.0,
+        gpts=64, slice_thickness=2.0,
     )
     pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
     detector = abtem.PixelatedDetector(max_angle="valid")
