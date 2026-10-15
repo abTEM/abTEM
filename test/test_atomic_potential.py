@@ -331,10 +331,15 @@ class TestScatteringFactorCacheKey:
             "touched entry is never evicted, so once is the only right answer"
         )
 
-    @pytest.mark.slow
     def test_concurrent_access_does_not_race(self):
         """Hand-rolled dict eviction raced: two threads evicting the same key
-        gave KeyError, and iteration could see the dict resized underneath."""
+        gave KeyError, and iteration could see the dict resized underneath.
+
+        The race is in the cache's dict operations, not in the arrays, so the
+        grids are small and the cache holds 4 entries for 12 grids: almost
+        every call evicts. Restoring the racy eviction fails this in every one
+        of 20 runs, within a fraction of a second; 4000 calls per thread on
+        grids up to 207^2 took ~30 s."""
         import sys
         import threading
 
@@ -342,8 +347,8 @@ class TestScatteringFactorCacheKey:
 
         def hammer(integrator, seed):
             try:
-                for n in range(4000):
-                    g = 8 + ((seed * 7919 + n * 13) % 200)
+                for n in range(300):
+                    g = 8 + ((seed * 7919 + n * 13) % 12)
                     integrator.get_scattering_factor(
                         "Si", (g, g), (0.1, 0.1), "cpu"
                     )
@@ -351,6 +356,7 @@ class TestScatteringFactorCacheKey:
                 errors.append(exc)
 
         integrator = ScatteringFactorProjectionIntegrals()
+        integrator._scattering_factors._maxsize = 4
         # A short switch interval makes the window reachable in seconds
         # instead of relying on luck.
         previous = sys.getswitchinterval()
@@ -831,27 +837,30 @@ class TestIntegratorCaches:
         assert clone._tables is not used._tables
         assert len(clone._tables) == 0
 
-    @pytest.mark.slow
     def test_concurrent_access_serves_correct_values(self):
-        """Not just "nothing raised": check what the cache hands back."""
+        """Not just "nothing raised": check what the cache hands back.
+
+        Small grids and a 4-entry cache for 16 grids, as in
+        test_concurrent_access_does_not_race: the race is in the dict
+        operations, and with every grid cheap, every value can be checked."""
         import sys
         import threading
 
         integrator = ScatteringFactorProjectionIntegrals()
-        combinations = [("Ga", (16 + n,) * 2, (0.1, 0.1)) for n in range(150)]
+        integrator._scattering_factors._maxsize = 4
+        combinations = [("Ga", (16 + n,) * 2, (0.1, 0.1)) for n in range(16)]
         truth = {
             c: ScatteringFactorProjectionIntegrals().get_scattering_factor(*c, "cpu")
-            for c in combinations[:8]
+            for c in combinations
         }
         errors = []
 
         def hammer(seed):
             try:
-                for n in range(1500):
+                for n in range(300):
                     combination = combinations[(seed * 7919 + n * 13) % len(combinations)]
                     got = integrator.get_scattering_factor(*combination, "cpu")
-                    expected = truth.get(combination)
-                    if expected is not None and not np.array_equal(got, expected):
+                    if not np.array_equal(got, truth[combination]):
                         errors.append(f"wrong value for {combination}")
             except Exception as exc:  # noqa: BLE001 -- report, don't mask
                 errors.append(exc)
@@ -867,7 +876,7 @@ class TestIntegratorCaches:
         finally:
             sys.setswitchinterval(previous)
         assert not errors, f"{len(errors)} failures, first: {errors[0]!r}"
-        assert len(integrator._scattering_factors) <= _MAX_CACHE_ENTRIES
+        assert len(integrator._scattering_factors) <= 4
 
 
 class TestGaussianProjectionIntegralsUsable:
