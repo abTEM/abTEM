@@ -1174,11 +1174,12 @@ class TestCrystalPotentialChunking:
 
         atoms = bulk("Si", cubic=True)
         unit = Potential(atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2])
-        crystal = CrystalPotential(unit, (2, 2, 3), seeds=seeds)
+        # Tiled along x and z, so the sites must be repeated in-plane and span
+        # more than one member slice.
+        crystal = CrystalPotential(unit, (2, 1, 2), seeds=seeds)
         rng = np.random.default_rng(0)
-        array = rng.standard_normal((2, 64, 64)) + 1j * rng.standard_normal(
-            (2, 64, 64)
-        )
+        shape = (2, *crystal.gpts)
+        array = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
 
         def run(sites):
             transition_potentials = TransitionPotentialArray(
