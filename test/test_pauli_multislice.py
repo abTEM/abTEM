@@ -290,87 +290,45 @@ def test_average_field_precession(device):
     assert abs(norm - 1) < 1e-4
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("method", ["series", "split"])
-@pytest.mark.parametrize("l", [1, -1])
-def test_vortex_orbital_phase(device, method, l):
-    """A vortex beam with OAM l in A = B x r / 2 acquires the orbital Zeeman
-    phase -e*B*l/(2*hbar*k) per unit length."""
-    gpts, extent = 128, 40.0
-    n_slices, dz = 10, 1.0
-    B0 = 5e4  # T
+def vortex_spinor(l, gpts, extent, device="cpu"):
+    """Spin-up Gaussian vortex beam with OAM l, centred on the grid."""
+    from abtem.core.backend import get_array_module
 
     x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
     X, Y = np.meshgrid(x, x, indexing="ij")
-
-    potential = vacuum_potential(n_slices, gpts, extent, dz)
-
-    A_array = np.zeros((n_slices, 3, gpts, gpts))
-    A_array[:, 0] = -0.5 * B0 * Y * dz
-    A_array[:, 1] = +0.5 * B0 * X * dz
-    A = VectorPotentialArray(A_array, slice_thickness=dz, extent=(extent, extent))
-    A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
-
     vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
         -(X**2 + Y**2) / (2 * 6.0**2)
     )
     vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
-
-    from abtem.core.backend import get_array_module
 
     waves = abtem.PlaneWave(
         energy=ENERGY, gpts=gpts, extent=extent, device=device
     ).build(lazy=False)
     xp = get_array_module(device)
     waves._array = xp.asarray(vortex.astype(to_numpy(waves.array).dtype))
-
-    spinor = waves.to_spinor((1, 0))
-
-    out_B = pauli_multislice(
-        spinor.copy(),
-        potential,
-        vector_potential=A,
-        magnetic_field=B_zero,
-        algorithm=ALGORITHMS[method],
-    )
-    out_0 = pauli_multislice(
-        spinor.copy(),
-        potential,
-        vector_potential=A_zero,
-        magnetic_field=B_zero,
-        algorithm=ALGORITHMS[method],
-    )
-
-    overlap = np.vdot(to_numpy(out_0.array[0]), to_numpy(out_B.array[0]))
-    phase = np.angle(overlap)
-
-    wavelength = energy2wavelength(ENERGY)
-    expected = -e_over_hbar * wavelength / (2 * np.pi) * B0 * l / 2 * (n_slices * dz)
-
-    assert abs(phase - expected) < 0.02 * abs(expected)
+    return waves.to_spinor((1, 0))
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("method", ["series", "split"])
-def test_average_field_vortex_orbital_phase(device, method):
-    """The orbital coupling reached through `average_field` matches both the
-    analytic vortex phase and the explicitly-supplied-A route.
+def test_vortex_orbital_phase(device, method):
+    """A vortex beam with OAM l in A = B x r / 2 acquires the orbital Zeeman
+    phase -e*B*l/(2*hbar*k) per unit length, by both routes to that physics:
 
-    `test_vortex_orbital_phase` covers the A_xy.grad_xy term when A is
-    handed in as a VectorPotentialArray. This covers the other route to the
-    same physics: `average_field`, where abTEM itself builds the
-    non-periodic A_np = B x r / 2. That path is otherwise only exercised by
-    `test_average_field_precession`, which uses a plane wave and therefore
-    probes only the sigma.B Zeeman term, never the orbital one -- yet it is
-    the path the vortex OAM magnetic signal depends on.
+    - an explicitly supplied VectorPotentialArray (the A_xy.grad_xy term),
+      checked separately for l = +L and l = -L;
+    - `average_field`, where abTEM itself builds the non-periodic
+      A_np = B x r / 2. That is the path the vortex OAM magnetic signal
+      depends on, and `test_average_field_precession` (a plane wave) only
+      probes its sigma.B Zeeman term, never the orbital one. Since
+      `average_field` also contributes an l-independent Zeeman phase, it is
+      checked through the l = +L minus l = -L difference, 2*phi.
 
-    Comparing l = +L against l = -L cancels the l-independent Zeeman phase
-    that `average_field` also contributes, leaving 2*phi with
-    phi = -e*B*l*z/(2*hbar*k).
+    Each phase is measured against a field-free run of the same beam.
     """
-    gpts, extent = 128, 40.0
+    gpts, extent = 64, 40.0
     n_slices, dz = 10, 1.0
-    B0 = 5e4  # T, as in test_vortex_orbital_phase
+    B0 = 5e4  # T
     L = 2
 
     x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
@@ -379,7 +337,7 @@ def test_average_field_vortex_orbital_phase(device, method):
     potential = vacuum_potential(n_slices, gpts, extent, dz)
     A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
 
-    # the explicit-A reference, A = B x r / 2 with B along z
+    # the explicit-A route, A = B x r / 2 with B along z
     A_array = np.zeros((n_slices, 3, gpts, gpts))
     A_array[:, 0] = -0.5 * B0 * Y * dz
     A_array[:, 1] = +0.5 * B0 * X * dz
@@ -387,26 +345,7 @@ def test_average_field_vortex_orbital_phase(device, method):
         A_array, slice_thickness=dz, extent=(extent, extent)
     )
 
-    from abtem.core.backend import get_array_module
-
-    xp = get_array_module(device)
-
-    def phase_for(l, use_average_field):
-        vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
-            -(X**2 + Y**2) / (2 * 6.0**2)
-        )
-        vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
-        waves = abtem.PlaneWave(
-            energy=ENERGY, gpts=gpts, extent=extent, device=device
-        ).build(lazy=False)
-        waves._array = xp.asarray(vortex.astype(to_numpy(waves.array).dtype))
-        spinor = waves.to_spinor((1, 0))
-
-        kwargs = (
-            {"vector_potential": A_zero, "average_field": (0.0, 0.0, B0)}
-            if use_average_field
-            else {"vector_potential": A_explicit}
-        )
+    def run(spinor, **kwargs):
         out = pauli_multislice(
             spinor.copy(),
             potential,
@@ -414,28 +353,37 @@ def test_average_field_vortex_orbital_phase(device, method):
             algorithm=ALGORITHMS[method],
             **kwargs,
         )
-        ref = pauli_multislice(
-            spinor.copy(),
-            potential,
-            vector_potential=A_zero,
-            magnetic_field=B_zero,
-            algorithm=ALGORITHMS[method],
+        return to_numpy(out.array[0])
+
+    explicit, average = {}, {}
+    for l in (L, -L):
+        spinor = vortex_spinor(l, gpts, extent, device)
+        reference = run(spinor, vector_potential=A_zero)
+        explicit[l] = np.angle(
+            np.vdot(reference, run(spinor, vector_potential=A_explicit))
         )
-        overlap = np.vdot(to_numpy(ref.array[0]), to_numpy(out.array[0]))
-        return np.angle(overlap)
+        average[l] = np.angle(
+            np.vdot(
+                reference,
+                run(spinor, vector_potential=A_zero, average_field=(0.0, 0.0, B0)),
+            )
+        )
 
     wavelength = energy2wavelength(ENERGY)
-    expected = (
-        -e_over_hbar * wavelength / (2 * np.pi) * B0 * L / 2 * (n_slices * dz)
-    )
+    phase_per_l = -e_over_hbar * wavelength / (2 * np.pi) * B0 / 2 * (n_slices * dz)
 
-    avg = phase_for(+L, True) - phase_for(-L, True)
-    explicit = phase_for(+L, False) - phase_for(-L, False)
+    for l, phase in explicit.items():
+        expected = phase_per_l * l
+        assert abs(phase - expected) < 0.02 * abs(expected), (
+            f"explicit A, l={l}: phase {phase}, expected {expected}"
+        )
 
+    avg = average[L] - average[-L]
+    expected = 2 * phase_per_l * L
     # the average_field route reproduces the analytic orbital phase ...
-    assert abs(avg - 2 * expected) < 0.05 * abs(2 * expected)
+    assert abs(avg - expected) < 0.05 * abs(expected)
     # ... and agrees with the explicitly-supplied-A route
-    assert abs(avg - explicit) < 0.05 * abs(2 * expected)
+    assert abs(avg - (explicit[L] - explicit[-L])) < 0.05 * abs(expected)
 
 
 def test_average_field_transverse_warns_axial_is_silent():
@@ -481,47 +429,43 @@ def test_average_field_transverse_orbital_contribution_dropped():
     component must not alter it at all -- only its separate Zeeman
     (spin) effect applies (test_average_field_precession).
 
-    Verified with the same construction as test_average_field_vortex_
-    orbital_phase: the phase difference between l=+L and l=-L cancels the
-    l-independent Zeeman contribution, isolating the orbital one. That
-    difference must be identical whether or not a transverse component is
-    present."""
-    gpts, extent = 128, 40.0
+    Verified with the same construction as test_vortex_orbital_phase: the
+    phase difference between l=+L and l=-L cancels the l-independent Zeeman
+    contribution, isolating the orbital one. That difference must be
+    identical whether or not a transverse component is present."""
+    gpts, extent = 64, 40.0
     n_slices, dz = 10, 1.0
     Bz, Bx, L = 5e4, 3e4, 2
 
-    x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
-    X, Y = np.meshgrid(x, x, indexing="ij")
     potential = vacuum_potential(n_slices, gpts, extent, dz)
     A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
 
-    def phase_for(l, average_field):
-        vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
-            -(X**2 + Y**2) / (2 * 6.0**2)
-        )
-        vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
-        waves = abtem.PlaneWave(
-            energy=ENERGY, gpts=gpts, extent=extent, device="cpu"
-        ).build(lazy=False)
-        waves._array = vortex.astype(to_numpy(waves.array).dtype)
-        spinor = waves.to_spinor((1, 0))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            out = pauli_multislice(
-                spinor,
-                potential,
-                vector_potential=A_zero,
+    phases = {"axial": {}, "with_transverse": {}}
+    for l in (L, -L):
+        spinor = vortex_spinor(l, gpts, extent)
+        reference = to_numpy(
+            pauli_multislice(
+                spinor.copy(), potential, vector_potential=A_zero,
                 magnetic_field=B_zero,
-                average_field=average_field,
-            )
-        ref = pauli_multislice(
-            spinor.copy(), potential, vector_potential=A_zero, magnetic_field=B_zero
+            ).array[0]
         )
-        overlap = np.vdot(to_numpy(ref.array[0]), to_numpy(out.array[0]))
-        return np.angle(overlap)
+        for name, average_field in (
+            ("axial", (0.0, 0.0, Bz)),
+            ("with_transverse", (Bx, 0.0, Bz)),
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                out = pauli_multislice(
+                    spinor.copy(),
+                    potential,
+                    vector_potential=A_zero,
+                    magnetic_field=B_zero,
+                    average_field=average_field,
+                )
+            phases[name][l] = np.angle(np.vdot(reference, to_numpy(out.array[0])))
 
-    axial_only = phase_for(+L, (0.0, 0.0, Bz)) - phase_for(-L, (0.0, 0.0, Bz))
-    with_transverse = phase_for(+L, (Bx, 0.0, Bz)) - phase_for(-L, (Bx, 0.0, Bz))
+    axial_only = phases["axial"][L] - phases["axial"][-L]
+    with_transverse = phases["with_transverse"][L] - phases["with_transverse"][-L]
 
     assert abs(with_transverse - axial_only) < 1e-9
 
