@@ -50,7 +50,6 @@ _R = np.geomspace(0.01, 0.2, 100)
 _TOLERANCE = 0.05
 
 
-@pytest.mark.parametrize("atomic_number", _ALL_ELEMENTS)
 @pytest.mark.parametrize(
     "func, x",
     [
@@ -66,34 +65,41 @@ _TOLERANCE = 0.05
         "projected_scattering_factor",
     ],
 )
-def test_lobato_kirkland_match(atomic_number, func, x):
+def test_lobato_kirkland_match(func, x):
     """Two independent parametrizations of the same atomic data must agree.
 
     Deterministic over every element both tabulate. The previous single
     hypothesis draw per run checked any given element about once in a hundred
     runs -- and the old k -> 0 comparison fails for Ir and Po, so it failed
-    only occasionally.
+    only occasionally. The elements are looped over in the test, and every
+    one that fails is named.
     """
-    symbol = chemical_symbols[atomic_number]
-    kirkland = getattr(KirklandParametrization(), func)(symbol)(x)
-    lobato = getattr(LobatoParametrization(), func)(symbol)(x)
-    error = np.abs(kirkland / lobato - 1).max()
-    assert error < _TOLERANCE, error
+    errors = {}
+    for atomic_number in _ALL_ELEMENTS:
+        symbol = chemical_symbols[atomic_number]
+        kirkland = getattr(KirklandParametrization(), func)(symbol)(x)
+        lobato = getattr(LobatoParametrization(), func)(symbol)(x)
+        errors[symbol] = np.abs(kirkland / lobato - 1).max()
+    failed = {symbol: error for symbol, error in errors.items() if error >= _TOLERANCE}
+    assert not failed, failed
 
 
-@pytest.mark.parametrize("atomic_number", _ALL_ELEMENTS)
-def test_lobato_obeys_the_rutherford_limit(atomic_number):
+def test_lobato_obeys_the_rutherford_limit():
     """At large k the electron scattering factor is Rutherford scattering by
     the bare nucleus, k^2 f_e(k) -> Z / (2 pi^2 a0) (Mott-Bethe with
     f_x -> 0). Lobato & Van Dyck build this constraint into their fit. The
     correction to the limit is O(1 / (b k^2)); for the smallest b in the table
     that is < 1e-3 at k = 1000 1/A.
     """
-    symbol = chemical_symbols[atomic_number]
     k2 = np.array([1000.0**2])
-    fe = LobatoParametrization().scattering_factor(symbol)(k2)[0]
-    limit = atomic_number / (2 * np.pi**2 * units.Bohr)
-    assert abs(k2[0] * fe / limit - 1) < 1e-3
+    deviations = {}
+    for atomic_number in _ALL_ELEMENTS:
+        symbol = chemical_symbols[atomic_number]
+        fe = LobatoParametrization().scattering_factor(symbol)(k2)[0]
+        limit = atomic_number / (2 * np.pi**2 * units.Bohr)
+        deviations[symbol] = abs(k2[0] * fe / limit - 1)
+    failed = {symbol: d for symbol, d in deviations.items() if d >= 1e-3}
+    assert not failed, failed
 
 
 # --------------------------------------------------------------------------
