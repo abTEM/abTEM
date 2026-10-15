@@ -53,23 +53,16 @@ def _build_with_numpy_fft(potential):
     gpts=abtem_st.gpts(),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
-@pytest.mark.parametrize("projection", ["finite", "infinite"])
 @pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
-def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, projection):
-    """The built potential must obey the k = 0 sum rule,
-    int V d^3r = sum_atoms F_Z(0), with F the parametrization's projected
-    scattering factor (see test_potential_physics._f0 for the units).
+def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization):
+    """The built potential of random multi-atom structures must obey the k = 0
+    sum rule, int V d^3r = sum_atoms F_Z(0), with F the parametrization's
+    projected scattering factor (see test_potential_physics._f0 for the units).
 
     Infinite projection: exact up to float32 round-off and parameter storage
     (Lobato carbon's nearly cancelling terms alone move F(0) by 1.8e-5), so
-    1e-4. Finite projection: truncation at the cutoff and the taper only remove
-    potential (<= 0.2 % for Z <= 14), and the log-singular core pixel costs
-    <= 1.8 % of the atom's slice at dx = 0.1 A, scaling as dx^2
-    (test_potential_physics); at the coarsest grid drawn here, dx ~ 0.16 A,
-    that is <= 4.6 %, so 8 %. The core-pixel error is a deficit for square
-    pixels but can be an excess for anisotropic ones -- the core pixel is
-    clamped to V(min(sampling) / 2), above its average over a dx != dy pixel
-    -- so the bound is two-sided.
+    1e-4. The finite projection's total is checked, with a tighter bound, by
+    test_potential_physics.test_finite_projection_total_at_default_cutoff.
     """
     from ase.data import chemical_symbols
 
@@ -81,7 +74,7 @@ def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, p
         gpts=gpts,
         slice_thickness=slice_thickness,
         parametrization=parametrization,
-        projection=projection,
+        projection="infinite",
     )
     array = potential.build(lazy=False).compute().array
     total = float(array.astype(np.float64).sum()) * np.prod(potential.sampling)
@@ -97,10 +90,7 @@ def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, p
             for Z in atoms.numbers
         )
     deficit = 1 - total / expected
-    if projection == "infinite":
-        assert abs(deficit) < 1e-4, deficit
-    else:
-        assert abs(deficit) < 8e-2, deficit
+    assert abs(deficit) < 1e-4, deficit
 
 
 @given(
@@ -570,75 +560,57 @@ def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
 # --- depth_profile tests ---
 
 
-@pytest.fixture
-def si_potential(request):
-    """Build a Si 2x2x5 potential for depth profile tests, on the device the
-    test is parametrised over (cpu when it is not)."""
-    callspec = getattr(request.node, "callspec", None)
-    device = callspec.params.get("device", "cpu") if callspec else "cpu"
+def _si_potential(device="cpu"):
+    """A Si 2x2x5 potential for the depth-profile tests, on a grid with a different
+    number of points along x and y, so that the two projections cannot be
+    confused."""
     atoms = si_cubic_atoms() * (2, 2, 5)
-    return Potential(atoms, slice_thickness=1.0, gpts=(32, 32), device=device)
+    return Potential(atoms, slice_thickness=1.0, gpts=(32, 24), device=device)
 
 
 @devices
-def test_potential_depth_profile_shape(si_potential, device):
-    pot = si_potential.build().compute()
-    assert_array_matches_device(pot.array, device)
-    profile = pot.depth_profile()
-    n_x = pot.gpts[0]
-    n_z = pot.num_slices
-    assert profile.shape == (n_x, n_z)
+def test_potential_depth_profile_sums_the_slices_along_the_projection_axis(device):
+    """Oracle: the slices summed by hand along y (an x-z section) or x (a y-z
+    section), over the whole axis or over the `depth` in its middle, with depth
+    along the second axis."""
+    potential = _si_potential(device).build().compute()
+    assert_array_matches_device(potential.array, device)
+    array = asnumpy(potential.array).astype(np.float64)  # (z, x, y)
+    # 3 A of the 10.86 A axis: round(3 / 0.339) = 9 of the 32 pixels along x,
+    # round(3 / 0.4525) = 7 of the 24 along y, the ones in the middle.
+    middle_x, middle_y = slice(11, 20), slice(8, 15)
+    oracles = {
+        ("y", None): array.sum(axis=2).T,
+        ("x", None): array.sum(axis=1).T,
+        ("y", 3.0): array[:, :, middle_y].sum(axis=2).T,
+        ("x", 3.0): array[:, middle_x, :].sum(axis=1).T,
+    }
+    z_sampling = potential.thickness / potential.num_slices
+    for (axis, depth), oracle in oracles.items():
+        profile = potential.depth_profile(projection_axis=axis, depth=depth)
+        np.testing.assert_allclose(
+            asnumpy(profile.array),
+            oracle,
+            rtol=0,
+            atol=1e-5 * np.abs(oracle).max(),
+            err_msg=f"projection_axis={axis}, depth={depth}",
+        )
+        in_plane = potential.sampling[0 if axis == "y" else 1]
+        assert profile.sampling == pytest.approx((in_plane, z_sampling)), axis
 
 
-@devices
-def test_potential_depth_profile_x_projection(si_potential, device):
-    pot = si_potential.build().compute()
-    profile = pot.depth_profile(projection_axis="x")
-    n_y = pot.gpts[1]
-    n_z = pot.num_slices
-    assert profile.shape == (n_y, n_z)
-
-
-@devices
-def test_potential_depth_profile_sampling(si_potential, device):
-    pot = si_potential.build().compute()
-    profile = pot.depth_profile()
-
-    assert np.isclose(profile.sampling[0], pot.sampling[0])
-
-    expected_z_sampling = pot.thickness / pot.num_slices
-    assert np.isclose(profile.sampling[1], expected_z_sampling)
-
-
-def test_potential_depth_profile_invalid_axis(si_potential):
-    pot = si_potential.build().compute()
-    with pytest.raises(ValueError, match="projection_axis"):
-        pot.depth_profile(projection_axis="z")
-
-
-def test_potential_depth_profile_finite_depth(si_potential):
-    pot = si_potential.build().compute()
-    full = pot.depth_profile()
-    partial = pot.depth_profile(depth=3.0)
-    assert full.shape == partial.shape
-    assert partial.array.sum() < full.array.sum()
-
-
-def test_potential_depth_profile_lazy_delegation(si_potential):
-    profile_lazy = si_potential.depth_profile()
-    profile_built = si_potential.build().compute().depth_profile()
-    assert profile_lazy.shape == profile_built.shape
-    assert np.allclose(profile_lazy.array, profile_built.array)
-
-
-def test_potential_show_depth_profile(si_potential):
-    import matplotlib
-
-    matplotlib.use("Agg")
+def test_depth_profile_of_an_unbuilt_potential_is_that_of_the_built_one():
     from abtem.visualize import Visualization
 
-    viz = si_potential.show_depth_profile()
-    assert isinstance(viz, Visualization)
+    potential = _si_potential()
+    built = potential.build().compute()
+    np.testing.assert_allclose(
+        potential.depth_profile(depth=3.0).compute().array,
+        built.depth_profile(depth=3.0).array,
+    )
+    with pytest.raises(ValueError, match="projection_axis"):
+        built.depth_profile(projection_axis="z")
+    assert isinstance(potential.show_depth_profile(), Visualization)
 
 
 @pytest.mark.parametrize(
