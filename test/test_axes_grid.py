@@ -160,21 +160,15 @@ def test_abutting_panels_have_nonzero_gap(two_by_two_diffraction_patterns):
             assert gap * fig_width_inches > min_gap_inches
 
 
-def test_suptitle_sets_whole_figure_title(two_by_two_diffraction_patterns):
+def test_suptitle_sets_whole_figure_title_without_replacing_column_titles(
+    two_by_two_diffraction_patterns,
+):
     """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
     per-panel `title` -- must be a dedicated parameter passed through
     Visualization, not something picked up from **kwargs (which here goes
-    to the underlying imshow/pcolormesh Artist call, not the Figure)."""
-    dp = two_by_two_diffraction_patterns
-    plt.close("all")
-    visualization = dp.show(explode=True, suptitle="Whole-figure title")
-    fig = visualization.get_figure()
-    assert fig._suptitle is not None
-    assert fig._suptitle.get_text() == "Whole-figure title"
+    to the underlying imshow/pcolormesh Artist call, not the Figure).
 
-
-def test_suptitle_does_not_replace_column_titles(two_by_two_diffraction_patterns):
-    """Regression: `suptitle` was once inserted into the title `if/elif`
+    Regression: `suptitle` was once inserted into the title `if/elif`
     chain, so (a) a string `title` on an exploded plot was overwritten by the
     auto-generated axis titles and (b) passing a suptitle dropped the
     auto-generated column titles entirely. Column titles must be independent
@@ -185,9 +179,11 @@ def test_suptitle_does_not_replace_column_titles(two_by_two_diffraction_patterns
     auto = [t.get_text() for t in dp.show(explode=True)._column_titles]
     assert auto and all(auto)
 
-    with_sup = [
-        t.get_text() for t in dp.show(explode=True, suptitle="Whole")._column_titles
-    ]
+    visualization = dp.show(explode=True, suptitle="Whole")
+    fig = visualization.get_figure()
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Whole"
+    with_sup = [t.get_text() for t in visualization._column_titles]
     assert with_sup == auto
 
     custom = [t.get_text() for t in dp.show(explode=True, title="foo")._column_titles]
