@@ -137,6 +137,16 @@ def _cap_threads_per_worker(config):
         os.environ.setdefault(name, str(threads))
 
 
+def pytest_collection_finish(session):
+    # Whether collecting the tests imported PyTorch, which can break CuPy's
+    # kernel compilation in the same process; checked, before any test can
+    # have imported it, by test_backend.py's
+    # test_collecting_the_tests_does_not_import_torch.
+    session.config._abtem_torch_imported_by_collection = (
+        "torch" in sys.modules or "abtem.core._torch" in sys.modules
+    )
+
+
 def pytest_configure(config):
     _cap_threads_per_worker(config)
     config.addinivalue_line("markers", "slow: mark test as slow to run")
