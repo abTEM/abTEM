@@ -125,9 +125,11 @@ def test_charge_density_potential_on_skew_cell_preserves_cell():
         pbc=True,
         scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
     )
-    density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+    density = np.random.RandomState(0).rand(16, 16, 16).astype(np.float32) * 0.1
 
-    pot = ChargeDensityPotential(atoms, density, sampling=0.1)
+    # sampling=0.2 (13 x 13): the build cost is the skew-grid point-charge
+    # correction, which grows with the in-plane pixel count (3.4 s at sampling=0.1)
+    pot = ChargeDensityPotential(atoms, density, sampling=0.2)
     assert not pot.grid.is_orthogonal
     assert pot.cell is not None
 
