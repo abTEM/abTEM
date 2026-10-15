@@ -32,6 +32,7 @@ def test_can_build(data, waves_builder, device, lazy):
 
     waves = waves_builder.build(lazy=lazy)
 
+    assert_array_matches_laziness(waves.array, lazy=lazy)
     assert_array_matches_device(waves.array, device)
 
     assert waves.gpts == waves_builder.gpts
@@ -45,24 +46,11 @@ def test_can_build(data, waves_builder, device, lazy):
 
     assert np.isclose(waves.energy, waves_builder.accelerator.energy)
 
-
-@given(data=st.data())
-@pytest.mark.parametrize(
-    "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
-)
-@devices
-@pytest.mark.parametrize("lazy", [True, False])
-def test_can_compute(data, waves_builder, device, lazy):
-    waves_builder = data.draw(waves_builder(device=device))
-    waves = waves_builder.build(lazy=lazy)
-
-    assert_array_matches_laziness(waves.array, lazy=lazy)
+    # Computing a lazy build must deliver the array its graph promised.
     waves.compute()
-
     assert_array_matches_laziness(waves.array, lazy=False)
-    assert waves.array.shape[-2:] == waves_builder.gpts
-    assert waves_builder.shape == waves.shape
-    assert waves.array.shape[: -len(waves.base_shape)] == waves.ensemble_shape
+    assert_array_matches_device(waves.array, device)
+    assert waves_builder.shape == waves.shape == waves.array.shape
     assert waves.array.dtype == np.complex64
 
 
@@ -146,9 +134,9 @@ def test_normalized(data, waves_builder, lazy):
         abtem_st.s_matrix,
     ],
 )
-@pytest.mark.parametrize("lazy", [True, False])
-def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
+def test_empty_multislice_normalized(data, atoms, waves_builder):
     waves_builder = _draw_normalized_builder(data, waves_builder)
+    lazy = data.draw(st.booleans(), label="lazy")
 
     atoms = atoms[:0]
 
@@ -182,7 +170,6 @@ def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
 
 
 @given(data=st.data(), potential=abtem_st.potential())
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
     "waves_builder",
     [
@@ -191,12 +178,17 @@ def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
         abtem_st.s_matrix,
     ],
 )
-def test_multislice_scatter(data, potential, waves_builder, lazy):
+def test_multislice_scatter(data, potential, waves_builder):
     """Multislice with a real potential is a product of unitary operators --
     a phase-object transmission function (|t| = 1) and the Fresnel
     propagator (|P| = 1) -- so it conserves the total intensity exactly,
-    except for what the antialiasing aperture removes."""
+    except for what the antialiasing aperture removes.
+
+    test_propagation_physics checks the same unitarity for eager float64
+    builds against a round-off bound; this one also runs lazily, on drawn
+    frozen-phonon potentials and with the default antialias aperture."""
     waves_builder = _draw_normalized_builder(data, waves_builder)
+    lazy = data.draw(st.booleans(), label="lazy")
     waves_builder.grid.match(potential)
 
     initial = _total_intensity(_to_waves(waves_builder.build(lazy=lazy)))
@@ -229,7 +221,6 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
     )
 
 
-@settings(max_examples=5)
 @given(data=st.data(), potential=abtem_st.potential())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize(
@@ -239,19 +230,23 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
         abtem_st.plane_wave,
     ],
 )
-@pytest.mark.parametrize(
-    "detectors",
-    [
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.segmented_detector,
-        None,
-    ],
-)
-def test_build_then_multislice(data, waves_builder, detectors, potential, lazy):
+def test_build_then_multislice(data, waves_builder, potential, lazy):
     waves_builder = data.draw(waves_builder())
     waves_builder.grid.match(potential)
 
+    # The two routes differ before the detectors, not in them, so one drawn
+    # detector per example covers each of them across the run.
+    detectors = data.draw(
+        st.sampled_from(
+            [
+                abtem_st.pixelated_detector,
+                abtem_st.waves_detector,
+                abtem_st.segmented_detector,
+                None,
+            ]
+        ),
+        label="detectors",
+    )
     if detectors is not None:
         detectors = data.draw(detectors())
 
@@ -737,10 +732,9 @@ def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
 
 @devices
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("reciprocal_space", [False, True])
 def test_phase_shift_keeps_the_space_of_the_waves(
-    reciprocal_space, lazy, precision, device
+    reciprocal_space, precision, device
 ):
     import dask.array as da
 
@@ -754,27 +748,28 @@ def test_phase_shift_keeps_the_space_of_the_waves(
         psi = rng.normal(size=(2, 16, 20)) + 1j * rng.normal(size=(2, 16, 20))
         psi = psi.astype(dtype)
         array = np.fft.fft2(psi).astype(dtype) if reciprocal_space else psi
-        if lazy:
-            array = da.from_array(array, chunks=(1, -1, -1))
-        waves = Waves(
-            array,
-            energy=100e3,
-            sampling=0.1,
-            reciprocal_space=reciprocal_space,
-            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        ).copy_to_device(device)
+        results = {}
+        for lazy in (False, True):
+            waves = Waves(
+                da.from_array(array, chunks=(1, -1, -1)) if lazy else array,
+                energy=100e3,
+                sampling=0.1,
+                reciprocal_space=reciprocal_space,
+                ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            ).copy_to_device(device)
 
-        shifted = waves.phase_shift(amount)
+            shifted = waves.phase_shift(amount)
 
-        assert shifted.reciprocal_space == reciprocal_space
-        assert shifted.is_lazy == lazy
-        # The phase factor must not widen the waves: a NumPy complex128 scalar
-        # promotes complex64 waves to complex128 under NEP 50.
-        assert shifted.array.dtype == dtype
-        result = shifted.ensure_real_space().compute()
-        assert result.array.dtype == dtype
-        result = asnumpy(result.array)
+            assert shifted.reciprocal_space == reciprocal_space, f"lazy={lazy}"
+            assert shifted.is_lazy == lazy
+            # The phase factor must not widen the waves: a NumPy complex128
+            # scalar promotes complex64 waves to complex128 under NEP 50.
+            assert shifted.array.dtype == dtype, f"lazy={lazy}"
+            result = shifted.ensure_real_space().compute()
+            assert result.array.dtype == dtype, f"lazy={lazy}"
+            results[lazy] = asnumpy(result.array)
 
     expected = np.exp(1j * amount) * psi
     atol = 100 * np.finfo(dtype).eps * np.abs(psi).max()
-    assert np.allclose(result, expected, rtol=0, atol=atol)
+    for lazy, result in results.items():
+        assert np.allclose(result, expected, rtol=0, atol=atol), f"lazy={lazy}"
