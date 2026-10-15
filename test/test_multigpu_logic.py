@@ -455,28 +455,6 @@ def _worker_precision():
     return config.get("precision")
 
 
-def test_push_config_to_workers():
-    distributed = pytest.importorskip("distributed")
-
-    from abtem.core import config
-    from abtem.core import backend
-
-    backend._pushed_config_token = None
-    with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
-        assert set(client.run(_worker_precision).values()) == {"float32"}
-
-        with config.set({"precision": "float64"}):
-            backend.push_config_to_workers(client)
-            assert set(client.run(_worker_precision).values()) == {"float64"}
-
-            # An unchanged configuration is not pushed again.
-            token = backend._pushed_config_token
-            backend.push_config_to_workers(client)
-            assert backend._pushed_config_token is token
-
-
 def _worker_config_snapshot():
     import copy
 
@@ -495,6 +473,10 @@ def test_workers_see_identical_config():
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1, dashboard_address=":0"
     ) as cluster, distributed.Client(cluster) as client:
+        # One cluster for all of it: each worker process imports abtem, which
+        # costs seconds per test.
+        assert set(client.run(_worker_precision).values()) == {"float32"}
+
         with config.set(
             {
                 "precision": "float64",
@@ -503,6 +485,12 @@ def test_workers_see_identical_config():
             }
         ):
             backend.push_config_to_workers(client)
+            assert set(client.run(_worker_precision).values()) == {"float64"}
+
+            # An unchanged configuration is not pushed again.
+            token = backend._pushed_config_token
+            backend.push_config_to_workers(client)
+            assert backend._pushed_config_token is token
 
             # Every worker must hold a config identical to the client's merged
             # configuration -- not just the keys we changed.
