@@ -67,11 +67,11 @@ def _si2_atoms():
     )
 
 
-class TestRadialWavefunctionBound:
-    """``bound`` compared n to 0, which raises for a continuum state."""
+def test_radial_wavefunction_bound():
+    """``bound`` compared n to 0, which raises for a continuum state (n=None);
+    ``AtomicWaveFunction`` delegates to it."""
 
-    @staticmethod
-    def _wavefunction(n, energy):
+    def wavefunction(n, energy):
         return RadialWavefunction(
             n=n,
             l=1,
@@ -80,15 +80,9 @@ class TestRadialWavefunctionBound:
             radial_values=np.zeros(10),
         )
 
-    def test_continuum_state_is_not_bound(self):
-        assert self._wavefunction(n=None, energy=25.0).bound is False
-
-    def test_bound_state_is_bound(self):
-        assert self._wavefunction(n=2, energy=-1839.0).bound is True
-
-    def test_atomic_wavefunction_delegates(self):
-        continuum = AtomicWaveFunction(self._wavefunction(None, 25.0), ml=0)
-        assert continuum.bound is False
+    assert wavefunction(n=None, energy=25.0).bound is False
+    assert wavefunction(n=2, energy=-1839.0).bound is True
+    assert AtomicWaveFunction(wavefunction(None, 25.0), ml=0).bound is False
 
 
 class TestAsymptoticAmplitude:
@@ -480,19 +474,25 @@ class TestPrismEelsBuiltTransitionPotentialGrid:
             self._scan(s_matrix, wrong_energy)
 
     def test_an_unbuilt_potential_is_still_regridded(self):
-        """Regression guard for the preceding commit: an unbuilt potential has
-        no array, so a grid mismatch is not an error -- it is matched and then
-        built at the S-matrix's gpts."""
-        pytest.importorskip("gpaw")
-        from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
-
+        """An unbuilt potential has no array, so a grid mismatch is not an
+        error: it is matched and then built at the S-matrix's gpts, giving the
+        result of one created on the S-matrix's grid."""
+        pytest.importorskip("sympy")
         s_matrix = self._s_matrix((64, 64))
-        transitions = SubshellTransitions(Z=14, n=1, l=0, xc="PBE").get_transitions()
-        unbuilt = TransitionPotential(
-            14, transitions, extent=8.0, gpts=32, energy=ENERGY, double_channel=False
+        regridded, reference = (
+            _as_array(
+                self._scan(
+                    s_matrix,
+                    _synthetic_unbuilt_transition_potential(
+                        ENERGY, extent=(8.0, 8.0), gpts=gpts, Z=14
+                    ),
+                )
+            )
+            for gpts in ((32, 32), (64, 64))
         )
-        measurement = self._scan(s_matrix, unbuilt)
-        assert measurement.shape[:2] == (2, 2)
+        assert regridded.shape[:2] == (2, 2)
+        assert np.abs(reference).max() > 0
+        np.testing.assert_array_equal(regridded, reference)
 
 
 class TestMultisliceBuiltTransitionPotentialEnergy:
@@ -526,7 +526,9 @@ class TestMultisliceBuiltTransitionPotentialEnergy:
             )
 
 
-def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64, 64)):
+def _synthetic_unbuilt_transition_potential(
+    energy, extent=(8.0, 8.0), gpts=(64, 64), Z=5
+):
     """An unbuilt ``TransitionPotential`` with a synthetic (non-physical)
     1s -> continuum-p transition. Building it exercises the real
     `_calculate_form_factor` path (needs sympy for the Wigner-3j symbols),
@@ -547,7 +549,7 @@ def _synthetic_unbuilt_transition_potential(energy, extent=(8.0, 8.0), gpts=(64,
         (AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=1)),
     ]
     return TransitionPotential(
-        Z=5, transitions=transitions, extent=extent, gpts=gpts, energy=energy,
+        Z=Z, transitions=transitions, extent=extent, gpts=gpts, energy=energy,
         double_channel=False,
     )
 
@@ -1218,7 +1220,8 @@ class TestPrismPotentialEnsembleAccumulation:
     Separately, ``SMatrix._build_ensemble_shape_metadata`` described that
     exit-plane axis with the per-*slice* ``ThicknessAxis`` (length
     ``num_slices``) instead of the per-exit-plane one, which raised from the
-    measurement constructor and masked the zeros above.
+    measurement constructor and masked the zeros above (checked by
+    TestPrismLazyExitPlanes, whose lazy axes come from the per-exit-plane one).
     """
 
     @staticmethod
@@ -1276,17 +1279,6 @@ class TestPrismPotentialEnsembleAccumulation:
             assert got[plane].sum() == pytest.approx(
                 reference[plane].sum(), rel=1e-3
             )
-
-    def test_exit_plane_axis_metadata_has_one_value_per_exit_plane(self):
-        """It was built from the per-slice ThicknessAxis instead."""
-        _, potential = self._setup(num_configs=2, exit_planes=1)
-        s_matrix = abtem.SMatrix(
-            potential=potential, energy=ENERGY, semiangle_cutoff=20, interpolation=1
-        )
-        shape, metadata = s_matrix._build_ensemble_shape_metadata()
-        assert shape[-1] == len(potential.exit_planes)
-        assert len(metadata[-1].values) == len(potential.exit_planes)
-
 
 def test_ensemble_indices_handle_a_multi_axis_potential_ensemble():
     """A potential with two ensemble axes is not constructible through the
@@ -1891,19 +1883,27 @@ class TestPrismLazyExitPlanes:
             ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
         )
 
+    # The declared chunks do not depend on double_channel (see
+    # SMatrix.transition_potential_scan); the per-block measurement does, as
+    # the two channels index the ensemble and exit-plane axes differently, so
+    # the double channel runs on the two cases with both axes.
     @pytest.mark.parametrize(
-        "num_configs, exit_planes, ensemble_mean",
+        "num_configs, exit_planes, ensemble_mean, double_channel",
         [
-            (None, None, True),
-            (None, 1, True),
-            (1, 1, True),
-            (3, 1, True),
-            (3, 1, False),
-            (None, [1, 3], True),
+            (None, None, True, False),
+            (None, 1, True, False),
+            (1, 1, True, False),
+            (3, 1, True, False),
+            (3, 1, False, False),
+            (None, [1, 3], True, False),
+            (3, 1, True, True),
+            (3, 1, False, True),
         ],
-        ids=["plain-1", "plain-5", "phonons1-5", "phonons3-5", "no-mean", "explicit"],
+        ids=[
+            "plain-1", "plain-5", "phonons1-5", "phonons3-5", "no-mean", "explicit",
+            "phonons3-5-double", "no-mean-double",
+        ],
     )
-    @pytest.mark.parametrize("double_channel", [False, True])
     def test_lazy_matches_eager(self, num_configs, exit_planes, ensemble_mean,
                                 double_channel):
         potential = self._potential(num_configs, exit_planes, ensemble_mean)
