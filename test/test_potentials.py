@@ -842,25 +842,20 @@ def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
     assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
 
 
-@pytest.mark.parametrize(
-    "exit_planes, expected",
-    [
+def test_integer_exit_planes_include_entrance_plane_up_to_num_slices():
+    # issue #515: exit_planes == num_slices used to drop the thickness axis while
+    # exit_planes == num_slices - 1 kept it
+    from abtem.potentials.iam import _validate_exit_planes
+
+    for exit_planes, expected in [
         (10, (-1, 9, 19)),
         (19, (-1, 18, 19)),
         # every integer up to the number of slices includes the entrance plane
         (20, (-1, 19)),
         (21, (19,)),
         (None, (19,)),
-    ],
-)
-def test_integer_exit_planes_include_entrance_plane_up_to_num_slices(
-    exit_planes, expected
-):
-    # issue #515: exit_planes == num_slices used to drop the thickness axis while
-    # exit_planes == num_slices - 1 kept it
-    from abtem.potentials.iam import _validate_exit_planes
-
-    assert _validate_exit_planes(exit_planes, 20) == expected
+    ]:
+        assert _validate_exit_planes(exit_planes, 20) == expected, exit_planes
 
 
 def test_potential_array_slicing_maps_exit_planes():
@@ -980,49 +975,33 @@ class TestPotentialDoesNotMutateItsAtoms:
             "Si2", positions=[(0.2, 0.2, 0.5), (4.2, 2.0, 1.5)], cell=(4.0, 4.0, 4.0)
         )
 
-    def test_a_plain_atoms_potential_does_not_rewrite_its_own_atoms(self):
-        atoms = self._atoms()
-        potential = Potential(atoms, gpts=(32, 32), slice_thickness=1.0)
-        stored = potential.frozen_phonons.atoms
-        before = stored.positions.copy()
-        _build_with_numpy_fft(potential)
-        assert np.array_equal(stored.positions, before)
+    def test_no_construction_rewrites_the_atoms_it_is_given(self):
+        """A plain `Atoms` is copied when the potential is made, so the write
+        landed on the potential's own copy; `Potential([a])` keeps a reference
+        and a pre-built frozen-phonons object holds the caller's atoms, so there
+        it reached the caller. `FrozenPhonons.randomize` copies, the oracle the
+        fix follows. Its sigmas must be nonzero: with sigmas=0.0 an in-place
+        randomize leaves the positions unchanged, and the check could not fail
+        (removing that copy is caught at 0.1 and missed at 0.0)."""
+        from abtem.inelastic.phonons import DummyFrozenPhonons, FrozenPhonons
 
-    def test_a_list_of_atoms_does_not_rewrite_the_callers_objects(self):
-        """`Potential([a])` keeps a reference, so the write reached the caller."""
-        atoms = self._atoms()
-        before = atoms.positions.copy()
-        _build_with_numpy_fft(Potential([atoms], gpts=(32, 32), slice_thickness=1.0))
-        assert np.array_equal(atoms.positions, before)
-
-    def test_a_prebuilt_dummy_frozen_phonons_does_not_rewrite_the_callers_atoms(self):
-        from abtem.inelastic.phonons import DummyFrozenPhonons
-
-        atoms = self._atoms()
-        before = atoms.positions.copy()
-        _build_with_numpy_fft(
-            Potential(
-                DummyFrozenPhonons(atoms), gpts=(32, 32), slice_thickness=1.0
-            )
-        )
-        assert np.array_equal(atoms.positions, before)
-
-    def test_frozen_phonons_was_already_safe(self):
-        """The oracle: FrozenPhonons.randomize copies, so this path never had
-        the defect. Pinned so the fix cannot be 'simplified' by removing the
-        copy there instead."""
-        atoms = self._atoms()
-        before = atoms.positions.copy()
-        from abtem.inelastic.phonons import FrozenPhonons
-
-        # sigmas must be NON-ZERO. With sigmas=0.0 randomize's displacement is
-        # `positions += 0 * r`, so an in-place randomize leaves the positions
-        # numerically identical and this test passes even with
-        # FrozenPhonons.randomize's own copy deleted -- it would be pinning a
-        # no-op. Verified: removing that copy is caught at 0.1 and missed at 0.0.
-        phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
-        _build_with_numpy_fft(Potential(phonons, gpts=(32, 32), slice_thickness=1.0))
-        assert np.array_equal(atoms.positions, before)
+        constructions = {
+            "plain atoms": lambda atoms: atoms,
+            "list of atoms": lambda atoms: [atoms],
+            "dummy frozen phonons": DummyFrozenPhonons,
+            "frozen phonons": lambda atoms: FrozenPhonons(
+                atoms, num_configs=2, sigmas=0.1, seed=1
+            ),
+        }
+        for name, construct in constructions.items():
+            atoms = self._atoms()
+            before = atoms.positions.copy()
+            potential = Potential(construct(atoms), gpts=(32, 32), slice_thickness=1.0)
+            if name == "plain atoms":
+                atoms = potential.frozen_phonons.atoms
+                before = atoms.positions.copy()
+            _build_with_numpy_fft(potential)
+            assert np.array_equal(atoms.positions, before), name
 
     def test_an_earlier_build_does_not_change_a_later_potentials_result(self):
         """The sharpest consequence: the write crosses *objects*.
@@ -1098,61 +1077,33 @@ class TestNonOrthogonalCellDoesNotMutateItsAtoms:
         scaled = np.array([[0.1, 0.1, 0.2], [1.3, -0.2, 0.5]])
         return Atoms("Si2", positions=scaled @ cell, cell=cell, pbc=True)
 
-    @pytest.mark.parametrize(
-        "construction",
-        ["list_of_atoms", "dummy_frozen_phonons", "frozen_phonons"],
-    )
-    def test_a_non_orthogonal_cell_does_not_rewrite_the_callers_atoms(
-        self, construction
-    ):
+    def test_a_non_orthogonal_cell_does_not_rewrite_the_callers_atoms(self):
+        """Through a build, and through `sampling="auto"`: `orthogonalize_cell`
+        has a second call site, `Potential.__init__` itself, reached when the
+        cell needs a transform (iam.py, `_require_cell_transform`). That call
+        runs in the constructor, before `build()` is ever called -- an
+        independent path into the same aliasing bug, so it is checked without
+        a build."""
         from abtem.inelastic.phonons import DummyFrozenPhonons, FrozenPhonons
 
-        atoms = self._atoms()
-        before = atoms.positions.copy()
-
-        if construction == "list_of_atoms":
-            wrapped = [atoms]
-        elif construction == "dummy_frozen_phonons":
-            wrapped = DummyFrozenPhonons(atoms)
-        else:
-            wrapped = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
-
-        _build_with_numpy_fft(Potential(wrapped, gpts=(32, 32), slice_thickness=1.0))
-        assert np.array_equal(atoms.positions, before)
-
-    @pytest.mark.parametrize(
-        "construction",
-        ["list_of_atoms", "dummy_frozen_phonons", "frozen_phonons"],
-    )
-    def test_sampling_auto_does_not_rewrite_the_callers_atoms_either(
-        self, construction
-    ):
-        """`orthogonalize_cell` has a second call site: `Potential.__init__`
-        itself, reached through `sampling="auto"` when the cell needs a
-        transform (iam.py, `_require_cell_transform`). That call runs
-        synchronously in the constructor, before `build()` is ever called --
-        an independent path into the same aliasing bug, not merely the same
-        bug reached twice through one call. Both call sites go through the
-        same `orthogonalize_cell`, so the fix covers this one too, but
-        nothing above pins it: every test in this class builds before
-        checking, which only exercises the first call site.
-        """
-        from abtem.inelastic.phonons import DummyFrozenPhonons, FrozenPhonons
-
-        atoms = self._atoms()
-        before = atoms.positions.copy()
-
-        if construction == "list_of_atoms":
-            wrapped = [atoms]
-        elif construction == "dummy_frozen_phonons":
-            wrapped = DummyFrozenPhonons(atoms)
-        else:
-            wrapped = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=1)
-
-        # No .build() call: sampling="auto" must do its own damage, if any,
-        # inside __init__ alone.
-        Potential(wrapped, sampling="auto", slice_thickness=1.0)
-        assert np.array_equal(atoms.positions, before)
+        constructions = {
+            "list of atoms": lambda atoms: [atoms],
+            "dummy frozen phonons": DummyFrozenPhonons,
+            "frozen phonons": lambda atoms: FrozenPhonons(
+                atoms, num_configs=2, sigmas=0.1, seed=1
+            ),
+        }
+        for name, construct in constructions.items():
+            for sampling in (None, "auto"):
+                atoms = self._atoms()
+                before = atoms.positions.copy()
+                if sampling is None:
+                    _build_with_numpy_fft(
+                        Potential(construct(atoms), gpts=(32, 32), slice_thickness=1.0)
+                    )
+                else:
+                    Potential(construct(atoms), sampling="auto", slice_thickness=1.0)
+                assert np.array_equal(atoms.positions, before), (name, sampling)
 
 
 class TestSliceIndexedAtomsWrapping:
