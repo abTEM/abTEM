@@ -311,8 +311,10 @@ def test_prism_non_orthogonal_matches_probe(lazy):
     (orthogonal) choice in any of these breaks the equivalence."""
     import abtem
 
+    # 3 x 3 x 3 cells on 96 x 96 (was 3 x 3 x 6 on 160 x 160): measured rel 7.4e-7
+    # against the 1e-5 bound, as before (8.2e-7)
     pot = abtem.Potential(
-        _hexagonal_carbon((3, 3, 6)), gpts=(160, 160), slice_thickness=1.0
+        _hexagonal_carbon((3, 3, 3)), gpts=(96, 96), slice_thickness=1.0
     )
     assert not pot.grid.is_orthogonal
 
@@ -323,7 +325,7 @@ def test_prism_non_orthogonal_matches_probe(lazy):
     ref = (
         probe.multislice(pot, scan=abtem.CustomScan([(px, py)]))
         .compute()
-        .array.reshape((-1, 160, 160))[0]
+        .array.reshape((-1, 96, 96))[0]
     )
 
     s_matrix = abtem.SMatrix(
@@ -339,7 +341,7 @@ def test_prism_non_orthogonal_matches_probe(lazy):
         s_matrix.build(lazy=lazy)
         .reduce(scan=abtem.CustomScan([(px, py)]), detectors=WavesDetector())
         .compute()
-        .array.reshape((-1, 160, 160))[0]
+        .array.reshape((-1, 96, 96))[0]
     )
 
     # remove the global phase, then compare the exit waves directly
@@ -353,8 +355,11 @@ def test_prism_non_orthogonal_matches_multislice_haadf():
     """A skew PRISM HAADF scan matches the multislice HAADF scan (the ground truth)."""
     import abtem
 
+    # 3 x 3 x 4 cells on 128 x 128 (was 4 x 4 x 8 on 208 x 208), still sampled
+    # finely enough to resolve the 100 mrad outer angle: measured rel 1.7e-6 against
+    # the 1e-4 bound
     pot = abtem.Potential(
-        _hexagonal_carbon((4, 4, 8)), gpts=(208, 208), slice_thickness=1.0
+        _hexagonal_carbon((3, 3, 4)), gpts=(128, 128), slice_thickness=1.0
     )
     assert not pot.grid.is_orthogonal
 
