@@ -488,16 +488,11 @@ def test_large_vector_potential_diverges_loudly(method):
     directly: amplitude ~1e65, not even a NaN, so a naive `isfinite()`
     check downstream would not have caught it either)."""
     gpts, extent = 128, 40.0
-    n_slices, dz = 100, 10.0
-    B0 = 5e4  # T-equivalent scale, deliberately unphysical to converge fast
-    l = 2
-
-    x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
-        -(X**2 + Y**2) / (2 * 6.0**2)
-    )
-    vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
+    # The deepest slice carries the same order of A as slice 100 of a
+    # B0 = 5e4 ramp, so the series leaves its radius of convergence within
+    # these 10 slices instead of after ~50.
+    n_slices, dz = 10, 10.0
+    B0 = 1e6  # T-equivalent scale, deliberately unphysical to diverge fast
 
     potential = vacuum_potential(n_slices, gpts, extent, dz)
     A_array = np.zeros((n_slices, 3, gpts, gpts))
@@ -506,11 +501,7 @@ def test_large_vector_potential_diverges_loudly(method):
     A = VectorPotentialArray(A_array, slice_thickness=dz, extent=(extent, extent))
     _, B_zero = zero_fields(n_slices, gpts, extent, dz)
 
-    waves = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device="cpu").build(
-        lazy=False
-    )
-    waves._array = vortex.astype(to_numpy(waves.array).dtype)
-    spinor = waves.to_spinor((1, 0))
+    spinor = vortex_spinor(2, gpts, extent)
 
     with pytest.raises(DivergedError):
         pauli_multislice(
