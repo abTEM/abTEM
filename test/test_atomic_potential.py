@@ -725,10 +725,17 @@ class TestIntegratorCaches:
 
     def test_sorted_disks_are_bounded(self):
         integrator = QuadratureProjectionIntegrals()
-        for n in range(_MAX_CACHE_ENTRIES + 8):
+        caches = (integrator._sorted_disks, integrator._tables)
+        assert all(cache._maxsize == _MAX_CACHE_ENTRIES for cache in caches)
+
+        # A bound of 4 rather than 32: filling it takes a potential build per
+        # entry, which for 32 + 8 grids took seconds.
+        for cache in caches:
+            cache._maxsize = 4
+        for n in range(4 + 8):
             self._build(integrator, gpts=(32 + 2 * n,) * 2)
-        assert len(integrator._sorted_disks) <= _MAX_CACHE_ENTRIES
-        assert len(integrator._tables) <= _MAX_CACHE_ENTRIES
+        # full, not just bounded: every grid added entries, and some were evicted
+        assert [len(cache) for cache in caches] == [4, 4]
 
     @pytest.mark.parametrize(
         "integrator_class",
