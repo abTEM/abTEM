@@ -4,7 +4,7 @@ electrostatic potential in multislice simulations."""
 from __future__ import annotations
 
 import warnings
-from functools import partial
+from functools import lru_cache, partial
 from typing import Tuple, Union
 
 import dask
@@ -355,6 +355,17 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     dz = (b - a) / slice_shape[-1]
 
     return np.sum(slice_array, axis=-1) * dz
+
+
+@lru_cache(maxsize=128)
+def _core_form_factor_interpolator(
+    symbol: str, core_electrons: int, n_G: int, G_max: float
+) -> interp1d:
+    # The transform costs about 0.5 s per species, so every potential built for the
+    # same species and core shares one interpolator. Nothing mutates it.
+    G = np.linspace(0.0, G_max, n_G)
+    f = slater_core_form_factor(symbol, core_electrons, G)
+    return interp1d(G, f, bounds_error=False, fill_value=(f[0], 0.0))
 
 
 def _add_core_density_correction_fourier(charge, atoms, core_density_correction):
@@ -771,14 +782,10 @@ class ChargeDensityPotential(_PotentialBuilder):
 
     def _build_core_density_correction(self, n_G: int = 4000, G_max: float = 200.0):
         """Per-species core form factors, as :func:`_generate_slices` expects them."""
-        G = np.linspace(0.0, G_max, n_G)
-        correction = {}
-        for symbol, core in self._core_electrons.items():
-            f = slater_core_form_factor(symbol, core, G)
-            correction[symbol] = interp1d(
-                G, f, bounds_error=False, fill_value=(f[0], 0.0)
-            )
-        return correction
+        return {
+            symbol: _core_form_factor_interpolator(symbol, int(core), n_G, G_max)
+            for symbol, core in self._core_electrons.items()
+        }
 
     @property
     def core_electrons(self) -> dict:
