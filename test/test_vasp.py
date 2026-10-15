@@ -138,30 +138,35 @@ def charge_density_3d(carbon_atoms):
 
 
 def test_vasp_potential_build(carbon_atoms, charge_density_3d, fake_potcar):
+    """An eager build from a POTCAR path and a lazy build from the pre-parsed
+    POTCAR give the same finite potential.
+
+    The whole point of VASPPotential is to replace the crude Gaussian
+    point-charge core correction with the POTCAR's actual radial core density --
+    the two should give different potentials for the same input density."""
+    from abtem.potentials.charge_density import ChargeDensityPotential
+
     pot = VASPPotential(
         carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
     )
-    result = pot.build(lazy=False)
-    assert result.array.shape[-2:] == pot.gpts
-    assert np.all(np.isfinite(result.array))
+    eager = pot.build(lazy=False)
+    assert eager.array.shape[-2:] == pot.gpts
+    assert np.all(np.isfinite(eager.array))
+    # subtract_min is off by default, so the slice minima are left alone
+    assert any(not np.isclose(s.min(), 0.0) for s in eager.array)
 
-
-def test_vasp_potential_build_lazy(carbon_atoms, charge_density_3d, fake_potcar):
-    pot = VASPPotential(
-        carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
+    preparsed = VASPPotential(
+        carbon_atoms,
+        charge_density_3d,
+        potcar=parse_potcar(fake_potcar),
+        sampling=0.1,
     )
-    result = pot.build(lazy=True).compute()
-    assert result.array.shape[-2:] == pot.gpts
-    assert np.all(np.isfinite(result.array))
+    lazy = preparsed.build(lazy=True).compute()
+    scale = np.abs(eager.array).max()
+    np.testing.assert_allclose(lazy.array, eager.array, rtol=0, atol=1e-6 * scale)
 
-
-def test_vasp_potential_accepts_preparsed_potcar(
-    carbon_atoms, charge_density_3d, fake_potcar
-):
-    elements = parse_potcar(fake_potcar)
-    pot = VASPPotential(carbon_atoms, charge_density_3d, potcar=elements, sampling=0.1)
-    result = pot.build(lazy=False)
-    assert result.array.shape[-2:] == pot.gpts
+    crude = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert not np.allclose(eager.array, crude.build(lazy=False).array)
 
 
 def test_vasp_potential_missing_element_raises(
@@ -178,40 +183,15 @@ def test_vasp_potential_requires_potcar(carbon_atoms, charge_density_3d):
         VASPPotential(carbon_atoms, charge_density_3d, sampling=0.1)
 
 
-def test_vasp_potential_differs_from_crude_point_charge(
-    carbon_atoms, charge_density_3d, fake_potcar
-):
-    """The whole point of VASPPotential is to replace the crude Gaussian
-    point-charge core correction with the POTCAR's actual radial core density --
-    the two should give different potentials for the same input density."""
-    from abtem.potentials.charge_density import ChargeDensityPotential
-
-    vasp_pot = VASPPotential(
+def test_vasp_potential_subtract_min(carbon_atoms, charge_density_3d, fake_potcar):
+    """subtract_min defaults to False (test_vasp_potential_build checks that the
+    default build leaves the slice minima alone); when True, VASPPotential passes
+    it on to the slice generator, which zeros each slice's minimum."""
+    default = VASPPotential(
         carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
     )
-    crude_pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert default.subtract_min is False
 
-    vasp_result = vasp_pot.build(lazy=False)
-    crude_result = crude_pot.build(lazy=False)
-
-    assert not np.allclose(vasp_result.array, crude_result.array)
-
-
-def test_vasp_potential_subtract_min_defaults_to_false(
-    carbon_atoms, charge_density_3d, fake_potcar
-):
-    pot = VASPPotential(
-        carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
-    )
-    assert pot.subtract_min is False
-
-    slices = [slic.array[0] for slic in pot.generate_slices()]
-    assert any(not np.isclose(s.min(), 0.0) for s in slices)
-
-
-def test_vasp_potential_subtract_min_true_zeros_each_slice_minimum(
-    carbon_atoms, charge_density_3d, fake_potcar
-):
     pot = VASPPotential(
         carbon_atoms,
         charge_density_3d,
@@ -245,7 +225,9 @@ def test_vasp_potential_on_skew_cell(fake_potcar):
     rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
     rho *= 8.0 / (rho.sum() * atoms.cell.volume / rho.size)
 
-    pot = VASPPotential(atoms, rho.astype(np.float32), potcar=fake_potcar, sampling=0.1)
+    # 13 x 13 gpts: the skew-grid interpolation is per pixel, and a coarse grid
+    # takes the same path as a fine one
+    pot = VASPPotential(atoms, rho.astype(np.float32), potcar=fake_potcar, sampling=0.2)
     assert not pot.grid.is_orthogonal
 
     built = pot.build(lazy=False)
