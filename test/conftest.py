@@ -3,7 +3,13 @@ import sys
 import warnings
 import zlib
 
-import pytest
+# A non-interactive backend, before anything imports matplotlib (abtem does): on
+# macOS the default (TkAgg) runs figure cleanup off the main thread under
+# pytest-xdist, which raised a tkinter error in one run and hung another. An
+# MPLBACKEND that is already set wins.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+import pytest  # noqa: E402
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
