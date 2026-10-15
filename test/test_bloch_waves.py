@@ -343,9 +343,10 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
 
 def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
     # energies, a fixed rotation and a distributed two-axis rotation together,
-    # with a scalar thickness
-    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
-    energies = [80e3, 120e3, 200e3]
+    # with a scalar thickness. Two energies against three rotations: with as
+    # many energies as rotations, swapped axes would keep the shape.
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=3.0)
+    energies = [80e3, 200e3]
     angles = np.array([[0.0, 0.0], [0.01, 0.02], [0.03, 0.0]])
     rotations = ("z", 0.1, "xy", angles)
 
@@ -353,10 +354,10 @@ def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
         *rotations
     )
     patterns = ensemble.calculate_diffraction_patterns(50.0, lazy=True)
-    assert patterns.shape[:2] == (3, 3)
+    assert patterns.shape[:2] == (3, 2)
     assert np.shape(patterns.reciprocal_lattice_vectors) == (3, 1, 3, 3)
     assert patterns[1].shape == patterns.shape[1:]
-    assert patterns.crop(k_max=1.0).shape[:2] == (3, 3)
+    assert patterns.crop(k_max=1.0).shape[:2] == (3, 2)
 
     for k, energy in enumerate(energies):
         expected = (
