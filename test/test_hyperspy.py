@@ -12,7 +12,8 @@ from utils import devices, lazy_params
 import abtem.array
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
-from abtem.measurements import Images, PolarMeasurements
+from abtem.measurements import DiffractionPatterns, Images, PolarMeasurements
+from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
 
 try:
@@ -44,10 +45,16 @@ def test_hyperspy(data, measurement, lazy, device):
         hyperspy_signal = measurement.to_hyperspy()
 
     # HyperSpy orders the signal axes the other way round: the stored array
-    # with its base axes reversed.
-    base_dims = measurement._base_dims
-    assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims
+    # with its base axes reversed. A potential is exported as a stack of
+    # images, one per slice, and unshifted diffraction patterns with the zero
+    # frequency at the centre.
     stored = _host(measurement.array)
+    base_dims = measurement._base_dims
+    if isinstance(measurement, PotentialArray):
+        base_dims = 2
+    if isinstance(measurement, DiffractionPatterns) and not measurement.fftshift:
+        stored = np.fft.fftshift(stored, axes=(-2, -1))
+    assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims
     base = tuple(range(stored.ndim - base_dims, stored.ndim))
     expected = np.moveaxis(stored, base, base[::-1])
 
