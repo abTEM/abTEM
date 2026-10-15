@@ -7,6 +7,7 @@ vector potential A = B x r / 2 acquires phase at half that rate per quantum
 of l — the g = 2 ratio of spin and orbital moments [Eq. (19)].
 """
 
+import functools
 import warnings
 
 import numpy as np
@@ -943,16 +944,26 @@ def test_split_matches_series(device):
     atoms = bulk("Fe", "bcc", a=2.87, cubic=True) * (2, 2, 1)
     set_magnetic_moments(atoms, np.tile([0.0, 0.0, 2.2], (len(atoms), 1)))
 
-    def run(method, dz):
+    # 0.18 Angstrom sampling: coarse error 0.009 (vs 0.024 at 64 gpts),
+    # Cauchy ratio e2/e1 0.49 (vs 0.45)
+    gpts = 32
+
+    @functools.cache
+    def fields(dz):
         potential = abtem.Potential(
-            atoms, gpts=64, slice_thickness=dz, device=device
+            atoms, gpts=gpts, slice_thickness=dz, device=device
         ).build(lazy=False)
-        A = VectorPotential(atoms, gpts=64, slice_thickness=dz, device=device).build(
+        A = VectorPotential(
+            atoms, gpts=gpts, slice_thickness=dz, device=device
+        ).build(lazy=False)
+        B = MagneticField(atoms, gpts=gpts, slice_thickness=dz, device=device).build(
             lazy=False
         )
-        B = MagneticField(atoms, gpts=64, slice_thickness=dz, device=device).build(
-            lazy=False
-        )
+        return potential, A, B
+
+    @functools.cache
+    def run(method, dz):
+        potential, A, B = fields(dz)
         probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=25, device=device)
         probe.grid.match(potential)
         spinor = probe.build(lazy=False).to_spinor((1, 0))
