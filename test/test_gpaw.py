@@ -137,9 +137,9 @@ def gpaw_calculator_bonding():
     return atoms.calc
 
 
-def assert_psae_matches_abtem(calc):
+def assert_psae_matches_abtem(calc, grid_spacing=0.02):
     with _ps2ae_compatible_density():
-        ps2ae_potential = PS2AE(calc, grid_spacing=0.02)
+        ps2ae_potential = PS2AE(calc, grid_spacing=grid_spacing)
         ps2ae_potential = ps2ae_potential.get_electrostatic_potential(
             rcgauss=0.01 * units.Bohr, ae=True
         )
@@ -157,7 +157,10 @@ def assert_psae_matches_abtem(calc):
 
 @pytest.mark.slow
 def test_compare_ps2ae_to_abtem_no_bonding(gpaw_calculator_no_bonding):
-    assert_psae_matches_abtem(gpaw_calculator_no_bonding)
+    # 0.04 A: PS2AE's all-electron potential on the 5 A cell is 126^3 points
+    # rather than 252^3 (3 s instead of 16 s). The largest difference from
+    # abTEM's potential, 0.26 of a ~480 peak, is still 4x inside the tolerance.
+    assert_psae_matches_abtem(gpaw_calculator_no_bonding, grid_spacing=0.04)
 
 
 def test_compare_ps2ae_to_abtem_bonding(gpaw_calculator_bonding):
