@@ -547,30 +547,25 @@ def test_show_explode_title_shows_label_only_on_first_panel():
 
 
 @pytest.mark.filterwarnings("ignore:This figure includes Axes")
-def test_show_suptitle_sets_whole_figure_title_single_panel():
+def test_show_suptitle_sets_whole_figure_title():
     """suptitle is a distinct, whole-figure title (Figure.suptitle) from the
     per-panel `title` -- and must be a dedicated parameter, not something
     picked up from **kwargs: kwargs here goes straight to pcolormesh (an
     Axes/Artist-level call), so a caller passing suptitle that way gets a
-    bare matplotlib AttributeError instead of what they wanted."""
+    bare matplotlib AttributeError instead of what they wanted. Checked on
+    both the single-panel and the exploded figure paths."""
     import matplotlib
 
     matplotlib.use("Agg")
-    spec, _ = _make_simple_spectrum()  # no ensemble axes -- no collapse warning
-    fig, _ = spec.show(suptitle="Whole-figure title")
-    assert fig._suptitle is not None
-    assert fig._suptitle.get_text() == "Whole-figure title"
-
-
-@pytest.mark.filterwarnings("ignore:This figure includes Axes")
-def test_show_suptitle_sets_whole_figure_title_exploded():
-    import matplotlib
-
-    matplotlib.use("Agg")
-    spec, _ = _make_multiaxis_spectrum()
-    fig, _ = spec.show(explode=[1], suptitle="Whole-figure title")
-    assert fig._suptitle is not None
-    assert fig._suptitle.get_text() == "Whole-figure title"
+    single, _ = _make_simple_spectrum()  # no ensemble axes -- no collapse warning
+    multi, _ = _make_multiaxis_spectrum()
+    for case, (spec, kwargs) in {
+        "single panel": (single, {}),
+        "exploded": (multi, {"explode": [1]}),
+    }.items():
+        fig, _ = spec.show(suptitle="Whole-figure title", **kwargs)
+        assert fig._suptitle is not None, case
+        assert fig._suptitle.get_text() == "Whole-figure title", case
 
 
 @pytest.mark.filterwarnings("ignore:This figure includes Axes")
