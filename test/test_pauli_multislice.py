@@ -1222,9 +1222,11 @@ def test_probe_gauge_origin_restores_lattice_periodicity(device):
     in reciprocal space but conserves the total, so a whole-grid sum is blind
     to it.
     """
-    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    # 11 slices on 64^2: the fixed-origin spread is 1e-7 (100x the 1e-9
+    # floor below) and the probe-centred one 1e-15
+    atoms = bulk("Si", cubic=True) * (2, 2, 2)
     lattice = atoms.cell[0, 0] / 2          # the (2,2,*) tiling doubles it
-    gpts = 128
+    gpts = 64
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
         lazy=False
     )
@@ -1302,9 +1304,9 @@ def test_probe_gauge_origin_restores_periodicity_across_dask_chunks(device):
     dask chunks so the second point can only be correct if the rechunk
     actually happens.
     """
-    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    atoms = bulk("Si", cubic=True) * (2, 2, 2)
     lattice = atoms.cell[0, 0] / 2
-    gpts = 128
+    gpts = 64
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
         lazy=False
     )
@@ -1386,9 +1388,9 @@ def test_probe_gauge_origin_custom_scan_is_correct_and_not_forced_to_one_chunk(
     a real 16x16 GridScan sweep). The library must leave CustomScan's normal
     chunking alone while still being correct.
     """
-    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    atoms = bulk("Si", cubic=True) * (2, 2, 2)
     lattice = atoms.cell[0, 0] / 2
-    gpts = 128
+    gpts = 64
     potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
         lazy=False
     )
@@ -1399,11 +1401,11 @@ def test_probe_gauge_origin_custom_scan_is_correct_and_not_forced_to_one_chunk(
     p = (0.3 * lattice, 0.2 * lattice)
     translated = (p[0], p[1] + lattice)
     positions = [p, translated] + [
-        (0.1 * lattice + i * 0.05 * lattice, 0.15 * lattice) for i in range(10)
+        (0.1 * lattice + i * 0.2 * lattice, 0.15 * lattice) for i in range(2)
     ]
     detector = abtem.AnnularDetector(inner=0.0, outer=4.0)
 
-    def run(force_multiple_chunks, spy_calls=None):
+    def run(position_chunks):
         probe = abtem.Probe(
             aperture=abtem.transfer.Vortex(
                 quantum_number=1, semiangle_cutoff=20.0, soft=False
@@ -1421,48 +1423,34 @@ def test_probe_gauge_origin_custom_scan_is_correct_and_not_forced_to_one_chunk(
             for i, m in enumerate(waves.ensemble_axes_metadata)
             if type(m).__name__ == "PositionsAxis"
         ][0]
-        if force_multiple_chunks:
-            waves = waves.rechunk({position_axis: (1,) * len(positions)})
-        input_chunks = waves._lazy_array.chunks[position_axis]
+        waves = waves.rechunk({position_axis: position_chunks})
+        assert waves._lazy_array.chunks[position_axis] == position_chunks
 
-        if spy_calls is not None:
-            original_rechunk = type(waves).rechunk
+        measurement = pauli_multislice(
+            waves,
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=(0.0, 0.0, 1.385),
+            algorithm=FourierMultislice(),
+            detectors=detector,
+            gauge_origin="probe",
+        )
 
-            def spying_rechunk(self, chunks, **kwargs):
-                spy_calls.append(chunks)
-                return original_rechunk(self, chunks, **kwargs)
-
-            type(waves).rechunk = spying_rechunk
-        try:
-            measurement = pauli_multislice(
-                waves,
-                potential,
-                vector_potential=A,
-                magnetic_field=B,
-                average_field=(0.0, 0.0, 1.385),
-                algorithm=FourierMultislice(),
-                detectors=detector,
-                gauge_origin="probe",
-            )
-        finally:
-            if spy_calls is not None:
-                type(waves).rechunk = original_rechunk
-
-        # pauli_multislice must not have rechunked the position axis away
-        # from what the caller set up -- only the (unrelated) spin axis may
-        # be rechunked for a spinor scan of this shape
-        for call_chunks in spy_calls or []:
-            if isinstance(call_chunks, tuple) and len(call_chunks) > position_axis:
-                assert call_chunks[position_axis] == input_chunks
+        # pauli_multislice must leave the caller's position chunking alone
+        # (the measurement keeps the spin and position axes of the waves)
+        assert measurement.array.chunks[position_axis] == position_chunks
 
         collected = to_numpy(measurement.array).sum(axis=0)  # sum spin
         return collected.reshape(len(positions), -1).sum(axis=1)
 
-    calls_multi, calls_single = [], []
-    v_multi = run(force_multiple_chunks=True, spy_calls=calls_multi)
-    v_single = run(force_multiple_chunks=False, spy_calls=calls_single)
+    v_multi = run((1,) * len(positions))
+    v_single = run((len(positions),))
 
     assert np.array_equal(v_multi, v_single)
+    # and correct: p and its lattice translation agree (a fixed gauge origin
+    # leaves them ~1e-7 apart here, see the sibling tests)
+    assert abs(v_single[0] - v_single[1]) / abs(v_single[0]) < 1e-12
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
