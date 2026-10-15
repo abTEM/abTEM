@@ -1166,7 +1166,11 @@ def test_line_profiles_add_to_plot():
         plt.close(fig)
 
 
-def test_line_profiles_add_to_plot_width_returns_rectangle():
+def test_line_profiles_add_to_plot_width_draws_the_averaging_width():
+    """A profile averaged over a width is drawn as a rectangle of that width. The
+    drawn rectangle must always reflect the profile's real averaging width, even
+    if a caller passes a different width= to add_to_plot -- otherwise the plot
+    would misrepresent the region the data was actually averaged over."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1179,29 +1183,10 @@ def test_line_profiles_add_to_plot_width_returns_rectangle():
 
     fig, ax = plt.subplots()
     try:
-        artist = line.add_to_plot(ax)
-        assert isinstance(artist, Rectangle)
-    finally:
-        plt.close(fig)
-
-
-def test_line_profiles_add_to_plot_width_always_matches_metadata():
-    """The drawn rectangle must always reflect the profile's real averaging width,
-    even if a caller passes a different width= to add_to_plot -- otherwise the plot
-    would misrepresent the region the data was actually averaged over."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=64)
-    image = wave.build((0, 0), lazy=False).intensity()
-    line = image.interpolate_line(start=(0.0, 0.0), end=(10.0, 0.0), width=2.0)
-
-    fig, ax = plt.subplots()
-    try:
-        artist = line.add_to_plot(ax, width=5.0)
-        assert artist.get_height() == 2.0
+        for kwargs in ({}, {"width": 5.0}):
+            artist = line.add_to_plot(ax, **kwargs)
+            assert isinstance(artist, Rectangle), kwargs
+            assert artist.get_height() == 2.0, kwargs
     finally:
         plt.close(fig)
 
@@ -1214,6 +1199,10 @@ def test_line_profiles_add_to_plot_on_visualization():
     visualization = image.show(display=False)
     try:
         line.add_to_plot(visualization, color="r")
+        for ax in np.array(visualization.axes).ravel():
+            (artist,) = ax.get_lines()
+            np.testing.assert_allclose(artist.get_xdata(), [1.0, 15.0])
+            np.testing.assert_allclose(artist.get_ydata(), [2.0, 8.0])
     finally:
         import matplotlib.pyplot as plt
 
