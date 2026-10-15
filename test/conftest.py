@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+import zlib
 
 import pytest
 from hypothesis import HealthCheck, Phase, settings
@@ -26,6 +27,22 @@ _GPU_DEVICE = _gpu_param.values[0]
 _SERIALIZE_GPU_TESTS = _ACCELERATOR == "gpu" or (
     _ACCELERATOR == "mps" and str(config.get("torch.device")).lower() == "mps"
 )
+
+# How many xdist workers may run GPU tests at the same time. 1 (the default)
+# is safe on any card; on one with memory to spare, e.g. an A100, more
+# (ABTEM_TEST_GPU_WORKERS=4) shortens a run whose wall time is otherwise that
+# of the GPU tests one after another.
+_GPU_WORKERS = max(int(os.environ.get("ABTEM_TEST_GPU_WORKERS", "1")), 1)
+
+
+def _gpu_group(item) -> str:
+    """The xdist group of a GPU test: one of _GPU_WORKERS, chosen by its test
+    function, so the cases of one function (and their fixtures) stay on one
+    worker. Multi-GPU tests share a group of their own."""
+    if _GPU_WORKERS == 1 or "multigpu" in item.keywords:
+        return "gpu"
+    function = item.nodeid.split("[")[0]
+    return f"gpu{zlib.crc32(function.encode()) % _GPU_WORKERS}"
 
 # requires_gpu/requires_multigpu both apply a dedicated `gpu` marker
 # alongside their skipif (see their definitions in test/utils.py) -- that
@@ -191,7 +208,8 @@ def pytest_collection_modifyitems(config, items):
 
     Routing every such test into one ``xdist_group`` makes xdist schedule
     them onto the same worker, so at most one runs at a time regardless of
-    ``-n`` -- while CPU-only tests still fan out across every worker. This
+    ``-n`` -- while CPU-only tests still fan out across every worker
+    (ABTEM_TEST_GPU_WORKERS spreads them over more groups, see _gpu_group). This
     only takes effect together with ``--dist=loadgroup`` (see pyproject.toml);
     without it, xdist's default scheduler ignores ``xdist_group`` entirely.
     A test is "GPU-touching" if any of its parametrized values -- direct or
@@ -227,4 +245,4 @@ def pytest_collection_modifyitems(config, items):
         if _SERIALIZE_GPU_TESTS and (
             is_gpu_param or is_gpu_marked or "multigpu" in item.keywords
         ):
-            item.add_marker(pytest.mark.xdist_group("gpu"))
+            item.add_marker(pytest.mark.xdist_group(_gpu_group(item)))
