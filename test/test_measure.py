@@ -91,7 +91,6 @@ def test_scanned_measurement_type():
 
 @settings(max_examples=5)
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["__add__", "__sub__", "__mul__", "__truediv__"])
 @lazy_params
 @devices
 @pytest.mark.parametrize(
@@ -103,7 +102,10 @@ def test_scanned_measurement_type():
         abtem_st.polar_measurements,
     ],
 )
-def test_add_subtract(data, measurement, method, lazy, device):
+def test_add_subtract(data, measurement, lazy, device):
+    # Every operator goes through ArrayObject._arithmetic, so the operators are
+    # looped here; the measurement class decides _copy_kwargs and the
+    # compatibility check.
     measurement = data.draw(measurement(lazy=lazy, device=device))
     # A second operand distinct from the first, b = 2a + 1 (>= 1, so safe to
     # divide by), so that no two of +, -, *, / can give the same result.
@@ -115,30 +117,45 @@ def test_add_subtract(data, measurement, method, lazy, device):
     )
     # compute() replaces a lazy object's array in place, so take the oracle
     # values from copies: computing the operands themselves would make the
-    # operation below run eagerly even when lazy=True.
+    # operations below run eagerly even when lazy=True.
     a = asnumpy(measurement.copy().compute().array)
     b = asnumpy(other.copy().compute().array)
 
-    new_measurement = getattr(measurement, method)(other)
-    assert new_measurement.array is not measurement.array
-    assert new_measurement.is_lazy == lazy
+    for name in ("add", "sub", "mul", "truediv"):
+        new_measurement = getattr(measurement, f"__{name}__")(other)
+        assert new_measurement.array is not measurement.array, name
+        assert new_measurement.is_lazy == lazy, name
 
-    # Oracle: the same elementwise operation on the plain numpy arrays.
-    expected = getattr(np.asarray(a, dtype=np.float64), method)(b)
-    np.testing.assert_allclose(
-        asnumpy(new_measurement.compute().array), expected, rtol=1e-6
-    )
-    # Not in place: the left operand is left untouched.
-    np.testing.assert_array_equal(asnumpy(measurement.compute().array), a)
+        # Oracle: the same elementwise operation on the plain numpy arrays.
+        expected = getattr(operator, name)(np.asarray(a, dtype=np.float64), b)
+        np.testing.assert_allclose(
+            asnumpy(new_measurement.compute().array), expected, rtol=1e-6, err_msg=name
+        )
+        # Not in place: the left operand is left untouched.
+        np.testing.assert_array_equal(
+            asnumpy(measurement.copy().compute().array), a, err_msg=name
+        )
+
+        # In place: an eager measurement is updated in its own array, and a lazy
+        # one is refused rather than silently replaced by a new lazy object.
+        target = measurement.copy()
+        if lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(target, f"__i{name}__")(other)
+            continue
+        result = getattr(target, f"__i{name}__")(other)
+        assert result.array is target.array, name
+        np.testing.assert_allclose(
+            asnumpy(target.array), expected, rtol=1e-6, err_msg=name
+        )
 
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
 @pytest.mark.parametrize(
     "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
 )
-def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
+def test_reflected_arithmetic_with_a_scalar(scalar_type, lazy, device):
     # Oracle: the same operation with the scalar on the left of the plain array.
     # The array is not symmetric under any of the operations, so a reflected
     # operation computed in the forward order (`2 / m` as `m / 2`) fails.
@@ -155,17 +172,19 @@ def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
         da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
     ).copy_to_device(device)
 
-    result = getattr(operator, op)(scalar, measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(scalar, measurement)
 
-    assert isinstance(result, Images)
-    assert result.is_lazy == lazy
-    expected = getattr(operator, op)(host_scalar, array)
-    np.testing.assert_allclose(
-        asnumpy(result.compute().array),
-        expected,
-        rtol=1e-6,
-        atol=1e-6 * np.abs(expected).max(),
-    )
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        expected = getattr(operator, op)(host_scalar, array)
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @devices
@@ -188,19 +207,18 @@ def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes(device):
         np.testing.assert_allclose(asnumpy(result.array), op(2.0, array), rtol=1e-6)
 
 
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
-def test_unsupported_left_operand_raises_type_error(op):
+def test_unsupported_left_operand_raises_type_error():
     # A reflected operator declines an operand it does not support, so Python
     # raises its own TypeError rather than the measurement raising another error.
     measurement = Images(np.ones((2, 3)), sampling=0.1)
-    with pytest.raises(TypeError, match="unsupported operand"):
-        getattr(operator, op)(object(), measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        with pytest.raises(TypeError, match="unsupported operand"):
+            getattr(operator, op)(object(), measurement)
 
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
-def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
+def test_dask_array_on_the_left_of_a_measurement(lazy, device):
     # Oracle: the same operation on the plain arrays. The two operands differ in
     # every element, so an operation computed in the forward order fails for
     # sub, truediv and pow. The result is lazy whenever either operand is.
@@ -211,16 +229,23 @@ def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
     ).copy_to_device(device)
     dask_left = copy_to_device(da.from_array(left, chunks=(1, 3)), device)
 
-    result = getattr(operator, op)(dask_left, measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(dask_left, measurement)
 
-    assert isinstance(result, Images)
-    assert result.is_lazy
-    computed = result.compute().array
-    assert_array_matches_device(computed, device)
-    expected = getattr(operator, op)(left.astype(np.float64), array.astype(np.float64))
-    np.testing.assert_allclose(
-        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
-    )
+        assert isinstance(result, Images), op
+        assert result.is_lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        expected = getattr(operator, op)(
+            left.astype(np.float64), array.astype(np.float64)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @lazy_params
@@ -253,9 +278,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("reflected", [False, True])
-@pytest.mark.parametrize("in_place", [False, True])
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize("form", ["forward", "reflected", "in_place"])
 @pytest.mark.parametrize(
     "operand_type",
     [
@@ -266,17 +289,14 @@ def test_measurement_as_a_map_blocks_keyword_argument():
         "numpy_float64_array",
     ],
 )
-def test_arithmetic_with_a_numpy_or_device_operand(
-    operand_type, op, in_place, reflected, lazy, device
-):
+def test_arithmetic_with_a_numpy_or_device_operand(operand_type, form, lazy, device):
     # Oracle: the same operation on the plain arrays in double precision. NumPy
     # promotes a single-precision measurement to double with any of these
     # operands; the torch backend holds single precision only and must give the
     # single-precision result instead, eager and lazy alike. An in-place
     # operation keeps single precision on every backend, and refuses a lazy
     # measurement rather than silently returning a new (lazy) object.
-    if in_place and reflected:
-        pytest.skip("an in-place operation has the measurement on the left")
+    in_place, reflected = form == "in_place", form == "reflected"
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -290,39 +310,58 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         xp.asarray(host_operand) if operand_type == "0d_device_array" else host_operand
     )
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
-    measurement = Images(
-        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
-        sampling=(0.1, 0.2),
-    ).copy_to_device(device)
 
-    if in_place and lazy:
-        with pytest.raises(RuntimeError, match="inplace"):
-            getattr(operator, "i" + op)(measurement, operand)
-        return
+    for op in ("add", "sub", "mul", "truediv"):
+        # A fresh measurement for each operator: an in-place one changes it.
+        measurement = Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+            sampling=(0.1, 0.2),
+        ).copy_to_device(device)
 
-    operands = (operand, measurement) if reflected else (measurement, operand)
-    result = getattr(operator, ("i" if in_place else "") + op)(*operands)
+        if in_place and lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(operator, "i" + op)(measurement, operand)
+            continue
 
-    assert isinstance(result, Images)
-    assert result.is_lazy == lazy
-    computed = result.compute().array
-    assert_array_matches_device(computed, device)
-    if in_place or device == "mps":
-        assert asnumpy(computed).dtype == get_dtype()
-    host_operands = (array.astype(np.float64), np.asarray(host_operand, np.float64))
-    expected = getattr(operator, op)(
-        *(host_operands[::-1] if reflected else host_operands)
-    )
-    np.testing.assert_allclose(
-        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
-    )
+        operands = (operand, measurement) if reflected else (measurement, operand)
+        result = getattr(operator, ("i" if in_place else "") + op)(*operands)
+
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        if in_place or device == "mps":
+            assert asnumpy(computed).dtype == get_dtype(), op
+        host_operands = (
+            array.astype(np.float64),
+            np.asarray(host_operand, np.float64),
+        )
+        expected = getattr(operator, op)(
+            *(host_operands[::-1] if reflected else host_operands)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @requires_gpu
 @lazy_params
-@pytest.mark.parametrize("reflected", [False, True])
 @pytest.mark.parametrize(
-    "operand_type", ["array", "dask_array", "measurement", "lazy_measurement"]
+    "operand_type, reflected",
+    [
+        ("array", False),
+        ("array", True),
+        ("dask_array", False),
+        ("dask_array", True),
+        # The reflected pair of two measurements is the forward pair with the
+        # devices swapped, which the device parameter covers.
+        ("measurement", False),
+        ("lazy_measurement", False),
+    ],
 )
 @pytest.mark.parametrize("device", ["gpu", "cpu"])
 def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
@@ -331,8 +370,6 @@ def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
     # The operand is on the other device. CuPy refuses NumPy arrays, so the side
     # on the host is moved to the device: the pair gives the same GPU result in
     # either order, eager or lazy.
-    if reflected and operand_type.endswith("measurement"):
-        pytest.skip("the reflected pair is the forward pair with devices swapped")
     other_device = "cpu" if device == "gpu" else "gpu"
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
     measurement = Images(
@@ -362,57 +399,56 @@ def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
     np.testing.assert_array_equal(asnumpy(computed), 2 * array)
 
 
-@settings(max_examples=5)
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
 @devices
-@pytest.mark.parametrize(
-    "measurement",
-    [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
-    ],
-)
-def test_inplace_add_subtract(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=False, device=device))
-    new_measurement = getattr(measurement, method)(measurement.copy())
-    assert new_measurement.array is measurement.array
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("method", ["sum", "mean", "std"])
-@devices
-@pytest.mark.parametrize(
-    "measurement",
-    [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
-    ],
-)
-def test_reduce(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=True, device=device))
-
-    axes_indices = st.integers(
-        min_value=0, max_value=max(len(measurement.ensemble_shape) - 1, 0)
+def test_reduce(data, device):
+    # The measurement is drawn lazy and reduced both as it is and after computing
+    # it, so that both branches of _reduction run. Oracle: the NumPy reduction of
+    # the computed array in double precision.
+    measurement = data.draw(
+        st.one_of(
+            *(
+                strategy(lazy=True, device=device)
+                for strategy in (
+                    abtem_st.images,
+                    abtem_st.line_profiles,
+                    abtem_st.diffraction_patterns,
+                    abtem_st.polar_measurements,
+                )
+            )
+        )
     )
-    axes_indices = st.lists(
-        elements=axes_indices,
-        min_size=0,
-        max_size=len(measurement.ensemble_shape),
-        unique=True,
+    num_ensemble_axes = len(measurement.ensemble_shape)
+    axes = tuple(
+        data.draw(
+            st.lists(
+                st.integers(min_value=0, max_value=max(num_ensemble_axes - 1, 0)),
+                max_size=num_ensemble_axes,
+                unique=True,
+            )
+        )
     )
-    axes_indices = data.draw(axes_indices)
 
-    axes = tuple(axes_indices)
-    num_lost_dims = len(axes)
-
-    new_measurement = getattr(measurement.compute(), method)(axes)
-
-    assert len(new_measurement.shape) == len(measurement.shape) - num_lost_dims
+    eager = measurement.copy().compute()
+    array = np.asarray(asnumpy(eager.array), dtype=np.float64)
+    for method in ("sum", "mean", "std"):
+        # The data lie in [0, 1), so 1e-5 is far below any wrong-axis reduction.
+        expected = getattr(np, method)(array, axis=axes)
+        for source in (measurement, eager):
+            case = f"{method}, lazy={source.is_lazy}"
+            reduced = getattr(source, method)(axes)
+            assert type(reduced) is type(measurement), case
+            assert reduced.is_lazy == source.is_lazy, case
+            assert len(reduced.ensemble_axes_metadata) == num_ensemble_axes - len(
+                axes
+            ), case
+            np.testing.assert_allclose(
+                asnumpy(reduced.compute().array),
+                expected,
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=case,
+            )
 
 
 @composite
