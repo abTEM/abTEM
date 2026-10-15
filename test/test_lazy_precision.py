@@ -288,7 +288,9 @@ def test_lazy_fft2_declares_the_dtype_of_its_blocks(dtype, device):
 
 
 @cuda_and_cpu
-@pytest.mark.parametrize("kernel_dtype", [np.float32, np.float64, np.complex128])
+# A real and a complex kernel; complex128 is the one that would promote a
+# complex64 input if the product were not taken in place.
+@pytest.mark.parametrize("kernel_dtype", [np.float32, np.complex128])
 @pytest.mark.parametrize("x_dtype", [np.complex64, np.complex128, np.float32])
 def test_lazy_fft2_convolve_declares_the_dtype_of_its_blocks(
     x_dtype, kernel_dtype, device
@@ -349,10 +351,18 @@ def _multislice(case, dtype, lazy, route="multislice", device="cpu"):
     return MULTISLICE_ROUTES[route](waves, potential, detectors)
 
 
+# Waves.multislice, MultisliceTransform.apply and Waves.apply_transform reach the
+# same MultisliceTransform; only Waves.multislice reduces the frozen-phonon
+# ensemble afterwards. So every case runs through Waves.multislice, and the two
+# other routes with the frozen-phonon case.
+MULTISLICE_CASES_AND_ROUTES = [(case, "multislice") for case in MULTISLICE_CASES] + [
+    ("fp", route) for route in MULTISLICE_ROUTES if route != "multislice"
+]
+
+
 @cuda_and_cpu
-@pytest.mark.parametrize("route", MULTISLICE_ROUTES)
 @pytest.mark.parametrize("config, input_dtype", CONFIG_AND_INPUT)
-@pytest.mark.parametrize("case", MULTISLICE_CASES)
+@pytest.mark.parametrize("case, route", MULTISLICE_CASES_AND_ROUTES)
 def test_multislice_of_waves_runs_in_the_configured_precision(
     case, config, input_dtype, route, device
 ):
@@ -461,18 +471,24 @@ PRISM_ENTRY_POINTS = {
 }
 
 
+# Without a potential (and without downsampling) the S-matrix is the bare
+# plane-wave expansion, whose dtype no multislice step promotes. Core-loss PRISM
+# needs a potential, so it has no vacuum case.
+PRISM_CASES = [
+    pytest.param(name, vacuum, id=f"{name}-{'vacuum' if vacuum else 'potential'}")
+    for name in PRISM_ENTRY_POINTS
+    for vacuum in (False, True)
+    if not (vacuum and name == "transition_potential_scan")
+]
+
+
 @cuda_and_cpu
-@pytest.mark.parametrize("vacuum", [False, True], ids=["potential", "vacuum"])
 @pytest.mark.parametrize("interpolation", [1, 2])
 @pytest.mark.parametrize("config", ["float32", "float64"])
-@pytest.mark.parametrize("name", PRISM_ENTRY_POINTS)
+@pytest.mark.parametrize("name, vacuum", PRISM_CASES)
 def test_lazy_prism_results_declare_their_block_precision(
-    name, config, interpolation, vacuum, device
+    name, vacuum, config, interpolation, device
 ):
-    # Without a potential (and without downsampling) the S-matrix is the bare
-    # plane-wave expansion, whose dtype no multislice step promotes.
-    if vacuum and name == "transition_potential_scan":
-        pytest.skip("core-loss PRISM needs a potential")
     entry_point = PRISM_ENTRY_POINTS[name]
     with abtem.config.set({"precision": config, "fft": "numpy"}):
         potential = abtem.Potential(
