@@ -677,7 +677,8 @@ def test_fftw_without_wisdom_falls_back_or_raises(monkeypatch, allow_fallback):
     "setting",
     [
         {"fftw.threads": 4},
-        {"fftw.planning_effort": "FFTW_ESTIMATE"},
+        # conftest.py runs the tests with FFTW_ESTIMATE, so change it to MEASURE
+        {"fftw.planning_effort": "FFTW_MEASURE"},
         {"fftw.planning_timelimit": 5},
     ],
     ids=["threads", "planning_effort", "planning_timelimit"],

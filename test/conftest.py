@@ -12,7 +12,13 @@ from utils import gpu as _gpu_param
 from utils import requires_gpu as _requires_gpu
 from utils import requires_multigpu as _requires_multigpu
 
-config.set({"diagnostics.progress_bar": False})
+# FFTW_ESTIMATE rather than abTEM's default FFTW_MEASURE: measuring pays off
+# for a user who transforms one shape many times, but the tests use most of
+# their (often hypothesis-drawn) shapes only a few times, and measuring each
+# new shape cost more than the transforms (8 of 16 s in one Bloch-wave test).
+config.set(
+    {"diagnostics.progress_bar": False, "fftw.planning_effort": "FFTW_ESTIMATE"}
+)
 
 # The literal device string that actually exercises an accelerator -- "gpu"
 # with CuPy, "mps" on Apple silicon -- whatever `gpu` in test/utils.py
