@@ -205,39 +205,44 @@ def test_rotated_magnetic_field_equals_displacing_the_input_atoms(field):
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * scale)
 
 
-@pytest.mark.parametrize(
-    "sigmas",
-    [0.1, {"W": 0.08, "Se": 0.09}, (0.1, 0.1, 0.1), _equal_per_atom_rows],
-    ids=["float", "dict", "equal_tuple", "equal_per_atom_rows"],
-)
 @pytest.mark.parametrize("name", ["plane_xz", "hexagonal_rotated_17"])
-def test_isotropic_sigmas_give_the_seeded_displacements_unchanged(name, sigmas):
+def test_isotropic_sigmas_give_the_seeded_displacements_unchanged(name):
     """An isotropic Gaussian is the same distribution along any rotated axes, so
     sigmas equal in all three directions are not mapped by the frame: the
     displacements are sigma * r along the potential's axes for any frame. That
     includes a 3-tuple or per-atom rows with three equal components."""
     atoms, kwargs = TRANSFORMS[name]
-    if isinstance(sigmas, dict) and "W" not in atoms.get_chemical_symbols():
-        sigmas = {"Si": 0.07}
-    if callable(sigmas):
-        sigmas = sigmas(atoms)
-    fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=5)
-    potential = abtem.Potential(fp, sampling=0.1, **kwargs)
-    transformed, _, frame = potential._transform_atoms()
+    species = {
+        symbol: 0.07 + 0.01 * i
+        for i, symbol in enumerate(sorted(set(atoms.get_chemical_symbols())))
+    }
+    forms = {
+        "float": 0.1,
+        "dict": species,
+        "equal_tuple": (0.1, 0.1, 0.1),
+        "equal_per_atom_rows": _equal_per_atom_rows(atoms),
+    }
+    mapped = []
+    for form, sigmas in forms.items():
+        fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=5)
+        potential = abtem.Potential(fp, sampling=0.1, **kwargs)
+        transformed, _, frame = potential._transform_atoms()
 
-    displaced = fp.randomize(transformed, frame=frame)
+        displaced = fp.randomize(transformed, frame=frame)
 
-    per_atom = fp._sigmas_of(transformed)
-    if per_atom.ndim == 2:
-        per_atom = per_atom[:, 0]
-    r = np.random.default_rng(fp.seed[0]).normal(size=(len(transformed), 3))
-    expected = transformed.positions.copy()
-    for axis in range(3):
-        expected[:, axis] += per_atom * r[:, axis]
-    np.testing.assert_array_equal(displaced.positions, expected)
-    np.testing.assert_array_equal(
-        displaced.positions, fp.randomize(transformed).positions
-    )
+        per_atom = fp._sigmas_of(transformed)
+        if per_atom.ndim == 2:
+            per_atom = per_atom[:, 0]
+        r = np.random.default_rng(fp.seed[0]).normal(size=(len(transformed), 3))
+        expected = transformed.positions.copy()
+        for axis in range(3):
+            expected[:, axis] += per_atom * r[:, axis]
+        if not (
+            np.array_equal(displaced.positions, expected)
+            and np.array_equal(displaced.positions, fp.randomize(transformed).positions)
+        ):
+            mapped.append(form)
+    assert mapped == []
 
 
 def test_only_the_anisotropic_atoms_are_mapped():
@@ -411,19 +416,22 @@ def test_directions_along_rotated_axes_drop_the_rotated_component(sheared):
     )
 
 
-@pytest.mark.parametrize("degrees", [4, 17, 33, 61, 122])
-def test_directions_along_axes_rotated_in_the_plane_are_kept_exactly(degrees):
+def test_directions_along_axes_rotated_in_the_plane_are_kept_exactly():
     """A rotation about z keeps the plane of x and y: directions="xy" then keeps
     the x and y components of sigma * r exactly, as without a frame, although
     the projection onto the rotated plane is diagonal only to rounding, which
     for most angles would move some coordinates by a few 1e-16 A."""
     atoms = _many_atoms()
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions="xy", seed=3)
-    frame = _rotation("z", degrees)
+    unrotated = fp.randomize(atoms).positions
 
-    displaced = fp._randomize_transformed(atoms, directions_frame=frame)
-
-    np.testing.assert_array_equal(displaced.positions, fp.randomize(atoms).positions)
+    moved = []
+    for degrees in (4, 17, 33, 61, 122):
+        frame = _rotation("z", degrees)
+        displaced = fp._randomize_transformed(atoms, directions_frame=frame)
+        if not np.array_equal(displaced.positions, unrotated):
+            moved.append(degrees)
+    assert moved == []
 
 
 def test_a_frame_that_is_not_3x3_raises():
@@ -773,11 +781,10 @@ class _GPAWStub:
         return self.displaced[-1]
 
 
-@pytest.mark.parametrize("directions", ["xyz", "xy"])
+# All three directions take no directions frame, whatever the plane; that case is
+# test_gpaw_needs_no_directions_frame_for_all_directions below.
 @pytest.mark.parametrize("plane", ["xy", "xz"])
-def test_gpaw_potential_drops_the_directions_of_the_potential(
-    monkeypatch, plane, directions
-):
+def test_gpaw_potential_drops_the_directions_of_the_potential(monkeypatch, plane):
     """GPAWPotential displaces the atoms along their own axes before it rotates
     them; `directions` still refers to the axes of the potential, so with
     plane="xz" and directions="xy" the input y axis, the beam, is dropped."""
@@ -785,16 +792,15 @@ def test_gpaw_potential_drops_the_directions_of_the_potential(
     atoms = _single_atom()
     sigmas = (0.05, 0.10, 0.20)
     fp = abtem.FrozenPhonons(
-        atoms, num_configs=1, sigmas=sigmas, directions=directions, seed=3
+        atoms, num_configs=1, sigmas=sigmas, directions="xy", seed=3
     )
 
     displaced = stub.displace(atoms, fp, plane=plane)
 
     r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
     expected = atoms.positions + np.array(sigmas, dtype=np.float32) * r
-    if directions == "xy":
-        dropped = 1 if plane == "xz" else 2
-        expected[:, dropped] = atoms.positions[:, dropped]
+    dropped = 1 if plane == "xz" else 2
+    expected[:, dropped] = atoms.positions[:, dropped]
     np.testing.assert_array_equal(displaced.positions, expected)
 
 
@@ -862,7 +868,8 @@ def test_gpaw_directions_frame_does_not_repeat_the_box_warning():
 @pytest.mark.parametrize("directions", ["xyz", "zyx"])
 def test_gpaw_needs_no_directions_frame_for_all_directions(monkeypatch, directions):
     """The frame of the potentials GPAWPotential builds is needed only to drop
-    directions; with all three it is not computed."""
+    directions; with all three it is not computed, and the atoms are displaced by
+    sigma * r along their own axes before the rotation to plane="xz"."""
     stub = _GPAWStub(monkeypatch)
 
     def unused(*args, **kwargs):
@@ -870,12 +877,16 @@ def test_gpaw_needs_no_directions_frame_for_all_directions(monkeypatch, directio
 
     monkeypatch.setattr(stub.module, "_slice_axes_frame", unused)
     atoms = _single_atom()
+    sigmas = (0.05, 0.10, 0.20)
     fp = abtem.FrozenPhonons(
-        atoms, num_configs=1, sigmas=0.1, directions=directions, seed=3
+        atoms, num_configs=1, sigmas=sigmas, directions=directions, seed=3
     )
 
     displaced = stub.displace(atoms, fp, plane="xz")
 
+    r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
+    expected = atoms.positions + np.array(sigmas, dtype=np.float32) * r
+    np.testing.assert_array_equal(displaced.positions, expected)
     np.testing.assert_array_equal(displaced.positions, fp.randomize(atoms).positions)
 
 
