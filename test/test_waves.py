@@ -514,9 +514,10 @@ def test_window_boxcar_is_a_no_op(data, lazy, device):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_window_hann_tapers_to_the_edges(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
-    windowed = waves.compute().window("hann")
-    array = asnumpy(windowed.array)
+    windowed = waves.window("hann")
+    assert_array_matches_laziness(windowed.array, lazy=lazy)
     assert windowed.array.dtype == waves.array.dtype
+    array = asnumpy(windowed.compute().array)
     assert windowed.energy == waves.energy
     # a Hann window is exactly zero at its first and last sample
     np.testing.assert_allclose(array[..., 0, :], 0.0, atol=1e-6)
