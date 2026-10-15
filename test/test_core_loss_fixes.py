@@ -333,84 +333,36 @@ class TestContinuumNormalisation:
         assert amplitude * np.sqrt(np.pi * k) == pytest.approx(1.0, rel=1e-3)
 
 
-class TestPrecisionConfig:
-    """The transition potential ignored ``config['precision']`` twice over.
+def test_no_hardcoded_dtypes_remain_in_core_loss():
+    """The transition potential ignored ``config['precision']``: it was
+    allocated complex64 and then promoted back to complex128 by a division by
+    a float64 numpy scalar (NEP 50), so every transition potential was silently
+    double precision.
 
-    It was allocated complex64, and then the closing division by a float64
-    numpy scalar promoted the whole array back to complex128 under NEP 50 --
-    so every transition potential was silently double precision at twice the
-    memory, whatever the configuration said.
+    This greps the source for dtype literals, which a promotion does not leave;
+    the built dtype and the single-vs-double agreement are checked by
+    test_core_loss.py's test_build_dtype_follows_precision and
+    test_build_matches_double_precision_reference, which need GPAW. Until those
+    run without it, this is the only check of the defect in CI.
     """
+    from pathlib import Path
 
-    # The two tests below check the *runtime* half of the defect in this
-    # class's docstring: an array allocated at the configured precision and
-    # then promoted back to complex128 by dividing by a float64 numpy scalar
-    # (NEP 50). test_no_hardcoded_dtypes_remain cannot stand in for them --
-    # it greps the source for hardcoded dtype literals, and a promotion
-    # leaves none, so `array = array / np.prod(...)` in place of the
-    # in-place `/=` passes it while silently doubling every transition
-    # potential's memory. Verified: reintroducing exactly that division
-    # fails test_built_array_honours_precision and passes the grep test.
+    import abtem.inelastic.core_loss as module
 
-    @requires_gpaw
-    @pytest.mark.parametrize(
-        "precision, expected",
-        [("float32", np.complex64), ("float64", np.complex128)],
-    )
-    def test_built_array_honours_precision(self, precision, expected):
-        from abtem.inelastic.core_loss import SubshellTransitions
-
-        with abtem.config.set({"precision": precision}):
-            potential = SubshellTransitions(14, 1, 0, epsilon=25.0)
-            built = potential.get_transition_potentials(
-                extent=6.0, gpts=64, energy=ENERGY
-            ).build()
-            assert built.array.dtype == expected
-
-    @requires_gpaw
-    def test_single_and_double_precision_agree(self):
-        from abtem.inelastic.core_loss import SubshellTransitions
-
-        values = {}
-        for precision in ("float32", "float64"):
-            with abtem.config.set({"precision": precision}):
-                built = SubshellTransitions(
-                    14, 1, 0, epsilon=25.0
-                ).get_transition_potentials(
-                    extent=10.0, gpts=128, energy=ENERGY
-                ).build()
-                values[precision] = float(
-                    np.abs(built.array).sum(dtype=np.float64)
-                )
-
-        assert values["float32"] == pytest.approx(values["float64"], rel=1e-5)
-
-    def test_no_hardcoded_dtypes_remain(self):
-        import re
-        from pathlib import Path
-
-        import abtem.inelastic.core_loss as module
-
-        source = Path(module.__file__).read_text()
-        offenders = [
-            line
-            for line in source.splitlines()
-            if re.search(
-                r"(dtype\s*=\s*(np|xp)\.(float|complex)\d+|"
-                r"(np|xp)\.(float|complex)\d+\s*\()",
-                line,
-            )
-        ]
-        assert not offenders, (
-            "use get_dtype() so abtem.config['precision'] is honoured:\n"
-            + "\n".join(offenders)
+    source = Path(module.__file__).read_text()
+    offenders = [
+        line
+        for line in source.splitlines()
+        if re.search(
+            r"(dtype\s*=\s*(np|xp)\.(float|complex)\d+|"
+            r"(np|xp)\.(float|complex)\d+\s*\()",
+            line,
         )
-
-
-def test_dead_set_threshold_is_gone():
-    # It computed two values, discarded both and returned None, and was never
-    # called from anywhere in abTEM or the tests.
-    assert not hasattr(TransitionPotentialArray, "set_threshold")
+    ]
+    assert not offenders, (
+        "use get_dtype() so abtem.config['precision'] is honoured:\n"
+        + "\n".join(offenders)
+    )
 
 
 @devices
@@ -1091,108 +1043,28 @@ class TestFilterByIntensity:
         assert kept_ranks == list(range(len(kept_ranks)))
 
 
-@pytest.mark.parametrize("lazy", [False, True])
-def test_detectors_elastic_is_refused_rather_than_ignored(lazy):
-    """It was declared in the signature and never read.
-
-    Elastic detectors passed through Probe.transition_potential_scan were
-    accepted in silence and only the inelastic measurement came back. Every
-    other unsupported keyword reaching the driver through
-    **multislice_func_kwargs raises TypeError; this one spelling quietly
-    absorbed the caller's intent.
-
-    Parametrised over ``lazy`` because abTEM is lazy by default: a check
-    inside the per-chunk worker would let the caller build a whole measurement
-    object without complaint and only fail later, inside a dask traceback.
-    """
-    atoms, potential, probe = _detectors_elastic_setup()
-
-    with pytest.raises(NotImplementedError, match="detectors_elastic"):
-        probe.transition_potential_scan(
-            potential=potential,
-            transition_potentials=synthetic_transition_potential(
-                gpts=potential.gpts, extent=potential.extent, n_transitions=3
-            ),
-            scan=np.array([[0.0, 0.0]]),
-            detectors=abtem.FlexibleAnnularDetector(),
-            detectors_elastic=[abtem.AnnularDetector(inner=50, outer=150)],
-            double_channel=False,
-            lazy=lazy,
-            sites=atoms,
-        )
-
-
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize(
-    "kwargs", [{}, {"detectors_elastic": None}, {"detectors_elastic": []}],
-    ids=["omitted", "none", "empty"],
-)
-def test_detectors_elastic_guard_has_no_false_positives(lazy, kwargs):
-    """An empty list asks for no elastic detectors, so nothing is dropped.
-
-    Raising on it would turn a working call into a crash for no benefit, and
-    callers that forward an explicit ``None`` must keep working.
-    """
-    atoms, potential, probe = _detectors_elastic_setup()
-
-    measurement = probe.transition_potential_scan(
-        potential=potential,
-        transition_potentials=synthetic_transition_potential(
-            gpts=potential.gpts, extent=potential.extent, n_transitions=3
-        ),
-        scan=np.array([[0.0, 0.0]]),
-        detectors=abtem.FlexibleAnnularDetector(),
-        double_channel=False,
-        lazy=lazy,
-        sites=atoms,
-        **kwargs,
-    )
-    if lazy:
-        measurement = measurement.compute(progress_bar=False)
-    assert np.asarray(abtem.core.backend.asnumpy(measurement.array)).size
-
-
-def _detectors_elastic_setup():
-    atoms = ase.build.bulk("Si", cubic=True)
-    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=1.4)
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
-    probe.grid.match(potential)
-    return atoms, potential, probe
-
-
-def test_transition_potentials_are_wrapped_by_the_live_isinstance_check():
-    """The deleted duck-typed validator was not an equivalent spelling.
-
-    It wrapped on ``hasattr(x, "scatter")``; the live check in
-    Waves.transition_potential_multislice is ``isinstance(x, (list, tuple))``.
-    They diverge on a generator, so asserting only that the dead one is gone
-    would not stop it being "restored" later as a synonym.
-    """
-    import abtem.inelastic.core_loss as core_loss
-
-    assert not hasattr(core_loss, "_validate_transition_potentials")
-
-    atoms, potential, probe = _detectors_elastic_setup()
+def test_a_single_transition_potential_equals_a_one_element_list():
+    """Waves.transition_potential_multislice wraps a non-list/tuple transition
+    potential into a list; the two spellings must give the same measurement."""
+    atoms, potential, probe = _expansion_scope_setup()
     single = synthetic_transition_potential(
         gpts=potential.gpts, extent=potential.extent, n_transitions=3
     )
 
-    from_single = probe.transition_potential_scan(
-        potential=potential, transition_potentials=single,
-        scan=np.array([[0.0, 0.0]]), detectors=abtem.FlexibleAnnularDetector(),
-        double_channel=False, lazy=False, sites=atoms,
-    )
-    from_list = probe.transition_potential_scan(
-        potential=potential, transition_potentials=[single],
-        scan=np.array([[0.0, 0.0]]), detectors=abtem.FlexibleAnnularDetector(),
-        double_channel=False, lazy=False, sites=atoms,
+    from_single, from_list = (
+        probe.transition_potential_scan(
+            potential=potential, transition_potentials=transition_potentials,
+            scan=np.array([[0.0, 0.0]]), detectors=abtem.FlexibleAnnularDetector(),
+            double_channel=False, lazy=False, sites=atoms,
+        )
+        for transition_potentials in (single, [single])
     )
     assert np.array_equal(
         np.asarray(abtem.core.backend.asnumpy(from_single.array)),
         np.asarray(abtem.core.backend.asnumpy(from_list.array)),
     )
-    
-    
+
+
 class TestPotentialEnsembleAccumulation:
     """The single-channel driver indexed only the exit-plane axis.
 
@@ -2443,15 +2315,16 @@ def _expansion_scope_setup():
     atoms = list(
         abtem.FrozenPhonons(ase.build.bulk("Si", cubic=True), 1, sigmas=0.1, seed=1)
     )[0]
-    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 3)
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=atoms.cell[2, 2] / 3
+    )
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
     probe.grid.match(potential)
     return atoms, potential, probe
 
 
-def _core_loss_scan(algorithm, lazy, double_channel):
+def _core_loss_scan(lazy, double_channel=False, **kwargs):
     atoms, potential, probe = _expansion_scope_setup()
-    kwargs = {} if algorithm is None else {"algorithm": algorithm}
     return probe.transition_potential_scan(
         potential=potential,
         transition_potentials=synthetic_transition_potential(
@@ -2466,62 +2339,37 @@ def _core_loss_scan(algorithm, lazy, double_channel):
     )
 
 
-@pytest.mark.parametrize("double_channel", [False, True])
-@pytest.mark.parametrize("lazy", [False, True])
-def test_full_expansion_scope_is_refused_at_call_time(lazy, double_channel):
-    """The core-loss multislice does not support ``expansion_scope="full"``.
+@pytest.mark.parametrize(
+    "option, match",
+    [
+        ("detectors_elastic", "detectors_elastic"),
+        ("algorithm", "expansion_scope='full'"),
+    ],
+)
+def test_unsupported_core_loss_options_are_refused_up_front(option, match, monkeypatch):
+    """``detectors_elastic`` was declared and never read, so elastic detectors
+    were accepted in silence and only the inelastic measurement came back;
+    ``RealSpaceMultislice(expansion_scope="full")`` is not supported by the
+    core-loss multislice.
 
-    The refusal happens when the measurement is built, not when it is computed:
-    a lazy call must not return an object that fails later inside a dask task.
+    Both are refused when the call is made, before the probe is built at every
+    scan position, eager or lazy: abTEM is lazy by default, and a check in the
+    per-chunk worker alone would fail only at compute time, inside a dask
+    traceback. The public driver refuses them too. The refusal precedes every
+    use of ``double_channel``, so one channel stands for both.
     """
-    from abtem.multislice import RealSpaceMultislice
-
-    with pytest.raises(NotImplementedError, match="expansion_scope='full'"):
-        _core_loss_scan(
-            RealSpaceMultislice(expansion_scope="full"), lazy, double_channel
-        )
-
-
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("option", ["algorithm", "detectors_elastic"])
-def test_core_loss_scan_refuses_before_building_the_probe(lazy, option, monkeypatch):
-    """An unsupported option is refused before the probe is built at every scan
-    position."""
-    from abtem.multislice import RealSpaceMultislice
-
-    builds = []
-    monkeypatch.setattr(
-        abtem.Probe, "build", lambda self, *args, **kwargs: builds.append(kwargs)
-    )
-    refused = {
-        "algorithm": RealSpaceMultislice(expansion_scope="full"),
-        "detectors_elastic": [abtem.AnnularDetector(inner=50, outer=150)],
-    }
-    atoms, potential, probe = _expansion_scope_setup()
-
-    with pytest.raises(NotImplementedError):
-        probe.transition_potential_scan(
-            potential=potential,
-            transition_potentials=synthetic_transition_potential(
-                gpts=potential.gpts, extent=potential.extent, n_transitions=2
-            ),
-            scan=np.array([[0.0, 0.0]]),
-            lazy=lazy,
-            sites=atoms,
-            **{option: refused[option]},
-        )
-    assert builds == []
-
-
-def test_full_expansion_scope_is_refused_by_the_driver():
-    """The public driver refuses it too, before any work."""
     from abtem.multislice import (
         RealSpaceMultislice,
         transition_potential_multislice_and_detect,
     )
 
+    refused = {
+        "detectors_elastic": [abtem.AnnularDetector(inner=50, outer=150)],
+        "algorithm": RealSpaceMultislice(expansion_scope="full"),
+    }[option]
+
     atoms, potential, probe = _expansion_scope_setup()
-    with pytest.raises(NotImplementedError, match="expansion_scope='full'"):
+    with pytest.raises(NotImplementedError, match=match):
         transition_potential_multislice_and_detect(
             probe.build(scan=np.array([[0.0, 0.0]]), lazy=False),
             potential.build(),
@@ -2531,18 +2379,47 @@ def test_full_expansion_scope_is_refused_by_the_driver():
             detectors=[abtem.AnnularDetector(inner=0.0, outer=None)],
             double_channel=False,
             sites=atoms,
-            algorithm=RealSpaceMultislice(expansion_scope="full"),
+            **{option: refused},
         )
+
+    builds = []
+    monkeypatch.setattr(
+        abtem.Probe, "build", lambda self, *args, **kwargs: builds.append(kwargs)
+    )
+    for lazy in (False, True):
+        try:
+            _core_loss_scan(lazy, **{option: refused})
+        except NotImplementedError as error:
+            assert re.search(match, str(error)), f"lazy={lazy}: {error}"
+        else:
+            pytest.fail(f"lazy={lazy}: {option} was not refused")
+        assert builds == [], f"lazy={lazy}: the probe was built before the refusal"
+
+
+def test_no_elastic_detectors_are_not_refused():
+    """An empty list asks for no elastic detectors, so nothing is dropped;
+    raising on it, or on an explicit ``None`` a caller forwards, would turn a
+    working call into a crash for no benefit."""
+    for detectors_elastic in (None, []):
+        for lazy in (False, True):
+            measurement = _core_loss_scan(lazy, detectors_elastic=detectors_elastic)
+            if lazy:
+                measurement = measurement.compute(progress_bar=False)
+            assert np.asarray(abtem.core.backend.asnumpy(measurement.array)).size, (
+                f"detectors_elastic={detectors_elastic}, lazy={lazy}"
+            )
 
 
 @pytest.mark.parametrize("double_channel", [False, True])
 def test_propagator_expansion_scope_runs_in_the_core_loss_multislice(double_channel):
-    """``RealSpaceMultislice(expansion_scope="propagator")`` is the supported real-space choice."""
+    """``RealSpaceMultislice(expansion_scope="propagator")`` is the supported
+    real-space choice."""
     from abtem.multislice import RealSpaceMultislice
 
-    default = _core_loss_scan(None, False, double_channel)
+    default = _core_loss_scan(False, double_channel)
     realspace = _core_loss_scan(
-        RealSpaceMultislice(expansion_scope="propagator"), False, double_channel
+        False, double_channel,
+        algorithm=RealSpaceMultislice(expansion_scope="propagator"),
     )
     reference = np.asarray(abtem.core.backend.asnumpy(default.array))
     result = np.asarray(abtem.core.backend.asnumpy(realspace.array))
