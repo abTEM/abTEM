@@ -55,20 +55,9 @@ def test_parity_projection_shape_and_axes(equilibrium):
     assert isinstance(axes[2], FrozenPhononsAxis)
 
 
-def test_ensemble_mean_forced_false(equilibrium):
-    snapshots = _make_snapshots(equilibrium)
-    ensemble = EnergyResolvedAtomsEnsemble(
-        snapshots,
-        [0.02, 0.05, 0.10],
-        equilibrium_atoms=equilibrium,
-        parity_projection=True,
-        ensemble_mean=True,  # should be silently overridden
-    )
-    assert ensemble.ensemble_mean is False
-
-
 def test_ensemble_mean_forced_false_does_not_warn(equilibrium):
-    """Forcing ensemble_mean=False for parity_projection is deliberate, not
+    """parity_projection silently overrides ensemble_mean=True.
+    Forcing ensemble_mean=False for parity_projection is deliberate, not
     a user oversight -- reduce_ensemble's generic "did you forget
     ensemble_mean=True" warning must not fire for it, while it must still
     fire for an ordinary (non-parity) ensemble_mean=False. Scoped to just
@@ -84,7 +73,9 @@ def test_ensemble_mean_forced_false_does_not_warn(equilibrium):
     snapshots = _make_snapshots(equilibrium, n_energies=1, n_configs=2)
     ensemble = EnergyResolvedAtomsEnsemble(
         snapshots, [0.02], equilibrium_atoms=equilibrium, parity_projection=True,
+        ensemble_mean=True,  # should be silently overridden
     )
+    assert ensemble.ensemble_mean is False
     fp_axis = next(
         ax for ax in ensemble.ensemble_axes_metadata
         if isinstance(ax, FrozenPhononsAxis)
@@ -156,7 +147,8 @@ def test_getitem_ambiguous_forms_not_supported_with_parity_projection(equilibriu
     """Bare/2D-style indexing (as used by a non-parity ensemble) is
     ambiguous once a leading parity axis exists -- ensemble[0] could mean
     "energy 0" (matching non-parity semantics) or "parity member 0"
-    (matching the actual leading axis), so both remain unsupported."""
+    (matching the actual leading axis), so both remain unsupported, as does
+    a bare array index."""
     snapshots = _make_snapshots(equilibrium)
     ensemble = EnergyResolvedAtomsEnsemble(
         snapshots,
@@ -168,6 +160,8 @@ def test_getitem_ambiguous_forms_not_supported_with_parity_projection(equilibriu
         ensemble[0]
     with pytest.raises(NotImplementedError, match="leading ':'"):
         ensemble[1, 0]
+    with pytest.raises(NotImplementedError, match="leading ':'"):
+        ensemble[np.array([0, 1])]
 
 
 def test_getitem_with_explicit_leading_colon_supported_with_parity_projection(
@@ -245,6 +239,14 @@ class TestEnsembleMachinery:
         )
         blocks = ensemble.ensemble_blocks(chunks=1)
         assert blocks.shape == (2, 2, 3)
+        # each reconstructed block carries its own member, not a re-twinned one
+        computed = blocks.compute()
+        for index in ((0, 1, 2), (1, 0, 1)):
+            np.testing.assert_allclose(
+                computed[index].snapshots[0, 0, 0].positions,
+                ensemble.snapshots[index].positions,
+                atol=1e-12,
+            )
 
 
 def test_rejects_equilibrium_with_wrong_atom_count(equilibrium):
@@ -562,16 +564,6 @@ def test_wrapped_snapshot_passes_minimum_image_check_pbc_false():
         parity_projection=True,
     )
     assert ensemble.ensemble_shape == (2, 1, 2)
-
-
-def test_getitem_rejects_array_index_with_parity_projection(equilibrium):
-    snapshots = _make_snapshots(equilibrium)
-    ensemble = EnergyResolvedAtomsEnsemble(
-        snapshots, [0.02, 0.05, 0.10], equilibrium_atoms=equilibrium,
-        parity_projection=True,
-    )
-    with pytest.raises(NotImplementedError, match="leading ':'"):
-        ensemble[np.array([0, 1])]
 
 
 def test_getitem_rebuilds_energy_axis_for_the_slice(equilibrium):
