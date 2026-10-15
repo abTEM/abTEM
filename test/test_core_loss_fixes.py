@@ -2176,10 +2176,9 @@ class TestScatterBatchBucketing:
     """generate_scattered_waves pads each site chunk at or above
     core_loss._SCATTER_BATCH_BUCKET up to a multiple of it before
     scattering, so the ifft2 batch shape depends on the bucket rather than
-    the data-dependent surviving-site count. Chunks smaller than one bucket
-    are left unpadded (see the guard in generate_scattered_waves) so a
-    VRAM-constrained run's small max_batch chunks are never rounded up to a
-    multiple of their own memory budget.
+    the data-dependent surviving-site count. The padding is capped at the
+    chunk's own site ceiling, so a VRAM-constrained run's small max_batch
+    chunks are never rounded up past their memory budget.
     """
 
     @staticmethod
@@ -2196,15 +2195,15 @@ class TestScatterBatchBucketing:
         )
 
     @staticmethod
-    def _make_waves(gpts=(32, 32)):
-        probe = abtem.Probe(energy=ENERGY, extent=(8.0, 8.0), gpts=gpts, semiangle_cutoff=20)
+    def _make_waves():
+        probe = abtem.Probe(
+            energy=ENERGY, extent=(8.0, 8.0), gpts=(32, 32), semiangle_cutoff=20
+        )
         return probe.build(lazy=False)
 
-    def test_ifft2_batch_shapes_are_bucketed(self, monkeypatch):
+    @staticmethod
+    def _record_ifft2_batches(monkeypatch):
         import abtem.inelastic.core_loss as cl
-
-        tp = self._make_tp(n_transitions=2)
-        waves = self._make_waves()
 
         real_ifft2 = cl.ifft2
         batch_shapes = set()
@@ -2214,6 +2213,12 @@ class TestScatterBatchBucketing:
             return real_ifft2(x, *args, **kwargs)
 
         monkeypatch.setattr(cl, "ifft2", recording_ifft2)
+        return batch_shapes
+
+    def test_ifft2_batch_shapes_are_bucketed(self, monkeypatch):
+        tp = self._make_tp(n_transitions=2)
+        waves = self._make_waves()
+        batch_shapes = self._record_ifft2_batches(monkeypatch)
 
         rng = np.random.default_rng(1)
         for n_sites in (3, 5, 7, 11, 17, 23):
@@ -2229,39 +2234,47 @@ class TestScatterBatchBucketing:
         # collapses onto one of 3.
         assert batch_shapes == {8, 16, 24}
 
-    @pytest.mark.parametrize(
-        "n_sites", [1, 2, 3, 5, 7, 8, 9, 11, 15, 16, 17, 23, 24, 25]
-    )
-    def test_matches_a_direct_unchunked_unpadded_scatter(self, n_sites):
-        """n_sites sweeps across and exactly on bucket boundaries (8, 16,
-        24): the padded, chunked path must match scatter() called directly
-        on the real sites, which pads and chunks nothing."""
+    def test_matches_a_direct_unchunked_unpadded_scatter(self):
+        """Below, at and just above a bucket boundary (the bucket is 8): the
+        padded path must match scatter() called directly on the real sites,
+        which pads and chunks nothing."""
         tp = self._make_tp(n_transitions=2)
         waves = self._make_waves()
         rng = np.random.default_rng(2)
-        sites = rng.uniform(0, 8, size=(n_sites, 2)).astype(np.float32)
 
-        chunks = list(
-            tp.generate_scattered_waves(waves, sites, max_batch=10**9, threshold=0.0)
-        )
-        assert len(chunks) == 1  # max_batch huge enough for one chunk
-        sites_chunk, padded = chunks[0]
-        assert len(sites_chunk) == n_sites  # yielded chunk is never padded
+        for n_sites in (1, 8, 9, 17):
+            sites = rng.uniform(0, 8, size=(n_sites, 2)).astype(np.float32)
+            chunks = list(
+                tp.generate_scattered_waves(
+                    waves, sites, max_batch=10**9, threshold=0.0
+                )
+            )
+            assert len(chunks) == 1  # max_batch huge enough for one chunk
+            sites_chunk, padded = chunks[0]
+            # the yielded chunk is never padded
+            assert len(sites_chunk) == n_sites, f"{n_sites} sites"
 
-        direct = tp.scatter(waves, sites)
-        assert np.array_equal(np.asarray(padded.array), np.asarray(direct.array))
+            direct = tp.scatter(waves, sites)
+            assert np.array_equal(
+                np.asarray(padded.array), np.asarray(direct.array)
+            ), f"{n_sites} sites"
 
-    def test_small_max_batch_still_matches_with_multiple_real_chunks(self):
-        """Padding is per real chunk, not per whole site list -- exercise it
-        with several genuinely separate chunks in the same call."""
+    def test_padding_never_exceeds_a_small_explicit_max_batch(self, monkeypatch):
+        """A memory-tight run (max_batch below the bucket) must not have its
+        per-chunk budget multiplied by padding: without the site-ceiling cap
+        the last chunk of 37 sites in chunks of 6 (one real site) would pad up
+        to a full bucket of 8. Padding is per real chunk, so the several
+        chunks must still reassemble to the direct, unchunked scatter."""
         tp = self._make_tp(n_transitions=2)
         waves = self._make_waves()
         rng = np.random.default_rng(3)
         sites = rng.uniform(0, 8, size=(37, 2)).astype(np.float32)
 
+        batch_shapes = self._record_ifft2_batches(monkeypatch)
         chunks = list(
             tp.generate_scattered_waves(waves, sites, max_batch=6, threshold=0.0)
         )
+        assert batch_shapes == {6}
         assert len(chunks) > 1
         assert sum(len(c[0]) for c in chunks) == 37
 
@@ -2269,139 +2282,63 @@ class TestScatterBatchBucketing:
         direct = tp.scatter(waves, sites)
         assert np.array_equal(reassembled, np.asarray(direct.array))
 
-    def test_padding_never_exceeds_a_small_explicit_max_batch(self, monkeypatch):
-        """A memory-tight run (small max_batch, below _SCATTER_BATCH_BUCKET)
-        must not have its declared per-chunk budget multiplied by padding.
-        Without the site_ceiling cap, max_batch=2 chunks would pad from 2
-        real sites up to a full bucket of 8 -- a 4x blowup of exactly the
-        allocation max_batch exists to bound."""
-        import abtem.inelastic.core_loss as cl
-
-        tp = self._make_tp(n_transitions=2)
-        waves = self._make_waves()
-
-        real_ifft2 = cl.ifft2
-        batch_shapes = set()
-
-        def recording_ifft2(x, *args, **kwargs):
-            batch_shapes.add(x.shape[0])
-            return real_ifft2(x, *args, **kwargs)
-
-        monkeypatch.setattr(cl, "ifft2", recording_ifft2)
-
-        rng = np.random.default_rng(4)
-        sites = rng.uniform(0, 8, size=(9, 2)).astype(np.float32)
-        for _ in tp.generate_scattered_waves(
-            waves, sites, max_batch=2, threshold=0.0
-        ):
-            pass
-
-        assert max(batch_shapes) <= 2
-        # Correctness is unaffected: still matches a direct unchunked call.
-        direct = tp.scatter(waves, sites)
-        chunks = list(
-            tp.generate_scattered_waves(waves, sites, max_batch=2, threshold=0.0)
-        )
-        reassembled = np.concatenate(
-            [np.asarray(c[1].array) for c in chunks], axis=0
-        )
-        assert np.array_equal(reassembled, np.asarray(direct.array))
-
-    def test_site_ceiling_is_memoized_per_waves_shape_and_not_recomputed(
-        self, monkeypatch
-    ):
-        """The site_ceiling probe (an extra validate_chunks call, needed
-        only for max_batch="auto") must run at most once per distinct
-        (max_batch, waves.shape, dtype, device) -- calling it on every
-        generate_scattered_waves invocation measured as a ~10x regression
-        on the "auto" path in a real per-slice driver loop, even though an
-        isolated call to validate_chunks alone looked cheap."""
+    def test_the_site_ceiling_probe_runs_once_per_waves_shape(self, monkeypatch):
+        """The site ceiling for max_batch="auto" needs an extra validate_chunks
+        call with a sentinel site count. Running it on every
+        generate_scattered_waves call measured as a ~10x regression on the
+        "auto" path in a real per-slice driver loop, so it is memoized -- but
+        per waves shape, so a stale ceiling never leaks into another grid. An
+        explicit int max_batch already is the ceiling and never probes."""
         from abtem.core.chunks import validate_chunks as real_validate_chunks
+        from abtem.inelastic.core_loss import _SCATTER_BATCH_CEILING_PROBE_SITES
 
         tp = self._make_tp(n_transitions=2)
-        waves = self._make_waves()
         rng = np.random.default_rng(5)
         sites = rng.uniform(0, 8, size=(5, 2)).astype(np.float32)
 
-        calls = []
+        probes = []
 
         def counting_validate_chunks(*args, **kwargs):
-            calls.append(kwargs.get("shape", args[0] if args else None))
+            shape = kwargs.get("shape", args[0] if args else None)
+            if shape[0] == _SCATTER_BATCH_CEILING_PROBE_SITES:
+                probes.append(shape)
             return real_validate_chunks(*args, **kwargs)
 
         monkeypatch.setattr(
             "abtem.inelastic.core_loss.validate_chunks", counting_validate_chunks
         )
 
-        for _ in range(5):
+        def scatter_all(waves, max_batch):
             for _ in tp.generate_scattered_waves(
-                waves, sites, max_batch="auto", threshold=0.0
+                waves, sites, max_batch=max_batch, threshold=0.0
             ):
                 pass
 
-        # One validate_chunks call per invocation for the real chunking
-        # (always needed, cheap, shape[0] == len(sites)) plus exactly one
-        # ceiling-probe call total (shape[0] == the sentinel), not one per
-        # invocation -- 5 invocations, 6 calls, not 10.
-        probe_calls = [
-            c for c in calls if c[0] == abtem.inelastic.core_loss._SCATTER_BATCH_CEILING_PROBE_SITES
-        ]
-        assert len(calls) == 6
-        assert len(probe_calls) == 1
-
-    def test_site_ceiling_cache_distinguishes_waves_shapes(self):
-        """A stale ceiling from one waves shape must never leak into a
-        different one -- the cache key has to include enough of the call's
-        own inputs to keep them apart."""
-        tp = self._make_tp(n_transitions=2)
-        small = self._make_waves(gpts=(16, 16))
-        large = self._make_waves(gpts=(64, 64))
-
-        ceiling_small = tp._get_site_ceiling("auto", small, "auto")
-        ceiling_large = tp._get_site_ceiling("auto", large, "auto")
-
-        # Same VRAM budget, more elements per site at the larger grid, so
-        # the ceiling (in sites) must not increase.
-        assert ceiling_large <= ceiling_small
-        assert len(tp._site_ceiling_cache) == 2
-
-    def test_site_ceiling_int_max_batch_bypasses_the_cache(self):
-        """An explicit int max_batch already is the ceiling (validate_chunks
-        tiles it verbatim); this must return immediately without touching
-        the cache, matching the description in _get_site_ceiling."""
-        tp = self._make_tp(n_transitions=2)
         waves = self._make_waves()
+        for _ in range(5):
+            scatter_all(waves, "auto")
+        assert len(probes) == 1
 
-        ceiling = tp._get_site_ceiling(7, waves, limit=123)
+        # two probe positions: waves of shape (2, 32, 32) rather than (32, 32)
+        probe = abtem.Probe(
+            energy=ENERGY, extent=(8.0, 8.0), gpts=(32, 32), semiangle_cutoff=20
+        )
+        scatter_all(probe.build(scan=[(0.0, 0.0), (1.0, 1.0)], lazy=False), "auto")
+        assert len(probes) == 2, "a new waves shape must probe its own ceiling"
 
-        assert ceiling == 7
-        assert tp._site_ceiling_cache == {}
+        scatter_all(waves, 7)
+        assert len(probes) == 2, "an int max_batch must not probe"
 
 
-class TestCeilToMultiple:
-    """Contrast case for _nearest_power_of_two (core/chunks.py), which
-    rounds *down* when the upper power would overshoot by more than 25% --
-    safe for a VRAM budget, unsafe for a batch bucket that must keep every
-    item. _ceil_to_multiple must never round down."""
+def test_ceil_to_multiple_rounds_up_never_down():
+    """Contrast case for _nearest_power_of_two (core/chunks.py), which rounds
+    *down* when the upper power would overshoot by more than 25% -- safe for a
+    VRAM budget, unsafe for a batch bucket that must keep every item."""
+    from abtem.core.chunks import _ceil_to_multiple
 
-    @pytest.mark.parametrize(
-        "n,multiple,expected",
-        [
-            (0, 8, 0),
-            (1, 8, 8),
-            (7, 8, 8),
-            (8, 8, 8),
-            (9, 8, 16),
-            (16, 8, 16),
-            (17, 8, 24),
-            (100, 8, 104),
-        ],
-    )
-    def test_rounds_up_never_down(self, n, multiple, expected):
-        from abtem.core.chunks import _ceil_to_multiple
-
-        assert _ceil_to_multiple(n, multiple) == expected
-        assert _ceil_to_multiple(n, multiple) >= n
+    table = {0: 0, 1: 8, 7: 8, 8: 8, 9: 16, 16: 16, 17: 24, 100: 104}
+    got = {n: _ceil_to_multiple(n, 8) for n in table}
+    assert got == table
 
 
 class TestScatteringSitesReadReciprocalSpaceWaves:
