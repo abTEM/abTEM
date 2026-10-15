@@ -169,7 +169,8 @@ def test_structure_factor_auto_centering_keeps_allowed_reflections():
     # silently dropped.
     atoms = graphene(vacuum=2.0)
     atoms.pbc = True
-    atoms = atoms.repeat((1, 1, 20))
+    # Two cells are enough for the (0, 0, 1/2) translation; 20 took 4 s.
+    atoms = atoms.repeat((1, 1, 2))
 
     structure_factor = StructureFactor(atoms, g_max=2.0)
     structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
