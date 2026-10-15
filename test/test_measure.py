@@ -1064,25 +1064,24 @@ def _step_bin_masks(scaled_r_squared, scale, num_bins, radial_sampling=1, width=
     return masks
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("fftshift", [True, False])
 @pytest.mark.parametrize("gpts", [(48, 36), (37, 50)])
-def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, precision):
+def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift):
     """With the default radial sampling and width, bin k holds the pixels with
     (k - 1/2) <= sqrt(i**2 + j**2) < (k + 1/2) in units of the angular sampling,
     which no pixel radius sits on, so the bins hold the same pixels at every
-    precision and every pattern size."""
+    pattern size. The bins are chosen on the host in double precision whatever
+    the configured precision, which only sets the dtype of the data averaged
+    (see ..._four_to_three_sampling_ratio_is_independent_of_precision)."""
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data,
-            sampling=1 / 16.29,
-            fftshift=fftshift,
-            metadata={"energy": 200e3},
-        )
-        profiles = patterns.azimuthal_average()
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 16.29,
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
 
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
@@ -1094,12 +1093,9 @@ def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, preci
     inside = r_squared < math.ceil((n - Fraction(1, 2)) ** 2)
     assert np.array_equal(np.sum(masks, axis=0), inside)
 
-    expected = [data[mask].astype(np.float64).mean() for mask in masks]
-    rtol = 1e-6 if precision == "float32" else 1e-12
+    expected = [data[mask].mean() for mask in masks]
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
 @pytest.mark.parametrize(
@@ -1202,28 +1198,25 @@ def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of
     )
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("fftshift", [True, False])
 def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_rule(
-    fftshift, precision
+    fftshift,
 ):
     """With sampling (1 / (3 a), 1 / (2 a)) the pixels at frequency (0, +-1) have
     the radius 3 / 2 in units of the finer sampling, exactly on the edge between
     bins 1 and 2, but the ratio of the angular samplings is not exactly 3 / 2 in
-    floating point. They belong to bin 2 at every precision."""
+    floating point. They belong to bin 2."""
     a = 5.431
     gpts = (48, 32)
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data,
-            sampling=(1 / (3 * a), 1 / (2 * a)),
-            fftshift=fftshift,
-            metadata={"energy": 200e3},
-        )
-        profiles = patterns.azimuthal_average()
+    patterns = DiffractionPatterns(
+        data,
+        sampling=(1 / (3 * a), 1 / (2 * a)),
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
 
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
@@ -1232,34 +1225,28 @@ def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_ru
     assert -i.min() == n and 3 * -j.min() == 2 * n
     masks = _step_bin_masks(4 * i**2 + 9 * j**2, 4, n)
 
-    expected = [data[mask].astype(np.float64).mean() for mask in masks]
-    rtol = 1e-6 if precision == "float32" else 1e-12
+    expected = [data[mask].mean() for mask in masks]
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize(
     "gpts, radial_sampling, width",
     [((30, 30), "0.2", "0.4"), ((25, 24), "0.1", "0.2")],
 )
 def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
-    gpts, radial_sampling, width, precision
+    gpts, radial_sampling, width
 ):
     """Bin edges at decimal multiples of the sampling, such as 2.0 = 20 * 0.1,
     are exact: 1.9 / 0.1 is 18.999999999999996 in floating point."""
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
-        )
-        profiles = patterns.azimuthal_average(
-            radial_sampling=float(radial_sampling), width=float(width)
-        )
+    patterns = DiffractionPatterns(
+        data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
+    )
+    profiles = patterns.azimuthal_average(
+        radial_sampling=float(radial_sampling), width=float(width)
+    )
 
     i = _integer_frequencies(gpts[0], True)[:, None]
     j = _integer_frequencies(gpts[1], True)[None, :]
@@ -1275,17 +1262,16 @@ def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
         data[mask].astype(np.float64).mean() if mask.any() else 0.0 for mask in masks
     ]
 
-    rtol = 1e-6 if precision == "float32" else 1e-12
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
+@pytest.mark.slow
 def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_bin():
     """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
     centered at 2116 and half a unit from the next edge, which float32 radii of
-    that size cannot resolve."""
+    that size cannot resolve. Slow (a 4240 x 96 pattern in 2118 bins): it guards
+    against a return to radii in the configured precision."""
     data = np.zeros((4240, 96), dtype=np.float32)
     data[2120 + 2116, 48 + 46] = 1.0
     with abtem.config.set({"precision": "float32"}):
