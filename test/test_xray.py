@@ -43,9 +43,8 @@ K_SHELL_YIELDS = {
 
 
 class TestSubshellMapping:
-    @pytest.mark.parametrize(
-        "n, l, expected",
-        [
+    def test_iupac_level_names(self):
+        for n, l, expected in [
             (1, 0, ("K",)),
             (2, 0, ("L1",)),
             (2, 1, ("L2", "L3")),
@@ -53,26 +52,24 @@ class TestSubshellMapping:
             (3, 1, ("M2", "M3")),
             (3, 2, ("M4", "M5")),
             (4, 3, ("N6", "N7")),
-        ],
-    )
-    def test_iupac_level_names(self, n, l, expected):
-        assert subshell_levels(n, l) == expected
+        ]:
+            assert subshell_levels(n, l) == expected, (n, l)
 
     @pytest.mark.parametrize("n, l", [(1, 1), (2, 2), (0, 0), (3, 3)])
     def test_invalid_quantum_numbers_raise(self, n, l):
         with pytest.raises(ValueError):
             subshell_levels(n, l)
 
-    @pytest.mark.parametrize(
-        "l, expected",
-        [(0, (1.0,)), (1, (1 / 3, 2 / 3)), (2, (0.4, 0.6)), (3, (3 / 7, 4 / 7))],
-    )
-    def test_statistical_weights_are_2j_plus_1(self, l, expected):
-        assert statistical_weights(l) == pytest.approx(expected)
-
-    @pytest.mark.parametrize("l", [0, 1, 2, 3])
-    def test_statistical_weights_sum_to_one(self, l):
-        assert sum(statistical_weights(l)) == pytest.approx(1.0)
+    def test_statistical_weights_are_2j_plus_1_and_sum_to_one(self):
+        for l, expected in [
+            (0, (1.0,)),
+            (1, (1 / 3, 2 / 3)),
+            (2, (0.4, 0.6)),
+            (3, (3 / 7, 4 / 7)),
+        ]:
+            weights = statistical_weights(l)
+            assert weights == pytest.approx(expected), l
+            assert sum(weights) == pytest.approx(1.0), l
 
 
 class TestVacancyDistribution:
@@ -95,17 +92,22 @@ class TestVacancyDistribution:
         expected = without["L2"] * xraydb.ck_probability("Fe", "L2", "L3")
         assert transferred == pytest.approx(expected)
 
-    @pytest.mark.parametrize("element", ["Fe", "Ag", "Au"])
-    @pytest.mark.parametrize("coster_kronig", [True, False])
-    def test_vacancies_are_conserved(self, element, coster_kronig):
-        distribution = vacancy_distribution(element, 2, 1, coster_kronig)
-        assert sum(distribution.values()) == pytest.approx(1.0)
+    def test_vacancies_are_conserved(self):
+        for element in ["Fe", "Ag", "Au"]:
+            for coster_kronig in [True, False]:
+                distribution = vacancy_distribution(element, 2, 1, coster_kronig)
+                assert sum(distribution.values()) == pytest.approx(1.0), (
+                    element,
+                    coster_kronig,
+                )
 
 
 class TestFluorescenceYield:
-    @pytest.mark.parametrize("element, expected", K_SHELL_YIELDS.items())
-    def test_k_shell_matches_tabulated_values(self, element, expected):
-        assert fluorescence_yield(element, 1, 0) == pytest.approx(expected, rel=1e-5)
+    def test_k_shell_matches_tabulated_values(self):
+        for element, expected in K_SHELL_YIELDS.items():
+            assert fluorescence_yield(element, 1, 0) == pytest.approx(
+                expected, rel=1e-5
+            ), element
 
     def test_accepts_atomic_number_and_symbol(self):
         assert fluorescence_yield(29, 1, 0) == fluorescence_yield("Cu", 1, 0)
@@ -130,17 +132,22 @@ class TestFluorescenceYield:
 
 
 class TestEmissionLines:
-    @pytest.mark.parametrize("element", ["Si", "Ti", "Fe", "Cu", "Ag"])
-    def test_line_intensities_sum_to_the_fluorescence_yield(self, element):
-        lines = emission_lines(element, 1, 0)
-        total = sum(line.intensity for line in lines.values())
-        assert total == pytest.approx(fluorescence_yield(element, 1, 0), rel=1e-10)
-
-    @pytest.mark.parametrize("element", ["Fe", "Ag", "Au"])
-    def test_l_shell_intensities_sum_to_the_fluorescence_yield(self, element):
-        lines = emission_lines(element, 2, 1)
-        total = sum(line.intensity for line in lines.values())
-        assert total == pytest.approx(fluorescence_yield(element, 2, 1), rel=1e-10)
+    def test_line_intensities_sum_to_the_fluorescence_yield(self):
+        for element, n, l in [
+            ("Si", 1, 0),
+            ("Ti", 1, 0),
+            ("Fe", 1, 0),
+            ("Cu", 1, 0),
+            ("Ag", 1, 0),
+            ("Fe", 2, 1),
+            ("Ag", 2, 1),
+            ("Au", 2, 1),
+        ]:
+            lines = emission_lines(element, n, l)
+            total = sum(line.intensity for line in lines.values())
+            assert total == pytest.approx(
+                fluorescence_yield(element, n, l), rel=1e-10
+            ), (element, n, l)
 
     def test_cu_ka1_energy(self):
         assert emission_lines("Cu", 1, 0)["Ka1"].energy == pytest.approx(8046.3, abs=0.5)
@@ -166,15 +173,18 @@ class TestEmissionLines:
         levels = {line.initial_level for line in lines.values()}
         assert levels == {"L2", "L3"}
 
-    @pytest.mark.parametrize(
-        "name, family",
-        [("Ka1", "Ka"), ("Ka2", "Ka"), ("Kb1", "Kb"), ("Lb2,15", "Lb"), ("Ll", "Ll")],
-    )
-    def test_family_parsing(self, name, family):
+    def test_family_parsing(self):
         from abtem.inelastic.xray_data import EmissionLine
 
-        line = EmissionLine(name, 1000.0, 1.0, "K", "L2")
-        assert line.family == family
+        for name, family in [
+            ("Ka1", "Ka"),
+            ("Ka2", "Ka"),
+            ("Kb1", "Kb"),
+            ("Lb2,15", "Lb"),
+            ("Ll", "Ll"),
+        ]:
+            line = EmissionLine(name, 1000.0, 1.0, "K", "L2")
+            assert line.family == family, name
 
     def test_line_families_partition_the_lines(self):
         lines = emission_lines("Ag", 2, 1)
@@ -519,11 +529,11 @@ class TestCrossShellCosterKronig:
                 xraydb.ck_probability(element, "L1", "L3", total=True)
             )
 
-    @pytest.mark.parametrize("element", ["Ti", "Fe", "Cu", "Ag"])
-    def test_l1_yield_is_much_larger_than_its_own_level(self, element):
-        edges = xraydb.xray_edges(element)
-        combined = fluorescence_yield(element, 2, 0)
-        assert combined > 2 * edges["L1"].fyield
+    def test_l1_yield_is_much_larger_than_its_own_level(self):
+        for element in ["Ti", "Fe", "Cu", "Ag"]:
+            edges = xraydb.xray_edges(element)
+            combined = fluorescence_yield(element, 2, 0)
+            assert combined > 2 * edges["L1"].fyield, element
 
     def test_2p_is_unchanged_by_the_wider_cascade(self):
         # L2 and L3 cannot feed L1, so a 2p edge sees only the L2 -> L3 step.
@@ -539,10 +549,10 @@ class TestCrossShellCosterKronig:
         distribution = vacancy_distribution("Fe", 2, 0, coster_kronig=False)
         assert distribution == pytest.approx({"L1": 1.0})
 
-    @pytest.mark.parametrize("n, l", [(2, 0), (2, 1), (3, 0), (3, 2)])
-    def test_vacancies_conserved_for_every_subshell(self, n, l):
-        distribution = vacancy_distribution("Au", n, l)
-        assert sum(distribution.values()) == pytest.approx(1.0)
+    def test_vacancies_conserved_for_every_subshell(self):
+        for n, l in [(2, 0), (2, 1)]:
+            distribution = vacancy_distribution("Au", n, l)
+            assert sum(distribution.values()) == pytest.approx(1.0), (n, l)
 
     def test_lines_come_from_levels_the_vacancy_reached(self):
         # An L1 ionisation must produce L3 lines after the cascade.
@@ -568,35 +578,34 @@ class TestCrossShellCosterKronigMShell:
         assert distribution["M1"] < 0.2  # most of it leaves
         assert sum(distribution.values()) == pytest.approx(1.0)
 
-    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
-    def test_migration_matches_a_manual_cascade_of_the_direct_rates(self, element):
+    def test_migration_matches_a_manual_cascade_of_the_direct_rates(self):
         # Redo the cascade from raw ck_probability(..., total=False) calls,
         # independently of _coster_kronig_cascade, following the same
         # decreasing-binding-energy processing order the module documents.
         levels = ["M1", "M2", "M3", "M4", "M5"]
-        vacancies = {level: 0.0 for level in levels}
-        vacancies["M1"] = 1.0
+        for element in self.HEAVY_ELEMENTS:
+            vacancies = {level: 0.0 for level in levels}
+            vacancies["M1"] = 1.0
 
-        for i, upper in enumerate(levels):
-            if vacancies[upper] == 0.0:
-                continue
-            transfers = {
-                lower: vacancies[upper]
-                * xraydb.ck_probability(element, upper, lower, total=False)
-                for lower in levels[i + 1 :]
-            }
-            vacancies[upper] -= sum(transfers.values())
-            for lower, amount in transfers.items():
-                vacancies[lower] += amount
+            for i, upper in enumerate(levels):
+                if vacancies[upper] == 0.0:
+                    continue
+                transfers = {
+                    lower: vacancies[upper]
+                    * xraydb.ck_probability(element, upper, lower, total=False)
+                    for lower in levels[i + 1 :]
+                }
+                vacancies[upper] -= sum(transfers.values())
+                for lower, amount in transfers.items():
+                    vacancies[lower] += amount
 
-        distribution = vacancy_distribution(element, 3, 0)
-        for level in levels:
-            assert distribution.get(level, 0.0) == pytest.approx(
-                vacancies[level], abs=1e-9
-            ), f"{element} {level}"
+            distribution = vacancy_distribution(element, 3, 0)
+            for level in levels:
+                assert distribution.get(level, 0.0) == pytest.approx(
+                    vacancies[level], abs=1e-9
+                ), f"{element} {level}"
 
-    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
-    def test_cascade_reproduces_the_tabulated_total_rate(self, element):
+    def test_cascade_reproduces_the_tabulated_total_rate(self):
         # xraydb's total=True is the cumulative probability a vacancy ever
         # passes through "lower", not the final resting population -- for an
         # intermediate level (M2, M3, M4) part of that keeps moving on down
@@ -604,20 +613,21 @@ class TestCrossShellCosterKronigMShell:
         # M5, the last level in the shell, has nowhere further to go, so
         # cumulative arrivals there equals the final population -- the same
         # reason the L-shell version of this test only checks L3.
-        distribution = vacancy_distribution(element, 3, 0)
-        assert distribution["M5"] == pytest.approx(
-            xraydb.ck_probability(element, "M1", "M5", total=True)
-        )
+        for element in self.HEAVY_ELEMENTS:
+            distribution = vacancy_distribution(element, 3, 0)
+            assert distribution["M5"] == pytest.approx(
+                xraydb.ck_probability(element, "M1", "M5", total=True)
+            ), element
 
-    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
-    def test_intermediate_levels_leak_less_than_their_cumulative_total(self, element):
+    def test_intermediate_levels_leak_less_than_their_cumulative_total(self):
         # For a non-terminal level, the tabulated "total" (cumulative
         # pass-through) must be >= the final resting population, since some
         # of what arrives at M2/M3/M4 continues cascading onward to M5.
-        distribution = vacancy_distribution(element, 3, 0)
-        for lower in ["M2", "M3", "M4"]:
-            total = xraydb.ck_probability(element, "M1", lower, total=True)
-            assert distribution[lower] <= total + 1e-9, f"{element} {lower}"
+        for element in self.HEAVY_ELEMENTS:
+            distribution = vacancy_distribution(element, 3, 0)
+            for lower in ["M2", "M3", "M4"]:
+                total = xraydb.ck_probability(element, "M1", lower, total=True)
+                assert distribution[lower] <= total + 1e-9, f"{element} {lower}"
 
     def test_m2_ionisation_does_not_feed_back_into_m1(self):
         # M1 has higher binding energy than M2, so an M2 (3p1/2) vacancy can
@@ -649,11 +659,15 @@ class TestCrossShellCosterKronigMShell:
         assert distribution["M5"] == pytest.approx(m5_weight)
         assert sum(distribution.values()) == pytest.approx(1.0)
 
-    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
-    @pytest.mark.parametrize("n, l", [(3, 0), (3, 1), (3, 2)])
-    def test_vacancies_conserved_for_every_m_subshell(self, element, n, l):
-        distribution = vacancy_distribution(element, n, l)
-        assert sum(distribution.values()) == pytest.approx(1.0)
+    def test_vacancies_conserved_for_every_m_subshell(self):
+        for element in self.HEAVY_ELEMENTS:
+            for n, l in [(3, 0), (3, 1), (3, 2)]:
+                distribution = vacancy_distribution(element, n, l)
+                assert sum(distribution.values()) == pytest.approx(1.0), (
+                    element,
+                    n,
+                    l,
+                )
 
     def test_lines_come_from_levels_the_vacancy_reached(self):
         # An M1 ionisation of a heavy element must produce M3/M4/M5 lines
@@ -663,14 +677,14 @@ class TestCrossShellCosterKronigMShell:
         assert initial_levels & {"M3", "M4", "M5"}
         assert "M1" not in initial_levels  # too little M1 population left
 
-    @pytest.mark.parametrize("element", HEAVY_ELEMENTS)
-    def test_m1_yield_exceeds_its_own_level(self, element):
+    def test_m1_yield_exceeds_its_own_level(self):
         # Most of an M1 vacancy ends up at M4/M5, which fluoresce far more
         # strongly than M1 itself, so the cascaded yield should be well
         # above the bare tabulated M1 omega.
-        edges = xraydb.xray_edges(element)
-        combined = fluorescence_yield(element, 3, 0)
-        assert combined > 5 * edges["M1"].fyield
+        for element in self.HEAVY_ELEMENTS:
+            edges = xraydb.xray_edges(element)
+            combined = fluorescence_yield(element, 3, 0)
+            assert combined > 5 * edges["M1"].fyield, element
 
 
 class TestCombineSubshells:
