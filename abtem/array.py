@@ -1730,6 +1730,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs = {**default_kwargs, **kwargs}
 
         if self.is_lazy:
+            if reduction_func in ("std", "var") and self.device == "mps":
+                # dask's moment_combine step casts to float64, which the
+                # single-precision torch backend refuses. Reducing each axis in
+                # one aggregate step skips it; the per-block partials it gathers
+                # have the reduced shape.
+                split_every = {
+                    axis: max(self.array.numblocks[axis], 2) for axis in axes
+                }
             kwargs["array"] = getattr(da, reduction_func)(
                 self.array, axes, split_every=split_every, keepdims=keepdims
             )

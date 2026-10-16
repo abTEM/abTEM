@@ -725,7 +725,14 @@ def _reduction(name: str):
     def func(x, axis=None, **kwargs):
         tensor = _unwrap(x)
         kwargs = _torch_kwargs(kwargs)
+        if name in ("std", "var"):
+            # torch defaults to Bessel's correction, NumPy to none (ddof=0).
+            kwargs["correction"] = kwargs.pop("ddof", 0)
         if _is_empty_axis(axis):
+            # Reducing over no axes leaves each element on its own: NumPy gives
+            # the element itself, but a spread of zero for std and var.
+            if name in ("std", "var"):
+                return _wrap(torch.zeros_like(tensor))
             return _wrap(tensor.clone())
         if axis is None:
             return _wrap(getattr(torch, name)(tensor, **kwargs))
@@ -805,7 +812,16 @@ def where(condition, x=None, y=None):
     if x is None or y is None:
         raise ValueError("either both or neither of x and y should be given")
 
-    return _wrap(torch.where(_unwrap(condition), _unwrap(x), _unwrap(y)))
+    # NumPy also takes a host-array condition and host-array or scalar branches
+    # -- dask's lazy std passes ``np.where(counts == 0, 0, term)`` -- which
+    # torch.where refuses. Python scalars are passed through, so that they don't
+    # change the result dtype.
+    def operand(value):
+        if isinstance(value, (bool, int, float, complex)):
+            return value
+        return _unwrap(asarray(value))
+
+    return _wrap(torch.where(_unwrap(asarray(condition)), operand(x), operand(y)))
 
 
 def _creation_like(name: str):
