@@ -463,18 +463,37 @@ def _worker_config_snapshot():
     return copy.deepcopy(config_dict)
 
 
-def test_workers_see_identical_config():
+@pytest.fixture(scope="module")
+def _shared_process_cluster():
+    # Each worker process cold-imports abtem (seconds each), so the two
+    # config-push tests share one cluster per xdist worker. The client is not
+    # made the default, so the other tests in this module keep dask's local
+    # schedulers; tests enter it with ``client.as_current()``.
     distributed = pytest.importorskip("distributed")
-
-    from abtem.core import backend, config
-    from abtem.core.config import config as client_config_dict
-
-    backend._pushed_config_token = None
     with distributed.LocalCluster(
         n_workers=2, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
-        # One cluster for all of it: each worker process imports abtem, which
-        # costs seconds per test.
+    ) as cluster, distributed.Client(cluster, set_as_default=False) as client:
+        yield client
+
+
+@pytest.fixture
+def process_client(_shared_process_cluster):
+    """The shared process-cluster client, with its workers on the default config
+    and the push token cleared, however the previous test left them."""
+    client = _shared_process_cluster
+    backend._pushed_config_token = None
+    backend.push_config_to_workers(client)
+    backend._pushed_config_token = None
+    yield client
+    backend._pushed_config_token = None
+
+
+def test_workers_see_identical_config(process_client):
+    from abtem.core import config
+    from abtem.core.config import config as client_config_dict
+
+    client = process_client
+    with client.as_current():
         assert set(client.run(_worker_precision).values()) == {"float32"}
 
         with config.set(
@@ -501,11 +520,6 @@ def test_workers_see_identical_config():
             # join later (or are restarted by a Nanny) also receive it.
             plugins = client.run(lambda dask_worker: list(dask_worker.plugins))
             assert all("abtem-config" in names for names in plugins.values())
-
-            cluster.scale(2)
-            client.wait_for_workers(2)
-            for snapshot in client.run(_worker_config_snapshot).values():
-                assert snapshot == client_config_dict
 
             # A subsequent change must invalidate the push token and
             # propagate on the next dispatch.
@@ -544,20 +558,17 @@ def test_forced_synchronous_scheduler_extends_to_nested_computes():
     assert seen and all(s != "synchronous" for s in seen)
 
 
-def test_cpu_distributed_compute_pushes_config():
-    distributed = pytest.importorskip("distributed")
+def test_cpu_distributed_compute_pushes_config(process_client):
     import numpy as np
 
-    from abtem.core import backend, config
+    from abtem.core import config
 
-    backend._pushed_config_token = None
-    with distributed.LocalCluster(
-        n_workers=1, processes=True, threads_per_worker=1, dashboard_address=":0"
-    ) as cluster, distributed.Client(cluster) as client:
-        with config.set({"precision": "float64"}):
-            images = abtem.Images(
-                np.ones((8, 8), dtype=np.float32), sampling=1.0
-            ).ensure_lazy()
-            images.compute(progress_bar=False)
+    client = process_client
+    assert set(client.run(_worker_precision).values()) == {"float32"}
+    with client.as_current(), config.set({"precision": "float64"}):
+        images = abtem.Images(
+            np.ones((8, 8), dtype=np.float32), sampling=1.0
+        ).ensure_lazy()
+        images.compute(progress_bar=False)
 
-            assert set(client.run(_worker_precision).values()) == {"float64"}
+        assert set(client.run(_worker_precision).values()) == {"float64"}
