@@ -1,3 +1,4 @@
+import itertools
 import os
 import pickle
 import warnings
@@ -274,14 +275,24 @@ def test_crystal_potential_with_frozen_phonons(
 
 def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
     """CrystalPotential.get_sliced_atoms tiles the unit's transformed atoms by
-    the repetitions, matching a manually-tiled Potential's sliced atoms."""
+    the repetitions, matching a manually-tiled Potential's sliced atoms.
+
+    Three atoms of the unit are given a cell length outside it: below the
+    entrance face, above the exit face and beyond the x face. The tiled atoms
+    must be wrapped, so that each lands in the slice of its wrapped depth; the
+    np.digitize binning puts an unwrapped atom below the cell in slice 0 and
+    drops one above it."""
     import numpy as np
 
     from abtem.slicing import SliceIndexedAtoms
 
     unit_atoms = si_cubic_atoms()
+    unit_atoms.positions[3] -= unit_atoms.cell[2]  # z = 3/4 c, slice 2 of 3
+    unit_atoms.positions[1] += unit_atoms.cell[2]  # z = 1/4 c, slice 0
+    unit_atoms.positions[5] += unit_atoms.cell[0]
     reps = (2, 2, 3)
-    slice_thickness = float(unit_atoms.cell[2, 2])
+    # a third of the cell, so that no atom sits on a slice boundary
+    slice_thickness = float(unit_atoms.cell[2, 2]) / 3
 
     unit_pot = Potential(unit_atoms, gpts=(32, 32), slice_thickness=slice_thickness)
     cryst = CrystalPotential(unit_pot, repetitions=reps)
@@ -1227,27 +1238,6 @@ class TestSliceIndexedAtomsWrapping:
         assert np.array_equal(once.atoms.positions, twice.atoms.positions)
         assert self._per_slice(once) == self._per_slice(twice)
 
-    def test_crystal_potential_slices_match_the_tiled_unit(self):
-        """A head count passes even when the atoms are in the wrong slices."""
-        import ase
-        import numpy as np
-
-        z = [1.0, 3.0, -0.5, 4.5]
-        unit = ase.Atoms(
-            "B" * len(z),
-            positions=[[1.0, 1.0, zz] for zz in z],
-            cell=np.diag([4.0, 4.0, 4.0]),
-            pbc=True,
-        )
-        reps = (1, 1, 2)
-        unit_potential = Potential(unit, gpts=(32, 32), slice_thickness=2.0)
-        crystal = CrystalPotential(unit_potential, repetitions=reps)
-
-        got = self._per_slice(crystal.get_sliced_atoms())
-        per_unit = self._per_slice(unit_potential.get_sliced_atoms())
-        assert got == per_unit * reps[2]
-        assert sum(got) == len(z) * reps[2]
-
     @staticmethod
     def _edge_atoms(offset=0.0, lateral=4.0):
         """Four B atoms in a 4 A tall cell, two of them just inside a face.
@@ -1381,48 +1371,34 @@ class TestSliceIndexedAtomsWrapping:
         )
         return FrozenPhonons(atoms, num_configs=2, sigmas=3.0, seed=6)
 
-    def test_far_outside_face_warning_points_at_the_caller(self):
+    def test_far_outside_face_warning_is_attributed_outside_abtem(self):
         """The warning about an atom displaced far out of the cell is attributed
-        to the line that builds the potential, not to a frame inside abTEM."""
+        to the line that builds the potential, not to a frame inside abTEM. A
+        lazy build raises it in a dask worker thread, whose stack holds no frame
+        of the caller: it is attributed to a frame outside abTEM, not to one
+        inside it or to ``<sys>``."""
         potential = Potential(
             self._displaced_far_past_the_exit_face(),
             sampling=0.2,
             slice_thickness=1.0,
             periodic=False,
         )
-        with warnings.catch_warnings(record=True) as records:
-            warnings.simplefilter("always")
-            potential.build(lazy=False)
-
-        face = [r for r in records if "lie more than" in str(r.message)]
-        assert face
-        assert all(r.filename == __file__ for r in face)
-
-    def test_far_outside_face_warning_of_a_lazy_build_is_not_inside_abtem(self):
-        """A lazy build raises the warning in a dask worker thread, whose stack
-        holds no frame of the caller. It is attributed to a frame outside abTEM,
-        not to one inside it or to ``<sys>``."""
-        potential = Potential(
-            self._displaced_far_past_the_exit_face(),
-            sampling=0.2,
-            slice_thickness=1.0,
-            periodic=False,
-        )
-        with warnings.catch_warnings(record=True) as records:
-            warnings.simplefilter("always")
-            potential.build(lazy=True).compute()
-
-        face = [r for r in records if "lie more than" in str(r.message)]
-        assert face
         package = os.path.dirname(abtem.__file__) + os.sep
-        for record in face:
-            assert record.filename != "<sys>"
-            assert not record.filename.startswith(package)
+        for lazy in (False, True):
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                potential.build(lazy=lazy).compute()
 
-    @pytest.mark.parametrize("lazy", [False, True])
-    @pytest.mark.parametrize("source", ["atoms", "frozen_phonons", "trajectory"])
+            face = [r for r in records if "lie more than" in str(r.message)]
+            assert face, lazy
+            for record in face:
+                if not lazy:
+                    assert record.filename == __file__
+                assert record.filename != "<sys>", lazy
+                assert not record.filename.startswith(package), lazy
+
     def test_atoms_given_far_outside_along_z_warn_once_where_the_potential_is_made(
-        self, source, lazy
+        self,
     ):
         """Atoms given far outside the cell along z are folded into it, which a
         cell meant to enclose them does not intend. The warning is raised when
@@ -1433,24 +1409,26 @@ class TestSliceIndexedAtomsWrapping:
         atoms = Atoms(
             "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
         )
-        given = {
+        sources = {
             "atoms": atoms,
             "frozen_phonons": FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
             "trajectory": AtomsEnsemble([atoms, atoms.copy()]),
-        }[source]
+        }
+        for (source, made), lazy in itertools.product(sources.items(), (False, True)):
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                potential = Potential(
+                    made, sampling=0.2, slice_thickness=1.0, periodic=False
+                )
+                potential.build(lazy=lazy).compute()
 
-        with warnings.catch_warnings(record=True) as records:
-            warnings.simplefilter("always")
-            potential = Potential(
-                given, sampling=0.2, slice_thickness=1.0, periodic=False
-            )
-            potential.build(lazy=lazy).compute()
-
-        far = [r for r in records if "outside the cell along z" in str(r.message)]
-        assert len(far) == 1
-        assert str(far[0].message).startswith("1 atom(s) are given more than 2.0 Å")
-        assert far[0].filename == __file__
-        assert not [r for r in records if "lie more than" in str(r.message)]
+            case = (source, lazy)
+            far = [r for r in records if "outside the cell along z" in str(r.message)]
+            assert len(far) == 1, case
+            message = str(far[0].message)
+            assert message.startswith("1 atom(s) are given more than 2.0 Å"), case
+            assert far[0].filename == __file__, case
+            assert not [r for r in records if "lie more than" in str(r.message)], case
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -1730,78 +1708,73 @@ class TestSliceIndexedAtomsWrapping:
 
     @float64_devices
     @pytest.mark.parametrize("lazy", [False, True])
-    @pytest.mark.parametrize("case", list(FAR_IN_PLANE))
-    def test_quadrature_potential_folds_atoms_far_outside_in_plane(
-        self, case, lazy, device
-    ):
+    def test_quadrature_potential_folds_atoms_far_outside_in_plane(self, lazy, device):
         """The padding repeats the cell a number of times set by the cell, so the
         images of an atom further outside than that reaches never entered the
         cell. Moving an atom by whole cell lengths leaves the periodic in-plane
         build unchanged."""
         kwargs = dict(projection="finite", periodic=False, device=device)
-        moved = self._slices(
-            self._far_in_plane(self.FAR_IN_PLANE[case]), lazy=lazy, **kwargs
-        )
         reference = self._slices(self._far_in_plane(), lazy=lazy, **kwargs)
-        np.testing.assert_allclose(
-            moved, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
-        )
+        for case, shifts in self.FAR_IN_PLANE.items():
+            moved = self._slices(self._far_in_plane(shifts), lazy=lazy, **kwargs)
+            np.testing.assert_allclose(
+                moved,
+                reference,
+                rtol=0,
+                atol=1e-10 * np.abs(reference).max(),
+                err_msg=case,
+            )
 
-    @float64_devices
-    @pytest.mark.parametrize(
-        "length_x, x, y",
-        [(4.0, -7.0, 1.0), (4.0, 1.0, 13.0), (20.0, -5.0, 1.0), (20.0, 25.0, 1.0)],
-        ids=["far_x", "far_y", "wide_below", "wide_above"],
-    )
-    def test_quadrature_configurations_keep_atoms_far_outside_in_plane(
-        self, length_x, x, y, device
-    ):
+    def test_quadrature_configurations_keep_atoms_far_outside_in_plane(self):
         """An atom given outside the cell is kept, wherever the padding stops:
-        beyond its reach, or, in a cell wider than twice the cutoff, in the range
-        it reaches but the crop of the padding drops."""
-        atoms = Atoms(
-            "B2",
-            positions=[[2.0, 2.5, 2.0], [x, y, 1.2]],
-            cell=np.diag([length_x, 5.0, 4.0]),
-            pbc=True,
-        )
-        potential = Potential(
-            FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
-            sampling=0.2,
-            slice_thickness=1.0,
-            projection="finite",
-            periodic=False,
-            device=device,
-        )
-        for configuration in potential.to_atoms_ensemble().trajectory:
-            assert len(configuration) == len(atoms)
+        beyond its reach (x = -7, y = 13 in a 4 x 5 A cell), or, in a cell wider
+        than twice the cutoff, in the range it reaches but the crop of the
+        padding drops (x = -5, 25 in a 20 A cell). Only the configurations are
+        made, so nothing runs on a device."""
+        for length_x, x, y in [
+            (4.0, -7.0, 1.0),
+            (4.0, 1.0, 13.0),
+            (20.0, -5.0, 1.0),
+            (20.0, 25.0, 1.0),
+        ]:
+            atoms = Atoms(
+                "B2",
+                positions=[[2.0, 2.5, 2.0], [x, y, 1.2]],
+                cell=np.diag([length_x, 5.0, 4.0]),
+                pbc=True,
+            )
+            potential = Potential(
+                FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
+                sampling=0.2,
+                slice_thickness=1.0,
+                projection="finite",
+                periodic=False,
+            )
+            for configuration in potential.to_atoms_ensemble().trajectory:
+                assert len(configuration) == len(atoms), (length_x, x, y)
 
-    @float64_devices
-    @pytest.mark.parametrize("x", [-0.3, -1e-16])
-    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(
-        self, x, device
-    ):
+    def test_quadrature_configurations_leave_atoms_within_reach_unwrapped(self):
         """An atom given just outside the cell is within the padding's reach, so
         it is displaced where it is given, not moved a cell length and drawn in
         another order."""
-        atoms = Atoms(
-            "B2",
-            positions=[[2.0, 2.5, 2.0], [x, 1.0, 1.2]],
-            cell=np.diag([4.0, 5.0, 4.0]),
-            pbc=True,
-        )
-        potential = Potential(
-            FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3),
-            sampling=0.1,
-            slice_thickness=0.5,
-            projection="finite",
-            periodic=False,
-            device=device,
-        )
-        for configuration in potential.to_atoms_ensemble().trajectory:
-            # sigma is 0.1 A, a cell length is at least 4 A.
-            displacement = configuration.positions - atoms.positions
-            assert np.abs(displacement).max() < 0.5
+        for x in (-0.3, -1e-16):
+            atoms = Atoms(
+                "B2",
+                positions=[[2.0, 2.5, 2.0], [x, 1.0, 1.2]],
+                cell=np.diag([4.0, 5.0, 4.0]),
+                pbc=True,
+            )
+            potential = Potential(
+                FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3),
+                sampling=0.1,
+                slice_thickness=0.5,
+                projection="finite",
+                periodic=False,
+            )
+            for configuration in potential.to_atoms_ensemble().trajectory:
+                # sigma is 0.1 A, a cell length is at least 4 A.
+                displacement = configuration.positions - atoms.positions
+                assert np.abs(displacement).max() < 0.5, x
 
     INTEGRATORS = {
         "infinite": {"projection": "infinite"},
@@ -1818,104 +1791,83 @@ class TestSliceIndexedAtomsWrapping:
 
     @pytest.mark.filterwarnings("ignore:.*outside the cell along z:UserWarning")
     @pytest.mark.parametrize("integrator", list(INTEGRATORS))
-    @pytest.mark.parametrize("z", [14.3, -10.3])
-    def test_configurations_keep_an_atom_given_far_outside_along_z(self, integrator, z):
+    def test_configurations_keep_atoms_given_outside_along_z(self, integrator):
         """The padding along z of the finite integrators did not reach an atom
         given more than a cell height outside, which was lost silently. Every
-        integrator now keeps it, at its image in the cell."""
-        atoms = self._given_along_z(z)
-        potential = Potential(
-            atoms,
+        integrator now keeps it, at its image in the cell. An atom given just
+        outside, within the padding's reach and within
+        FACE_SLICE_WARNING_DISTANCE, is displaced where it is given, not moved a
+        cell height and drawn in another order. Only the configurations are
+        made, so nothing runs on a device."""
+        kwargs = dict(
             sampling=0.2,
             slice_thickness=1.0,
             periodic=False,
             **self.INTEGRATORS[integrator],
         )
-        for configuration in potential.to_atoms_ensemble().trajectory:
-            assert len(configuration) == len(atoms)
-            assert configuration.positions[1, 2] == pytest.approx(z % 4.0)
+        for z in (14.3, -10.3):
+            atoms = self._given_along_z(z)
+            ensemble = Potential(atoms, **kwargs).to_atoms_ensemble()
+            for configuration in ensemble.trajectory:
+                assert len(configuration) == len(atoms), z
+                assert configuration.positions[1, 2] == pytest.approx(z % 4.0), z
+        for z in (4.3, -0.3):
+            atoms = self._given_along_z(z)
+            phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3)
+            ensemble = Potential(phonons, **kwargs).to_atoms_ensemble()
+            for configuration in ensemble.trajectory:
+                displacement = configuration.positions - atoms.positions
+                assert np.abs(displacement).max() < 0.5, z
 
     @float64_devices
     @pytest.mark.filterwarnings("ignore:.*outside the cell along z:UserWarning")
     @pytest.mark.parametrize("integrator", list(INTEGRATORS))
-    @pytest.mark.parametrize("z", [6.3, 10.3, 14.3, -2.5, -10.3])
-    def test_atom_given_far_outside_along_z_is_its_image_in_the_cell(
-        self, integrator, z, device
-    ):
+    def test_atom_given_outside_along_z_is_kept(self, integrator, device):
         """abTEM #540: a non-periodic potential is cut out of the repeated
         structure, so an atom given more than FACE_SLICE_WARNING_DISTANCE
         outside the cell along z is its image in the cell for every integrator,
-        at the same depth. The infinite projection used to put it in the face
-        slice, and the finite integrators to lose it beyond the padding."""
-        kwargs = dict(self.INTEGRATORS[integrator], periodic=False, device=device)
-        given = self._slices(self._given_along_z(z), **kwargs)
-        image = self._slices(self._given_along_z(z % 4.0), **kwargs)
-        np.testing.assert_allclose(
-            given, image, rtol=0, atol=1e-10 * np.abs(image).max()
-        )
+        at the same depth: just past that distance (6.3, -2.5) and beyond the
+        padding of the finite integrators (14.3, -10.3). The infinite projection
+        used to put it in the face slice, and the finite integrators to lose it
+        beyond the padding. At any distance, also within the warning distance
+        (4.3), where the depths differ, the total of the non-periodic potential
+        is that of the periodic one (the table of #540)."""
+        from abtem.slicing import FACE_SLICE_WARNING_DISTANCE
 
-    @float64_devices
-    @pytest.mark.filterwarnings("ignore:.*outside the cell along z:UserWarning")
-    @pytest.mark.parametrize("integrator", list(INTEGRATORS))
-    @pytest.mark.parametrize("z", [4.3, 6.3, 8.3, 10.3, 12.3, 14.3])
-    def test_non_periodic_total_keeps_an_atom_given_outside_along_z(
-        self, integrator, z, device
-    ):
-        """The table of abTEM #540: the total of the non-periodic potential is
-        that of the periodic one at any distance, also within
-        FACE_SLICE_WARNING_DISTANCE, where the depths differ."""
-        atoms = self._given_along_z(z)
         kwargs = dict(self.INTEGRATORS[integrator], device=device)
-        total = self._slices(atoms, periodic=False, **kwargs).sum()
-        reference = self._slices(atoms, periodic=True, **kwargs).sum()
-        assert total == pytest.approx(reference, rel=1e-4)
+        for z in (4.3, 6.3, -2.5, 14.3, -10.3):
+            atoms = self._given_along_z(z)
+            given = self._slices(atoms, periodic=False, **kwargs)
+            periodic = self._slices(atoms, periodic=True, **kwargs)
+            assert given.sum() == pytest.approx(periodic.sum(), rel=1e-4), z
+            if -FACE_SLICE_WARNING_DISTANCE <= z <= 4.0 + FACE_SLICE_WARNING_DISTANCE:
+                continue
+            image = self._slices(self._given_along_z(z % 4.0), periodic=False, **kwargs)
+            np.testing.assert_allclose(
+                given, image, rtol=0, atol=1e-10 * np.abs(image).max(), err_msg=z
+            )
 
     @pytest.mark.filterwarnings("ignore:.*outside the cell along z:UserWarning")
-    @pytest.mark.parametrize(
-        "z, expected",
-        [(4.3, 3), (5.9, 3), (6.1, 2), (-1.9, 0), (-2.1, 1)],
-    )
     def test_infinite_projection_keeps_the_face_rule_within_the_warning_distance(
-        self, z, expected
+        self,
     ):
         """Within FACE_SLICE_WARNING_DISTANCE of a face the infinite projection
         puts an atom given outside the cell in the face slice, as frozen phonons
         displace atoms, so that a configuration they return builds the same
         potential when it is given back. Further out the atom is its image, so
         the slice it is put in jumps at that distance."""
-        potential = Potential(
-            self._given_along_z(z),
-            sampling=0.2,
-            slice_thickness=1.0,
-            periodic=False,
-            projection="infinite",
-        )
-        # The first atom, at z = 2, is in slice 2.
-        counts = [0, 0, 1, 0]
-        counts[expected] += 1
-        assert self._per_slice(potential.get_sliced_atoms()) == counts
-
-    @float64_devices
-    @pytest.mark.parametrize("integrator", list(INTEGRATORS))
-    @pytest.mark.parametrize("z", [4.3, -0.3])
-    def test_configurations_leave_atoms_within_reach_along_z_unwrapped(
-        self, integrator, z, device
-    ):
-        """An atom given just outside the cell along z is within the padding's
-        reach and within FACE_SLICE_WARNING_DISTANCE, so it is displaced where
-        it is given, not moved a cell height and drawn in another order."""
-        atoms = self._given_along_z(z)
-        potential = Potential(
-            FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=3),
-            sampling=0.2,
-            slice_thickness=1.0,
-            periodic=False,
-            device=device,
-            **self.INTEGRATORS[integrator],
-        )
-        for configuration in potential.to_atoms_ensemble().trajectory:
-            displacement = configuration.positions - atoms.positions
-            assert np.abs(displacement).max() < 0.5
+        for z, expected in [(4.3, 3), (5.9, 3), (6.1, 2), (-1.9, 0), (-2.1, 1)]:
+            potential = Potential(
+                self._given_along_z(z),
+                sampling=0.2,
+                slice_thickness=1.0,
+                periodic=False,
+                projection="infinite",
+            )
+            # The first atom, at z = 2, is in slice 2.
+            counts = [0, 0, 1, 0]
+            counts[expected] += 1
+            assert self._per_slice(potential.get_sliced_atoms()) == counts, z
 
     @float64_devices
     @pytest.mark.parametrize(
@@ -2017,11 +1969,10 @@ class TestSliceIndexedAtomsWrapping:
                 atol=1e-5 * np.abs(ensemble[i]).max(),
             )
 
-    @pytest.mark.parametrize("structure", ["graphene", "Mg", "MoS2"])
     @pytest.mark.parametrize(
         "integrator", ["scattering_factor", "gaussian", "quadrature"]
     )
-    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator, structure):
+    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator):
         """A transformed non-periodic cell is cut out of the repeated structure
         with the integrator's margin already included. Padding it periodically
         on top added images of those margin atoms: the infinite projection was
@@ -2046,13 +1997,6 @@ class TestSliceIndexedAtomsWrapping:
             "quadrature": QuadratureProjectionIntegrals,
         }
 
-        hexagonal = {
-            "graphene": lambda: ase.build.graphene(vacuum=2),
-            "Mg": lambda: ase.build.bulk("Mg"),
-            "MoS2": lambda: ase.build.mx2("MoS2", vacuum=2),
-        }[structure]()
-        orthogonal = orthogonalize_cell(hexagonal)
-
         def build(atoms, periodic):
             return (
                 Potential(
@@ -2070,13 +2014,19 @@ class TestSliceIndexedAtomsWrapping:
         # Oracle: the orthogonal cell is commensurate with the lattice, so
         # cutting it out of the repeated hexagonal structure must give the
         # potential of the same cell built periodically.
-        reference = build(orthogonal, periodic=True)
-        np.testing.assert_allclose(
-            build(hexagonal, periodic=False),
-            reference,
-            rtol=1e-5,
-            atol=1e-5 * np.abs(reference).max(),
-        )
+        for hexagonal in (
+            ase.build.graphene(vacuum=2),
+            ase.build.bulk("Mg"),
+            ase.build.mx2("MoS2", vacuum=2),
+        ):
+            reference = build(orthogonalize_cell(hexagonal), periodic=True)
+            np.testing.assert_allclose(
+                build(hexagonal, periodic=False),
+                reference,
+                rtol=1e-5,
+                atol=1e-5 * np.abs(reference).max(),
+                err_msg=str(hexagonal.symbols),
+            )
 
     def test_non_orthogonal_cell_raises_before_any_wrapping(self):
         import ase
