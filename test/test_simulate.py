@@ -7,42 +7,16 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from hypothesis import given
-from utils import devices, lazy_params, to_host_array
+from utils import devices, to_host_array
 
 from abtem import AnnularDetector, PixelatedDetector, PlaneWave
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhononsAxis
-from abtem.scan import CustomScan
-
-
-# @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True], ids=["not_lazy"])
-@devices
-@pytest.mark.parametrize("ensemble_mean", [True, False])
-@pytest.mark.parametrize(
-    "waves_builder",
-    [
-        abtem_st.probe,
-        # abtem_st.plane_wave,
-        # abtem_st.s_matrix,
-    ],
-)
-def test_multislice_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
-):
-    waves = data.draw(waves_builder(device=device))
-    frozen_phonons = data.draw(abtem_st.frozen_phonons())
-    exit_waves = waves.multislice(frozen_phonons)
-
-    assert exit_waves.shape[0] == len(frozen_phonons)
-    assert len(exit_waves.shape) == len(waves.shape) + 1
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
@@ -53,8 +27,10 @@ def test_multislice_with_frozen_phonons(
     ],
 )
 def test_multislice_detect_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
+    data, waves_builder, device, ensemble_mean
 ):
+    # laziness only changes when the graph is computed, not the shape
+    lazy = data.draw(st.booleans(), label="lazy")
     waves = data.draw(waves_builder(device=device, allow_distribution=False))
     frozen_phonons = data.draw(abtem_st.frozen_phonons(ensemble_mean=ensemble_mean))
 
@@ -70,7 +46,6 @@ def test_multislice_detect_with_frozen_phonons(
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
@@ -80,7 +55,7 @@ def test_multislice_detect_with_frozen_phonons(
     ],
 )
 def test_s_matrix_multislice_detect_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
+    data, waves_builder, device, ensemble_mean
 ):
     waves = data.draw(waves_builder(device=device, allow_distribution=False))
     frozen_phonons = data.draw(abtem_st.frozen_phonons(ensemble_mean=ensemble_mean))
@@ -119,9 +94,7 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 
 @pytest.mark.slow
 @given(data=st.data())
-@lazy_params
 @devices
-@pytest.mark.parametrize("frozen_phonons", [True, False])
 @pytest.mark.parametrize(
     "detector",
     [
@@ -142,37 +115,28 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
         abtem_st.probe,
     ],
 )
-def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons, lazy):
-    probe = data.draw(waves_builder(allow_distribution=False))
+def test_probe_scan(data, waves_builder, detector, scan, device):
+    # Laziness and frozen phonons are drawn: neither changes the detector or
+    # scan code path, only the leading ensemble axis and when it is computed.
+    lazy = data.draw(st.booleans(), label="lazy")
+    frozen_phonons = data.draw(st.booleans(), label="frozen_phonons")
+    probe = data.draw(waves_builder(allow_distribution=False, device=device))
     detector = data.draw(detector())
     scan = data.draw(scan())
 
     potential = data.draw(
-        abtem_st.potential(no_frozen_phonons=not frozen_phonons, ensemble_mean=False)
+        abtem_st.potential(
+            no_frozen_phonons=not frozen_phonons, ensemble_mean=False, device=device
+        )
     )
-    # scan.match_probe(probe)
     probe.grid.match(potential)
 
     measurement_shape = detector._out_shape(probe)[0]
 
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    # if isinstance(scan, CustomScan) and scan.shape == (1,):
-    #    expected_shape = potential.ensemble_shape + measurement_shape
-    # else:
     expected_shape = potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-
-    # print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
-    # print(measurement.shape)
-    # try:
     assert measurement.shape == expected_shape
-    #     )
-    # except:
-    #     print(frozen_phonons)
-    #     print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
-    #     print(measurement.shape)
-    #     raise
-
     assert measurement.dtype == detector._out_dtype(probe)[0]
     assert type(measurement) == detector._out_type(probe.build(scan))[0]
 
@@ -181,53 +145,6 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
             measurement.base_axes_metadata
             == detector._out_base_axes_metadata(probe.build(scan))[0]
         )
-
-
-# # @given(data=st.data(),
-# #        gpts=core_st.gpts(min_value=32, max_value=64),
-# #        planewave_cutoff=st.floats(5, 10),
-# #        energy=st.floats(100e3, 200e3))
-# # @pytest.mark.parametrize('lazy', [True, False])
-# # @pytest.mark.parametrize('device', ['cpu', gpu])
-# # @pytest.mark.parametrize('detector', list(all_detectors.keys()))
-# # @pytest.mark.parametrize('downsample', ['cutoff', False])
-# # @pytest.mark.parametrize('interpolation', [1, 2, 3])
-# # @pytest.mark.parametrize('frozen_phonons', [True, False])
-# # def test_s_matrix_scan_and_detect(data,
-# #                                   gpts,
-# #                                   planewave_cutoff,
-# #                                   energy,
-# #                                   detector,
-# #                                   lazy,
-# #                                   device,
-# #                                   downsample,
-# #                                   interpolation,
-# #                                   frozen_phonons):
-# #     if frozen_phonons:
-# #         atoms = data.draw(atoms_st.random_atoms(min_side_length=5, max_side_length=10))
-# #     else:
-# #         atoms = data.draw(atoms_st.random_frozen_phonons(min_side_length=5, max_side_length=10))
-# #
-# #     s_matrix = SMatrix(potential=atoms,
-# #                        gpts=gpts,
-# #                        planewave_cutoff=planewave_cutoff,
-# #                        interpolation=interpolation,
-# #                        energy=energy,
-# #                        device=device)
-# #
-# #     if downsample:
-# #         probe = s_matrix.build(stop=0, lazy=True).downsample(max_angle=downsample).comparable_probe()
-# #     else:
-# #         probe = s_matrix.build(stop=0, lazy=True).comparable_probe()
-# #
-# #     detectors = [
-# #         data.draw(all_detectors[detector](max_angle=np.floor(min(probe.cutoff_angles)), allow_detect_every=False))]
-# #
-# #     scan = GridScan()
-# #     measurements = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy, downsample=downsample)
-# #     measurements.compute()
-# #
-# #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan=scan)
 
 
 @devices

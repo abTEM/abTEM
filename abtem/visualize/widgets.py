@@ -10,6 +10,7 @@ from traitlets.traitlets import link
 
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
+from abtem.visualize.visualizations import default_ensemble_index  # noqa: F401
 
 if TYPE_CHECKING:
     pass
@@ -77,12 +78,12 @@ def slider_from_axes_metadata(
         )
     elif slider_type == "index":
         if default_value is None:
-            default_value = 0
-
-        try:
-            index = int(np.argmin(np.abs(values - default_value)))
-        except Exception:
-            index = 0
+            index = default_ensemble_index(axis_metadata, length)
+        else:
+            try:
+                index = int(np.argmin(np.abs(values - default_value)))
+            except Exception:
+                index = 0
 
         slider = widgets.SelectionSlider(
             description=label,

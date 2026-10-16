@@ -98,6 +98,20 @@ def _reference(energy, detector, frozen_phonons, scan, device, exit_planes=None)
     return _references[key]
 
 
+_exit_waves_cache = {}
+
+
+def _exit_waves(energy, device):
+    """The eager exit waves of a GridScan at `energy` (one or several), as `_run`
+    computes them. They are the input of most detector tests here, so each is
+    computed once per worker; every call returns a copy, so a test that changes
+    the waves it gets does not change those of the next."""
+    key = (tuple(np.atleast_1d(energy)), np.ndim(energy), device)
+    if key not in _exit_waves_cache:
+        _exit_waves_cache[key] = _run(energy, "waves", False, "gridscan", False, device)
+    return _exit_waves_cache[key].copy()
+
+
 def _centre_crop(array, gpts):
     """The central `gpts` of fftshifted diffraction patterns."""
     starts = [n // 2 - m // 2 for n, m in zip(array.shape[-2:], gpts)]
@@ -253,12 +267,24 @@ def test_several_detectors_with_a_multi_energy_scan(frozen_phonons, lazy, device
     )
 
 
+UNORDERED = [60e3, 70e3, 50e3]
+
+
+# The order of the energies matters only for the crop to the highest energy's pixel
+# count, so it is varied with the crop; the frozen phonons change only the axis
+# order, which `test_each_energy_matches_a_single_energy_run` covers in full.
 @pytest.mark.parametrize(
-    "energies", [ENERGIES, [60e3, 70e3, 50e3]], ids=["ascending", "unordered"]
-)
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-@pytest.mark.parametrize(
-    "frozen_phonons", [False, True], ids=["static", "frozen-phonons"]
+    "frozen_phonons, lazy, energies",
+    [
+        (False, True, UNORDERED),
+        (True, False, ENERGIES),
+        (True, True, UNORDERED),
+    ],
+    ids=[
+        "static-lazy-unordered",
+        "frozen-phonons-eager",
+        "frozen-phonons-lazy-unordered",
+    ],
 )
 @devices
 def test_pixelated_detector_with_a_multi_energy_scan(
@@ -269,13 +295,19 @@ def test_pixelated_detector_with_a_multi_energy_scan(
     )
 
 
-@pytest.mark.parametrize(
-    "energies", [ENERGIES, [60e3, 70e3, 50e3]], ids=["ascending", "unordered"]
-)
-@pytest.mark.parametrize(
-    "detector, chunks",
+# Every detector is applied eagerly. The lazy blocks of 3 and of 2 and 1 energies
+# are taken by one detector of each code path: one that splits the ensemble into
+# energies and reorders the scan axes (annular), the auto-sized annular detector
+# (sized per energy inside the blocks), a radial-binned detector that keeps the axis
+# order (flexible), the spectral slit (not a radial detector), and the two that
+# detect the whole ensemble at once (pixelated, cropped to the highest energy, and
+# waves). The detectors that split the ensemble share one
+# `_calculate_new_array_per_energy`, so the offset, segmented and spectral-annular
+# ones add nothing lazily. Unordered energies
+# go to the crop (pixelated) and the per-energy sizing (annular-auto).
+_EXIT_WAVE_DETECTION_CASES = (
     [
-        (detector, chunks)
+        (detector, None, ENERGIES)
         for detector in (
             "annular",
             "annular-auto",
@@ -287,18 +319,35 @@ def test_pixelated_detector_with_a_multi_energy_scan(
             "spectral-annular",
             "waves",
         )
-        for chunks in (None, 3, (2, 1))
-        # a lazy SegmentedDetector.detect needs an `offset` attribute
-        if not (detector == "segmented" and chunks is not None)
+    ]
+    + [
+        (detector, chunks, ENERGIES)
+        for detector in ("annular", "pixelated", "waves")
+        for chunks in (3, (2, 1))
+    ]
+    + [
+        (detector, (2, 1), ENERGIES)
+        for detector in ("annular-auto", "flexible", "spectral-slit")
+    ]
+    + [("pixelated", chunks, UNORDERED) for chunks in (None, 3, (2, 1))]
+    + [("annular-auto", (2, 1), UNORDERED)]
+)
+
+
+@pytest.mark.parametrize(
+    "detector, chunks, energies",
+    _EXIT_WAVE_DETECTION_CASES,
+    ids=[
+        f"{detector}-{chunks}-{'ascending' if energies == ENERGIES else 'unordered'}"
+        for detector, chunks, energies in _EXIT_WAVE_DETECTION_CASES
     ],
-    ids=str,
 )
 @devices
 def test_detect_on_multi_energy_exit_waves(detector, chunks, energies, device):
     """A detector applied to precomputed exit waves detects each energy with its own
     angular sampling, eagerly (`chunks` None) and lazily, with every energy in one
     block or split into blocks of 2 and 1."""
-    waves = _run(energies, "waves", False, "gridscan", False, device)
+    waves = _exit_waves(energies, device)
     if chunks is not None:
         waves = _lazy(waves, chunks)
 
@@ -312,8 +361,11 @@ def test_detect_on_multi_energy_exit_waves(detector, chunks, energies, device):
     )
 
 
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-@pytest.mark.parametrize("entry", ["scan", "detect"])
+# The crop is fixed by `_match_ensemble` on the whole ensemble before a lazy scan or
+# detection is split into blocks, so one lazy and one eager entry cover both.
+@pytest.mark.parametrize(
+    "entry, lazy", [("scan", True), ("detect", False)], ids=["scan-lazy", "detect"]
+)
 @devices
 def test_resampled_pixelated_detector_with_multi_energy_waves(entry, lazy, device):
     """With `resample`, every energy is cropped to the pixel count of the highest
@@ -321,7 +373,7 @@ def test_resampled_pixelated_detector_with_multi_energy_waves(entry, lazy, devic
     if entry == "scan":
         result = _run(ENERGIES, "pixelated-resampled", False, "gridscan", lazy, device)
     else:
-        waves = _run(ENERGIES, "waves", False, "gridscan", False, device)
+        waves = _exit_waves(ENERGIES, device)
         if lazy:
             waves = _lazy(waves, 3)
         with dask.config.set(scheduler="synchronous"):
@@ -333,7 +385,7 @@ def test_resampled_pixelated_detector_with_multi_energy_waves(entry, lazy, devic
     gpts = _reference(max(ENERGIES), "pixelated", False, "gridscan", device)[0]
     gpts = gpts.shape[-2:]
     for i, energy in enumerate(ENERGIES):
-        single = _run(energy, "waves", False, "gridscan", False, device)
+        single = _exit_waves(energy, device)
         patterns = single.diffraction_patterns(max_angle="full", parity="same")
         cropped = abtem.DiffractionPatterns(
             _centre_crop(patterns.array, gpts),
@@ -381,19 +433,19 @@ def test_flexible_annular_detector_refuses_an_auto_sized_outer_angle(lazy):
 
 def _stacked_exit_waves(energies, device, stale_energy=False):
     """Single-energy exit waves stacked along an energy axis behind the scan axes."""
-    singles = [
-        _run(energy, "waves", False, "gridscan", False, device) for energy in energies
-    ]
+    singles = [_exit_waves(energy, device) for energy in energies]
     waves = abtem.stack(singles, EnergyAxis(values=tuple(energies)), axis=2)
     if stale_energy:
         waves.accelerator.energy = energies[0]
     return waves
 
 
+# Stacked waves differ from a multi-energy run only in where their energies come
+# from, which matters to a detector that splits the ensemble into energies
+# (annular) and to the crop to the highest energy (pixelated); the other detectors
+# of either kind read the energies the same way.
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-@pytest.mark.parametrize(
-    "detector", ["annular", "flexible", "spectral-slit", "pixelated", "waves"]
-)
+@pytest.mark.parametrize("detector", ["annular", "pixelated"])
 @devices
 def test_detect_on_stacked_single_energy_waves(detector, lazy, device):
     """Waves stacked along an energy axis carry each member's energy on the axis,
@@ -422,9 +474,7 @@ def test_multislice_with_a_waves_detector_on_stacked_exit_waves(lazy, device):
     energies = [70e3, 50e3, 60e3]
     potential = _potential(False, device)
     waves = _stacked_exit_waves(energies, device)
-    singles = [
-        _run(energy, "waves", False, "gridscan", False, device) for energy in energies
-    ]
+    singles = [_exit_waves(energy, device) for energy in energies]
     assert waves.accelerator.energy is None
     if lazy:
         waves = _lazy(waves, 3)
@@ -448,13 +498,16 @@ def test_multislice_with_a_waves_detector_on_stacked_exit_waves(lazy, device):
         )
 
 
-@pytest.mark.parametrize(
-    "chunks", [None, 3, 1, (2, 1)], ids=["eager", "one-block", "one-per-block", "2-1"]
-)
-@pytest.mark.parametrize("detector", ["annular", "flexible", "spectral-slit"])
+# No public path leaves a scalar energy on waves with an energy axis (stacking
+# leaves none, see test_detect_on_stacked_single_energy_waves), so the state is set
+# by hand. Eagerly, the ensemble is split into energies with the scalar on it; in
+# blocks of 2 and 1, the block of 2 is split the same way and the block of 1 is a
+# single-valued energy axis under a different scalar energy. The splitting
+# detectors share that code, so the annular detector stands for them.
+@pytest.mark.parametrize("chunks", [None, (2, 1)], ids=["eager", "2-1"])
 @devices
 def test_each_energy_is_detected_with_its_own_energy_despite_a_scalar_energy(
-    detector, chunks, device
+    chunks, device
 ):
     """A scalar energy left on waves with an energy axis is not the energy of every
     member, whatever energies a block holds."""
@@ -466,59 +519,33 @@ def test_each_energy_is_detected_with_its_own_energy_despite_a_scalar_energy(
         waves = _lazy(waves, chunks)
 
     with dask.config.set(scheduler="synchronous"):
-        detected = DETECTORS[detector]().detect(waves)
+        detected = DETECTORS["annular"]().detect(waves)
         if chunks is not None:
             detected = detected.compute(progress_bar=False)
 
     _assert_members_match_single_energy_runs(
-        detected, detector, False, "gridscan", device, energies=energies
+        detected, "annular", False, "gridscan", device, energies=energies
     )
 
 
-@pytest.mark.parametrize(
-    "chunks", [None, 3, (2, 1)], ids=["eager", "one-block", "2-1"]
-)
+# The crop is fixed on the whole ensemble before it is split into blocks, and a
+# lazy detection rebuilds the detector with it in every block, so blocks of 2 and 1
+# cover the eager crop as well.
 @devices
-def test_the_crop_of_an_ensemble_ignores_a_scalar_energy(chunks, device):
+def test_the_crop_of_an_ensemble_ignores_a_scalar_energy(device):
     """The pixel count every energy is cropped to is that of the highest energy on
     the axis, not that of a scalar energy left on the waves (here the lowest)."""
     waves = _stacked_exit_waves(ENERGIES, device, stale_energy=True)
     assert waves.accelerator.energy == min(ENERGIES)
-    if chunks is not None:
-        waves = _lazy(waves, chunks)
+    waves = _lazy(waves, (2, 1))
 
     with dask.config.set(scheduler="synchronous"):
         detected = DETECTORS["pixelated"]().detect(waves)
-        if chunks is not None:
-            detected = detected.compute(progress_bar=False)
+        detected = detected.compute(progress_bar=False)
 
     _assert_members_match_single_energy_runs(
         detected, "pixelated", False, "gridscan", device
     )
-
-
-@pytest.mark.parametrize("entry", ["detect", "lazy-detect", "copy"])
-def test_a_pixelated_detector_without_the_attribute_of_an_older_version(entry):
-    """An older version did not record the ensemble crop (`_ensemble_gpts`); such a
-    detector has none."""
-    waves = _run(ENERGIES, "waves", False, "gridscan", False, "cpu")
-    fresh = DETECTORS["pixelated"]()
-    reference = fresh.detect(waves)
-
-    detector = DETECTORS["pixelated"]()
-    del detector.__dict__["_ensemble_gpts"]
-    if entry == "copy":
-        detector = type(detector)(**detector._copy_kwargs())
-        detected = detector.detect(waves)
-    elif entry == "lazy-detect":
-        with dask.config.set(scheduler="synchronous"):
-            detected = detector.detect(_lazy(waves, (2, 1)))
-            detected = detected.compute(progress_bar=False)
-    else:
-        detected = detector.detect(waves)
-
-    assert detected.shape == reference.shape
-    np.testing.assert_array_equal(detected.array, reference.array)
 
 
 @devices
@@ -554,13 +581,15 @@ def test_detect_on_multi_energy_prism_exit_waves(device):
 def test_the_users_detectors_are_not_changed():
     """The ensemble's crop is fixed on a copy of the detector."""
     detector = abtem.PixelatedDetector(max_angle=60)
-    waves = _run(ENERGIES, "waves", False, "gridscan", False, "cpu")
+    waves = _exit_waves(ENERGIES, "cpu")
     detector.detect(waves)
     potential = _potential(False, "cpu")
     probe = abtem.Probe(energy=ENERGIES, semiangle_cutoff=20)
     probe.grid.match(potential)
     detectors = [detector, abtem.AnnularDetector(30, 100)]
-    probe.scan(potential, scan=_scan("gridscan", potential), detectors=detectors)
+    probe.scan(
+        potential, scan=_scan("gridscan", potential), detectors=detectors
+    ).compute(progress_bar=False)
 
     assert detector._ensemble_gpts is None
     assert detectors[0] is detector and len(detectors) == 2

@@ -1,3 +1,4 @@
+from fractions import Fraction
 from typing import Iterable
 
 import ase.build
@@ -188,11 +189,20 @@ _ACCELERATOR = _accelerator_device()
 #
 # It carries the `gpu` marker, like requires_gpu, so `pytest -m "not gpu"`
 # deselects the accelerator half of these tests on a machine that has one.
+#
+# The torch backend's case is shown as `[torch]`, and carries the markers `torch`,
+# `mps` and `metal`, aliases of each other: the value passed to the test stays
+# "mps", and `-k` matches marker names, so `-k` and `-m` with any of the three
+# select it, and `not` deselects it.
+_TORCH_MARKS = (pytest.mark.torch, pytest.mark.mps, pytest.mark.metal)
+
 gpu = pytest.param(
     _ACCELERATOR or "gpu",
+    id="torch" if _ACCELERATOR == "mps" else None,
     marks=(
         pytest.mark.gpu,
         pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+        *(_TORCH_MARKS if _ACCELERATOR == "mps" else ()),
     ),
 )
 
@@ -244,6 +254,56 @@ devices = pytest.mark.parametrize("device", [gpu, "cpu"])
 lazy_params = pytest.mark.parametrize("lazy", [True, False])
 
 
+def float64_devices(function):
+    """Parametrize a test over `device` and run it in double precision with the
+    numpy FFT, which the comparisons at 1e-10 of the maximum need (the
+    `float64_config` fixture of conftest.py). The `float64` marker makes the
+    collection hook of conftest.py skip the Metal case."""
+    function = pytest.mark.usefixtures("float64_config")(function)
+    return devices(pytest.mark.float64(function))
+
+
+# A box that strains the atoms is reported by a warning, which only the tests of
+# the warning look at.
+ignore_strain_warning = pytest.mark.filterwarnings(
+    "ignore:The box .* is not a whole supercell:UserWarning"
+)
+
+
+def plane_rotation_by_hand(plane):
+    """The rotation of the atoms to a plane given as a string, written out by hand
+    as a matrix acting on row vectors whose columns are the new axes: the first
+    named axis becomes x, the second y and the remaining axis z. Where that is a
+    reflection ("xz", "yx" and "zy") the axis `_ODD_PLANE_REVERSED_AXIS` of abtem
+    is reversed, so that it is a rotation; the tests follow that one choice."""
+    from abtem.atoms import _ODD_PLANE_REVERSED_AXIS
+
+    unit = {"x": np.eye(3)[0], "y": np.eye(3)[1], "z": np.eye(3)[2]}
+    (remaining,) = set("xyz") - set(plane)
+    rotation = np.stack([unit[plane[0]], unit[plane[1]], unit[remaining]], axis=1)
+    if np.linalg.det(rotation) < 0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1
+    return rotation
+
+
+def rotated_by_hand(atoms, plane):
+    """The atoms of an orthogonal cell as `plane` sees them, rotated by hand with
+    `plane_rotation_by_hand` and wrapped into the rotated cell. Magnetic moments
+    turn with the atoms: the rotation is proper, so these pseudovectors turn as
+    vectors do."""
+    rotation = plane_rotation_by_hand(plane)
+    lengths = np.abs(np.diag(atoms.cell) @ rotation)
+    rotated = ase.Atoms(
+        atoms.numbers, positions=atoms.positions @ rotation, cell=lengths, pbc=True
+    )
+    if atoms.has("magnetic_moments"):
+        rotated.set_array(
+            "magnetic_moments", atoms.get_array("magnetic_moments") @ rotation
+        )
+    rotated.wrap()
+    return rotated
+
+
 try:
     import dask_cuda as _dask_cuda  # noqa: F401
 
@@ -271,15 +331,20 @@ requires_multigpu = _GpuRequirement(
 )
 
 
-# Skip marker for the Metal backend, which -- like CUDA -- is exercised whenever
-# the machine has it. Deselect it with -k "not mps".
-requires_mps = pytest.mark.skipif(
-    not _mps_is_usable(),
-    reason=(
-        "requires the Metal (MPS) backend: macOS on Apple silicon with PyTorch "
-        "installed"
+# Marks for the torch backend, which -- like CUDA -- is exercised whenever the
+# machine has it: Metal on macOS, or torch's CPU device with
+# ABTEM_TORCH__DEVICE=cpu. A list, for `pytestmark = requires_mps`, with the
+# same markers as the `gpu` parameter above.
+requires_mps = [
+    pytest.mark.skipif(
+        not _mps_is_usable(),
+        reason=(
+            "requires the torch backend: Metal on macOS, or "
+            "ABTEM_TORCH__DEVICE=cpu, with PyTorch installed"
+        ),
     ),
-)
+    *_TORCH_MARKS,
+]
 
 
 def synthetic_transition_potential(
@@ -447,3 +512,19 @@ def si_diamond_atoms():
     than relying on ASE's default lattice constant for Si.
     """
     return ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+
+
+def exactly_dividing_lengths():
+    """Pairs ``(length, step, count)`` of floats, with ``length / step == count``
+    exactly as decimal numbers: every length from 1 to 40 in steps of 0.1, and
+    each common step that divides it a whole number of times. The division is
+    decided on the decimal strings, so no float rounding enters the oracle."""
+    steps = "0.05 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1 1.2 1.5 2".split()
+    pairs = []
+    for tenths in range(10, 401):
+        length = Fraction(tenths, 10)
+        for step in steps:
+            quotient = length / Fraction(step)
+            if quotient.denominator == 1:
+                pairs.append((float(length), float(step), int(quotient)))
+    return pairs
