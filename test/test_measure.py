@@ -2445,6 +2445,34 @@ def test_diffraction_patterns_to_cartesian():
     assert ortho.to_cartesian() is ortho
 
 
+@pytest.mark.parametrize("width", [0.0, 1.5])
+def test_skew_image_interpolate_line_follows_the_physical_positions(width):
+    """On a skewed cell pixel (i, j) sits at i a1 / n1 + j a2 / n2. A cell-periodic
+    wave along b1, interpolated along b1, is constant across the line, so averaging
+    over a width leaves it unchanged. Measured before the fix (fractional
+    coordinates through the transposed inverse cell, perpendicular samples in
+    unskewed pixel steps): off by up to 1.8 on values of magnitude 1, with and
+    without a width, against 1e-4 (cubic interpolation of 32 pixels per period)."""
+    a = 8.0
+    cell = np.array([[a, 0.0], [-a / 2, a * 3**0.5 / 2]])
+    b1 = np.linalg.inv(cell).T[0]
+    n = 64
+    i, j = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+    r = (i / n)[..., None] * cell[0] + (j / n)[..., None] * cell[1]
+    image = Images(
+        np.cos(2 * np.pi * r @ b1), sampling=(a / n, a / n), metadata={"cell": cell}
+    )
+
+    start = np.array([1.0, 2.0])
+    end = start + 1.7 * b1 / np.sum(b1**2)  # 1.7 periods along b1
+    line = image.interpolate_line(start, end, gpts=9, endpoint=True, width=width)
+
+    points = np.linspace(start, end, 9)
+    np.testing.assert_allclose(
+        np.asarray(line.array), np.cos(2 * np.pi * points @ b1), atol=1e-4
+    )
+
+
 def test_skew_diffraction_to_cartesian_and_indexing():
     """to_cartesian resamples a skew pattern onto an orthogonal grid, and
     index_diffraction_spots reads symmetry-equivalent reflections equally."""
