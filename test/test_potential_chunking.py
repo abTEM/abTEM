@@ -47,9 +47,8 @@ def si_potential_with_exit_planes():
 class TestNearestPowerOfTwo:
     """Unit tests for the _nearest_power_of_two helper."""
 
-    @pytest.mark.parametrize(
-        "n, expected",
-        [
+    def test_rounding(self):
+        for n, expected in [
             (1, 1),    # already a power of two
             (2, 2),    # already a power of two
             (4, 4),    # already a power of two
@@ -60,10 +59,8 @@ class TestNearestPowerOfTwo:
             (20, 16),  # int(20 * 1.25)=25; ceil=32 > 25 → lower
             (100, 64),  # int(100 * 1.25)=125; ceil=128 > 125 → lower
             (65, 64),  # int(65 * 1.25)=81; ceil=128 > 81 → lower
-        ],
-    )
-    def test_rounding(self, n, expected):
-        assert _nearest_power_of_two(n) == expected
+        ]:
+            assert _nearest_power_of_two(n) == expected, n
 
 
 def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
@@ -174,15 +171,15 @@ class TestChunkedSlicesCorrectness:
             assert np.allclose(ref.array, chunked.array)
             assert ref.slice_thickness == chunked.slice_thickness
 
-    @pytest.mark.parametrize("chunk_size", [2, 3, 5, 7])
-    def test_various_chunk_sizes_match_build(self, si_potential, chunk_size):
+    def test_various_chunk_sizes_match_build(self, si_potential):
         """All chunk sizes should reconstruct the same full potential."""
         built = si_potential.build(lazy=False)
-        chunks = list(si_potential.generate_chunked_slices(chunk_size=chunk_size))
+        for chunk_size in (2, 3, 5, 7):
+            chunks = list(si_potential.generate_chunked_slices(chunk_size=chunk_size))
 
-        reconstructed = np.concatenate([c.array for c in chunks], axis=0)
-        assert reconstructed.shape == built.array.shape
-        assert np.allclose(reconstructed, built.array)
+            reconstructed = np.concatenate([c.array for c in chunks], axis=0)
+            assert reconstructed.shape == built.array.shape, chunk_size
+            assert np.allclose(reconstructed, built.array), chunk_size
 
     def test_exit_planes_preserved_across_chunks(self, si_potential_with_exit_planes):
         """Exit planes must be correctly assigned regardless of chunk boundaries."""
@@ -241,8 +238,7 @@ class TestPotentialArrayChunkedSlices:
 class TestMultisliceWithChunking:
     """Verify that multislice results are identical with different chunk sizes."""
 
-    @pytest.mark.parametrize("chunk_size", [1, 2, 5, 100])
-    def test_plane_wave_chunked_vs_unchunked(self, si_potential, chunk_size):
+    def test_plane_wave_chunked_vs_unchunked(self, si_potential):
         """PlaneWave multislice must give identical results for all chunk sizes."""
         waves = PlaneWave(energy=200e3, gpts=si_potential.gpts)
         waves.grid.match(si_potential)
@@ -252,15 +248,15 @@ class TestMultisliceWithChunking:
             si_potential, potential_chunk_size=len(si_potential) + 1, lazy=False
         )
 
-        # Test: specific chunk size
-        result = waves.multislice(
-            si_potential, potential_chunk_size=chunk_size, lazy=False
-        )
+        for chunk_size in (1, 2, 5, 100):
+            result = waves.multislice(
+                si_potential, potential_chunk_size=chunk_size, lazy=False
+            )
 
-        assert np.allclose(ref.array, result.array), (
-            f"Mismatch with chunk_size={chunk_size}, "
-            f"max diff={np.abs(ref.array - result.array).max()}"
-        )
+            assert np.allclose(ref.array, result.array), (
+                f"Mismatch with chunk_size={chunk_size}, "
+                f"max diff={np.abs(ref.array - result.array).max()}"
+            )
 
     def test_chunked_matches_prebuilt_potential_array(self, si_potential):
         """Chunked unbuilt potential must match passing a pre-built PotentialArray.
@@ -323,25 +319,25 @@ class TestMultisliceWithChunking:
 class TestDiskMeshgridIter:
     """Verify that disk_meshgrid_iter produces the same indices as disk_meshgrid."""
 
-    @pytest.mark.parametrize("r", [0, 1, 5, 20, 100])
-    def test_matches_disk_meshgrid(self, r):
+    def test_matches_disk_meshgrid(self):
         from abtem.core.grid import disk_meshgrid, disk_meshgrid_iter
 
-        reference = disk_meshgrid(r)
-        # Concatenate all chunks from the iterator.
-        chunks = list(disk_meshgrid_iter(r, chunk_size=500))
-        if len(chunks) == 0:
-            result = np.empty((0, 2), dtype=np.int32)
-        else:
-            result = np.concatenate(chunks)
+        for r in (0, 1, 5, 20, 100):
+            reference = disk_meshgrid(r)
+            # Concatenate all chunks from the iterator.
+            chunks = list(disk_meshgrid_iter(r, chunk_size=500))
+            if len(chunks) == 0:
+                result = np.empty((0, 2), dtype=np.int32)
+            else:
+                result = np.concatenate(chunks)
 
-        assert result.dtype == np.int32
-        assert result.shape[1] == 2
+            assert result.dtype == np.int32, r
+            assert result.shape[1] == 2, r
 
-        # Sort both by (row, col) for comparison.
-        ref_sorted = reference[np.lexsort((reference[:, 1], reference[:, 0]))]
-        res_sorted = result[np.lexsort((result[:, 1], result[:, 0]))]
-        np.testing.assert_array_equal(ref_sorted, res_sorted)
+            # Sort both by (row, col) for comparison.
+            ref_sorted = reference[np.lexsort((reference[:, 1], reference[:, 0]))]
+            res_sorted = result[np.lexsort((result[:, 1], result[:, 0]))]
+            np.testing.assert_array_equal(ref_sorted, res_sorted, err_msg=f"r={r}")
 
     def test_chunk_size_respected(self):
         from abtem.core.grid import disk_meshgrid_iter
@@ -454,8 +450,7 @@ class TestCrystalPotentialChunking:
                 f"expected {len(crystal_potential)}"
             )
 
-    @pytest.mark.parametrize("chunk_size", [1, 3, 5])
-    def test_chunked_multislice_matches_full(self, crystal_potential, chunk_size):
+    def test_chunked_multislice_matches_full(self, crystal_potential):
         """Multislice through CrystalPotential must be identical for all chunk sizes."""
         waves = PlaneWave(energy=200e3, gpts=crystal_potential.gpts)
         waves.grid.match(crystal_potential)
@@ -465,15 +460,16 @@ class TestCrystalPotentialChunking:
             potential_chunk_size=len(crystal_potential) + 1,
             lazy=False,
         )
-        chunked = waves.multislice(
-            crystal_potential,
-            potential_chunk_size=chunk_size,
-            lazy=False,
-        )
-        assert np.allclose(ref.array, chunked.array), (
-            f"chunk_size={chunk_size}: "
-            f"max diff={np.abs(ref.array - chunked.array).max()}"
-        )
+        for chunk_size in (1, 3, 5):
+            chunked = waves.multislice(
+                crystal_potential,
+                potential_chunk_size=chunk_size,
+                lazy=False,
+            )
+            assert np.allclose(ref.array, chunked.array), (
+                f"chunk_size={chunk_size}: "
+                f"max diff={np.abs(ref.array - chunked.array).max()}"
+            )
 
     def test_crystal_matches_explicit_supercell(self):
         """CrystalPotential multislice result must match an explicit supercell Potential."""
