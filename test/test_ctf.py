@@ -263,6 +263,48 @@ class TestCTF:
             dp.array, np.exp(-1j * chi), rtol=0, atol=1e-3
         )
 
+    def test_to_diffraction_patterns_grid_arguments(self):
+        # An explicit gpts sets the number of pixels and max_angle the largest
+        # angle, whether or not the CTF has a grid of its own; without them the
+        # CTF's own gpts and sampling are used. The values are exp(-i chi) of
+        # the defocus at the coordinates the patterns report.
+        defocus = 100.0
+        wavelength = energy2wavelength(ENERGY)
+        own_max_angle = wavelength / (2 * SAMPLING[0]) * 1e3  # 185 mrad
+
+        def ctf(grid):
+            if grid:
+                return CTF(energy=ENERGY, defocus=defocus, gpts=32, sampling=SAMPLING)
+            return CTF(energy=ENERGY, defocus=defocus)
+
+        for grid, kwargs, gpts, max_angle in (
+            (True, {}, 32, own_max_angle),
+            (True, {"gpts": 64}, 64, own_max_angle),
+            (True, {"max_angle": 30}, 32, 30),
+            (True, {"max_angle": 30, "gpts": 64}, 64, 30),
+            (False, {}, 128, 50),
+            (False, {"gpts": 64}, 64, 50),
+            (False, {"max_angle": 30}, 128, 30),
+            (False, {"max_angle": 30, "gpts": 64}, 64, 30),
+        ):
+            case = f"grid={grid}, {kwargs}"
+            dp = ctf(grid).to_diffraction_patterns(**kwargs)
+
+            assert dp.shape == (gpts, gpts), case
+            # Even gpts: the fftshifted grid reaches exactly n/2 pixels out.
+            np.testing.assert_allclose(
+                dp.max_angles, max_angle, rtol=1e-6, err_msg=case
+            )
+
+            kx, ky = np.meshgrid(*dp.coordinates, indexing="ij")
+            alpha = wavelength * np.hypot(kx, ky)
+            chi = -np.pi / wavelength * alpha**2 * defocus
+            # float32 phases of up to 580 rad (185 mrad corner): at most 1e-4
+            # apart, 10x below the tolerance
+            np.testing.assert_allclose(
+                dp.array, np.exp(-1j * chi), rtol=0, atol=1e-3, err_msg=case
+            )
+
     def test_apply_to_waves(self):
         from abtem.waves import PlaneWave
         ctf = CTF(energy=ENERGY, semiangle_cutoff=30.0, defocus=100.0)
