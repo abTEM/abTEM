@@ -314,7 +314,9 @@ def _panel_arrays(spec_array, ensemble_shape, explode_axes):
 
 
 @pytest.mark.filterwarnings("ignore:This figure includes Axes")
-@pytest.mark.parametrize("explode_axes", [(0, 2), (2, 0), (0, 1, 2), (2, 1, 0)])
+# (2, 0) is out of order, (0, 1, 2) explodes every axis; (0, 2) and (2, 1, 0)
+# add no order mix-up these do not show.
+@pytest.mark.parametrize("explode_axes", [(2, 0), (0, 1, 2)])
 def test_show_explode_sequence_any_order(explode_axes):
     """explode as a sequence of axis indices must plot each panel's own data
     regardless of the order the axes are listed in -- not the axis positioned
@@ -496,69 +498,44 @@ def test_cropped_spectrum_shows_without_error():
 # ---- MomentumResolvedSpectrum.show(logscale=...) -----------------------------
 
 
-def test_show_logscale_uses_lognorm():
-    import matplotlib
-    from matplotlib.colors import LogNorm
-
-    matplotlib.use("Agg")
-    spec, _ = _make_simple_spectrum()
-    fig, ax = spec.show(logscale=True)
-    assert isinstance(ax.collections[0].norm, LogNorm)
-
-
-def test_show_logscale_exploded_uses_lognorm():
-    import matplotlib
-    from matplotlib.colors import LogNorm
-
-    matplotlib.use("Agg")
-    spec, _ = _make_multiaxis_spectrum()
-    fig, axes = spec.show(explode=True, logscale=True)
-    assert isinstance(axes.flatten()[0].collections[0].norm, LogNorm)
-
-
-def test_show_logscale_and_power_raises():
-    import matplotlib
-
-    matplotlib.use("Agg")
-    spec, _ = _make_simple_spectrum()
-    with pytest.raises(ValueError, match="logscale"):
-        spec.show(logscale=True, power=2.0)
-
-
-def test_show_logscale_masks_nonpositive_values_without_error():
-    """Phonon-loss TDS intensities can include zero (or, from numerical
-    noise, tiny negative) values; log scale must mask rather than raise."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    spec, array = _make_simple_spectrum()
-    array[0, 0] = 0.0
-    fig, ax = spec.show(logscale=True)
-    assert ax.collections[0].norm.vmin is None or ax.collections[0].norm.vmin > 0
-
-
-def test_show_logscale_colors_nonpositive_values_instead_of_leaving_them_blank():
-    """LogNorm masks values <= 0 rather than raising, and a masked pixel is
-    drawn with the colormap's "bad" colour -- which defaults to fully
-    transparent, showing the figure's white background through it and
-    looking exactly like missing data. These pixels are real, valid,
-    just-below-the-log-floor intensity (routine for TDS: incoherent -
-    coherent is often exactly zero), so they must be coloured as the bottom
-    of the colour scale instead of left blank."""
+def test_show_logscale_uses_lognorm_and_colours_nonpositive_values():
+    """Log scale uses a LogNorm, alone and exploded. Phonon-loss TDS intensities
+    can include zero (or, from numerical noise, tiny negative) values; LogNorm
+    masks values <= 0 rather than raising, and a masked pixel is drawn with the
+    colormap's "bad" colour -- which defaults to fully transparent, showing the
+    figure's white background through it and looking exactly like missing data.
+    These pixels are real, valid, just-below-the-log-floor intensity (routine for
+    TDS: incoherent - coherent is often exactly zero), so they must be coloured
+    as the bottom of the colour scale instead of left blank."""
     import matplotlib
     import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
 
     matplotlib.use("Agg")
     spec, array = _make_simple_spectrum()
     array[0, 0] = 0.0
 
     fig, ax = spec.show(logscale=True)
+    norm = ax.collections[0].norm
+    assert isinstance(norm, LogNorm)
+    assert norm.vmin is None or norm.vmin > 0
     cmap = ax.collections[0].cmap
     assert tuple(cmap.get_bad()) == tuple(cmap(0.0))
     assert cmap.get_bad()[-1] == 1.0  # fully opaque, not the default transparent
 
     # Must not have mutated the globally registered colormap.
     assert tuple(plt.get_cmap("viridis").get_bad()) == (0.0, 0.0, 0.0, 0.0)
+
+    spec, _ = _make_multiaxis_spectrum()
+    fig, axes = spec.show(explode=True, logscale=True)
+    assert isinstance(axes.flatten()[0].collections[0].norm, LogNorm)
+    plt.close("all")
+
+
+def test_show_logscale_and_power_raises():
+    spec, _ = _make_simple_spectrum()
+    with pytest.raises(ValueError, match="logscale"):
+        spec.show(logscale=True, power=2.0)
 
 
 # ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------

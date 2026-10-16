@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from abc import ABCMeta, abstractmethod
 from collections import OrderedDict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
+import numba  # type: ignore
 import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
@@ -1179,10 +1179,21 @@ _interpolation_pool: Optional[ThreadPoolExecutor] = None
 _INTERPOLATION_BUFFER_BUDGET = 256 * 1024**2
 
 
+def _interpolation_threads() -> int:
+    """The thread count of the interpolation pool.
+
+    Numba's launch-time thread count rather than ``os.cpu_count()``: abTEM
+    seeds it from ``OMP_NUM_THREADS`` (see abtem.core._numba_threads), so a
+    job limited to a few cores, e.g. by an HPC scheduler or one pytest-xdist
+    worker among many, is not oversubscribed by this pool.
+    """
+    return max(int(numba.config.NUMBA_NUM_THREADS), 1)
+
+
 def _get_interpolation_pool() -> ThreadPoolExecutor:
     global _interpolation_pool
     if _interpolation_pool is None:
-        _interpolation_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
+        _interpolation_pool = ThreadPoolExecutor(max_workers=_interpolation_threads())
     return _interpolation_pool
 
 
@@ -1205,7 +1216,7 @@ def _threaded_interpolate_radial_functions(
     (whose workqueue backend aborts on concurrent launches, e.g. from dask).
     """
     num_chunks = min(
-        os.cpu_count() or 1,
+        _interpolation_threads(),
         len(positions),
         max(int(_INTERPOLATION_BUFFER_BUDGET // max(array.nbytes, 1)), 1),
     )
