@@ -373,14 +373,71 @@ def _add_core_density_correction_fourier(charge, atoms, core_density_correction)
     return charge
 
 
+_REFERENCES = ("mean", "vacuum", "slice_min")
+
+# The largest planar-average electron density, relative to the cell average, that
+# the slice chosen as vacuum may contain.
+_VACUUM_DENSITY_TOLERANCE = 1e-3
+
+
+def _validate_reference(reference: str) -> str:
+    if reference not in _REFERENCES:
+        raise ValueError(
+            f"reference must be one of {', '.join(map(repr, _REFERENCES))}, "
+            f"not {reference!r}"
+        )
+    return reference
+
+
+def _vacuum_level(density, potential, atoms, ewald_potential) -> float:
+    """
+    The planar-average potential [V] in the vacuum slice: of the slices of
+    `ewald_potential`, the one whose largest planar-average electron density is
+    the smallest, which must be below `_VACUUM_DENSITY_TOLERANCE` times the cell
+    average.
+
+    `density` is the electron density on its own grid, its last axis along the
+    slices, and `potential` the long-range part on the cropped grid.
+    """
+    profile = np.abs(np.asarray(density, dtype=float).mean(axis=(0, 1)))
+    z = np.arange(len(profile)) * ewald_potential.thickness / len(profile)
+
+    largest = []
+    for a, b in ewald_potential.slice_limits:
+        inside = (z >= a) & (z < b)
+        if not inside.any():
+            # A slice thinner than the density spacing: its nearest plane.
+            inside = np.argmin(np.abs(z - (a + b) / 2))
+        largest.append(profile[inside].max())
+
+    j = int(np.argmin(largest))
+    ratio = largest[j] / profile.mean() if profile.mean() > 0 else np.inf
+    if not ratio <= _VACUUM_DENSITY_TOLERANCE:
+        raise ValueError(
+            'reference="vacuum" needs a vacuum slice, one whose planar-average '
+            f"electron density is below {_VACUUM_DENSITY_TOLERANCE:g} of the cell "
+            f"average; the emptiest slice, {j}, has {ratio:.2g} of it. Use "
+            'reference="mean" for a structure without vacuum along the slices.'
+        )
+
+    a, b = ewald_potential.slice_limits[j]
+    short_range = next(ewald_potential.generate_slices(j, j + 1))
+    long_range = _interpolate_slice(
+        potential, atoms.cell, ewald_potential.gpts, ewald_potential.sampling, a, b
+    )
+    return (float(short_range.array.mean()) + float(long_range.mean())) / (b - a)
+
+
 def _generate_slices(
     charge,
     ewald_potential,
     first_slice: int = 0,
     last_slice: int = None,
     core_density_correction: dict = None,
-    subtract_min: bool = False,
+    reference: str = "mean",
 ):
+    _validate_reference(reference)
+
     if last_slice is None:
         last_slice = len(ewald_potential)
 
@@ -393,6 +450,8 @@ def _generate_slices(
         atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
 
     atoms = ewald_potential.frozen_phonons._randomize_transformed(atoms, frame)
+
+    electron_density = charge
 
     charge = -np.fft.fftn(charge)
 
@@ -416,6 +475,22 @@ def _generate_slices(
         / eps0
     )
 
+    # The constant [V] subtracted from the potential, times each slice's thickness.
+    if reference == "mean":
+        # The long-range part averages to the G=0 term the Poisson solve leaves
+        # (nonzero for a charged cell, e.g. issue #421); the short-range part, the
+        # potential of a point charge minus a Gaussian one of width w, integrates
+        # to Z w**2 / (2 eps0) per atom. Analytic, so the result neither depends
+        # on the width (chosen from the sampling) nor needs every slice.
+        width = ewald_potential.integrator.parametrization.width
+        volume = abs(np.linalg.det(np.array(atoms.cell)))
+        short_range = float(np.sum(atoms.numbers)) * width**2 / (2 * eps0 * volume)
+        offset = float(potential.mean()) + short_range
+    elif reference == "vacuum":
+        offset = _vacuum_level(electron_density, potential, atoms, ewald_potential)
+    else:
+        offset = None
+
     for i, ((a, b), slic) in enumerate(
         zip(
             ewald_potential.slice_limits[first_slice:last_slice],
@@ -428,14 +503,12 @@ def _generate_slices(
 
         slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
 
-        if subtract_min:
-            # A different constant for each slice: the phase of the whole wave
-            # changes, its intensities do not (Fourier multislice). Without it,
-            # the potential carries one constant offset for every slice, the
-            # mean sum(Z) w**2 / (2 eps0 V) of the short-range Ewald part,
-            # since the long-range part has no G=0 term. Neither is referenced
-            # to the vacuum; see the docstring of ChargeDensityPotential.
+        if reference == "slice_min":
+            # A different constant for each slice; see the docstring of
+            # ChargeDensityPotential.
             slic._array -= slic._array.min()
+        else:
+            slic._array -= offset * (b - a)
         yield slic
 
 
@@ -601,25 +674,32 @@ class ChargeDensityPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
-    subtract_min : bool, optional
-        If True, each slice's own minimum value is subtracted from it, as earlier
-        versions of abTEM always did. Default is False. The periodic Poisson solve
-        fixes the potential only up to a constant, and neither setting references
-        it to zero in vacuum, as :class:`.Potential` and a non-periodic
-        :class:`.GPAWPotential` do, or to a zero cell average, as a periodic
-        :class:`.GPAWPotential` does. With False, the potential is offset from a
-        zero cell average by one constant, the same in every slice:
-        sum(Z) w**2 / (2 eps0 V) [V], with Z the atomic numbers, V the cell volume
-        and w = 3 Å the width of the internal Ewald split (in a slice, times its
-        thickness). The differences between slices, e.g. between a slab and its
-        vacuum, are kept; subtract the vacuum value to reference the vacuum to
-        zero. With True, the offset differs from slice to slice: the vacuum around
-        a laterally isolated object is close to zero, but the potential between the
-        atoms of a dense slice is removed, and the profile along z with it. A
-        constant in a slice only changes the phase of the whole wave, so the
-        intensities of the default multislice are the same either way; with
-        ``RealSpaceMultislice(expansion_scope="full")`` the constant enters the
-        propagator and the two settings differ.
+    reference : {"mean", "vacuum", "slice_min"}, optional
+        The constant the potential is referenced to; a periodic Poisson solve fixes
+        it only up to one. A constant in a slice changes only the phase of the
+        whole wave, so the intensities of the default (Fourier) multislice do not
+        depend on it; the phase of the exit wave, comparisons with other
+        potentials, the mean inner potential and the propagator of
+        ``RealSpaceMultislice(expansion_scope="full")`` do.
+
+        - ``"mean"`` (default): the potential averages to zero over the cell, as
+          for a periodic :class:`.GPAWPotential` (plane-wave mode). One constant,
+          the same in every slice, so the profile along z is kept: in a cell with
+          vacuum, the vacuum sits at minus the cell average of the potential
+          referenced to the vacuum.
+        - ``"vacuum"``: the potential is zero in vacuum, as for :class:`.Potential`
+          and a non-periodic :class:`.GPAWPotential`; for slabs and molecules.
+          One constant, the planar-average potential of the vacuum slice: the
+          slice whose largest planar-average electron density is the smallest,
+          which must be below 1e-3 of the cell average, or a `ValueError` is
+          raised (e.g. for a bulk crystal). For a slab with a dipole, the vacuum
+          on either side differs, and this takes the emptiest slice.
+        - ``"slice_min"``: each slice's own minimum is subtracted from it, as
+          abTEM v1.0.10 and earlier always did. A different
+          constant in every slice: the vacuum around a laterally isolated object
+          is close to zero, but the potential between the atoms of a dense slice
+          is removed, and the profile along z (and with it the mean inner
+          potential) is lost. For reproducing earlier results.
     non_orthogonal : bool, optional
         Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
         or on an orthogonal box (False). The default, None, uses the skewed grid
@@ -643,7 +723,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
-        subtract_min: bool = False,
+        reference: str = "mean",
         non_orthogonal: Optional[bool] = None,
     ):
         if hasattr(atoms, "randomize"):
@@ -655,7 +735,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
-        self._subtract_min = subtract_min
+        self._reference = _validate_reference(reference)
 
         if isinstance(self._charge_density, np.ndarray):
             # Skipped for a lazy (dask) charge_density to avoid forcing an eager
@@ -725,8 +805,10 @@ class ChargeDensityPotential(_PotentialBuilder):
         return self._repetitions
 
     @property
-    def subtract_min(self):
-        return self._subtract_min
+    def reference(self) -> str:
+        """The constant the potential is referenced to: "mean", "vacuum" or
+        "slice_min"."""
+        return self._reference
 
     @property
     def num_frozen_phonons(self):
@@ -987,6 +1069,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             ewald_potential,
             first_slice=first_slice,
             last_slice=last_slice,
-            subtract_min=self._subtract_min,
+            reference=self.reference,
         ):
             yield slic
