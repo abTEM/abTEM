@@ -1506,6 +1506,8 @@ def test_local_potential_device_cache_keys_on_the_arrays_device():
     assert tp._local_potential_device_cache[0] == "cpu"
 
 
+# The 6 A cell is what makes the grid coarse; it is small for the delocalisation.
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 @pytest.mark.parametrize("gpts", [16, 17])
 def test_transition_potential_builds_on_a_coarse_grid(gpts):
     """The radial grid of the overlap integral must reach the largest k of the
