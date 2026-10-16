@@ -66,22 +66,16 @@ def _assert_equal_to_fresh(reused, fresh):
     )
 
 
+# interpolation=1 takes the same matching path; it is scanned in
+# test_prism_auto_outer_is_the_dummy_probes_cutoff.
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("interpolation", [1, 2])
-@pytest.mark.parametrize(
-    "make",
-    [
-        lambda: abtem.AnnularDetector(20),
-        lambda: abtem.FlexibleAnnularDetector(step_size=5),
-    ],
-    ids=["annular", "flexible_annular"],
-)
-def test_prism_scan_leaves_the_users_detector_unmatched(make, interpolation, lazy):
-    detector = make()
-    _prism(_potential(), 60e3, detector, lazy=lazy, interpolation=interpolation)
+def test_prism_scan_leaves_the_users_detector_unmatched(lazy):
+    detectors = [abtem.AnnularDetector(20), abtem.FlexibleAnnularDetector(step_size=5)]
+    _prism(_potential(), 60e3, detectors, lazy=lazy, interpolation=2)
 
-    assert detector.outer is None
-    assert not detector._outer_is_explicit
+    for detector in detectors:
+        assert detector.outer is None, type(detector).__name__
+        assert not detector._outer_is_explicit, type(detector).__name__
 
 
 @pytest.mark.parametrize("upsample", [False, True])
