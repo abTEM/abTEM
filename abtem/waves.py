@@ -406,7 +406,9 @@ def reduce_ensemble(
     output = _squeeze_flagged_axes(ensemble)
 
     if not isinstance(output, BaseMeasurements) and any(
-        isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+        isinstance(ax, FrozenPhononsAxis)
+        and not ax._ensemble_mean
+        and not ax._ensemble_mean_forced
         for ax in output.ensemble_axes_metadata
     ):
         warnings.warn(

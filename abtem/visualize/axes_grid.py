@@ -277,8 +277,19 @@ class AxesGrid:
                     self._caxes.ravel()[i].set_axes_locator(locator)
                     i += 1
         else:
-            for ny, row_type in enumerate(row_types):
-                for nx, col_type in enumerate(col_types):
+            # `self._caxes` has shape (ncols, nrows, ncbars) (see
+            # `_make_caxes`), so `.ravel()` in C order varies column
+            # slowest, then row, then cbar-within-panel -- the loop below
+            # must walk in that same order (nx outer, ny inner) to match,
+            # exactly like `_set_axes_locators` does for `self._axes`
+            # (whose shape is likewise (ncols, nrows)). Nesting them the
+            # other way round (ny outer, nx inner, as a previous version of
+            # this loop did) silently scrambles which physical cell each
+            # colorbar axes ends up positioned at whenever nrows != 1 and
+            # ncols != 1 -- most visibly wrong (an apparent diagonal
+            # shuffle) for a square grid.
+            for nx, col_type in enumerate(col_types):
+                for ny, row_type in enumerate(row_types):
                     if ((row_type == "ax") and (col_type == "cbar_width")) or (
                         (row_type == "cbar_width") and (col_type == "ax")
                     ):
