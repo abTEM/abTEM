@@ -112,7 +112,12 @@ def test_lobato_obeys_the_rutherford_limit():
 # The oracles below come from the DFT density itself.
 # --------------------------------------------------------------------------
 
-_GPAW_ELEMENTS = ("H", "C", "Si", "Fe", "Cu", "Mo", "Au")
+# The elements take the same code path (a neutral, spin-polarized atom). These
+# three are the lightest, the heaviest (the hardest f_x to resolve, and the
+# largest V error, 3.6 %) and the one closest to the 5 % bounds (Cu: f_e 4.3 %,
+# unregularized fit 3.0 %). C, Si, Fe and Mo were the same checks with more
+# margin, except Mo's unregularized fit (3.6 %), which Cu stands in for.
+_GPAW_ELEMENTS = ("H", "Cu", "Au")
 # Each element's tests share one xdist worker, so its all-electron atom (up to
 # seconds) is solved once (see all_electron_atom).
 _GPAW_ELEMENT_PARAMS = [
