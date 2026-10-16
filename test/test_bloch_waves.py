@@ -301,6 +301,10 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
     rotations = ("x", np.array([0.0, 0.02, 0.05]))
     thicknesses = [50.0, 100.0]
     multi = BlochWaves(structure_factor, energy=energies, sg_max=0.1, device=device)
+    # off zone axis the energies select different beams (103 and 97 of a
+    # 107-beam union at 0.02 rad), so each is embedded into the union with zeros
+    tilted = multi.rotate("x", 0.02)
+    assert len({len(tilted.select_energy(e).hkl) for e in energies}) == 2
 
     ensemble = multi.rotate(*rotations)
     assert isinstance(ensemble, BlochwaveEnsemble)

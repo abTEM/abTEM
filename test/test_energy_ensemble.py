@@ -811,91 +811,62 @@ class TestBlochWavesEnergyEnsemble:
         """Cached multi-thickness exit waves."""
         return bw_multi.calculate_exit_waves(BLOCH_THICKNESS).compute()
 
-    def test_scalar_energy_unchanged(self):
-        """Scalar energy still works as before (no regression)."""
-        atoms = _srtio3_atoms()
-        bw = BlochWaves(atoms, energy=100e3, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
-        assert bw._energy_hkl_masks is None
-        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
-        assert isinstance(result, IndexedDiffractionPatterns)
-        # one pattern over the beams, with no energy axis
-        assert result.array.shape == (int(bw._hkl_mask.sum()),)
-        assert not any(isinstance(a, EnergyAxis) for a in result.axes_metadata)
-
-    def test_members_match_single_energy(self, dp_single, ew_single):
+    def test_members_match_single_energy(
+        self, dp_single, dp_multi, ew_single, ew_multi
+    ):
         """Oracle: each energy member is an independent Bloch-wave calculation
-        at that energy. Its beams (on the union beam set) must equal those of a
-        single-energy run on that energy's own beam set, and its exit wave the
-        single-energy exit wave."""
+        at that energy, for a scalar thickness and a list of thicknesses. Its
+        beams (on the union beam set) must equal those of a single-energy run
+        on that energy's own beam set, every other beam must be zero, and its
+        exit wave must be the single-energy exit wave. The single-energy runs
+        have no energy axis."""
+        assert isinstance(dp_single, IndexedDiffractionPatterns)
+        assert isinstance(ew_single, Waves)
+        for result, axes in (
+            (dp_single, [EnergyAxis]),
+            (dp_multi, [EnergyAxis, ThicknessAxis]),
+            (ew_single, [EnergyAxis]),
+            (ew_multi, [EnergyAxis, ThicknessAxis]),
+        ):
+            assert [type(a) for a in result.ensemble_axes_metadata] == axes
+            assert result.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
+            assert result.shape[0] == len(BLOCH_ENERGIES)
+
+        union = {tuple(hkl): j for j, hkl in enumerate(dp_single.miller_indices)}
         for i, energy in enumerate(BLOCH_ENERGIES):
             single = BlochWaves(
                 _srtio3_atoms(), energy=energy, sg_max=BLOCH_SG_MAX,
                 g_max=BLOCH_G_MAX,
             )
-            dp = single.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
-            ew = single.calculate_exit_waves(BLOCH_THICKNESS[0]).compute()
+            for thicknesses, patterns, exit_waves in (
+                (BLOCH_THICKNESS[0], dp_single, ew_single),
+                (BLOCH_THICKNESS, dp_multi, ew_multi),
+            ):
+                message = f"member {i} ({energy:g} eV), thicknesses {thicknesses}"
+                dp = single.calculate_diffraction_patterns(thicknesses).compute()
+                ew = single.calculate_exit_waves(thicknesses).compute()
+                for result in (dp, ew):
+                    assert not any(
+                        isinstance(a, EnergyAxis) for a in result.axes_metadata
+                    ), message
 
-            union = {
-                tuple(hkl): j for j, hkl in enumerate(dp_single.miller_indices)
-            }
-            indices = [union[tuple(hkl)] for hkl in dp.miller_indices]
-            member = np.asarray(dp_single.array[i])
-            np.testing.assert_allclose(
-                member[indices], np.asarray(dp.array), rtol=0,
-                atol=1e-6 * np.abs(np.asarray(dp.array)).max(),
-                err_msg=f"diffraction member {i} ({energy:g} eV)",
-            )
-            # every beam outside the single-energy set carries no intensity
-            outside = np.ones(len(member), dtype=bool)
-            outside[indices] = False
-            np.testing.assert_array_equal(member[outside], 0.0)
+                indices = [union[tuple(hkl)] for hkl in dp.miller_indices]
+                member = np.asarray(patterns.array[i])
+                reference = np.asarray(dp.array)
+                np.testing.assert_allclose(
+                    member[..., indices], reference, rtol=0,
+                    atol=1e-6 * np.abs(reference).max(), err_msg=message,
+                )
+                # every beam outside the single-energy set carries no intensity
+                outside = np.ones(member.shape[-1], dtype=bool)
+                outside[indices] = False
+                np.testing.assert_array_equal(member[..., outside], 0.0, message)
 
-            reference = np.asarray(ew.array)
-            np.testing.assert_allclose(
-                np.asarray(ew_single.array[i]), reference, rtol=0,
-                atol=1e-5 * np.abs(reference).max(),
-                err_msg=f"exit-wave member {i} ({energy:g} eV)",
-            )
-
-    def test_union_mask_is_superset(self, bw_multi):
-        """The union _hkl_mask must be at least as large as each per-energy mask."""
-        assert bw_multi._energy_hkl_masks is not None
-        n_union = int(bw_multi._hkl_mask.sum())
-        for sub in bw_multi._energy_hkl_masks:
-            assert int(sub.sum()) <= n_union
-
-    def test_diffraction_patterns_shape(self, bw_multi, dp_single):
-        """calculate_diffraction_patterns returns (n_energies, n_beams) array."""
-        assert isinstance(dp_single, IndexedDiffractionPatterns)
-        n_energies = len(BLOCH_ENERGIES)
-        n_union = int(bw_multi._hkl_mask.sum())
-        assert dp_single.array.shape == (n_energies, n_union)
-        assert isinstance(dp_single.ensemble_axes_metadata[0], EnergyAxis)
-        assert dp_single.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
-
-    def test_diffraction_patterns_multi_thickness_shape(self, bw_multi, dp_multi):
-        """calculate_diffraction_patterns with thicknesses: (n_energies, n_thick, n_beams)."""
-        n_energies = len(BLOCH_ENERGIES)
-        n_union = int(bw_multi._hkl_mask.sum())
-        n_thick = len(BLOCH_THICKNESS)
-        assert dp_multi.array.shape == (n_energies, n_thick, n_union)
-        assert isinstance(dp_multi.ensemble_axes_metadata[0], EnergyAxis)
-        assert isinstance(dp_multi.ensemble_axes_metadata[1], ThicknessAxis)
-
-    def test_exit_waves_shape(self, ew_single):
-        """calculate_exit_waves returns (n_energies, ny, nx) Waves."""
-        assert isinstance(ew_single, Waves)
-        n_energies = len(BLOCH_ENERGIES)
-        assert ew_single.array.shape[0] == n_energies
-        assert isinstance(ew_single.ensemble_axes_metadata[0], EnergyAxis)
-        assert ew_single.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
-
-    def test_exit_waves_multi_thickness_shape(self, ew_multi):
-        """calculate_exit_waves with thicknesses: (n_energies, n_thick, ny, nx)."""
-        n_energies = len(BLOCH_ENERGIES)
-        n_thick = len(BLOCH_THICKNESS)
-        assert ew_multi.array.shape[0] == n_energies
-        assert ew_multi.array.shape[1] == n_thick
+                reference = np.asarray(ew.array)
+                np.testing.assert_allclose(
+                    np.asarray(exit_waves.array[i]), reference, rtol=0,
+                    atol=1e-5 * np.abs(reference).max(), err_msg=message,
+                )
 
     def test_inactive_beams_are_zero(self, bw_multi, dp_single):
         """Beams inactive at a given energy must have zero intensity in the output.
@@ -923,87 +894,6 @@ class TestBlochWavesEnergyEnsemble:
                 dp_single.array[i, inactive], 0.0,
                 err_msg=f"Inactive beams non-zero at energy index {i}",
             )
-
-
-BLOCH_ENSEMBLE_N_ROTATIONS = 4
-
-
-class TestBlochwaveEnsembleEnergyEnsemble:
-    """BlochWaves.rotate() with a rotation ensemble returns a BlochwaveEnsemble,
-    a different class from BlochWaves with its own calculate_diffraction_patterns.
-    Combined with a multi-energy ensemble, reciprocal_lattice_vectors -- which has
-    no energy dependence of its own -- needs an explicit size-1 placeholder axis
-    for energy, in the same position array has one, or the two disagree by one
-    axis the moment both ensembles are present together (rotation ensemble alone,
-    or energy ensemble alone as covered above, each stay one axis short of
-    triggering it)."""
-
-    @staticmethod
-    def _rotated_ensemble(n_rotations, energies):
-        atoms = _srtio3_atoms()
-        bw = BlochWaves(atoms, energy=energies, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
-        angles = np.linspace(0.0, 10.0, n_rotations)
-        zero = np.zeros_like(angles)
-        all_angles = np.stack((zero, angles, -zero), axis=-1)
-        return bw.rotate("zxz", all_angles, degrees=True)
-
-    @pytest.fixture(scope="class")
-    @classmethod
-    def rotated_multi_energy(cls):
-        """Shared rotation+energy ensemble (expensive: rebuilds the structure
-        factor once instead of once per test)."""
-        return cls._rotated_ensemble(BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES)
-
-    @pytest.fixture(scope="class")
-    @classmethod
-    def dp_multi(cls, rotated_multi_energy):
-        """Cached multi-thickness diffraction patterns, shared by the tests
-        that only read the result rather than re-triggering the bug."""
-        return rotated_multi_energy.calculate_diffraction_patterns(
-            BLOCH_THICKNESS, lazy=False
-        )
-
-    @pytest.fixture(scope="class")
-    @classmethod
-    def dp_scalar(cls, rotated_multi_energy):
-        """Cached scalar-thickness diffraction patterns."""
-        return rotated_multi_energy.calculate_diffraction_patterns(
-            BLOCH_THICKNESS[0], lazy=False
-        )
-
-    def test_diffraction_patterns_shape_with_thicknesses(self, dp_multi):
-        n_rot = BLOCH_ENSEMBLE_N_ROTATIONS
-        n_energies, n_thick = len(BLOCH_ENERGIES), len(BLOCH_THICKNESS)
-        assert dp_multi.array.shape[:-1] == (n_rot, n_energies, n_thick)
-        assert isinstance(dp_multi.ensemble_axes_metadata[1], EnergyAxis)
-        assert isinstance(dp_multi.ensemble_axes_metadata[2], ThicknessAxis)
-
-    def test_diffraction_patterns_shape_scalar_thickness(self, dp_scalar):
-        n_rot, n_energies = BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_ENERGIES)
-        assert dp_scalar.array.shape[:-1] == (n_rot, n_energies)
-
-    def test_getitem_after_multi_energy(self, dp_multi):
-        """__getitem__ zips items against reciprocal_lattice_vectors.shape
-        positionally, so a missing energy placeholder there mis-slices this
-        even where __init__'s broadcast check alone would not catch it."""
-        sub = dp_multi[1]
-        assert sub.array.shape == dp_multi.array.shape[1:]
-
-    def test_crop_after_multi_energy(self, dp_multi):
-        cropped = dp_multi.crop(k_max=BLOCH_G_MAX / 2)
-        assert cropped.array.shape[:-1] == dp_multi.array.shape[:-1]
-
-    def test_single_energy_rotation_ensemble_unchanged(self):
-        """No regression for the rotation-ensemble-only path (single energy)."""
-        rotated = self._rotated_ensemble(
-            BLOCH_ENSEMBLE_N_ROTATIONS, BLOCH_ENERGIES[0]
-        )
-        result = rotated.calculate_diffraction_patterns(
-            BLOCH_THICKNESS, lazy=False
-        )
-        assert result.array.shape[:-1] == (
-            BLOCH_ENSEMBLE_N_ROTATIONS, len(BLOCH_THICKNESS)
-        )
 
 
 # ---------------------------------------------------------------------------
