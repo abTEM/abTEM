@@ -169,22 +169,24 @@ def test_make_displacement_field_rms_normalisation():
 # ---------------------------------------------------------------------------
 
 class TestApplyDisplacementField:
-    def test_output_shape(self):
-        img = np.ones((16, 16))
-        result = _apply_displacement_field(img, np.zeros_like(img), np.zeros_like(img))
-        assert result.shape == (16, 16)
-
     def test_zero_displacement_preserves_interior(self):
         # RegularGridInterpolator wraps boundary pixels (p % x.max()), so
         # the last column/row gets remapped to index 0; only check interior.
         img = np.random.default_rng(0).random((16, 16))
         result = _apply_displacement_field(img, np.zeros_like(img), np.zeros_like(img))
+        assert result.shape == (16, 16)
         assert np.allclose(result[:-1, :-1], img[:-1, :-1], atol=1e-10)
 
-    def test_nonzero_displacement_changes_image(self):
+    def test_half_pixel_displacement_interpolates_between_neighbours(self):
+        # The x displacement is added to the axis-0 coordinate, and the image is
+        # interpolated linearly: half a pixel gives the mean of each pixel and
+        # its neighbour along axis 0. The last row and column are wrapped (see
+        # above), so only the interior is checked.
         img = np.random.default_rng(1).random((16, 16))
         result = _apply_displacement_field(img, np.ones_like(img) * 0.5, np.zeros_like(img))
-        assert not np.allclose(result, img)
+        np.testing.assert_allclose(
+            result[:-1, :-1], 0.5 * (img[:-1, :-1] + img[1:, :-1]), atol=1e-12
+        )
 
     def test_output_finite_with_realistic_field(self):
         img = np.random.default_rng(2).random((16, 16))
@@ -341,13 +343,6 @@ class TestScanNoiseTransform:
         imgs = self._images()
         result = snt.apply(imgs).compute()
         assert isinstance(result, Images) and result.base_shape == imgs.base_shape
-
-    def test_samples_and_seeds(self):
-        snt = ScanNoiseTransform(
-            rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
-            seeds=0, samples=2, num_components=5,
-        )
-        assert snt.apply(self._images()).compute().shape[0] == 2
 
     def test_samples_get_independent_reproducible_distortions(self):
         # A non-constant image is needed: a distorted constant image is unchanged.
@@ -568,17 +563,17 @@ def _scan_patterns(scan_shape=(4, 6), pattern_shape=(8, 8), value=None):
     )
 
 
+# One seed, a sample axis, and a dose distribution with a sample axis: none, one
+# and two noise-ensemble axes in front of the scan axes.
+_POISSON_NOISE_KWARGS = {
+    "seed": dict(dose=1.0, seeds=0),
+    "samples": dict(dose=1.0, seeds=0, samples=3),
+    "dose-distribution": dict(dose=np.array([0.5, 2.0]), seeds=1, samples=3),
+}
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
 class TestLazyPoissonNoise:
-    @pytest.mark.parametrize(
-        "kwargs",
-        [
-            dict(dose=1.0, seeds=0),
-            dict(dose=1.0, seeds=0, samples=3),
-            dict(dose=np.array([0.5, 2.0]), seeds=1, samples=3),
-        ],
-        ids=["seed", "samples", "dose-distribution"],
-    )
     @pytest.mark.parametrize(
         "chunks, max_batch",
         [
@@ -589,23 +584,28 @@ class TestLazyPoissonNoise:
         ],
         ids=["one-chunk", "scan-chunks", "all-split", "sample-split"],
     )
-    def test_lazy_equals_eager(self, device, kwargs, chunks, max_batch):
+    def test_lazy_equals_eager(self, device, chunks, max_batch):
         patterns = _to_device(_scan_patterns(), device)
-        transform = NoiseTransform(**kwargs)
+        for name, kwargs in _POISSON_NOISE_KWARGS.items():
+            transform = NoiseTransform(**kwargs)
 
-        eager = transform.apply(patterns)
-        lazy = transform.apply(patterns.ensure_lazy(chunks=chunks), max_batch=max_batch)
-        assert lazy.is_lazy and not eager.is_lazy
-        assert lazy.shape == eager.shape
-        if max_batch == 1:
-            # every noise-ensemble (dose/sample) axis and the first scan axis
-            n_split = lazy.ensemble_dims - 1
-            assert all(len(c) > 1 for c in lazy.array.chunks[:n_split])
-        if max_batch == 2 and lazy.ensemble_dims > 2:
-            # the leading noise-ensemble axis is split, the scan axes are not
-            assert len(lazy.array.chunks[0]) > 1
+            eager = transform.apply(patterns)
+            lazy = transform.apply(
+                patterns.ensure_lazy(chunks=chunks), max_batch=max_batch
+            )
+            assert lazy.is_lazy and not eager.is_lazy, name
+            assert lazy.shape == eager.shape, name
+            if max_batch == 1:
+                # every noise-ensemble (dose/sample) axis and the first scan axis
+                n_split = lazy.ensemble_dims - 1
+                assert all(len(c) > 1 for c in lazy.array.chunks[:n_split]), name
+            if max_batch == 2 and lazy.ensemble_dims > 2:
+                # the leading noise-ensemble axis is split, the scan axes are not
+                assert len(lazy.array.chunks[0]) > 1, name
 
-        np.testing.assert_array_equal(_to_cpu_array(lazy), _to_cpu_array(eager))
+            np.testing.assert_array_equal(
+                _to_cpu_array(lazy), _to_cpu_array(eager), err_msg=name
+            )
 
     def test_poisson_noise_method_lazy_equals_eager(self, device):
         patterns = _to_device(_scan_patterns(), device)

@@ -33,9 +33,14 @@ def _potential(kind, device="cpu"):
     return potential.build(lazy=kind == "lazy")
 
 
+# Every kind of potential with a wave builder; built eager and lazy waves only
+# with the plain potential, as the kind of waves does not depend on it.
 @devices
-@pytest.mark.parametrize("kind", ["plain", "lazy", "exit_planes", "frozen_phonons"])
-@pytest.mark.parametrize("waves", ["builder", "eager", "lazy"])
+@pytest.mark.parametrize(
+    "kind, waves",
+    [(kind, "builder") for kind in ("plain", "lazy", "exit_planes", "frozen_phonons")]
+    + [("plain", "eager"), ("plain", "lazy")],
+)
 def test_multislice_through_a_transmission_function(kind, waves, device):
     potential = _potential(kind, device)
     transmission_function = AntialiasAperture().bandlimit(

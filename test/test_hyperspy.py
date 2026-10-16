@@ -1,4 +1,3 @@
-import sys
 import warnings
 from types import SimpleNamespace
 
@@ -13,7 +12,8 @@ from utils import devices, lazy_params
 import abtem.array
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
-from abtem.measurements import Images, PolarMeasurements
+from abtem.measurements import DiffractionPatterns, Images, PolarMeasurements
+from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
 
 try:
@@ -23,7 +23,6 @@ except ImportError:
 
 
 @given(data=st.data())
-@lazy_params
 @devices
 @pytest.mark.parametrize(
     "measurement",
@@ -36,22 +35,38 @@ except ImportError:
         abtem_st.waves,
     ],
 )
-@pytest.mark.skipif("hyperspy" not in sys.modules, reason="requires hyperspy")
-def test_hyperspy(data, measurement, lazy, device):
-    measurement = data.draw(measurement(lazy=lazy, device=device))
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
-        hyperspy_signal = measurement.to_hyperspy()
-        expected = measurement.to_cpu().to_hyperspy().data
+@pytest.mark.skipif(hyperspy is None, reason="requires hyperspy")
+def test_hyperspy(data, measurement, device):
+    for lazy in (False, True):
+        drawn = data.draw(measurement(lazy=lazy, device=device))
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            hyperspy_signal = drawn.to_hyperspy()
 
-    signal_data = hyperspy_signal.data
-    if lazy:
-        signal_data, expected = signal_data.compute(), expected.compute()
-    if device == "mps":
-        # HyperSpy cannot hold torch backend arrays.
-        assert isinstance(signal_data, np.ndarray)
-    np.testing.assert_array_equal(asnumpy(signal_data), expected)
+        # HyperSpy orders the signal axes the other way round: the stored array
+        # with its base axes reversed. A potential is exported as a stack of
+        # images, one per slice, and unshifted diffraction patterns with the zero
+        # frequency at the centre.
+        stored = _host(drawn.array)
+        base_dims = drawn._base_dims
+        if isinstance(drawn, PotentialArray):
+            base_dims = 2
+        if isinstance(drawn, DiffractionPatterns) and not drawn.fftshift:
+            stored = np.fft.fftshift(stored, axes=(-2, -1))
+        assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims, lazy
+        base = tuple(range(stored.ndim - base_dims, stored.ndim))
+        expected = np.moveaxis(stored, base, base[::-1])
+
+        signal_data = hyperspy_signal.data
+        if lazy:
+            signal_data = signal_data.compute()
+        if device == "mps":
+            # HyperSpy cannot hold torch backend arrays.
+            assert isinstance(signal_data, np.ndarray)
+        np.testing.assert_array_equal(
+            asnumpy(signal_data), expected, err_msg=f"lazy={lazy}"
+        )
 
 
 # Exports of reciprocal-space Waves and of unshifted DiffractionPatterns carry the
@@ -353,7 +368,9 @@ def test_polar_measurements_to_diffraction_patterns_export_centred(lazy, device)
     assert stored[32, 32] == array[0, 0]
 
     data_array = patterns.to_data_array()
-    assert float(data_array.sel(kx=0, ky=0)) == array[0, 0]
+    # to_data_array keeps the device array, and CuPy refuses the implicit
+    # conversion float() would ask for.
+    assert float(_host(data_array.sel(kx=0, ky=0).data)) == array[0, 0]
     np.testing.assert_array_equal(_host(data_array.data), stored)
     if hyperspy is not None:
         np.testing.assert_array_equal(_host(patterns.to_hyperspy().data), stored)

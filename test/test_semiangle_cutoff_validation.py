@@ -53,11 +53,28 @@ def _probe_intensity(aperture):
     return np.abs(probe.build(lazy=False).array) ** 2
 
 
-@pytest.mark.parametrize("name", list(APERTURES))
-@pytest.mark.parametrize("semiangle_cutoff", [-5.0, -np.inf, np.nan])
-def test_a_negative_or_nan_cutoff_is_rejected(name, semiangle_cutoff):
-    with pytest.raises(ValueError, match="must be non-negative"):
-        APERTURES[name](semiangle_cutoff)
+def _not_rejected(names, semiangle_cutoffs, match):
+    """The (aperture, cutoff) pairs that construct without the ValueError, or
+    with another message."""
+    accepted = []
+    for name in names:
+        for semiangle_cutoff in semiangle_cutoffs:
+            try:
+                APERTURES[name](semiangle_cutoff)
+            except ValueError as error:
+                if match not in str(error):
+                    accepted.append((name, semiangle_cutoff, str(error)))
+            else:
+                accepted.append((name, semiangle_cutoff))
+    return accepted
+
+
+def test_a_negative_or_nan_cutoff_is_rejected():
+    # One validator for every aperture class, so one test loops over them.
+    assert (
+        _not_rejected(APERTURES, (-5.0, -np.inf, np.nan), "must be non-negative")
+        == []
+    )
 
 
 @pytest.mark.parametrize("make", [lambda: Aperture(20.0), lambda: CTF(20.0)])
@@ -81,27 +98,30 @@ def test_a_negative_cutoff_is_rejected_by_probe_and_distributions():
         nyquist_sampling(-5.0, ENERGY)
 
 
-@pytest.mark.parametrize("name", NOTHING_OPEN_AT_ZERO)
-def test_a_zero_cutoff_is_rejected_where_it_describes_no_aperture(name):
-    with pytest.raises(ValueError, match="semiangle_cutoff=0"):
-        APERTURES[name](0.0)
+def test_a_zero_cutoff_is_rejected_where_it_describes_no_aperture():
+    assert _not_rejected(NOTHING_OPEN_AT_ZERO, (0.0,), "semiangle_cutoff=0") == []
 
 
-@pytest.mark.parametrize("name", ["Aperture", "hard Aperture", "CTF"])
-def test_a_zero_cutoff_is_still_a_parallel_beam(name):
-    intensity = _probe_intensity(APERTURES[name](0.0))
+def test_a_zero_cutoff_is_still_a_parallel_beam():
+    not_flat = []
+    for name in ("Aperture", "hard Aperture", "CTF"):
+        intensity = _probe_intensity(APERTURES[name](0.0))
+        if not (
+            np.all(np.isfinite(intensity))
+            and np.allclose(intensity, intensity.flat[0], rtol=1e-6, atol=0)
+        ):
+            not_flat.append(name)
+    assert not_flat == []
 
-    assert np.all(np.isfinite(intensity))
-    np.testing.assert_allclose(intensity, intensity.flat[0], rtol=1e-6)
 
-
-@pytest.mark.parametrize("name", list(APERTURES))
-def test_a_positive_cutoff_gives_a_normalized_probe(name):
+def test_a_positive_cutoff_gives_a_normalized_probe():
     """Guards against rejecting valid apertures."""
-    intensity = _probe_intensity(APERTURES[name](20.0))
-
-    assert np.all(np.isfinite(intensity))
-    assert intensity.sum() > 0
+    not_normalized = []
+    for name, make in APERTURES.items():
+        intensity = _probe_intensity(make(20.0))
+        if not (np.all(np.isfinite(intensity)) and intensity.sum() > 0):
+            not_normalized.append(name)
+    assert not_normalized == []
 
 
 @pytest.mark.parametrize(
