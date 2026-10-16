@@ -2628,68 +2628,76 @@ class TestPolarMeasurements:
         assert pm.shape[-1] == 4
         assert pm.outer_angle == 15.0
 
-    @pytest.mark.parametrize(
-        "values, radial_limits, azimuthal_limits, expected",
-        [
-            # ones: every selected bin contributes 1.
-            ("ones", None, None, 12.0),  # all 3 x 4 bins
-            ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
-            ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
-            ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
-            # indexed: A[i, j] = 10 i + j.
-            ("indexed", None, None, 138.0),  # total
-            ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
-            ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
-            ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
-            ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
-            # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
-            ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
-            ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
-            # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
-            ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
-            ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
-            # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
-            ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
-        ],
+    # The bin selection is host NumPy on scalars; only the final sum runs on the
+    # (lazy or device) array, so each table is a loop inside one test per
+    # lazy/device pair.
+    _integrate_cases = (
+        # ones: every selected bin contributes 1.
+        ("ones", None, None, 12.0),  # all 3 x 4 bins
+        ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
+        ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
+        ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
+        # indexed: A[i, j] = 10 i + j.
+        ("indexed", None, None, 138.0),  # total
+        ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
+        ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
+        ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
+        ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
+        # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
+        ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
+        ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
+        # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
+        ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
+        ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
+        # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
+        ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
     )
-    @lazy_params
-    @pytest.mark.parametrize("device", ["cpu", gpu])
-    def test_integrate_values(
-        self, values, radial_limits, azimuthal_limits, expected, lazy, device
-    ):
-        pm = self._polar(values=values, lazy=lazy, device=device)
-        result = pm.integrate(
-            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-        )
-        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
 
-    @pytest.mark.parametrize(
-        "radial_limits, azimuthal_limits, expected",
-        [
-            # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
-            ((25, 35), None, 132.0),  # R_1 + R_2
-            ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
-            # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
-            (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
-            (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
-            # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
-            (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
-            # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
-            ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
-        ],
-    )
     @lazy_params
     @pytest.mark.parametrize("device", ["cpu", gpu])
-    def test_integrate_values_with_offsets(
-        self, radial_limits, azimuthal_limits, expected, lazy, device
-    ):
+    def test_integrate_values(self, lazy, device):
+        polar = {
+            values: self._polar(values=values, lazy=lazy, device=device)
+            for values in ("ones", "indexed")
+        }
+        for values, radial_limits, azimuthal_limits, expected in self._integrate_cases:
+            result = polar[values].integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{values}, {radial_limits}, {azimuthal_limits}",
+            )
+
+    _offset_cases = (
+        # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
+        ((25, 35), None, 132.0),  # R_1 + R_2
+        ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
+        # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
+        (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
+        (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
+        # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
+        (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
+        # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
+        ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
+    )
+
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values_with_offsets(self, lazy, device):
         pm = self._polar(
             radial_offset=20.0, azimuthal_offset=np.pi / 4, lazy=lazy, device=device
         )
-        result = pm.integrate(
-            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-        )
-        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
+        for radial_limits, azimuthal_limits, expected in self._offset_cases:
+            result = pm.integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{radial_limits}, {azimuthal_limits}",
+            )
 
     def test_integrate_limits_on_inexact_bin_edges(self):
         # With radial_sampling = 0.1 the edge 0.3 is bin index 3, although
