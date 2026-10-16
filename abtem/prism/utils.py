@@ -5,10 +5,17 @@ import numpy as np
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
+    """Crop ``new_shape`` windows from the last two axes of ``array`` at ``corners``.
+    A window as large as the array can only sit at the origin, so ``array`` itself
+    is returned, not a copy."""
+
+    if tuple(new_shape) == tuple(array.shape[-2:]):
+        return array
+
     xp = get_array_module(array)
 
     if len(array.shape) > 3:
@@ -59,25 +66,85 @@ def minimum_crop(positions: np.ndarray, shape):
     return crop_corner, size, corners
 
 
+def window_crop(positions: np.ndarray, window_gpts, gpts):
+    """The crop box of windows of ``window_gpts`` points centred on ``positions``
+    (in pixels of a grid of ``gpts`` points), as ``minimum_crop`` returns it, except
+    that a window as large as the grid is the whole grid for every position, with
+    each window's corner at the origin (the cell frame)."""
+    if tuple(window_gpts) == tuple(gpts):
+        xp = get_array_module(positions)
+        return (0, 0), tuple(gpts), xp.zeros(positions.shape, dtype=int)
+
+    return minimum_crop(positions, window_gpts)
+
+
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
-    if start < 0:
-        if stop > n:
-            raise RuntimeError(f"start = {start} stop = {stop}, n = {n}")
+    """Two slices covering ``[start, stop)`` on a periodic axis of length ``n``.
 
-        a = slice(start % n, None)
-        b = slice(0, stop)
+    ``start`` may be any integer. Normalising it into ``[0, n)`` first leaves
+    only two cases -- the window fits, or it wraps once -- which is what two
+    slices can express.
 
-    elif stop > n:
-        if start < 0:
-            raise RuntimeError(f"start = {start} stop = {stop}, n = {n}")
+    The previous implementation assumed ``-n <= start < n`` and ``0 < stop <= 2n``
+    and split on the raw values. For a window lying entirely in negative indices
+    (``stop <= 0``) it produced ``slice(0, stop)``, which is Python's *negative
+    indexing* and selects ``n + stop`` elements rather than none, so the two
+    pieces concatenated to ``n + size`` elements instead of ``size``. The
+    mis-shaped array then surfaced as a broadcast error frames away from here.
 
-        a = slice(start, None)
-        b = slice(0, stop - n)
+    Raises
+    ------
+    RuntimeError
+        If ``stop - start > n``. Two slices cannot cover more than one period;
+        ``wrapped_crop_2d`` catches this and takes its general path.
+    """
+    size = stop - start
 
-    else:
-        a = slice(start, stop)
-        b = slice(0, 0)
-    return a, b
+    if size > n:
+        raise RuntimeError(
+            f"a window of {size} elements exceeds the period {n} and cannot be "
+            f"expressed as two slices (start = {start}, stop = {stop})"
+        )
+
+    start %= n
+    stop = start + size
+
+    if stop <= n:
+        return slice(start, stop), slice(0, 0)
+
+    return slice(start, None), slice(0, stop - n)
+
+
+def _wrapped_gather_2d(
+    array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]
+) -> np.ndarray:
+    """``wrapped_crop_2d`` for windows wider than one period.
+
+    Gathers by modulo index, which is total for any corner and any size. It
+    copies through fancy indexing, so it is kept off the common path -- but it
+    is correct where the slice pair cannot be, and unlike the ``xp.pad(...,
+    mode="wrap")`` fallback it replaced, it does not fail for windows spanning
+    several periods.
+    """
+    xp = get_array_module(array)
+    i = (corner[0] + xp.arange(size[0])) % array.shape[-2]
+    j = (corner[1] + xp.arange(size[1])) % array.shape[-1]
+    return array[..., i[:, None], j[None, :]]
+
+
+def _check_crop_shape(cropped: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    """Fail here rather than at a broadcast three frames downstream.
+
+    A wrongly sized crop used to reach the caller intact and only show up as an
+    operand-shape mismatch elsewhere. The check is a shape comparison, so it
+    costs nothing on the hot path, and it is a complete detector for this class
+    of defect: when the slice pair is wrong it is the shape that is wrong.
+    """
+    if cropped.shape[-2:] != tuple(size):
+        raise RuntimeError(
+            f"wrapped_crop_2d produced {cropped.shape[-2:]}, expected {tuple(size)}"
+        )
+    return cropped
 
 
 def wrapped_crop_2d(
@@ -91,17 +158,7 @@ def wrapped_crop_2d(
         a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
         b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
     except RuntimeError:
-        padding = tuple(
-            (abs(min(c, 0)), max(c + k - l, 0))
-            for c, l, k in zip(corner, array.shape[-2:], size)
-        )
-        slices = tuple(
-            slice(c + p[0], c + p[0] + l) for c, l, p in zip(corner, size, padding)
-        )
-        padding = ((0, 0),) * (len(array.shape) - 2) + padding
-        slices = (slice(None),) * (len(array.shape) - 2) + slices
-        array = xp.pad(array, padding, mode="wrap")[slices]
-        return array
+        return _wrapped_gather_2d(array, corner, size)
 
     A = array[..., a, b]
     B = array[..., c, b]
@@ -123,12 +180,14 @@ def wrapped_crop_2d(
         CD = xp.concatenate([C, D], axis=-2)
 
     if CD.size == 0:
-        return AB
+        return _check_crop_shape(AB, size)
 
     if AB.size == 0:
-        return CD
+        cropped = CD
+    else:
+        cropped = xp.concatenate([AB, CD], axis=-1)
 
-    return xp.concatenate([AB, CD], axis=-1)
+    return _check_crop_shape(cropped, size)
 
 
 def prism_wave_vectors(
@@ -143,13 +202,14 @@ def prism_wave_vectors(
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
-    n = np.arange(-n_max, n_max + 1, dtype=np.float32)
-    w = np.asarray(extent[0], dtype=np.float32)
-    m = np.arange(-m_max, m_max + 1, dtype=np.float32)
-    h = np.asarray(extent[1], dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    n = np.arange(-n_max, n_max + 1, dtype=dtype)
+    w = np.asarray(extent[0], dtype=dtype)
+    m = np.arange(-m_max, m_max + 1, dtype=dtype)
+    h = np.asarray(extent[1], dtype=dtype)
 
-    kx = n / w * np.float32(interpolation[0])
-    ky = m / h * np.float32(interpolation[1])
+    kx = n / w * dtype(interpolation[0])
+    ky = m / h * dtype(interpolation[1])
 
     mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
 
@@ -166,8 +226,9 @@ def plane_waves(
     reverse: bool = False,
 ) -> np.ndarray:
     xp = get_array_module(wave_vectors)
-    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=dtype)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=dtype)
 
     sign = -1.0 if reverse else 1.0
 
@@ -204,7 +265,7 @@ def prism_coefficients(positions, wave_vectors, xp, ctf=None):
         alpha = (
             xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
         )
-        phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+        phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
 
         basis = ctf._evaluate_from_angular_grid(alpha, phi)
         basis, coefficients = expand_dims_to_broadcast(

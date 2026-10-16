@@ -19,9 +19,9 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.potentials.iam import BasePotential, validate_potential
-from abtem.transfer import nyquist_sampling
+from abtem.transfer import _raise_if_parallel_beam, nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
 from abtem.visualize.visualizations import Visualization
 
@@ -41,7 +41,7 @@ def validate_scan(
 
     Parameters
     ----------
-    scan : Sequence or np.ndarray or BaseScan
+    scan : Sequence or numpy.ndarray or BaseScan
         The scan or scan positions to validate. If None, a scan with a single position
         at (0, 0) is returned.
     probe : Probe or None
@@ -91,6 +91,13 @@ def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
 
         semiangle_cutoff = probe.aperture._max_semiangle_cutoff
 
+        _raise_if_parallel_beam(
+            semiangle_cutoff,
+            "The default scan sampling (the probe's Nyquist sampling)",
+            "Give the scan an explicit `sampling` or `gpts`. A parallel beam is "
+            "translation invariant, so a single position (`gpts=1`) gives the whole "
+            "result.",
+        )
         scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe._valid_energy)
 
 
@@ -156,7 +163,7 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         Returns
         -------
-        kernel : np.ndarray or dask.array.Array
+        kernel : numpy.ndarray or dask.array.Array
         """
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -242,7 +249,7 @@ class CustomScan(BaseScan):
 
     Parameters
     ----------
-    positions : np.ndarray, optional
+    positions : numpy.ndarray, optional
         Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 2)
         is accepted. Default is (0., 0.).
     """
@@ -441,9 +448,12 @@ class LineScan(BaseScan):
     gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
+        Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
+        The number of positions is rounded up to fit the line, so the actual
+        sampling is at most the requested one. With `endpoint=True` the number
+        includes the end point.
         If not provided the sampling will match the Nyquist sampling of the Probe
-        in a multislice simulation.
+        in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included.
         Default is True.
@@ -487,7 +497,7 @@ class LineScan(BaseScan):
     def angle(self):
         """Angle of the line from `start` to `end` and the `x`-axis [deg.]."""
         direction = self.direction
-        return np.arctan2(direction[1], direction[0])
+        return np.rad2deg(np.arctan2(direction[1], direction[0]))
 
     def add_margin(self, margin: float | tuple[float, float]):
         """
@@ -537,7 +547,9 @@ class LineScan(BaseScan):
         gpts : int
             Number of grid points along the line.
         sampling : float
-            Sampling of grid points along the line [Å].
+            Sampling of grid points along the line [Å]. The number of positions is
+            rounded up to fit the line, so the actual sampling is at most the
+            requested one. With `endpoint=True` the number includes the end point.
         endpoint : bool
             Sets whether the ending position is included or not.
 
@@ -597,7 +609,9 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
-        self._gpts = int(np.ceil(self.extent / self.sampling))
+        self._gpts = max(
+            safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint), 1
+        )
 
         self._adjust_sampling()
 
@@ -735,7 +749,9 @@ class LineScan(BaseScan):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         direction = np.array(self.end) - np.array(self.start)
-        direction = direction / np.linalg.norm(direction, axis=0)
+        length = np.linalg.norm(direction)
+        if length > 0:
+            direction = direction / length
 
         cumchunks = tuple(np.cumsum(chunks[0]))
 
@@ -811,7 +827,13 @@ class LineScan(BaseScan):
             )
 
         if width:
-            rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
+            # Rectangle's xy is a corner, so shift it back by half the width
+            # along the perpendicular: the band is then centred on the line,
+            # matching the region interpolate_line averages over.
+            direction = self.direction
+            perpendicular = np.array([-direction[1], direction[0]])
+            anchor = np.array(self.start) - perpendicular * width / 2
+            rect = Rectangle(anchor, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
             return rect
         else:
@@ -842,9 +864,9 @@ class GridScan(HasGrid2DMixin, BaseScan):
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one
         of gpts or sampling.
     sampling : two float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
-        If not provided the sampling will match the Nyquist sampling of the  Probe
-        in a multislice simulation.
+        Sampling rate of scan positions [Å]. Provide one of gpts or sampling.
+        If not provided the sampling will match the Nyquist sampling of the Probe
+        in a multislice simulation, which requires a positive semiangle cutoff.
     endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included.
         Default is False.
@@ -895,7 +917,12 @@ class GridScan(HasGrid2DMixin, BaseScan):
             extent = None
 
         self._grid = Grid(
-            extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+            dimensions=2,
+            endpoint=endpoint,
+            fft_grid=False,
         )
 
     def __len__(self):
@@ -960,6 +987,120 @@ class GridScan(HasGrid2DMixin, BaseScan):
             self.end = probe.extent
 
         _validate_scan_sampling(self, probe)
+
+    @classmethod
+    def commensurate(
+        cls,
+        matrix: "BaseSMatrix | BasePotential | Atoms",
+        gpts: int | tuple[int, int] | None = None,
+        sampling: float | tuple[float, float] | None = None,
+        start: float | tuple[float, float] | Atom = (0.0, 0.0),
+        end: float | tuple[float, float] | Atom | None = None,
+    ) -> "GridScan":
+        """
+        Create a grid scan whose step is a whole number of pixels of the grid
+        the given scattering matrix is reduced on.
+
+        Scattering-matrix reductions with ``upsample=True`` are much faster for
+        such scans, since every probe position falls on the pixel grid of the
+        reduced wave functions. The requested number of positions or sampling
+        is snapped to the nearest whole-pixel step; when the scanned span is
+        itself a whole number of pixels, the step is snapped to a divisor of
+        the span so the scan tiles it exactly, otherwise the end point is
+        moved to the nearest lattice point.
+
+        Parameters
+        ----------
+        matrix : BaseSMatrix or BasePotential or Atoms
+            The scattering matrix (built or not) whose reduction grid the scan
+            steps along. Given a potential, the grid of a scattering matrix
+            with default downsampling is assumed.
+        gpts : one or two int, optional
+            Requested number of scan positions in the `x`- and `y`-direction.
+            Provide either gpts or sampling.
+        sampling : one or two float, optional
+            Requested sampling rate of the scan positions [Å]. Provide either
+            gpts or sampling.
+        start : one or two float or Atom, optional
+            Start corner of the scan [Å]. Default is (0., 0.).
+        end : one or two float or Atom, optional
+            End corner of the scan [Å] (not included, as for
+            ``endpoint=False``). Default is the scanned extent.
+        """
+        if (gpts is None) == (sampling is None):
+            raise ValueError("provide either gpts or sampling")
+
+        coordinate_potential = None
+        if hasattr(matrix, "downsampled_gpts"):
+            matrix.grid.check_is_defined()
+            grid_gpts = tuple(matrix.downsampled_gpts)
+            grid_extent = matrix._valid_extent
+        elif hasattr(matrix, "wave_vectors"):
+            grid_gpts = matrix._valid_gpts
+            grid_extent = matrix._valid_extent
+        else:
+            validated_potential = validate_potential(matrix)
+            assert validated_potential is not None
+            validated_potential.grid.check_is_defined()
+            coordinate_potential = validated_potential
+
+            from abtem.waves import _antialias_cutoff_gpts
+
+            grid_gpts = tuple(
+                n + (-n) % 4
+                for n in _antialias_cutoff_gpts(
+                    validated_potential._valid_gpts,
+                    validated_potential._valid_sampling,
+                )
+            )
+            grid_extent = validated_potential._valid_extent
+
+        pixel = np.array(grid_extent) / np.array(grid_gpts)
+
+        start_coordinate = validate_coordinate(start, coordinate_potential)
+        assert start_coordinate is not None
+        end_coordinate = validate_coordinate(end, coordinate_potential)
+        if end_coordinate is None:
+            end_coordinate = grid_extent
+
+        span_pixels = (np.array(end_coordinate) - np.array(start_coordinate)) / pixel
+        if np.any(span_pixels <= 0.0):
+            raise ValueError(f"scan span must be positive, got {span_pixels * pixel}")
+
+        if gpts is not None:
+            gpts_pair = (gpts, gpts) if isinstance(gpts, (int, np.integer)) else gpts
+            targets = span_pixels / np.array(gpts_pair)
+        else:
+            targets = np.array(
+                (sampling, sampling)
+                if isinstance(sampling, (int, float, np.floating))
+                else sampling
+            ) / pixel
+
+        scan_gpts = []
+        scan_end = []
+        for target, span, origin, delta in zip(
+            targets, span_pixels, start_coordinate, pixel
+        ):
+            whole_span = int(round(span))
+            if whole_span > 0 and abs(span - whole_span) < 1e-6:
+                step = min(
+                    (d for d in range(1, whole_span + 1) if whole_span % d == 0),
+                    key=lambda d: abs(d - target),
+                )
+                n = whole_span // step
+            else:
+                step = max(1, int(round(target)))
+                n = max(1, int(round(span / step)))
+            scan_gpts.append(n)
+            scan_end.append(origin + n * step * delta)
+
+        return cls(
+            start=start_coordinate,
+            end=(scan_end[0], scan_end[1]),
+            gpts=(scan_gpts[0], scan_gpts[1]),
+            endpoint=False,
+        )
 
     def _x_coordinates(self):
         return np.linspace(
