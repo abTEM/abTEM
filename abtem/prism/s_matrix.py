@@ -61,6 +61,7 @@ from abtem.detectors import (
 )
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
+    _intensity_dtype,
     allocate_measurement,
     allocate_multislice_measurements,
     multislice_and_detect,
@@ -1273,7 +1274,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             # ``incident.array`` is on the reduction device (CuPy on GPU); keep
             # everything in ``xp`` rather than forcing a NumPy conversion.
             incident_intensity = (
-                xp.abs(xp.asarray(incident.array)).astype(xp.float64) ** 2
+                xp.abs(xp.asarray(incident.array)).astype(
+                    _intensity_dtype(incident.device)
+                )
+                ** 2
             )
             plasmon_target_norm = float(
                 incident_intensity.sum(axis=(-2, -1)).max()
@@ -1327,7 +1331,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     # across loss orders.
                     sum_axes = (0, -2, -1) if plasmon_order_resolved else (-2, -1)
                     current = (
-                        xp.abs(waves_array).astype(xp.float64) ** 2
+                        xp.abs(waves_array).astype(_intensity_dtype(self.device)) ** 2
                     ).sum(axis=sum_axes, keepdims=True)
                     scale = xp.sqrt(plasmon_target_norm / current).astype(
                         waves_array.dtype

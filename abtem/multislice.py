@@ -510,10 +510,16 @@ def _configuration_seed(potential_configuration) -> Optional[int]:
     return int(seed)
 
 
+def _intensity_dtype(device: str):
+    """The precision the plasmon intensity sums accumulate in: double, except on
+    the torch backend, which is single precision only."""
+    return np.float32 if device == "mps" else np.float64
+
+
 def _plasmon_total_intensity(waves: Waves):
     """Total wave-function intensity per ensemble member (summed over the grid axes)."""
     xp = get_array_module(waves.device)
-    arr = xp.abs(waves._array).astype(xp.float64)
+    arr = xp.abs(waves._array).astype(_intensity_dtype(waves.device))
     return xp.sum(arr**2, axis=(-2, -1), keepdims=True)
 
 
@@ -527,9 +533,9 @@ def _renormalize_wave_inplace(waves: Waves) -> None:
     is always normalized, so this is physics-preserving.
     """
     xp = get_array_module(waves.device)
-    arr = xp.abs(waves._array).astype(xp.float64)
+    arr = xp.abs(waves._array).astype(_intensity_dtype(waves.device))
     norm_sq = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
-    norm_sq = xp.maximum(norm_sq, xp.finfo(xp.float64).tiny)
+    norm_sq = xp.maximum(norm_sq, np.finfo(_intensity_dtype(waves.device)).tiny)
     scale = (1.0 / xp.sqrt(norm_sq)).astype(waves._array.dtype)
     waves._array = waves._array * scale
 
@@ -542,11 +548,11 @@ def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     implementation, which normalizes the wave before forming the diffraction pattern).
     """
     xp = get_array_module(waves.device)
-    arr = xp.abs(waves._array).astype(xp.float64)
+    arr = xp.abs(waves._array).astype(_intensity_dtype(waves.device))
     current = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
-    current = xp.maximum(current, xp.finfo(xp.float64).tiny)
+    current = xp.maximum(current, np.finfo(_intensity_dtype(waves.device)).tiny)
     scale = xp.sqrt(target_norm / current)
-    max_scale = xp.finfo(waves._array.dtype).max
+    max_scale = np.finfo(waves._array.dtype).max
     scale = xp.minimum(scale, max_scale)
     scale = scale.astype(waves._array.dtype)
     kwargs = waves._copy_kwargs(exclude=("array",))
@@ -568,13 +574,13 @@ def _renormalize_order_waves_inplace(order_waves: list) -> None:
     xp = get_array_module(order_waves[0].device)
     total = sum(
         xp.sum(
-            xp.abs(w._array).astype(xp.float64) ** 2,
+            xp.abs(w._array).astype(_intensity_dtype(w.device)) ** 2,
             axis=(-2, -1),
             keepdims=True,
         )
         for w in order_waves
     )
-    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
+    total = xp.maximum(total, np.finfo(_intensity_dtype(order_waves[0].device)).tiny)
     scale = (1.0 / xp.sqrt(total)).astype(order_waves[0]._array.dtype)
     for w in order_waves:
         w._array = w._array * scale
@@ -587,15 +593,15 @@ def _renormalize_order_waves(order_waves: list, target_norm) -> None:
     xp = get_array_module(order_waves[0].device)
     total = sum(
         xp.sum(
-            xp.abs(w._array).astype(xp.float64) ** 2,
+            xp.abs(w._array).astype(_intensity_dtype(w.device)) ** 2,
             axis=(-2, -1),
             keepdims=True,
         )
         for w in order_waves
     )
-    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
+    total = xp.maximum(total, np.finfo(_intensity_dtype(order_waves[0].device)).tiny)
     scale = xp.sqrt(target_norm / total)
-    max_scale = xp.finfo(order_waves[0]._array.dtype).max
+    max_scale = np.finfo(order_waves[0]._array.dtype).max
     scale = xp.minimum(scale, max_scale)
     scale = scale.astype(order_waves[0]._array.dtype)
     for w in order_waves:
