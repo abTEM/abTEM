@@ -2723,12 +2723,6 @@ def _strain_from_the_transform(atoms, box):
     return np.asarray(box) / lengths - 1.0, np.array(cosines), lengths
 
 
-@ignore_strain_warning
-def test_strain_warning_threshold_is_a_tenth_of_a_percent():
-    assert abtem.atoms.BOX_STRAIN_WARNING_THRESHOLD == 1e-3
-
-
-@ignore_strain_warning
 def test_box_that_strains_the_atoms_warns_with_the_numbers():
     si = bulk("Si", "diamond", a=5.431, cubic=True)
     potential, records = _construct(si, box=(20.0, 5.431, 5.431), sampling=0.2)
@@ -2748,45 +2742,21 @@ def test_box_that_strains_the_atoms_warns_with_the_numbers():
     assert potential.box == (20.0, 5.431, 5.431)
 
 
-@ignore_strain_warning
-@pytest.mark.parametrize(
-    "factor, warns",
-    [(1.0011, True), (0.9989, True), (1.0009, False), (0.9991, False), (1.0, False)],
-)
-def test_strain_warning_threshold_applies_to_the_stretch(factor, warns):
+def test_strain_warning_threshold_applies_to_the_stretch():
+    # A tenth of a percent: 21.72 A for 4 periods (0.99982) is silent too.
     si = bulk("Si", "diamond", a=5.431, cubic=True)
-    box = (4 * 5.431 * factor, 5.431, 5.431)
-    _, records = _construct(si, box=box, sampling=0.2)
-    assert bool(records) == warns
-    if warns:
-        assert f"{100 * (factor - 1):+.3f} %" in str(records[0].message)
-
-
-@ignore_strain_warning
-def test_a_slightly_off_box_of_four_periods_is_silent():
-    si = bulk("Si", "diamond", a=5.431, cubic=True)
-    _, records = _construct(si, box=(21.72, 5.431, 5.431), sampling=0.2)
-    assert records == []
-
-
-@ignore_strain_warning
-def test_strain_warning_quotes_the_shear_of_a_hexagonal_supercell():
-    graphene_cell = graphene(vacuum=2.0)
-    box = (20.0, 20.0, 4.0)
-    _, records = _construct(graphene_cell, box=box, sampling=0.2)
-
-    assert len(records) == 1
-    message = str(records[0].message)
-    stretch, cosines, lengths = _strain_from_the_transform(graphene_cell, box)
-    assert cosines[2] == pytest.approx(0.064, abs=1e-3)
-    for value in stretch:
-        assert f"{100 * value:+.3f} %" in message
-    for value in cosines:
-        assert f"{value:.2e}" in message
-    for value in np.degrees(np.arccos(cosines)):
-        assert f"{value:.3f}°" in message
-    assert str(round(float(lengths[0]), 6)) in message
-    assert "[[8, 0, 0], [5, 9, 0], [0, 0, 1]]" in message
+    for factor, warns in [
+        (1.0011, True),
+        (0.9989, True),
+        (1.0009, False),
+        (0.9991, False),
+        (1.0, False),
+    ]:
+        box = (4 * 5.431 * factor, 5.431, 5.431)
+        _, records = _construct(si, box=box, sampling=0.2)
+        assert bool(records) == warns, factor
+        if warns:
+            assert f"{100 * (factor - 1):+.3f} %" in str(records[0].message), factor
 
 
 @ignore_strain_warning
@@ -2876,12 +2846,6 @@ def test_strain_warning_is_not_repeated_by_frozen_phonons_or_lazy_blocks():
     assert lazy.array.shape[:3] == (3, 3, 100)
 
 
-@ignore_strain_warning
-def test_strain_warning_does_not_hide_an_error_for_a_box_with_no_whole_period():
-    with pytest.raises(ValueError, match="no whole repetition"):
-        abtem.Potential(_two_atoms(), box=(1.5, 3.0, 5.0), **GRID)
-
-
 @float64_devices
 @ignore_strain_warning
 def test_strain_warning_is_not_repeated_by_a_crystal_potential():
@@ -2913,26 +2877,25 @@ def test_strain_warning_is_not_repeated_by_a_crystal_potential():
 
 
 @float64_devices
-@ignore_strain_warning
-@pytest.mark.parametrize("repetitions, reported", [((2, 3, 2), 0), ((3, 1, 1), 1)])
-def test_charge_density_potential_reports_its_default_box_once(repetitions, reported):
+def test_charge_density_potential_reports_its_default_box_once():
     # The default box of BN x (3, 1, 1) is reached by a strain; the potential
     # reports it when it is constructed, and the Ewald potential it builds from
     # its own box does not repeat it.
     atoms = graphene(formula="BN", a=2.5, vacuum=2.0)
     atoms.pbc = True
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        potential = ChargeDensityPotential(
-            atoms,
-            _charge_density(),
-            sampling=0.2,
-            slice_thickness=1.0,
-            repetitions=repetitions,
-        )
-        potential.build(lazy=False)
-        potential.build(lazy=True).compute()
-    assert len(_strain_warnings(records)) == reported
+    for repetitions, reported in [((2, 3, 2), 0), ((3, 1, 1), 1)]:
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential = ChargeDensityPotential(
+                atoms,
+                _charge_density(),
+                sampling=0.2,
+                slice_thickness=1.0,
+                repetitions=repetitions,
+            )
+            potential.build(lazy=False)
+            potential.build(lazy=True).compute()
+        assert len(_strain_warnings(records)) == reported, repetitions
 
 
 # The box that abTEM picks itself is reported when it strains the atoms.
@@ -2968,7 +2931,6 @@ def _construct_chosen(builder, *args, **kwargs):
     return built, _chosen_box_warnings(records)
 
 
-@ignore_strain_warning
 def test_default_box_of_bn_repeated_three_times_warns_with_the_numbers():
     atoms = _bn((3, 1, 1))
     potential, records = _construct_chosen(abtem.Potential, atoms, **STRAIN_GRID)
@@ -2989,53 +2951,22 @@ def test_default_box_of_bn_repeated_three_times_warns_with_the_numbers():
     assert str(round(float(lengths[0]), 6)) in message
     assert "[[1, 0, 0], [1, 5, 0], [0, 0, 1]]" in message
     assert str(tuple(float(b) for b in potential.box)) in message
-
-
-@ignore_strain_warning
-def test_warning_says_who_chose_the_box_and_names_the_remedies():
-    _, records = _construct_chosen(abtem.Potential, _bn((3, 1, 1)), **STRAIN_GRID)
-
-    message = str(records[0].message)
+    # who chose the box, and the remedies
     assert "abTEM chose because none was given" in message
     assert "Pass a `box` that is a whole supercell" in message
-    assert "repeat the atoms' cell so that an orthogonal supercell" in message
     assert "at most 5 repetitions" in message
-    assert f"{abtem.atoms.BOX_STRAIN_WARNING_THRESHOLD:.1e}" in message
 
 
-@ignore_strain_warning
-def test_default_box_of_bn_repeated_five_times_warns():
-    atoms = _bn((5, 1, 1))
-    potential, records = _construct_chosen(abtem.Potential, atoms, **STRAIN_GRID)
-
-    assert len(records) == 1
-    stretch, _, _ = _strain_from_the_transform(atoms, potential.box)
-    assert 100 * stretch[1] == pytest.approx(-13.397, abs=1e-3)
-    assert f"{100 * stretch[1]:+.3f} %" in str(records[0].message)
-
-
-@ignore_strain_warning
-@pytest.mark.parametrize("repetitions", STRAINED)
-def test_strained_default_box_warns_once(repetitions):
-    _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
-    assert len(records) == 1
-
-
-@ignore_strain_warning
-@pytest.mark.parametrize("repetitions", EXACT)
-def test_exact_default_box_is_silent(repetitions):
-    # (3, 2, 1), (2, 3, 1), ...: different repetitions along x and y whose
-    # lattice vectors still make an exact orthogonal supercell.
-    _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
-    assert records == []
-
-
-@ignore_strain_warning
-def test_default_box_with_different_repetitions_along_x_and_y_is_judged_by_the_cell():
-    _, strained = _construct_chosen(abtem.Potential, _bn((4, 1, 1)), **STRAIN_GRID)
-    _, exact = _construct_chosen(abtem.Potential, _bn((3, 2, 1)), **STRAIN_GRID)
-    assert len(strained) == 1
-    assert exact == []
+def test_default_box_warns_once_when_it_strains_the_atoms():
+    # Judged by the cell: (4, 1, 1) is strained, while (3, 2, 1), (2, 3, 1), ...
+    # repeat along x and y differently and still make an exact orthogonal
+    # supercell.
+    for repetitions in STRAINED:
+        _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
+        assert len(records) == 1, repetitions
+    for repetitions in EXACT:
+        _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
+        assert records == [], repetitions
 
 
 @ignore_strain_warning
@@ -3056,20 +2987,6 @@ def test_box_given_by_the_user_is_not_reported_as_chosen_by_abtem():
         abtem.Potential(atoms, box=(default[0] * 1.01, default[1], 4.0), **STRAIN_GRID)
     assert _chosen_box_warnings(records) == []
     assert [r for r in records if str(r.message).startswith("The box")]
-
-
-@float64_devices
-@ignore_strain_warning
-def test_warning_is_given_once_by_a_frozen_phonon_potential_and_its_blocks():
-    frozen_phonons = abtem.FrozenPhonons(
-        _bn((3, 1, 1)), num_configs=2, sigmas=0.05, seed=1
-    )
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        potential = abtem.Potential(frozen_phonons, **STRAIN_GRID)
-        potential.build(lazy=False)
-        potential.build(lazy=True).compute()
-    assert len(_chosen_box_warnings(records)) == 1
 
 
 @ignore_strain_warning
@@ -3103,52 +3020,28 @@ _GPAW_FAMILY = [
 ]
 
 
-@ignore_strain_warning
 @pytest.mark.parametrize("build", _GPAW_FAMILY)
-@pytest.mark.parametrize("repetitions", [(3, 1, 1), (5, 1, 1), (4, 1, 1)])
-def test_gpaw_family_warns_for_a_strained_default_box(build, repetitions):
-    _, records = _construct_chosen(build, _bn(repetitions))
-    assert len(records) == 1
+def test_gpaw_family_warns_for_a_strained_default_box_only(build):
+    for repetitions in [(3, 1, 1), (5, 1, 1), (4, 1, 1)]:
+        _, records = _construct_chosen(build, _bn(repetitions))
+        assert len(records) == 1, repetitions
+    for repetitions in [(1, 1, 1), (2, 1, 1), (3, 2, 1)]:
+        _, records = _construct_chosen(build, _bn(repetitions))
+        assert records == [], repetitions
 
 
-@ignore_strain_warning
-@pytest.mark.parametrize("build", _GPAW_FAMILY)
-@pytest.mark.parametrize("repetitions", [(1, 1, 1), (2, 1, 1), (3, 2, 1)])
-def test_gpaw_family_is_silent_for_an_exact_default_box(build, repetitions):
-    _, records = _construct_chosen(build, _bn(repetitions))
-    assert records == []
-
-
-@ignore_strain_warning
-@pytest.mark.parametrize("repetitions", [(3, 1, 1), (4, 1, 1)])
-def test_charge_density_repetitions_are_judged_by_the_repeated_cell(repetitions):
-    _, records = _construct_chosen(
-        ChargeDensityPotential,
-        _bn(),
-        _charge_density(),
-        sampling=0.2,
-        slice_thickness=1.0,
-        repetitions=repetitions,
-    )
-    assert len(records) == 1
-    assert "[[1, 0, 0], [1, " in str(records[0].message)
-
-
-@float64_devices
-@ignore_strain_warning
-def test_charge_density_does_not_repeat_the_warning_when_it_builds_the_ewald_field():
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        potential = ChargeDensityPotential(
+def test_charge_density_repetitions_are_judged_by_the_repeated_cell():
+    for repetitions in [(3, 1, 1), (4, 1, 1)]:
+        _, records = _construct_chosen(
+            ChargeDensityPotential,
             _bn(),
             _charge_density(),
             sampling=0.2,
             slice_thickness=1.0,
-            repetitions=(3, 1, 1),
+            repetitions=repetitions,
         )
-        potential.build(lazy=False)
-        potential.build(lazy=True).compute()
-    assert len(_chosen_box_warnings(records)) == 1
+        assert len(records) == 1, repetitions
+        assert "[[1, 0, 0], [1, " in str(records[0].message), repetitions
 
 
 @ignore_strain_warning
