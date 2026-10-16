@@ -418,6 +418,7 @@ class TestScatteringFactorIntegratorIsAPlainObject:
             cloudpickle.loads(cloudpickle.dumps(self._potential())), abtem.Potential
         )
 
+    @pytest.mark.slow  # ~10 s of process-pool start-up
     def test_builds_under_the_processes_scheduler(self):
         """The processes scheduler round-trips the graph through pickle."""
         import dask
