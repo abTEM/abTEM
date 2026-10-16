@@ -578,28 +578,33 @@ class TestCrystalPotentialChunking:
     @pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
     @pytest.mark.parametrize("num_configs", [1, 3, 12])
     @pytest.mark.parametrize("repetitions", [(2, 3, 2), (3, 1, 3)])
-    @pytest.mark.parametrize("chunk_size", [1, 3, 5, 100])
-    @pytest.mark.parametrize("slice_range", [(0, None), (3, 7)])
     @devices
     def test_frozen_phonon_chunks_equal_generate_slices(
-        self, num_configs, repetitions, chunk_size, slice_range, device
+        self, num_configs, repetitions, device
     ):
         """The chunks hold the slices of generate_slices: the member's reseeded
         pool, the balanced draws and the lateral mosaic."""
+        # One seeded crystal serves every case: each generator call on it draws
+        # the same member, as when each case built its own crystal.
         crystal = _frozen_phonon_crystal(
             num_configs, repetitions, device=device, seeds=(5,)
         )
-        expected = np.stack(
-            [asnumpy(s.array[0]) for s in crystal.generate_slices(*slice_range)]
-        )
-        chunks = list(
-            crystal.generate_chunked_slices(*slice_range, chunk_size=chunk_size)
-        )
+        for slice_range in [(0, None), (3, 7)]:
+            expected = np.stack(
+                [asnumpy(s.array[0]) for s in crystal.generate_slices(*slice_range)]
+            )
+            for chunk_size in [1, 3, 5, 100]:
+                case = f"slice_range={slice_range}, chunk_size={chunk_size}"
+                chunks = list(
+                    crystal.generate_chunked_slices(*slice_range, chunk_size=chunk_size)
+                )
 
-        assert all(len(chunk) <= chunk_size for chunk in chunks)
-        np.testing.assert_array_equal(
-            np.concatenate([asnumpy(chunk.array) for chunk in chunks]), expected
-        )
+                assert all(len(chunk) <= chunk_size for chunk in chunks), case
+                np.testing.assert_array_equal(
+                    np.concatenate([asnumpy(chunk.array) for chunk in chunks]),
+                    expected,
+                    err_msg=case,
+                )
 
     @pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
     def test_frozen_phonon_chunks_come_from_one_generate_slices_call(
