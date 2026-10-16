@@ -94,13 +94,13 @@ def test_default_directions_displace_all_three_axes():
             assert np.any(displacement[:, axis] != 0) == (axis in displaced)
 
 
-@pytest.mark.parametrize("directions", ["xq", "q", "x y"])
-def test_invalid_direction_is_named_at_construction(directions):
+def test_invalid_direction_is_named_at_construction():
     atoms = ase.build.bulk("Au", cubic=True)
-    bad = next(d for d in directions if d not in "xyz")
 
-    with pytest.raises(RuntimeError, match=f"not '{bad}'"):
-        FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions=directions)
+    for directions in ("xq", "q", "x y"):
+        bad = next(d for d in directions if d not in "xyz")
+        with pytest.raises(RuntimeError, match=f"not '{bad}'"):
+            FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions=directions)
 
 
 def test_lazy_partition_args_embed_atoms_once():
