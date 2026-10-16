@@ -1146,6 +1146,10 @@ def test_double_channel_shares_the_transmissions_of_shared_slices(monkeypatch):
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 @pytest.mark.slow
+# A single Si unit cell is far smaller than the inelastic delocalisation, so
+# the cross-section here is not converged. That is fine for a smoke test of
+# the GPAW pipeline, but it trips the convergence warning.
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 def test_subshell_transitions_real_gpaw_pipeline():
     """End-to-end regression test using GPAW's real atomic all-electron
     solvers (``gpaw.atom.all_electron.AllElectron`` and
@@ -1189,6 +1193,9 @@ def test_subshell_transitions_real_gpaw_pipeline():
 
 
 @pytest.mark.parametrize("l", [1, 2], ids=["p", "d"])
+# The 6 A cell is smaller than the inelastic delocalisation, which trips the
+# convergence warning; the filling factor is a ratio and does not depend on it.
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy(l):
     """Regression test for a (2*l+1) orbital-degeneracy double-count.
 
@@ -1499,6 +1506,8 @@ def test_local_potential_device_cache_keys_on_the_arrays_device():
     assert tp._local_potential_device_cache[0] == "cpu"
 
 
+# The 6 A cell is what makes the grid coarse; it is small for the delocalisation.
+@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
 @pytest.mark.parametrize("gpts", [16, 17])
 def test_transition_potential_builds_on_a_coarse_grid(gpts):
     """The radial grid of the overlap integral must reach the largest k of the

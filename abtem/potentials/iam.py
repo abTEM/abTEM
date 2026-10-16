@@ -2819,6 +2819,65 @@ class CrystalPotential(_PotentialBuilder):
 
         return self._sliced_atoms
 
+    def get_realised_atoms(self, seed: Optional[int] = None) -> Atoms:
+        """
+        Reconstruct one explicit thermal realisation of the full crystal: the
+        displaced atoms of the crystal `generate_slices` builds for the member
+        with seed ``seed`` -- the pool configuration drawn for every lateral
+        tile of every z-repetition, at the offset of that tile.
+
+        With ``seed`` equal to the first of `seeds` (the default), these are the
+        atoms `get_sliced_atoms` groups into slices. The method exists for the
+        case `get_sliced_atoms` cannot cover: a ``CrystalPotential`` without
+        fixed `seeds`, or another member of the ensemble. Passing the same
+        ``seed`` as ``seeds=(seed,)`` to the ``CrystalPotential`` actually used
+        for the multislice run makes the two agree, so that, for example, an
+        ionisation/EDX scan can place its transition potentials at the
+        thermally displaced positions of that run -- pass the result as
+        ``sites=`` to :meth:`abtem.Probe.ionization_scan`.
+
+        Parameters
+        ----------
+        seed : int, optional
+            The member seed to replay. Defaults to ``int(self.seeds[0])``; for a
+            ``CrystalPotential`` without fixed `seeds` it must be given, and the
+            same value passed as ``seeds`` to the ``CrystalPotential`` used for
+            the actual run.
+
+        Returns
+        -------
+        atoms : ase.Atoms
+            The full crystal (all repetitions). A unit without frozen phonons is
+            tiled undisplaced.
+        """
+        if seed is None:
+            if self.seeds is None:
+                raise ValueError(
+                    "This CrystalPotential has no fixed 'seeds', so its "
+                    "mosaic draw is not reproducible after the fact -- pass "
+                    "'seed' explicitly, and pass the same value as 'seeds' "
+                    "to the CrystalPotential actually used for the "
+                    "multislice run (before it consumes it), so the two "
+                    "agree on which configuration landed where."
+                )
+            seed = int(self.seeds[0])
+
+        if not hasattr(self._potential_unit, "get_transformed_atoms"):
+            raise RuntimeError(
+                "Cannot derive atoms from a CrystalPotential whose "
+                f"potential_unit ({type(self._potential_unit).__name__}) does "
+                "not expose 'get_transformed_atoms' (e.g. a precomputed "
+                "PotentialArray)."
+            )
+
+        if self._has_displaced_atoms:
+            return self._displaced_atoms(member_seed=int(seed))
+
+        tiled = self._potential_unit.get_transformed_atoms() * self._repetitions
+        tiled.set_cell(np.diag(self.box))
+        tiled.pbc = True
+        return tiled
+
     @property
     def _has_displaced_atoms(self) -> bool:
         """Whether the unit is a pool of displaced configurations of atoms it
@@ -2831,11 +2890,17 @@ class CrystalPotential(_PotentialBuilder):
             and not isinstance(frozen_phonons, DummyFrozenPhonons)
         )
 
-    def _displaced_atoms(self) -> Atoms:
+    def _displaced_atoms(self, member_seed: Optional[int] = None) -> Atoms:
         """The displaced atoms of the crystal `generate_slices` builds: for
         every repeated unit, the configuration of the pool that `_draw_mosaic`
-        draws for it, translated to the offset of the unit."""
-        member_seed = None if self.seeds is None else int(self.seeds[0])
+        draws for it, translated to the offset of the unit.
+
+        By default the crystal of the first member of `seeds` (or, without
+        seeds, of the single default builder); with `member_seed`, that of a
+        crystal built with ``seeds=(member_seed,)`` (see `get_realised_atoms`).
+        """
+        if member_seed is None and self.seeds is not None:
+            member_seed = int(self.seeds[0])
         pool_unit = self._pool_unit_for_member(member_seed)
         # The configurations of the pool, in the order its build stacks them:
         # transformed to the unit's box, displaced, and wrapped into it (see
@@ -2843,7 +2908,7 @@ class CrystalPotential(_PotentialBuilder):
         configurations = list(
             np.asarray(pool_unit.to_atoms_ensemble().trajectory, dtype=object).ravel()
         )
-        drawn_tiles = self._draw_mosaic(len(configurations))
+        drawn_tiles = self._draw_mosaic(len(configurations), member_seed)
         if drawn_tiles is None:
             drawn_tiles = np.zeros(
                 (self.repetitions[2],) + tuple(self.repetitions[:2]), dtype=int
@@ -3180,7 +3245,9 @@ class CrystalPotential(_PotentialBuilder):
         # and CuPy kernels from running concurrently.
         return potentials.ensure_computed(scheduler="synchronous", progress_bar=False)
 
-    def _draw_mosaic(self, n_configs: int) -> Optional[np.ndarray]:
+    def _draw_mosaic(
+        self, n_configs: int, member_seed: Optional[int] = None
+    ) -> Optional[np.ndarray]:
         """The pool configuration of every repeated unit of the crystal, drawn
         from a pool of `n_configs` configurations: an index into the pool for
         every lateral tile of every z-repetition, with axes z-repetition,
@@ -3192,12 +3259,16 @@ class CrystalPotential(_PotentialBuilder):
         every call draws the same mosaic. `generate_slices` assembles the slices
         from it and `get_sliced_atoms` places the displaced atoms on it; both
         must take it from here, or the core-loss sites stop following the
-        configurations the elastic slices are built from.
+        configurations the elastic slices are built from. With `member_seed`,
+        the draws come from it instead: the mosaic of a crystal built with
+        ``seeds=(member_seed,)`` (see `get_realised_atoms`).
         """
         if n_configs <= 1:
             return None
 
-        if self.seeds is None:
+        if member_seed is not None:
+            rng = np.random.default_rng(int(member_seed))
+        elif self.seeds is None:
             rng = np.random.default_rng(np.random.SeedSequence(self._root_seed))
         else:
             rng = np.random.default_rng(int(self.seeds[0]))

@@ -53,6 +53,9 @@ extra = [
 gpaw = [
     "hankel",
     "sympy",
+    # X-ray emission data for EDX. Core-loss already requires GPAW for the
+    # atomic wave functions, so EDX users always have this extra anyway.
+    "xraydb",
 ]
 # The experimental Metal (MPS) backend on Apple silicon. Restricted to macOS on
 # arm64, the only platform with a Metal device: elsewhere the torch wheel pulls
@@ -96,6 +99,9 @@ test = [
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.8.0",
     "sympy",
+    # Also in the `gpaw` extra. Listed here, like sympy, so CI exercises the
+    # core-loss and EDX tests rather than skipping them.
+    "xraydb",
     "tox>=4.34.1",
     "xarray",
 ]

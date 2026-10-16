@@ -5644,6 +5644,192 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         itemset(array, 0, measurements)
         return array
 
+    def _eager_ionization_scan(
+        self,
+        scan,
+        detectors,
+        transition_potentials,
+        sites,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import prism_effective_ionization_scan
+
+        def detect(s_matrix):
+            return prism_effective_ionization_scan(
+                s_matrix=s_matrix,
+                transition_potentials=transition_potentials,
+                scan=scan,
+                detectors=detectors,
+                sites=sites,
+                inelastic_crop=inelastic_crop,
+            )
+
+        return self._detect_ensemble(
+            self.build(lazy=True).dummy_probes(scan), detectors, detect, squeeze
+        )
+
+    @staticmethod
+    def _lazy_ionization_scan(
+        s_matrix, scan, detectors, transition_potentials, sites,
+        inelastic_crop=None,
+    ):
+        s_matrix = s_matrix.item()
+        measurements = s_matrix._eager_ionization_scan(
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            inelastic_crop=inelastic_crop,
+            squeeze=False,
+        )
+
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
+        itemset(array, 0, measurements)
+        return array
+
+    def ionization_scan(
+        self,
+        transition_potentials,
+        scan=None,
+        detectors=None,
+        sites=None,
+        inelastic_crop=None,
+        lazy=None,
+    ):
+        """PRISM ionisation scan via the effective local ionisation potential.
+
+        The S-matrix counterpart of :meth:`abtem.Probe.ionization_scan`: it
+        forms no scattered waves, and is exact for a measurement that collects
+        all scattering angles, which is what X-ray emission requires. Pass the
+        result to :meth:`abtem.XrayDetector.to_counts` to convert it into detected
+        counts.
+
+        For an angle-resolved (EELS) measurement use
+        :meth:`transition_potential_scan` instead.
+
+        At ``interpolation=(1, 1)`` the result matches
+        :meth:`abtem.Probe.ionization_scan` to float32 noise.
+
+        There is no ``double_channel`` option, and that is not an omission:
+        with no angular restriction the elastic propagation of the
+        ejected-state wave is unitary, so double channelling cannot change the
+        total count.
+
+        See :func:`abtem.inelastic.core_loss.prism_effective_ionization_scan`
+        for the algorithm.
+
+        Parameters
+        ----------
+        transition_potentials : BaseTransitionPotential
+            Transition potential of the ionised subshell (a single instance).
+            Give ``epsilon`` as an :class:`~abtem.EnergyIntegral` to integrate
+            over the edge, which X-ray emission requires.
+        scan : BaseScan or tuple, optional
+            Scan positions. Defaults to a ``GridScan`` at Nyquist sampling.
+        detectors : BaseDetector or list of BaseDetector, optional
+            Accumulators to fill. Defaults to a single
+            :class:`~abtem.IonizationDetector`, which reports the bare
+            ionisation probability; pass an :class:`~abtem.XrayDetector` to get
+            photon counts directly.
+        sites : SliceIndexedAtoms or Atoms, optional
+            The ionised atoms. Taken from the potential if not given.
+        inelastic_crop : float or tuple of float, optional
+            Real-space side length [Angstrom] of the window around each site,
+            as on :meth:`transition_potential_scan`. Chosen automatically from
+            the effective ionisation potential if not given.
+        lazy : bool, optional
+            If True, build a Dask graph; otherwise compute eagerly. Defaults to
+            the user configuration value.
+
+        Returns
+        -------
+        measurement : BaseMeasurements or list of BaseMeasurements
+            Ionisation probability per incident electron, or one measurement
+            per detector.
+        """
+        from abtem.detectors import IonizationDetector
+
+        if detectors is None:
+            detectors = [IonizationDetector()]
+
+        if scan is None:
+            scan = GridScan(
+                start=(0, 0),
+                end=self.extent,
+                sampling=self.dummy_probes().aperture.nyquist_sampling,
+            )
+
+        detectors = validate_detectors(detectors)
+        scan = validate_scan(scan, self)
+        lazy = validate_lazy(lazy)
+
+        if not lazy:
+            measurements = self._eager_ionization_scan(
+                scan=scan,
+                detectors=detectors,
+                transition_potentials=transition_potentials,
+                sites=sites,
+                inelastic_crop=inelastic_crop,
+            )
+            return _wrap_measurements(measurements)
+
+        blocks = self.ensemble_blocks(1)
+
+        # Each block carries an exit-plane axis whenever the potential has more
+        # than one, between the ensemble and the scan axes; see
+        # transition_potential_scan.
+        num_exit_planes = 0
+        if self.potential is not None and len(self.potential.exit_planes) > 1:
+            num_exit_planes = len(self.potential.exit_planes)
+
+        chunks = ()
+        drop_axis = ()
+        if not self.ensemble_shape:
+            blocks = blocks[None]
+            drop_axis = (0,)
+            offset = 0
+        else:
+            chunks += blocks.chunks
+            offset = len(blocks.shape)
+
+        new_axis = tuple_range(
+            offset=offset,
+            length=bool(num_exit_planes) + len(scan.shape),
+        )
+        if num_exit_planes:
+            chunks += (num_exit_planes,)
+        chunks += scan.shape
+
+        arrays = blocks.map_blocks(
+            self._lazy_ionization_scan,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            inelastic_crop=inelastic_crop,
+            meta=np.array((), dtype=object),
+        )
+
+        waves = self.build(lazy=True).dummy_probes(scan=scan)
+
+        extra_axes_metadata = []
+        if self.potential is not None:
+            extra_axes_metadata = list(self.potential.ensemble_axes_metadata)
+            if num_exit_planes:
+                extra_axes_metadata = extra_axes_metadata + [
+                    self.potential._get_exit_planes_axes_metadata()
+                ]
+
+        measurements = _finalize_lazy_measurements(
+            arrays, waves, detectors, extra_axes_metadata
+        )
+
+        return _wrap_measurements(measurements)
+
     def transition_potential_scan(
         self,
         transition_potentials,

@@ -1178,6 +1178,10 @@ def transition_potential_multislice_and_detect(
 
             _update_plasmon_axes(waves, depth)
 
+            # An X-ray detector modelling self-absorption needs to know how deep
+            # the emission happened; scatter() carries the metadata through.
+            waves.metadata["depth"] = depth
+
             sites_slice = configuration_sites.get_atoms_in_slices(
                 scatter_index, atomic_number=transition_potential.Z
             )
