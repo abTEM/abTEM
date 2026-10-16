@@ -10,7 +10,6 @@ import abtem
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("device", ["cpu"])
 @pytest.mark.parametrize(
     "detector",
     [
@@ -20,8 +19,8 @@ import abtem
         abtem_st.waves_detector,
     ],
 )
-def test_detect(data, detector, lazy, device):
-    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+def test_detect(data, detector, lazy):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
     detector = data.draw(detector())
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
