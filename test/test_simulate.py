@@ -7,7 +7,7 @@ import pytest
 import strategies as abtem_st
 from ase import Atoms
 from hypothesis import given
-from utils import devices, lazy_params, to_host_array
+from utils import devices, to_host_array
 
 from abtem import AnnularDetector, PixelatedDetector, PlaneWave
 from abtem.core.chunks import chunk_ranges, validate_chunks
@@ -17,7 +17,6 @@ from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhon
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(
@@ -28,8 +27,10 @@ from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhon
     ],
 )
 def test_multislice_detect_with_frozen_phonons(
-    data, waves_builder, device, ensemble_mean, lazy
+    data, waves_builder, device, ensemble_mean
 ):
+    # laziness only changes when the graph is computed, not the shape
+    lazy = data.draw(st.booleans(), label="lazy")
     waves = data.draw(waves_builder(device=device, allow_distribution=False))
     frozen_phonons = data.draw(abtem_st.frozen_phonons(ensemble_mean=ensemble_mean))
 
@@ -93,9 +94,7 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 
 @pytest.mark.slow
 @given(data=st.data())
-@lazy_params
 @devices
-@pytest.mark.parametrize("frozen_phonons", [True, False])
 @pytest.mark.parametrize(
     "detector",
     [
@@ -116,7 +115,11 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
         abtem_st.probe,
     ],
 )
-def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons, lazy):
+def test_probe_scan(data, waves_builder, detector, scan, device):
+    # Laziness and frozen phonons are drawn: neither changes the detector or
+    # scan code path, only the leading ensemble axis and when it is computed.
+    lazy = data.draw(st.booleans(), label="lazy")
+    frozen_phonons = data.draw(st.booleans(), label="frozen_phonons")
     probe = data.draw(waves_builder(allow_distribution=False, device=device))
     detector = data.draw(detector())
     scan = data.draw(scan())
