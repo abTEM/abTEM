@@ -8068,16 +8068,27 @@ def momentum_resolved_spectrum(
         )
 
         # interpolate_line with width>0 returns the AVERAGE across the
-        # perpendicular direction.  Convert to a SUM to be consistent with the
-        # annular detector path (which sums all pixels inside the mask).
-        # n_perp is the number of perpendicular samples used internally.
+        # perpendicular direction.  Convert to a SUM over pixels to be
+        # consistent with the annular detector path (which sums all pixels
+        # inside the mask): each sample stands for the area between its
+        # neighbours along and across the slit, divided by the pixel area.
+        # interpolate_line places its n_perp perpendicular samples at
+        # linspace(-n_perp / 2, n_perp / 2, n_perp) * sampling_inv, i.e.
+        # n_perp / (n_perp - 1) * sampling_inv apart, and the N line samples
+        # (endpoint included) (q_max_inv - q_min_inv) / (N - 1) apart.
         n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+        perpendicular_step = sampling_inv * (
+            n_perp / (n_perp - 1) if n_perp > 1 else 1.0
+        )
+        line_step = (q_max_inv - q_min_inv) / (N - 1)
+        pixel_area = dp.sampling[0] * dp.sampling[1]
+        samples_to_sum = n_perp * line_step * perpendicular_step / pixel_area
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
         moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
         spectrum_array = moveaxis(
-            line_profiles.array * n_perp, energy_axis_idx, -1
+            line_profiles.array * samples_to_sum, energy_axis_idx, -1
         )
         q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 
