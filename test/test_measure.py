@@ -1662,6 +1662,44 @@ def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
         np.testing.assert_allclose(line.array, truth, err_msg=name)
 
 
+@pytest.mark.parametrize("fftshift", [True, False])
+@lazy_params
+@devices
+def test_diffraction_patterns_interpolate_line_at_frequencies(fftshift, lazy, device):
+    """Lines through grid nodes of a pattern, given in spatial frequencies,
+    sample its values at those frequencies, whether the pattern is stored
+    fftshifted or not. The values are defined on the centred frequency grid
+    (kx_i = i * dkx, i = -n/2 ... n/2 - 1). An unshifted pattern was indexed
+    as if it were shifted, half a grid away (a delta at k0 read as zero)."""
+    rng = np.random.default_rng(5)
+    gpts, sampling = (16, 20), (0.1, 0.08)
+    centred = rng.random(gpts)  # index i <-> frequency (i - n // 2) * sampling
+    array = centred if fftshift else np.fft.ifftshift(centred)
+    array = array.astype(get_dtype(complex=False))
+    if lazy:
+        array = da.from_array(array, chunks=(8, 10))
+    dp = DiffractionPatterns(
+        array, sampling=sampling, fftshift=fftshift, metadata={"energy": 100e3}
+    )
+    dp = dp.to_gpu() if device == "gpu" else dp
+
+    lo = [-(n // 2) * d for n, d in zip(gpts, sampling)]
+    hi = [(n // 2 - 1) * d for n, d in zip(gpts, sampling)]
+    j = -7  # a negative ky: stored last when unshifted
+    line = dp.interpolate_line(
+        start=(lo[0], j * sampling[1]), end=(hi[0], j * sampling[1]), gpts=gpts[0],
+        endpoint=True,
+    )
+    _assert_matches_reference(_line_values(line), centred[:, j + gpts[1] // 2])
+
+    i = 5
+    line = dp.interpolate_line(
+        start=(i * sampling[0], lo[1]), end=(i * sampling[0], hi[1]), gpts=gpts[1],
+        endpoint=True,
+    )
+    _assert_matches_reference(_line_values(line), centred[i + gpts[0] // 2])
+
+
 @given(
     data=st.data(), dose_per_area=abtem_st.sensible_floats(min_value=1e8, max_value=1e9)
 )

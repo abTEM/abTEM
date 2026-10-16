@@ -1282,6 +1282,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         The offset of the origin of the measurement coordinates [Å] or [1/Å].
         """
 
+    @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        """The coordinates of the array's first pixel [Å] or [1/Å]; positions are
+        converted to pixel indices relative to it (periodically)."""
+        return self.offset
+
     def interpolate_line(
         self,
         start: tuple[float, float] | Atom | None = None,
@@ -1366,7 +1372,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             scan.add_margin(margin)
 
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+            (scan.get_positions(lazy=False) - self._first_pixel_coordinates)
+            / self.sampling
         )
 
         if width:
@@ -4340,6 +4347,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def offset(self) -> tuple[float, float]:
         limits = self.limits
         return limits[0][0], limits[1][0]
+
+    @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        # Unshifted patterns store the zero frequency first; the negative
+        # frequencies follow the positive ones and are reached periodically.
+        if self.fftshift:
+            return self.offset
+        return 0.0, 0.0
 
     @property
     def extent(self) -> tuple[float, float]:
