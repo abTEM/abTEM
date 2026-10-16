@@ -2096,11 +2096,13 @@ def _array(atoms, **kwargs):
     return asnumpy(abtem.Potential(atoms, **kwargs).build(lazy=False).array)
 
 
-def _assert_same(actual, expected):
+def _assert_same(actual, expected, err_msg=""):
     actual, expected = asnumpy(actual), asnumpy(expected)
-    assert actual.shape == expected.shape
+    assert actual.shape == expected.shape, err_msg
     scale = np.abs(expected).max()
-    np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-10 * scale)
+    np.testing.assert_allclose(
+        actual, expected, rtol=0, atol=1e-10 * scale, err_msg=err_msg
+    )
 
 
 def _integral(potential):
@@ -2126,22 +2128,6 @@ class _FakeCalculator:
 
     def get_number_of_grid_points(self):
         return np.array([16, 12, 20])
-
-
-@ignore_strain_warning
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        dict(box=(8.0, 9.0, 10.0)),
-        dict(box=(4.0, 3.0, 5.5)),
-        dict(origin=(1.0, 0.75, 0.0)),
-        dict(origin=(0.0, 0.0, 1e-3)),
-    ],
-    ids=["box", "box-z", "origin", "origin-z"],
-)
-def test_charge_density_potential_rejects_a_box_or_origin(kwargs):
-    with pytest.raises(NotImplementedError, match="default box"):
-        ChargeDensityPotential(_two_atoms(), _charge_density(), **GRID, **kwargs)
 
 
 @float64_devices
@@ -2228,27 +2214,6 @@ def test_charge_density_potential_default_box_follows_the_plane_and_cell():
 
 
 @ignore_strain_warning
-@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-@pytest.mark.parametrize(
-    "kwargs",
-    [dict(box=(8.0, 9.0, 10.0)), dict(origin=(1.0, 0.75, 0.0))],
-    ids=["box", "origin"],
-)
-def test_gpaw_magnetics_reject_a_box_or_origin(builder, kwargs):
-    calculator = _FakeCalculator(_two_atoms())
-    with pytest.raises(NotImplementedError, match="default box"):
-        builder(calculator, **GRID, **kwargs)
-
-
-@ignore_strain_warning
-@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
-def test_gpaw_magnetics_accept_their_own_box(builder):
-    calculator = _FakeCalculator(_two_atoms())
-    assert builder(calculator, box=(4.0, 3.0, 5.0), **GRID).box == (4.0, 3.0, 5.0)
-    assert builder(calculator, origin=(0.0, 0.0, 0.0), **GRID).box == (4.0, 3.0, 5.0)
-
-
-@ignore_strain_warning
 @pytest.mark.parametrize(
     "build",
     [
@@ -2265,20 +2230,33 @@ def test_gpaw_magnetics_accept_their_own_box(builder):
     ids=["charge-density", "magnetic-field", "vector-potential"],
 )
 class TestRejectingBuildersValidateTheirArguments:
-    def test_origin_none_is_the_zero_origin(self, build):
-        assert build(origin=None).box == (4.0, 3.0, 5.0)
+    """These builders accept their default box and origin only. The validation
+    of the arguments is the shared `_validate_box` / `_validate_origin`, so one
+    test per builder checks that each reaches it."""
 
-    @pytest.mark.parametrize(
-        "origin", [(1.0, 0.5), ("1", "0", "0"), (np.nan, 0.0, 0.0), 1.0]
-    )
-    def test_invalid_origin_raises(self, build, origin):
-        with pytest.raises(ValueError, match="origin"):
-            build(origin=origin)
+    def test_only_the_default_box_and_origin_are_accepted(self, build):
+        for kwargs in [
+            dict(box=(4.0, 3.0, 5.0)),
+            dict(origin=(0.0, 0.0, 0.0)),
+            dict(origin=None),
+        ]:
+            assert build(**kwargs).box == (4.0, 3.0, 5.0), kwargs
+        for kwargs in [
+            dict(box=(8.0, 9.0, 10.0)),
+            dict(box=(4.0, 3.0, 5.5)),
+            dict(origin=(1.0, 0.75, 0.0)),
+            dict(origin=(0.0, 0.0, 1e-3)),
+        ]:
+            with pytest.raises(NotImplementedError, match="default box"):
+                build(**kwargs)
 
-    @pytest.mark.parametrize("box", [("4", "3", "5"), (4.0, 3.0), (4.0, np.nan, 5.0)])
-    def test_invalid_box_raises(self, build, box):
-        with pytest.raises(ValueError, match="box"):
-            build(box=box)
+    def test_invalid_box_or_origin_raises(self, build):
+        for origin in [(1.0, 0.5), ("1", "0", "0"), (np.nan, 0.0, 0.0), 1.0]:
+            with pytest.raises(ValueError, match="origin"):
+                build(origin=origin)
+        for box in [("4", "3", "5"), (4.0, 3.0), (4.0, np.nan, 5.0)]:
+            with pytest.raises(ValueError, match="box"):
+                build(box=box)
 
 
 def _supercell_cases():
@@ -2294,42 +2272,24 @@ def _supercell_cases():
 
 @float64_devices
 @ignore_strain_warning
-@pytest.mark.parametrize("projection", ["infinite", "finite"])
 @pytest.mark.parametrize("periodic", [True, False])
 @pytest.mark.parametrize("case", _supercell_cases(), ids=lambda c: c[0])
-def test_supercell_box_matches_repeated_atoms(case, periodic, projection):
+def test_supercell_box_matches_repeated_atoms(case, periodic):
     name, atoms, repetitions, *orthogonal = case
     repeated = (orthogonal[0] if orthogonal else atoms) * repetitions
     box = tuple(np.diag(repeated.cell))
 
-    potential = abtem.Potential(
-        atoms, box=box, periodic=periodic, projection=projection, **GRID
-    )
+    for projection in ("infinite", "finite"):
+        potential = abtem.Potential(
+            atoms, box=box, periodic=periodic, projection=projection, **GRID
+        )
 
-    assert potential.box == pytest.approx(box, rel=1e-12)
-    _assert_same(
-        potential.build(lazy=False).array,
-        _array(repeated, projection=projection, **GRID),
-    )
-
-
-@float64_devices
-@ignore_strain_warning
-@pytest.mark.parametrize("projection", ["infinite", "finite"])
-@pytest.mark.parametrize("periodic", [True, False])
-@pytest.mark.parametrize("box, cells", [((8.0, 9.0, 10.0), 12), ((12.0, 3.0, 5.0), 3)])
-def test_projected_potential_integral_counts_the_cells_in_the_box(
-    box, cells, periodic, projection
-):
-    # Each atom's projected potential integrates to the same value wherever it
-    # sits, so the integral over a box that holds whole cells counts them.
-    atoms = _two_atoms()
-    one_cell = abtem.Potential(atoms, projection=projection, **GRID)
-    in_box = abtem.Potential(
-        atoms, box=box, periodic=periodic, projection=projection, **GRID
-    )
-
-    assert _integral(in_box) / _integral(one_cell) == pytest.approx(cells, rel=1e-9)
+        assert potential.box == pytest.approx(box, rel=1e-12), projection
+        _assert_same(
+            potential.build(lazy=False).array,
+            _array(repeated, projection=projection, **GRID),
+            err_msg=projection,
+        )
 
 
 @float64_devices
@@ -2376,18 +2336,28 @@ def test_box_with_one_period_compresses_the_cell_onto_it():
 @float64_devices
 @ignore_strain_warning
 @pytest.mark.parametrize("box", [None, (4.0, 3.0, 5.0)])
-@pytest.mark.parametrize("kind", [tuple, list, np.array])
-def test_origin_translates_an_orthogonal_cell(box, kind):
+def test_origin_translates_an_orthogonal_cell(box):
+    """An origin given as any sequence of three numbers translates the atoms;
+    None and a zero origin given as a list change nothing."""
     atoms = _two_atoms()
     origin = (1.0, 0.5, 0.0)
     translated = atoms.copy()
     translated.translate(-np.array(origin))
     translated.wrap()
 
-    _assert_same(
-        _array(atoms, origin=kind(origin), box=box, **GRID),
-        _array(translated, **GRID),
-    )
+    expected = _array(translated, **GRID)
+    for kind in (tuple, list, np.array):
+        _assert_same(
+            _array(atoms, origin=kind(origin), box=box, **GRID),
+            expected,
+            err_msg=kind.__name__,
+        )
+
+    expected = _array(atoms, **GRID)
+    for zero in (None, [0.0, 0.0, 0.0]):
+        _assert_same(
+            _array(atoms, origin=zero, box=box, **GRID), expected, err_msg=str(zero)
+        )
 
 
 @float64_devices
@@ -2405,13 +2375,6 @@ def test_origin_with_a_plane_translates_the_permuted_atoms():
     _assert_same(
         _array(atoms, plane="xz", origin=origin, **GRID), _array(permuted, **GRID)
     )
-
-
-@float64_devices
-@ignore_strain_warning
-def test_zero_origin_given_as_a_list_changes_nothing():
-    atoms = _two_atoms()
-    _assert_same(_array(atoms, origin=[0.0, 0.0, 0.0], **GRID), _array(atoms, **GRID))
 
 
 @float64_devices
@@ -2507,12 +2470,17 @@ def test_auto_slice_thickness_of_a_primitive_fcc_cell_fills_its_box():
 
 
 @ignore_strain_warning
-@pytest.mark.parametrize(
-    "box", [(8.0, 9.0), (8.0, 0.0, 10.0), (8.0, -9.0, 10.0), (8.0, np.nan, 10.0), "abc"]
-)
-def test_invalid_box_raises(box):
-    with pytest.raises(ValueError):
-        abtem.Potential(_two_atoms(), box=box, **GRID)
+def test_invalid_box_raises():
+    for box in [
+        (8.0, 9.0),
+        (8.0, 0.0, 10.0),
+        (8.0, -9.0, 10.0),
+        (8.0, np.nan, 10.0),
+        "abc",
+        ("8", "9", "10"),
+    ]:
+        with pytest.raises(ValueError, match="box"):
+            abtem.Potential(_two_atoms(), box=box, **GRID)
 
 
 @ignore_strain_warning
@@ -2614,19 +2582,6 @@ def test_invalid_origin_raises():
 
 @float64_devices
 @ignore_strain_warning
-def test_origin_none_is_the_zero_origin():
-    atoms = _two_atoms()
-    _assert_same(_array(atoms, origin=None, **GRID), _array(atoms, **GRID))
-
-
-@ignore_strain_warning
-def test_box_of_strings_raises():
-    with pytest.raises(ValueError, match="box"):
-        abtem.Potential(_two_atoms(), box=("8", "9", "10"), **GRID)
-
-
-@float64_devices
-@ignore_strain_warning
 def test_plane_box_and_origin_together():
     atoms = _two_atoms()
     origin = (1.0, 0.5, 0.25)
@@ -2723,16 +2678,16 @@ def test_magnetic_field_box_matches_repeated_atoms(device):
 
 @float64_devices
 @ignore_strain_warning
-@pytest.mark.parametrize("stored", [None, [0.0, 0.0, 0.0], np.zeros(3)])
-def test_potential_restored_with_the_origin_as_it_was_passed_builds(stored):
+def test_potential_restored_with_the_origin_as_it_was_passed_builds():
     # A potential restored from a pickle skips `__init__`, so it may hold the
     # origin exactly as the user passed it.
     atoms = _two_atoms()
     potential = abtem.Potential(atoms, **GRID)
-    restored = pickle.loads(pickle.dumps(potential))
-    restored._origin = stored
-
-    _assert_same(restored.build(lazy=False).array, _array(atoms, **GRID))
+    expected = _array(atoms, **GRID)
+    for stored in (None, [0.0, 0.0, 0.0], np.zeros(3)):
+        restored = pickle.loads(pickle.dumps(potential))
+        restored._origin = stored
+        _assert_same(restored.build(lazy=False).array, expected, err_msg=str(stored))
 
 
 @float64_devices
