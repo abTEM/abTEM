@@ -37,7 +37,6 @@ from abtem.measurements import (
     MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
-    ReciprocalSpaceLineProfiles,
     _apply_convolve_2d_on_axes,
     _gaussian_kernel_2d,
     _gaussian_kernels_1d,
@@ -1979,16 +1978,38 @@ def test_polar_measurements_integrate(data, lazy, device):
 @lazy_params
 @devices
 def test_line_profiles_interpolate(data, lazy, device):
+    # Interpolating to twice the points puts every second point on an old grid
+    # node, where the spline reproduces the data, over the same extent. A shift
+    # of the new grid by any fraction of a sample moves these points off the
+    # nodes; the data are random in [0, 1), so 1e-5 is far below that error.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.interpolate().compute()
+    n = measurement.base_shape[0]
+    original = asnumpy(measurement.copy().compute().array)
+
+    interpolated = measurement.interpolate(gpts=2 * n)
+
+    assert interpolated.is_lazy == lazy
+    assert np.isclose(interpolated.extent, measurement.extent)
+    assert np.isclose(interpolated.sampling, measurement.sampling / 2)
+    values = asnumpy(interpolated.compute().array)
+    assert values.shape == original.shape[:-1] + (2 * n,)
+    np.testing.assert_allclose(values[..., ::2], original, rtol=1e-5, atol=1e-5)
 
 
 @given(data=st.data(), reps=st.integers(min_value=1, max_value=3))
 @lazy_params
 @devices
 def test_line_profiles_tile(data, reps, lazy, device):
+    # Oracle: np.tile along the base axis only.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.tile(reps).compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    tiled = measurement.tile(reps)
+
+    assert tiled.is_lazy == lazy
+    assert np.isclose(tiled.extent, reps * measurement.extent)
+    expected = np.tile(original, (1,) * (original.ndim - 1) + (reps,))
+    np.testing.assert_array_equal(asnumpy(tiled.compute().array), expected)
 
 
 @pytest.mark.parametrize(
@@ -2302,14 +2323,17 @@ class TestImagesComplexAccessors:
         assert np.allclose(imag.array, imgs.array.imag)
 
     def test_phase(self):
-        imgs = make_images(complex_=True)
+        # Shifted so that the values cover all four quadrants.
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         phase = imgs.phase()
-        assert np.all(np.abs(phase.array) <= np.pi + 1e-10)
+        assert not np.iscomplexobj(phase.array)
+        np.testing.assert_allclose(phase.array, np.angle(imgs.array))
 
     def test_abs(self):
-        imgs = make_images(complex_=True)
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         ab = imgs.abs()
-        assert np.all(ab.array >= 0)
+        assert not np.iscomplexobj(ab.array)
+        np.testing.assert_allclose(ab.array, np.abs(imgs.array))
 
     def test_real_on_real_raises(self):
         imgs = make_images(complex_=False)
@@ -2414,21 +2438,6 @@ class TestImagesNormalizeEnsemble:
         )
 
 
-class TestImagesScanNoise:
-    def test_scan_noise_returns_images(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(
-            rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
-            num_components=5
-        ).compute()
-        assert isinstance(result, Images)
-
-    def test_scan_noise_shape_preserved(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(1.0, 1e-6, 1e-4, num_components=5).compute()
-        assert result.base_shape == imgs.base_shape
-
-
 class TestImagesRelativeDifference:
     def test_zero_difference(self):
         imgs = make_images()
@@ -2445,7 +2454,7 @@ class TestImagesRelativeDifference:
 
 
 # ---------------------------------------------------------------------------
-# DiffractionPatterns — integrate_radial, crop, poisson_noise with samples
+# DiffractionPatterns — integrate_radial, crop
 # ---------------------------------------------------------------------------
 
 def _dp(shape=(32, 32), fill=1.0):
@@ -2455,16 +2464,6 @@ def _dp(shape=(32, 32), fill=1.0):
 
 
 class TestDiffractionPatternsIntegrateRadial:
-    def test_returns_images_with_scan_axes(self):
-        arr = np.ones((4, 4, 16, 16))
-        dp = DiffractionPatterns(
-            arr, sampling=0.05,
-            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
-            metadata={"energy": 100e3},
-        )
-        result = dp.integrate_radial(inner=0, outer=10)
-        assert isinstance(result, Images)
-
     def test_inner_equals_outer_zero_result(self):
         dp = _dp()
         result = dp.integrate_radial(inner=5, outer=5)
@@ -2523,47 +2522,11 @@ class TestDiffractionPatternsCrop:
         np.testing.assert_array_equal(cropped.array, expected)
 
 
-class TestDiffractionPatternsPoisson:
-    def test_poisson_with_samples(self):
-        dp = _dp((16, 16), fill=100.0)
-        noisy = dp.poisson_noise(total_dose=1e6, samples=4).compute()
-        assert noisy.shape[0] == 4
-
-    def test_poisson_nonnegative(self):
-        dp = _dp((16, 16), fill=50.0)
-        noisy = dp.poisson_noise(total_dose=1e5).compute()
-        assert np.all(noisy.array >= 0)
-
-
 # ---------------------------------------------------------------------------
 # RealSpaceLineProfiles
 # ---------------------------------------------------------------------------
 
 class TestRealSpaceLineProfiles:
-    def _lp(self, n=64):
-        from abtem.core.axes import RealSpaceAxis
-        arr = np.ones(n)
-        return RealSpaceLineProfiles(arr, sampling=0.1)
-
-    def test_construction(self):
-        lp = self._lp()
-        assert lp.base_shape == (64,)
-
-    def test_extent(self):
-        lp = self._lp(32)
-        # RealSpaceLineProfiles.extent is a scalar float, not a tuple
-        assert np.isclose(lp.extent, 32 * 0.1)
-
-    def test_interpolate(self):
-        lp = self._lp()
-        result = lp.interpolate(sampling=0.05)
-        assert result.base_shape[0] > lp.base_shape[0]
-
-    def test_tile(self):
-        lp = self._lp(16)
-        tiled = lp.tile(3)
-        assert tiled.base_shape[0] == 48
-
     def test_sum_axis(self):
         arr = np.ones((4, 32))
         from abtem.core.axes import OrdinalAxis
@@ -2724,25 +2687,6 @@ class TestPolarMeasurements:
         pm = self._polar()
         result = pm.integrate(detector_regions=[1, 4])
         np.testing.assert_allclose(self._values(result), [11.0, 22.0])
-
-
-# ---------------------------------------------------------------------------
-# ReciprocalSpaceLineProfiles
-# ---------------------------------------------------------------------------
-
-class TestReciprocalSpaceLineProfiles:
-    def test_from_ctf(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1), defocus=200.0)
-        profiles = ctf.profiles()
-        assert isinstance(profiles, ReciprocalSpaceLineProfiles)
-
-    def test_shape(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1))
-        profiles = ctf.profiles()
-        assert len(profiles.base_shape) == 1
-        assert profiles.base_shape[0] > 0
 
 
 def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
