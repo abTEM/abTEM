@@ -6,7 +6,7 @@ import types
 import warnings
 from fractions import Fraction
 
-import ase
+import ase  # noqa: F401 (the tests PR #352 adds use it)
 import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
@@ -17,7 +17,6 @@ import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
-    array_is_close,
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
@@ -2178,28 +2177,23 @@ def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("endpoint", [False, True])
-def test_interpolate_line_of_zero_length_gives_the_point_value_without_width(
-    endpoint, lazy
-):
+def test_interpolate_line_of_zero_length(lazy):
+    # Without a width, a line of zero length is the value at its point, with or
+    # without the endpoint; there is no direction to average a width across.
     array = np.random.default_rng(0).random((40, 40))
     images = Images(array, sampling=0.1)
     if lazy:
         images = images.ensure_lazy()
 
-    profile = images.interpolate_line(
-        start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
-    )
     expected = scipy.ndimage.map_coordinates(array, [[10.0], [10.0]], order=3)
-    assert profile.shape == (1,)
-    np.testing.assert_allclose(profile.compute().array, expected, rtol=1e-10)
-
-
-@pytest.mark.parametrize("lazy", [False, True])
-def test_interpolate_line_of_zero_length_cannot_be_averaged_over_a_width(lazy):
-    images = Images(np.random.default_rng(0).random((40, 40)), sampling=0.1)
-    if lazy:
-        images = images.ensure_lazy()
+    for endpoint in (False, True):
+        profile = images.interpolate_line(
+            start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
+        )
+        assert profile.shape == (1,), endpoint
+        np.testing.assert_allclose(
+            profile.compute().array, expected, rtol=1e-10, err_msg=str(endpoint)
+        )
 
     with pytest.raises(ValueError, match="zero length cannot be averaged"):
         images.interpolate_line(start=(1, 1), end=(1, 1), sampling=0.1, width=0.3)
@@ -2214,34 +2208,42 @@ def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
 
 @lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
+    # A periodic field with a few Fourier components on a square 4 x 4 Å cell
+    # sampled anisotropically. The default line runs along y at x = 0 over one
+    # period, so its profile is periodic too. Taking the line and then
+    # interpolating it (2-D and 1-D splines), or interpolating the image (FFT,
+    # exact for a band-limited field) and then taking the line, must both give
+    # the field along the line: the spline path to its own error of 3e-3 of the
+    # amplitude, the FFT path to float32 rounding (5e-7). A line displaced by
+    # 0.1 Å is wrong by about 0.1 of the amplitude.
+    length, gpts = 4.0, (40, 32)
 
-    if not lazy:
-        images.compute()
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x + y + 0.4) / length) + 0.5 * np.sin(
+            2 * np.pi * (x - 3 * y) / length
+        )
 
-    assert np.allclose(
-        images.interpolate_line().interpolate(0.01).array,
-        images.interpolate(0.01).interpolate_line().array,
-        rtol=0.01,
+    axes = [np.arange(n) * length / n for n in gpts]
+    images = Images(
+        field(*np.meshgrid(*axes, indexing="ij")),
+        sampling=tuple(length / n for n in gpts),
     )
+    if lazy:
+        images = images.lazy()
 
-
-@lazy_params
-def test_interpolate_periodic_spline_and_fft(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
-
-    if not lazy:
-        images.compute()
-
-    spline_interpolated = images.interpolate(
-        method="spline", sampling=0.05, boundary="periodic", order=5
-    )
-    fft_interpolated = images.interpolate(method="fft", sampling=0.05)
-    assert array_is_close(
-        spline_interpolated.array, fft_interpolated.array, rel_tol=0.01
-    )
+    expected = field(0.0, np.arange(400) * 0.01)
+    for name, profile, rel in (
+        ("line, then interpolate", images.interpolate_line().interpolate(0.01), 1e-2),
+        ("interpolate, then line", images.interpolate(0.01).interpolate_line(), 1e-5),
+    ):
+        assert profile.is_lazy == lazy, name
+        np.testing.assert_allclose(
+            asnumpy(profile.compute().array),
+            expected,
+            rtol=0,
+            atol=rel * np.abs(expected).max(),
+            err_msg=name,
+        )
 
 
 def _periodic_spline_interpolate(array, gpts, order, lazy, device):
