@@ -96,7 +96,11 @@ def test_matched_returns_an_explicit_detector_itself():
 def test_show_regions_and_detect_do_not_write_the_outer_angle(detector):
     waves = _plane_waves()
     detector.show(waves)
-    detector.get_detector_regions(waves)
+    # The single-region AnnularDetector has get_detector_region, not the plural.
+    if isinstance(detector, abtem.AnnularDetector):
+        detector.get_detector_region(waves)
+    else:
+        detector.get_detector_regions(waves)
     detector.detect(waves)
     assert detector.outer is None
 
