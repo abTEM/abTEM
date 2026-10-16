@@ -28,71 +28,45 @@ TEST_ENERGIES = [100e3, 200e3, 300e3]
 
 
 class TestPlaneWaveEnergyEnsemble:
-    def test_ensemble_shape(self):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        assert pw.ensemble_shape == (3,)
+    def test_build(self):
+        """A list or an array of energies gives an EnergyAxis, built eagerly or
+        lazily alike. (The members of a plane wave are all ones at any energy;
+        their energy dependence is tested through multislice below.)"""
+        eager = None
+        for energy in (ENERGIES, np.array(ENERGIES)):
+            pw = PlaneWave(energy=energy, gpts=32, sampling=0.1)
+            assert pw.ensemble_shape == (3,)
+            for lazy in (False, True):
+                waves = pw.build(lazy=lazy)
+                assert waves.shape == (3, 32, 32)
+                assert isinstance(waves.ensemble_axes_metadata[0], EnergyAxis)
+                assert waves.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+                waves = waves.compute()
+                if eager is None:
+                    eager = waves.array
+                np.testing.assert_array_equal(waves.array, eager)
 
-    def test_build_eager(self):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        waves = pw.build(lazy=False)
-        assert waves.shape == (3, 32, 32)
-        assert isinstance(waves.ensemble_axes_metadata[0], EnergyAxis)
-        assert waves.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+    def test_to_zarr_from_zarr(self):
+        waves = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1).build(lazy=False)
+        # a directory store and a zip store
+        for filename in ("waves.zarr", "waves.zarr.zip"):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, filename)
+                waves.to_zarr(path)
+                loaded = Waves.from_zarr(path).compute()
+            assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis), filename
+            assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES), filename
+            np.testing.assert_array_equal(loaded.array, waves.array, err_msg=filename)
+            assert loaded[1].wavelength == waves[1].wavelength, filename
 
-    def test_build_lazy(self):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        waves = pw.build(lazy=True)
-        assert waves.shape == (3, 32, 32)
-        assert isinstance(waves.ensemble_axes_metadata[0], EnergyAxis)
-        waves_computed = waves.compute()
-        assert waves_computed.shape == (3, 32, 32)
-
-    def test_scalar_energy_unchanged(self):
-        pw = PlaneWave(energy=100e3, gpts=32, sampling=0.1)
-        assert pw.accelerator.energy == 100e3
-        assert pw.ensemble_shape == ()
-        waves = pw.build(lazy=False)
-        assert waves.shape == (32, 32)
-        assert waves.energy == 100e3
-
-    def test_numpy_array_energy(self):
-        pw = PlaneWave(energy=np.array(ENERGIES), gpts=32, sampling=0.1)
-        assert pw.ensemble_shape == (3,)
-        waves = pw.build(lazy=False)
-        assert waves.shape == (3, 32, 32)
-
-    @pytest.mark.parametrize("filename", ["waves.zarr", "waves.zarr.zip"])
-    def test_to_zarr_from_zarr(self, filename):
-        pw = PlaneWave(energy=ENERGIES, gpts=32, sampling=0.1)
-        waves = pw.build(lazy=False)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, filename)
-            waves.to_zarr(path)
-            loaded = Waves.from_zarr(path)
-        assert loaded.shape == (3, 32, 32)
-        assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
-        assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
-
+    # The energies are split in the multislice transform, ahead of the
+    # algorithm, eagerly over the whole array and lazily per block; the lazy
+    # path does not depend on the algorithm, so RealSpaceMultislice runs eagerly.
     @pytest.mark.parametrize(
-        "algorithm", [None, RealSpaceMultislice(order=1)], ids=["default", "realspace"]
+        "algorithm, lazy",
+        [(None, False), (None, True), (RealSpaceMultislice(order=1), False)],
+        ids=["default-eager", "default-lazy", "realspace-eager"],
     )
-    def test_multislice_eager(self, algorithm):
-        """PlaneWave with list energy completes multislice without EnergyUndefinedError,
-        for both the default and RealSpaceMultislice algorithms."""
-        potential_unit = abtem.Potential(
-            _srtio3_atoms(), sampling=0.1, projection="finite"
-        )
-        potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
-        pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
-        pw.grid.match(potential)
-        kwargs = {} if algorithm is None else {"algorithm": algorithm}
-        result = pw.multislice(potential, **kwargs).compute()
-        assert result.array.shape[0] == 3
-
-    @pytest.mark.parametrize(
-        "algorithm", [None, RealSpaceMultislice(order=1)], ids=["default", "realspace"]
-    )
-    @lazy_params
     def test_multislice_members_match_single_energy(self, algorithm, lazy):
         """Oracle: each member of an energy ensemble is an independent
         simulation at that energy; the ensemble must reproduce each
@@ -124,59 +98,17 @@ class TestPlaneWaveEnergyEnsemble:
 
 
 class TestProbeEnergyEnsemble:
-    def test_ensemble_shape(self):
-        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        assert probe.ensemble_shape == (3,)
-
-    def test_build_eager(self):
-        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        waves = probe.build(lazy=False)
-        assert waves.shape == (3, 32, 32)
-        assert isinstance(waves.ensemble_axes_metadata[0], EnergyAxis)
-
-    def test_scalar_energy_unchanged(self):
-        probe = Probe(energy=100e3, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        assert probe.accelerator.energy == 100e3
-        assert probe.ensemble_shape == ()
-
-    def test_to_zarr_from_zarr(self):
-        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        waves = probe.build(lazy=False)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "probe_waves.zarr")
-            waves.to_zarr(path)
-            loaded = Waves.from_zarr(path)
-        assert loaded.shape == (3, 32, 32)
-        assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
-        assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
-
-    def test_multislice_eager(self):
-        """Probe.multislice(lazy=False) with energy ensemble produces per-energy exit waves."""
-        import ase.build
-        atoms = ase.build.mx2(vacuum=2)
-        atoms = abtem.orthogonalize_cell(atoms)
-        potential = abtem.Potential(atoms, sampling=0.1)
-        repeated = abtem.CrystalPotential(potential, (2, 1, 1))
-        probe = Probe(
-            sampling=0.1, extent=10, energy=[40e3, 60e3, 80e3], semiangle_cutoff=20
-        ).match_grid(repeated)
-        result = probe.multislice(repeated, lazy=False)
-        assert isinstance(result, Waves)
-        energy_axes = [
-            ax for ax in result.ensemble_axes_metadata if isinstance(ax, EnergyAxis)
-        ]
-        assert len(energy_axes) == 1
-        assert tuple(energy_axes[0].values) == (40e3, 60e3, 80e3)
-
     @lazy_params
     def test_multislice_members_match_single_energy(self, lazy):
         """Oracle: each energy member equals an independent single-energy
         probe simulation, for a scanned (off-centre, non-square) set of probe
         positions, so the aperture (in mrad, hence energy dependent in
         1/A), the propagator and the interaction constant must all use the
-        member's own energy."""
-        potential = abtem.Potential(
-            _srtio3_atoms(), sampling=0.1, projection="finite"
+        member's own energy. The potential is a CrystalPotential, which
+        generates its slices with its own code."""
+        potential = abtem.CrystalPotential(
+            abtem.Potential(_srtio3_atoms(), sampling=0.1, projection="finite"),
+            repetitions=(1, 1, 2),
         )
         energies = [60e3, 100e3, 200e3]
         positions = [(0.7, 1.3), (2.2, 0.4)]
@@ -209,21 +141,37 @@ class TestWavesBuilderEnergyProperty:
     EnergyEnsemble wrapper -- and detector.show() must accept a WavesBuilder
     directly (not just a built Waves object)."""
 
-    def test_probe_energy_is_plain_float(self):
-        probe = Probe(energy=100e3, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        assert probe.energy == 100e3
-        assert isinstance(probe.energy, float)
-
-    def test_plane_wave_energy_is_plain_float(self):
-        pw = PlaneWave(energy=100e3, gpts=32, sampling=0.1)
-        assert pw.energy == 100e3
-        assert isinstance(pw.energy, float)
-
-    def test_probe_energy_ensemble_is_distribution(self):
+    def test_energy_is_a_plain_float_or_a_distribution(self):
+        """A scalar energy stays a float with no ensemble axes; several energies
+        are a distribution with one EnergyAxis. (SMatrix.energy of several
+        energies is the first one.)"""
         from abtem.distributions import BaseDistribution
 
-        probe = Probe(energy=ENERGIES, gpts=32, sampling=0.1, semiangle_cutoff=30)
-        assert isinstance(probe.energy, BaseDistribution)
+        builders = {
+            PlaneWave: {},
+            Probe: dict(semiangle_cutoff=30),
+            SMatrix: dict(semiangle_cutoff=PRISM_SEMIANGLE),
+        }
+        for cls, kwargs in builders.items():
+            name = cls.__name__
+            scalar = cls(energy=100e3, gpts=32, sampling=0.1, **kwargs)
+            assert scalar.energy == 100e3, name
+            assert isinstance(scalar.energy, float), name
+            assert scalar.accelerator.energy == 100e3, name
+            assert scalar.ensemble_shape == (), name
+            assert scalar.ensemble_axes_metadata == [], name
+
+            ensemble = cls(energy=TEST_ENERGIES, gpts=32, sampling=0.1, **kwargs)
+            if cls is not SMatrix:
+                assert isinstance(ensemble.energy, BaseDistribution), name
+            assert ensemble.ensemble_shape == (3,), name
+            (axis,) = ensemble.ensemble_axes_metadata
+            assert isinstance(axis, EnergyAxis), name
+            assert axis.values == tuple(TEST_ENERGIES), name
+
+        waves = PlaneWave(energy=100e3, gpts=32, sampling=0.1).build(lazy=False)
+        assert waves.shape == (32, 32)
+        assert waves.energy == 100e3
 
     def test_annular_detector_show_unbuilt_probe(self):
         """AnnularDetector.show() must accept a Probe directly, without build()."""
@@ -245,19 +193,39 @@ class TestWavesBuilderEnergyProperty:
 
 
 class TestWavesEnergyEnsemble:
-    def test_list_energy(self):
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 200e3, 300e3], sampling=0.1)
-        assert w.shape == (3, 32, 32)
-        assert isinstance(w.ensemble_axes_metadata[0], EnergyAxis)
-        assert w.ensemble_axes_metadata[0].values == (80e3, 200e3, 300e3)
+    def test_energy_of_the_ensemble_and_its_members(self):
+        """A list of energies gives an EnergyAxis and no scalar energy. The full
+        ensemble's angular sampling uses the highest energy (the finest grid
+        in mrad, conservative for every member); an indexed member, or an
+        ensemble of one energy given only by its axis, uses its own energy."""
+        from abtem.core.energy import energy2wavelength
 
-    def test_scalar_energy(self):
-        arr = np.ones((32, 32), dtype=complex)
-        w = Waves(arr, energy=100e3, sampling=0.1)
-        assert w.shape == (32, 32)
-        assert w.energy == 100e3
-        assert w.ensemble_axes_metadata == []
+        scalar = Waves(np.ones((32, 32), dtype=complex), energy=100e3, sampling=0.1)
+        assert scalar.energy == 100e3
+        assert scalar.ensemble_axes_metadata == []
+
+        energies = [80e3, 100e3, 120e3]
+        w = Waves(np.ones((3, 32, 32), dtype=complex), energy=energies, sampling=0.1)
+        assert isinstance(w.ensemble_axes_metadata[0], EnergyAxis)
+        assert w.ensemble_axes_metadata[0].values == tuple(energies)
+        assert w.metadata.get("energy") is None
+
+        def angular_sampling(energy):
+            wavelength = energy2wavelength(energy)
+            return tuple(d * wavelength * 1e3 for d in w.reciprocal_space_sampling)
+
+        assert np.allclose(w.angular_sampling, angular_sampling(max(energies)))
+        for i, energy in enumerate(energies):
+            assert w[i].metadata["energy"] == energy
+            assert w[i].wavelength == energy2wavelength(energy)
+            assert np.allclose(w[i].angular_sampling, angular_sampling(energy))
+
+        single = Waves(
+            np.ones((1, 32, 32), dtype=complex),
+            sampling=0.1,
+            ensemble_axes_metadata=[EnergyAxis(values=(100e3,))],
+        )
+        assert single.wavelength == energy2wavelength(100e3)
 
     def test_stack_along_an_energy_axis_leaves_no_scalar_energy(self):
         """The axis carries each member's energy. A scalar energy taken from the
@@ -299,68 +267,6 @@ class TestWavesEnergyEnsemble:
         assert detected.metadata.get("energy") is None
         assert [type(axis) for axis in detected.ensemble_axes_metadata] == [EnergyAxis]
 
-    def test_per_chunk_valid_energy(self):
-        """Single-element EnergyAxis in ensemble metadata resolves via _valid_energy."""
-        arr = np.ones((1, 32, 32), dtype=complex)
-        energy_axis = EnergyAxis(values=(100e3,))
-        w = Waves(arr, sampling=0.1, ensemble_axes_metadata=[energy_axis])
-        assert w._valid_energy == 100e3
-
-    def test_to_zarr_from_zarr(self):
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 200e3, 300e3], sampling=0.1)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "waves.zarr")
-            w.to_zarr(path)
-            loaded = Waves.from_zarr(path)
-        assert loaded.shape == (3, 32, 32)
-        assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
-        assert loaded.ensemble_axes_metadata[0].values == (80e3, 200e3, 300e3)
-
-    def test_angular_sampling_uses_max_energy(self):
-        """Waves.angular_sampling uses max energy for energy-ensemble waves."""
-        from abtem.core.energy import energy2wavelength
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
-        sampling = w.angular_sampling
-        assert len(sampling) == 2 and all(a > 0 for a in sampling)
-        wl = energy2wavelength(120e3)  # max energy
-        expected = (
-            w.reciprocal_space_sampling[0] * wl * 1e3,
-            w.reciprocal_space_sampling[1] * wl * 1e3,
-        )
-        assert np.allclose(sampling, expected)
-
-    def test_indexing_propagates_energy_to_metadata(self):
-        """Indexing a member from an energy ensemble populates metadata['energy']."""
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
-        assert w.metadata.get("energy") is None  # full ensemble: no scalar energy
-        assert w[0].metadata["energy"] == 80e3
-        assert w[1].metadata["energy"] == 100e3
-        assert w[2].metadata["energy"] == 120e3
-
-    def test_indexed_member_valid_energy(self):
-        """_valid_energy on an indexed member returns the correct per-member energy."""
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
-        assert w[0]._valid_energy == 80e3
-        assert w[1]._valid_energy == 100e3
-        assert w[2]._valid_energy == 120e3
-
-    def test_indexed_member_angular_sampling(self):
-        """angular_sampling on an indexed member uses the exact per-member energy."""
-        from abtem.core.energy import energy2wavelength
-        arr = np.ones((3, 32, 32), dtype=complex)
-        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
-        for i, energy in enumerate([80e3, 100e3, 120e3]):
-            wl = energy2wavelength(energy)
-            expected = (
-                w.reciprocal_space_sampling[0] * wl * 1e3,
-                w.reciprocal_space_sampling[1] * wl * 1e3,
-            )
-            assert np.allclose(w[i].angular_sampling, expected)
-
 
 class TestWavesEnergyEnsembleDiffractionPatterns:
     """Regression tests for three failures reported by a user working with an
@@ -376,63 +282,32 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         arr = np.ones((3, 32, 32), dtype=complex)
         return Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
 
-    def test_diffraction_patterns_default_angle(self):
-        """diffraction_patterns() without max_angle works for energy ensemble."""
-        dp = self._exit_waves().diffraction_patterns()
-        assert dp.array.shape[0] == 3
-        assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis)
+    def test_energy_of_the_patterns_and_their_members(self):
+        """diffraction_patterns(), with and without max_angle, keeps the
+        EnergyAxis. The full ensemble's geometry is that of its highest energy
+        (block_direct and the other methods are compared with single-energy
+        runs in test_multi_energy_ensembles.py); an indexed member carries its
+        own energy and angular sampling."""
+        energies = [80e3, 100e3, 120e3]
 
-    def test_diffraction_patterns_max_angle(self):
-        """diffraction_patterns(max_angle=30) no longer raises EnergyUndefinedError."""
-        dp = self._exit_waves().diffraction_patterns(max_angle=30)
-        assert dp.array.shape[0] == 3
-        # angular_sampling should be computable without error
-        assert all(a > 0 for a in dp.angular_sampling)
+        def single(energy, **kwargs):
+            waves = Waves(np.ones((32, 32), dtype=complex), energy=energy, sampling=0.1)
+            return waves.diffraction_patterns(**kwargs)
 
-    def test_dp_get_energy_fallback(self):
-        """Full ensemble: _get_energy() falls back to the max EnergyAxis value,
-        mirroring Waves.angular_sampling's conservative (shortest-wavelength)
-        convention for un-indexed multi-energy ensembles."""
-        dp = self._exit_waves().diffraction_patterns()
-        assert dp.metadata.get("energy") is None   # no scalar energy on full ensemble
-        assert dp._get_energy() == 120e3           # max of EnergyAxis values
+        for kwargs in ({}, dict(max_angle=30)):
+            dp = self._exit_waves().diffraction_patterns(**kwargs)
+            assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis), kwargs
+            assert dp.metadata.get("energy") is None, kwargs
 
-    def test_indexed_member_has_correct_energy(self):
-        """Indexing a member propagates the per-member energy into metadata."""
-        dp = self._exit_waves().diffraction_patterns()
-        assert dp[0].metadata["energy"] == 80e3
-        assert dp[1].metadata["energy"] == 100e3
-        assert dp[2].metadata["energy"] == 120e3
-
-    def test_indexed_member_get_energy(self):
-        """_get_energy() on an indexed member returns the exact per-member energy."""
-        dp = self._exit_waves().diffraction_patterns()
-        assert dp[0]._get_energy() == 80e3
-        assert dp[2]._get_energy() == 120e3
-
-    def test_indexed_member_angular_sampling(self):
-        """angular_sampling on an indexed DiffractionPatterns uses exact per-member energy."""
-        from abtem.core.energy import energy2wavelength
-        dp = self._exit_waves().diffraction_patterns()
-        for i, energy in enumerate([80e3, 100e3, 120e3]):
-            wl = energy2wavelength(energy)
-            expected = (
-                dp.sampling[0] * wl * 1e3,
-                dp.sampling[1] * wl * 1e3,
-            )
-            assert np.allclose(dp[i].angular_sampling, expected)
-
-    def test_block_direct(self):
-        """block_direct() no longer raises TypeError on energy-ensemble patterns."""
-        dp = self._exit_waves().diffraction_patterns()
-        blocked = dp.block_direct()
-        assert blocked.array.shape == dp.array.shape
-
-    def test_angular_sampling_and_max_angles(self):
-        """angular_sampling and max_angles work on energy-ensemble DiffractionPatterns."""
-        dp = self._exit_waves().diffraction_patterns()
-        assert all(a > 0 for a in dp.angular_sampling)
-        assert all(a > 0 for a in dp.max_angles)
+            highest = single(max(energies), **kwargs)
+            assert dp.shape[1:] == highest.shape, kwargs
+            assert np.allclose(dp.angular_sampling, highest.angular_sampling), kwargs
+            assert np.allclose(dp.max_angles, highest.max_angles), kwargs
+            for i, energy in enumerate(energies):
+                assert dp[i].metadata["energy"] == energy, kwargs
+                assert np.allclose(
+                    dp[i].angular_sampling, single(energy, **kwargs).angular_sampling
+                ), (kwargs, energy)
 
 
 class TestEnergyEnsembleSpotIndexing:
@@ -443,6 +318,9 @@ class TestEnergyEnsembleSpotIndexing:
 
     ENERGIES = (80e3, 300e3)
     ROTATIONS = (0.0, 10.0, 20.0)
+    # 49 x 49 pixels at 0.1 1/A hold 150 and 63 spots at 80 and 300 keV, so
+    # indexing a member at the other energy changes its spots
+    GPTS = (49, 49)
 
     @staticmethod
     def _cell():
@@ -464,12 +342,12 @@ class TestEnergyEnsembleSpotIndexing:
         # indexing only reads the pattern array and the geometry, so random
         # patterns exercise it fully
         array = np.random.default_rng(0).random(
-            (len(self.ROTATIONS), len(self.ENERGIES), 97, 97)
+            (len(self.ROTATIONS), len(self.ENERGIES)) + self.GPTS
         )
         if chunks is not None:
             import dask.array as da
 
-            array = da.from_array(array, chunks=chunks + (97, 97))
+            array = da.from_array(array, chunks=chunks + self.GPTS)
         return DiffractionPatterns(
             array,
             sampling=(0.1, 0.1),
@@ -481,12 +359,18 @@ class TestEnergyEnsembleSpotIndexing:
         )
 
     @staticmethod
-    def _assert_member_matches(ensemble, member, single):
-        hkl = [tuple(h) for h in ensemble.miller_indices]
-        idx = [hkl.index(tuple(h)) for h in single.miller_indices]
-        others = np.setdiff1d(np.arange(len(hkl)), idx)
-        values = np.asarray(ensemble.array)[:, member]
-        np.testing.assert_array_equal(values[..., idx], np.asarray(single.array))
+    def _assert_member_matches(ensemble, values, single, rtol=0.0):
+        """`values`, one energy member of the array of `ensemble`, equals the
+        single-energy `single` on its spots and is zero on the other spots."""
+        from abtem.core.backend import asnumpy
+
+        index = {tuple(h): i for i, h in enumerate(ensemble.miller_indices)}
+        idx = [index[tuple(h)] for h in single.miller_indices]
+        others = np.setdiff1d(np.arange(len(index)), idx)
+        values = asnumpy(values)
+        np.testing.assert_allclose(
+            values[..., idx], np.asarray(single.array), rtol=rtol, atol=0
+        )
         assert np.all(values[..., others] == 0)
 
     # a rotation series is only indexable lazily, one orientation per block
@@ -505,36 +389,20 @@ class TestEnergyEnsembleSpotIndexing:
                 )
                 .compute()
             )
-            self._assert_member_matches(ensemble, j, single)
-
-    def test_eager_matches_single_energy(self):
-        dp = self._patterns()[1]
-        om = self._orientation_matrices()[1]
-        ensemble = dp.index_diffraction_spots(
-            cell=self._cell(), orientation_matrices=om, centering="F"
-        )
-        for j in range(len(self.ENERGIES)):
-            single = dp[j].index_diffraction_spots(
-                cell=self._cell(), orientation_matrices=om, centering="F"
-            )
-            np.testing.assert_array_equal(
-                np.asarray(ensemble.array)[j][
-                    [
-                        [tuple(h) for h in ensemble.miller_indices].index(tuple(h))
-                        for h in single.miller_indices
-                    ]
-                ],
-                single.array,
+            self._assert_member_matches(
+                ensemble, np.asarray(ensemble.array)[:, j], single
             )
 
+    # an integration radius has its own device handling (the disk weights)
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("radius", [None, 0.25])
-    def test_indexing_stays_on_device(self, device, lazy, radius):
-        """Every array the indexing combines with the patterns lives on their
-        device (CuPy refuses implicit NumPy conversion), the result stays
-        there, and it matches the CPU result."""
-        from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+    def test_members_match_single_energy_on_device(self, device, lazy, radius):
+        """Each member of a single orientation equals the member indexed on its
+        own on the CPU. Every array the indexing combines with the patterns
+        lives on their device (CuPy refuses implicit NumPy conversion), and the
+        result stays there."""
+        from abtem.core.backend import copy_to_device, get_array_module
         from abtem.measurements import DiffractionPatterns
 
         reference = self._patterns()[1]
@@ -543,7 +411,7 @@ class TestEnergyEnsembleSpotIndexing:
         if lazy:
             import dask.array as da
 
-            array = da.from_array(array, chunks=(1, 97, 97))
+            array = da.from_array(array, chunks=(1,) + self.GPTS)
         dp = DiffractionPatterns(
             array,
             sampling=reference.sampling,
@@ -558,25 +426,14 @@ class TestEnergyEnsembleSpotIndexing:
         assert get_array_module(result.array) is get_array_module(
             copy_to_device(np.zeros(1), device)
         )
-        expected = reference.index_diffraction_spots(**kwargs)
-        np.testing.assert_allclose(asnumpy(result.array), expected.array, rtol=1e-6)
-
-    def test_highest_energy_is_not_used_for_every_member(self):
-        """The regression: the lowest-energy member indexed as the highest
-        energy (the old behaviour) differs from indexing it correctly."""
-        dp = self._patterns()[1]
-        om = self._orientation_matrices()[1]
-        lowest = dp[0]
-        correct = lowest.index_diffraction_spots(
-            cell=self._cell(), orientation_matrices=om, centering="F"
-        )
-        as_highest = lowest.index_diffraction_spots(
-            cell=self._cell(),
-            orientation_matrices=om,
-            centering="F",
-            energy=max(self.ENERGIES),
-        )
-        assert len(correct.miller_indices) != len(as_highest.miller_indices)
+        singles = [
+            reference[j].index_diffraction_spots(**kwargs)
+            for j in range(len(self.ENERGIES))
+        ]
+        # indexing every member at one energy would fail the comparison
+        assert len(singles[0].miller_indices) != len(singles[1].miller_indices)
+        for j, single in enumerate(singles):
+            self._assert_member_matches(result, result.array[j], single, rtol=1e-6)
 
 
 class TestCTFEnergyEnsemble:
@@ -588,26 +445,20 @@ class TestCTFEnergyEnsemble:
         )
 
     def test_probe_ctf_is_energy_ensemble(self):
-        """probe.ctf must not raise and must expose EnergyAxis."""
+        """probe.ctf carries the probe's energies as an EnergyAxis, and its
+        diffraction patterns are on the grid of the highest energy, whose
+        member is that energy's own (see test_to_diffraction_patterns_grid)."""
         ctf = self._probe().ctf
         assert len(ctf.ensemble_axes_metadata) == 1
         assert isinstance(ctf.ensemble_axes_metadata[0], EnergyAxis)
         assert tuple(ctf.ensemble_axes_metadata[0].values) == (40e3, 60e3, 80e3)
 
-    def test_ctf_scalar_energy_no_ensemble_axis(self):
-        """A single-energy CTF has no energy ensemble axis."""
-        from abtem.transfer import CTF
-        ctf = CTF(energy=60e3, semiangle_cutoff=20)
-        assert ctf.energy == 60e3
-        assert ctf._energy_distribution is None
-        energy_axes = [a for a in ctf.ensemble_axes_metadata if isinstance(a, EnergyAxis)]
-        assert energy_axes == []
-
-    def test_ctf_to_diffraction_patterns(self):
-        """to_diffraction_patterns() on an energy-ensemble CTF produces ensemble output."""
-        dp = self._probe().ctf.to_diffraction_patterns(max_angle=20)
-        assert dp.array.shape[0] == 3
-        assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis)
+        patterns = ctf.to_diffraction_patterns(max_angle=20)
+        assert isinstance(patterns.ensemble_axes_metadata[0], EnergyAxis)
+        single = Probe(
+            sampling=0.05, extent=20, energy=80e3, semiangle_cutoff=20
+        ).ctf.to_diffraction_patterns(max_angle=20)
+        np.testing.assert_allclose(patterns.array[-1], single.array)
 
     def test_apply_ctf_on_multi_energy_waves_can_be_detected(self):
         """The stacked result of a per-energy CTF stays a multi-energy ensemble that
@@ -624,15 +475,6 @@ class TestCTFEnergyEnsemble:
         detected = abtem.WavesDetector().detect(applied)
         assert detected.array.shape == applied.array.shape
         np.testing.assert_array_equal(detected.array, applied.array)
-
-    def test_aperture_energy_ensemble(self):
-        """Aperture also accepts energy as a distribution via the same path."""
-        from abtem.transfer import Aperture
-        from abtem.distributions import DistributionFromValues
-
-        ap = Aperture(semiangle_cutoff=20, energy=DistributionFromValues([40e3, 60e3, 80e3]))
-        assert len(ap.ensemble_axes_metadata) == 1
-        assert isinstance(ap.ensemble_axes_metadata[0], EnergyAxis)
 
 
 class TestTransferFunctionEnergyMatching:
@@ -671,27 +513,30 @@ class TestTransferFunctionEnergyMatching:
             ]
         )
 
+    # Waves.apply_ctf and CTF.apply are one-line wrappers of
+    # Waves.apply_transform: they share one code path, so they are looped over
+    _APPLY = {
+        "apply_ctf": lambda waves, ctf: waves.apply_ctf(ctf),
+        "ctf.apply": lambda waves, ctf: ctf.apply(waves),
+        "apply_transform": lambda waves, ctf: waves.apply_transform(ctf),
+    }
+
     @devices
     @lazy_params
-    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply", "apply_transform"])
-    def test_matches_single_energy_simulations(self, lazy, apply, device):
+    def test_matches_single_energy_simulations(self, lazy, device):
         waves = self._exit_waves(TEST_ENERGIES, lazy, device)
-        ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+        oracle = self._oracle()
+        for name, apply in self._APPLY.items():
+            ctf = abtem.CTF(energy=TEST_ENERGIES, **self.CTF_KWARGS)
+            result = apply(waves, ctf)
 
-        if apply == "apply_ctf":
-            result = waves.apply_ctf(ctf)
-        elif apply == "ctf.apply":
-            result = ctf.apply(waves)
-        else:
-            result = waves.apply_transform(ctf)
-
-        assert len(result.ensemble_axes_metadata) == 1
-        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
-        assert result.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
-        assert result.accelerator.energy is None
-        np.testing.assert_allclose(
-            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
-        )
+            assert len(result.ensemble_axes_metadata) == 1, name
+            assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis), name
+            assert result.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
+            assert result.accelerator.energy is None, name
+            np.testing.assert_allclose(
+                self._intensity(result), oracle, rtol=1e-4, atol=1e-6, err_msg=name
+            )
 
     def test_matches_ctf_without_energy(self):
         """Matching the energies is equivalent to leaving the CTF energy unset, and
@@ -809,42 +654,41 @@ class TestTransferFunctionEnergyMatching:
             waves.apply_ctf(abtem.CTF(energy=TEST_ENERGIES, defocus=50))
 
     @devices
-    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
-    def test_reused_after_single_energy_waves(self, apply, device):
+    def test_reused_after_single_energy_waves(self, device):
         """Applying a CTF to single-energy wave functions leaves it without their
         energy, so it can then be applied to a multi-energy ensemble."""
-        ctf = abtem.CTF(**self.CTF_KWARGS)
-        for energy in (200e3, TEST_ENERGIES):
-            waves = self._exit_waves(energy, lazy=False, device=device)
-            if apply == "apply_ctf":
-                result = waves.apply_ctf(ctf)
-            else:
-                result = ctf.apply(waves)
-            assert ctf.energy is None
-        np.testing.assert_allclose(
-            self._intensity(result), self._oracle(), rtol=1e-4, atol=1e-6
-        )
+        single = self._exit_waves(200e3, lazy=False, device=device)
+        ensemble = self._exit_waves(TEST_ENERGIES, lazy=False, device=device)
+        oracle = self._oracle()
+        for name in ("apply_ctf", "ctf.apply"):
+            ctf = abtem.CTF(**self.CTF_KWARGS)
+            for waves in (single, ensemble):
+                result = self._APPLY[name](waves, ctf)
+                assert ctf.energy is None, name
+            np.testing.assert_allclose(
+                self._intensity(result), oracle, rtol=1e-4, atol=1e-6, err_msg=name
+            )
 
-    @lazy_params
-    @pytest.mark.parametrize("apply", ["apply_ctf", "ctf.apply"])
-    def test_fixed_energy_on_mismatched_member_raises(self, lazy, apply):
-        """A fixed energy is checked against an indexed member's own energy."""
-        member = PlaneWave(energy=TEST_ENERGIES, extent=5, gpts=32).build(lazy=lazy)[1]
-        ctf = abtem.CTF(energy=TEST_ENERGIES[0], **self.CTF_KWARGS)
-        with pytest.raises(RuntimeError, match="Inconsistent energies"):
-            member.apply_ctf(ctf) if apply == "apply_ctf" else ctf.apply(member)
-        assert ctf.energy == TEST_ENERGIES[0]
+    def test_fixed_energy_on_mismatched_member_raises(self):
+        """A fixed energy is checked against an indexed member's own energy.
+        The check reads the metadata when the transform is applied, before any
+        lazy graph is built, so eager wave functions stand for lazy ones."""
+        member = PlaneWave(energy=TEST_ENERGIES, extent=5, gpts=32).build(lazy=False)[1]
+        for name in ("apply_ctf", "ctf.apply"):
+            apply = self._APPLY[name]
+            ctf = abtem.CTF(energy=TEST_ENERGIES[0], **self.CTF_KWARGS)
+            with pytest.raises(RuntimeError, match="Inconsistent energies"):
+                apply(member, ctf)
+            assert ctf.energy == TEST_ENERGIES[0], name
 
-        matching = abtem.CTF(energy=TEST_ENERGIES[1], **self.CTF_KWARGS)
-        result = member.apply_ctf(matching) if apply == "apply_ctf" else (
-            matching.apply(member)
-        )
-        assert result.metadata["energy"] == TEST_ENERGIES[1]
+            matching = abtem.CTF(energy=TEST_ENERGIES[1], **self.CTF_KWARGS)
+            assert apply(member, matching).metadata["energy"] == TEST_ENERGIES[1]
 
     def test_single_valued_energy_distribution_is_scalar(self):
-        ctf = abtem.CTF(energy=[200e3], defocus=50)
-        assert ctf.energy == 200e3
-        assert ctf.ensemble_axes_metadata == []
+        for energy in (200e3, [200e3]):
+            ctf = abtem.CTF(energy=energy, defocus=50)
+            assert ctf.energy == 200e3, energy
+            assert ctf.ensemble_axes_metadata == [], energy
 
     def test_profiles(self):
         """Each energy member of the profiles is the single-energy profile on the
