@@ -448,26 +448,123 @@ def test_generate_slices_poisson_solve_matches_requested_gpts(
     assert seen_shapes[0][:2] == requested_gpts
 
 
-def test_subtract_min_defaults_to_false(carbon_atoms, charge_density_3d):
-    """subtract_min must default to False -- the per-slice minimum is not
-    subtracted unless explicitly requested."""
+def test_reference_defaults_to_mean_and_rejects_others(carbon_atoms, charge_density_3d):
     pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
-    assert pot.subtract_min is False
+    assert pot.reference == "mean"
+    with pytest.raises(ValueError, match="reference must be one of"):
+        ChargeDensityPotential(
+            carbon_atoms, charge_density_3d, sampling=0.1, reference="minimum"
+        )
 
-    slices = [slic.array[0] for slic in pot.generate_slices()]
-    # With the (nonzero, non-uniform) test charge_density, at least one slice's
-    # minimum should not land exactly at zero when left unsubtracted.
-    assert any(not np.isclose(s.min(), 0.0) for s in slices)
 
-
-def test_subtract_min_true_zeros_each_slice_minimum(carbon_atoms, charge_density_3d):
-    pot = ChargeDensityPotential(
-        carbon_atoms, charge_density_3d, sampling=0.1, subtract_min=True
+@float64_devices
+def test_slice_min_reference_subtracts_each_slice_minimum(
+    carbon_atoms, charge_density_3d, device
+):
+    """reference="slice_min" is the per-slice minimum subtraction of v1.0.10 and
+    earlier: each slice of the "mean" potential minus its own minimum, which
+    differs from slice to slice. Up to rounding: 1e-12 of the maximum."""
+    slices = {
+        reference: asnumpy(
+            ChargeDensityPotential(
+                carbon_atoms,
+                charge_density_3d,
+                sampling=0.1,
+                slice_thickness=0.5,
+                device=device,
+                reference=reference,
+            )
+            .build(lazy=False)
+            .array
+        )
+        for reference in ("mean", "slice_min")
+    }
+    minima = slices["mean"].min(axis=(1, 2), keepdims=True)
+    assert np.ptp(minima) > 0.1  # V A: the constants do differ between slices
+    np.testing.assert_allclose(
+        slices["slice_min"],
+        slices["mean"] - minima,
+        rtol=0,
+        atol=1e-12 * np.abs(slices["mean"]).max(),
     )
-    assert pot.subtract_min is True
 
-    for slic in pot.generate_slices():
-        assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
+
+def _skewed_monolayer():
+    """Graphene with 4 A of vacuum on either side (a skewed in-plane cell) and its
+    -Z electrons, Gaussians of std 0.7 A on a 0.125 A grid."""
+    atoms = graphene(vacuum=4.0)
+    atoms.pbc = True
+    shape = (20, 20, int(round(atoms.cell[2, 2] / 0.125)))
+    fractions = np.stack(
+        np.meshgrid(*(np.arange(n) / n for n in shape), indexing="ij"), axis=-1
+    )
+    density = np.zeros(shape)
+    for position in atoms.get_scaled_positions():
+        for i in (-1, 0, 1):
+            for j in (-1, 0, 1):
+                d = fractions - position - (i, j, 0)
+                d[..., 2] -= np.round(d[..., 2])
+                r2 = ((d @ np.array(atoms.cell)) ** 2).sum(-1)
+                density += 6 * np.exp(-r2 / (2 * 0.49)) / (2 * np.pi * 0.49) ** 1.5
+    return atoms, density
+
+
+@ignore_core_count_warning
+@float64_devices
+@pytest.mark.parametrize("reference", ["mean", "vacuum"])
+def test_reference_constant_holds_across_build_routes(reference, device):
+    """The constant is the same however the potential is built: a skewed cell
+    repeated (2, 1, 1), lazy blocks of frozen phonons against the eager build, and
+    a range of slices against those of the whole. "mean" averages to zero (within
+    2e-4 of the removed constant sum(Z) w^2 / (2 eps0 V), 57 V here, as in
+    test_potential_physics; measured 5e-5), "vacuum" has a planar average of
+    zero in the slice at z = 0, 4 A from the atoms (1e-10 V). Sampling 0.05 A
+    narrows the Ewald width to 1.5 A, which keeps the build cheap."""
+    from abtem.core.constants import eps0
+
+    atoms, density = _skewed_monolayer()
+    potential = ChargeDensityPotential(
+        atoms,
+        density,
+        sampling=0.05,
+        slice_thickness=0.5,
+        repetitions=(2, 1, 1),
+        device=device,
+        reference=reference,
+    )
+    width = potential._ewald_width()
+    removed = np.sum(atoms.numbers) * width**2 / (2 * eps0 * atoms.cell.volume)
+    array = asnumpy(potential.build(lazy=False).array) / 0.5  # V
+    assert array.shape[-2:] == potential.gpts
+    if reference == "mean":
+        assert abs(array.mean()) < 2e-4 * removed, (array.mean(), removed)
+    else:
+        assert abs(array[0].mean()) < 1e-10, array[0].mean()
+
+    part = (
+        np.concatenate([asnumpy(s.array) for s in potential.generate_slices(6, 12)])
+        / 0.5
+    )
+    np.testing.assert_allclose(part, array[6:12], rtol=0, atol=1e-12 * array.max())
+
+    frozen_phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=3)
+    potential = ChargeDensityPotential(
+        frozen_phonons,
+        density,
+        sampling=0.05,
+        slice_thickness=0.5,
+        device=device,
+        reference=reference,
+    )
+    width = potential._ewald_width()
+    removed = np.sum(atoms.numbers) * width**2 / (2 * eps0 * atoms.cell.volume)
+    eager = asnumpy(potential.build(lazy=False).array) / 0.5
+    lazy = asnumpy(potential.build(lazy=True).compute().array) / 0.5
+    np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-12 * eager.max())
+    if reference == "mean":
+        assert np.abs(eager.mean(axis=(1, 2, 3))).max() < 2e-4 * removed
+    else:
+        assert np.abs(eager[:, 0].mean(axis=(1, 2))).max() < 1e-10
 
 
 def test_charge_density_potential_on_skew_cell_preserves_cell():

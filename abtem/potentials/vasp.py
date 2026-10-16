@@ -298,14 +298,32 @@ class VASPPotential(ChargeDensityPotential):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
-    subtract_min : bool, optional
-        If True, each slice's own minimum value is subtracted from it. This constant,
-        spatially uniform shift doesn't change multislice-simulated intensities (a
-        per-slice constant only contributes an overall, unobservable phase), but it
-        does mean the potential's absolute value -- e.g. in vacuum -- is not the
-        physical electrostatic reference and differs slice-to-slice, and from other
-        potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
-        is False.
+    reference : {"mean", "vacuum", "slice_min"}, optional
+        The constant the potential is referenced to; a periodic Poisson solve fixes
+        it only up to one. A constant in a slice changes only the phase of the
+        whole wave, so the intensities of the default (Fourier) multislice do not
+        depend on it; the phase of the exit wave, comparisons with other
+        potentials, the mean inner potential and the propagator of
+        ``RealSpaceMultislice(expansion_scope="full")`` do.
+
+        - ``"mean"`` (default): the potential averages to zero over the cell, as
+          for a periodic :class:`.GPAWPotential` (plane-wave mode). One constant,
+          the same in every slice, so the profile along z is kept: in a cell with
+          vacuum, the vacuum sits at minus the cell average of the potential
+          referenced to the vacuum.
+        - ``"vacuum"``: the potential is zero in vacuum, as for :class:`.Potential`
+          and a non-periodic :class:`.GPAWPotential`; for slabs and molecules.
+          One constant, the planar-average potential of the vacuum slice: the
+          slice whose largest planar-average electron density is the smallest,
+          which must be below 1e-3 of the cell average, or a `ValueError` is
+          raised (e.g. for a bulk crystal). For a slab with a dipole, the vacuum
+          on either side differs, and this takes the emptiest slice.
+        - ``"slice_min"``: each slice's own minimum is subtracted from it, as
+          abTEM v1.0.10 and earlier always did. A different
+          constant in every slice: the vacuum around a laterally isolated object
+          is close to zero, but the potential between the atoms of a dense slice
+          is removed, and the profile along z (and with it the mean inner
+          potential) is lost. For reproducing earlier results.
     non_orthogonal : bool, optional
         Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
         or on an orthogonal box (False). The default, None, uses the skewed grid
@@ -328,7 +346,7 @@ class VASPPotential(ChargeDensityPotential):
         exit_planes: int = None,
         repetitions=(1, 1, 1),
         device: str = None,
-        subtract_min: bool = False,
+        reference: str = "mean",
         non_orthogonal: Optional[bool] = None,
     ):
         # POTCAR is parsed before the base class runs so that its exact valence
@@ -375,7 +393,7 @@ class VASPPotential(ChargeDensityPotential):
             exit_planes=exit_planes,
             repetitions=repetitions,
             device=device,
-            subtract_min=subtract_min,
+            reference=reference,
             non_orthogonal=non_orthogonal,
         )
 
@@ -454,6 +472,6 @@ class VASPPotential(ChargeDensityPotential):
             first_slice=first_slice,
             last_slice=last_slice,
             core_density_correction=self._core_density_correction,
-            subtract_min=self.subtract_min,
+            reference=self.reference,
         ):
             yield slic

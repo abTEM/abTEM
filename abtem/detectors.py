@@ -32,6 +32,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
     _image_resampling_gpts,
+    _metric_k_components,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
@@ -950,6 +951,8 @@ def _slit_detector_mask(
     width: float,
     fftshift: bool = False,
     xp=np,
+    cell=None,
+    wavelength: Optional[float] = None,
 ) -> np.ndarray:
     """Boolean mask for a rectangular slit in reciprocal space.
 
@@ -984,17 +987,27 @@ def _slit_detector_mask(
     fftshift : bool
         If True, zero frequency is at the centre of the array.
     xp : array module
+    cell : 2x2 array, optional
+        Real-space cell of a skewed grid, whose pixels sit at physical (kx, ky)
+        given by its reciprocal vectors rather than on the axes.
+    wavelength : float, optional
+        Electron wavelength [Å], required with ``cell``.
     """
     from abtem.core.grid import spatial_frequencies
 
-    kx, ky = spatial_frequencies(
-        gpts,
-        (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]),
-        False,
-        xp,
-    )
-    dx = kx[:, None] - origin[0]
-    dy = ky[None, :] - origin[1]
+    if cell is not None:
+        kx, ky = _metric_k_components(gpts, cell, wavelength, xp)
+        dx = kx - origin[0]
+        dy = ky - origin[1]
+    else:
+        kx, ky = spatial_frequencies(
+            gpts,
+            (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]),
+            False,
+            xp,
+        )
+        dx = kx[:, None] - origin[0]
+        dy = ky[None, :] - origin[1]
 
     cos_a, sin_a = cos_sin_deg(angle)
     along = dx * cos_a + dy * sin_a
@@ -1320,7 +1333,9 @@ class SpectralSlitDetector(BaseDetector):
     ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
         return (_scanned_measurement_type(waves),)
 
-    def _mask(self, gpts, sampling, fftshift: bool = False, xp=np) -> np.ndarray:
+    def _mask(
+        self, gpts, sampling, fftshift: bool = False, xp=np, cell=None, wavelength=None
+    ) -> np.ndarray:
         return _slit_detector_mask(
             gpts=gpts,
             sampling=sampling,
@@ -1332,13 +1347,22 @@ class SpectralSlitDetector(BaseDetector):
             width=self._width,
             fftshift=fftshift,
             xp=xp,
+            cell=cell,
+            wavelength=wavelength,
         )
 
     def _get_detector_region_array(
         self, waves, fftshift: bool = True
     ) -> np.ndarray:
-        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
-        return self._mask(gpts, angular_sampling, fftshift=fftshift)
+        gpts, angular_sampling, _, energy = _gpts_and_sampling_from_obj(waves)
+        cell = _cell_from_obj(waves)
+        return self._mask(
+            gpts,
+            angular_sampling,
+            fftshift=fftshift,
+            cell=cell,
+            wavelength=None if cell is None else energy2wavelength(energy),
+        )
 
     def get_detector_region(self, waves, fftshift: bool = True):
         """
@@ -1489,7 +1513,14 @@ class SpectralSlitDetector(BaseDetector):
         gpts = diffraction_patterns.shape[-2:]
         sampling = diffraction_patterns.angular_sampling
 
-        mask = self._mask(gpts, sampling, xp=xp)
+        # a skewed cell's pixels sit at the physical frequencies of its metric
+        cell = _cell_from_obj(diffraction_patterns)
+        wavelength = (
+            None
+            if cell is None
+            else energy2wavelength(diffraction_patterns._get_energy())
+        )
+        mask = self._mask(gpts, sampling, xp=xp, cell=cell, wavelength=wavelength)
         intensity = xp.sum(
             diffraction_patterns._eager_array * mask, axis=(-2, -1)
         )

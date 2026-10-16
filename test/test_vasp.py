@@ -3,7 +3,9 @@ import warnings
 import numpy as np
 import pytest
 from ase import Atoms
+from utils import float64_devices
 
+from abtem.core.backend import asnumpy
 from abtem.potentials.vasp import (
     VASPPotential,
     core_density_fourier_transform,
@@ -152,8 +154,6 @@ def test_vasp_potential_build(carbon_atoms, charge_density_3d, fake_potcar):
     eager = pot.build(lazy=False)
     assert eager.array.shape[-2:] == pot.gpts
     assert np.all(np.isfinite(eager.array))
-    # subtract_min is off by default, so the slice minima are left alone
-    assert any(not np.isclose(s.min(), 0.0) for s in eager.array)
 
     preparsed = VASPPotential(
         carbon_atoms,
@@ -183,26 +183,41 @@ def test_vasp_potential_requires_potcar(carbon_atoms, charge_density_3d):
         VASPPotential(carbon_atoms, charge_density_3d, sampling=0.1)
 
 
-def test_vasp_potential_subtract_min(carbon_atoms, charge_density_3d, fake_potcar):
-    """subtract_min defaults to False (test_vasp_potential_build checks that the
-    default build leaves the slice minima alone); when True, VASPPotential passes
-    it on to the slice generator, which zeros each slice's minimum."""
-    default = VASPPotential(
+@float64_devices
+def test_vasp_potential_reference(carbon_atoms, charge_density_3d, fake_potcar, device):
+    """VASPPotential passes its reference on to the slice generator. The POTCAR
+    core density goes into the long-range part, whose average the "mean"
+    reference removes with the rest, so the potential still averages to zero:
+    within 2e-4 of the removed constant 6 w^2 / (2 eps0 V), as for
+    ChargeDensityPotential (measured 4e-5). "slice_min" zeros each slice's
+    minimum."""
+    from abtem.core.constants import eps0
+
+    potentials = {
+        reference: VASPPotential(
+            carbon_atoms,
+            charge_density_3d,
+            potcar=fake_potcar,
+            sampling=0.1,
+            slice_thickness=0.5,
+            device=device,
+            reference=reference,
+        )
+        for reference in ("mean", "slice_min")
+    }
+    assert VASPPotential(
         carbon_atoms, charge_density_3d, potcar=fake_potcar, sampling=0.1
-    )
-    assert default.subtract_min is False
+    ).reference == "mean"
 
-    pot = VASPPotential(
-        carbon_atoms,
-        charge_density_3d,
-        potcar=fake_potcar,
-        sampling=0.1,
-        subtract_min=True,
-    )
-    assert pot.subtract_min is True
+    width = potentials["mean"]._ewald_width()
+    removed = 6 * width**2 / (2 * eps0 * carbon_atoms.cell.volume)
+    mean = asnumpy(potentials["mean"].build(lazy=False).array) / 0.5
+    assert abs(mean.mean()) < 2e-4 * removed, (mean.mean(), removed)
 
-    for slic in pot.generate_slices():
-        assert np.isclose(slic.array[0].min(), 0.0, atol=1e-6)
+    slice_min = asnumpy(potentials["slice_min"].build(lazy=False).array)
+    np.testing.assert_allclose(
+        slice_min.min(axis=(1, 2)), 0.0, rtol=0, atol=1e-12 * slice_min.max()
+    )
 
 
 def test_vasp_potential_on_skew_cell(fake_potcar):

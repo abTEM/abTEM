@@ -403,14 +403,71 @@ def _add_core_density_correction_fourier(charge, atoms, core_density_correction)
     return charge
 
 
+_REFERENCES = ("mean", "vacuum", "slice_min")
+
+# The largest planar-average electron density, relative to the cell average, that
+# the slice chosen as vacuum may contain.
+_VACUUM_DENSITY_TOLERANCE = 1e-3
+
+
+def _validate_reference(reference: str) -> str:
+    if reference not in _REFERENCES:
+        raise ValueError(
+            f"reference must be one of {', '.join(map(repr, _REFERENCES))}, "
+            f"not {reference!r}"
+        )
+    return reference
+
+
+def _vacuum_level(density, potential, atoms, ewald_potential) -> float:
+    """
+    The planar-average potential [V] in the vacuum slice: of the slices of
+    `ewald_potential`, the one whose largest planar-average electron density is
+    the smallest, which must be below `_VACUUM_DENSITY_TOLERANCE` times the cell
+    average.
+
+    `density` is the electron density on its own grid, its last axis along the
+    slices, and `potential` the long-range part on the cropped grid.
+    """
+    profile = np.abs(np.asarray(density, dtype=float).mean(axis=(0, 1)))
+    z = np.arange(len(profile)) * ewald_potential.thickness / len(profile)
+
+    largest = []
+    for a, b in ewald_potential.slice_limits:
+        inside = (z >= a) & (z < b)
+        if not inside.any():
+            # A slice thinner than the density spacing: its nearest plane.
+            inside = np.argmin(np.abs(z - (a + b) / 2))
+        largest.append(profile[inside].max())
+
+    j = int(np.argmin(largest))
+    ratio = largest[j] / profile.mean() if profile.mean() > 0 else np.inf
+    if not ratio <= _VACUUM_DENSITY_TOLERANCE:
+        raise ValueError(
+            'reference="vacuum" needs a vacuum slice, one whose planar-average '
+            f"electron density is below {_VACUUM_DENSITY_TOLERANCE:g} of the cell "
+            f"average; the emptiest slice, {j}, has {ratio:.2g} of it. Use "
+            'reference="mean" for a structure without vacuum along the slices.'
+        )
+
+    a, b = ewald_potential.slice_limits[j]
+    short_range = next(ewald_potential.generate_slices(j, j + 1))
+    long_range = _interpolate_slice(
+        potential, atoms.cell, ewald_potential.gpts, ewald_potential.sampling, a, b
+    )
+    return (float(short_range.array.mean()) + float(long_range.mean())) / (b - a)
+
+
 def _generate_slices(
     charge,
     ewald_potential,
     first_slice: int = 0,
     last_slice: int = None,
     core_density_correction: dict = None,
-    subtract_min: bool = False,
+    reference: str = "mean",
 ):
+    _validate_reference(reference)
+
     if last_slice is None:
         last_slice = len(ewald_potential)
 
@@ -423,6 +480,8 @@ def _generate_slices(
         atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
 
     atoms = ewald_potential.frozen_phonons._randomize_transformed(atoms, frame)
+
+    electron_density = charge
 
     charge = -np.fft.fftn(charge)
 
@@ -446,6 +505,22 @@ def _generate_slices(
         / eps0
     )
 
+    # The constant [V] subtracted from the potential, times each slice's thickness.
+    if reference == "mean":
+        # The long-range part averages to the G=0 term the Poisson solve leaves
+        # (nonzero for a charged cell, e.g. issue #421); the short-range part, the
+        # potential of a point charge minus a Gaussian one of width w, integrates
+        # to Z w**2 / (2 eps0) per atom. Analytic, so the result neither depends
+        # on the width (chosen from the sampling) nor needs every slice.
+        width = ewald_potential.integrator.parametrization.width
+        volume = abs(np.linalg.det(np.array(atoms.cell)))
+        short_range = float(np.sum(atoms.numbers)) * width**2 / (2 * eps0 * volume)
+        offset = float(potential.mean()) + short_range
+    elif reference == "vacuum":
+        offset = _vacuum_level(electron_density, potential, atoms, ewald_potential)
+    else:
+        offset = None
+
     for i, ((a, b), slic) in enumerate(
         zip(
             ewald_potential.slice_limits[first_slice:last_slice],
@@ -458,16 +533,12 @@ def _generate_slices(
 
         slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
 
-        if subtract_min:
-            # A per-slice constant shift doesn't change multislice-simulated
-            # intensities (it's spatially uniform, so it only contributes an
-            # overall, unobservable phase) -- but it does mean the potential's
-            # own absolute value, e.g. in vacuum, is not physically meaningful
-            # and differs slice-to-slice from the true electrostatic reference
-            # (and from other potential builders, e.g. GPAWPotential, which
-            # don't do this). Off by default; kept only for comparison with
-            # older results that relied on this normalization.
+        if reference == "slice_min":
+            # A different constant for each slice; see the docstring of
+            # ChargeDensityPotential.
             slic._array -= slic._array.min()
+        else:
+            slic._array -= offset * (b - a)
         yield slic
 
 
@@ -633,14 +704,32 @@ class ChargeDensityPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
-    subtract_min : bool, optional
-        If True, each slice's own minimum value is subtracted from it. This constant,
-        spatially uniform shift doesn't change multislice-simulated intensities (a
-        per-slice constant only contributes an overall, unobservable phase), but it
-        does mean the potential's absolute value -- e.g. in vacuum -- is not the
-        physical electrostatic reference and differs slice-to-slice, and from other
-        potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
-        is False.
+    reference : {"mean", "vacuum", "slice_min"}, optional
+        The constant the potential is referenced to; a periodic Poisson solve fixes
+        it only up to one. A constant in a slice changes only the phase of the
+        whole wave, so the intensities of the default (Fourier) multislice do not
+        depend on it; the phase of the exit wave, comparisons with other
+        potentials, the mean inner potential and the propagator of
+        ``RealSpaceMultislice(expansion_scope="full")`` do.
+
+        - ``"mean"`` (default): the potential averages to zero over the cell, as
+          for a periodic :class:`.GPAWPotential` (plane-wave mode). One constant,
+          the same in every slice, so the profile along z is kept: in a cell with
+          vacuum, the vacuum sits at minus the cell average of the potential
+          referenced to the vacuum.
+        - ``"vacuum"``: the potential is zero in vacuum, as for :class:`.Potential`
+          and a non-periodic :class:`.GPAWPotential`; for slabs and molecules.
+          One constant, the planar-average potential of the vacuum slice: the
+          slice whose largest planar-average electron density is the smallest,
+          which must be below 1e-3 of the cell average, or a `ValueError` is
+          raised (e.g. for a bulk crystal). For a slab with a dipole, the vacuum
+          on either side differs, and this takes the emptiest slice.
+        - ``"slice_min"``: each slice's own minimum is subtracted from it, as
+          abTEM v1.0.10 and earlier always did. A different
+          constant in every slice: the vacuum around a laterally isolated object
+          is close to zero, but the potential between the atoms of a dense slice
+          is removed, and the profile along z (and with it the mean inner
+          potential) is lost. For reproducing earlier results.
     valence_electrons : dict, optional
         Valence electrons per chemical symbol, as the pseudopotential that produced
         `charge_density` defines them. The core electrons this class subtracts are
@@ -685,7 +774,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
-        subtract_min: bool = False,
+        reference: str = "mean",
         valence_electrons: dict = None,
         non_orthogonal: Optional[bool] = None,
     ):
@@ -698,7 +787,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
-        self._subtract_min = subtract_min
+        self._reference = _validate_reference(reference)
         self._valence_electrons = valence_electrons
         self._core_electrons = self._resolve_core_electrons()
         self._core_density_correction = self._build_core_density_correction()
@@ -850,8 +939,10 @@ class ChargeDensityPotential(_PotentialBuilder):
         return self._repetitions
 
     @property
-    def subtract_min(self):
-        return self._subtract_min
+    def reference(self) -> str:
+        """The constant the potential is referenced to: "mean", "vacuum" or
+        "slice_min"."""
+        return self._reference
 
     @property
     def num_frozen_phonons(self):
@@ -986,15 +1077,49 @@ class ChargeDensityPotential(_PotentialBuilder):
             **kwargs,
         )
 
+    def _ewald_width(self) -> float:
+        """Width [Å] of the Gaussians splitting the nuclear point charges into a
+        long-range part (added to the density and solved by FFT) and a short-range
+        real-space correction, whose cutoff, and with it the atom padding and the
+        pixels stamped per atom, grows with the width.
+
+        The split is exact for any width only while both parts are resolved:
+
+        - 30 x sampling: the short-range part is clamped inside the inner radial
+          limit (sampling / 2) and its radial table is spaced by the sampling, so
+          the nucleus pixel and the table carry an error growing as the width
+          shrinks against the sampling (1.4e-4 of the maximum at 10 x sampling).
+        - 4 x the density spacing: the long-range part lives on the density grid
+          and is spline-interpolated from it (2e-4 at 2 x, 3e-5 at 4 x).
+        - 2 x the mean slice thickness: its kz content is cropped to the slice
+          count (per slice, against 3 Å: 6e-3 at 0.5 x, 4e-4 at 1 x, 8e-5 at 2 x).
+        - At most dev's fixed 3 Å, so a build is never wider (slower) than it.
+
+        It depends on the slice thickness, so different slicings of one cell use
+        different widths. They add up to its projection within 5.5e-5 of the
+        maximum at sampling 0.05 and 0.033 Å (tolerance 1e-4); from sampling 0.1 Å
+        the width is 3 Å as before.
+        """
+        cell = np.asarray(self.frozen_phonons.atoms.cell)
+        density_spacing = max(
+            np.linalg.norm(cell[i]) / n
+            for i, n in enumerate(self.charge_density.shape[-3:])
+        )
+        return float(
+            min(
+                3.0,
+                max(
+                    30 * max(self.sampling),
+                    4 * density_spacing,
+                    2 * float(np.mean(self.slice_thickness)),
+                ),
+            )
+        )
+
     # The box it is given is this potential's own, not one the user gave.
     @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
-        # A width that followed the sampling and slice thickness made the
-        # slices of one potential add up to a projected potential that changed
-        # with the slicing (by ~1 %), and a width set by the sampling alone is
-        # too narrow for the kz content the slices keep; a fixed width
-        # satisfies both.
-        ewald_parametrization = EwaldParametrization(width=3)
+        ewald_parametrization = EwaldParametrization(width=self._ewald_width())
 
         # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
         # internal ewald Potential: the box-given path forces an orthogonalising
@@ -1031,7 +1156,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
-            ewald_parametrization = EwaldParametrization(width=3)
+            ewald_parametrization = EwaldParametrization(width=self._ewald_width())
             # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
             # leave box=None so the ewald Potential auto-detects the skew geometry
             # rather than rectifying it.
@@ -1079,7 +1204,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             ewald_potential,
             first_slice=first_slice,
             last_slice=last_slice,
-            subtract_min=self._subtract_min,
+            reference=self.reference,
             core_density_correction=self._core_density_correction,
         ):
             yield slic
