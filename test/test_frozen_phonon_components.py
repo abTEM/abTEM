@@ -201,21 +201,20 @@ def test_lazy_exit_waves_give_the_eager_result(components):
     np.testing.assert_allclose(lazy.array.compute(), eager.array, rtol=1e-5)
 
 
+# The components that need both moments give wrong values without either, which
+# test_components_match_the_reference and
+# test_unbiased_estimator_matches_the_sample_variance catch; what is left to check
+# is that the others skip one. unbiased adds no moment to the total.
 @pytest.mark.parametrize(
     "kwargs, formed",
     [
         (dict(components="elastic"), ["mean"]),
-        (dict(components="total"), ["configurations"]),
         (dict(components=("total",), unbiased=True), ["configurations"]),
-        (dict(components="diffuse"), ["mean", "configurations"]),
-        (dict(components="all"), ["mean", "configurations"]),
-        (dict(components="elastic", unbiased=True), ["mean", "configurations"]),
     ],
 )
 def test_only_the_moments_the_components_need_are_formed(monkeypatch, kwargs, formed):
     """The elastic component needs only the patterns of the mean wave, the total only
-    those of the configurations; the diffuse component, and the elastic one with
-    unbiased, need both."""
+    those of the configurations."""
     waves = _exit_waves()
     everything = elastic_diffuse_diffraction_patterns(
         waves, unbiased=kwargs.get("unbiased", False)
@@ -571,20 +570,15 @@ def test_unbiased_accepts_a_numpy_bool():
     assert result.metadata["unbiased"] is True
 
 
-@pytest.mark.parametrize("unbiased", [1, None, "yes"])
-def test_unbiased_must_be_a_bool(unbiased):
-    with pytest.raises(TypeError, match="unbiased must be a bool"):
-        elastic_diffuse_diffraction_patterns(_exit_waves(), unbiased=unbiased)
+def test_unbiased_must_be_a_bool():
+    for unbiased in (1, None, "yes"):
+        with pytest.raises(TypeError, match="unbiased must be a bool"):
+            elastic_diffuse_diffraction_patterns(_exit_waves(), unbiased=unbiased)
 
 
+# one per branch: not a dtype, and a dtype other than float32 or float64
 @pytest.mark.parametrize(
-    "reduction_dtype, error",
-    [
-        ("int32", ValueError),
-        ("float16", ValueError),
-        (-1, TypeError),
-        (object(), TypeError),
-    ],
+    "reduction_dtype, error", [("float16", ValueError), (object(), TypeError)]
 )
 def test_reduction_dtype_must_be_float32_or_float64(reduction_dtype, error):
     with pytest.raises(error, match="reduction_dtype must be float32 or float64"):
@@ -605,15 +599,9 @@ def test_exit_waves_need_a_frozen_phonon_axis():
         elastic_diffuse_diffraction_patterns(without)
 
 
+# the two ways to need the diffuse part (_needs_the_diffuse_part)
 @pytest.mark.parametrize(
-    "kwargs",
-    [
-        dict(components="diffuse"),
-        dict(components="all"),
-        dict(unbiased=True),
-        dict(components="elastic", unbiased=True),
-        dict(components=("total", "elastic"), unbiased=True),
-    ],
+    "kwargs", [dict(components="diffuse"), dict(components="elastic", unbiased=True)]
 )
 def test_a_single_configuration_raises_where_the_diffuse_part_is_needed(kwargs):
     with pytest.raises(ValueError, match="at least 2 frozen-phonon"):
