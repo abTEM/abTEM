@@ -181,25 +181,18 @@ def test_lazy_normalize_matches_eager(chunks, reciprocal_space):
 def test_multislice_scatter(data, potential, waves_builder):
     """Multislice with a real potential is a product of unitary operators --
     a phase-object transmission function (|t| = 1) and the Fresnel
-    propagator (|P| = 1) -- so it conserves the total intensity exactly,
-    except for what the antialiasing aperture removes.
+    propagator (|P| = 1) -- so it conserves the total intensity exactly once
+    the antialiasing aperture removes nothing.
 
     test_propagation_physics checks the same unitarity for eager float64
-    builds against a round-off bound; this one also runs lazily, on drawn
-    frozen-phonon potentials and with the default antialias aperture."""
+    builds against a round-off bound; this one also runs lazily and on drawn
+    frozen-phonon potentials. There is no bound to check with the default
+    aperture: band-limiting |t| = 1 makes the transmission function slightly
+    non-unitary, so the intensity can rise as well as fall (+0.13 % was
+    observed on an anisotropic grid)."""
     waves_builder = _draw_normalized_builder(data, waves_builder)
     lazy = data.draw(st.booleans(), label="lazy")
     waves_builder.grid.match(potential)
-
-    initial = _total_intensity(_to_waves(waves_builder.build(lazy=lazy)))
-
-    # With the default aperture, intensity scattered beyond the cutoff is
-    # lost; the band-limited transmission function is not exactly unitary
-    # either, so allow the same small gain as before.
-    scattered = _total_intensity(
-        _to_waves(waves_builder.multislice(potential, lazy=lazy))
-    )
-    assert np.all(scattered < initial * 1.0005)
 
     # With the aperture opened far beyond the corners of the Fourier grid
     # (cutoff / max(sampling) / 2 must exceed |k|max, which for anisotropic
