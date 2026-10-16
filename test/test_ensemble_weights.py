@@ -558,8 +558,12 @@ def test_weighted_energy_axis(device, tiny_potential):
     _assert_close_to(reduced.array, reference)
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int32"])
-@pytest.mark.parametrize("lazy", [True, False])
+# The dtype handling (an integer cast, then a dtype-preserving reduction) runs
+# before the lazy/eager split, so laziness is crossed with float32 only.
+@pytest.mark.parametrize(
+    "dtype, lazy",
+    [("float32", True), ("float32", False), ("float64", False), ("int32", False)],
+)
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_weighted_reduction_dtype_and_direct_oracle(dtype, lazy, device):
     from abtem.core.axes import ParameterAxis
