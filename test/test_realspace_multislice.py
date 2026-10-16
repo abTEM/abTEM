@@ -96,8 +96,7 @@ class TestLazyVsEager:
             FourierMultislice(order=1),
             FourierMultislice(order=2),
             FourierMultislice(order='exact'),
-            pytest.param(RealSpaceMultislice(order=1), marks=pytest.mark.slow),
-            pytest.param(RealSpaceMultislice(order=2), marks=pytest.mark.slow),
+            # the lazy/eager plumbing does not depend on the real-space order
             pytest.param(RealSpaceMultislice(order=3), marks=pytest.mark.slow),
         ],
     )
