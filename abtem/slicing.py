@@ -3,14 +3,30 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import abstractmethod
 from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
-from abtem.core.utils import EqualityMixin, label_to_index
+from abtem.atoms import (
+    _stacklevel_outside_package,
+    is_cell_orthogonal,
+    wrap_and_snap_atoms,
+)
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
+
+# How far outside the cell along z [Å] a non-periodic potential places an atom in
+# its face slice before warning. A thermal displacement is a few times its
+# standard deviation, which rarely exceeds 0.25 Å, so this is about 8 sigma: no
+# frozen phonon reaches it, but a misplaced atom or a wrong cell height does.
+FACE_SLICE_WARNING_DISTANCE = 2.0
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -323,7 +339,7 @@ def commensurate_gpts(
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = int(np.ceil(L / target_sampling))
+        n_target = safe_ceiling_int(L / target_sampling)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
@@ -423,8 +439,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())
@@ -636,6 +652,30 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
+    """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
+    [0, height]."""
+    return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
+
+
+def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
+    """Warn about atoms far enough outside [0, height] along z that placing them
+    in the face slice is a guess at their depth, not a correction of it."""
+    far = _far_outside_faces(z, height)
+    if not np.any(far):
+        return
+
+    warnings.warn(
+        f"{int(far.sum())} atom(s) lie more than {FACE_SLICE_WARNING_DISTANCE} Å "
+        f"outside the cell along z (0 to {height:.4g} Å). A non-periodic potential "
+        "keeps an atom that left the cell in the face slice it left through, which "
+        "is right for a small displacement such as a frozen phonon, but puts an "
+        "atom this far out at the wrong depth. Check the atomic positions against "
+        "the cell height.",
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 class SliceIndexedAtoms(BaseSlicedAtoms):
     """
     Sliced atoms assigning each atom to a specific slice index.
@@ -658,8 +698,36 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Wrapping unconditionally moved such
+        # an atom the full height of the box, which is the same depth
+        # corruption this wrap exists to prevent, just for the other path.
+        # Callers that know the potential's convention pass it through; the
+        # default wraps, since that is right for everything else that reaches
+        # here.
+        # Validate first: wrapping reads np.diag(atoms.cell) and would
+        # silently ignore the shear terms of a non-orthogonal cell before
+        # BaseSlicedAtoms raises for it.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
@@ -673,9 +741,63 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
+        # label_to_index silently discards labels outside [0, num_slices - 1],
+        # which is how an out-of-cell atom used to disappear. np.digitize
+        # against increasing bins returns [0, len(bins)], never negative, so
+        # only the upper end can escape: an atom below the entrance face
+        # already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised
+        # after padding. It belongs to the face it left, so clamp it into the
+        # last slice, mirroring what digitize already does at the entrance
+        # face. Its true position is kept: the infinite projection does not
+        # depend on z within a slice, so the projected potential is conserved
+        # exactly, where dropping the atom lost its whole contribution.
+        if not wrap:
+            _warn_far_outside_faces(
+                self.atoms.positions[:, 2], float(np.sum(self.slice_thickness))
+            )
+            labels = np.minimum(labels, len(self) - 1)
+
+        # After a wrap there is no atom outside the cell, so say so rather
+        # than dropping one.
+        if wrap and len(labels) and labels.max() > len(self) - 1:
+            raise RuntimeError(
+                f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
+                f"every one of the {len(self)} slices after wrapping; the "
+                "first is at z = "
+                f"{self.atoms.positions[labels > len(self) - 1][0, 2]!r}"
+            )
+
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
         ]
+
+    def __eq__(self, other) -> bool:
+        # _slice_index is a list of integer arrays, one per slice. list.__eq__
+        # compares elementwise and reduces the per-element `==` (itself an
+        # array) to a bool, which numpy refuses for anything but a length-1
+        # array -- generic EqualityMixin.__eq__ (safe_equality) catches that
+        # ValueError and reports "unequal", so this class never compared equal
+        # to anything, including an identical twin. Compare it directly with
+        # np.array_equal and let safe_equality handle every other attribute
+        # exactly as it would without this override.
+        if not isinstance(other, SliceIndexedAtoms):
+            return False
+
+        if len(self._slice_index) != len(other._slice_index):
+            return False
+
+        if not all(
+            np.array_equal(a, b)
+            for a, b in zip(self._slice_index, other._slice_index)
+        ):
+            return False
+
+        return safe_equality(
+            self, other, exclude=("_slice_index",) + self._eq_exclude
+        )
 
     def get_atoms_in_slices(
         self,
@@ -757,3 +879,54 @@ class SlicedAtoms(BaseSlicedAtoms):
         atoms = self.atoms[in_slice]
         atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
+
+
+def _sum_planes(array, start: int, stop: int):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[-1]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
+
+
+def _integrate_planes(array, start: float, stop: float):
+    """
+    The integral of the planes of `array`, repeated periodically along its last
+    axis, from `start` to `stop` (`start` < `stop`), in units of the plane spacing:
+    multiply by the spacing for an integral over heights.
+
+    Plane k is the sample at the height k and stands for the heights from k - 1/2
+    to k + 1/2, so each plane is weighted by the length of its heights that lie
+    between the limits. Consecutive slices share their limit, so the weights of
+    every plane add up to one. A limit on a plane splits it between the slices on
+    either side (the trapezoidal rule), so the integral of a slice is centred on
+    the slice; summing the planes from the lower limit up to the upper one whole (a
+    left Riemann sum) would put it half a plane below the slice.
+    """
+    n = array.shape[-1]
+    # The limits half a plane up, so that plane k stands for the interval from k
+    # to k + 1. Python floats, so that the weights keep the dtype of `array`: a
+    # NumPy float64 scalar would promote float32 planes to float64.
+    u, v = float(start) + 0.5, float(stop) + 0.5
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        return (v - u) * array[..., first % n]
+
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[
+        ..., last % n
+    ]
+    if last > first + 1:
+        summed = summed + _sum_planes(array, first + 1, last)
+    return summed

@@ -1,8 +1,8 @@
-import ase
 import numpy as np
 
 from abtem import Potential
 from abtem.waves import PlaneWave
+from utils import si_cubic_atoms
 
 
 def test_tilt():
@@ -12,7 +12,7 @@ def test_tilt():
     tilt = np.array([[100.0, 0.0], [0.0, 0.0]])
     planewave4 = PlaneWave(energy=80e3, tilt=tilt, extent=10, gpts=64)
 
-    atoms = ase.build.bulk("Si", cubic=True)
+    atoms = si_cubic_atoms()
 
     potential = Potential(
         atoms,

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import itertools
+import os
+import sys
+import warnings
 from numbers import Number
 from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
 
@@ -102,6 +108,103 @@ def plane_to_axes(plane: str) -> tuple[int, ...]:
     axes = tuple(axis_map[axis] for axis in plane)
     last_axis = {0, 1, 2} - set(axes)
     return axes + (last_axis.pop(),)
+
+
+#: The axis of the potential (0 for `x`, 1 for `y`, 2 for `z`) that is reversed
+#: when a plane given as a string is an odd permutation of the axes ("xz", "yx" and
+#: "zy"). A permutation of the axes alone would be a reflection; reversing one axis
+#: makes it a rotation. The second image axis `y` is reversed, so the beam keeps
+#: the direction and the entry face it had when the axes were only permuted (for
+#: "xz" it runs along +`y` of the atoms and enters at their y = 0 face); only the
+#: projected image is reversed along its second axis. Every site that rotates
+#: atoms, grids or vector components to a plane takes the reversed axis from
+#: `_plane_rotation`. Reversing `x` instead (0) would also need `_standardize_cell`
+#: changed: for a cell rotated about the beam it rotates the first in-plane
+#: lattice vector onto +`x`, which turns a reversed `x` into a reversed `y`.
+_ODD_PLANE_REVERSED_AXIS = 1
+
+
+def _plane_rotation(plane: str) -> np.ndarray:
+    """
+    The proper rotation `rotate_atoms_to_plane` applies to the atoms for a plane
+    given as a string, as a 3x3 matrix acting on row vectors (its columns are the
+    new axes in the frame of the atoms).
+
+    The first axis named by `plane` becomes `x`, the second `y`, and the remaining
+    axis `z`. For "xy", "yz" and "zx" that is a rotation. For "xz", "yx" and "zy"
+    it is a reflection, so the axis `_ODD_PLANE_REVERSED_AXIS` is also reversed.
+    """
+    axes = plane_to_axes(plane)
+    rotation = np.eye(3)[:, list(axes)]
+    if np.linalg.det(rotation) < 0.0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1.0
+    return rotation
+
+
+def _plane_reversed_axes(plane: str) -> list[int]:
+    """The axes of the frame of `plane` that point against the axis of the atoms
+    they come from."""
+    return [int(i) for i in np.flatnonzero(_plane_rotation(plane).sum(axis=0) < 0.0)]
+
+
+def _grid_to_plane(array, plane: str, first_axis: int = 0):
+    """
+    The values of a periodic grid over an orthogonal cell, as on the grid over the
+    cell rotated to `plane` by `rotate_atoms_to_plane`.
+
+    The three spatial axes of `array` start at `first_axis`. Grid point k sits at k
+    times the spacing, so along a reversed axis the point k goes to -k modulo the
+    number of points, as a position does when it is wrapped back into the cell.
+    """
+    axes = plane_to_axes(plane)
+    spatial = [first_axis + i for i in range(3)]
+    array = np.moveaxis(array, [first_axis + axis for axis in axes], spatial)
+    for axis in _plane_reversed_axes(plane):
+        array = np.roll(np.flip(array, axis=spatial[axis]), 1, axis=spatial[axis])
+    return array
+
+
+def _vector_field_to_plane(array, plane: str):
+    """
+    A vector field of shape (3, nx, ny, nz) on a periodic grid over an orthogonal
+    cell, as on the grid over the cell rotated to `plane`: the grid is moved as by
+    `_grid_to_plane` and the components are rotated with the positions.
+
+    The rotation is proper, so a pseudovector, such as a magnetic field, rotates the
+    same way as a vector.
+    """
+    array = _grid_to_plane(array, plane, first_axis=1)
+    array = array[list(plane_to_axes(plane))]
+    for axis in _plane_reversed_axes(plane):
+        array[axis] = -array[axis]
+    return array
+
+
+# The per-atom arrays that hold a pseudovector for each atom, which turn with the
+# atoms when they are rotated.
+_PSEUDOVECTOR_ARRAYS = ("magnetic_moments",)
+
+
+def _rotate_pseudovector_arrays(atoms: Atoms, linear_map: np.ndarray) -> None:
+    """
+    Turn the per-atom pseudovectors of `atoms`, such as magnetic moments, in place
+    with the linear map applied to their positions (a 3x3 matrix acting on row
+    vectors).
+
+    A pseudovector turns with the rotation part of the map, the orthogonal factor
+    of its polar decomposition: a strain has no single rule for it and leaves it.
+    Under an improper rotation it also changes sign.
+    """
+    names = [name for name in _PSEUDOVECTOR_ARRAYS if atoms.has(name)]
+    if not names:
+        return
+
+    u, _, vt = np.linalg.svd(np.asarray(linear_map, dtype=float))
+    rotation = u @ vt
+    rotation = rotation * np.sign(np.linalg.det(rotation))
+    for name in names:
+        vectors = atoms.get_array(name)
+        atoms.set_array(name, (vectors @ rotation).astype(vectors.dtype))
 
 
 def is_cell_hexagonal(atoms: Atoms | Cell) -> bool:
@@ -212,6 +315,12 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     atoms : ase.Atoms
         The standardized atoms.
     """
+    return _standardize_cell(atoms, tol)[0]
+
+
+def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarray]:
+    """`standardize_cell`, also returning the rotation it applies to the
+    positions, as a 3x3 matrix acting on row vectors."""
     atoms = atoms.copy()
 
     cell = np.array(atoms.cell)
@@ -227,7 +336,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
 
         atoms.pbc = True
         atoms.wrap()
-        return atoms
+        return atoms, np.eye(3)
 
     xy = np.delete(cell, vertical_vector[0], axis=0)
 
@@ -240,13 +349,17 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     r = np.arctan2(cell[0, 1], cell[0, 0]) / np.pi * 180
     atoms.set_cell(cell)
 
+    rotation = np.eye(3)
     if r != 0.0:
         atoms.rotate(-r, "z", rotate_cell=True)
+        # The images of the unit vectors under the same rotation.
+        unit_vectors = Atoms(positions=np.eye(3))
+        unit_vectors.rotate(-r, "z")
+        rotation = unit_vectors.positions
+        _rotate_pseudovector_arrays(atoms, rotation)
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
-
-    atoms.positions[np.diag(cell) < 0.0, :] *= -1
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
@@ -258,7 +371,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
             "This cell cannot be made orthogonal using currently implemented methods."
         )
 
-    return atoms
+    return atoms, rotation
 
 
 def rotation_matrix_to_euler(
@@ -664,7 +777,15 @@ def rotate_atoms_to_plane(
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
 ) -> Atoms:
     """
-    Rotate atoms so that their `xy` plane is rotated into a given plane.
+    Rotate atoms so that a given plane becomes their `xy` plane.
+
+    The first axis named by `plane` becomes `x`, the second `y` and the remaining
+    axis `z`, the propagation direction. The result is a rotation, never a mirror
+    image: for "xz", "yx" and "zy", where those axes alone would be a reflection,
+    the new `y` is the second named axis reversed. For "xz" the new `x` is `x`,
+    the new `y` is -`z` and the new `z` is `y` of the given atoms, so the beam
+    runs along +`y` and the image is reversed along its second axis. The atoms are
+    wrapped into the rotated cell.
 
     Parameters
     ----------
@@ -681,16 +802,34 @@ def rotate_atoms_to_plane(
     if plane == "xy":
         return atoms
 
+    return _rotate_atoms_to_plane(atoms, plane)[0]
+
+
+def _rotate_atoms_to_plane(
+    atoms: Atoms,
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+) -> tuple[Atoms, np.ndarray]:
+    """`rotate_atoms_to_plane`, also returning the linear map it applies to the
+    positions, as a 3x3 matrix acting on row vectors."""
+    if plane == "xy":
+        return atoms, np.eye(3)
+
+    if not isinstance(plane, str):
+        raise NotImplementedError("plane must be given as a string, such as 'xz'.")
+
     atoms = atoms.copy()
-    if isinstance(plane, str):
-        axes = plane_to_axes(plane)
+    rotation = _plane_rotation(plane)
 
-    atoms.positions[:] = atoms.positions[:][:, list(axes)]
-    atoms.cell[:] = atoms.cell[:][:, list(axes)]
+    # A reversed axis gives the cell a negative lattice vector and the atoms
+    # negative coordinates along it; `_standardize_cell` makes the vector positive
+    # and wraps the atoms back into the cell, which translates them by it.
+    atoms.positions[:] = atoms.positions @ rotation
+    atoms.cell[:] = np.array(atoms.cell) @ rotation
+    _rotate_pseudovector_arrays(atoms, rotation)
 
-    atoms = standardize_cell(atoms)
+    atoms, standard_rotation = _standardize_cell(atoms)
 
-    return atoms
+    return atoms, rotation @ standard_rotation
 
 
 def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
@@ -816,6 +955,278 @@ def _snap_scaled_positions_to_cell_boundary(atoms: Atoms, tolerance: float) -> N
     atoms.set_scaled_positions(scaled % 1.0)
 
 
+def _box_repetitions(cell, box) -> np.ndarray:
+    """
+    The lattice vectors of the repetition of `cell` that fills `box`, as an integer
+    matrix in units of the lattice vectors of `cell`.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction, i.e.
+        the integer matrix is singular. A direction shorter than about half a period
+        rounds to no repetition.
+    """
+    vectors = np.round(np.dot(np.diag(box), np.linalg.inv(cell)))
+
+    if np.round(abs(np.linalg.det(vectors))) == 0:
+        raise ValueError(
+            f"The box {tuple(float(b) for b in box)} holds no whole repetition of "
+            "the atoms' cell along at least one direction (it is shorter than "
+            "about half a period), so the periodicity cannot be preserved. Use a "
+            "larger box, or cut the box out of the repeated structure (`cut_cell`, "
+            "or `periodic=False` in a potential)."
+        )
+
+    return vectors
+
+
+def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding each atom once for every
+    cell of `atoms` the supercell contains.
+
+    Two lattice translations of `atoms` give the same atom in the supercell
+    exactly when they differ by a lattice vector of the supercell. The
+    translations are therefore sorted into |det(vectors)| classes by an integer
+    key, which is exact, and one translation of each class is used for every atom.
+    The images are wrapped into the supercell in its own fractional coordinates,
+    so that no atom depends on which side of a face round-off puts it: a
+    fractional coordinate within 1e-9 of 1 is 0. The result carries the per-atom
+    arrays of `atoms`.
+
+    Raises
+    ------
+    RuntimeError
+        If the translations do not fall into exactly |det(vectors)| classes.
+    """
+    cell = np.array(atoms.cell)
+    vectors = np.rint(vectors).astype(np.int64)
+    newcell = vectors @ cell
+    num_images = int(round(abs(np.linalg.det(vectors))))
+
+    # adjugate * det = |det| * inverse(vectors), exactly, for an integer matrix
+    adjugate = np.rint(np.linalg.inv(vectors) * np.linalg.det(vectors)).astype(np.int64)
+    determinant = int(np.rint(np.linalg.det(vectors)))
+    if not np.array_equal(vectors @ adjugate, determinant * np.eye(3, dtype=np.int64)):
+        raise RuntimeError(
+            f"The matrix {vectors.tolist()} is not invertible as an integer matrix; "
+            "please report this cell."
+        )
+
+    corners = np.array(list(itertools.product((0, 1), repeat=3)), dtype=float)
+    scaled_corners = np.linalg.solve(cell.T, (corners @ newcell).T).T
+    lower = np.floor(scaled_corners.min(axis=0)).astype(int) - 1
+    upper = np.ceil(scaled_corners.max(axis=0)).astype(int) + 1
+    shifts = np.stack(
+        np.meshgrid(*[np.arange(l, u) for l, u in zip(lower, upper)], indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+
+    keys = (shifts @ adjugate) % abs(determinant)
+    _, first = np.unique(keys, axis=0, return_index=True)
+    shifts = shifts[np.sort(first)]
+    if len(shifts) != num_images:
+        raise RuntimeError(
+            f"The translations of the cell fall into {len(shifts)} classes in the "
+            f"supercell, expected {num_images}; please report this cell."
+        )
+
+    inverse = np.linalg.inv(newcell)
+    fractional = (atoms.positions @ inverse)[:, None, :] + (
+        (shifts @ adjugate) / determinant
+    )
+    fractional -= np.floor(fractional)
+    fractional[np.isclose(fractional, 1.0, atol=1e-9, rtol=0.0)] = 0.0
+
+    index = np.repeat(np.arange(len(atoms)), num_images)
+    supercell = atoms[index]
+    supercell.set_cell(newcell)
+    supercell.positions[:] = fractional.reshape(-1, 3) @ newcell
+    return supercell
+
+
+def _cut_supercell(atoms: Atoms, vectors: np.ndarray, tolerance: float) -> Atoms:
+    """
+    The supercell of `atoms` with lattice vectors `vectors` (an integer matrix, in
+    units of the lattice vectors of `atoms`), holding every atom once.
+
+    `ase.build.cut` keeps the atoms whose scaled position in the supercell is in
+    [-0.1 * tolerance, 1 - 0.1 * tolerance) and generates images only above the
+    lower face. An atom whose image lies in the band below the upper face is
+    therefore lost, because its image in the supercell is the one below the lower
+    face: a scaled coordinate of -3.6e-16 wraps to 1 - 3.6e-16, and in a
+    supercell of 100 A every atom within 0.1 A of an upper face is in the band.
+    The number of atoms is checked, and the supercell is built by
+    `_wrapped_supercell` when it is wrong, which leaves every cut that was right
+    unchanged.
+    """
+    expected = len(atoms) * int(round(abs(np.linalg.det(vectors))))
+    supercell = cut(
+        atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance
+    )
+    if len(supercell) == expected:
+        return supercell
+
+    return _wrapped_supercell(atoms, vectors)
+
+
+# A box that strains the atoms by more than this (a relative stretch of a supercell
+# vector, or the cosine of an angle between two of them) is reported by
+# `_warn_if_box_is_strained`.
+BOX_STRAIN_WARNING_THRESHOLD = 1e-3
+
+# The most repetitions of the cell along a lattice vector that `best_orthogonal_cell`
+# and `orthogonalize_cell` try when no box is given.
+_DEFAULT_BOX_MAX_REPETITIONS = 5
+
+# Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
+# box, and atoms given far outside a non-periodic cell, were reported when the user
+# gave them.
+_box_strain_warning_suppressed = contextvars.ContextVar(
+    "abtem_box_strain_warning_suppressed", default=False
+)
+
+
+@contextlib.contextmanager
+def _box_strain_warning_silenced():
+    """Construct builders inside this context to leave a box they were given
+    unreported: it is reported where the user gave it."""
+    token = _box_strain_warning_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _box_strain_warning_suppressed.reset(token)
+
+
+def _cell_in_plane_frame(cell, plane="xy") -> np.ndarray:
+    """The cell as `orthogonalize_cell` sees it: small components zeroed and the
+    axes permuted to `plane`."""
+    cell = np.array(cell, dtype=float)
+    cell[np.abs(cell) < 1e-6] = 0.0
+    atoms = Atoms(cell=cell)
+    if plane != "xy":
+        atoms = rotate_atoms_to_plane(atoms, plane)
+    return np.array(atoms.cell)
+
+
+def _box_strain(cell, box, plane="xy") -> dict:
+    """
+    How `orthogonalize_cell` deforms the supercell of `cell` that fills `box`.
+
+    Returns the lattice vectors of the supercell in units of the lattice vectors
+    of the cell (`vectors`), the supercell vectors (`supercell`) and their
+    lengths (`lengths`), the relative stretch of each onto the matching box length
+    (`stretch`, box length over supercell length minus one), and the cosines of
+    the angles between the supercell vectors (`cosines`, for the pairs (y, z),
+    (x, z) and (x, y)), which the box makes right angles. A rotation of the
+    supercell is not a strain and is not counted.
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the cell along some direction.
+    """
+    cell = _cell_in_plane_frame(cell, plane)
+    vectors = _box_repetitions(cell, box)
+    supercell = vectors @ cell
+    lengths = np.linalg.norm(supercell, axis=1)
+    unit = supercell / lengths[:, None]
+    cosines = np.array([unit[1] @ unit[2], unit[0] @ unit[2], unit[0] @ unit[1]])
+    return {
+        "vectors": vectors,
+        "supercell": supercell,
+        "lengths": lengths,
+        "stretch": np.asarray(box, dtype=float) / lengths - 1.0,
+        "cosines": cosines,
+    }
+
+
+def _stacklevel_outside_package() -> int:
+    """The stack level of the first caller outside the abtem package."""
+    package = os.path.dirname(os.path.abspath(__file__)) + os.sep
+    frame, level = sys._getframe(1), 1
+    while frame is not None and os.path.abspath(frame.f_code.co_filename).startswith(
+        package
+    ):
+        frame, level = frame.f_back, level + 1
+    return level
+
+
+def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
+    """
+    Raise a ValueError if `box` holds no whole repetition of `cell` (rotated to
+    `plane`), and warn if the atoms are strained to fit it by more than
+    `BOX_STRAIN_WARNING_THRESHOLD`: a stretch of a supercell vector, or a shear,
+    the cosine of the angle between two supercell vectors, which the box turns into
+    right angles. A box that is a whole supercell up to round-off is silent.
+
+    If `default` is true, `box` is the one abTEM chose because none was given: the
+    warning says so, names the ways to avoid the strain, and a box that holds no
+    whole repetition is not an error here but silent: the potential reports it when
+    it places the atoms, if it does.
+    """
+    try:
+        strain = _box_strain(cell, box, plane)
+    except ValueError:
+        if default:
+            return
+        raise
+
+    if _box_strain_warning_suppressed.get():
+        return
+
+    if (
+        np.abs(strain["stretch"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+        and np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD
+    ):
+        return
+
+    vectors = np.rint(strain["vectors"]).astype(int)
+    if np.count_nonzero(vectors - np.diag(np.diag(vectors))) == 0:
+        periods = f"{tuple(int(n) for n in np.diag(vectors))} periods along x, y, z"
+    else:
+        periods = f"the lattice vectors {vectors.tolist()} (rows: x, y, z)"
+
+    degrees = np.degrees(np.arccos(strain["cosines"]))
+    lengths = tuple(round(float(n), 6) for n in strain["lengths"])
+    if np.abs(strain["cosines"]).max() <= BOX_STRAIN_WARNING_THRESHOLD:
+        nearest = f"the supercell is {lengths} Å, the nearest box that needs no strain"
+    else:
+        nearest = f"the supercell vectors are {lengths} Å long and not at right angles"
+    if default:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å, which abTEM chose because "
+            f"none was given (the closest orthogonal cell it finds with at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions of the atoms' cell along "
+            f"each lattice vector), is not a whole supercell of the atoms' cell, so "
+            f"the atoms are strained onto it."
+        )
+        remedy = (
+            " Pass a `box` that is a whole supercell of the atoms' cell, or repeat "
+            "the atoms' cell so that an orthogonal supercell of at most "
+            f"{_DEFAULT_BOX_MAX_REPETITIONS} repetitions exists."
+        )
+    else:
+        opening = (
+            f"The box {tuple(float(b) for b in box)} Å is not a whole supercell of "
+            f"the atoms' cell, so the atoms are strained onto it."
+        )
+        remedy = ""
+    warnings.warn(
+        f"{opening} It is filled with {periods}; {nearest}. Stretch along x, y, z: "
+        f"{', '.join(f'{100 * x:+.3f} %' for x in strain['stretch'])}. Angles "
+        f"between the supercell vectors (y and z, x and z, x and y), which the "
+        f"box turns into right angles: "
+        f"{', '.join(f'{d:.3f}°' for d in degrees)} (shear, the cosine of the "
+        f"angle: {', '.join(f'{c:.2e}' for c in strain['cosines'])}). A stretch "
+        f"or shear above {BOX_STRAIN_WARNING_THRESHOLD:.1e} is reported.{remedy}",
+        UserWarning,
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
@@ -851,21 +1262,27 @@ def orthogonalize_cell(
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         This is equivalent to translating the atoms. The default is (0., 0., 0.).
@@ -873,7 +1290,10 @@ def orthogonalize_cell(
         The extent of the potential in `x`, `y` and `z`. If not given this is determined
         from the atoms' cell. If the box size does not match an integer number of the
         atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword.
+        periodicity, determined by the `periodic` keyword. The box must hold at least
+        one repetition of the atoms' cell along each direction (about half a period
+        or more); the repetition is rounded to the nearest whole number, and the
+        atoms are strained to fit the box.
     tolerance : float
         Determines what is defined as a plane. All atoms within a distance equal to
         tolerance [Å] from a given plane will be considered to belong to that plane.
@@ -884,14 +1304,28 @@ def orthogonalize_cell(
         The orthogonal atoms.
     transform : tuple of arrays, optional
         The applied transform given as Euler angles (by default not returned).
+
+    Raises
+    ------
+    ValueError
+        If the box holds no whole repetition of the atoms' cell along some direction.
     """
+
+    # Copy once, up front, rather than at each mutating call below. Three
+    # separate ASE calls on `atoms` in this function mutate in place --
+    # `set_cell`/`wrap` immediately below, `translate`/`wrap` when `origin`
+    # is non-default, and `_snap_scaled_positions_to_cell_boundary` right
+    # before `cut()` in the repeat-and-cut branch further down -- so copying
+    # at only one of those call sites still leaves the others writing into
+    # the caller's object.
+    atoms = atoms.copy()
 
     cell = atoms.cell
     cell[np.abs(cell) < 1e-6] = 0.0
     atoms.set_cell(cell)
     atoms.wrap()
 
-    if origin != (0.0, 0.0, 0.0):
+    if tuple(origin) != (0.0, 0.0, 0.0):
         atoms.translate(-np.array(origin))
         atoms.wrap()
 
@@ -932,53 +1366,50 @@ def orthogonalize_cell(
         # sits in the first vector (whose direction seeds the process), the
         # result is a valid orthogonal box rotated slightly off the
         # coordinate axes, which is not what the rest of this function
-        # assumes. Since reaching this branch already means every
-        # off-diagonal component is at or below float64's ~2e-8 relative
-        # rounding floor (see above), zeroing them directly is both simpler
-        # and correct; anything larger is guarded against below rather than
-        # silently discarded.
+        # assumes. Zeroing the off-diagonal components directly is both
+        # simpler and correct when they are noise.
+        #
+        # A sheared cell is not noise, though its diagonal can equal its best
+        # orthogonal box too: the shortest lattice vector along an axis has the
+        # length of the cell's own diagonal entry when an off-diagonal
+        # component is a whole multiple of the matching component of another
+        # vector (a hexagonal cell repeated an even number of times along its
+        # second vector, a monoclinic cell whose c vector leans by a whole a
+        # vector). Such a cell goes through the repeat-and-cut path below like
+        # any other non-orthogonal cell.
         cell = np.array(atoms.cell, dtype=float)
         off_diagonal = cell[~np.eye(3, dtype=bool)]
         max_off_diagonal = np.max(np.abs(off_diagonal))
         relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
-        if relative_off_diagonal > 1e-6:
-            raise RuntimeError(
-                "Cell is not orthogonal and the off-diagonal components "
-                f"({max_off_diagonal:.3e} A, {relative_off_diagonal:.3e} "
-                "relative to the cell size) are too large to be numerical "
-                "noise; refusing to silently drop them. This should not "
-                "normally happen; please report this cell."
-            )
+        if relative_off_diagonal <= 1e-6:
+            orthogonal_cell = np.diag(np.diag(cell))
 
-        orthogonal_cell = np.diag(np.diag(cell))
+            atoms = atoms.copy()
+            atoms.set_cell(orthogonal_cell)
+            atoms.wrap()
 
-        atoms = atoms.copy()
-        atoms.set_cell(orthogonal_cell)
-        atoms.wrap()
-
-        if return_transform:
-            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
-        elif return_transform_matrix:
-            return atoms, np.eye(3)
-        else:
-            return atoms
+            if return_transform:
+                return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            elif return_transform_matrix:
+                return atoms, np.eye(3)
+            else:
+                return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
 
     _snap_scaled_positions_to_cell_boundary(atoms, tolerance)
 
-    inv = np.linalg.inv(atoms.cell)
-    vectors = np.dot(np.diag(box), inv)
-    vectors = np.round(vectors)
+    vectors = _box_repetitions(atoms.cell, box)
 
-    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
+    atoms = _cut_supercell(atoms, vectors, tolerance)
 
     A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
     if allow_transform:
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = np.diag(box)
+        _rotate_pseudovector_arrays(atoms, A)
 
     # elif not np.allclose(A, np.eye(3)):
     #    raise RuntimeError()
@@ -1018,8 +1449,13 @@ def atoms_in_cell(
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
+    # The interval is half-open, [-m, 1 + m), and the tolerance shifts *both*
+    # ends down so that it stays a period long. With it on the lower end only,
+    # float noise from a rotation or orthogonalisation -- an atom at -3e-17
+    # and its periodic image at 1 - 1e-16 -- kept both copies, and a
+    # non-periodic cut of hcp Mg held 8 atoms where its cell has 4.
     mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
-        scaled_positions < (1 + scaled_margins)[None], axis=1
+        scaled_positions < (1 + scaled_margins - 1e-12)[None], axis=1
     )
 
     atoms = atoms[mask]
@@ -1036,14 +1472,15 @@ def cut_cell(
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell,
     ignoring periodicity. If the given atoms do not originally fill the cell, they are
-    first repeated until they do.
+    first repeated until they do, also when some of them lie outside the cell.
 
     Parameters
     ----------
     atoms : ase.Atoms
         Atoms to be fit.
-    cell : tuple of floats
-        Cell to be fit into.
+    cell : tuple of floats, optional
+        Cell to be fit into. By default the best orthogonal cell of the atoms' cell
+        after it is rotated into `plane`.
     plane : str or tuple of tuples
         Plane to be rotated into given as either a string or two tuples (by default `xy`
         which results in no rotation for a standardized cell).
@@ -1058,9 +1495,6 @@ def cut_cell(
     cut : ase.Atoms
        Atoms fit into the cell.
     """
-    if cell is None:
-        cell = tuple(best_orthogonal_cell(atoms.cell))
-
     if isinstance(margin, SupportsFloat):
         margin = (float(margin), float(margin), float(margin))
 
@@ -1070,6 +1504,9 @@ def cut_cell(
         atoms.wrap()
 
     atoms = rotate_atoms_to_plane(atoms, plane)
+
+    if cell is None:
+        cell = tuple(best_orthogonal_cell(atoms.cell))
 
     new_cell = np.diag(np.array(cell) + 2 * np.array(margin))
     new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
@@ -1093,9 +1530,11 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
+    floor_min = np.floor(scaled_corners.min(axis=0))
+
     new_atoms = atoms * repetitions
 
-    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    center_translate = np.dot(floor_min, atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
@@ -1103,8 +1542,131 @@ def cut_cell(
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
 
+    # The repetitions are the lattice shifts [first, first + repetitions). They reach
+    # every image in the region kept of an atom given in the cell, except in a
+    # non-orthogonal cell with a margin, and at a face within rounding. They miss
+    # those of an atom given outside the cell. Those images are placed directly, at
+    # the lattice shifts the region kept needs, and follow the atoms of the
+    # repetitions, which are as they would be without them. Their number is set by
+    # the box, not by how far outside the cell the atom is.
+    first = floor_min - scaled_margin.sum(0)
+    # The region kept is the one `atoms_in_cell` keeps, which allows 1e-12 of the box
+    # length at both faces of the box.
+    kept = scaled_corners - np.linalg.solve(
+        atoms.cell.T, np.array(margin) + 1e-12 * np.array(cell)
+    )
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    unreached = np.flatnonzero(
+        np.any(
+            (scaled_positions < kept.max(axis=0) - first - repetitions)
+            | (scaled_positions >= kept.min(axis=0) - first + 1),
+            axis=1,
+        )
+    )
+    # The region kept spans fewer than `repetitions` shifts along each axis.
+    steps = np.indices(repetitions).reshape(3, -1).T
+    shifts = np.ceil(kept.min(axis=0) - scaled_positions[unreached])[:, None] + steps
+    shifts = shifts.reshape(-1, 3)
+    reached = np.all((shifts >= first) & (shifts < first + repetitions), axis=1)
+    missed = atoms[np.repeat(unreached, len(steps))[~reached]]
+    missed.positions[:] += np.dot(shifts[~reached], atoms.cell)
+    missed.cell = cell
+    new_atoms.extend(atoms_in_cell(missed, margin=margin))
+
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
+
+
+def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
+    """Wrap atoms into their cell by modulo, snapping the boundary cases to zero.
+
+    Wrapping is by ``np.mod`` rather than ``Atoms.wrap``, because ``wrap`` is a
+    **no-op along any axis where ``pbc`` is False** -- which is ASE's default
+    for a hand-built ``Atoms`` and what every ``ase.build.*(vacuum=...)`` slab
+    carries. The slicing this feeds models an infinite-projection potential
+    that is periodic in all three directions whatever the ``Atoms`` object
+    declares, so the bin index must be taken modulo the cell regardless.
+
+    Using ``wrap`` here was actively harmful for those inputs: it left
+    out-of-cell positions untouched, and the boundary snapping below then saw
+    arbitrarily large values rather than near-boundary ones and moved them to
+    zero -- teleporting an atom instead of wrapping it.
+
+    The snap itself is still needed: positions land in ``[0, L)``, and the
+    ``SliceIndexedAtoms`` bin edges are nudged down by 1e-12, so anything in
+    ``(L - 1e-12, L)`` would fall outside every bin and be dropped. The same
+    applies in x and y, where a value a hair below ``L`` puts the atom's FFT
+    peak at the wrong position.
+
+    Idempotent, and the caller's ``Atoms`` is not modified unless ``copy`` is
+    False.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        Atoms to wrap. Not modified unless ``copy`` is False.
+    copy : bool, optional
+        If False, wrap in place. Only for callers that own ``atoms``.
+    """
+    cell = np.diag(np.array(atoms.cell))
+
+    positions = atoms.positions
+    if positions.size == 0 or not np.all(cell > 0.0):
+        # A degenerate cell is reported better by the caller's own validation
+        # than by a modulo-by-zero here.
+        return atoms
+
+    if np.all((positions >= 0.0) & (positions < cell - 1e-10)):
+        return atoms
+
+    if copy:
+        atoms = atoms.copy()
+
+    np.mod(atoms.positions, cell, out=atoms.positions)
+
+    for ax in range(3):
+        length = cell[ax]
+        atoms.positions[atoms.positions[:, ax] > length - 1e-10, ax] = 0.0
+        atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
+
+    return atoms
+
+
+def _pad_images(margin: float, length: float) -> int:
+    """The number of cell lengths `pad_atoms` repeats a cell to each side."""
+    return int(np.ceil(margin / length))
+
+
+def _wrap_far_atoms(
+    atoms: Atoms, margins: tuple[float, float, float], directions: str = "xy"
+) -> None:
+    """
+    Wrap into the cell, in place, the atoms that `pad_atoms` would not keep with all
+    their images, along the given directions.
+
+    `pad_atoms` repeats the cell `_pad_images` times to each side and crops to the
+    margin. The images of an atom given outside the cell are all in the repetitions
+    only up to the distance they reach less the margin, and the atom itself is kept
+    only up to the margin. Wrapping the atoms further out, by whole cell lengths,
+    leaves the periodic structure unchanged. An atom closer to the cell is not moved.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to wrap, with an orthogonal cell.
+    margins : tuple of three floats
+        The padding margin along `x`, `y` and `z`.
+    directions : str
+        The directions to wrap along, as for `pad_atoms`.
+    """
+    for direction in directions:
+        axis = "xyz".index(direction)
+        length = atoms.cell[axis, axis]
+        reach = _pad_images(margins[axis], length) * length
+        slack = min(reach - margins[axis], margins[axis])
+        positions = atoms.positions[:, axis]
+        far = (positions < -slack) | (positions >= length + slack)
+        positions[far] = np.mod(positions[far], length)
 
 
 def pad_atoms(
@@ -1113,8 +1675,12 @@ def pad_atoms(
     directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms
+    Repeat the atoms in the given directions, retaining only the repeated atoms
     within the margin distance from the cell boundary.
+
+    Atoms are cropped only along the directions that were repeated. Along any other
+    direction, including a padded direction with a zero margin, every atom is kept,
+    even one outside the cell.
 
     Parameters
     ----------
@@ -1122,7 +1688,7 @@ def pad_atoms(
         The atoms that should be padded.
     margins: one or tuple of three floats
         The padding margin. Can be specified either as a single value for all
-        directions, or three separate values.
+        directions, or three separate values for `x`, `y` and `z`.
     directions : str
         The directions to pad the atoms as a concatenation of one or more of `x`, `y`
         and `z` for each of the principal directions.
@@ -1139,7 +1705,15 @@ def pad_atoms(
     if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3
 
-    assert isinstance(margins, tuple)
+    # Indexed by axis, not by position in `directions`: a margin per direction
+    # used to be paired with `directions` by zip, so (m,) with "z" gave z the
+    # margin m and a full (mx, my, mz) with "z" gave z mx.
+    margins = tuple(float(margin) for margin in margins)
+    if len(margins) != 3:
+        raise ValueError(
+            "margins must be one value or three values for x, y and z, "
+            f"not {len(margins)}"
+        )
 
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()
@@ -1147,16 +1721,27 @@ def pad_atoms(
     axes = [{"x": 0, "y": 1, "z": 2}[direction] for direction in directions]
 
     reps = [1, 1, 1]
-    for axis, margin in zip(axes, margins):
-        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+    for axis in axes:
+        reps[axis] = 1 + 2 * _pad_images(margins[axis], atoms.cell[axis, axis])
 
-    if any([rep > 1 for rep in reps]):
-        atoms = atoms * reps
-        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
-        atoms.cell = old_cell
+    if not any([rep > 1 for rep in reps]):
+        return atoms
 
-    atoms = atoms_in_cell(atoms, margins)
-    return atoms
+    atoms = atoms * reps
+    atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
+    atoms.cell = old_cell
+
+    # Crop only along the repeated axes: the crop is there to trim the images
+    # just added. Along any other axis it can only remove original atoms, and a
+    # non-periodic potential holds those unwrapped -- an atom displaced out of
+    # the cell before it reached the potential (frozen phonons iterated by
+    # hand, an MD snapshot) was dropped here and lost its whole contribution,
+    # where the same displacement applied by the potential after padding was
+    # kept. An infinite margin disables atoms_in_cell along that axis.
+    crop_margins = tuple(
+        float(margins[axis]) if reps[axis] > 1 else np.inf for axis in range(3)
+    )
+    return atoms_in_cell(atoms, crop_margins)
 
 
 # ---------------------------------------------------------------------------

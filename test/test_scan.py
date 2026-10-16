@@ -1,16 +1,21 @@
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase import Atoms
 from ase.build import bulk
 from hypothesis import given
 from hypothesis import strategies as st
-from utils import gpu
+from utils import devices
 
 from abtem.core.axes import PositionsAxis
 from abtem.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials.iam import Potential
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.waves import Probe
+
+
+def _probe():
+    return Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
 
 
 @given(
@@ -26,37 +31,67 @@ def test_linescan_at_position(position, extent, angle):
     vector = np.array(linescan.end) - np.array(linescan.start)
 
     assert np.allclose(extent, np.linalg.norm(vector))
-    # assert np.allclose(angle, np.rad2deg(np.arctan2(vector[1], vector[0])) % 360, atol=1.)
+    # The line points along angle (degrees from the x-axis, counter-clockwise).
+    # Compare unit vectors rather than angles, so 0 and 360 deg (and any
+    # angle near the arctan2 branch cut) are equivalent.
+    expected_direction = (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)))
+    assert np.allclose(vector / np.linalg.norm(vector), expected_direction)
+    # LineScan.angle is documented in degrees.
+    reported = np.deg2rad(linescan.angle)
+    assert np.allclose((np.cos(reported), np.sin(reported)), expected_direction)
     assert np.allclose(
         position, (np.array(linescan.start) + np.array(linescan.end)) / 2
     )
 
 
+@pytest.mark.parametrize("angle", [0.0, 30.0, 135.0, 250.0])
+def test_linescan_add_to_plot_width_is_centred_on_line(angle):
+    # interpolate_line averages over +-width/2 about the line, so the drawn
+    # band must be centred on it: its centre is the line's midpoint and its
+    # corners lie width/2 to either side of start and end.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    position, extent, width = (3.0, 2.0), 4.0, 1.0
+    linescan = LineScan.at_position(center=position, extent=extent, angle=angle)
+    fig, ax = plt.subplots()
+    try:
+        rect = linescan.add_to_plot(ax, width=width)
+        corners = rect.get_patch_transform().transform(
+            [(0, 0), (1, 0), (1, 1), (0, 1)]
+        )
+    finally:
+        plt.close(fig)
+
+    direction = np.array(linescan.direction)
+    perpendicular = np.array([-direction[1], direction[0]]) * width / 2
+    start, end = np.array(linescan.start), np.array(linescan.end)
+    expected = [
+        start - perpendicular,
+        end - perpendicular,
+        end + perpendicular,
+        start + perpendicular,
+    ]
+    assert np.allclose(corners, expected)
+    assert np.allclose(corners.mean(axis=0), position)
+
+
 # --- CustomScan tests ---
 
 
-@given(data=st.data())
-def test_custom_scan_shape(data):
-    """CustomScan.shape should be (n,) for n positions."""
-    scan = data.draw(abtem_st.custom_scan())
-    n_positions = len(scan.positions)
-    assert scan.shape == (n_positions,)
-
-
-@given(data=st.data())
-def test_custom_scan_positions_are_2d(data):
-    """CustomScan positions should always have shape (n, 2)."""
-    scan = data.draw(abtem_st.custom_scan())
-    assert scan.positions.ndim == 2
-    assert scan.positions.shape[1] == 2
-
-
-def test_custom_scan_positions_stored_correctly():
-    """CustomScan stores xy positions exactly as provided."""
-    positions = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-    scan = CustomScan(positions)
-    assert scan.shape == (3,)
-    assert np.allclose(scan.positions, positions)
+def test_custom_scan_stores_its_positions():
+    """CustomScan stores the xy positions as given, one row per position; a single
+    position may be given as one (x, y) pair."""
+    cases = [
+        ([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+        ((1.0, 2.0), [[1.0, 2.0]]),
+    ]
+    for positions, expected in cases:
+        scan = CustomScan(positions)
+        assert scan.shape == (len(expected),), positions
+        np.testing.assert_array_equal(scan.positions, expected)
 
 
 def test_custom_scan_probe_build_shape():
@@ -64,24 +99,10 @@ def test_custom_scan_probe_build_shape():
     correct length in the ensemble."""
     positions = np.array([[0.5, 0.5], [1.0, 1.0], [1.5, 1.5], [2.0, 2.0]])
     scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
+    probe = _probe()
     waves = probe.build(scan, lazy=False)
     assert waves.ensemble_shape == (4,)
     assert isinstance(waves.ensemble_axes_metadata[0], PositionsAxis)
-
-
-@pytest.mark.parametrize("n_positions", [1, 3, 10])
-def test_custom_scan_annular_detector_shape(n_positions):
-    """Regression test for gh-235: AnnularDetector should produce a (n,) measurement
-    when detecting waves built from a CustomScan with n positions."""
-    rng = np.random.default_rng(42)
-    positions = rng.uniform(0.5, 4.5, size=(n_positions, 2))
-    scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
-    waves = probe.build(scan, lazy=False)
-    detector = AnnularDetector(inner=5, outer=20)
-    measurement = detector.detect(waves)
-    assert measurement.shape == (n_positions,)
 
 
 @pytest.mark.parametrize(
@@ -93,16 +114,24 @@ def test_custom_scan_annular_detector_shape(n_positions):
     ],
 )
 def test_custom_scan_detector_ensemble_shape(detector_cls, kwargs):
-    """Waves built from a CustomScan should be detectable by all common detector types
-    and produce measurements whose ensemble shape matches the scan shape."""
-    positions = np.array([[0.5, 0.5], [1.5, 1.5], [2.5, 2.5]])
-    scan = CustomScan(positions)
-    probe = Probe(energy=100e3, semiangle_cutoff=30, extent=5, gpts=64)
-    waves = probe.build(scan, lazy=False)
+    """Waves built from a CustomScan of n positions, n = 1 included (gh-235), give
+    measurements of ensemble shape (n,), each that of its position alone."""
+    probe = _probe()
     detector = detector_cls(**kwargs)
-    measurement = detector.detect(waves)
-    # The scan positions axis must appear somewhere in the measurement shape
-    assert measurement.ensemble_shape == (3,)
+    positions = np.random.default_rng(42).uniform(0.5, 4.5, size=(3, 2))
+    alone = [
+        detector.detect(probe.build(CustomScan(p), lazy=False)).array[0]
+        for p in positions
+    ]
+    for n in (1, 3):
+        measurement = detector.detect(
+            probe.build(CustomScan(positions[:n]), lazy=False)
+        )
+        assert measurement.ensemble_shape == (n,)
+        for i in range(n):
+            np.testing.assert_array_equal(
+                measurement.array[i], alone[i], err_msg=f"n={n}, position {i}"
+            )
 
 
 # --- GridScan tests ---
@@ -126,7 +155,7 @@ def test_single_point_grid_scan_partition_round_trip(endpoint):
     assert np.allclose(block_scan.get_positions().ravel(), (1.0, 1.0))
 
 
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@devices
 @pytest.mark.parametrize("endpoint", [True, False])
 def test_single_point_grid_scan_lazy(device, endpoint):
     """Regression test: building the wave functions of a one-point GridScan lazily used
@@ -171,3 +200,65 @@ def test_grid_scan_zero_extent_rejected():
 #         blocks[i] = blocks[i].values
 #
 #     assert np.allclose(concatenate_blocks(blocks), s.get_positions())
+
+
+@pytest.mark.parametrize(
+    "extent, sampling, gpts, gpts_without_endpoint",
+    [(10.0, 0.3, 35, 34), (5.0, 0.5, 11, 10), (10.8, 0.3, 37, 36)],
+)
+def test_line_scan_sampling_is_at_most_the_requested_sampling(
+    extent, sampling, gpts, gpts_without_endpoint
+):
+    scan = LineScan(start=(0, 0), end=(extent, 0), sampling=sampling)
+    grid_scan = GridScan(
+        start=(0, 0), end=(extent, extent), sampling=sampling, endpoint=True
+    )
+    assert scan.gpts == gpts == grid_scan.gpts[0]
+    assert scan.sampling <= sampling * (1 + 1e-12)
+
+    scan = LineScan(start=(0, 0), end=(extent, 0), sampling=sampling, endpoint=False)
+    grid_scan = GridScan(
+        start=(0, 0), end=(extent, extent), sampling=sampling, endpoint=False
+    )
+    assert scan.gpts == gpts_without_endpoint == grid_scan.gpts[0]
+    assert scan.sampling <= sampling * (1 + 1e-12)
+
+
+def test_line_scan_of_an_extent_far_below_the_sampling_has_one_position():
+    scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0, endpoint=False)
+    assert scan.gpts == 1
+    scan = LineScan(start=(0, 0), end=(1e-9, 0), sampling=1.0)
+    assert scan.gpts == 1
+    assert scan.sampling == pytest.approx(1e-9)
+
+
+# Both endpoints give one position (test_scans_of_a_zero_extent_have_one_position);
+# each is scanned once, one eager and one lazy.
+@pytest.mark.parametrize("endpoint, lazy", [(True, False), (False, True)])
+def test_zero_length_line_scan_measures_its_one_position(endpoint, lazy):
+    atoms = Atoms("C", positions=[(1.5, 1.5, 1.0)], cell=(5, 5, 2), pbc=True)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0)
+    probe = _probe()
+    detector = AnnularDetector(inner=5, outer=20)
+
+    scan = LineScan(start=(1, 1), end=(1, 1), sampling=0.5, endpoint=endpoint)
+    assert scan.get_positions().tolist() == [[1.0, 1.0]]
+    measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    expected = probe.scan(
+        potential, scan=CustomScan([(1, 1)]), detectors=detector, lazy=lazy
+    )
+    if lazy:
+        measurement, expected = measurement.compute(), expected.compute()
+
+    assert measurement.shape == (1,)
+    assert np.isfinite(measurement.array).all()
+    np.testing.assert_allclose(measurement.array, expected.array, rtol=1e-6)
+
+
+def test_scans_of_a_zero_extent_have_one_position():
+    assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5).gpts == 1
+    assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5, endpoint=False).gpts == 1
+    scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=True)
+    assert scan.gpts == (5, 1)
+    scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=False)
+    assert scan.gpts == (4, 1)
