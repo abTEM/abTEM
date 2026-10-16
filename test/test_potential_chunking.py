@@ -1120,8 +1120,11 @@ class TestCrystalPotentialChunking:
         # one pool per member, each built once
         assert len(pools[2]) == len(set(pools[2])) == 3
         assert sorted(pools[2]) == sorted(pools[6])
+        # Threaded blocks are not bitwise reproducible against the eager run
+        # (4.6e-7 relative was seen in CI); a pool built from another seed
+        # moves the atoms, which changes the result by far more.
         for result in results.values():
-            np.testing.assert_array_equal(result.array, expected.array)
+            np.testing.assert_allclose(result.array, expected.array, rtol=1e-5)
 
     @pytest.mark.parametrize("scheduler", ["threads"])
     def test_a_reseeded_pool_is_built_once_in_a_lazy_transition_potential_scan(
@@ -1167,7 +1170,8 @@ class TestCrystalPotentialChunking:
             result = lazy.compute(scheduler=scheduler, progress_bar=False)
 
         assert len(builds) == len(set(builds)) == 3
-        np.testing.assert_array_equal(result.array, expected.array)
+        # float32 rounding only, as in the test above
+        np.testing.assert_allclose(result.array, expected.array, rtol=1e-5)
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("seeds", [None, (1, 2)])
