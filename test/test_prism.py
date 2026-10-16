@@ -32,48 +32,25 @@ def _aberrated_ctf():
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
 @devices
-def test_prism_matches_probe(data, lazy, device):
-    s_matrix = data.draw(abtem_st.s_matrix(device=device))
-
-    s_matrix = s_matrix.round_gpts_to_interpolation()
-    probe = s_matrix.dummy_probes()
-
-    s_matrix_diffraction_patterns = (
-        s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-    probe_diffraction_patterns = (
-        probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-
-    s_matrix_diffraction_patterns.compute()
-    probe_diffraction_patterns.compute()
-    assert np.allclose(
-        s_matrix_diffraction_patterns.compute().array,
-        probe_diffraction_patterns.compute().array,
-    )
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [False])
-@devices
-def test_prism_matches_probe_with_interpolation(data, lazy, device):
+def test_prism_matches_probe(data, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device, max_interpolation=3))
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
-    s_matrix_diffraction_patterns = (
-        s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-    probe_diffraction_patterns = (
-        probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
+    for lazy in (False, True):
+        s_matrix_diffraction_patterns = (
+            s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
+        )
+        probe_diffraction_patterns = (
+            probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
+        )
 
-    assert np.allclose(
-        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
-    )
+        assert np.allclose(
+            s_matrix_diffraction_patterns.compute().array,
+            probe_diffraction_patterns.compute().array,
+        ), f"lazy={lazy}"
 
 
 @given(data=st.data())
@@ -98,12 +75,9 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
         .compute()
     )
 
-    if np.all(probe_diffraction_patterns.array < 1e-7):
-        pass
-    else:
-        assert np.allclose(
-            s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
-        )
+    assert np.allclose(
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+    )
 
 
 # PRISM and multislice are different code paths, so their results agree only
