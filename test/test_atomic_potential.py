@@ -13,7 +13,7 @@ from abtem.integrals import (
     ScatteringFactorProjectionIntegrals,
     _DeviceArrayCache,
 )
-from utils import assert_array_matches_device, devices, si_cubic_atoms
+from utils import assert_array_matches_device, devices, gpu, si_cubic_atoms
 
 # from abtem.integrals import GaussianProjectionIntegrals
 from abtem.parametrizations import (
@@ -901,11 +901,12 @@ class TestGaussianProjectionIntegralsUsable:
             )
         )
 
-    @devices
+    # GPU only: the CPU build is the reference. Its own correctness is checked
+    # against Lobato's closed form in test_potential_physics.py
+    # (test_gaussian_projection_single_slice_matches_analytic).
+    @pytest.mark.parametrize("device", [gpu])
     def test_builds_on_both_devices_and_they_agree(self, device):
         """It failed on GPU with TypeError: Unsupported type numpy.ndarray."""
-        if device == "cpu":
-            pytest.skip("the cpu case would compare a build with itself")
         got = self._build(GaussianProjectionIntegrals(), device=device)
         reference = self._build(GaussianProjectionIntegrals(), device="cpu")
         assert got.shape == reference.shape
