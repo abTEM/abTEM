@@ -628,3 +628,158 @@ def test_momentum_resolved_spectrum_matches_cpu(device, detector, lazy):
     np.testing.assert_allclose(
         asnumpy(result.array), asnumpy(reference.array), rtol=1e-5, atol=1e-6
     )
+
+
+# ---- On a skewed (non-orthogonal) grid ----------------------------------------
+
+_SKEW_A = 20.0  # Å: 1.85 mrad per pixel at 100 keV
+# Rows are the in-plane lattice vectors. A hexagonal cell is simulated on a skewed
+# grid, whose pixel (h1, h2) sits at h1 b1 + h2 b2; the others on orthogonal grids
+# of the given extent.
+_SKEW_CELLS = {
+    "hexagonal": np.array([[_SKEW_A, 0.0], [-_SKEW_A / 2, _SKEW_A * 3**0.5 / 2]]),
+    "rectangular": (_SKEW_A, _SKEW_A * 3**0.5 / 2),
+    "square": (_SKEW_A, _SKEW_A),
+}
+_SKEW_ANGLE = 20.0  # degrees: along neither a grid axis nor a b_i
+_SKEW_SIGMA = 2.5  # mrad
+_SKEW_OUTER = 5 * _SKEW_SIGMA  # mrad
+_SKEW_Q = (20.0, 45.0)  # mrad
+_SKEW_WEIGHTS = (1.0, 2.0)
+_SKEW_DIRECTION = np.array(
+    [np.cos(np.deg2rad(_SKEW_ANGLE)), np.sin(np.deg2rad(_SKEW_ANGLE))]
+)
+
+
+def _gaussians_dp(cell_name):
+    """Diffraction patterns (fftshift layout, one energy loss) holding two
+    normalised Gaussian angular densities of weights `_SKEW_WEIGHTS`, centred at
+    `_SKEW_Q` along `_SKEW_ANGLE`. A pixel holds the density times its area, as a
+    pattern of diffuse scattering does, so a region covering a Gaussian collects
+    its weight on any grid. The pixel positions are worked out here from the cell,
+    independently of abTEM's grids."""
+    from abtem.core.axes import EnergyLossAxis
+    from abtem.core.energy import energy2wavelength
+
+    cell = _SKEW_CELLS[cell_name]
+    energy = 100e3
+    to_mrad = energy2wavelength(energy) * 1e3
+    gpts = (80, 80)
+    if np.ndim(cell) == 1:
+        extent, cell = cell, None
+        reciprocal = np.diag(1 / np.array(extent))
+    else:
+        extent = tuple(np.linalg.norm(cell, axis=1))
+        reciprocal = np.linalg.inv(cell).T  # rows b1, b2
+    h1 = np.arange(gpts[0]) - gpts[0] // 2
+    h2 = np.arange(gpts[1]) - gpts[1] // 2
+    g = h1[:, None, None] * reciprocal[0] + h2[None, :, None] * reciprocal[1]
+    g = g * to_mrad
+    pixel_area = abs(np.linalg.det(reciprocal)) * to_mrad**2
+
+    array = np.zeros(gpts)
+    for q, weight in zip(_SKEW_Q, _SKEW_WEIGHTS):
+        r2 = np.sum((g - q * _SKEW_DIRECTION) ** 2, axis=-1)
+        density = np.exp(-r2 / (2 * _SKEW_SIGMA**2)) / (2 * np.pi * _SKEW_SIGMA**2)
+        array += weight * density * pixel_area
+
+    metadata = {"energy": energy}
+    if cell is not None:
+        metadata["cell"] = tuple(map(tuple, cell))
+    return DiffractionPatterns(
+        array[None],
+        sampling=(1 / extent[0], 1 / extent[1]),
+        fftshift=True,
+        ensemble_axes_metadata=[EnergyLossAxis(values=[0.05], units="eV")],
+        metadata=metadata,
+    )
+
+
+def _collected(name, dp):
+    """What a region measures on `dp`: the spectra one value per Gaussian, the
+    rest the outer Gaussian only."""
+    offset = tuple(_SKEW_Q[1] * _SKEW_DIRECTION)
+    if name == "spectral_annular":
+        detector = SpectralAnnularDetector(
+            outer=_SKEW_OUTER,
+            q_min=_SKEW_Q[0],
+            q_max=_SKEW_Q[1],
+            q_sampling=_SKEW_Q[1] - _SKEW_Q[0],
+            angle=_SKEW_ANGLE,
+        )
+        return asnumpy(momentum_resolved_spectrum(dp, detector).array).ravel()
+    if name == "spectral_slit":
+        detector = SpectralSlitDetector(
+            width=2 * _SKEW_OUTER,
+            q_min=_SKEW_Q[0] - _SKEW_OUTER,
+            q_max=_SKEW_Q[1] + _SKEW_OUTER,
+            angle=_SKEW_ANGLE,
+        )
+        spectrum = momentum_resolved_spectrum(dp, detector)
+        values = asnumpy(spectrum.array).ravel()
+        first = spectrum._q_values < np.mean(_SKEW_Q)
+        return np.array([values[first].sum(), values[~first].sum()])
+    if name == "integrate_radial":
+        return asnumpy(dp.integrate_radial(0.0, _SKEW_OUTER, offset=offset).array)
+    if name == "polar_binning":
+        binned = dp.polar_binning(1, 1, 0.0, _SKEW_OUTER, offset=offset)
+        return asnumpy(binned.array)
+    if name == "annular_region":
+        region = abtem.AnnularDetector(0.0, _SKEW_OUTER, offset=offset)
+    else:
+        region = SpectralSlitDetector(
+            width=2 * _SKEW_OUTER,
+            q_min=_SKEW_Q[1] - _SKEW_OUTER,
+            q_max=_SKEW_Q[1] + _SKEW_OUTER,
+            angle=_SKEW_ANGLE,
+        )
+    mask = region.get_detector_region(dp, fftshift=True).array
+    return np.sum(dp.array * mask, axis=(-2, -1))
+
+
+# A region is placed and sized in physical scattering angles, whatever the grid.
+# Measured error relative to the weights on the hexagonal (skewed) grid, before
+# the fix: 0.32 and 1.0 for the spectral disks (the second disk was shifted along
+# b1 and b2, missing its Gaussian), 1.0 for the offset integration, polar bin,
+# annular and slit regions; after it at most 6e-6, against rtol 1e-4. The
+# rectangular grid is within 6.2e-6 before and after. What remains is the
+# Gaussian tails past the region edge and the rounding of a region centre to a
+# pixel.
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize(
+    "name", ["spectral_annular", "integrate_radial", "polar_binning"]
+)
+@pytest.mark.parametrize("cell_name", ["hexagonal", "rectangular"])
+def test_offset_regions_collect_the_density_they_cover_on_any_grid(
+    cell_name, name, device
+):
+    dp = _gaussians_dp(cell_name).copy_to_device(device)
+    expected = _SKEW_WEIGHTS if name.startswith("spectral") else _SKEW_WEIGHTS[1:]
+    np.testing.assert_allclose(np.ravel(_collected(name, dp)), expected, rtol=1e-4)
+
+
+# get_detector_region builds the mask on the host.
+@pytest.mark.parametrize("name", ["annular_region", "slit_region"])
+@pytest.mark.parametrize("cell_name", ["hexagonal", "rectangular"])
+def test_offset_detector_regions_cover_the_density_on_any_grid(cell_name, name):
+    np.testing.assert_allclose(
+        np.ravel(_collected(name, _gaussians_dp(cell_name))),
+        _SKEW_WEIGHTS[1:],
+        rtol=1e-4,
+    )
+
+
+# The slit spectrum converts the interpolated average across the slit to a sum by
+# counting one sample per square pixel of the smaller sampling, so on a skewed
+# grid it must give what a square grid of the same pixel spacing gives (both
+# 0.92 of the weights under that convention). Measured: 1.0 off
+# before the fix (the line was mapped through the real-space cell, landing off
+# the Gaussians), 7.4e-4 after, against rtol 3e-3; the remaining difference is the
+# linear interpolation on the two grids.
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_slit_spectrum_on_a_skewed_grid_matches_a_square_grid(device):
+    skewed = _collected(
+        "spectral_slit", _gaussians_dp("hexagonal").copy_to_device(device)
+    )
+    square = _collected("spectral_slit", _gaussians_dp("square").copy_to_device(device))
+    np.testing.assert_allclose(skewed, square, rtol=3e-3)
