@@ -235,8 +235,15 @@ class TestAtomicPotentialTail:
 class TestContinuumNormalisation:
     """The continuum state must be energy-normalised: u -> sin(kr+d)/sqrt(pi k)."""
 
-    @pytest.mark.parametrize("epsilon", [1.0, 25.0, 400.0])
-    @pytest.mark.parametrize("lprime", [0, 1, 2, 3])
+    # Each way _continuum_radial_grid sizes the grid, and every l' (l' >= 2 is
+    # where the envelope overshoots near the barrier): at 1 eV the grid holds
+    # one period (l' = 0, 2) or clears the centrifugal barrier (l' = 3, the
+    # largest grid, 120 Bohr); at 25 eV it is the default 20 Bohr (l' = 1) or
+    # clears the barrier (l' = 3); at 400 eV it is the default (l' = 2).
+    @pytest.mark.parametrize(
+        "epsilon, lprime",
+        [(1.0, 0), (1.0, 2), (1.0, 3), (25.0, 1), (25.0, 3), (400.0, 2)],
+    )
     def test_asymptotic_amplitude_is_one_over_sqrt_pi_k(self, epsilon, lprime):
         """Two checks on one wavefunction (each costs a GPAW all-electron run
         and a Numerov integration on up to ~7.5e6 points, so it is computed
