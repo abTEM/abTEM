@@ -1632,7 +1632,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Lorentzian has heavier tails than the Gaussian, so a larger truncation
             is recommended.
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1653,10 +1655,16 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         xp = get_array_module(self.array)
 
+        # 'reflect' is about the edge of the last pixel, the edge sample being
+        # repeated, as in gaussian_filter (scipy.ndimage's 'reflect'). That is
+        # numpy.pad's 'symmetric' and dask's map_overlap 'reflect'; numpy.pad's
+        # own 'reflect' mirrors about the last pixel centre (scipy's 'mirror').
         if boundary == "periodic":
             mode = "wrap"
-        elif boundary in ("reflect", "constant"):
-            mode = boundary
+        elif boundary == "reflect":
+            mode = "symmetric"
+        elif boundary == "constant":
+            mode = "constant"
         else:
             raise ValueError(
                 f"boundary must be 'periodic', 'reflect', or 'constant', got {boundary!r}"
@@ -1741,7 +1749,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             (default is 10.0). The Gaussian component uses the SciPy default
             (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1806,7 +1816,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Truncate the Lorentzian component at this many half-widths
             (default 10.0). The Gaussian component uses the SciPy default (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
