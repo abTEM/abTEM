@@ -51,26 +51,19 @@ def test_nyquist_sampling_of_a_positive_cutoff_is_unchanged():
     )
 
 
-@pytest.mark.parametrize(
-    "make_scan",
-    [
-        pytest.param(lambda: abtem.GridScan(), id="GridScan"),
-        pytest.param(lambda: abtem.LineScan(start=(0, 0), end=(3, 4)), id="LineScan"),
-    ],
-)
-def test_default_scan_of_a_parallel_beam_raises(potential, make_scan):
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=0)
-
-    with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
-        _haadf(probe, potential, make_scan())
-
-
-def test_default_scan_of_an_all_zero_cutoff_distribution_raises(potential):
-    cutoffs = abtem.distributions.from_values([0.0, 0.0])
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=cutoffs)
-
-    with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
-        _haadf(probe, potential, abtem.GridScan())
+def test_default_scan_of_a_parallel_beam_raises(potential):
+    parallel = abtem.Probe(energy=ENERGY, semiangle_cutoff=0)
+    all_zero = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=abtem.distributions.from_values([0.0, 0.0])
+    )
+    cases = [
+        ("GridScan", parallel, abtem.GridScan()),
+        ("LineScan", parallel, abtem.LineScan(start=(0, 0), end=(3, 4))),
+        ("all-zero cutoff distribution", all_zero, abtem.GridScan()),
+    ]
+    for name, probe, scan in cases:
+        with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
+            _haadf(probe, potential, scan)
 
 
 def test_explicit_scan_of_a_parallel_beam_works(potential):
