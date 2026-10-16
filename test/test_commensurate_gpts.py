@@ -20,6 +20,19 @@ def _plane_positions(x_planes, y_planes):
     return positions
 
 
+def _rutile():
+    # Rutile (TiO2) has no exactly commensurate grid, which both the
+    # translation-invariance and the fallback-overshoot tests rely on.
+    from ase.spacegroup import crystal
+
+    return crystal(
+        ["Ti", "O"],
+        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
+        spacegroup=136,
+        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
+    )
+
+
 def test_commensurate_and_fast():
     # 4 periods in x, 5 in y — both fast-compatible.
     extent = (10.0, 10.0)
@@ -151,24 +164,25 @@ def test_incommensurate_fallback_scales_to_large_supercells():
     # The translational-period search prunes candidate shifts to the plane
     # differences with near-integer L/s, so a large supercell of an
     # incommensurate structure stays cheap (review flagged the previous
-    # search-every-m version as O(n^2 log n)).
-    import time
-
+    # search-every-m version as O(n^2 log n); ~2 ms now). No wall-clock bound:
+    # it flaked on loaded runners. A quadratic regression shows in --durations.
     cell = 9.184
     base = np.sort(np.random.RandomState(0).uniform(0, cell, 12))
     planes = np.concatenate([base + i * cell for i in range(200)])
     extent = 200 * cell
-    positions = _plane_positions(planes, planes)
+    # Pair the planes up rather than taking their outer product: the 2400 x
+    # 2400 grid of _plane_positions is 5.8M atoms.
+    positions = np.stack([planes, planes, np.zeros_like(planes)], axis=1)
 
-    start = time.perf_counter()
     gpts = commensurate_gpts((extent, extent), positions, target_sampling=0.05)
-    elapsed = time.perf_counter() - start
 
-    # Correctness: the 200-cell translational period must be preserved.
-    assert gpts[0] % 200 == 0
-    # Performance: ~2 ms measured; 1 s is a generous CI-safe bound that the
-    # old quadratic search would still miss by an order of magnitude here.
-    assert elapsed < 1.0
+    # The 200-cell translational period must be preserved on both axes, and the
+    # grid must stay near the target size (today 39200 = 1.067 x target: the
+    # fast-FFT pick among nearby multiples of 200; bound 1.1).
+    target = extent / 0.05
+    for axis, n in enumerate(gpts):
+        assert n % 200 == 0, (axis, n)
+        assert 0.99 < n / target < 1.1, (axis, n, target)
 
 
 def test_plane_set_invariance_sees_across_the_periodic_wrap():
@@ -192,14 +206,7 @@ def test_auto_gpts_is_translation_invariant_for_incommensurate_structures():
     # scoring has to preserve. (The regression guard for the periodic-wrap bug
     # itself is test_plane_set_invariance_sees_across_the_periodic_wrap; this
     # is the end-to-end property that bug was one way of breaking.)
-    from ase.spacegroup import crystal
-
-    rutile = crystal(
-        ["Ti", "O"],
-        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
-        spacegroup=136,
-        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
-    )
+    rutile = _rutile()
 
     for plane in ("xy", "xz", "yz"):
         reference = Potential(rutile, sampling="auto", plane=plane).gpts
@@ -303,14 +310,7 @@ def test_incommensurate_fallback_respects_its_overshoot_window():
     # alignment -- but only inside the documented window. Scoring the
     # candidate that terminates the search let a size 17 % above the target
     # (38 % more pixels) win from outside it.
-    from ase.spacegroup import crystal
-
-    rutile = crystal(
-        ["Ti", "O"],
-        basis=[(0, 0, 0), (0.30478, 0.30478, 0)],
-        spacegroup=136,
-        cellpar=[4.5937, 4.5937, 2.9587, 90, 90, 90],
-    ) * (6, 6, 1)
+    rutile = _rutile() * (6, 6, 1)
 
     potential = Potential(rutile, sampling="auto")
 
@@ -341,3 +341,22 @@ def test_fallback_window_is_a_bound_even_when_no_fast_size_fits():
     assert gpts[0] <= n_target * 1.12
     # The period is what the fallback exists to preserve, so it survives.
     assert gpts[0] % _translational_period_count(np.unique(planes), cell) == 0
+
+
+@pytest.mark.parametrize("round_to_fast_fft", [False, True])
+@pytest.mark.parametrize("points", [48, 96])
+def test_target_grid_of_an_extent_dividing_the_target_sampling(
+    points, round_to_fast_fft
+):
+    # 48 * 0.05 is 2.4000000000000004, so the extent over 0.05 is 48.00000000000001
+    # in floats; the target is still 48 points, which is itself a fast size.
+    extent = points * 0.05
+    positions = _plane_positions(np.array([0.5]), np.array([0.5]))
+    gpts = commensurate_gpts(
+        (extent, extent),
+        positions,
+        target_sampling=0.05,
+        round_to_fast_fft=round_to_fast_fft,
+    )
+    assert is_fast_fft_size(points)
+    assert gpts == (points, points)

@@ -18,6 +18,7 @@ from matplotlib.patches import Circle
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
+from abtem.core.axes import AxisMetadata, ThicknessAxis
 from abtem.core.utils import itemset, label_to_index
 from abtem.visualize.artists import (
     DomainColoringArtist,
@@ -28,10 +29,21 @@ from abtem.visualize.artists import (
     validate_cmap,
 )
 from abtem.visualize.axes_grid import AxesCollection, AxesGrid
-from abtem.visualize.widgets import slider_from_axes_metadata
 
 if TYPE_CHECKING:
     from abtem.measurements import BaseMeasurements
+
+
+def default_ensemble_index(axis_metadata: AxisMetadata, length: int) -> int:
+    """Index shown for an ensemble axis that is not explicitly indexed.
+
+    Thickness series default to their last plane (the exit surface): with an integer
+    ``exit_planes``, the first plane is the entrance surface at zero thickness, i.e.
+    the unscattered incident wave.
+    """
+    if isinstance(axis_metadata, ThicknessAxis):
+        return length - 1
+    return 0
 
 
 def discrete_cmap(num_colors, base_cmap):
@@ -88,6 +100,21 @@ def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasureme
         raise ValueError(f"complex conversion '{method}" f"' not implemented")
 
     return measurement
+
+
+def _sum_ensemble_range(measurement, axes: tuple[int, ...]):
+    """Sum a selected range of ensemble members.
+
+    Axes carrying probability weights are summed with their weights scaled to
+    average one over the range, ``N Σ p_i I_i / Σ p_i``, so that equal weights give
+    the plain sum and the plotted scale does not depend on whether the axis is
+    weighted.
+    """
+    if not measurement._weighted_axes(axes):
+        return measurement.sum(axis=axes)
+
+    num_members = int(np.prod([measurement.shape[axis] for axis in axes]))
+    return measurement._weighted_ensemble_mean(axes) * num_members
 
 
 def _validate_artist_type(measurement, complex_conversion, artist_type=None):
@@ -286,6 +313,9 @@ class Visualization:
                 "interactive visualizations requires the 'ipympl' matplotlib backend"
             )
 
+        # ipywidgets (and IPython) take ~0.5 s to import, so only on this path.
+        from abtem.visualize.widgets import slider_from_axes_metadata
+
         sliders = [
             slider_from_axes_metadata(
                 self.measurement.axes_metadata[i], self.measurement.shape[i]
@@ -331,7 +361,12 @@ class Visualization:
         for i in range(len(self._measurement.ensemble_shape)):
             if i in self.indexing_axes:
                 if j >= len(indices):
-                    validated_indices += (0,)
+                    validated_indices += (
+                        default_ensemble_index(
+                            self._measurement.axes_metadata[i],
+                            self._measurement.shape[i],
+                        ),
+                    )
                 elif isinstance(indices[j], int):
                     validated_indices += (indices[j],)
                     removed_axes += 1
@@ -348,7 +383,7 @@ class Visualization:
 
         measurement = self._measurement[validated_indices]
         if len(summed_axes) > 0:
-            measurement = measurement.sum(axis=summed_axes)
+            measurement = _sum_ensemble_range(measurement, summed_axes)
 
         measurement = convert_complex(measurement, self._complex_conversion)
 

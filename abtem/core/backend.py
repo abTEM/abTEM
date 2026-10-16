@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import ctypes
+import importlib.util
 import logging
+import os
+import sys
+import threading
 import warnings
 from numbers import Number
 from types import ModuleType
-from typing import Union
+from typing import Any, Union
 
 import dask.array as da
+import numba  # type: ignore
 import numpy as np
 import scipy  # type: ignore
 import scipy.ndimage  # type: ignore
@@ -39,20 +45,121 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    assert cupyx is None
+    # this can fail even though cupyx itself imported, if the CUDA/ROCm
+    # libraries it eagerly pulls in aren't on the loader path. GPU code that
+    # needs cupyx_ndimage then fails at use time instead of blocking the abtem
+    # import.
     cupyx_ndimage = None
 
 
-try:
-    # cupyx.scipy exposes submodules lazily; signal must be imported explicitly
-    # before ``get_scipy_module(...).signal`` can resolve it (the import emits a
-    # FutureWarning about the experimental cupyx.jit interface it uses
-    # internally)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        import cupyx.scipy.signal  # type: ignore  # noqa: F401
-except ImportError:
-    assert cupyx is None
+def _is_macos() -> bool:
+    """Whether this machine can have a Metal (MPS) device.
+
+    Apple silicon and Intel Macs with an AMD GPU both can; whether this one
+    does is for PyTorch to answer.
+    """
+    return sys.platform == "darwin"
+
+
+def _preload_torch_openmp() -> bool:
+    """Load PyTorch's own OpenMP runtime ahead of pyfftw's, without torch.
+
+    PyTorch and pyfftw each ship a copy of libomp.dylib, and the order the two
+    enter the process matters: if pyfftw's comes first, torch's work on the
+    CPU later segfaults -- including the dtype cast it makes before uploading
+    a double-precision host array to Metal, and its CPU fallback for large
+    eigendecompositions. Importing all of torch up front would win that
+    race, but costs about two seconds and 180 MB on every import of abTEM,
+    whether or not Metal is ever used. Only torch's runtime has to be first,
+    and loading that alone takes a few milliseconds -- after which pyfftw can
+    load as usual and torch can wait until something asks for the 'mps'
+    device. This module is imported before abtem.core.fft imports pyfftw.
+
+    Returns
+    -------
+    bool
+        Whether torch can safely be imported later. False only when it is too
+        late: pyfftw's runtime is already in the process and torch's is not.
+    """
+    if not _is_macos():
+        return True  # no Metal device to load torch for
+    if "torch" in sys.modules:
+        return True  # its runtime is already in, ahead of whatever follows
+    try:
+        spec = importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        return True
+    if spec is None or not spec.submodule_search_locations:
+        return True  # not installed; using Metal will say so
+    runtime = os.path.join(spec.submodule_search_locations[0], "lib", "libomp.dylib")
+    if not os.path.exists(runtime):
+        return True  # no runtime of its own to clash with
+    if "pyfftw" in sys.modules:
+        return False
+    try:
+        ctypes.CDLL(runtime, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass  # importing torch will report whatever is wrong with it
+    return True
+
+
+_TORCH_IMPORT_IS_SAFE = _preload_torch_openmp()
+
+# The Metal (MPS) array namespace and its array type, loaded on first use of
+# the 'mps' device and None until then. Read them through the module
+# (``backend.tp``) rather than binding them by value, so every caller sees the
+# namespace once it is loaded. No Metal array can exist before then, so
+# ``backend.tp is None`` correctly answers "not a Metal array" either way.
+tp: Any = None
+TorchNDArray: Any = None
+_TORCH_LOAD_LOCK = threading.Lock()
+
+
+def _cap_numba_threads_to_omp_num_threads() -> None:
+    """Cap Numba's own thread pool to ``OMP_NUM_THREADS``, if set.
+
+    A fallback for the case where something already imported numba before
+    abtem: ``abtem.core._numba_threads``, imported as abtem's own first
+    statement, is the primary mechanism (seeds ``NUMBA_NUM_THREADS`` itself
+    before numba's first import, which applies process-wide -- see that
+    module's docstring for why this function's own approach, calling
+    ``numba.set_num_threads()`` after the fact, is not equivalent: it only
+    rebinds the *calling* thread's own active count, not a spawned worker
+    thread's, such as one of dask's threaded-scheduler tasks).
+
+    Every ``@njit(parallel=True)`` kernel in this package (the CPU Laplacian
+    stencil in ``finite_difference.py``, the magnetism kernels in
+    ``magnetism/pauli.py``, the partitioned S-matrix kernel in
+    ``prism/_partitioned_s_matrix.py``) uses Numba's own internal thread
+    pool. That pool defaults to the full visible CPU count and reads
+    neither ``OMP_NUM_THREADS`` nor ``OPENBLAS_NUM_THREADS`` -- Numba's
+    default "workqueue" threading layer (the fallback when neither TBB nor
+    OpenMP is available) is independent of both. Skipped when
+    ``NUMBA_NUM_THREADS`` is already set explicitly, so a deliberate,
+    Numba-specific choice already made by the caller is never overridden.
+    """
+    if "NUMBA_NUM_THREADS" in os.environ:
+        return
+
+    omp_num_threads = os.environ.get("OMP_NUM_THREADS")
+    if omp_num_threads is None:
+        return
+
+    try:
+        n = int(omp_num_threads)
+    except ValueError:
+        return
+
+    if n > 0:
+        # set_num_threads raises ValueError above Numba's own launch-time
+        # ceiling (numba.config.NUMBA_NUM_THREADS, itself derived from the
+        # visible CPU count unless NUMBA_NUM_THREADS constrained it at
+        # process start) -- clamp rather than let a larger OMP_NUM_THREADS
+        # crash the import.
+        numba.set_num_threads(min(n, numba.config.NUMBA_NUM_THREADS))
+
+
+_cap_numba_threads_to_omp_num_threads()
 
 
 ArrayModule = Union[ModuleType, str]
@@ -66,6 +173,73 @@ def check_cupy_is_installed():
     """
     if cp is None:
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
+
+
+def check_mps_is_available():
+    """
+    Load the Metal (MPS) array namespace, raising if it is unusable.
+
+    PyTorch is imported here, on the first request for the 'mps' device,
+    rather than with abTEM: see ``_preload_torch_openmp``.
+
+    Returns
+    -------
+    module
+        The Metal array namespace, as returned by ``get_array_module('mps')``.
+    """
+    global tp, TorchNDArray
+
+    if tp is None:
+        with _TORCH_LOAD_LOCK:
+            if tp is None:
+                if not _TORCH_IMPORT_IS_SAFE:
+                    raise RuntimeError(
+                        "The Metal (MPS) backend cannot be loaded: pyfftw was "
+                        "imported before abTEM, so its OpenMP runtime is already "
+                        "loaded, and importing PyTorch after it would crash the "
+                        "process. Import abtem (or torch) before pyfftw."
+                    )
+
+                torch_device = _config_get("torch.device")
+                if not isinstance(torch_device, str) or torch_device.lower() not in (
+                    "mps",
+                    "cpu",
+                ):
+                    raise ValueError(
+                        "The configuration key 'torch.device' must be 'mps' or "
+                        f"'cpu', got {torch_device!r}."
+                    )
+                torch_device = torch_device.lower()
+
+                # Importing PyTorch can break CuPy's runtime kernel compilation
+                # in the same process (observed with ROCm), so a machine that
+                # cannot have a Metal device is refused before the import.
+                if torch_device == "mps" and not _is_macos():
+                    raise RuntimeError(
+                        "The Metal (MPS) backend is not available on this machine. "
+                        "Metal requires macOS; change the device to 'cpu'."
+                    )
+
+                from abtem.core import _torch
+
+                _torch.DEVICE = torch_device
+
+                _torch._check_available()
+
+                # tp last: other threads test it without the lock, and must
+                # not see it before TorchNDArray is in place too.
+                TorchNDArray = _torch.TorchNDArray
+                tp = _torch.torch_numpy
+
+    if config.get("precision") != "float32":
+        raise RuntimeError(
+            "Metal (MPS) is a single-precision backend, but the configured "
+            f"precision is '{config.get('precision')}'. Set "
+            "abtem.config.set({'precision': 'float32'}), or run on the 'cpu' or "
+            "'gpu' device for double precision."
+        )
+
+    return tp
 
 
 _cuda_cluster_client = None
@@ -344,6 +518,9 @@ def get_array_module(
             check_cupy_is_installed()
             return cp
 
+        if x.lower() in ("torch", "mps", "metal"):
+            return check_mps_is_available()
+
     if isinstance(x, np.ndarray):
         return np
 
@@ -359,6 +536,9 @@ def get_array_module(
 
         if x is cp:
             return cp
+
+    if tp is not None and (isinstance(x, (TorchNDArray, tp.Tensor)) or x is tp):
+        return tp
 
     raise ValueError(f"array module specification {x} not recognized")
 
@@ -384,7 +564,12 @@ def device_name_from_array_module(xp: ArrayModule) -> str:
     if xp is cp:
         return "gpu"
 
-    raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
+    if tp is not None and xp is tp:
+        return "mps"
+
+    raise ValueError(
+        f"array module must be NumPy, CuPy or the Metal namespace, not {xp}"
+    )
 
 
 def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = None):
@@ -410,6 +595,11 @@ def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = N
 
     elif xp is cp:
         return cupyx.scipy  # type: ignore
+
+    elif tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.scipy
 
     else:
         raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
@@ -440,6 +630,11 @@ def get_ndimage_module(
     if xp is cp:
         return cupyx_ndimage  # type: ignore
 
+    if tp is not None and xp is tp:
+        from abtem.core import _torch
+
+        return _torch.ndimage
+
     raise RuntimeError("Invalid array module")
 
 
@@ -457,6 +652,18 @@ def asnumpy(array: np.ndarray | da.Array):
     numpy.ndarray
         The array converted to NumPy.
     """
+    if tp is not None:
+        if isinstance(array, (TorchNDArray, tp.Tensor)):
+            return tp.asnumpy(array)
+
+        # A lazy array whose chunks live on Metal still has to be brought
+        # across. Without this it falls to the cp-less short-circuit below and
+        # is handed back untouched -- still device-backed, so the caller's next
+        # reduction runs against Metal chunks rather than host memory, having
+        # asked for NumPy.
+        if isinstance(array, da.core.Array) and get_array_module(array) is tp:
+            return da.map_blocks(asnumpy, array)
+
     if cp is None:
         return array
 
@@ -499,10 +706,17 @@ def copy_to_device(
             device=device,
         )
 
+    if tp is not None and old_xp is tp:
+        array = tp.asnumpy(array)
+        old_xp = np
+
     if new_xp is np:
-        return cp.asnumpy(array)
+        return array if old_xp is np else cp.asnumpy(array)
 
     if new_xp is cp:
         return cp.asarray(array)
+
+    if tp is not None and new_xp is tp:
+        return tp.asarray(array)
 
     raise RuntimeError("Invalid device specified")

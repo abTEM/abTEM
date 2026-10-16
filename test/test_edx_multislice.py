@@ -713,16 +713,25 @@ class TestPrismEffectiveIonization:
             interpolation=1,
             downsample=False,
         )
-        got = s_matrix.ionization_scan(
-            _transition_potential(
-                potential.extent, potential.gpts, band_limited=True
-            ),
-            scan=np.array([[0.0, 0.0]]),
-            sites=atoms,
-        )
+        def scan(lazy):
+            return s_matrix.ionization_scan(
+                _transition_potential(
+                    potential.extent, potential.gpts, band_limited=True
+                ),
+                scan=np.array([[0.0, 0.0]]),
+                sites=atoms,
+                lazy=lazy,
+            )
+
+        got = scan(lazy=False)
         values = np.asarray(got.array).ravel()
         assert values[0] == 0.0  # entrance plane, nothing traversed
         assert np.all(np.diff(values) >= -1e-12), values
+
+        # The lazy graph declares the exit-plane axis of each block; without it
+        # the result had one array dimension fewer than axes metadata.
+        lazy = scan(lazy=True).compute()
+        np.testing.assert_array_equal(np.asarray(lazy.array).ravel(), values)
 
     def test_signal_is_real_and_non_negative(self):
         atoms, potential = self._setup()
