@@ -169,7 +169,8 @@ def test_structure_factor_auto_centering_keeps_allowed_reflections():
     # silently dropped.
     atoms = graphene(vacuum=2.0)
     atoms.pbc = True
-    atoms = atoms.repeat((1, 1, 20))
+    # Two cells are enough for the (0, 0, 1/2) translation; 20 took 4 s.
+    atoms = atoms.repeat((1, 1, 2))
 
     structure_factor = StructureFactor(atoms, g_max=2.0)
     structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
@@ -300,6 +301,10 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
     rotations = ("x", np.array([0.0, 0.02, 0.05]))
     thicknesses = [50.0, 100.0]
     multi = BlochWaves(structure_factor, energy=energies, sg_max=0.1, device=device)
+    # off zone axis the energies select different beams (103 and 97 of a
+    # 107-beam union at 0.02 rad), so each is embedded into the union with zeros
+    tilted = multi.rotate("x", 0.02)
+    assert len({len(tilted.select_energy(e).hkl) for e in energies}) == 2
 
     ensemble = multi.rotate(*rotations)
     assert isinstance(ensemble, BlochwaveEnsemble)
@@ -342,9 +347,10 @@ def test_rotation_ensemble_with_multiple_energies(device, lazy):
 
 def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
     # energies, a fixed rotation and a distributed two-axis rotation together,
-    # with a scalar thickness
-    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=4.0)
-    energies = [80e3, 120e3, 200e3]
+    # with a scalar thickness. Two energies against three rotations: with as
+    # many energies as rotations, swapped axes would keep the shape.
+    structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=3.0)
+    energies = [80e3, 200e3]
     angles = np.array([[0.0, 0.0], [0.01, 0.02], [0.03, 0.0]])
     rotations = ("z", 0.1, "xy", angles)
 
@@ -352,10 +358,10 @@ def test_rotation_ensemble_with_energies_and_fixed_multi_axis_rotations():
         *rotations
     )
     patterns = ensemble.calculate_diffraction_patterns(50.0, lazy=True)
-    assert patterns.shape[:2] == (3, 3)
+    assert patterns.shape[:2] == (3, 2)
     assert np.shape(patterns.reciprocal_lattice_vectors) == (3, 1, 3, 3)
     assert patterns[1].shape == patterns.shape[1:]
-    assert patterns.crop(k_max=1.0).shape[:2] == (3, 3)
+    assert patterns.crop(k_max=1.0).shape[:2] == (3, 2)
 
     for k, energy in enumerate(energies):
         expected = (
@@ -430,16 +436,18 @@ def test_structure_factor_array_projected_potential_honors_lazy(built_lazy):
     g_max=st.floats(min_value=10, max_value=16),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 def test_potential_from_structure_factor(
-    atoms, sampling, thermal_sigma, g_max, slice_thickness, lazy
+    atoms, sampling, thermal_sigma, g_max, slice_thickness
 ):
+    # Eager only: StructureFactor.get_projected_potential builds with its lazy
+    # argument and hands over to the built array, whose lazy and eager results
+    # test_structure_factor_array_projected_potential_honors_lazy compares.
     structure_factor = abtem.StructureFactor(
         atoms, g_max=g_max, thermal_sigma=thermal_sigma
     )
 
     structure_factor_potential = structure_factor.get_projected_potential(
-        slice_thickness=slice_thickness, sampling=sampling, lazy=lazy
+        slice_thickness=slice_thickness, sampling=sampling, lazy=False
     )
 
     parametrization = abtem.parametrizations.LobatoParametrization(sigmas=thermal_sigma)
@@ -472,7 +480,7 @@ def test_potential_from_structure_factor(
     )
 
     structure_factor_potential = structure_factor_potential.project().compute()
-    potential = potential.build(lazy=lazy).project().compute()
+    potential = potential.build(lazy=False).project().compute()
 
     # sampling is honoured (to within fitting the grid to the cell)
     assert np.allclose(structure_factor_potential.sampling, sampling, rtol=0.05)
@@ -651,24 +659,26 @@ def test_exact_excitation_errors_match_the_nonparaxial_dispersion():
         excitation_errors(g, energy, use_wave_eq="paraxial")
 
 
-@pytest.mark.parametrize("use_wave_eq", ["paraxial", "True", None])
-def test_invalid_use_wave_eq_is_rejected_at_construction(use_wave_eq):
+def test_invalid_use_wave_eq_is_rejected_at_construction():
     # not only later, at compute time inside dask
     from abtem.bloch.dynamical import BlochwaveEnsemble
 
     structure_factor = StructureFactor(bulk("Si", cubic=True), g_max=2.0)
-    with pytest.raises(ValueError, match="use_wave_eq"):
-        BlochWaves(structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=use_wave_eq)
-    with pytest.raises(ValueError, match="use_wave_eq"):
-        BlochwaveEnsemble(
-            "x",
-            np.array([0.0, 0.01]),
-            structure_factor=structure_factor,
-            energy=100e3,
-            sg_max=0.1,
-            g_max=1.0,
-            use_wave_eq=use_wave_eq,
-        )
+    for use_wave_eq in ("paraxial", "True", None):
+        with pytest.raises(ValueError, match="use_wave_eq"):
+            BlochWaves(
+                structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=use_wave_eq
+            )
+        with pytest.raises(ValueError, match="use_wave_eq"):
+            BlochwaveEnsemble(
+                "x",
+                np.array([0.0, 0.01]),
+                structure_factor=structure_factor,
+                energy=100e3,
+                sg_max=0.1,
+                g_max=1.0,
+                use_wave_eq=use_wave_eq,
+            )
     for valid in (False, True, "exact", np.bool_(True)):
         bloch_waves = BlochWaves(
             structure_factor, energy=100e3, sg_max=0.1, use_wave_eq=valid
@@ -878,12 +888,15 @@ def float64():
 
 def _tilted_si_bloch_waves(use_wave_eq):
     # beam || [018] of cubic Si, 7.1 degrees from [001]: g_z != 0 for most beams,
-    # so the (1 + g_z / K) metric of the standard form matters
+    # so the (1 + g_z / K) metric of the standard form matters. g_max = 3 gives
+    # 266 beams (496 at g_max = 4, ~6x slower to solve) with the metric spread
+    # over 0.037 (the test needs > 0.02) and the standard form's sum |psi_g|^2
+    # off 1 by 7e-6 (the test needs > 1e-6).
     atoms = bulk("Si", cubic=True)
     basis = np.array([[1, 0, 0], [0, 8, -1], [0, 1, 8]])
     orientation_matrix = basis / np.linalg.norm(basis, axis=1)[:, None]
     structure_factor = StructureFactor(
-        atoms, g_max=4.0, parametrization="lobato", centering="F"
+        atoms, g_max=3.0, parametrization="lobato", centering="F"
     )
     return BlochWaves(
         structure_factor=structure_factor,
@@ -896,46 +909,6 @@ def _tilted_si_bloch_waves(use_wave_eq):
 
 @pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
 @pytest.mark.usefixtures("float64")
-def test_eigendecomposition_matches_scattering_matrix_when_tilted(use_wave_eq):
-    # Both solution paths must map the symmetrized eigenproblem back to beam
-    # amplitudes with the same metric (they used not to, off zone axis).
-    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
-    thickness = 300.0
-    psi = np.asarray(
-        bloch_waves.calculate_diffraction_patterns(
-            [thickness], return_complex=True, lazy=False
-        ).array
-    )[0]
-    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
-    S = np.asarray(bloch_waves.calculate_scattering_matrix(thickness))
-    np.testing.assert_allclose(psi, S[:, direct_beam], atol=1e-10)
-
-
-@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
-@pytest.mark.usefixtures("float64")
-def test_bloch_waves_conserve_their_own_flux_when_tilted(use_wave_eq):
-    # The wave-equation forms, like multislice, are unitary: sum |psi_g|^2 = 1.
-    # The standard form conserves the current along z instead:
-    # sum (1 + g_z / K) |psi_g|^2 = 1.
-    from abtem.core.energy import energy2wavelength
-
-    bloch_waves = _tilted_si_bloch_waves(use_wave_eq)
-    psi = np.asarray(
-        bloch_waves.calculate_diffraction_patterns(
-            [100.0, 300.0, 600.0], return_complex=True, lazy=False
-        ).array
-    )
-    if use_wave_eq:
-        weights = 1.0
-    else:
-        weights = 1 + bloch_waves.g_vec[:, 2] * energy2wavelength(bloch_waves.energy)
-    np.testing.assert_allclose((weights * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
-    if not use_wave_eq:
-        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
-
-
-@pytest.mark.parametrize("use_wave_eq", [False, True, "exact"])
-@pytest.mark.usefixtures("float64")
 def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
     # The standard form (use_wave_eq=False; Helmholtz with only gamma**2 dropped)
     # is the generalized eigenproblem A C = 2 K gamma B C, with
@@ -943,6 +916,12 @@ def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
     # wave-equation forms have B = 1. Compare the eigenvalues and the propagated
     # beams with scipy's generalized Hermitian solver. (Conservation of
     # sum B |psi_g|^2 alone cannot tell the right metric from a wrong one.)
+    # The same solution also checks that the scattering-matrix path maps the
+    # symmetrized eigenproblem back to beam amplitudes with the same metric
+    # (they used not to, off zone axis), and the conserved flux: the
+    # wave-equation forms, like multislice, are unitary, sum |psi_g|^2 = 1,
+    # while the standard form conserves the current along z instead,
+    # sum (1 + g_z / K) |psi_g|^2 = 1.
     import scipy.linalg
 
     from abtem.bloch.utils import excitation_errors
@@ -955,8 +934,25 @@ def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
     metric = 1 + g[:, 2] / k if use_wave_eq is False else np.ones(len(g))
     assert use_wave_eq or np.ptp(metric) > 0.02  # the metric matters
 
+    z = np.array([100.0, 300.0, 600.0])
+    psi = np.asarray(
+        bloch_waves.calculate_diffraction_patterns(
+            z, return_complex=True, lazy=False
+        ).array
+    )
+
+    # the scattering-matrix path
+    direct_beam = np.flatnonzero(np.all(bloch_waves.hkl == 0, axis=1))[0]
+    S = np.asarray(bloch_waves.calculate_scattering_matrix(z[1]))
+    np.testing.assert_allclose(psi[1], S[:, direct_beam], atol=1e-10)
+
+    # the conserved flux
+    np.testing.assert_allclose((metric * np.abs(psi) ** 2).sum(-1), 1.0, atol=1e-10)
+    if use_wave_eq is False:
+        assert abs((np.abs(psi) ** 2).sum(-1) - 1).max() > 1e-6  # the metric matters
+
     # U from the paraxial form, which carries no metric
-    paraxial = _tilted_si_bloch_waves(True)
+    paraxial = bloch_waves if use_wave_eq is True else _tilted_si_bloch_waves(True)
     assert np.array_equal(paraxial.hkl, bloch_waves.hkl)
     A = np.asarray(paraxial.calculate_structure_matrix(lazy=False))
     np.testing.assert_allclose(
@@ -973,13 +969,9 @@ def test_bloch_waves_solve_their_eigenproblem_when_tilted(use_wave_eq):
     # psi(0) = C alpha = e_0, so alpha = C^H B e_0
     initial = np.all(bloch_waves.hkl == 0, axis=1) * metric
     alpha = C.conj().T @ initial
-    z = np.array([100.0, 300.0])
     phases = np.exp(2j * np.pi * z[:, None] * eigenvalues[None] / (2 * k))
     expected = (phases * alpha) @ C.T
-    psi = bloch_waves.calculate_diffraction_patterns(
-        z, return_complex=True, lazy=False
-    ).array
-    np.testing.assert_allclose(np.asarray(psi), expected, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(psi, expected, rtol=0, atol=1e-9)
 
 
 # --- abTEM/abTEM#455 --------------------------------------------------------
@@ -1163,6 +1155,35 @@ def test_projected_potential_sequence_slice_thickness(lazy):
         sf.get_projected_potential(slice_thickness=[2.0, 2.0], lazy=lazy)
     with pytest.raises(ValueError, match="at least one z grid point"):
         sf.get_projected_potential(slice_thickness=[depth - 1e-3, 1e-3], lazy=lazy)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_projected_potential_slices_are_centred_on_their_slices(lazy):
+    # One atom at the middle of the middle of three slices, which put m, k and m
+    # planes of the potential in the slices: the potential is mirror-symmetric
+    # about the atom, and so are the outer slices. Plane j stands for the heights
+    # within dz / 2 of it, so a slice limit on a plane splits it between the
+    # slices. Summing whole planes from each lower limit (a left Riemann sum) put
+    # each slice integral dz / 2 below its slice, so the outer slices differed.
+    cell = (3.0, 3.2, 4.0)
+
+    def structure_factor(z):
+        atoms = Atoms("C", positions=[(1.1, 1.3, z)], cell=cell, pbc=True)
+        return StructureFactor(atoms, g_max=4.0, thermal_sigma=0.1)
+
+    num_planes = structure_factor(0.0).get_potential_3d(lazy=False).shape[-1]
+    dz = cell[2] / num_planes
+    outer = num_planes // 3
+    planes = (outer, num_planes - 2 * outer, outer)
+    potential = structure_factor((outer + planes[1] / 2) * dz).get_projected_potential(
+        slice_thickness=[n * dz for n in planes], lazy=lazy
+    )
+    array = np.asarray(potential.compute().array)
+
+    assert len(array) == 3
+    scale = np.abs(array[0]).max()
+    assert scale > 0
+    np.testing.assert_allclose(array[0], array[2], rtol=0, atol=1e-5 * scale)
 
 
 @pytest.mark.parametrize("lazy", [False, True])

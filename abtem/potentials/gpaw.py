@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
+import io
 import threading
 import warnings
 from collections import defaultdict
@@ -20,8 +19,14 @@ from ase.data import atomic_numbers, chemical_symbols
 from dask.delayed import Delayed
 from scipy.interpolate import interp1d
 
-from abtem.atoms import is_cell_orthogonal, plane_to_axes
+from abtem.atoms import (
+    _box_strain_warning_silenced,
+    _grid_to_plane,
+    is_cell_orthogonal,
+    plane_to_axes,
+)
 from abtem.core.axes import AxisMetadata
+from abtem.core.backend import copy_to_device
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,
@@ -30,6 +35,7 @@ from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import (
+    SOURCE_INDEX,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -38,6 +44,7 @@ from abtem.inelastic.phonons import (
 from abtem.parametrizations import LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.slicing import _integrate_planes
 
 try:
     from gpaw import GPAW
@@ -251,18 +258,51 @@ def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
     return interpolators
 
 
-def integrate_slice(array, gpts, a, b, thickness):
-    dz = thickness / array.shape[2]
-    na = int(np.floor(a / dz))
-    nb = int(np.floor(b / dz))
-    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
-    new_shape = (nb - na,) + gpts
-    old_shape = (nb - na,) + slice_array.shape
+def _same_elements_and_cell(atoms, other):
+    """Whether two atoms have the same elements in the same order and cell."""
+    return (
+        len(atoms) == len(other)
+        and np.array_equal(atoms.numbers, other.numbers)
+        and np.allclose(np.array(atoms.cell), np.array(other.cell))
+    )
+
+
+def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
+    """
+    Integrate the planes of `array` along its last axis between the heights `a`
+    and `b`, and Fourier interpolate the result to `gpts`.
+
+    Plane k is the sample at the height k * dz, with dz the plane spacing, and
+    stands for the heights from k * dz - dz / 2 to k * dz + dz / 2; the grid is
+    periodic, so plane 0 also stands for the heights within dz / 2 below the
+    thickness. A slice takes each plane times the length of the plane's heights
+    that lie between `a` and `b`. Consecutive slices share their limit, so the
+    weights of every plane add up to dz. A limit on a plane splits it between the
+    slices on either side (the trapezoidal rule), so the integral of a slice is
+    centred on the slice. Taking the planes from floor(a / dz) to floor(b / dz)
+    whole (a left Riemann sum) put it dz / 2 below the slice.
+
+    `array` is one period of a grid repeated `repetitions` times along its three
+    axes, and `thickness` is the length of the repeated grid along the last axis.
+    The planes are taken from the one period and the integral is repeated in the
+    plane, which gives the same values as integrating the repeated grid, up to
+    the order of the float sum.
+    """
+    nz = array.shape[2] * repetitions[2]
+    dz = thickness / nz
+    # The limits in plane spacings; the repeated grid ends at plane nz.
+    start, stop = a / dz, min(b / dz, nz)
+
+    if stop <= start:
+        return np.zeros(gpts, dtype=array.dtype)
+
+    summed = _integrate_planes(array, start, stop)
+
+    slice_array = np.tile(summed * dz, repetitions[:2])
+    old_shape = slice_array.shape
     slice_array = np.fft.fftn(slice_array)
     slice_array = fft_crop(slice_array, gpts)
-    slice_array = (
-        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
-    )
+    slice_array = np.fft.ifftn(slice_array).real * np.prod(gpts) / np.prod(old_shape)
     return slice_array
 
 
@@ -279,6 +319,27 @@ class _DummyParametrization:
         return {}
 
 
+def _drops_directions(frozen_phonons: BaseFrozenPhonons) -> bool:
+    """Whether the frozen phonons displace the atoms along fewer than three axes."""
+    return (
+        isinstance(frozen_phonons, FrozenPhonons)
+        and len(set(frozen_phonons.directions.lower())) < 3
+    )
+
+
+def _slice_axes_frame(atoms: Atoms, plane, gpts) -> np.ndarray:
+    """The linear map from the Cartesian axes of `atoms` to those of the potentials
+    `_generate_slices` builds from them, acting on row vectors."""
+    # The default box was reported when the GPAWPotential was constructed.
+    with _box_strain_warning_silenced():
+        potential = Potential(
+            atoms=atoms[:1], gpts=gpts, projection="finite", plane=plane
+        )
+    if potential.plane != "xy" and not is_cell_orthogonal(atoms.cell):
+        raise NotImplementedError
+    return potential._transform_atoms()[2]
+
+
 def _generate_slices(
     interpolators,
     valence_potential,
@@ -288,27 +349,47 @@ def _generate_slices(
     plane="xy",
     first_slice=0,
     last_slice=None,
+    device=None,
+    repetitions=(1, 1, 1),
 ):
-    potential_generators = []
+    # `atoms` is the calculator's atoms or whole copies of them one after another
+    # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
+    # correction of atom i of the calculator. `valence_potential` is that of one
+    # calculator cell.
+    n = len(interpolators)
+    potentials = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-        potential = Potential(
-            gpts=gpts,
-            atoms=atoms[i : i + 1],
-            parametrization=parametrization,
-            slice_thickness=slice_thickness,
-            projection="finite",
-            plane=plane,
-        )
-        potential_generators.append(potential.generate_slices())
+        # The default box was reported when the GPAWPotential was constructed.
+        with _box_strain_warning_silenced():
+            potential = Potential(
+                gpts=gpts,
+                atoms=atoms[i::n],
+                parametrization=parametrization,
+                slice_thickness=slice_thickness,
+                projection="finite",
+                plane=plane,
+                device=device,
+            )
+        potentials.append(potential)
+
+    if last_slice is None:
+        last_slice = len(potential)
+
+    potential_generators = [
+        potential.generate_slices(first_slice, last_slice) for potential in potentials
+    ]
 
     transform_valence_potential = None
     if potential.plane != "xy":
         if not is_cell_orthogonal(atoms.cell):
             raise NotImplementedError
 
+        # The valence potential is rotated with the atoms, including the reversal
+        # of the axis that `_plane_rotation` reverses for the planes that need it.
         axes = plane_to_axes(potential.plane)
-        valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
+        valence_potential = _grid_to_plane(valence_potential, potential.plane)
+        repetitions = tuple(repetitions[axis] for axis in axes)
         transform_valence_potential = False
     # else:
     #    atoms = ewald_potential.frozen_phonons.atoms
@@ -320,8 +401,10 @@ def _generate_slices(
     elif transform_valence_potential is None:
         transform_valence_potential = True
 
-    if last_slice is None:
-        last_slice = len(potential)
+    if transform_valence_potential and repetitions != (1, 1, 1):
+        # `_interpolate_slice` maps the grid points of the slice into the cell of
+        # `atoms`, so it takes the valence potential of the repeated cell.
+        valence_potential = np.tile(valence_potential, repetitions)
 
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
@@ -331,14 +414,22 @@ def _generate_slices(
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array
 
+        # The valence potential is on the host; its slice is moved to the device
+        # of the slice array.
         if transform_valence_potential:
-            slic.array[:] -= _interpolate_slice(
+            valence_slice = _interpolate_slice(
                 valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
             )
         else:
-            slic.array[:] -= integrate_slice(
-                valence_potential, potential.gpts, a, b, potential.thickness
+            valence_slice = integrate_slice(
+                valence_potential,
+                potential.gpts,
+                a,
+                b,
+                potential.thickness,
+                repetitions,
             )
+        slic.array[:] -= copy_to_device(valence_slice, slic.array)
 
         yield slic
 
@@ -384,20 +475,24 @@ class GPAWPotential(_PotentialBuilder):
         i.e. provided plane is perpendicular to the propagation direction. If string,
         it must be a concatenation of two of 'x', 'y' and 'z';
         the default value 'xy' indicates that potential slices are cuts along the
-        `xy`-plane of the atoms. The plane may also be specified with two arbitrary
-        3D vectors, which are mapped to the `x` and `y` directions of the potential.
-        The length of the vectors has no influence. If the vectors are not
-        perpendicular, the second vector is rotated in the plane to become perpendicular
-        to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to
-        providing 'xy'.
+        `xy`-plane of the atoms. The atoms are rotated to the plane, never mirrored,
+        so for 'xz', 'yx' and 'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also
+        be specified with two arbitrary 3D vectors, which are mapped to the `x` and
+        `y` directions of the potential. The length of the vectors has no influence.
+        If the vectors are not perpendicular, the second vector is rotated in the
+        plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided Atoms mapped to the origin of the Potential.
-        This is equivalent to translating the atoms. The default is (0., 0., 0.)
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the potential is interpolated from the
+        calculator's grid of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms' cell. If the box size does not match an integer number of the
-        atoms' supercell, an affine transformation may be necessary to preserve
-        periodicity, determined by the `periodic` keyword
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True (default), the periodicity of
@@ -406,7 +501,17 @@ class GPAWPotential(_PotentialBuilder):
         cut out of a larger repeated potential, which may not preserve periodicity.
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
         Approximates frozen phonons for a single GPAW calculator by displacing only the
-        nuclear core potentials. Supercedes the atoms from the calculator.
+        nuclear core potentials. Supercedes the atoms from the calculator. The atoms are
+        displaced along their own axes before the slices transform them to `plane`
+        (with the default box and origin; `box` and `origin` do not move the atoms),
+        so every displacement gets the linear map of that transform: anisotropic ones
+        as in :class:`~abtem.potentials.iam.Potential`, and isotropic
+        ones too, which therefore get the small strain of a non-orthogonal cell's
+        orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
+        isotropic displacements without it. `directions` refers to the axes of the
+        potential, as in :class:`~abtem.potentials.iam.Potential`. A trajectory
+        (:class:`~abtem.inelastic.phonons.AtomsEnsemble`) is not accepted: pass one
+        calculator per frame instead.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -418,6 +523,8 @@ class GPAWPotential(_PotentialBuilder):
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
@@ -461,13 +568,31 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif frozen_phonons.ensemble_shape and not isinstance(
+                frozen_phonons, FrozenPhonons
+            ):
+                raise ValueError(
+                    "One calculator takes `FrozenPhonons`; for a trajectory, pass "
+                    "one calculator per frame."
+                )
+            elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
+                raise ValueError(
+                    "The frozen phonons must have the calculator's atoms: the same "
+                    "elements in the same order and the same cell, with positions "
+                    "that may differ. Repeat the cell with `repetitions`."
+                )
 
         self._calculators = calculators
         self._frozen_phonons = frozen_phonons
         self._gridrefinement = gridrefinement
-        self._repetitions = repetitions
+        self._repetitions = tuple(repetitions)
 
-        cell = frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
         frozen_phonons.atoms.calc = None
 
         super().__init__(
@@ -538,7 +663,11 @@ class GPAWPotential(_PotentialBuilder):
 
         calculator = _DummyGPAW.from_generic(calculator)
 
-        atoms = self.frozen_phonons.atoms
+        atoms = self.frozen_phonons.atoms.copy()
+        # Per-atom displacement standard deviations follow their atoms into
+        # the repeated cell.
+        atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
+        valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
             # cell_cv = calculator.gd.cell_cv * self.repetitions
@@ -552,7 +681,16 @@ class GPAWPotential(_PotentialBuilder):
         # gd = calculator.gd
         # nt_sG = calculator.nt_sG
 
-        random_atoms = self.frozen_phonons.randomize(atoms)
+        # The atoms are displaced along their own axes, before _generate_slices
+        # transforms them, while `directions` refers to the axes of the
+        # transformed atoms. Only frozen phonons that drop directions need that
+        # frame.
+        directions_frame = None
+        if _drops_directions(self.frozen_phonons):
+            directions_frame = _slice_axes_frame(atoms, self.plane, self.gpts)
+        random_atoms = self.frozen_phonons._randomize_transformed(
+            atoms, directions_frame=directions_frame
+        )
 
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
@@ -569,12 +707,14 @@ class GPAWPotential(_PotentialBuilder):
         for slic in _generate_slices(
             interpolators,
             plane=self.plane,
-            valence_potential=calculator.valence_potential,
+            valence_potential=valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
             slice_thickness=self.slice_thickness,
             first_slice=first_slice,
             last_slice=last_slice,
+            device=self.device,
+            repetitions=self.repetitions,
         ):
             yield slic
         # for slic in _generate_slices(
@@ -594,7 +734,9 @@ class GPAWPotential(_PotentialBuilder):
     def ensemble_shape(self):
         return self._frozen_phonons.ensemble_shape
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _gpaw_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
@@ -709,17 +851,19 @@ class GPAWParametrization:
         that converts the all-electron radial charge density into an X-ray
         scattering factor. `None` (default) lets `hankel` choose automatically.
     integration_step : float, optional
-        Step size used by the Hankel transform. The default of 0.002 is fine
-        for light elements, but is too coarse for heavier ones (e.g. In, Z=49),
-        where it can produce a non-monotonic, unphysical scattering factor; 0.001
-        resolves this for most elements at negligible extra cost. The heaviest
-        elements (e.g. Re, Z=75) may still show a several-percent-level
-        mismatch against tabulated parametrizations even at this step size,
-        plausibly from GPAW's scalar-relativistic treatment diverging from
-        whatever reference the tabulated parameters were fit to.
+        Step size used by the Hankel transform. The default is 1e-4. Coarser
+        steps are inaccurate at small k, where the transform must resolve the
+        whole radial extent of the density: against direct quadrature of the
+        same density on GPAW's radial grid, a step of 0.001 puts f_x for Au
+        2.9 electrons low at k = 0.06 1/A and 0.63 high at k = 0.12 1/A (Si:
+        0.009 low at 0.06). The electron scattering factor divides Z - f_x by
+        k^2, so that became a 45 % (Au) and 26 % (Re) error in the fitted
+        f_e at k = 0.12 1/A -- the "several-percent mismatch" of heavy
+        elements previously attributed to relativistic effects. At 1e-4 the
+        error is < 5e-4 electrons for k >= 0.06 1/A, for ~0.1 s per call.
     """
 
-    def __init__(self, nodes=None, integration_step=0.001):
+    def __init__(self, nodes=None, integration_step=1e-4):
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}
@@ -778,22 +922,21 @@ class GPAWParametrization:
     def _run_all_electron_atom(symbol, added_electrons, spinpol):
         from gpaw.atom.aeatom import AllElectronAtom
 
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE")
+        ae = AllElectronAtom(symbol, spinpol=spinpol, xc="PBE", log=io.StringIO())
 
-            for n, l, df in added_electrons:
-                ae.add(n, l, df)
+        for n, l, df in added_electrons:
+            ae.add(n, l, df)
 
-            if added_electrons:
-                # The occupations perturbed by add() need a more conservative
-                # mixing schedule to reach self-consistency than the default,
-                # which is tuned for the unperturbed (neutral) configuration.
-                ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-            else:
-                ae.run()
+        if added_electrons:
+            # The occupations perturbed by add() need a more conservative
+            # mixing schedule to reach self-consistency than the default,
+            # which is tuned for the unperturbed (neutral) configuration.
+            ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+        else:
+            ae.run()
 
-            ae.scalar_relativistic = True
-            ae.refine()
+        ae.scalar_relativistic = True
+        ae.refine()
 
         return ae
 
@@ -819,10 +962,8 @@ class GPAWParametrization:
         n = ae.n_sg.sum(0) / units.Bohr**3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
-    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
-        if isinstance(symbol, (int, np.int32, np.int64)):
-            symbol = chemical_symbols[symbol]
-
+    def _hankel_transform(self, n, k):
+        """f_x(k) = 3D Fourier transform of the radial density n, for k > 0."""
         try:
             from hankel import SymmetricFourierTransform
         except ImportError as e:
@@ -832,12 +973,18 @@ class GPAWParametrization:
             ) from e
 
         ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
+        return ht.transform(n, k * 2 * np.pi)[0]
+
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
         k = np.linspace(0.001, 12, 2000)
 
         n = self.charge(symbol, charge)
 
         # we do not calculate the Fourier Transform at k=0 for numerical reason
-        fx = ht.transform(n, k[1:] * 2 * np.pi)[0]
+        fx = self._hankel_transform(n, k[1:])
 
         # instead it is replaced by the exact value fx(0)=Z
         fx = np.concatenate([[atomic_numbers[symbol]], fx])
@@ -855,7 +1002,6 @@ class GPAWParametrization:
         if key in self._potential_functions:
             return self._potential_functions[key]
 
-        fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
         r = np.linspace(0, 20, 10000)
@@ -864,8 +1010,12 @@ class GPAWParametrization:
         fe0 = np.trapezoid(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
+        # The transform directly at the fit points, from the same density: the
+        # 2000-point table of x_ray_scattering_factor costs 20x the time and
+        # memory, and a second all-electron calculation.
+        fx = self._hankel_transform(n, k[k > 0])
         fe = np.zeros(len(k))
-        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
+        fe[k != 0] = (Z - fx) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
         # The Lobato functional form has near-degenerate parameter

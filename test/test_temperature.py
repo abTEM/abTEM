@@ -2,6 +2,7 @@ from functools import reduce
 from operator import mul
 
 import ase.build
+import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ import strategies as abtem_st
 from hypothesis import given
 
 from abtem import FrozenPhonons
+from abtem.inelastic.phonons import BaseFrozenPhonons
 
 
 @given(data=st.data())
@@ -41,15 +43,25 @@ def test_frozen_phonons_as_ensembles(data, frozen_phonons, lazy):
 
     blocks = frozen_phonons.ensemble_blocks(chunks).compute()
 
-    # assert all([not block.is_lazy for block in blocks])
+    # Computed blocks are concrete frozen-phonon objects. (The original
+    # `not block.is_lazy` check predates the removal of `is_lazy` from the
+    # frozen-phonon classes.)
+    assert not isinstance(blocks, da.core.Array)
+    assert all(isinstance(block, BaseFrozenPhonons) for block in np.ravel(blocks))
 
     for i, _, fp in frozen_phonons.generate_blocks(chunks):
         fp = fp.item()
 
         assert blocks[i] == fp
 
-    # assert all(isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=True))
-    # assert all(not isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=False))
+    assert all(
+        isinstance(array, da.core.Array)
+        for array in frozen_phonons._partition_args(lazy=True)
+    )
+    assert all(
+        not isinstance(array, da.core.Array)
+        for array in frozen_phonons._partition_args(lazy=False)
+    )
 
 
 def test_sigmas():
@@ -82,13 +94,13 @@ def test_default_directions_displace_all_three_axes():
             assert np.any(displacement[:, axis] != 0) == (axis in displaced)
 
 
-@pytest.mark.parametrize("directions", ["xq", "q", "x y"])
-def test_invalid_direction_is_named_at_construction(directions):
+def test_invalid_direction_is_named_at_construction():
     atoms = ase.build.bulk("Au", cubic=True)
-    bad = next(d for d in directions if d not in "xyz")
 
-    with pytest.raises(RuntimeError, match=f"not '{bad}'"):
-        FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions=directions)
+    for directions in ("xq", "q", "x y"):
+        bad = next(d for d in directions if d not in "xyz")
+        with pytest.raises(RuntimeError, match=f"not '{bad}'"):
+            FrozenPhonons(atoms, num_configs=1, sigmas=0.1, directions=directions)
 
 
 def test_lazy_partition_args_embed_atoms_once():

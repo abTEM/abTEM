@@ -3,15 +3,14 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
+from utils import gpu, to_host_array
 
 import abtem
-from utils import gpu
 from abtem.core.backend import asnumpy
 
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("device", ["cpu"])
 @pytest.mark.parametrize(
     "detector",
     [
@@ -21,134 +20,23 @@ from abtem.core.backend import asnumpy
         abtem_st.waves_detector,
     ],
 )
-def test_detect(data, detector, lazy, device):
-    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+def test_detect(data, detector, lazy):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
     detector = data.draw(detector())
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
 
-    # measurement = detector.detect(waves).compute()
+    measurement = detector.detect(waves).compute()
 
-    # assert measurement.ensemble_shape == waves.ensemble_shape
-    # assert measurement.dtype == detector._out_dtype(waves)
-    # assert measurement.base_shape == detector._out_base_shape(waves)
-    # assert type(measurement) == detector._out_type(waves)
-    # assert measurement.base_axes_metadata == detector._out_base_axes_metadata(waves)
+    # The _out_* methods describe each output of a multi-output detector.
+    assert measurement.ensemble_shape == waves.ensemble_shape
+    assert measurement.dtype == detector._out_dtype(waves)[0]
+    assert measurement.base_shape == detector._out_base_shape(waves)[0]
+    assert type(measurement) is detector._out_type(waves)[0]
+    assert measurement.base_axes_metadata == detector._out_base_axes_metadata(waves)[0]
 
-    # if detector.to_cpu:
-    #    assert measurement.device == "cpu"
-
-
-# @given(data=st.data())
-# @pytest.mark.parametrize("lazy", [True, False])
-# @pytest.mark.parametrize("device", ["cpu", gpu])
-# def test_annular_detector(data, lazy, device):
-#     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
-#     detector = data.draw(abtem_st.annular_detector())
-#
-#     assume(len(_scan_shape(waves)) > 0)
-#     assume(len(_scan_shape(waves)) < 3)
-#     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
-#     assume(min(waves.cutoff_angles) > 1.0)
-#     assume(detector.angular_limits(waves)[1] < min(waves.cutoff_angles))
-#
-#     measurement = detector.detect(waves)
-#
-#     scan_axes = _scan_axes(waves)
-#
-#     shape = tuple(
-#         n for i, n in enumerate(waves.ensemble_shape) if i not in scan_axes[-2:]
-#     )
-#
-#     assert measurement.ensemble_shape == shape
-#     assert measurement.dtype == detector._out_dtype(waves)
-#     assert measurement.base_shape == _scan_shape(waves)
-#
-#     if len(scan_axes) == 1:
-#         assert type(measurement) == RealSpaceLineProfiles
-#     elif len(scan_axes) > 1:
-#         assert type(measurement) == Images
-#
-#     if detector.to_cpu:
-#         assert measurement.device == "cpu"
-#
-
-# @given(data=st.data())
-# @pytest.mark.parametrize("lazy", [True, False])
-# @pytest.mark.parametrize("device", ["cpu", gpu])
-# def test_integrate_consistent(data, lazy, device):
-#     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
-#
-#     assume(min(waves.cutoff_angles) > 10.0)
-#
-#     min_extent = max(waves.angular_sampling)
-#     max_extent = np.floor(min(waves.cutoff_angles)) - 1.0
-#
-#     assume(min_extent < max_extent)
-#
-#     extent = np.floor(
-#         data.draw(
-#             st.floats(
-#                 min_value=min_extent,
-#                 max_value=max_extent,
-#             )
-#         )
-#     )
-#     inner = np.floor(
-#         data.draw(st.floats(min_value=0.0, max_value=min(waves.cutoff_angles) - extent))
-#     )
-#     outer = inner + extent
-#
-#     assume(
-#         AnnularDetector(inner=inner, outer=outer).get_detector_region(waves).array.sum()
-#         > 0
-#     )
-#
-#     annular_measurement = AnnularDetector(inner=inner, outer=outer).detect(waves)
-#     flexible_measurement = FlexibleAnnularDetector(
-#         step_size=1, outer=np.floor(min(waves.cutoff_angles))
-#     ).detect(waves)
-#     pixelated_measurement = PixelatedDetector(max_angle="cutoff").detect(waves)
-#
-#     assert annular_measurement == flexible_measurement.integrate_radial(inner, outer)
-#     assert annular_measurement == pixelated_measurement.integrate_radial(inner, outer)
-#
-#
-# @given(
-#     gpts=st.integers(min_value=64, max_value=128),
-#     extent=st.floats(min_value=5, max_value=10),
-# )
-# @pytest.mark.parametrize("device", [gpu, "cpu"])
-# def test_interpolate_diffraction_patterns(gpts, extent, device):
-#     probe1 = Probe(
-#         energy=100e3,
-#         semiangle_cutoff=30,
-#         extent=(extent * 2, extent),
-#         gpts=(gpts * 2, gpts),
-#         device=device,
-#         soft=False,
-#     )
-#     probe2 = Probe(
-#         energy=100e3,
-#         semiangle_cutoff=30,
-#         extent=extent,
-#         gpts=gpts,
-#         device=device,
-#         soft=False,
-#     )
-#
-#     measurement1 = (
-#         probe1.build(lazy=False)
-#         .diffraction_patterns(max_angle=None)
-#         .interpolate("uniform")
-#         .to_cpu()
-#     )
-#
-#     measurement2 = (
-#         probe2.build(lazy=False).diffraction_patterns(max_angle=None).to_cpu()
-#     )
-#
-#     assert np.allclose(measurement1.array, measurement2.array)
+    if detector.to_cpu:
+        assert measurement.device == "cpu"
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -196,19 +84,7 @@ def test_pixelated_detector_resample_uniform(lazy, extent, gpts):
     )
 
 
-@pytest.mark.parametrize(
-    "detector_cls, kwargs",
-    [
-        (abtem.AnnularDetector, dict(inner=0, outer=20)),
-        (abtem.FlexibleAnnularDetector, dict()),
-        (
-            abtem.SegmentedDetector,
-            dict(inner=0, outer=20, nbins_radial=2, nbins_azimuthal=4),
-        ),
-        (abtem.PixelatedDetector, dict()),
-    ],
-)
-def test_measurement_detectors_default_to_cpu(detector_cls, kwargs):
+def test_measurement_detectors_default_to_cpu():
     """Every detector producing a measurement returns it on the host by
     default.
 
@@ -216,18 +92,27 @@ def test_measurement_detectors_default_to_cpu(detector_cls, kwargs):
     docstring (and every sibling detector) said True, so on a GPU run its
     measurements came back as CuPy arrays while the others were NumPy --
     an inconsistency that only surfaced on a CuPy workstation.
-    """
-    assert detector_cls(**kwargs).to_cpu is True
 
-
-def test_waves_detector_keeps_data_on_device_by_default():
-    """WavesDetector is deliberately the exception: it returns the (large)
-    wave functions themselves and is the implicit detector when none is
-    given, so it must not force a device-to-host copy of every exit wave.
+    WavesDetector is deliberately the exception: it returns the (large) wave
+    functions themselves and is the implicit detector when none is given, so it
+    must not force a device-to-host copy of every exit wave.
     """
     from abtem.detectors import WavesDetector
 
-    assert WavesDetector().to_cpu is False
+    defaults = [
+        (abtem.AnnularDetector(inner=0, outer=20), True),
+        (abtem.FlexibleAnnularDetector(), True),
+        (
+            abtem.SegmentedDetector(
+                inner=0, outer=20, nbins_radial=2, nbins_azimuthal=4
+            ),
+            True,
+        ),
+        (abtem.PixelatedDetector(), True),
+        (WavesDetector(), False),
+    ]
+    for detector, to_cpu in defaults:
+        assert detector.to_cpu is to_cpu, type(detector).__name__
 
 
 def _finite_crystallite_exit_waves(device="cpu"):
@@ -245,57 +130,77 @@ def _finite_crystallite_exit_waves(device="cpu"):
     waves = abtem.PlaneWave(
         energy=200e3, extent=potential.extent, gpts=potential.gpts, device=device
     )
-    return waves.build(lazy=False).multislice(potential, detectors=abtem.WavesDetector())
-
-
-@pytest.mark.parametrize(
-    "detector_cls, kwargs",
-    [
-        (abtem.PixelatedDetector, dict(max_angle="full")),
-        (abtem.WavesDetector, dict()),
-    ],
-)
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_margin_window_defaults_reproduce_unmodified_detector(detector_cls, kwargs, device):
-    """margin=0.0 and window_func=None (the defaults) must reproduce exactly
-    what the detector returned before these parameters existed."""
-    exit_waves = _finite_crystallite_exit_waves(device)
-
-    plain = detector_cls(**kwargs).detect(exit_waves)
-    explicit_defaults = detector_cls(**kwargs, margin=0.0, window_func=None).detect(
-        exit_waves
+    return waves.build(lazy=False).multislice(
+        potential, detectors=abtem.WavesDetector()
     )
 
-    np.testing.assert_array_equal(asnumpy(plain.array), asnumpy(explicit_defaults.array))
+
+@pytest.fixture(scope="module")
+def crystallite_exit_waves():
+    """The exit waves of `_finite_crystallite_exit_waves(device)`, computed once
+    per worker; each call hands out a copy."""
+    cache = {}
+
+    def crystallite_exit_waves(device):
+        if device not in cache:
+            cache[device] = _finite_crystallite_exit_waves(device)
+        return cache[device].copy()
+
+    return crystallite_exit_waves
 
 
-@pytest.mark.parametrize(
-    "detector_cls, kwargs",
-    [
-        (abtem.PixelatedDetector, dict(max_angle="full")),
-        (abtem.WavesDetector, dict()),
-    ],
-)
+# The detectors that take a margin and a window function.
+_MARGIN_WINDOW_DETECTORS = [
+    (abtem.PixelatedDetector, dict(max_angle="full")),
+    (abtem.WavesDetector, dict()),
+]
+
+
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_margin_crops_output_shape(detector_cls, kwargs, device):
+def test_margin_window_defaults_reproduce_unmodified_detector(
+    device, crystallite_exit_waves
+):
+    """margin=0.0 and window_func=None (the defaults) must reproduce exactly
+    what the detector returned before these parameters existed."""
+    exit_waves = crystallite_exit_waves(device)
+
+    for detector_cls, kwargs in _MARGIN_WINDOW_DETECTORS:
+        plain = detector_cls(**kwargs).detect(exit_waves)
+        explicit_defaults = detector_cls(
+            **kwargs, margin=0.0, window_func=None
+        ).detect(exit_waves)
+
+        np.testing.assert_array_equal(
+            asnumpy(plain.array),
+            asnumpy(explicit_defaults.array),
+            err_msg=detector_cls.__name__,
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_margin_crops_output_shape(device, crystallite_exit_waves):
     """Non-zero margin must shrink the output shape, and _out_base_shape must
     predict the actual shape -- the failure mode a mismatch here would cause
     is a ValueError from a pre-allocated array that doesn't match during
     multislice, not just a wrong-looking result."""
-    exit_waves = _finite_crystallite_exit_waves(device)
+    exit_waves = crystallite_exit_waves(device)
 
-    plain = detector_cls(**kwargs).detect(exit_waves)
-    cropped_detector = detector_cls(**kwargs, margin=1.0)
-    cropped = cropped_detector.detect(exit_waves)
+    for detector_cls, kwargs in _MARGIN_WINDOW_DETECTORS:
+        plain = detector_cls(**kwargs).detect(exit_waves)
+        cropped_detector = detector_cls(**kwargs, margin=1.0)
+        cropped = cropped_detector.detect(exit_waves)
 
-    expected_shape = cropped_detector._out_base_shape(exit_waves)[0]
-    assert cropped.base_shape == expected_shape
-    assert expected_shape[0] < plain.base_shape[0]
-    assert expected_shape[1] < plain.base_shape[1]
+        expected_shape = cropped_detector._out_base_shape(exit_waves)[0]
+        message = detector_cls.__name__
+        assert cropped.base_shape == expected_shape, message
+        assert expected_shape[0] < plain.base_shape[0], message
+        assert expected_shape[1] < plain.base_shape[1], message
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_pixelated_detector_window_reduces_diffuse_background(device):
+def test_pixelated_detector_window_reduces_diffuse_background(
+    device, crystallite_exit_waves
+):
     """Windowing a finite, non-periodic crystallite's exit wave before
     detecting should measurably suppress the diffuse background between
     Bragg spots -- the truncation-rod streaks a hard-edged box produces --
@@ -305,7 +210,7 @@ def test_pixelated_detector_window_reduces_diffuse_background(device):
     windowing effect the renormalization is not meant to undo."""
     from abtem.detectors import _window_power_gain
 
-    exit_waves = _finite_crystallite_exit_waves(device)
+    exit_waves = crystallite_exit_waves(device)
 
     plain = asnumpy(abtem.PixelatedDetector(max_angle="full").detect(exit_waves).array)
     windowed = asnumpy(
@@ -324,7 +229,9 @@ def test_pixelated_detector_window_reduces_diffuse_background(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_pixelated_detector_window_matches_manual_renormalization(device):
+def test_pixelated_detector_window_matches_manual_renormalization(
+    device, crystallite_exit_waves
+):
     """Pins down the exact renormalization convention: PixelatedDetector's
     windowed output must equal manually windowing the waves, taking the
     diffraction pattern, and rescaling by 1 / mean(taper**2) -- the window's
@@ -332,7 +239,7 @@ def test_pixelated_detector_window_matches_manual_renormalization(device):
     analysis tools apply by hand for a Hann window."""
     from abtem.detectors import _window_power_gain
 
-    exit_waves = _finite_crystallite_exit_waves(device)
+    exit_waves = crystallite_exit_waves(device)
 
     detected = abtem.PixelatedDetector(
         max_angle="full", window_func="hann", margin=0.5
@@ -356,14 +263,16 @@ def test_pixelated_detector_window_matches_manual_renormalization(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_windowed_pixelated_detector_alias_matches_pixelated_detector(device):
+def test_windowed_pixelated_detector_alias_matches_pixelated_detector(
+    device, crystallite_exit_waves
+):
     """WindowedPixelatedDetector exists only so code written against py3DED's
     own WindowedPixelatedDetector (same margin/window_func signature) runs
     unmodified against abTEM directly -- it must produce identical output to
     the equivalent PixelatedDetector call."""
     from abtem.detectors import WindowedPixelatedDetector
 
-    exit_waves = _finite_crystallite_exit_waves(device)
+    exit_waves = crystallite_exit_waves(device)
 
     kwargs = dict(max_angle="full", margin=0.5, window_func="hann")
     reference = abtem.PixelatedDetector(**kwargs).detect(exit_waves)
@@ -491,6 +400,285 @@ def test_radial_detector_show_without_waves_defaults_units(detector):
         return image
 
     np.testing.assert_array_equal(drawn(), drawn(units="mrad"))
+
+
+@pytest.fixture
+def float64_numpy_fft():
+    with abtem.config.set({"precision": "float64", "fft": "numpy"}):
+        yield
+
+
+@pytest.fixture
+def on_device(device):
+    with abtem.config.set({"device": device}):
+        yield
+
+
+def _real_space_setup(sampling, energy=60e3, scan_gpts=(3, 4), cells=(2, 1, 1)):
+    import ase.build
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * cells
+    potential = abtem.Potential(atoms, sampling=sampling, slice_thickness=2)
+    probe = abtem.Probe(energy=energy, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(0.5, 1), fractional=True, potential=potential, gpts=scan_gpts
+    )
+    return potential, probe, scan
+
+
+@pytest.fixture(scope="module")
+def exit_waves():
+    """The eager exit waves of `_real_space_setup(sampling)` through an entry point
+    ("scan", "multislice" or "prism") with a WavesDetector, computed once per
+    worker; each call hands out a copy."""
+    cache = {}
+
+    def exit_waves(entry, sampling, device):
+        key = (entry, sampling, device)
+        if key not in cache:
+            with abtem.config.set(
+                {"precision": "float64", "fft": "numpy", "device": device}
+            ):
+                potential, probe, scan = _real_space_setup(sampling)
+                cache[key] = _run_waves_detector(
+                    entry, potential, probe, scan, abtem.WavesDetector(), False
+                )
+        return cache[key].copy()
+
+    return exit_waves
+
+
+# The lazy detect takes the block path of the lazy scan, and the eager scan
+# detects eager waves as the eager detect does.
+@pytest.mark.float64
+@pytest.mark.usefixtures("float64_numpy_fft", "on_device")
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("entry_point", ["detect", "scan_lazy"])
+def test_real_space_pixelated_detector_declares_what_it_returns(
+    entry_point, device, exit_waves
+):
+    """PixelatedDetector(reciprocal_space=False) declares the shape and sampling
+    of the intensity image it returns, |psi|^2 on the waves' grid or on the grid
+    `resample` gives, through every entry point."""
+    potential, probe, scan = _real_space_setup(sampling=0.05)
+    waves = exit_waves("scan", 0.05, device)
+
+    for resample in (False, 0.1):
+        detector = abtem.PixelatedDetector(reciprocal_space=False, resample=resample)
+
+        expected = np.abs(to_host_array(waves)) ** 2
+        expected_sampling = waves.sampling
+        if resample:
+            gpts = tuple(int(np.ceil(e / resample)) for e in waves.extent)
+            expected_sampling = tuple(e / n for e, n in zip(waves.extent, gpts))
+            expected = to_host_array(waves.intensity().interpolate(sampling=resample))
+            assert expected.shape[-2:] == gpts
+
+        if entry_point == "detect":
+            result = detector.detect(waves)
+        else:
+            result = probe.scan(potential, scan=scan, detectors=detector, lazy=True)
+
+        message = f"resample={resample}"
+        assert result.shape == expected.shape, message
+        result = result.compute(scheduler="synchronous") if result.is_lazy else result
+        assert result.shape == expected.shape, message
+        np.testing.assert_allclose(
+            (result.axes_metadata[-2].sampling, result.axes_metadata[-1].sampling),
+            expected_sampling,
+            rtol=1e-12,
+            err_msg=message,
+        )
+        np.testing.assert_allclose(
+            to_host_array(result),
+            expected,
+            rtol=0,
+            atol=1e-12 * expected.max(),
+            err_msg=message,
+        )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_real_space_pixelated_detector_multislice(lazy):
+    potential, probe, _ = _real_space_setup(sampling=0.05)
+    waves = probe.multislice(potential, detectors=abtem.WavesDetector(), lazy=False)
+    expected = np.abs(waves.array) ** 2
+
+    result = probe.multislice(
+        potential,
+        detectors=abtem.PixelatedDetector(reciprocal_space=False),
+        lazy=lazy,
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    assert result.shape == expected.shape == (128, 221)
+    np.testing.assert_allclose(
+        result.array, expected, rtol=0, atol=1e-12 * expected.max()
+    )
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_real_space_pixelated_detector_multi_energy(lazy):
+    energies = [50e3, 60e3, 70e3, 80e3]
+    potential, probe, scan = _real_space_setup(
+        sampling=0.1, energy=energies, scan_gpts=(2, 3), cells=(1, 1, 1)
+    )
+    detector = abtem.PixelatedDetector(reciprocal_space=False)
+
+    result = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    energy_axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
+    assert result.shape[energy_axis] == len(energies)
+    for i, energy in enumerate(energies):
+        single = abtem.Probe(energy=energy, semiangle_cutoff=20).scan(
+            potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+        )
+        expected = np.abs(single.array) ** 2
+        np.testing.assert_allclose(
+            np.take(result.array, i, axis=energy_axis),
+            expected,
+            rtol=0,
+            atol=1e-12 * expected.max(),
+        )
+
+
+def _segmented(outer):
+    return abtem.SegmentedDetector(
+        nbins_radial=3, nbins_azimuthal=4, inner=20, outer=outer, rotation=0.3
+    )
+
+
+# The lazy detect takes the block path of the lazy scan; the eager scan and the
+# lazy multislice add no path of their own.
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("entry_point", ["detect", "scan_lazy", "multislice"])
+def test_segmented_detector_without_outer_matches_an_explicit_cutoff(entry_point):
+    """Without an outer angle the detector integrates up to the antialias cutoff
+    angle of the detected waves."""
+    potential, probe, scan = _real_space_setup(
+        sampling=0.1, scan_gpts=(3, 5), cells=(1, 1, 1)
+    )
+    lazy = entry_point.endswith("_lazy")
+
+    def detected(outer):
+        detector = _segmented(outer)
+        if entry_point.startswith("detect"):
+            waves = probe.scan(
+                potential, scan=scan, detectors=abtem.WavesDetector(), lazy=False
+            )
+            result = detector.detect(waves.ensure_lazy() if lazy else waves)
+        elif entry_point.startswith("scan"):
+            result = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+        else:
+            result = probe.multislice(potential, detectors=detector, lazy=lazy)
+        return result.compute(scheduler="synchronous") if result.is_lazy else result
+
+    waves = probe.multislice(
+        potential, detectors=abtem.WavesDetector(), lazy=False
+    )
+    outer = min(waves.cutoff_angles)
+
+    result = detected(None)
+    expected = detected(outer)
+
+    np.testing.assert_array_equal(result.array, expected.array)
+    assert result.axes_metadata[-2].sampling == pytest.approx((outer - 20) / 3)
+
+
+@pytest.mark.usefixtures("float64_numpy_fft")
+@pytest.mark.parametrize("lazy", [False, True])
+def test_segmented_detector_without_outer_refuses_multi_energy(lazy):
+    potential, _, scan = _real_space_setup(
+        sampling=0.1, scan_gpts=(3, 5), cells=(1, 1, 1)
+    )
+    probe = abtem.Probe(energy=[50e3, 60e3, 70e3], semiangle_cutoff=20)
+    probe.grid.match(potential)
+
+    with pytest.raises(RuntimeError, match="cannot auto-size"):
+        probe.scan(potential, scan=scan, detectors=_segmented(None), lazy=lazy)
+
+
+def test_real_space_pixelated_detector_refuses_uniform_resampling():
+    # "uniform" equalises the angular sampling of diffraction patterns
+    with pytest.raises(ValueError, match="diffraction patterns only"):
+        abtem.PixelatedDetector(reciprocal_space=False, resample="uniform")
+
+
+def _run_waves_detector(entry, potential, probe, scan, detector, lazy):
+    if entry == "scan":
+        return probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+    if entry == "multislice":
+        return probe.multislice(potential, detectors=detector, lazy=lazy)
+    if entry == "prism":
+        s_matrix = abtem.SMatrix(potential=potential, energy=60e3, semiangle_cutoff=20)
+        return s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
+    raise ValueError(entry)
+
+
+# (32, 48) crops, (80, 128) pads the (64, 111) exit-wave grid; both differ along
+# x and y and from the (3, 4) scan, so a swapped or misplaced axis changes the shape
+@pytest.mark.float64
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("entry", ["detect", "scan", "multislice", "prism"])
+def test_waves_detector_gpts_matches_downsample(entry, lazy, device, exit_waves):
+    """`WavesDetector(gpts)` gives what `Waves.downsample(gpts)` gives on the
+    full-grid waves: `gpts` points over the unchanged extent."""
+    # "detect" detects the exit waves of the scan
+    full = exit_waves("scan" if entry == "detect" else entry, 0.1, device)
+    for gpts in [(32, 48), (80, 128)]:
+        with abtem.config.set(
+            {"precision": "float64", "fft": "numpy", "device": device}
+        ):
+            expected = full.downsample(gpts=gpts)
+            detector = abtem.WavesDetector(gpts=gpts)
+            if entry == "detect":
+                result = detector.detect(full.copy().ensure_lazy() if lazy else full)
+            else:
+                potential, probe, scan = _real_space_setup(sampling=0.1)
+                result = _run_waves_detector(
+                    entry, potential, probe, scan, detector, lazy
+                )
+            declared_shape = result.shape
+            result = result.compute() if lazy else result
+
+        message = f"gpts={gpts}"
+        assert declared_shape == result.shape == expected.shape, message
+        assert np.allclose(result.sampling, expected.sampling, rtol=1e-12, atol=0)
+        assert np.allclose(result.extent, full.extent, rtol=1e-12, atol=0)
+        assert result.antialias_cutoff_gpts == expected.antialias_cutoff_gpts
+        expected_array = to_host_array(expected)
+        scale = np.abs(expected_array).max()
+        np.testing.assert_allclose(
+            to_host_array(result),
+            expected_array,
+            rtol=0,
+            atol=1e-12 * scale,
+            err_msg=message,
+        )
+
+
+@pytest.mark.float64
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_waves):
+    """No `gpts`, as `None` or an empty tuple, leaves ensemble waves as they are."""
+    waves = exit_waves("scan", 0.1, device)
+    for gpts in (None, ()):
+        with abtem.config.set(
+            {"precision": "float64", "fft": "numpy", "device": device}
+        ):
+            source = waves.copy().ensure_lazy() if lazy else waves
+            result = abtem.WavesDetector(gpts=gpts).detect(source)
+            result = result.compute() if lazy else result
+
+        assert result.shape == waves.shape, gpts
+        assert np.array_equal(result.sampling, waves.sampling), gpts
+        assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
 
 
 @pytest.mark.parametrize("lazy", [False, True])
