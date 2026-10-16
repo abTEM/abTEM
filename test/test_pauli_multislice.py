@@ -33,9 +33,13 @@ from abtem.multislice import (
     multislice_and_detect,
 )
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::numba.core.errors.NumbaPerformanceWarning"
-)
+# Every test here runs in double precision (the float64_precision fixture); the
+# `float64` marker makes conftest.py skip their Metal/torch cases, which are
+# single precision.
+pytestmark = [
+    pytest.mark.filterwarnings("ignore::numba.core.errors.NumbaPerformanceWarning"),
+    pytest.mark.float64,
+]
 
 ENERGY = 100e3
 
