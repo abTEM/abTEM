@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
+import warnings
 from functools import partial
 from numbers import Number
 from typing import Callable, Iterator, Optional, Sequence, SupportsFloat, overload
@@ -72,13 +73,22 @@ class DistributionFromValues(BaseDistribution):
 
     Parameters
     ----------
-    values : np.ndarray
+    values : numpy.ndarray
         The values of the distribution.
-    weights : np.ndarray, optional
-        The values of the weights. If None, all weights are set to 1.
+    weights : numpy.ndarray, optional
+        The probability weights of the values; they must be non-negative and need not
+        be normalized. If None, all weights are set to 1 (equal weights).
     ensemble_mean : bool, optional
         If True, the mean of an ensemble of measurements defined by the distribution is
         calculated, otherwise the full ensemble is kept.
+
+    Notes
+    -----
+    The weights are *probabilities*: every ensemble member is simulated as the
+    physically correct (unweighted) wave function for its parameter value, and the
+    weights are applied when an ensemble of measurements is reduced, which
+    computes the weighted mean ``Σ_i p_i I_i / Σ_i p_i`` (see
+    :meth:`abtem.measurements.BaseMeasurements.reduce_ensemble`).
     """
 
     def __init__(
@@ -90,8 +100,24 @@ class DistributionFromValues(BaseDistribution):
         self._values = np.array(values)
 
         if weights is None:
-            weights = np.ones(len(values))
+            weights = np.ones(len(self._values))
 
+        weights = np.asarray(weights)
+
+        if weights.shape != (len(self._values),):
+            raise ValueError(
+                f"expected one weight per value ({len(self._values)}), got weights of "
+                f"shape {weights.shape}"
+            )
+
+        if np.any(weights < 0):
+            raise ValueError("distribution weights are probabilities: must be >= 0")
+
+        # No all-zero check here: the blocks built by ``divide`` (and their
+        # negations) may hold only zero-weight members of a valid distribution.
+        # ``from_values`` rejects an all-zero distribution. An ensemble axis
+        # whose weights are all zero (e.g. a slice of zero-weight members) has
+        # equal weights and is reduced with the plain mean.
         self._weights = weights
 
         self._ensemble_mean = ensemble_mean
@@ -273,9 +299,12 @@ def from_values(
     if weights is None:
         weights = np.ones(len(values))
     values_array = np.array(values)
-    return DistributionFromValues(
+    distribution = DistributionFromValues(
         values=values_array, weights=weights, ensemble_mean=ensemble_mean
     )
+    if len(distribution.weights) and not np.sum(distribution.weights) > 0:
+        raise ValueError("distribution weights must not all be zero")
+    return distribution
 
 
 def uniform(
@@ -315,6 +344,72 @@ def uniform(
     )
 
 
+def _validate_normalize(normalize: str) -> str:
+    if normalize in ("intensity", "amplitude"):
+        warnings.warn(
+            f"normalize='{normalize}' is deprecated and now equivalent to "
+            "normalize='probability'. Distribution weights are probabilities "
+            "applied when the ensemble is reduced (the weighted mean "
+            "Σ p_i I_i / Σ p_i), not factors on the wave amplitude, so the weights "
+            "are normalized to sum to one. Use the default normalize='probability'.",
+            FutureWarning,
+            stacklevel=3,
+        )
+    elif normalize != "probability":
+        raise ValueError(
+            f"Unknown normalization method: {normalize!r}; use 'probability'"
+        )
+    return "probability"
+
+
+def _distribution_from_kernel(
+    dimension: int,
+    num_samples: tuple[int, ...],
+    center: tuple[float, ...],
+    ensemble_mean: tuple[bool, ...],
+    range_width: tuple[float, ...],
+    sampling_limit: tuple[float, ...],
+    normalize: str,
+    kernel: Callable[[int, np.ndarray], np.ndarray],
+) -> MultidimensionalDistribution:
+    """Shared per-axis grid construction, weighting and normalization used by
+    :func:`gaussian`, :func:`lorentzian`, :func:`voigtian` and
+    :func:`pseudo_voigtian`.
+
+    Parameters
+    ----------
+    range_width : tuple of float
+        Per-axis half-width of the sampled range before scaling by
+        ``sampling_limit`` (e.g. the standard deviation for a Gaussian, or
+        the Voigt HWHM estimate for a Voigt profile).
+    kernel : callable
+        ``kernel(i, x)`` returning the (un-normalized) weights for axis *i*
+        given the coordinate array ``x = values - center[i]``.
+    """
+    distributions: list[BaseDistribution] = []
+    for i in range(dimension):
+        values = np.linspace(
+            -range_width[i] * sampling_limit[i] + center[i],
+            range_width[i] * sampling_limit[i] + center[i],
+            num_samples[i],
+        )
+
+        x = values - center[i]
+        weights = kernel(i, x)
+
+        if normalize != "probability":
+            raise RuntimeError(f"Unknown normalization method: {normalize}")
+        weights /= weights.sum()
+
+        distributions.append(
+            DistributionFromValues(
+                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
+            )
+        )
+
+    return MultidimensionalDistribution(distributions=distributions)
+
+
 def gaussian(
     standard_deviation: float | tuple[float, ...],
     num_samples: int | tuple[int, ...],
@@ -322,7 +417,7 @@ def gaussian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 3.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -351,13 +446,25 @@ def gaussian(
     sampling_limit : float, optional
         Truncate the distribution at this many standard deviations (default is 3.0).
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
     The Gaussian distribution is parameterized by its standard deviation σ
     (``standard_deviation``). The corresponding full-width at half-maximum is
     FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+
+    The weights are the probabilities p_i ∝ exp(-x_i² / 2σ²) of the sampled values:
+    each ensemble member is simulated unweighted and the reduced (incoherently
+    averaged) measurement is Σ p_i I(x_i) / Σ p_i, so the parameter seen by the
+    intensity has standard deviation σ (up to the truncation at ``sampling_limit``).
+    For a defocus spread this corresponds to Kirkland's 1/e focal-spread width
+    Δ = √2·σ used by :class:`abtem.transfer.TemporalEnvelope`.
 
     Note that the Lorentzian and Voigt distributions use the half-width at
     half-maximum (HWHM) γ as their width parameter, so for the same FWHM one
@@ -369,30 +476,19 @@ def gaussian(
     sampling_limit = number_to_tuple(sampling_limit, dimension)
     num_samples = number_to_tuple(num_samples, dimension)
 
-    distributions: list[BaseDistribution] = []
-    for i in range(dimension):
-        values = np.linspace(
-            -standard_deviation[i] * sampling_limit[i] + center[i],
-            standard_deviation[i] * sampling_limit[i] + center[i],
-            num_samples[i],
-        )
+    def kernel(i: int, x: np.ndarray) -> np.ndarray:
+        return np.exp(-0.5 * x**2 / standard_deviation[i] ** 2)
 
-        weights = np.exp(-0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2)
-
-        if normalize == "intensity":
-            weights /= np.sqrt((weights**2).sum())
-        elif normalize == "amplitude":
-            weights /= weights.sum()
-        else:
-            raise RuntimeError(f"Unknown normalization method: {normalize}")
-
-        distributions.append(
-            DistributionFromValues(
-                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
-            )
-        )
-
-    return MultidimensionalDistribution(distributions=distributions)
+    return _distribution_from_kernel(
+        dimension,
+        num_samples,
+        center,
+        ensemble_mean,
+        range_width=standard_deviation,
+        sampling_limit=sampling_limit,
+        normalize=_validate_normalize(normalize),
+        kernel=kernel,
+    )
 
 
 def lorentzian(
@@ -402,7 +498,7 @@ def lorentzian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 10.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -433,7 +529,12 @@ def lorentzian(
         Lorentzian has heavier tails than the Gaussian, so a larger truncation is
         recommended.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -445,14 +546,14 @@ def lorentzian(
     parameter. For the same FWHM one needs γ = FWHM / 2 but
     σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
 
-    The Lorentzian source-size model is described in [1]_.
+    The Lorentzian source-size model is described in Nguyen et al. (2014).
 
     References
     ----------
-    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
-       in scanning transmission electron microscopy and spectroscopy",
-       *Ultramicroscopy* **146**, 6–16 (2014).
-       https://doi.org/10.1016/j.ultramic.2014.04.008
+    D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+        in scanning transmission electron microscopy and spectroscopy",
+        *Ultramicroscopy* **146**, 6–16 (2014).
+        https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     center = number_to_tuple(center, dimension)
     half_width = number_to_tuple(half_width, dimension)
@@ -460,30 +561,19 @@ def lorentzian(
     sampling_limit = number_to_tuple(sampling_limit, dimension)
     num_samples = number_to_tuple(num_samples, dimension)
 
-    distributions: list[BaseDistribution] = []
-    for i in range(dimension):
-        values = np.linspace(
-            -half_width[i] * sampling_limit[i] + center[i],
-            half_width[i] * sampling_limit[i] + center[i],
-            num_samples[i],
-        )
+    def kernel(i: int, x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + (x / half_width[i]) ** 2)
 
-        weights = 1.0 / (1.0 + ((values - center[i]) / half_width[i]) ** 2)
-
-        if normalize == "intensity":
-            weights /= np.sqrt((weights**2).sum())
-        elif normalize == "amplitude":
-            weights /= weights.sum()
-        else:
-            raise RuntimeError(f"Unknown normalization method: {normalize}")
-
-        distributions.append(
-            DistributionFromValues(
-                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
-            )
-        )
-
-    return MultidimensionalDistribution(distributions=distributions)
+    return _distribution_from_kernel(
+        dimension,
+        num_samples,
+        center,
+        ensemble_mean,
+        range_width=half_width,
+        sampling_limit=sampling_limit,
+        normalize=_validate_normalize(normalize),
+        kernel=kernel,
+    )
 
 
 def voigtian(
@@ -494,7 +584,7 @@ def voigtian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 5.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -529,7 +619,12 @@ def voigtian(
         Truncate the distribution at this many Voigt half-widths (default is 5.0).
         The Voigt HWHM is estimated using the Thompson et al. (1987) approximation.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -562,7 +657,7 @@ def voigtian(
     sampling_limit = number_to_tuple(sampling_limit, dimension)
     num_samples = number_to_tuple(num_samples, dimension)
 
-    distributions: list[BaseDistribution] = []
+    voigt_hwhm = []
     for i in range(dimension):
         sigma = gaussian_sigma[i]
         gamma = lorentzian_gamma[i]
@@ -583,36 +678,30 @@ def voigtian(
             + 0.07842 * fG * fL**4
             + fL**5
         )
-        voigt_hwhm = f5 ** (1.0 / 5.0) / 2.0
+        voigt_hwhm.append(f5 ** (1.0 / 5.0) / 2.0)
 
-        values = np.linspace(
-            -voigt_hwhm * sampling_limit[i] + center[i],
-            voigt_hwhm * sampling_limit[i] + center[i],
-            num_samples[i],
-        )
+    def kernel(i: int, x: np.ndarray) -> np.ndarray:
+        sigma = gaussian_sigma[i]
+        gamma = lorentzian_gamma[i]
 
         if sigma == 0.0:
-            weights = 1.0 / (1.0 + ((values - center[i]) / gamma) ** 2)
+            return 1.0 / (1.0 + (x / gamma) ** 2)
         elif gamma == 0.0:
-            weights = np.exp(-0.5 * (values - center[i]) ** 2 / sigma**2)
+            return np.exp(-0.5 * x**2 / sigma**2)
         else:
-            z = ((values - center[i]) + 1j * gamma) / (sigma * np.sqrt(2.0))
-            weights = np.real(wofz(z))
+            z = (x + 1j * gamma) / (sigma * np.sqrt(2.0))
+            return np.real(wofz(z))
 
-        if normalize == "intensity":
-            weights /= np.sqrt((weights**2).sum())
-        elif normalize == "amplitude":
-            weights /= weights.sum()
-        else:
-            raise RuntimeError(f"Unknown normalization method: {normalize}")
-
-        distributions.append(
-            DistributionFromValues(
-                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
-            )
-        )
-
-    return MultidimensionalDistribution(distributions=distributions)
+    return _distribution_from_kernel(
+        dimension,
+        num_samples,
+        center,
+        ensemble_mean,
+        range_width=tuple(voigt_hwhm),
+        sampling_limit=sampling_limit,
+        normalize=_validate_normalize(normalize),
+        kernel=kernel,
+    )
 
 
 def pseudo_voigtian(
@@ -624,7 +713,7 @@ def pseudo_voigtian(
     center: float | tuple[float, ...] = 0.0,
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 10.0,
-    normalize: str = "intensity",
+    normalize: str = "probability",
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
@@ -666,7 +755,12 @@ def pseudo_voigtian(
         effective width is max(σ, γ), so the range is sampling_limit·max(σ, γ)
         on each side of the center.
     normalize : str, optional
-        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+        Scaling of the stored probability weights: 'probability' (default)
+        normalizes them to sum to one. The weights are probabilities applied when
+        the ensemble is reduced (Σ p_i I_i / Σ p_i), so the scaling never changes a
+        reduced result. 'intensity' and 'amplitude' are deprecated remnants of the
+        former convention in which the weights multiplied the wave amplitude; both
+        now emit a FutureWarning and behave as 'probability'.
 
     Notes
     -----
@@ -686,10 +780,10 @@ def pseudo_voigtian(
 
     References
     ----------
-    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
-       in scanning transmission electron microscopy and spectroscopy",
-       *Ultramicroscopy* **146**, 6–16 (2014).
-       https://doi.org/10.1016/j.ultramic.2014.04.008
+    D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+        in scanning transmission electron microscopy and spectroscopy",
+        *Ultramicroscopy* **146**, 6–16 (2014).
+        https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     center = number_to_tuple(center, dimension)
     gaussian_sigma = number_to_tuple(gaussian_sigma, dimension)
@@ -699,54 +793,48 @@ def pseudo_voigtian(
     sampling_limit = number_to_tuple(sampling_limit, dimension)
     num_samples = number_to_tuple(num_samples, dimension)
 
-    distributions: list[BaseDistribution] = []
+    hw = []
     for i in range(dimension):
+        h = max(gaussian_sigma[i], lorentzian_gamma[i])
+        if h == 0.0:
+            raise ValueError(
+                "At least one of gaussian_sigma or lorentzian_gamma must be non-zero."
+            )
+        hw.append(h)
+
+    def kernel(i: int, x: np.ndarray) -> np.ndarray:
         sigma = gaussian_sigma[i]
         gamma = lorentzian_gamma[i]
         eta_i = eta[i]
 
-        hw = max(sigma, gamma)
-        if hw == 0.0:
-            raise ValueError(
-                "At least one of gaussian_sigma or lorentzian_gamma must be non-zero."
-            )
-
-        values = np.linspace(
-            -hw * sampling_limit[i] + center[i],
-            hw * sampling_limit[i] + center[i],
-            num_samples[i],
-        )
-
-        x = values - center[i]
-
         if sigma == 0.0:
-            g_weights = np.zeros(num_samples[i])
-            g_weights[num_samples[i] // 2] = 1.0
+            g_weights = np.zeros_like(x)
+            # For an even num_samples the symmetric grid has no sample
+            # exactly at x=0 (it falls between index n//2-1 and n//2), so
+            # use the grid point closest to the center rather than assuming
+            # index n//2 lands on it.
+            g_weights[np.argmin(np.abs(x))] = 1.0
         else:
             g_weights = np.exp(-0.5 * x**2 / sigma**2)
 
         if gamma == 0.0:
-            l_weights = np.zeros(num_samples[i])
-            l_weights[num_samples[i] // 2] = 1.0
+            l_weights = np.zeros_like(x)
+            l_weights[np.argmin(np.abs(x))] = 1.0
         else:
             l_weights = 1.0 / (1.0 + (x / gamma) ** 2)
 
-        weights = (1.0 - eta_i) * g_weights + eta_i * l_weights
+        return (1.0 - eta_i) * g_weights + eta_i * l_weights
 
-        if normalize == "intensity":
-            weights /= np.sqrt((weights**2).sum())
-        elif normalize == "amplitude":
-            weights /= weights.sum()
-        else:
-            raise RuntimeError(f"Unknown normalization method: {normalize}")
-
-        distributions.append(
-            DistributionFromValues(
-                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
-            )
-        )
-
-    return MultidimensionalDistribution(distributions=distributions)
+    return _distribution_from_kernel(
+        dimension,
+        num_samples,
+        center,
+        ensemble_mean,
+        range_width=tuple(hw),
+        sampling_limit=sampling_limit,
+        normalize=_validate_normalize(normalize),
+        kernel=kernel,
+    )
 
 
 @overload
@@ -797,8 +885,10 @@ def validate_distribution(
     elif isinstance(distribution, (tuple, list, np.ndarray)):
         distribution = np.array(distribution)
 
+        # One weight per value (not ``ones_like``: for an (N, 2) array of tilts
+        # that would give (N, 2) weights, misaligned with the N values).
         return DistributionFromValues(
-            distribution, np.ones_like(distribution, dtype=get_dtype(complex=False))
+            distribution, np.ones(len(distribution), dtype=get_dtype(complex=False))
         )
     else:
         raise ValueError(
@@ -813,9 +903,14 @@ def tuple_range_except(n, i):
 
 def _unpack_distributions(
     *args: float | BaseDistribution, shape: tuple[int, ...], xp: ArrayModule = np
-) -> tuple[tuple[float | np.ndarray, ...], float | np.ndarray]:
+) -> tuple[float | np.ndarray, ...]:
+    """Broadcastable parameter values of the given (distributions of) parameters.
+
+    The distribution weights are not returned: they are probabilities carried by
+    the ensemble axis metadata and applied when the ensemble is reduced.
+    """
     if len(args) == 0:
-        return (), 1.0
+        return ()
 
     xp = get_array_module(xp)
     dtype = get_dtype(complex=False)
@@ -824,7 +919,6 @@ def _unpack_distributions(
     base_axes = tuple(range(num_new_axes, num_new_axes + len(shape)))
 
     unpacked = []
-    weights = 1.0
     i = 0
     for arg in args:
         if not isinstance(arg, BaseDistribution):
@@ -833,15 +927,9 @@ def _unpack_distributions(
             axis = tuple_range_except(num_new_axes, i) + base_axes
             values = xp.asarray(np.expand_dims(arg.values, axis=axis), dtype=dtype)
             unpacked.append(values)
-            new_weights = xp.asarray(
-                np.expand_dims(arg.weights, axis=axis), dtype=dtype
-            )
-            weights = new_weights if weights is None else weights * new_weights
             i += 1
 
-    unpacked_tuple = tuple(unpacked)
-
-    return unpacked_tuple, weights
+    return tuple(unpacked)
 
 
 class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):

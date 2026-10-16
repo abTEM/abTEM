@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import cuda, njit  # type: ignore
+from numba import njit, prange  # type: ignore
 
 from abtem.antialias import AntialiasAperture
-from abtem.core.backend import get_array_module
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.utils import get_dtype
 
@@ -191,6 +191,100 @@ def _laplace_stencil_array(accuracy):
     return stencil
 
 
+_LAPLACE_STENCIL_KERNEL = r"""
+#include <cupy/complex.cuh>
+
+// Batched 2-D Laplacian finite-difference stencil: for each batch element m,
+// out[m, i, j] = sum_k c[k + n] * (a[m, i + k, j] + a[m, i, j + k]) over
+// k in [-n, n], evaluated on the interior i, j in [n, H - n) x [n, W - n).
+// The boundary is left zero; the caller handles it via wrap padding.
+//
+// Grid: x covers W (fastest axis, coalesced), y covers H, z strides over the
+// batch so any batch size is supported.
+//
+// Template parameter T is the complex floating-point type.
+template<typename T>
+__device__ __forceinline__ void laplace_stencil_impl(
+    T* __restrict__ out,
+    const T* __restrict__ a,
+    const T* __restrict__ c,
+    const int n,
+    const int M, const int H, const int W
+) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < n || i >= H - n || j < n || j >= W - n) return;
+
+    for (int m = blockIdx.z; m < M; m += gridDim.z) {
+        const T* am = a + (long long)m * H * W;
+        T cumul = T(0);
+        for (int k = -n; k <= n; k++) {
+            cumul += c[k + n] * (am[(long long)(i + k) * W + j]
+                                 + am[(long long)i * W + (j + k)]);
+        }
+        out[(long long)m * H * W + (long long)i * W + j] = cumul;
+    }
+}
+
+extern "C" __global__ void laplace_stencil_c64(
+    complex<float>* out, const complex<float>* a, const complex<float>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_impl<complex<float> >(out, a, c, n, M, H, W);
+}
+
+extern "C" __global__ void laplace_stencil_c128(
+    complex<double>* out, const complex<double>* a, const complex<double>* c,
+    int n, int M, int H, int W
+) {
+    laplace_stencil_impl<complex<double> >(out, a, c, n, M, H, W);
+}
+"""
+
+_laplace_stencil_c64 = None
+_laplace_stencil_c128 = None
+
+
+def _init_laplace_stencil_kernels():
+    global _laplace_stencil_c64, _laplace_stencil_c128
+    if _laplace_stencil_c64 is None:
+        # no --std option: the dialect requirement comes from CuPy's bundled
+        # headers, and each backend's default tracks them (CuPy itself pins no
+        # dialect); pinning one broke NVRTC when CuPy 14's complex.cuh started
+        # requiring C++17 via CCCL
+        mod = cp.RawModule(code=_LAPLACE_STENCIL_KERNEL)
+        # _laplace_stencil_c64 doubles as the initialized-guard, so it is
+        # assigned last: a concurrent thread that observes it non-None is then
+        # guaranteed to also observe _laplace_stencil_c128 (redundant module
+        # compilation from two racing threads is harmless — CuPy caches it)
+        _laplace_stencil_c128 = mod.get_function("laplace_stencil_c128")
+        _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
+
+
+@njit(parallel=True, fastmath=True)
+def _laplace_stencil_cpu_kernel(a, c, n):
+    """The 5-point-per-axis Laplacian stencil of `_laplace_operator_stencil` on
+    the CPU, for a stack of 2D arrays. `c` holds the coefficients rolled so that
+    c[k] is that of offset k, and only the interior (n from each edge) is written.
+
+    Module level, with the coefficients as arguments, so that Numba compiles it
+    once per array type: as a closure over them it was compiled anew -- ~1 s
+    with parallel=True -- every time an operator was made, once per dask task
+    of a lazy real-space multislice.
+    """
+    M, H, W = a.shape
+    out = a.copy()
+    out[:] = 0
+    for m in prange(M):
+        for i in range(n, H - n):
+            for j in range(n, W - n):
+                cumul = c[0] * 0
+                for k in range(-n, n + 1):
+                    cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+                out[m, i, j] = cumul
+    return out
+
+
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
@@ -203,52 +297,95 @@ def _laplace_operator_stencil(
     n = len(c) // 2
     padding = n + 1
 
-    from numba import prange  # type: ignore
-
-    @njit(parallel=True, fastmath=True)
     def _laplace_stencil_cpu_batch(a):
-        M, H, W = a.shape
-        out = a.copy()
-        out[:] = 0
-        for m in prange(M):
-            for i in range(n, H - n):
-                for j in range(n, W - n):
-                    cumul = dtype(0.0)
-                    for k in range(-n, n + 1):
-                        cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
-                    out[m, i, j] = cumul
-        return out
+        return _laplace_stencil_cpu_kernel(a, c, n)
 
-    @cuda.jit
-    def stencil_func_gpu_batch(a, out):
-        m, i, j = cuda.grid(3)
-        M, H, W = a.shape
-        if m < M and n <= i < H - n and n <= j < W - n:
-            cumul = dtype(0.0)
-            for k in range(-n, n + 1):
-                cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
-            out[m, i, j] = cumul
+    if device == "gpu":
+        check_cupy_is_installed()
+        # the kernel indexes the coefficients in natural order (index k + n for
+        # offset k), so undo the roll applied for the CPU stencil above
+        c_gpu = cp.asarray(np.roll(c, n))
 
     def _laplace_stencil_gpu(a):
         xp = get_array_module(a)
+        a = xp.ascontiguousarray(a)
         out = xp.zeros_like(a)
 
         M, H, W = a.shape
 
-        threads_x = 8
-        threads_y = 8
+        _init_laplace_stencil_kernels()
+        if a.dtype == xp.complex128:
+            kernel = _laplace_stencil_c128
+        elif a.dtype == xp.complex64:
+            kernel = _laplace_stencil_c64
+        else:
+            raise TypeError(
+                "the GPU Laplacian stencil requires a complex64 or complex128 "
+                f"array, got {a.dtype}"
+            )
 
-        target_threads = 256
-        threads_m = max(1, target_threads // (threads_x * threads_y))
+        threads_x = 16
+        threads_y = 16
+        block = (threads_x, threads_y, 1)
+        grid = (
+            math.ceil(W / threads_x),
+            math.ceil(H / threads_y),
+            min(M, 65535),
+        )
+        kernel(
+            grid,
+            block,
+            (
+                out,
+                a,
+                c_gpu.astype(a.dtype, copy=False),
+                np.int32(n),
+                np.int32(M),
+                np.int32(H),
+                np.int32(W),
+            ),
+        )
 
-        threadsperblock = (threads_m, threads_x, threads_y)
+        return out
 
-        blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
-        blockspergrid_x = math.ceil(a.shape[1] / threadsperblock[1])
-        blockspergrid_y = math.ceil(a.shape[2] / threadsperblock[2])
-        blockspergrid = (blockspergrid_m, blockspergrid_x, blockspergrid_y)
-        stencil_func_gpu_batch[blockspergrid, threadsperblock](a, out)
+    def _laplace_stencil_mps(a):
+        """The same stencil on Metal, as shifted slices rather than a kernel.
 
+        The sum is separable -- each output is the coefficients applied along
+        the row and along the column -- so the whole of it is 2 * (2n + 1)
+        strided adds over the interior, which Metal runs as well as a bespoke
+        kernel would. That avoids writing and compiling Metal Shading Language
+        for an operation torch already expresses.
+
+        Only the interior is written, exactly as the CPU and CUDA stencils do:
+        the caller pads by n + 1 beforehand and crops afterwards, so the band
+        left at zero here never survives into the result.
+        """
+        xp = get_array_module(a)
+
+        if a.dtype not in (np.complex64, np.complex128):
+            raise TypeError(
+                "the GPU Laplacian stencil requires a complex64 or complex128 "
+                f"array, got {a.dtype}"
+            )
+
+        _, height, width = a.shape
+        out = xp.zeros_like(a)
+
+        if height <= 2 * n or width <= 2 * n:
+            return out
+
+        rows = slice(n, height - n)
+        columns = slice(n, width - n)
+
+        total = out[:, rows, columns]
+        for k in range(-n, n + 1):
+            # c is rolled for the CPU stencil's negative indexing; keep it
+            coefficient = complex(c[k])
+            total = total + coefficient * a[:, n + k : height - n + k, columns]
+            total = total + coefficient * a[:, rows, n + k : width - n + k]
+
+        out[:, rows, columns] = total
         return out
 
     def _laplace_stencil(a):
@@ -266,6 +403,8 @@ def _laplace_operator_stencil(
             result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
             result = _laplace_stencil_gpu(a)
+        elif device == "mps":
+            result = _laplace_stencil_mps(a)
         else:
             raise ValueError(f"Unsupported device: {device}")
 
@@ -314,6 +453,11 @@ class LaplaceOperator:
     def __init__(self, accuracy):
         """
         Centered finite-difference laplacian operator.
+
+        Operates on complex wave arrays: the stencil coefficients are cast to
+        the configured complex dtype, so the stencils are specialized for
+        complex64/complex128 input even though the Laplacian itself is a real
+        operator.
 
         Parameters
         ----------
@@ -391,6 +535,11 @@ def _multislice_exponential_series(
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
+    if initial_amplitude == 0:
+        # Every term of the series is linear in the wave, so a zero wave is
+        # returned unchanged; the convergence ratio below would be 0 / 0.
+        return waves
+
     if fully_corrected:
         temp = full_series(
             waves, laplace, transmission_function, order, wavelength, thickness
@@ -456,7 +605,7 @@ def conventional_operator(
         Waves object to apply multislice operator on
     laplace: Callable
         Fast laplace operator stencil function
-    transmission_function: np.ndarray,
+    transmission_function: numpy.ndarray,
         Scaled potential slice to multiply incoming waves with
     wavelength: float
         Waves wavelength

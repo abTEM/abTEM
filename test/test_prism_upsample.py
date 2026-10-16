@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 from ase.build import bulk
-from utils import gpu
+from test_prism import _aberrated_ctf
+from utils import devices, to_host_array
 
 import abtem
 from abtem import CompressedSMatrixArray, CustomScan, GridScan, Potential, Probe, SMatrix
@@ -15,7 +16,11 @@ from abtem.prism.s_matrix import SMatrixArray
 # stitched pattern assembly all branch on the array module, and those branches
 # are only exercised when the tests also run on the GPU. Tests of pure Python
 # validation or grid arithmetic are left unparametrized and say so.
-devices = pytest.mark.parametrize("device", [gpu, "cpu"])
+
+# Shared kwargs for the small vacuum SMatrix constructions used throughout
+# this module; the varying kwargs (interpolation, upsample, tolerance,
+# device, ...) stay explicit at each call site.
+_VACUUM_KWARGS = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
 
 
 def _small_potential(gpts=96, repetitions=(2, 2, 3), device="cpu"):
@@ -23,19 +28,8 @@ def _small_potential(gpts=96, repetitions=(2, 2, 3), device="cpu"):
     return Potential(atoms, gpts=gpts, slice_thickness=2, device=device)
 
 
-def _array(measurement):
-    """The array of a measurement or wave function, on the host.
-
-    Detectors return host arrays by default, but reductions to wave functions
-    and their derived measurements stay on the device, so every assertion goes
-    through this.
-    """
-    array = measurement.array if hasattr(measurement, "array") else measurement
-    return array.get() if hasattr(array, "get") else np.asarray(array)
-
-
 def _relative_error(measurement, reference):
-    measurement, reference = _array(measurement), _array(reference)
+    measurement, reference = to_host_array(measurement), to_host_array(reference)
     return np.sqrt(((measurement - reference) ** 2).mean()) / reference.mean()
 
 
@@ -47,7 +41,7 @@ def _assert_chunking_unchanged(whole, chunked, what):
     operand shape, so the last bits legitimately move on some builds. A real
     chunking bug misplaces whole rows and lands far above this bound.
     """
-    whole, chunked = _array(whole), _array(chunked)
+    whole, chunked = to_host_array(whole), to_host_array(chunked)
     scale = max(float(np.abs(whole).max()), 1e-30)
     error = float(np.abs(whole - chunked).max()) / scale
     assert error < 1e-6, f"{what}: chunking moved values by {error:.3e} relative"
@@ -57,10 +51,7 @@ def _assert_chunking_unchanged(whole, chunked, what):
 @pytest.mark.parametrize("interpolation", [(1, 1), (2, 2), (2, 4)])
 def test_upsample_matches_probe(interpolation, device):
     s_matrix = SMatrix(
-        extent=20,
-        gpts=128,
-        energy=100e3,
-        semiangle_cutoff=20,
+        **_VACUUM_KWARGS,
         interpolation=interpolation,
         upsample=True,
         tolerance=1e-6,
@@ -75,8 +66,8 @@ def test_upsample_matches_probe(interpolation, device):
     diffraction_patterns = s_matrix_array.reduce().diffraction_patterns(max_angle=None)
 
     assert np.allclose(
-        np.squeeze(_array(diffraction_patterns)),
-        np.squeeze(_array(probe_diffraction_patterns)),
+        np.squeeze(to_host_array(diffraction_patterns)),
+        np.squeeze(to_host_array(probe_diffraction_patterns)),
         atol=1e-5,
     )
 
@@ -84,10 +75,7 @@ def test_upsample_matches_probe(interpolation, device):
 @devices
 def test_upsample_rank_one_in_vacuum(device):
     s_matrix = SMatrix(
-        extent=20,
-        gpts=128,
-        energy=100e3,
-        semiangle_cutoff=20,
+        **_VACUUM_KWARGS,
         interpolation=(2, 2),
         upsample=True,
         tolerance=1e-6,
@@ -100,13 +88,37 @@ def test_upsample_rank_one_in_vacuum(device):
 
 
 @devices
-def test_upsample_matches_multislice_no_interpolation(device):
+def test_compressed_scan_default_detector(device):
+    # Like every other scan(), the compressed one defaults to the flexible
+    # annular detector, not to exit waves (issue #511).
+    s_matrix_array = SMatrix(
+        **_VACUUM_KWARGS, interpolation=(2, 2), upsample=True, device=device
+    ).build(lazy=False)
+    scan = CustomScan([[5.0, 5.0], [6.0, 7.0]])
+
+    assert isinstance(s_matrix_array.scan(scan=scan), abtem.PolarMeasurements)
+    assert isinstance(
+        s_matrix_array.scan(scan=scan, detectors=abtem.WavesDetector()), abtem.Waves
+    )
+
+
+@devices
+@pytest.mark.parametrize(
+    "positions",
+    [
+        pytest.param([(2.2, 3.3), (5.0, 5.0)], id="on_grid"),
+        pytest.param(
+            [(2.6180339, 4.1415926), (7.7182818, 3.3025851)], id="off_grid"
+        ),
+    ],
+)
+def test_upsample_matches_multislice_no_interpolation(device, positions):
     potential = _small_potential(device=device)
 
     probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
     probe.grid.match(potential)
 
-    scan = CustomScan([(2.2, 3.3), (5.0, 5.0)])
+    scan = CustomScan(positions)
 
     probe_diffraction_patterns = probe.multislice(
         potential=potential, scan=scan, lazy=False
@@ -128,7 +140,7 @@ def test_upsample_matches_multislice_no_interpolation(device):
     )
 
     assert np.allclose(
-        _array(diffraction_patterns), _array(probe_diffraction_patterns), atol=1e-5
+        to_host_array(diffraction_patterns), to_host_array(probe_diffraction_patterns), atol=1e-5
     )
 
 
@@ -176,39 +188,6 @@ def test_upsample_beats_prism_at_same_interpolation(device):
 
 
 @devices
-def test_upsample_off_grid_positions(device):
-    potential = _small_potential(device=device)
-
-    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
-    probe.grid.match(potential)
-
-    scan = CustomScan([(2.6180339, 4.1415926), (7.7182818, 3.3025851)])
-
-    probe_diffraction_patterns = probe.multislice(
-        potential=potential, scan=scan, lazy=False
-    ).diffraction_patterns(max_angle=50)
-
-    s_matrix = SMatrix(
-        potential=potential,
-        energy=100e3,
-        semiangle_cutoff=20,
-        interpolation=1,
-        upsample=True,
-        tolerance=1e-6,
-        max_rank=10_000,
-        device=device,
-    )
-
-    diffraction_patterns = s_matrix.reduce(scan=scan, lazy=False).diffraction_patterns(
-        max_angle=50
-    )
-
-    assert np.allclose(
-        _array(diffraction_patterns), _array(probe_diffraction_patterns), atol=1e-5
-    )
-
-
-@devices
 def test_upsample_windowed(device):
     potential = _small_potential(device=device)
 
@@ -234,18 +213,85 @@ def test_upsample_windowed(device):
         device=device,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    # the cropping window truncates the high-angle scattering tails, hence the
-    # annular dark field signal is slightly reduced
-    assert np.allclose(_array(windowed), _array(full), rtol=0.12)
+    # Oracle: probe multislice. Cropping the reduced wave functions to a window
+    # truncates them, and a truncation in real space is a convolution in
+    # Fourier space: intensity leaks out of the bright-field disc to higher
+    # angles, so the dark-field signal goes UP, not down. Measured against
+    # multislice on this cell (bands 0-20 / 20-40 / 40-100 mrad):
+    #
+    #   window  periods  BF      20-40   ADF 40-100
+    #   64/auto   2.0    1.000   0.996   1.008
+    #   48        1.5    0.984   1.17    1.068
+    #   32        1.0    0.947   1.67    1.081
+    #   24        0.75   0.915   2.01    1.114
+    #
+    # ("periods" is the window in units of the interpolation period,
+    # downsampled gpts / interpolation = 32.) The total intensity of the
+    # windowed patterns stays below one (0.992, 0.987, 0.978), at or above the
+    # multislice intensity inside the same window, so this is a redistribution
+    # by the truncation, not an excess from normalisation. Cropping the full
+    # reduction to 48 px accounts for +3.8% of the ADF by itself; the rest is
+    # the interpolation kernel truncated to the window. Both are inherent to
+    # windows narrower than the 1.75 periods the automatic window enforces
+    # (SMatrix._auto_window_gpts).
+    #
+    # The bound is the error of the one-period (32 px) window: the 1.5-period
+    # window used here must stay more accurate than that.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    reference = to_host_array(
+        probe.scan(potential=potential, scan=scan, detectors=detector, lazy=False)
+    )
+    windowed, full = to_host_array(windowed), to_host_array(full)
+
+    # the full (here: automatic) window is held to the interpolation bound
+    assert np.abs(full / reference - 1).max() < 0.05
+    assert np.abs(windowed / reference - 1).max() < 0.085
+
+
+@devices
+def test_upsample_window_at_interpolation_one_is_exact(device):
+    # Oracle: at interpolation 1 the expansion is complete and no compression
+    # applies (SMatrix._upsample_enabled is False), so the reduction is plain
+    # PRISM at interpolation 1, which equals probe multislice. A C-PRISM
+    # window must not change that. It used to be passed on to the PRISM
+    # reduction as its cropping window, without the sqrt(gpts / window)
+    # amplitude rescaling of the compressed reduction, scaling every signal
+    # by (window / gpts)^2: 0.5616 at 48 of 64 px, 0.2408 at 32 px.
+    potential = _small_potential(device=device)
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=20),
+        abtem.AnnularDetector(inner=40, outer=100),
+    ]
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    measurements = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        upsample=True,
+        window_gpts=48,
+        device=device,
+    ).scan(scan=scan, detectors=detectors, lazy=False)
+
+    # PRISM at interpolation 1 matches multislice to single-precision
+    # round-off (see test_prism_scan_matches_probe_scan in
+    # test_propagation_physics.py); 1e-4 leaves room for the summation order
+    for measurement, reference in zip(measurements, references):
+        measurement, reference = to_host_array(measurement), to_host_array(reference)
+        np.testing.assert_allclose(measurement, reference, rtol=1e-4)
 
 
 @devices
 def test_upsample_window_normalization(device):
     s_matrix = SMatrix(
-        extent=20,
-        gpts=128,
-        energy=100e3,
-        semiangle_cutoff=20,
+        **_VACUUM_KWARGS,
         interpolation=(2, 2),
         upsample=True,
         tolerance=1e-6,
@@ -257,7 +303,7 @@ def test_upsample_window_normalization(device):
         s_matrix.build(lazy=False).reduce().diffraction_patterns(max_angle=None)
     )
 
-    assert np.allclose(_array(diffraction_patterns).sum(), 1.0, atol=1e-2)
+    assert np.allclose(to_host_array(diffraction_patterns).sum(), 1.0, atol=1e-2)
 
 
 @devices
@@ -287,7 +333,33 @@ def test_upsample_frozen_phonons(lazy, device):
         measurement = measurement.compute()
 
     assert measurement.shape == (3, 3)
-    assert np.all(_array(measurement) >= 0.0)
+
+    # Oracle: the frozen-phonon measurement is the incoherent average over the
+    # configurations, ie. the mean of independent single-configuration
+    # simulations of each displaced structure (iterating the FrozenPhonons
+    # yields exactly those structures). The per-configuration results differ
+    # by ~9% of the signal here, so dropping or duplicating a configuration,
+    # or summing instead of averaging, is far outside the round-off bound.
+    per_configuration = [
+        to_host_array(
+            SMatrix(
+                potential=Potential(
+                    atoms, gpts=96, slice_thickness=2, device=device
+                ),
+                energy=100e3,
+                semiangle_cutoff=20,
+                interpolation=2,
+                upsample=True,
+                device=device,
+            ).scan(scan=scan, detectors=detector, lazy=False)
+        )
+        for atoms in frozen_phonons
+    ]
+    assert len(per_configuration) == 2
+    expected = np.mean(per_configuration, axis=0)
+    np.testing.assert_allclose(
+        to_host_array(measurement), expected, rtol=0, atol=1e-5 * expected.max()
+    )
 
 
 @devices
@@ -309,7 +381,7 @@ def test_upsample_lazy_matches_eager(device):
     eager = SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=False)
     lazy = SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=True).compute()
 
-    assert np.allclose(_array(eager), _array(lazy), rtol=1e-4, atol=1e-8)
+    assert np.allclose(to_host_array(eager), to_host_array(lazy), rtol=1e-4, atol=1e-8)
 
 
 @devices
@@ -340,6 +412,40 @@ def test_upsample_detectors(device):
     for measurement in measurements:
         assert measurement.shape[:2] == (2, 2)
 
+    # Oracle: an independent method. Each detector must read the same signal
+    # off the upsampled reduction as off the multislice exit waves of the same
+    # probes, within the interpolation error the upsampled reduction is held
+    # to above (test_upsample_beats_prism_at_same_interpolation: < 0.05).
+    # Measured: annular 0.9%, pixelated 1.4%, wave intensities 1.3%, radial
+    # bands 0.07-1%.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    annular, flexible, pixelated, waves = measurements
+    annular_ref, flexible_ref, pixelated_ref, waves_ref = references
+
+    assert _relative_error(annular, annular_ref) < 0.05
+
+    # the reduction is downsampled to the antialias cutoff, so it has fewer
+    # 1 mrad radial bins than the reference; single bins hold a few discrete
+    # pixels each, hence compare bands within the common range
+    flexible, flexible_ref = to_host_array(flexible), to_host_array(flexible_ref)
+    assert flexible.shape[2] < flexible_ref.shape[2]
+    for inner, outer in [(0, 20), (20, 40), (40, 70)]:
+        band = flexible[:, :, inner:outer].sum(axis=2)
+        band_ref = flexible_ref[:, :, inner:outer].sum(axis=2)
+        assert _relative_error(band, band_ref) < 0.05, (inner, outer)
+
+    assert pixelated.shape == pixelated_ref.shape
+    assert _relative_error(pixelated, pixelated_ref) < 0.05
+
+    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:], normalization="amplitude")
+    intensity = np.abs(to_host_array(waves)) ** 2
+    intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
+    assert _relative_error(intensity, intensity_ref) < 0.05
+
 
 @devices
 def test_upsample_ctf_ensemble(device):
@@ -362,6 +468,25 @@ def test_upsample_ctf_ensemble(device):
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
 
     assert measurement.shape == (3, 2, 2)
+
+    # Oracle: each ensemble member is an independent simulation with that
+    # member's CTF. The defocus-0 member is the aberration-free probe, ie. the
+    # reduction without a CTF, and the last member is the defocus-50 probe.
+    # The members differ from each other by ~14% of the signal, so a
+    # misordered or misapplied ensemble is far outside the round-off bound.
+    without_ctf = to_host_array(
+        s_matrix.scan(scan=scan, detectors=detector, lazy=False)
+    )
+    defocus_50 = to_host_array(
+        s_matrix.scan(
+            scan=scan, detectors=detector, ctf=abtem.CTF(defocus=50), lazy=False
+        )
+    )
+    measurement = to_host_array(measurement)
+    atol = 1e-5 * without_ctf.max()
+    np.testing.assert_allclose(measurement[0], without_ctf, rtol=0, atol=atol)
+    np.testing.assert_allclose(measurement[2], defocus_50, rtol=0, atol=atol)
+    assert np.abs(measurement[0] - measurement[2]).max() > 100 * atol
 
 
 def test_upsample_downsampled_gpts_independent_of_interpolation():
@@ -387,21 +512,10 @@ def test_upsample_aberrated_ctf_matches_probe(device):
     # the azimuthal angle convention of the reduction coefficients must match
     # polar_spatial_frequencies, ie. arctan2(ky, kx); the real-space intensity
     # of an aberrated probe is sensitive to the convention
-    ctf = abtem.CTF(
-        energy=100e3,
-        semiangle_cutoff=20,
-        defocus=50,
-        astigmatism=40,
-        astigmatism_angle=0.5236,
-        coma=3e3,
-        coma_angle=1.0,
-    )
+    ctf = _aberrated_ctf()
 
     s_matrix = SMatrix(
-        extent=20,
-        gpts=128,
-        energy=100e3,
-        semiangle_cutoff=20,
+        **_VACUUM_KWARGS,
         interpolation=(2, 2),
         upsample=True,
         tolerance=1e-6,
@@ -412,9 +526,9 @@ def test_upsample_aberrated_ctf_matches_probe(device):
     probe = Probe._from_ctf(
         extent=20, gpts=s_matrix_array.gpts, ctf=ctf, energy=100e3, device=device
     )
-    probe_intensity = _array(probe.build(lazy=False).intensity())
+    probe_intensity = to_host_array(probe.build(lazy=False).intensity())
 
-    upsampled_intensity = _array(s_matrix_array.reduce(ctf=ctf).intensity())
+    upsampled_intensity = to_host_array(s_matrix_array.reduce(ctf=ctf).intensity())
 
     assert np.allclose(
         np.squeeze(upsampled_intensity),
@@ -454,7 +568,7 @@ def test_upsample_identical_to_prism_without_interpolation(device):
 
     upsampled_measurement = upsampled.scan(scan=scan, detectors=detector, lazy=False)
 
-    assert np.allclose(_array(upsampled_measurement), _array(prism_measurement))
+    assert np.allclose(to_host_array(upsampled_measurement), to_host_array(prism_measurement))
 
 
 @devices
@@ -472,7 +586,7 @@ def test_upsample_defocus_phase(device):
         upsample=True,
         device=device,
     )
-    assert np.allclose(_array(vacuum._defocus_phase(vacuum.wave_vectors)), 1.0)
+    assert np.allclose(to_host_array(vacuum._defocus_phase(vacuum.wave_vectors)), 1.0)
 
     thick = SMatrix(
         potential=_small_potential(device=device),
@@ -482,14 +596,14 @@ def test_upsample_defocus_phase(device):
         upsample=True,
         device=device,
     )
-    phase = _array(thick._defocus_phase(thick.wave_vectors))
+    phase = to_host_array(thick._defocus_phase(thick.wave_vectors))
     assert np.allclose(np.abs(phase), 1.0)
     assert not np.allclose(phase, 1.0)
 
 
 def test_upsample_only_options_require_upsample():
     # constructor validation only: device-independent
-    kwargs = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
+    kwargs = _VACUUM_KWARGS
 
     with pytest.raises(ValueError, match="upsample=True"):
         SMatrix(**kwargs, interpolation=2, max_rank=64)
@@ -541,10 +655,10 @@ def test_upsample_streamed_expansion_matches_expanded(device):
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 3))
     detector = abtem.PixelatedDetector(max_angle=None)
 
-    expanded = _array(s_matrix_array.reduce(scan=scan, detectors=detector))
+    expanded = to_host_array(s_matrix_array.reduce(scan=scan, detectors=detector))
 
     for max_batch_expansion in (7, 10_000):
-        streamed = _array(
+        streamed = to_host_array(
             s_matrix_array.reduce(
                 scan=scan, detectors=detector, max_batch_expansion=max_batch_expansion
             )
@@ -552,8 +666,8 @@ def test_upsample_streamed_expansion_matches_expanded(device):
         assert np.allclose(streamed, expanded, atol=1e-5 * expanded.max())
 
     positions = CustomScan(np.array([[1.234, 2.345], [3.001, 0.777]]))
-    expanded = _array(s_matrix_array.reduce(scan=positions, detectors=detector))
-    streamed = _array(
+    expanded = to_host_array(s_matrix_array.reduce(scan=positions, detectors=detector))
+    streamed = to_host_array(
         s_matrix_array.reduce(
             scan=positions, detectors=detector, max_batch_expansion=33
         )
@@ -561,8 +675,8 @@ def test_upsample_streamed_expansion_matches_expanded(device):
     assert np.allclose(streamed, expanded, atol=1e-5 * expanded.max())
 
     ctf = abtem.CTF(semiangle_cutoff=20, defocus=50, Cs=1e5)
-    expanded = _array(s_matrix_array.reduce(scan=scan, detectors=detector, ctf=ctf))
-    streamed = _array(
+    expanded = to_host_array(s_matrix_array.reduce(scan=scan, detectors=detector, ctf=ctf))
+    streamed = to_host_array(
         s_matrix_array.reduce(
             scan=scan, detectors=detector, ctf=ctf, max_batch_expansion=50
         )
@@ -587,15 +701,15 @@ def test_upsample_streamed_expansion_through_s_matrix(device):
         device=device,
     )
 
-    expanded = _array(SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=False))
-    streamed = _array(
+    expanded = to_host_array(SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=False))
+    streamed = to_host_array(
         SMatrix(**kwargs, max_batch_expansion=41).scan(
             scan=scan, detectors=detector, lazy=False
         )
     )
     assert np.allclose(streamed, expanded, atol=1e-5 * expanded.max())
 
-    lazy_streamed = _array(
+    lazy_streamed = to_host_array(
         SMatrix(**kwargs, max_batch_expansion=41)
         .scan(scan=scan, detectors=detector, lazy=True)
         .compute()
@@ -605,7 +719,7 @@ def test_upsample_streamed_expansion_through_s_matrix(device):
 
 def test_upsample_streamed_expansion_validation():
     # constructor and reduction validation only: device-independent
-    kwargs = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
+    kwargs = _VACUUM_KWARGS
 
     with pytest.raises(ValueError, match="upsample=True"):
         SMatrix(**kwargs, interpolation=2, max_batch_expansion=8)
@@ -691,8 +805,8 @@ def test_upsample_singular_values_spectrum(device):
         device=device,
     ).build(lazy=False)
 
-    singular_values = _array(s_matrix_array.singular_values)
-    sigma = _array(s_matrix_array.sigma)
+    singular_values = to_host_array(s_matrix_array.singular_values)
+    sigma = to_host_array(s_matrix_array.sigma)
     rank = s_matrix_array.rank
 
     assert len(singular_values) >= rank
@@ -731,21 +845,21 @@ def test_upsample_modes_reduction_matches_expand(device):
         CustomScan(np.array([[1.234, 2.345], [3.001, 0.777]])),
     ]
     for scan in scans:
-        expanded = _array(
+        expanded = to_host_array(
             s_matrix_array.reduce(scan=scan, detectors=detector, method="expand")
         )
-        modes = _array(
+        modes = to_host_array(
             s_matrix_array.reduce(scan=scan, detectors=detector, method="modes")
         )
         assert np.allclose(modes, expanded, atol=1e-4 * expanded.max())
 
     ctf = abtem.CTF(semiangle_cutoff=20, defocus=50, Cs=1e5)
-    expanded = _array(
+    expanded = to_host_array(
         s_matrix_array.reduce(
             scan=scans[0], detectors=detector, ctf=ctf, method="expand"
         )
     )
-    modes = _array(
+    modes = to_host_array(
         s_matrix_array.reduce(
             scan=scans[0], detectors=detector, ctf=ctf, method="modes"
         )
@@ -754,12 +868,12 @@ def test_upsample_modes_reduction_matches_expand(device):
 
     # complex waves in the absolute frame (registration must match, not just
     # the intensities)
-    expanded = _array(
+    expanded = to_host_array(
         s_matrix_array.reduce(
             scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="expand"
         )
     )
-    modes = _array(
+    modes = to_host_array(
         s_matrix_array.reduce(
             scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="modes"
         )
@@ -799,7 +913,7 @@ def test_upsample_batched_windowed_reduction_matches_loop(device):
 
     loop = s_matrix_array._reduce_to_waves(u_windows, snapped, kernel)
     batched = s_matrix_array._reduce_to_waves_batched(u_windows, snapped, kernel)
-    assert np.allclose(_array(loop), _array(batched))
+    assert np.allclose(to_host_array(loop), to_host_array(batched))
 
 
 def test_upsample_reduction_method_validation():
@@ -858,12 +972,12 @@ def test_upsample_lattice_reduction_matches_general(device):
     try:
         for scan in scans:
             assert original(s_matrix_array, scan) is not None
-            fast = _array(s_matrix_array.reduce(scan=scan, detectors=detector))
+            fast = to_host_array(s_matrix_array.reduce(scan=scan, detectors=detector))
 
             CompressedSMatrixArray._lattice_geometry = (
                 lambda self, scan, warn=False: None
             )
-            general = _array(s_matrix_array.reduce(scan=scan, detectors=detector))
+            general = to_host_array(s_matrix_array.reduce(scan=scan, detectors=detector))
             CompressedSMatrixArray._lattice_geometry = original
 
             assert np.allclose(fast, general, atol=1e-5 * general.max())
@@ -917,13 +1031,13 @@ def test_upsample_blend_angle(device):
     detector = abtem.PixelatedDetector(max_angle=None)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
 
-    blended = _array(
+    blended = to_host_array(
         s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=expected)
     )
-    unblended = _array(
+    unblended = to_host_array(
         s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
     )
-    plain = _array(
+    plain = to_host_array(
         SMatrix(
             potential=potential, energy=100e3, semiangle_cutoff=20,
             interpolation=2, upsample=True, tolerance=1e-4, blend_angle=0,
@@ -937,14 +1051,14 @@ def test_upsample_blend_angle(device):
     # the default blend acts through the detector routing; a full diffraction
     # pattern is not routable, hence the default reduction is the plain
     # interpolated one and Fourier blending must be requested explicitly
-    default = _array(s_matrix_array.reduce(scan=scan, detectors=detector))
+    default = to_host_array(s_matrix_array.reduce(scan=scan, detectors=detector))
     assert np.allclose(default, plain, atol=1e-6 * plain.max())
     # blending changes the high-angle content but not the total intensity much
     assert not np.allclose(blended, plain, atol=1e-6 * plain.max())
     assert np.isclose(blended.sum(), plain.sum(), rtol=0.05)
 
     # a blend angle beyond the maximum simulated angle is a no-op
-    very_high = _array(
+    very_high = to_host_array(
         s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=1e4)
     )
     assert np.allclose(very_high, plain, atol=1e-6 * plain.max())
@@ -970,10 +1084,10 @@ def test_upsample_blend_aperture_and_clamp(device):
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
     # a full diffraction pattern is not routable, hence the Fourier-weighted
     # blend must be requested explicitly in the reduction
-    blended = _array(
+    blended = to_host_array(
         s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle="aperture")
     )
-    plain = _array(
+    plain = to_host_array(
         s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
     )
     assert not np.allclose(blended, plain, atol=1e-6 * plain.max())
@@ -1022,10 +1136,10 @@ def test_upsample_composite_blend(device):
     plain = s_matrix_array.scan(scan=scan, detectors=detectors, blend_angle=0)
 
     # below the blend angle the composite is the interpolated reduction
-    assert np.allclose(_array(composite[0]), _array(plain[0]), rtol=0.02)
+    assert np.allclose(to_host_array(composite[0]), to_host_array(plain[0]), rtol=0.02)
     # the high-angle branch changes the dark-field values
-    assert not np.allclose(_array(composite[1]), _array(plain[1]), rtol=0.02)
-    assert np.all(_array(composite[1]) >= 0)
+    assert not np.allclose(to_host_array(composite[1]), to_host_array(plain[1]), rtol=0.02)
+    assert np.all(to_host_array(composite[1]) >= 0)
 
     with pytest.raises(NotImplementedError, match="intensity"):
         s_matrix_array.scan(
@@ -1091,6 +1205,14 @@ def test_upsample_blend_snapping():
     assert C._snapped_blend_angle(None, detectors) is None
     assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
 
+    # an offset detector's boundaries are the bounds of the angles it covers,
+    # widened by |offset| plus the rounding margin
+    offset_detector = abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
+    )
+    assert C._snapped_blend_angle(60.0, [offset_detector], margin=1.0) == 56.0
+    assert C._snapped_blend_angle(30.0, [offset_detector], margin=1.0) == 15.0
+
 
 @devices
 def test_upsample_blend_snaps_to_detector_boundary(device):
@@ -1118,10 +1240,10 @@ def test_upsample_blend_snaps_to_detector_boundary(device):
 
     # snapped to 21 mrad: both dark-field bands sit above it and must be PRISM
     for a, b in zip(composite[1:], reference[1:]):
-        assert np.allclose(_array(a), _array(b), rtol=1e-4, atol=1e-9)
+        assert np.allclose(to_host_array(a), to_host_array(b), rtol=1e-4, atol=1e-9)
     # the bright field is below it and is the interpolated reduction
     assert not np.allclose(
-        _array(composite[0]), _array(reference[0]), rtol=1e-4
+        to_host_array(composite[0]), to_host_array(reference[0]), rtol=1e-4
     )
 
 
@@ -1135,13 +1257,13 @@ def test_upsample_plane_wave_branch_is_prism(device):
                   interpolation=2, device=device)
     prism = SMatrix(**kwargs).build(lazy=False)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
-    expected = _array(prism.reduce(scan=scan))
+    expected = to_host_array(prism.reduce(scan=scan))
 
     for tolerance in (1e-1, 1e-2, 1e-3):
         compressed = SMatrix(**kwargs, upsample=True, tolerance=tolerance,
                              window_gpts=int(prism.window_gpts[0])).build(lazy=False)
         # a vanishing blend angle leaves the plane-wave branch alone
-        branch = _array(compressed.reduce(scan=scan, blend_angle=1e-6))
+        branch = to_host_array(compressed.reduce(scan=scan, blend_angle=1e-6))
         error = np.abs(branch - expected).max() / np.abs(expected).max()
         assert error < 1e-4, f"tolerance {tolerance}: {error}"
 
@@ -1170,22 +1292,27 @@ def test_upsample_blend_taper_routing(device):
     sharp = built.scan(scan=scan, detectors=rings, blend_angle=cut)
 
     # outside the zone the taper changes nothing
-    assert np.allclose(_array(tapered[0]), _array(sharp[0]), rtol=1e-5)
-    assert np.allclose(_array(tapered[2]), _array(sharp[2]), rtol=1e-5)
+    assert np.allclose(to_host_array(tapered[0]), to_host_array(sharp[0]), rtol=1e-5)
+    assert np.allclose(to_host_array(tapered[2]), to_host_array(sharp[2]), rtol=1e-5)
 
     # inside the zone the value lies between the two pure branches
-    low = _array(built.scan(scan=scan, detectors=rings[1], blend_angle=0))
-    high = _array(
+    low = to_host_array(built.scan(scan=scan, detectors=rings[1], blend_angle=0))
+    high = to_host_array(
         built._with_window(
             tuple(-(-g // i) for g, i in zip(built.gpts, built._interpolation))
-        ).reduce(scan=scan, detectors=rings[1], blend_angle=cut - taper,
-                 _blend_component="high", _blend_taper=0.0)
+        )._reduce(
+            scan=scan,
+            detectors=rings[1],
+            blend_angle=cut - taper,
+            _blend_component="high",
+            _blend_taper=0.0,
+        )
     )
     lower = np.minimum(low, high) * (1 - 1e-4) - 1e-12
     upper = np.maximum(low, high) * (1 + 1e-4) + 1e-12
-    assert np.all(_array(tapered[1]) >= lower)
-    assert np.all(_array(tapered[1]) <= upper)
-    assert not np.allclose(_array(tapered[1]), _array(sharp[1]), rtol=1e-5)
+    assert np.all(to_host_array(tapered[1]) >= lower)
+    assert np.all(to_host_array(tapered[1]) <= upper)
+    assert not np.allclose(to_host_array(tapered[1]), to_host_array(sharp[1]), rtol=1e-5)
 
 
 @devices
@@ -1207,9 +1334,9 @@ def test_upsample_lattice_product_chunking(device):
                         gpts=(scan_gpts, scan_gpts))
         assert built._lattice_geometry(scan) is not None
 
-        whole = _array(built.reduce(scan=scan, detectors=detector))
+        whole = to_host_array(built.reduce(scan=scan, detectors=detector))
         built._REDUCE_BATCH_BYTES = 65536  # a few product rows per chunk
-        chunked = _array(built.reduce(scan=scan, detectors=detector))
+        chunked = to_host_array(built.reduce(scan=scan, detectors=detector))
         del built._REDUCE_BATCH_BYTES
 
         _assert_chunking_unchanged(whole, chunked, f"scan {scan_gpts}")
@@ -1275,12 +1402,12 @@ def test_upsample_pixelated_detector_is_stitched(device):
     assert built._routing_sides(cut, [detector]) == ["pattern"]
 
     stitched = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
-    stitched_array = _array(stitched)
+    stitched_array = to_host_array(stitched)
     assert stitched_array.shape[-2:] == tuple(built.gpts)
     assert np.allclose(stitched_array.sum((-2, -1)), 1.0, atol=0.05)
 
     reference = prism.reduce(scan=scan, detectors=detector)
-    reference_array = _array(reference)
+    reference_array = to_host_array(reference)
     factor = int(round(reference.angular_sampling[0]
                        / stitched.angular_sampling[0]))
     size, period = built.gpts[0], reference_array.shape[-1]
@@ -1305,7 +1432,7 @@ def test_upsample_pixelated_detector_is_stitched(device):
     plain = built.reduce(scan=scan, detectors=padded, blend_angle=0.0)
     assert plain.angular_sampling == stitched.angular_sampling
     below = theta < cut
-    assert np.allclose(_array(plain)[..., below], stitched_array[..., below])
+    assert np.allclose(to_host_array(plain)[..., below], stitched_array[..., below])
 
 
 @devices
@@ -1341,3 +1468,45 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
                           blend_angle=1e4)
     assert np.allclose(beyond.angular_sampling, reference.angular_sampling)
+
+
+def test_upsample_offset_detectors_route_on_the_angles_they_cover():
+    # an offset region is an annulus about its offset centre, so it covers
+    # [max(inner - r, 0), outer + r] about k = 0, r = |offset| plus a pixel of
+    # the one-period window for the offset's nearest-pixel rounding; routing
+    # reads the band from those bounds, not from inner/outer alone
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+
+    cut = 60.0
+    offset = (3.0, 4.0)  # |offset| = 5 mrad
+    r = 5.0 + built._offset_rounding_margin
+
+    def sides(detector):
+        return built._routing_sides(cut, [detector])
+
+    # wholly below / above the cut, with or without an offset
+    below = abtem.AnnularDetector(inner=0, outer=cut - r - 1, offset=offset)
+    above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
+    assert sides(below) == ["low"]
+    assert sides(above) == ["high"]
+    assert sides(abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=cut + r + 1, outer=150,
+        offset=offset,
+    )) == ["high"]
+    # outer <= cut, but the offset region reaches across it
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
+    # inner >= cut, but the offset region reaches below it
+    assert sides(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
+    # a q-sweep of disks is not an angular band
+    assert sides(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
+
+    # snapping puts the cut on the covered bounds of an offset detector
+    detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
+    assert built._snapped_blend_angle(
+        40 + r + 1, [detector], built._offset_rounding_margin
+    ) == pytest.approx(40 + r)

@@ -35,7 +35,7 @@ def antialias_aperture(
 
     Returns
     -------
-    antialias_aperture_array : np.ndarray
+    antialias_aperture_array : numpy.ndarray
     """
     cutoff = config.get("antialias.cutoff") / max(sampling) / 2
     taper = config.get("antialias.taper") / max(sampling)

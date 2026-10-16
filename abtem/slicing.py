@@ -3,14 +3,30 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import abstractmethod
 from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
-from abtem.core.utils import EqualityMixin, label_to_index
+from abtem.atoms import (
+    _stacklevel_outside_package,
+    is_cell_orthogonal,
+    wrap_and_snap_atoms,
+)
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
+
+# How far outside the cell along z [Å] a non-periodic potential places an atom in
+# its face slice before warning. A thermal displacement is a few times its
+# standard deviation, which rarely exceeds 0.25 Å, so this is about 8 sigma: no
+# frozen phonon reaches it, but a misplaced atom or a wrong cell height does.
+FACE_SLICE_WARNING_DISTANCE = 2.0
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -38,6 +54,353 @@ def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarra
 
     assert np.isclose(np.sum(slice_thickness), atoms.cell[2, 2])
     return slice_thickness
+
+
+def commensurate_slice_thickness(
+    atoms: Atoms,
+    target_thickness: float = 1.0,
+    tolerance: float = 0.2,
+) -> tuple[float, ...]:
+    """
+    Find slice thicknesses commensurate with the crystal planes, closest to a target
+    thickness.
+
+    Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
+    and the cell height.  Adjacent plane-level slices are merged so that each resulting
+    slice thickness is as close as possible to `target_thickness` while keeping
+    boundaries aligned with atomic planes.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atoms to be sliced. Must have an orthogonal cell.
+    target_thickness : float
+        Target slice thickness [Å].
+    tolerance : float
+        Tolerance for identifying distinct crystal planes [Å].
+
+    Returns
+    -------
+    tuple of float
+        Commensurate slice thicknesses.
+    """
+    cell_z = float(atoms.cell[2, 2])
+    z = atoms.positions[:, 2] % cell_z
+
+    # Snap values at z ≈ cell_z back to 0 before deduplicating, so planes near
+    # the periodic boundary merge with planes near 0 instead of being treated
+    # as distinct. Identify unique planes by sorted-neighbor distance (as in
+    # commensurate_gpts) rather than rounding to a fixed tolerance-wide grid
+    # anchored at 0: fixed-grid rounding can split two atoms much closer
+    # together than `tolerance` into different bins when they straddle a bin
+    # edge, or merge genuinely distinct planes that land in the same bin.
+    z[z > cell_z - tolerance] = 0.0
+    z = np.sort(z)
+    unique_mask = np.concatenate([[True], np.diff(z) > tolerance])
+    unique_z = z[unique_mask]
+    unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
+
+    boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
+    plane_thicknesses = np.diff(boundaries)
+
+    merged = []
+    acc = 0.0
+    for t in plane_thicknesses:
+        if acc > 0 and acc + t > target_thickness and acc >= target_thickness * 0.5:
+            merged.append(acc)
+            acc = t
+        else:
+            acc += t
+    if acc > 0:
+        # z is periodic, so the last slice and the first slice are also
+        # adjacent through the wrap at cell_z ≡ 0. Without this, a trailing
+        # remainder that is real (spacing ≥ tolerance) but well below half
+        # the target thickness would end up as its own near-degenerate final
+        # slice, since nothing follows it to trigger the merge guard above.
+        if merged and acc < target_thickness * 0.5:
+            merged[-1] += acc
+        else:
+            merged.append(acc)
+
+    result = tuple(float(t) for t in merged)
+    assert np.isclose(sum(result), cell_z)
+    return result
+
+
+# How far above the target grid size the incommensurate fallback may look for a
+# better-aligned fast size. Alignment is a tie-break among nearby candidates,
+# not something to optimise: how closely the grid samples an atom column is set
+# by the requested sampling, which is the user's to choose, whereas what this
+# fallback exists to guarantee is that symmetry-equivalent atoms are sampled
+# ALIKE -- and that follows from gpts being a multiple of the translational
+# period, which every candidate here satisfies. So the window stays tight;
+# chasing the best-aligned candidate without one costs up to 38 % extra pixels.
+_FALLBACK_MAX_OVERSHOOT = 1.12
+
+
+def _plane_set_invariant_under(
+    unique_x: np.ndarray, L: float, s: float, tolerance: float = 1e-3
+) -> bool:
+    """Whether shifting every atom plane by ``s`` maps the plane set onto itself."""
+    # Every plane, shifted by s, must land within tolerance of a plane.
+    # The plane set is periodic, so the nearest plane to a shifted point may
+    # lie across the wrap at 0 ≡ L: a point landing just below L is nearest
+    # to unique_x[0], and one landing below unique_x[0] is nearest to
+    # unique_x[-1]. Indexing modulo n picks up both; clipping the
+    # searchsorted index instead collapses the two neighbours onto the same
+    # end plane and silently misses the true nearest one. (The caller's
+    # `x > L - tolerance -> 0` snap bounds the input planes away from L, but
+    # not the shifted ones: floating-point cell transforms routinely put a
+    # shifted plane an ulp below L.)
+    n = len(unique_x)
+    shifted = (unique_x + s) % L
+    idx = np.searchsorted(unique_x, shifted)
+    neighbors = np.stack([unique_x[(idx - 1) % n], unique_x[idx % n]])
+    distances = np.abs(neighbors - shifted)
+    distances = np.minimum(distances, L - distances)
+    return bool(np.all(distances.min(axis=0) < tolerance))
+
+
+def _translational_period_count(
+    unique_x: np.ndarray, L: float, tolerance: float = 1e-3
+) -> int:
+    """The largest m for which the plane set is invariant under a shift of L / m."""
+    # Largest m such that the set of atom planes is invariant under a shift
+    # of L / m. Even when the intra-cell plane positions are irrational
+    # (no commensurate grid exists), a repeated unit cell still imposes
+    # this translational period, and symmetry-equivalent atoms only see
+    # identical discretised potentials if gpts is a multiple of m.
+    #
+    # A shift s mapping the plane set onto itself must map the first plane
+    # onto some plane, so the differences to the first plane are the only
+    # candidates -- and s must moreover be L / m for near-integer m. This
+    # prunes the search from every m in [2, n_planes] to the few
+    # difference-derived candidates, typically O(n log n) overall instead of
+    # O(n^2 log n). Candidates are tried in increasing s, so the first valid
+    # shift is the minimal period, i.e. the largest m.
+    #
+    # Each candidate is tested at the EXACT shift L / m rather than at the
+    # difference that suggested it: a period-m set is invariant under L / m by
+    # definition, while the difference carries the plane's own float noise and
+    # may sit up to 2.5 % away (the near-integer filter's width). Testing the
+    # exact shift also makes m the whole identity of a candidate, so distinct
+    # differences rounding to the same m can be collapsed -- without that, an
+    # off-period difference rounding to m could be tested and rejected first,
+    # suppressing the genuine L / m shift entirely.
+    deltas = np.sort((unique_x - unique_x[0]) % L)
+    tested: set[int] = set()
+    for delta in deltas:
+        if delta < tolerance:
+            continue
+        if delta > L / 2 + tolerance:
+            # m = L / delta must be >= 2, and deltas are sorted ascending.
+            break
+        m = L / delta
+        m_int = int(round(m))
+        if m_int < 2 or abs(m - m_int) > 0.05 or m_int in tested:
+            continue
+        tested.add(m_int)
+        if _plane_set_invariant_under(unique_x, L, L / m_int, tolerance):
+            return m_int
+    return 1
+
+
+def commensurate_gpts(
+    extent: tuple[float, float],
+    positions: np.ndarray,
+    target_sampling: float = 0.05,
+    tolerance: float = 1e-3,
+    round_to_fast_fft: bool = True,
+) -> tuple[int, int]:
+    """
+    Find grid points such that the sampling grid is commensurate with the atom
+    positions in x and y, closest to a target sampling.
+
+    For each axis the function identifies the unique atom planes and computes the
+    GCD of the spacings between them.  This gives the primitive lattice spacing
+    and therefore the required grid period p (= number of grid points per unit
+    cell of the primitive lattice).  The result is invariant under rigid
+    translations of the structure: a crystal that has been centered or otherwise
+    shifted within the cell always yields the same p as the unshifted version.
+
+    When `round_to_fast_fft` is enabled the number of grid points additionally
+    factorizes completely into the primes 2, 3, 5 and 7 whenever that is
+    compatible with commensurability, so FFTs run on fast radix kernels instead
+    of the slow, memory-hungry Bluestein fallback.  The multiple of p nearest
+    the target sampling is kept when it is already such a length, and otherwise
+    the next one up -- so enabling this never coarsens the grid.  If p itself
+    contains a prime factor larger than 7 no multiple of it can be fast, and
+    commensurability takes precedence.
+
+    Structures whose internal parameters are irrational (rutile, brookite) have
+    no commensurate grid at all.  For those, `round_to_fast_fft` additionally
+    selects among fast sizes within a few percent of the target the one whose
+    grid the atom planes come closest to sitting on, subject to keeping the
+    grid a multiple of the plane set's translational period -- without which
+    symmetry-equivalent atoms in different unit cells would discretise
+    differently.  This is the only case in which the returned grid is not the
+    one closest to `target_sampling`.
+
+    Parameters
+    ----------
+    extent : tuple of float
+        Grid extent in x and y [Å].
+    positions : numpy.ndarray
+        Atom positions with shape (N, 3) or (N, 2).
+    target_sampling : float
+        Target grid sampling [Å].
+    tolerance : float
+        Tolerance for identifying distinct atom planes [Å].
+    round_to_fast_fft : bool
+        If True (default), prefer grids that are also fast FFT sizes (all prime
+        factors in {2, 3, 5, 7}). The realized sampling is then never coarser
+        than commensurability alone would give, and at most a few percent
+        finer. Setting
+        this to False reproduces the plain commensurate grid exactly, including
+        for the incommensurate structures above, which then simply take the
+        target size.
+
+    Returns
+    -------
+    tuple of int
+        Number of grid points in x and y.
+    """
+    from abtem.core.fft import is_fast_fft_size, next_fast_fft_size
+
+    def fallback_gpts(n_target: int, unique_x=None, L=None) -> int:
+        # The GCD search found no commensurate period. With fast-FFT rounding
+        # off this is simply the target size (the base branch's behaviour).
+        # With it on, pick the fast size that (a) keeps gpts a multiple of the
+        # translational period count m of the plane set and (b) best aligns
+        # the planes with grid points: structures with an irrational internal
+        # parameter (e.g. rutile u = 0.306, brookite) have no exactly
+        # commensurate grid, but some fast sizes come much closer than others.
+        # Note this ties the period constraint in (a) to the rounding flag, so
+        # that `round_to_fast_fft=False` reproduces the base branch exactly.
+        if not round_to_fast_fft:
+            return n_target
+        if unique_x is None or L is None or len(unique_x) <= 1:
+            return next_fast_fft_size(n_target)
+
+        m = _translational_period_count(unique_x, L, tolerance)
+        if not is_fast_fft_size(m):
+            # No multiple of m can be a fast FFT size; translational
+            # commensurability takes precedence, as in the main path.
+            return max(round(n_target / m), 1) * m
+
+        best = None
+        multiplier = -(-n_target // m)
+        while True:
+            multiplier = next_fast_fft_size(multiplier)
+            n = multiplier * m
+            if best is not None and n > n_target * _FALLBACK_MAX_OVERSHOOT:
+                # Candidates outside the window are not scored at all. Scoring
+                # the terminating candidate and only then stopping let the
+                # largest one -- often the best aligned, since a finer grid
+                # resolves more phases -- win from outside any window at all.
+                break
+            # Score by ALIGNABILITY, not realized alignment: the smallest
+            # achievable max plane-to-gridpoint distance over all grid-origin
+            # phases. The plane residues x_i*n/L mod 1 must cluster near a
+            # common phase for the planes to sit near grid points; the tightest
+            # arc containing all residues is 1 - (largest circular gap), and
+            # centering the phase in that arc gives max distance (1 - gap)/2.
+            # Unlike distance-to-nearest-gridpoint at a fixed origin, this
+            # depends only on RELATIVE positions, so a rigidly translated
+            # structure gets the same grid (a tested invariant of the
+            # commensurate search that the fallback must preserve).
+            residues = np.sort(np.mod(unique_x * (n / L), 1.0))
+            gaps = np.diff(np.concatenate([residues, [residues[0] + 1.0]]))
+            alignability = (1.0 - float(np.max(gaps))) / 2.0
+            # Compare candidates by misalignment in ANGSTROM, not in fractions
+            # of a grid spacing: a finer grid has a smaller spacing, so the same
+            # fractional alignability is physically better there and the two are
+            # not comparable as they stand. Rounding to 0.001 A -- far below
+            # what a projected potential resolves -- makes indistinguishable
+            # candidates tie, and the tie-break then takes the smaller grid.
+            misalignment = alignability * (L / n)
+            score = (round(misalignment, 3), n)
+            if best is None or score < best[0]:
+                best = (score, n)
+            multiplier += 1
+
+        assert best is not None
+        if best[1] > n_target * _FALLBACK_MAX_OVERSHOOT:
+            # Candidates ascend, so the first one already overshoots and there
+            # is no in-window candidate to find: every fast multiple of m is
+            # this far above the target or further. Being a fast size is not
+            # worth that many extra pixels, so keep the period constraint on
+            # its own -- exactly what the branch above does when m itself is
+            # not a fast size. Without this the window is not a bound at all
+            # (m = 64 against a target of 72 lands on 128, +78 %).
+            return max(round(n_target / m), 1) * m
+        return best[1]
+
+    gpts = []
+    for i in range(2):
+        L = extent[i]
+        n_target = safe_ceiling_int(L / target_sampling)
+
+        x = positions[:, i] % L
+        # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
+        # from cell-transform at L−ε rather than 0, creating a spurious near-zero
+        # spacing that breaks the GCD calculation.
+        x[x > L - tolerance] = 0.0
+        x = np.sort(x)
+
+        # De-duplicate: keep one representative per distinct atom plane
+        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])
+        unique_x = x[unique_mask]
+
+        if len(unique_x) <= 1:
+            gpts.append(fallback_gpts(n_target, unique_x, L))
+            continue
+
+        # Spacings between consecutive unique planes, including the wrap-around gap
+        spacings = np.concatenate([np.diff(unique_x), [L + unique_x[0] - unique_x[-1]]])
+
+        min_spacing = float(np.min(spacings))
+        if min_spacing < tolerance:
+            gpts.append(fallback_gpts(n_target, unique_x, L))
+            continue
+
+        # Check that every spacing is approximately an integer multiple of the
+        # minimum spacing (i.e. the minimum is the primitive spacing).
+        ratios = spacings / min_spacing
+        k = np.round(ratios).astype(int)
+        if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
+            # No clear commensurability — take the incommensurate fallback
+            gpts.append(fallback_gpts(n_target, unique_x, L))
+            continue
+
+        # Primitive spacing refined as L / (total number of primitive periods).
+        # Using L / sum(k) is more accurate than min_spacing alone because it
+        # averages out any floating-point scatter in the individual spacings.
+        n_periods = int(np.sum(k))
+        # The commensurate grid nearest the target, i.e. the grid chosen when
+        # fast-FFT rounding is off.
+        nearest = max(round(n_target / n_periods), 1)
+
+        if round_to_fast_fft and is_fast_fft_size(n_periods):
+            # A multiple q * n_periods is a fast FFT size exactly when both
+            # factors are, so only the multiplier has to be moved -- and only
+            # when the nearest commensurate grid is not already fast. Enlarging
+            # an already-fast grid buys nothing: both are exactly commensurate,
+            # so the extra pixels improve no measurable quantity. When n_periods
+            # itself has a prime factor larger than 7 no multiple can be fast
+            # and commensurability takes precedence (handled below).
+            # Rounding the multiplier up rather than to the nearer fast value
+            # keeps the grid from ever coming out coarser than it would with
+            # rounding off, so enabling this can only refine the sampling.
+            multiplier = nearest if is_fast_fft_size(nearest) else (
+                next_fast_fft_size(nearest)
+            )
+            n_multiple = multiplier * n_periods
+        else:
+            n_multiple = nearest * n_periods
+        gpts.append(n_multiple)
+
+    return tuple(gpts)
 
 
 def is_number(value: Any) -> TypeGuard[int | float | np.ndarray]:
@@ -76,8 +439,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())
@@ -289,6 +652,30 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
+    """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
+    [0, height]."""
+    return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
+
+
+def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
+    """Warn about atoms far enough outside [0, height] along z that placing them
+    in the face slice is a guess at their depth, not a correction of it."""
+    far = _far_outside_faces(z, height)
+    if not np.any(far):
+        return
+
+    warnings.warn(
+        f"{int(far.sum())} atom(s) lie more than {FACE_SLICE_WARNING_DISTANCE} Å "
+        f"outside the cell along z (0 to {height:.4g} Å). A non-periodic potential "
+        "keeps an atom that left the cell in the face slice it left through, which "
+        "is right for a small displacement such as a frozen phonon, but puts an "
+        "atom this far out at the wrong depth. Check the atomic positions against "
+        "the cell height.",
+        stacklevel=_stacklevel_outside_package(),
+    )
+
+
 class SliceIndexedAtoms(BaseSlicedAtoms):
     """
     Sliced atoms assigning each atom to a specific slice index.
@@ -311,8 +698,36 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Wrapping unconditionally moved such
+        # an atom the full height of the box, which is the same depth
+        # corruption this wrap exists to prevent, just for the other path.
+        # Callers that know the potential's convention pass it through; the
+        # default wraps, since that is right for everything else that reaches
+        # here.
+        # Validate first: wrapping reads np.diag(atoms.cell) and would
+        # silently ignore the shear terms of a non-orthogonal cell before
+        # BaseSlicedAtoms raises for it.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
@@ -326,9 +741,63 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
+        # label_to_index silently discards labels outside [0, num_slices - 1],
+        # which is how an out-of-cell atom used to disappear. np.digitize
+        # against increasing bins returns [0, len(bins)], never negative, so
+        # only the upper end can escape: an atom below the entrance face
+        # already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised
+        # after padding. It belongs to the face it left, so clamp it into the
+        # last slice, mirroring what digitize already does at the entrance
+        # face. Its true position is kept: the infinite projection does not
+        # depend on z within a slice, so the projected potential is conserved
+        # exactly, where dropping the atom lost its whole contribution.
+        if not wrap:
+            _warn_far_outside_faces(
+                self.atoms.positions[:, 2], float(np.sum(self.slice_thickness))
+            )
+            labels = np.minimum(labels, len(self) - 1)
+
+        # After a wrap there is no atom outside the cell, so say so rather
+        # than dropping one.
+        if wrap and len(labels) and labels.max() > len(self) - 1:
+            raise RuntimeError(
+                f"{int((labels > len(self) - 1).sum())} atom(s) fall outside "
+                f"every one of the {len(self)} slices after wrapping; the "
+                "first is at z = "
+                f"{self.atoms.positions[labels > len(self) - 1][0, 2]!r}"
+            )
+
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
         ]
+
+    def __eq__(self, other) -> bool:
+        # _slice_index is a list of integer arrays, one per slice. list.__eq__
+        # compares elementwise and reduces the per-element `==` (itself an
+        # array) to a bool, which numpy refuses for anything but a length-1
+        # array -- generic EqualityMixin.__eq__ (safe_equality) catches that
+        # ValueError and reports "unequal", so this class never compared equal
+        # to anything, including an identical twin. Compare it directly with
+        # np.array_equal and let safe_equality handle every other attribute
+        # exactly as it would without this override.
+        if not isinstance(other, SliceIndexedAtoms):
+            return False
+
+        if len(self._slice_index) != len(other._slice_index):
+            return False
+
+        if not all(
+            np.array_equal(a, b)
+            for a, b in zip(self._slice_index, other._slice_index)
+        ):
+            return False
+
+        return safe_equality(
+            self, other, exclude=("_slice_index",) + self._eq_exclude
+        )
 
     def get_atoms_in_slices(
         self,
@@ -410,3 +879,54 @@ class SlicedAtoms(BaseSlicedAtoms):
         atoms = self.atoms[in_slice]
         atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
+
+
+def _sum_planes(array, start: int, stop: int):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[-1]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
+
+
+def _integrate_planes(array, start: float, stop: float):
+    """
+    The integral of the planes of `array`, repeated periodically along its last
+    axis, from `start` to `stop` (`start` < `stop`), in units of the plane spacing:
+    multiply by the spacing for an integral over heights.
+
+    Plane k is the sample at the height k and stands for the heights from k - 1/2
+    to k + 1/2, so each plane is weighted by the length of its heights that lie
+    between the limits. Consecutive slices share their limit, so the weights of
+    every plane add up to one. A limit on a plane splits it between the slices on
+    either side (the trapezoidal rule), so the integral of a slice is centred on
+    the slice; summing the planes from the lower limit up to the upper one whole (a
+    left Riemann sum) would put it half a plane below the slice.
+    """
+    n = array.shape[-1]
+    # The limits half a plane up, so that plane k stands for the interval from k
+    # to k + 1. Python floats, so that the weights keep the dtype of `array`: a
+    # NumPy float64 scalar would promote float32 planes to float64.
+    u, v = float(start) + 0.5, float(stop) + 0.5
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        return (v - u) * array[..., first % n]
+
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[
+        ..., last % n
+    ]
+    if last > first + 1:
+        summed = summed + _sum_planes(array, first + 1, last)
+    return summed
