@@ -11,7 +11,7 @@ import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import device_name_from_array_module, get_array_module
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, safe_ceiling_int
 
 
 def _fast_fft_rounding_mode() -> str:
@@ -100,14 +100,11 @@ def adjusted_gpts(
     tuple of float
         The new sampling [Å].
     """
-    new_sampling = tuple(
-        d * n / int(np.ceil(n * (d / d_target)))
-        for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
-    )
     new_gpts = tuple(
-        int(np.ceil(n * (d / d_target)))
+        max(safe_ceiling_int(n * (d / d_target)), 1)
         for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
     )
+    new_sampling = tuple(d * n / g for d, n, g in zip(old_sampling, old_gpts, new_gpts))
     return new_sampling, new_gpts
 
 
@@ -475,7 +472,7 @@ class Grid(CopyMixin, EqualityMixin):
     ):
         if extent is not None and sampling is not None:
             self._gpts = tuple(
-                int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
+                max(safe_ceiling_int(r / d) + int(e), 1)
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 
@@ -533,9 +530,15 @@ class Grid(CopyMixin, EqualityMixin):
         check_match : bool
             If true check whether grids can match without overriding already defined
             grid parameters.
+
+        A grid with locked gpts (built `Waves`, `PotentialArray`, `SMatrixArray`) is
+        checked, not changed: it raises on a mismatch and is assigned only where its
+        own value is undefined.
         """
 
-        if check_match:
+        if check_match or self._lock_gpts:
+            # the gpts of a locked grid are those of its data: a grid that differs
+            # is refused, not matched, and one that agrees within tolerance is kept
             self.check_match(other)
 
         # if (self.extent is None) & (other.extent is None):
@@ -543,8 +546,11 @@ class Grid(CopyMixin, EqualityMixin):
 
         if other.extent is None:
             other.extent = self.extent
-        elif np.any(
-            np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+        elif self.extent is None or (
+            not self._lock_gpts
+            and np.any(
+                np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+            )
         ):
             self.extent = other.extent
 
@@ -558,8 +564,12 @@ class Grid(CopyMixin, EqualityMixin):
 
         if other.sampling is None:
             other.sampling = self.sampling
-        elif not np.allclose(
-            np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
+        elif self.sampling is None or (
+            not self._lock_gpts
+            and not np.allclose(
+                np.array(self.sampling, np.float32),
+                np.array(other.sampling, np.float32),
+            )
         ):
             self.sampling = other.sampling
 
@@ -768,7 +778,12 @@ class HasGrid2DMixin:
     _grid: Grid
 
     def match_grid(self, other: HasGrid2DMixin, check_match: bool = False):
-        """Match the grid to another object with a Grid."""
+        """
+        Match the grid to another object with a Grid.
+
+        A grid with locked gpts (built `Waves`, `PotentialArray`, `SMatrixArray`) is
+        checked, not changed, and raises on a mismatch.
+        """
         self.grid.match(other, check_match=check_match)
         return self
 

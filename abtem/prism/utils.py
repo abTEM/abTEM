@@ -6,10 +6,17 @@ from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
 from abtem.core.grid import reciprocal_cell
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
+    """Crop ``new_shape`` windows from the last two axes of ``array`` at ``corners``.
+    A window as large as the array can only sit at the origin, so ``array`` itself
+    is returned, not a copy."""
+
+    if tuple(new_shape) == tuple(array.shape[-2:]):
+        return array
+
     xp = get_array_module(array)
 
     if len(array.shape) > 3:
@@ -58,6 +65,18 @@ def minimum_crop(positions: np.ndarray, shape):
 
     corners -= xp.asarray(crop_corner)
     return crop_corner, size, corners
+
+
+def window_crop(positions: np.ndarray, window_gpts, gpts):
+    """The crop box of windows of ``window_gpts`` points centred on ``positions``
+    (in pixels of a grid of ``gpts`` points), as ``minimum_crop`` returns it, except
+    that a window as large as the grid is the whole grid for every position, with
+    each window's corner at the origin (the cell frame)."""
+    if tuple(window_gpts) == tuple(gpts):
+        xp = get_array_module(positions)
+        return (0, 0), tuple(gpts), xp.zeros(positions.shape, dtype=int)
+
+    return minimum_crop(positions, window_gpts)
 
 
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
@@ -190,15 +209,16 @@ def prism_wave_vectors(
     n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
     m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
-    n = np.arange(-n_max, n_max + 1, dtype=np.float32)
-    m = np.arange(-m_max, m_max + 1, dtype=np.float32)
+    dtype = get_dtype(complex=False)
+    n = np.arange(-n_max, n_max + 1, dtype=dtype)
+    m = np.arange(-m_max, m_max + 1, dtype=dtype)
 
     if cell is None:
-        w = np.asarray(extent[0], dtype=np.float32)
-        h = np.asarray(extent[1], dtype=np.float32)
+        w = np.asarray(extent[0], dtype=dtype)
+        h = np.asarray(extent[1], dtype=dtype)
 
-        kx = n / w * np.float32(interpolation[0])
-        ky = m / h * np.float32(interpolation[1])
+        kx = n / w * dtype(interpolation[0])
+        ky = m / h * dtype(interpolation[1])
 
         mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
 
@@ -210,14 +230,14 @@ def prism_wave_vectors(
     # non-orthogonal cell: enumerate reciprocal-lattice points g = n*ix*b1 + m*iy*b2
     # (b1, b2 are the reciprocal basis vectors) and keep those within the cutoff sphere.
     reciprocal = reciprocal_cell(cell)
-    nx = (n[:, None] * np.float32(interpolation[0]))
-    my = (m[None, :] * np.float32(interpolation[1]))
+    nx = (n[:, None] * dtype(interpolation[0]))
+    my = (m[None, :] * dtype(interpolation[1]))
     kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]
     ky = nx * reciprocal[0, 1] + my * reciprocal[1, 1]
 
     mask = kx**2 + ky**2 < (cutoff / 1.0e3 / wavelength) ** 2
-    kx = kx[mask].astype(np.float32)
-    ky = ky[mask].astype(np.float32)
+    kx = kx[mask].astype(dtype)
+    ky = ky[mask].astype(dtype)
     return xp.asarray([kx, ky]).T
 
 
@@ -235,12 +255,13 @@ def plane_waves(
     the pixel indices via ``g . a1`` and ``g . a2``. When ``cell`` is ``None`` the grid is
     orthogonal and the result is bit-identical to the original implementation."""
     xp = get_array_module(wave_vectors)
+    dtype = get_dtype(complex=False)
 
     sign = -1.0 if reverse else 1.0
 
     if cell is None:
-        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=dtype)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=dtype)
 
         array = complex_exponential(
             sign * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
@@ -255,15 +276,11 @@ def plane_waves(
     a2 = cell[1] / gpts[1]  # sampling vector along axis 1
 
     # per-pixel phase increment along each grid axis for every wave vector
-    phase_i = (wave_vectors[:, 0] * a1[0] + wave_vectors[:, 1] * a1[1]).astype(
-        np.float32
-    )
-    phase_j = (wave_vectors[:, 0] * a2[0] + wave_vectors[:, 1] * a2[1]).astype(
-        np.float32
-    )
+    phase_i = (wave_vectors[:, 0] * a1[0] + wave_vectors[:, 1] * a1[1]).astype(dtype)
+    phase_j = (wave_vectors[:, 0] * a2[0] + wave_vectors[:, 1] * a2[1]).astype(dtype)
 
-    i = xp.arange(gpts[0], dtype=np.float32)
-    j = xp.arange(gpts[1], dtype=np.float32)
+    i = xp.arange(gpts[0], dtype=dtype)
+    j = xp.arange(gpts[1], dtype=dtype)
 
     array = complex_exponential(
         sign * 2 * np.pi * phase_i[:, None, None] * i[None, :, None]

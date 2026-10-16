@@ -13,10 +13,12 @@ from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
+from abtem.core.backend import copy_to_device
 from abtem.core.energy import energy2sigma
 from abtem.core.grid import coordinate_grid
+from abtem.core.utils import get_dtype
 from abtem.inelastic.phonons import BaseFrozenPhonons
-from abtem.integrals import FieldIntegrator, cutoff_taper
+from abtem.integrals import FieldIntegrator, _require_orthogonal_cell, cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
 from abtem.atoms import is_cell_orthogonal
 from abtem.potentials.iam import (
@@ -275,20 +277,20 @@ def interpolate(array_out, array_in, position, sampling_out, sampling_in):
     bottom = max(int(round(position[1] / sampling_out[1])) - region_y, 0)
     top = min(int(round(position[1] / sampling_out[1])) + region_y, array_out.shape[2])
 
-    shift_x = np.float32(position[0] / sampling_in[0] - nx // 2)
-    shift_y = np.float32(position[1] / sampling_in[1] - ny // 2)
+    shift_x = position[0] / sampling_in[0] - nx // 2
+    shift_y = position[1] / sampling_in[1] - ny // 2
 
     for i in range(left, right):
-        x = np.float32(i * scale_x) - shift_x
+        x = i * scale_x - shift_x
         xf = np.floor(x)
         wx1 = x - xf
-        wx0 = np.float32(1) - wx1
+        wx0 = 1.0 - wx1
 
         for j in range(bottom, top):
-            y = np.float32(j * scale_y) - shift_y
+            y = j * scale_y - shift_y
             yf = np.floor(y)
             wy1 = y - yf
-            wy0 = np.float32(1) - wy1
+            wy0 = 1.0 - wy1
 
             array_out[0, i, j] += bilinear_weighted_sum(
                 array_in[0], int(xf), int(yf), wx0, wx1, wy0, wy1
@@ -391,7 +393,7 @@ def interpolate_quasi_dipole_vector_field_projections(
 
 class QuasiDipoleProjections(FieldIntegrator):
     # _tables is a cache populated lazily by get_integral_table, one entry
-    # per element on first use -- incidental state, never identity, same
+    # per (element, precision) on first use -- incidental state, never identity, same
     # reasoning as _DeviceArrayCache.__eq__ (integrals.py) and Potential's
     # _sliced_atoms exclusion. Without this, a used integrator stops
     # comparing equal to an identical fresh one once anything is cached, and
@@ -417,7 +419,7 @@ class QuasiDipoleProjections(FieldIntegrator):
         self._slice_thickness = slice_thickness
         self._sampling = sampling
         self._interpolation_func = interpolation_func
-        self._tables: dict[str, np.ndarray] = {}
+        self._tables: dict[tuple[str, str], np.ndarray] = {}
 
     @property
     def slice_thickness(self):
@@ -452,11 +454,14 @@ class QuasiDipoleProjections(FieldIntegrator):
         pass
 
     def get_integral_table(self, symbol: str):
+        # Keyed on precision too, so changing abtem.config["precision"] after a
+        # build cannot hand back a table of the old dtype.
+        key = (symbol, np.dtype(get_dtype()).name)
         try:
-            table = self._tables[symbol]
+            table = self._tables[key]
         except KeyError:
             table = self._calculate_integral_table(symbol)
-            self._tables[symbol] = table
+            self._tables[key] = table
 
         return table
 
@@ -468,16 +473,20 @@ class QuasiDipoleProjections(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ):
+        _require_orthogonal_cell(cell)
+        # The numba kernels run on the host; the finished slice is copied to
+        # `device` so it can be added into the device-side slice stack.
         if len(atoms) == 0:
-            return np.zeros((3,) + gpts, dtype=np.float32)
+            return copy_to_device(np.zeros((3,) + gpts, dtype=get_dtype()), device)
 
         positions = atoms.positions
         magnetic_moments = atoms.get_array("magnetic_moments")
         slice_limits = np.array([a, b])
         integral_sampling = (self._sampling,) * 2
 
-        array = np.zeros((3,) + gpts, dtype=np.float32)
+        array = np.zeros((3,) + gpts, dtype=get_dtype())
         for number in np.unique(atoms.numbers):
             mask = atoms.numbers == number
 
@@ -506,7 +515,7 @@ class QuasiDipoleProjections(FieldIntegrator):
                 scratch,
             )
 
-        return array
+        return copy_to_device(array, device)
 
 
 class QuasiDipoleMagneticFieldProjections(QuasiDipoleProjections):
@@ -539,7 +548,7 @@ class QuasiDipoleMagneticFieldProjections(QuasiDipoleProjections):
 
         shape = (5, len(slice_limits), *(len(x),) * 2)
 
-        tables = np.zeros(shape, dtype=np.float32)
+        tables = np.zeros(shape, dtype=get_dtype())
         for i, (a, b) in enumerate(zip(slice_limits[:-1], slice_limits[1:]), start=1):
             n = int(np.round((b - a) / self._step_size)) + 1
             z = np.linspace(a, b, n)
@@ -595,7 +604,7 @@ class QuasiDipoleVectorPotentialProjections(QuasiDipoleProjections):
 
         shape = (2, len(slice_limits), *(len(x),) * 2)
 
-        tables = np.zeros(shape, dtype=np.float32)
+        tables = np.zeros(shape, dtype=get_dtype())
         for i, (a, b) in enumerate(zip(slice_limits[:-1], slice_limits[1:]), start=1):
             n = int(np.round((b - a) / self._step_size)) + 1
             z = np.linspace(a, b, n)
@@ -680,10 +689,12 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         if metadata is None:
             metadata = {}
-        metadata = {"label": "magnetic field", "units": "T", **metadata}
+        # Each slice is the field integrated through the slice, in tesla times Å.
+        metadata = {"label": "magnetic field", "units": "ÅT", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -692,6 +703,7 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
             exit_planes=exit_planes,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            cell=cell,
         )
 
     @classmethod
@@ -716,10 +728,13 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         if metadata is None:
             metadata = {}
-        metadata = {"label": "vector potential", "units": "ÅT", **metadata}
+        # Each slice is the vector potential (in Å T) integrated through the
+        # slice, in Å² T.
+        metadata = {"label": "vector potential", "units": "Å²T", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -728,6 +743,7 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
             exit_planes=exit_planes,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            cell=cell,
         )
 
     @classmethod
@@ -793,7 +809,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
         )
 
 
-class VectorPotential(_FieldBuilderFromAtoms, BaseMagneticField):
+class VectorPotential(_FieldBuilderFromAtoms, BaseVectorPotential):
     _exclude_from_copy = ("parametrization",)
 
     def __init__(

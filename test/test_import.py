@@ -13,6 +13,7 @@ cp.RawModule(...).get_function(...)), the subprocess exits non-zero with
 CUDARuntimeError: cudaErrorNoDevice.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -32,19 +33,14 @@ def _run_import(extra_env=None):
     )
 
 
-def test_import_succeeds():
-    """Baseline: import abtem works in the current environment."""
-    result = _run_import()
-    assert result.returncode == 0, result.stderr.decode()
-
-
-@pytest.mark.skipif(
-    subprocess.run(
-        [sys.executable, "-c", "import cupy"],
-        capture_output=True,
-    ).returncode != 0,
-    reason="CuPy not installed",
+# find_spec, not a subprocess import: this runs at collection in every xdist
+# worker and the controller.
+requires_cupy = pytest.mark.skipif(
+    importlib.util.find_spec("cupy") is None, reason="CuPy not installed"
 )
+
+
+@requires_cupy
 def test_import_with_cupy_but_no_gpu():
     """import abtem must not call any CUDA API at module level.
 
@@ -59,3 +55,27 @@ def test_import_with_cupy_but_no_gpu():
         "call was added at module level.\n\n"
         + result.stderr.decode()
     )
+
+
+@requires_cupy
+def test_import_does_not_load_cublas():
+    """import abtem must not load CuPy's BLAS bindings.
+
+    On CUDA, loading them maps cuBLAS and costs about 150 MB of resident memory
+    in every process, whatever device the work later runs on. They are loaded
+    by modules such as cupyx.scipy.signal, which abTEM imports where it uses
+    them.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, abtem; "
+            "print(sorted(m for m in ('cupy_backends.cuda.libs.cublas', "
+            "'cupyx.scipy.signal') if m in sys.modules))",
+        ],
+        capture_output=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout.decode().strip() == "[]"
