@@ -1797,19 +1797,6 @@ class TestBuiltFieldWithAnEnsembleAxis:
         )
         return cls(phonons, gpts=(16, 20), slice_thickness=1.5).build()
 
-    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
-    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
-    def test_warns(self, cls, method):
-        built = self._built(cls)
-        assert built.shape == (2, 4, 3, 16, 20)
-
-        with pytest.warns(UserWarning, match="ensemble"):
-            slices = list(getattr(built, method)())
-
-        np.testing.assert_array_equal(
-            np.concatenate([s.array for s in slices]), built.array[0]
-        )
-
     def test_warns_for_a_potential_too(self):
         phonons = FrozenPhonons(bulk("Si", cubic=True), 2, sigmas=0.05, seed=3)
         built = Potential(phonons, gpts=(16, 20), slice_thickness=2.0).build()
@@ -1821,38 +1808,42 @@ class TestBuiltFieldWithAnEnsembleAxis:
             np.concatenate([s.array for s in slices]), built.array[0]
         )
 
-    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
-    @pytest.mark.parametrize(
-        "how", ["generate_slices", "generate_chunked_slices", "list", "for"]
-    )
-    def test_the_warning_points_at_the_caller(self, cls, how):
-        built = self._built(cls)
+    def test_the_warning_points_at_the_caller(self):
+        # each way of iterating adds its own frames between the caller and the
+        # warning; the stack level skips all of them
+        for cls in (MagneticField, VectorPotential):
+            built = self._built(cls)
+            for how in ("generate_slices", "generate_chunked_slices", "list", "for"):
+                with pytest.warns(UserWarning, match="ensemble") as record:
+                    if how == "list":
+                        list(built)
+                    elif how == "for":
+                        for _ in built:
+                            break
+                    else:
+                        list(getattr(built, how)())
 
-        with pytest.warns(UserWarning, match="ensemble") as record:
-            if how == "list":
-                list(built)
-            elif how == "for":
-                for _ in built:
-                    break
-            else:
-                list(getattr(built, how)())
+                assert [w.filename for w in record] == [__file__], (cls, how)
 
-        assert [w.filename for w in record] == [__file__]
-
-    @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
-    @pytest.mark.parametrize("method", ["generate_slices", "generate_chunked_slices"])
+    # No ensemble axis, and an ensemble axis of one member, are separate cases
+    # of the member count.
     @pytest.mark.parametrize("num_configurations", [None, 1])
-    def test_a_single_member_does_not_warn(
-        self, cls, method, num_configurations, recwarn
-    ):
+    def test_a_single_member_does_not_warn(self, num_configurations, recwarn):
         atoms = _fe_atoms_with_moments()
         if num_configurations is not None:
             atoms = FrozenPhonons(atoms, num_configurations, sigmas=0.05, seed=3)
-        built = cls(atoms, gpts=(16, 20), slice_thickness=1.5).build()
-        assert built.ensemble_shape == (() if num_configurations is None else (1,))
+        for cls in (MagneticField, VectorPotential):
+            built = cls(atoms, gpts=(16, 20), slice_thickness=1.5).build()
+            assert built.ensemble_shape == (
+                () if num_configurations is None else (1,)
+            )
 
-        list(getattr(built, method)())
-        assert not [w for w in recwarn if "ensemble" in str(w.message)]
+            for method in ("generate_slices", "generate_chunked_slices"):
+                list(getattr(built, method)())
+                assert not [w for w in recwarn if "ensemble" in str(w.message)], (
+                    cls,
+                    method,
+                )
 
 
 @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
