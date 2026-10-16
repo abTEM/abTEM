@@ -95,47 +95,33 @@ PRISM_SCAN_DETECTORS = [
 ]
 
 
-@pytest.mark.slow
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-@pytest.mark.parametrize(
-    "downsample", [True, False], ids=["downsample", "no_downsample"]
-)
 @devices
-@pytest.mark.parametrize(
-    "interpolation", [False, True], ids=["no_interpolation", "interpolation"]
-)
-@pytest.mark.parametrize(
-    "frozen_phonons", [True, False], ids=["frozen_phonons", "no_frozen_phonons"]
-)
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_prism_scan(
-    data, interpolation, detector, downsample, lazy, frozen_phonons, device
-):
+@pytest.mark.parametrize("detector", PRISM_SCAN_DETECTORS)
+def test_prism_scan(data, detector, device):
+    # Laziness, downsampling, interpolation (1 to 3) and a frozen-phonon
+    # ensemble are drawn rather than crossed: hypothesis explores their
+    # combinations across runs. Two frozen-phonon configurations make the
+    # ensemble axis one that a dropped or duplicated axis would change.
+    lazy = data.draw(st.booleans(), label="lazy")
+    frozen_phonons = data.draw(st.booleans(), label="frozen_phonons")
     potential = data.draw(
         abtem_st.potential(
-            device=device, no_frozen_phonons=not frozen_phonons, ensemble_mean=False
+            device=device,
+            no_frozen_phonons=not frozen_phonons,
+            min_frozen_phonons=2,
+            max_frozen_phonons=2,
+            ensemble_mean=False,
         )
     )
     ctf = data.draw(abtem_st.ctf(partial_coherence=False))
 
-    max_interpolation = 3 if interpolation else 1
-
     s_matrix = data.draw(
         abtem_st.s_matrix(
             potential=potential,
-            max_interpolation=max_interpolation,
+            max_interpolation=3,
             device=device,
-            downsample=downsample,
+            downsample=data.draw(st.booleans(), label="downsample"),
         )
     )
 
