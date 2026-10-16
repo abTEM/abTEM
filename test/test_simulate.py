@@ -17,23 +17,6 @@ from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhon
 
 
 @given(data=st.data())
-@devices
-@pytest.mark.parametrize(
-    "waves_builder",
-    [
-        abtem_st.probe,
-    ],
-)
-def test_multislice_with_frozen_phonons(data, waves_builder, device):
-    waves = data.draw(waves_builder(device=device))
-    frozen_phonons = data.draw(abtem_st.frozen_phonons())
-    exit_waves = waves.multislice(frozen_phonons)
-
-    assert exit_waves.shape[0] == len(frozen_phonons)
-    assert len(exit_waves.shape) == len(waves.shape) + 1
-
-
-@given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @devices
 @pytest.mark.parametrize("ensemble_mean", [True, False])
@@ -159,53 +142,6 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
             measurement.base_axes_metadata
             == detector._out_base_axes_metadata(probe.build(scan))[0]
         )
-
-
-# # @given(data=st.data(),
-# #        gpts=core_st.gpts(min_value=32, max_value=64),
-# #        planewave_cutoff=st.floats(5, 10),
-# #        energy=st.floats(100e3, 200e3))
-# # @pytest.mark.parametrize('lazy', [True, False])
-# # @pytest.mark.parametrize('device', ['cpu', gpu])
-# # @pytest.mark.parametrize('detector', list(all_detectors.keys()))
-# # @pytest.mark.parametrize('downsample', ['cutoff', False])
-# # @pytest.mark.parametrize('interpolation', [1, 2, 3])
-# # @pytest.mark.parametrize('frozen_phonons', [True, False])
-# # def test_s_matrix_scan_and_detect(data,
-# #                                   gpts,
-# #                                   planewave_cutoff,
-# #                                   energy,
-# #                                   detector,
-# #                                   lazy,
-# #                                   device,
-# #                                   downsample,
-# #                                   interpolation,
-# #                                   frozen_phonons):
-# #     if frozen_phonons:
-# #         atoms = data.draw(atoms_st.random_atoms(min_side_length=5, max_side_length=10))
-# #     else:
-# #         atoms = data.draw(atoms_st.random_frozen_phonons(min_side_length=5, max_side_length=10))
-# #
-# #     s_matrix = SMatrix(potential=atoms,
-# #                        gpts=gpts,
-# #                        planewave_cutoff=planewave_cutoff,
-# #                        interpolation=interpolation,
-# #                        energy=energy,
-# #                        device=device)
-# #
-# #     if downsample:
-# #         probe = s_matrix.build(stop=0, lazy=True).downsample(max_angle=downsample).comparable_probe()
-# #     else:
-# #         probe = s_matrix.build(stop=0, lazy=True).comparable_probe()
-# #
-# #     detectors = [
-# #         data.draw(all_detectors[detector](max_angle=np.floor(min(probe.cutoff_angles)), allow_detect_every=False))]
-# #
-# #     scan = GridScan()
-# #     measurements = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy, downsample=downsample)
-# #     measurements.compute()
-# #
-# #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan=scan)
 
 
 @devices
