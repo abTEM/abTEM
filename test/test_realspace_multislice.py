@@ -425,10 +425,15 @@ class TestBackscattering:
         assert isinstance(backscattered, abtem.Waves)
         assert backscattered.shape == transmitted.shape
         assert np.abs(to_host_array(backscattered.array[0])).max() > 0
+        # float32 rounding only: on the GPU the annular sum differs by 1.7e-7
+        # relative between the two routes; another detector or the backscattered
+        # waves would differ by order 1.
         for detector, measurement in zip(detectors, measurements):
-            np.testing.assert_array_equal(
+            np.testing.assert_allclose(
                 to_host_array(measurement.array),
                 to_host_array(detector.detect(transmitted).array),
+                rtol=1e-5,
+                atol=1e-12,
                 err_msg=type(detector).__name__,
             )
 
