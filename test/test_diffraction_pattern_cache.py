@@ -40,6 +40,7 @@ from abtem import (
 )
 from abtem.antialias import AntialiasAperture
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import copy_to_device
 from abtem.core.fft import (
     get_shared_diffraction_pattern_fft,
     share_diffraction_pattern_fft,
@@ -225,8 +226,7 @@ def _make_transition_potential(potential, device, n_transitions=4, seed=0):
         rng.standard_normal((n_transitions, *potential.gpts))
         + 1j * rng.standard_normal((n_transitions, *potential.gpts))
     ).astype(np.complex64)
-    if device == "gpu":
-        array = cp.asarray(array)
+    array = copy_to_device(array, device)
     return TransitionPotentialArray(
         Z=14,
         array=array,
@@ -324,9 +324,9 @@ def test_standalone_detect_calls_never_share(si_atoms, device):
 
     original = Waves._diffraction_pattern_fft
 
-    def counting(array, normalize):
+    def counting(*args):
         calls.append(1)
-        return original(array, normalize)
+        return original(*args)
 
     Waves._diffraction_pattern_fft = staticmethod(counting)
     try:
@@ -468,9 +468,9 @@ def test_share_per_depth_shares_within_but_not_across_depths(si_atoms, device):
         original = Waves._diffraction_pattern_fft
         calls = []
 
-        def counting(array, normalize):
+        def counting(*args):
             calls.append(1)
-            return original(array, normalize)
+            return original(*args)
 
         Waves._diffraction_pattern_fft = staticmethod(counting)
         try:

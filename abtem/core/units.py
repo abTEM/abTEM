@@ -31,8 +31,8 @@ _conversion_factors = {
     "1/mm": 1e7,
     "1/m": 1e10,
     "mrad": 1,
-    "rad": 1e3,
-    "deg": 1e3 / np.pi * 180.0,
+    "rad": 1e-3,
+    "deg": 1e-3 / np.pi * 180.0,
     "eV": 1,
     "keV": 1e-3,
     "meV": 1e3,
@@ -43,7 +43,7 @@ _tex_units = {
     "nm": r"\mathrm{nm}",
     "um": r"\mathrm{\mu m}",
     "mm": r"\mathrm{mm}",
-    "m": r"\mathrm{mm}",
+    "m": r"\mathrm{m}",
     "1/Å": r"\mathrm{\AA}^{-1}",
     "1/nm": r"\mathrm{nm}^{-1}",
     "1/um": r"\mathrm{\mu m}^{-1}",
@@ -132,7 +132,7 @@ def validate_units(
 
         return units
     elif units_type[units] == "reciprocal_space":
-        if units == "Angstrom":
+        if units == "1/Angstrom":
             units = "1/Å"
 
         return units
@@ -170,6 +170,12 @@ def get_conversion_factor(
     if old_units is None and units is not None:
         raise RuntimeError("old_units must be provided if units is provided")
 
+    # Factors are relative to the base unit of each category (Å, 1/Å, mrad, eV),
+    # so the old units must be normalised to base units before converting.
+    validated_old_units = validate_units(old_units)
+    assert validated_old_units is not None
+    old_factor = _conversion_factors[validated_old_units]
+
     if units_type[old_units] == "reciprocal_space" and units_type[units] == "angular":
         if energy is None:
             raise RuntimeError(
@@ -182,10 +188,11 @@ def get_conversion_factor(
         units = validate_units(units, "mrad")
         assert units is not None
 
-        conversion = wavelength * 1e3 * _conversion_factors[units]
+        # small-angle relation: alpha [mrad] = 1e3 * wavelength [Å] * k [1/Å]
+        conversion = wavelength * 1e3 * _conversion_factors[units] / old_factor
         return conversion
 
     validated_units = validate_units(units, old_units)
     assert validated_units is not None
 
-    return _conversion_factors[validated_units]
+    return _conversion_factors[validated_units] / old_factor

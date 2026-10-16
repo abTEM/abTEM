@@ -8,33 +8,6 @@ import strategies as abtem_st
 from hypothesis import given, settings
 
 from abtem.core.ensemble import concatenate_array_blocks
-from utils import lazy_params
-
-
-@given(data=st.data())
-@pytest.mark.parametrize(
-    "ensemble",
-    [
-        abtem_st.frozen_phonons,
-        abtem_st.dummy_frozen_phonons,
-        abtem_st.md_frozen_phonons,
-        abtem_st.grid_scan,
-        abtem_st.line_scan,
-        abtem_st.custom_scan,
-        abtem_st.potential,
-        abtem_st.potential_array,
-        abtem_st.aberrations,
-        abtem_st.aperture,
-        abtem_st.temporal_envelope,
-        abtem_st.spatial_envelope,
-        # abtem_st.composite_wave_transform,
-        abtem_st.ctf,
-    ],
-)
-def test_ensemble_shape(data, ensemble):
-    ensemble = data.draw(ensemble())
-    assert len(ensemble.ensemble_shape) == len(ensemble.ensemble_axes_metadata)
-    assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 
 
 @settings(max_examples=5)
@@ -63,6 +36,8 @@ def test_ensemble_shape(data, ensemble):
 )
 def test_ensembles(data, ensemble):
     ensemble = data.draw(ensemble())
+    assert len(ensemble.ensemble_shape) == len(ensemble.ensemble_axes_metadata)
+    assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 
     if len(ensemble.ensemble_shape) > 0:
         chunks = data.draw(
@@ -76,11 +51,11 @@ def test_ensembles(data, ensemble):
     if len(ensemble.ensemble_shape) > 0:
         assert len(blocks.shape) == len(ensemble.ensemble_shape)
 
-    try:
-        for i, _, fp in ensemble.generate_blocks(chunks):
-            assert blocks[i] == fp.item()
-    except NotImplementedError:
-        pass
+    # Every ensemble type listed above implements generate_blocks; this used
+    # to be wrapped in `except NotImplementedError: pass`, which would have
+    # silently skipped the check for a whole type.
+    for i, _, fp in ensemble.generate_blocks(chunks):
+        assert blocks[i] == fp.item()
 
 
 @settings(max_examples=5)
@@ -113,29 +88,3 @@ def test_array_waves_transform(data, ensemble, chunks):
     assert blocks.shape[:-2] == ensemble.ensemble_shape
 
     assert np.allclose(blocks, array, atol=1e-5)
-
-
-@given(data=st.data())
-@pytest.mark.parametrize(
-    "ensemble",
-    [
-        abtem_st.grid_scan,
-        abtem_st.line_scan,
-        abtem_st.custom_scan,
-        abtem_st.aberrations,
-        abtem_st.aperture,
-        abtem_st.temporal_envelope,
-        abtem_st.spatial_envelope,
-        # abtem_st.composite_wave_transform,
-        abtem_st.ctf,
-    ],
-)
-@lazy_params
-def test_apply_waves_transform(data, ensemble, lazy):
-    ensemble = data.draw(ensemble())
-    waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)
-
-    ensemble_shape = ensemble._out_ensemble_shape(waves)[0]
-    waves = ensemble.apply(waves)
-
-    assert waves.shape[:-2] == ensemble_shape

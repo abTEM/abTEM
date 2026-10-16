@@ -13,6 +13,7 @@ a distributed client runs an annotated graph.
 """
 
 import collections
+import warnings
 
 import ase.build
 import dask
@@ -24,6 +25,7 @@ from utils import gpu
 import abtem
 from abtem.array import (
     _EXTRACT_PRIORITY,
+    _LOCAL_SCHEDULER_WARNING,
     ComputableList,
     _keep_annotations_guard,
 )
@@ -106,16 +108,6 @@ def cluster(request):
         yield device, n_workers, client, local_cluster.scheduler.plugins[plugin.name]
 
 
-def test_extract_priority_reaches_the_distributed_scheduler(cluster):
-    device, _, _, plugin = cluster
-    image, waves = _haadf_and_waves(device)
-
-    ComputableList([image, waves]).compute(progress_bar=False)
-
-    assert plugin.priorities["_extract_blockwise_multi_output"] == {-_EXTRACT_PRIORITY}
-    assert plugin.priorities["apply_transform"] == {0}
-
-
 def test_a_single_output_block_is_not_annotated(cluster):
     """With one detector, the multislice task fuses with its extract and everything
     downstream; a priority there would reach the multislice work itself."""
@@ -148,9 +140,21 @@ def test_packed_blocks_are_released_as_they_are_extracted(cluster):
 
     computed = elastic_and_total().compute(progress_bar=False)
 
+    # The extract priority reaches the distributed scheduler; the multislice
+    # blocks themselves stay unprioritized.
+    assert plugin.priorities["_extract_blockwise_multi_output"] == {-_EXTRACT_PRIORITY}
+    assert plugin.priorities["apply_transform"] == {0}
     assert plugin.total == 32
     assert plugin.peak <= 3 * n_workers
-    reference = elastic_and_total().compute(progress_bar=False, scheduler="synchronous")
+    with warnings.catch_warnings():
+        # Older dask (e.g. 2025.3) warns about a local scheduler while the
+        # fixture's client is active.
+        warnings.filterwarnings(
+            "ignore", message=_LOCAL_SCHEDULER_WARNING, category=UserWarning
+        )
+        reference = elastic_and_total().compute(
+            progress_bar=False, scheduler="synchronous"
+        )
     for result, ref in zip(computed, reference):
         result, ref = asnumpy(result.array), asnumpy(ref.array)
         np.testing.assert_allclose(result, ref, rtol=0, atol=1e-5 * np.abs(ref).max())

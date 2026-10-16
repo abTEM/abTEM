@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from abc import ABCMeta, abstractmethod
 from collections import OrderedDict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
+import numba  # type: ignore
 import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
@@ -17,7 +17,9 @@ from scipy import integrate  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
+from abtem.core import backend
 from abtem.core.backend import (
+    asnumpy,
     cp,
     cupyx,
     device_name_from_array_module,
@@ -218,6 +220,10 @@ def _device_cache_key(device, like=None) -> str | tuple[str, int]:
     xp = get_array_module(device)
     if xp is np:
         return "cpu"
+    if backend.tp is not None and xp is backend.tp:
+        # Metal exposes a single device, so its identity needs no index -- and
+        # a torch device carries no `id` to read one from.
+        return "mps"
     if like is not None and get_array_module(like) is not np:
         return ("gpu", int(like.device.id))
     return ("gpu", int(xp.cuda.Device().id))
@@ -351,6 +357,10 @@ def _sinc_on_device(gpts, sampling, device, device_key):
     """``sinc`` built inside the context of the device its key names."""
     if device_key == "cpu":
         return sinc(gpts, sampling, "cpu")
+
+    if device_key == "mps":
+        # one Metal device, and no context to enter
+        return sinc(gpts, sampling, "mps")
 
     import cupy as cp  # noqa: PLC0415 -- optional dependency
 
@@ -920,6 +930,12 @@ class ScatteringFactorProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if device_key == "cpu":
             return self._calculate_scattering_factor(symbol, gpts, sampling, "cpu")
 
+        if device_key == "mps":
+            # Metal has one device and no context to enter, so the allocation
+            # needs no steering -- the concern this method exists for does not
+            # arise there.
+            return self._calculate_scattering_factor(symbol, gpts, sampling, "mps")
+
         import cupy as cp  # noqa: PLC0415 -- optional dependency
 
         with cp.cuda.Device(device_key[1]):
@@ -1033,10 +1049,21 @@ _interpolation_pool: Optional[ThreadPoolExecutor] = None
 _INTERPOLATION_BUFFER_BUDGET = 256 * 1024**2
 
 
+def _interpolation_threads() -> int:
+    """The thread count of the interpolation pool.
+
+    Numba's launch-time thread count rather than ``os.cpu_count()``: abTEM
+    seeds it from ``OMP_NUM_THREADS`` (see abtem.core._numba_threads), so a
+    job limited to a few cores, e.g. by an HPC scheduler or one pytest-xdist
+    worker among many, is not oversubscribed by this pool.
+    """
+    return max(int(numba.config.NUMBA_NUM_THREADS), 1)
+
+
 def _get_interpolation_pool() -> ThreadPoolExecutor:
     global _interpolation_pool
     if _interpolation_pool is None:
-        _interpolation_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
+        _interpolation_pool = ThreadPoolExecutor(max_workers=_interpolation_threads())
     return _interpolation_pool
 
 
@@ -1059,7 +1086,7 @@ def _threaded_interpolate_radial_functions(
     (whose workqueue backend aborts on concurrent launches, e.g. from dask).
     """
     num_chunks = min(
-        os.cpu_count() or 1,
+        _interpolation_threads(),
         len(positions),
         max(int(_INTERPOLATION_BUFFER_BUDGET // max(array.nbytes, 1)), 1),
     )
@@ -1495,7 +1522,12 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_device)[None]
             )
 
-            if len(self._parametrization.sigmas):
+            # An element with a smoothing width is accumulated into its own
+            # buffer, smoothed, and then added; every other element goes
+            # straight into the slice.
+            symbol = chemical_symbols[number]
+            smoothed = symbol in self._parametrization.sigmas
+            if smoothed:
                 temp = xp.zeros(gpts, dtype=fp_dtype)
             else:
                 temp = array
@@ -1557,6 +1589,24 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                             chunk_offset=start,
                         )
                         del disk_chunk
+            elif device_name_from_array_module(xp) == "mps":
+                # The threaded interpolation is a numba routine over host
+                # memory and Metal has no kernel of its own, so it runs on the
+                # host and the result is added back. Finite projections are
+                # thereby available on Metal rather than unsupported; the
+                # multislice they feed still runs on the device.
+                host_temp = np.zeros(temp.shape, dtype=fp_dtype)
+                _threaded_interpolate_radial_functions(
+                    array=host_temp,
+                    positions=asnumpy(positions),
+                    disk_indices=disk,
+                    disk_counts=disk_counts,
+                    sampling=sampling,
+                    radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
+                    radial_functions=asnumpy(radial_potential),
+                    radial_derivative=asnumpy(radial_potential_derivative),
+                )
+                temp += xp.asarray(host_temp)
             else:
                 _threaded_interpolate_radial_functions(
                     array=temp,
@@ -1569,9 +1619,7 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            symbol = chemical_symbols[number]
-
-            if symbol in self._parametrization.sigmas:
+            if smoothed:
                 sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"

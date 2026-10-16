@@ -88,6 +88,21 @@ def test_upsample_rank_one_in_vacuum(device):
 
 
 @devices
+def test_compressed_scan_default_detector(device):
+    # Like every other scan(), the compressed one defaults to the flexible
+    # annular detector, not to exit waves (issue #511).
+    s_matrix_array = SMatrix(
+        **_VACUUM_KWARGS, interpolation=(2, 2), upsample=True, device=device
+    ).build(lazy=False)
+    scan = CustomScan([[5.0, 5.0], [6.0, 7.0]])
+
+    assert isinstance(s_matrix_array.scan(scan=scan), abtem.PolarMeasurements)
+    assert isinstance(
+        s_matrix_array.scan(scan=scan, detectors=abtem.WavesDetector()), abtem.Waves
+    )
+
+
+@devices
 @pytest.mark.parametrize(
     "positions",
     [
@@ -198,9 +213,79 @@ def test_upsample_windowed(device):
         device=device,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    # the cropping window truncates the high-angle scattering tails, hence the
-    # annular dark field signal is slightly reduced
-    assert np.allclose(to_host_array(windowed), to_host_array(full), rtol=0.12)
+    # Oracle: probe multislice. Cropping the reduced wave functions to a window
+    # truncates them, and a truncation in real space is a convolution in
+    # Fourier space: intensity leaks out of the bright-field disc to higher
+    # angles, so the dark-field signal goes UP, not down. Measured against
+    # multislice on this cell (bands 0-20 / 20-40 / 40-100 mrad):
+    #
+    #   window  periods  BF      20-40   ADF 40-100
+    #   64/auto   2.0    1.000   0.996   1.008
+    #   48        1.5    0.984   1.17    1.068
+    #   32        1.0    0.947   1.67    1.081
+    #   24        0.75   0.915   2.01    1.114
+    #
+    # ("periods" is the window in units of the interpolation period,
+    # downsampled gpts / interpolation = 32.) The total intensity of the
+    # windowed patterns stays below one (0.992, 0.987, 0.978), at or above the
+    # multislice intensity inside the same window, so this is a redistribution
+    # by the truncation, not an excess from normalisation. Cropping the full
+    # reduction to 48 px accounts for +3.8% of the ADF by itself; the rest is
+    # the interpolation kernel truncated to the window. Both are inherent to
+    # windows narrower than the 1.75 periods the automatic window enforces
+    # (SMatrix._auto_window_gpts).
+    #
+    # The bound is the error of the one-period (32 px) window: the 1.5-period
+    # window used here must stay more accurate than that.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    reference = to_host_array(
+        probe.scan(potential=potential, scan=scan, detectors=detector, lazy=False)
+    )
+    windowed, full = to_host_array(windowed), to_host_array(full)
+
+    # the full (here: automatic) window is held to the interpolation bound
+    assert np.abs(full / reference - 1).max() < 0.05
+    assert np.abs(windowed / reference - 1).max() < 0.085
+
+
+@devices
+def test_upsample_window_at_interpolation_one_is_exact(device):
+    # Oracle: at interpolation 1 the expansion is complete and no compression
+    # applies (SMatrix._upsample_enabled is False), so the reduction is plain
+    # PRISM at interpolation 1, which equals probe multislice. A C-PRISM
+    # window must not change that. It used to be passed on to the PRISM
+    # reduction as its cropping window, without the sqrt(gpts / window)
+    # amplitude rescaling of the compressed reduction, scaling every signal
+    # by (window / gpts)^2: 0.5616 at 48 of 64 px, 0.2408 at 32 px.
+    potential = _small_potential(device=device)
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=20),
+        abtem.AnnularDetector(inner=40, outer=100),
+    ]
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    measurements = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        upsample=True,
+        window_gpts=48,
+        device=device,
+    ).scan(scan=scan, detectors=detectors, lazy=False)
+
+    # PRISM at interpolation 1 matches multislice to single-precision
+    # round-off (see test_prism_scan_matches_probe_scan in
+    # test_propagation_physics.py); 1e-4 leaves room for the summation order
+    for measurement, reference in zip(measurements, references):
+        measurement, reference = to_host_array(measurement), to_host_array(reference)
+        np.testing.assert_allclose(measurement, reference, rtol=1e-4)
 
 
 @devices
@@ -248,7 +333,33 @@ def test_upsample_frozen_phonons(lazy, device):
         measurement = measurement.compute()
 
     assert measurement.shape == (3, 3)
-    assert np.all(to_host_array(measurement) >= 0.0)
+
+    # Oracle: the frozen-phonon measurement is the incoherent average over the
+    # configurations, ie. the mean of independent single-configuration
+    # simulations of each displaced structure (iterating the FrozenPhonons
+    # yields exactly those structures). The per-configuration results differ
+    # by ~9% of the signal here, so dropping or duplicating a configuration,
+    # or summing instead of averaging, is far outside the round-off bound.
+    per_configuration = [
+        to_host_array(
+            SMatrix(
+                potential=Potential(
+                    atoms, gpts=96, slice_thickness=2, device=device
+                ),
+                energy=100e3,
+                semiangle_cutoff=20,
+                interpolation=2,
+                upsample=True,
+                device=device,
+            ).scan(scan=scan, detectors=detector, lazy=False)
+        )
+        for atoms in frozen_phonons
+    ]
+    assert len(per_configuration) == 2
+    expected = np.mean(per_configuration, axis=0)
+    np.testing.assert_allclose(
+        to_host_array(measurement), expected, rtol=0, atol=1e-5 * expected.max()
+    )
 
 
 @devices
@@ -301,6 +412,40 @@ def test_upsample_detectors(device):
     for measurement in measurements:
         assert measurement.shape[:2] == (2, 2)
 
+    # Oracle: an independent method. Each detector must read the same signal
+    # off the upsampled reduction as off the multislice exit waves of the same
+    # probes, within the interpolation error the upsampled reduction is held
+    # to above (test_upsample_beats_prism_at_same_interpolation: < 0.05).
+    # Measured: annular 0.9%, pixelated 1.4%, wave intensities 1.3%, radial
+    # bands 0.07-1%.
+    probe = Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(potential)
+    references = probe.scan(
+        potential=potential, scan=scan, detectors=detectors, lazy=False
+    )
+    annular, flexible, pixelated, waves = measurements
+    annular_ref, flexible_ref, pixelated_ref, waves_ref = references
+
+    assert _relative_error(annular, annular_ref) < 0.05
+
+    # the reduction is downsampled to the antialias cutoff, so it has fewer
+    # 1 mrad radial bins than the reference; single bins hold a few discrete
+    # pixels each, hence compare bands within the common range
+    flexible, flexible_ref = to_host_array(flexible), to_host_array(flexible_ref)
+    assert flexible.shape[2] < flexible_ref.shape[2]
+    for inner, outer in [(0, 20), (20, 40), (40, 70)]:
+        band = flexible[:, :, inner:outer].sum(axis=2)
+        band_ref = flexible_ref[:, :, inner:outer].sum(axis=2)
+        assert _relative_error(band, band_ref) < 0.05, (inner, outer)
+
+    assert pixelated.shape == pixelated_ref.shape
+    assert _relative_error(pixelated, pixelated_ref) < 0.05
+
+    waves_ref = waves_ref.downsample(gpts=waves.shape[-2:], normalization="amplitude")
+    intensity = np.abs(to_host_array(waves)) ** 2
+    intensity_ref = np.abs(to_host_array(waves_ref)) ** 2
+    assert _relative_error(intensity, intensity_ref) < 0.05
+
 
 @devices
 def test_upsample_ctf_ensemble(device):
@@ -323,6 +468,25 @@ def test_upsample_ctf_ensemble(device):
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
 
     assert measurement.shape == (3, 2, 2)
+
+    # Oracle: each ensemble member is an independent simulation with that
+    # member's CTF. The defocus-0 member is the aberration-free probe, ie. the
+    # reduction without a CTF, and the last member is the defocus-50 probe.
+    # The members differ from each other by ~14% of the signal, so a
+    # misordered or misapplied ensemble is far outside the round-off bound.
+    without_ctf = to_host_array(
+        s_matrix.scan(scan=scan, detectors=detector, lazy=False)
+    )
+    defocus_50 = to_host_array(
+        s_matrix.scan(
+            scan=scan, detectors=detector, ctf=abtem.CTF(defocus=50), lazy=False
+        )
+    )
+    measurement = to_host_array(measurement)
+    atol = 1e-5 * without_ctf.max()
+    np.testing.assert_allclose(measurement[0], without_ctf, rtol=0, atol=atol)
+    np.testing.assert_allclose(measurement[2], defocus_50, rtol=0, atol=atol)
+    assert np.abs(measurement[0] - measurement[2]).max() > 100 * atol
 
 
 def test_upsample_downsampled_gpts_independent_of_interpolation():
@@ -1041,6 +1205,14 @@ def test_upsample_blend_snapping():
     assert C._snapped_blend_angle(None, detectors) is None
     assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
 
+    # an offset detector's boundaries are the bounds of the angles it covers,
+    # widened by |offset| plus the rounding margin
+    offset_detector = abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=21, outer=50, offset=(3, 4)
+    )
+    assert C._snapped_blend_angle(60.0, [offset_detector], margin=1.0) == 56.0
+    assert C._snapped_blend_angle(30.0, [offset_detector], margin=1.0) == 15.0
+
 
 @devices
 def test_upsample_blend_snaps_to_detector_boundary(device):
@@ -1128,8 +1300,13 @@ def test_upsample_blend_taper_routing(device):
     high = to_host_array(
         built._with_window(
             tuple(-(-g // i) for g, i in zip(built.gpts, built._interpolation))
-        ).reduce(scan=scan, detectors=rings[1], blend_angle=cut - taper,
-                 _blend_component="high", _blend_taper=0.0)
+        )._reduce(
+            scan=scan,
+            detectors=rings[1],
+            blend_angle=cut - taper,
+            _blend_component="high",
+            _blend_taper=0.0,
+        )
     )
     lower = np.minimum(low, high) * (1 - 1e-4) - 1e-12
     upper = np.maximum(low, high) * (1 + 1e-4) + 1e-12
@@ -1291,3 +1468,45 @@ def test_upsample_pixelated_patterns_use_the_simulation_grid(device):
     beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
                           blend_angle=1e4)
     assert np.allclose(beyond.angular_sampling, reference.angular_sampling)
+
+
+def test_upsample_offset_detectors_route_on_the_angles_they_cover():
+    # an offset region is an annulus about its offset centre, so it covers
+    # [max(inner - r, 0), outer + r] about k = 0, r = |offset| plus a pixel of
+    # the one-period window for the offset's nearest-pixel rounding; routing
+    # reads the band from those bounds, not from inner/outer alone
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+
+    cut = 60.0
+    offset = (3.0, 4.0)  # |offset| = 5 mrad
+    r = 5.0 + built._offset_rounding_margin
+
+    def sides(detector):
+        return built._routing_sides(cut, [detector])
+
+    # wholly below / above the cut, with or without an offset
+    below = abtem.AnnularDetector(inner=0, outer=cut - r - 1, offset=offset)
+    above = abtem.AnnularDetector(inner=cut + r + 1, outer=150, offset=offset)
+    assert sides(below) == ["low"]
+    assert sides(above) == ["high"]
+    assert sides(abtem.SegmentedDetector(
+        nbins_radial=1, nbins_azimuthal=4, inner=cut + r + 1, outer=150,
+        offset=offset,
+    )) == ["high"]
+    # outer <= cut, but the offset region reaches across it
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1, offset=offset)) is None
+    assert sides(abtem.AnnularDetector(inner=0, outer=cut - 1)) == ["low"]
+    # inner >= cut, but the offset region reaches below it
+    assert sides(abtem.AnnularDetector(inner=cut + 1, outer=150, offset=offset)) is None
+    # a q-sweep of disks is not an angular band
+    assert sides(abtem.SpectralAnnularDetector(outer=5.0, q_max=cut - 20)) is None
+
+    # snapping puts the cut on the covered bounds of an offset detector
+    detector = abtem.AnnularDetector(inner=20, outer=40, offset=offset)
+    assert built._snapped_blend_angle(
+        40 + r + 1, [detector], built._offset_rounding_margin
+    ) == pytest.approx(40 + r)

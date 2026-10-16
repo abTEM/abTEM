@@ -1,27 +1,45 @@
+import math
+import operator
+import pickle
+import sys
+import types
 import warnings
+from fractions import Fraction
 
-import ase
+import ase  # noqa: F401 (the tests PR #352 adds use it)
 import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
+import scipy.ndimage
+import scipy.signal
 import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
-from utils import array_is_close, devices, ensure_is_tuple, gpu, lazy_params, requires_gpu
+from utils import (
+    assert_array_matches_device,
+    devices,
+    ensure_is_tuple,
+    gpu,
+    lazy_params,
+    requires_gpu,
+)
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import copy_to_device
+from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+from abtem.core.energy import energy2wavelength
+from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
-    ReciprocalSpaceLineProfiles,
     _apply_convolve_2d_on_axes,
     _gaussian_kernel_2d,
     _gaussian_kernels_1d,
+    _interpolate_stack,
     _scan_sampling,
     _scan_shape,
 )
@@ -62,14 +80,15 @@ def test_scanned_measurement_type():
         ensemble_axes_metadata=ensemble_axes_metadata,
         metadata={"energy": 100e3},
     )
-
-    # with pytest.raises(RuntimeError):
-    #    measurement.integrate_radial(inner=0, outer=10)
+    # Scan axes ahead of another ensemble axis still become the image axes.
+    images = measurement.integrate_radial(inner=0, outer=10)
+    assert isinstance(images, Images)
+    assert images.shape == (10, 10, 10)
+    assert isinstance(images.ensemble_axes_metadata[0], OrdinalAxis)
 
 
 @settings(max_examples=5)
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["__add__", "__sub__", "__mul__", "__truediv__"])
 @lazy_params
 @devices
 @pytest.mark.parametrize(
@@ -81,63 +100,353 @@ def test_scanned_measurement_type():
         abtem_st.polar_measurements,
     ],
 )
-def test_add_subtract(data, measurement, method, lazy, device):
+def test_add_subtract(data, measurement, lazy, device):
+    # Every operator goes through ArrayObject._arithmetic, so the operators are
+    # looped here; the measurement class decides _copy_kwargs and the
+    # compatibility check.
     measurement = data.draw(measurement(lazy=lazy, device=device))
-    new_measurement = getattr(measurement, method)(measurement.copy())
-    assert new_measurement.array is not measurement.array
+    # A second operand distinct from the first, b = 2a + 1 (>= 1, so safe to
+    # divide by), so that no two of +, -, *, / can give the same result.
+    other = measurement.__class__(
+        **{
+            **measurement._copy_kwargs(exclude=("array",)),
+            "array": measurement.array * 2 + 1,
+        }
+    )
+    # compute() replaces a lazy object's array in place, so take the oracle
+    # values from copies: computing the operands themselves would make the
+    # operations below run eagerly even when lazy=True.
+    a = asnumpy(measurement.copy().compute().array)
+    b = asnumpy(other.copy().compute().array)
+
+    for name in ("add", "sub", "mul", "truediv"):
+        new_measurement = getattr(measurement, f"__{name}__")(other)
+        assert new_measurement.array is not measurement.array, name
+        assert new_measurement.is_lazy == lazy, name
+
+        # Oracle: the same elementwise operation on the plain numpy arrays.
+        expected = getattr(operator, name)(np.asarray(a, dtype=np.float64), b)
+        np.testing.assert_allclose(
+            asnumpy(new_measurement.compute().array), expected, rtol=1e-6, err_msg=name
+        )
+        # Not in place: the left operand is left untouched.
+        np.testing.assert_array_equal(
+            asnumpy(measurement.copy().compute().array), a, err_msg=name
+        )
+
+        # In place: an eager measurement is updated in its own array, and a lazy
+        # one is refused rather than silently replaced by a new lazy object.
+        target = measurement.copy()
+        if lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(target, f"__i{name}__")(other)
+            continue
+        result = getattr(target, f"__i{name}__")(other)
+        assert result.array is target.array, name
+        np.testing.assert_allclose(
+            asnumpy(target.array), expected, rtol=1e-6, err_msg=name
+        )
 
 
-@settings(max_examples=5)
-@given(data=st.data())
-@pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
+@lazy_params
 @devices
 @pytest.mark.parametrize(
-    "measurement",
+    "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
+)
+def test_reflected_arithmetic_with_a_scalar(scalar_type, lazy, device):
+    # Oracle: the same operation with the scalar on the left of the plain array.
+    # The array is not symmetric under any of the operations, so a reflected
+    # operation computed in the forward order (`2 / m` as `m / 2`) fails.
+    xp = get_array_module(device)
+    host_scalar = {
+        "python": 2.0,
+        "numpy_float64": np.float64(1.5),
+        "numpy_float32": np.float32(3.0),
+        "0d_array": np.asarray(2.0),
+    }[scalar_type]
+    scalar = xp.asarray(host_scalar) if scalar_type == "0d_array" else host_scalar
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
+
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(scalar, measurement)
+
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        expected = getattr(operator, op)(host_scalar, array)
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
+
+
+@devices
+def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes(device):
+    # MeasurementsEnsemble has no base axes, so NumPy's coercion through
+    # __len__/__getitem__ would succeed and build an object array; a NumPy scalar
+    # on the left must defer to the reflected operators instead.
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    ensemble = MeasurementsEnsemble(
+        array,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            OrdinalAxis(values=(0, 1, 2)),
+        ],
+    ).copy_to_device(device)
+    for op in (operator.mul, operator.truediv, operator.add, operator.sub):
+        result = op(np.float64(2.0), ensemble)
+        assert isinstance(result, MeasurementsEnsemble)
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(asnumpy(result.array), op(2.0, array), rtol=1e-6)
+
+
+def test_unsupported_left_operand_raises_type_error():
+    # A reflected operator declines an operand it does not support, so Python
+    # raises its own TypeError rather than the measurement raising another error.
+    measurement = Images(np.ones((2, 3)), sampling=0.1)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        with pytest.raises(TypeError, match="unsupported operand"):
+            getattr(operator, op)(object(), measurement)
+
+
+@lazy_params
+@devices
+def test_dask_array_on_the_left_of_a_measurement(lazy, device):
+    # Oracle: the same operation on the plain arrays. The two operands differ in
+    # every element, so an operation computed in the forward order fails for
+    # sub, truediv and pow. The result is lazy whenever either operand is.
+    left = np.array([[3.0, 1.0, 2.0], [5.0, 7.0, 11.0]], dtype=get_dtype())
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
+    dask_left = copy_to_device(da.from_array(left, chunks=(1, 3)), device)
+
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(dask_left, measurement)
+
+        assert isinstance(result, Images), op
+        assert result.is_lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        expected = getattr(operator, op)(
+            left.astype(np.float64), array.astype(np.float64)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
+
+
+@lazy_params
+@devices
+def test_builtin_sum_of_measurements(lazy, device):
+    # sum() starts from the integer 0, so it needs 0 + m.
+    arrays = [np.full((2, 3), value, dtype=get_dtype()) for value in (1.0, 2.0, 4.0)]
+    measurements = [
+        Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=0.1
+        ).copy_to_device(device)
+        for array in arrays
+    ]
+
+    result = sum(measurements)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    np.testing.assert_array_equal(asnumpy(result.compute().array), sum(arrays))
+
+
+def test_measurement_as_a_map_blocks_keyword_argument():
+    # dask reads the ndim of any argument it takes for array-like, and a
+    # measurement must not look array-like to it.
+    x = da.ones((4, 4), chunks=2)
+    images = Images(np.ones((4, 4)), sampling=0.1)
+    result = x.map_blocks(lambda block, images=None: block * 2, images=images)
+    np.testing.assert_array_equal(result.compute(), 2 * np.ones((4, 4)))
+
+
+@lazy_params
+@devices
+@pytest.mark.parametrize("form", ["forward", "reflected", "in_place"])
+@pytest.mark.parametrize(
+    "operand_type",
     [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
+        "numpy_float64",
+        "numpy_int64",
+        "0d_numpy_array",
+        "0d_device_array",
+        "numpy_float64_array",
     ],
 )
-def test_inplace_add_subtract(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=False, device=device))
-    new_measurement = getattr(measurement, method)(measurement.copy())
-    assert new_measurement.array is measurement.array
+def test_arithmetic_with_a_numpy_or_device_operand(operand_type, form, lazy, device):
+    # Oracle: the same operation on the plain arrays in double precision. NumPy
+    # promotes a single-precision measurement to double with any of these
+    # operands; the torch backend holds single precision only and must give the
+    # single-precision result instead, eager and lazy alike. An in-place
+    # operation keeps single precision on every backend, and refuses a lazy
+    # measurement rather than silently returning a new (lazy) object.
+    in_place, reflected = form == "in_place", form == "reflected"
+    xp = get_array_module(device)
+    host_operand = {
+        "numpy_float64": np.float64(-0.5),
+        "numpy_int64": np.int64(3),
+        "0d_numpy_array": np.asarray(2.0),
+        "0d_device_array": np.asarray(2.0, dtype=get_dtype()),
+        # Broadcasts along the last axis, which is 3 long and the other 2.
+        "numpy_float64_array": np.array([0.5, 2.0, 4.0]),
+    }[operand_type]
+    operand = (
+        xp.asarray(host_operand) if operand_type == "0d_device_array" else host_operand
+    )
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+
+    for op in ("add", "sub", "mul", "truediv"):
+        # A fresh measurement for each operator: an in-place one changes it.
+        measurement = Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+            sampling=(0.1, 0.2),
+        ).copy_to_device(device)
+
+        if in_place and lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(operator, "i" + op)(measurement, operand)
+            continue
+
+        operands = (operand, measurement) if reflected else (measurement, operand)
+        result = getattr(operator, ("i" if in_place else "") + op)(*operands)
+
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        if in_place or device == "mps":
+            assert asnumpy(computed).dtype == get_dtype(), op
+        host_operands = (
+            array.astype(np.float64),
+            np.asarray(host_operand, np.float64),
+        )
+        expected = getattr(operator, op)(
+            *(host_operands[::-1] if reflected else host_operands)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
+
+
+@requires_gpu
+@lazy_params
+@pytest.mark.parametrize(
+    "operand_type, reflected",
+    [
+        ("array", False),
+        ("array", True),
+        ("dask_array", False),
+        ("dask_array", True),
+        # The reflected pair of two measurements is the forward pair with the
+        # devices swapped, which the device parameter covers.
+        ("measurement", False),
+        ("lazy_measurement", False),
+    ],
+)
+@pytest.mark.parametrize("device", ["gpu", "cpu"])
+def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
+    device, operand_type, reflected, lazy
+):
+    # The operand is on the other device. CuPy refuses NumPy arrays, so the side
+    # on the host is moved to the device: the pair gives the same GPU result in
+    # either order, eager or lazy.
+    other_device = "cpu" if device == "gpu" else "gpu"
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+        sampling=(0.1, 0.2),
+    ).copy_to_device(device)
+    operand_array = (
+        da.from_array(array, chunks=(1, 3))
+        if operand_type in ("dask_array", "lazy_measurement")
+        else array.copy()
+    )
+    if operand_type.endswith("measurement"):
+        operand = Images(operand_array, sampling=(0.1, 0.2)).copy_to_device(
+            other_device
+        )
+    else:
+        operand = copy_to_device(operand_array, other_device)
+
+    operands = (operand, measurement) if reflected else (measurement, operand)
+    result = operator.add(*operands)
+
+    assert isinstance(result, Images)
+    lazy_operand = operand_type in ("dask_array", "lazy_measurement")
+    assert result.is_lazy == (lazy or lazy_operand)
+    computed = result.compute().array
+    assert_array_matches_device(computed, "gpu")
+    np.testing.assert_array_equal(asnumpy(computed), 2 * array)
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["sum", "mean", "std"])
 @devices
-@pytest.mark.parametrize(
-    "measurement",
-    [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
-    ],
-)
-def test_reduce(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=True, device=device))
-
-    axes_indices = st.integers(
-        min_value=0, max_value=max(len(measurement.ensemble_shape) - 1, 0)
+def test_reduce(data, device):
+    # The measurement is drawn lazy and reduced both as it is and after computing
+    # it, so that both branches of _reduction run. Oracle: the NumPy reduction of
+    # the computed array in double precision.
+    measurement = data.draw(
+        st.one_of(
+            *(
+                strategy(lazy=True, device=device)
+                for strategy in (
+                    abtem_st.images,
+                    abtem_st.line_profiles,
+                    abtem_st.diffraction_patterns,
+                    abtem_st.polar_measurements,
+                )
+            )
+        )
     )
-    axes_indices = st.lists(
-        elements=axes_indices,
-        min_size=0,
-        max_size=len(measurement.ensemble_shape),
-        unique=True,
+    num_ensemble_axes = len(measurement.ensemble_shape)
+    axes = tuple(
+        data.draw(
+            st.lists(
+                st.integers(min_value=0, max_value=max(num_ensemble_axes - 1, 0)),
+                max_size=num_ensemble_axes,
+                unique=True,
+            )
+        )
     )
-    axes_indices = data.draw(axes_indices)
 
-    axes = tuple(axes_indices)
-    num_lost_dims = len(axes)
-
-    new_measurement = getattr(measurement.compute(), method)(axes)
-
-    assert len(new_measurement.shape) == len(measurement.shape) - num_lost_dims
+    eager = measurement.copy().compute()
+    array = np.asarray(asnumpy(eager.array), dtype=np.float64)
+    for method in ("sum", "mean", "std"):
+        # The data lie in [0, 1), so 1e-5 is far below any wrong-axis reduction.
+        expected = getattr(np, method)(array, axis=axes)
+        for source in (measurement, eager):
+            case = f"{method}, lazy={source.is_lazy}"
+            reduced = getattr(source, method)(axes)
+            assert type(reduced) is type(measurement), case
+            assert reduced.is_lazy == source.is_lazy, case
+            assert len(reduced.ensemble_axes_metadata) == num_ensemble_axes - len(
+                axes
+            ), case
+            np.testing.assert_allclose(
+                asnumpy(reduced.compute().array),
+                expected,
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=case,
+            )
 
 
 @composite
@@ -163,7 +472,7 @@ def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     elif gpts_or_sampling["sampling"]:
         sampling = ensure_is_tuple(gpts_or_sampling["sampling"], 2)
         adjusted_sampling = tuple(
-            l / np.ceil(l / d) for d, l in zip(sampling, measurement.extent)
+            l / safe_ceiling_int(l / d) for d, l in zip(sampling, measurement.extent)
         )
         assert np.allclose(interpolated.sampling, adjusted_sampling)
 
@@ -206,85 +515,187 @@ def sigma(draw, max_value=5.0):
     return draw(st.one_of(st.tuples(sigma, sigma), sigma))
 
 
-@given(data=st.data(), sigma=sigma())
+# Anisotropic pixel sampling (x != y), so that applying a sigma/sampling
+# component to the wrong image axis changes the result.
+_anisotropic_sampling = st.tuples(
+    st.floats(min_value=0.02, max_value=0.05),
+    st.floats(min_value=0.06, max_value=0.1),
+)
+
+# Binary-exact anisotropic sampling for the Lorentzian-family tests: with
+# half-widths chosen as (multiple of 0.5 px) x sampling, the documented
+# truncation window (``truncate`` half-widths along each axis) ends exactly on
+# a pixel, so the reference kernel below is unambiguous.
+_LORENTZIAN_SAMPLING = (0.125, 0.0625)
+_lorentzian_hw_pixels = st.sampled_from([0.0, 0.5, 1.5, 2.5])
+
+# How each filter's documented `boundary` maps onto scipy.ndimage's `mode`
+# ('periodic' wraps around; the Gaussian's 'reflect' reflects about the edge
+# of the last pixel, which is scipy's 'reflect').
+_BOUNDARY_TO_SCIPY = {"periodic": "wrap", "reflect": "reflect", "constant": "constant"}
+
+
+def _with_sampling(measurement, sampling):
+    return Images(
+        array=measurement.array,
+        sampling=sampling,
+        ensemble_axes_metadata=measurement.ensemble_axes_metadata,
+        metadata=measurement.metadata,
+    )
+
+
+def _as_float64(measurement):
+    return np.asarray(asnumpy(measurement.compute().array), dtype=np.float64)
+
+
+def _assert_matches_reference(result, expected, rel=1e-5):
+    """Compare with a tolerance relative to the reference signal's peak, so
+    the tolerance can never exceed the signal itself (a zero image fails)."""
+    result = np.asarray(asnumpy(result), dtype=np.float64)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(result, expected, rtol=0, atol=rel * scale)
+
+
+def _analytic_lorentzian_kernel(hw_pixels, truncate=10.0):
+    """The Lorentzian kernel as documented by ``Images.lorentzian_filter``:
+
+        L(x, y) = 1 / (1 + (x/γ_x)² + (y/γ_y)²),   γ = HWHM in pixels,
+
+    truncated at ``truncate`` half-widths along each axis and normalized to
+    unit sum; the γ → 0 limit along an axis is a delta along that axis.
+    """
+    terms = []
+    for axis, hw in enumerate(hw_pixels):
+        radius = int(round(truncate * hw))
+        assert radius == truncate * hw, "choose hw so the window ends on a pixel"
+        x = np.arange(-radius, radius + 1, dtype=np.float64)
+        shape = (-1, 1) if axis == 0 else (1, -1)
+        terms.append(((x / hw) ** 2 if hw > 0 else x * 0.0).reshape(shape))
+    kernel = 1.0 / (1.0 + terms[0] + terms[1])
+    return kernel / kernel.sum()
+
+
+def _scipy_gaussian_kernel(sigma_pixels):
+    """scipy.ndimage's own (truncate=4) 2-D Gaussian kernel, obtained as the
+    impulse response of scipy.ndimage.gaussian_filter on a delta that fits
+    the whole kernel."""
+    radii = [int(4.0 * s + 0.5) for s in sigma_pixels]
+    delta = np.zeros([2 * r + 1 for r in radii])
+    delta[radii[0], radii[1]] = 1.0
+    return scipy.ndimage.gaussian_filter(delta, sigma_pixels, mode="constant")
+
+
+def _convolve_base_axes(array, kernel_2d, mode):
+    """Reference convolution over the two trailing (image) axes."""
+    kernel = kernel_2d.reshape((1,) * (array.ndim - 2) + kernel_2d.shape)
+    return scipy.ndimage.convolve(array, kernel, mode=mode, cval=0.0)
+
+
+@given(
+    data=st.data(),
+    sigma=sigma(),
+    sampling=_anisotropic_sampling,
+    boundary=st.sampled_from(["periodic", "reflect", "constant"]),
+)
 @lazy_params
 @devices
-def test_gaussian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_gaussian_filter_images(data, sigma, sampling, boundary, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), sampling
+    )
     try:
-        filtered = measurement.gaussian_filter(sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.gaussian_filter(sigma, boundary=boundary).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: scipy.ndimage.gaussian_filter, with sigma converted from Å to
+    # pixels separately along x (axis -2) and y (axis -1) and no smoothing
+    # across the ensemble axes.
+    sigma_x, sigma_y = ensure_is_tuple(sigma, 2)
+    sigma_pixels = (0.0,) * (original.ndim - 2) + (
+        sigma_x / sampling[0],
+        sigma_y / sampling[1],
+    )
+    expected = scipy.ndimage.gaussian_filter(
+        original, sigma_pixels, mode=_BOUNDARY_TO_SCIPY[boundary]
+    )
+    _assert_matches_reference(filtered.array, expected)
 
 
-@given(data=st.data(), sigma=sigma())
+@given(
+    data=st.data(),
+    hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
+    boundary=st.sampled_from(["periodic", "constant"]),
+)
 @lazy_params
 @devices
-def test_lorentzian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_lorentzian_filter_images(data, hw_pixels, boundary, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), _LORENTZIAN_SAMPLING
+    )
+    half_width = tuple(h * d for h, d in zip(hw_pixels, _LORENTZIAN_SAMPLING))
     try:
-        filtered = measurement.lorentzian_filter(sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.lorentzian_filter(
+            half_width, boundary=boundary
+        ).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: direct (scipy.ndimage) convolution with the analytic kernel.
+    expected = _convolve_base_axes(
+        original,
+        _analytic_lorentzian_kernel(hw_pixels),
+        mode=_BOUNDARY_TO_SCIPY[boundary],
+    )
+    _assert_matches_reference(filtered.array, expected)
 
 
-@given(data=st.data(), sigma=sigma())
+@given(
+    data=st.data(),
+    sigma_pixels=st.tuples(
+        st.floats(min_value=0.0, max_value=3.0), st.floats(min_value=0.0, max_value=3.0)
+    ),
+    hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
+)
 @lazy_params
 @devices
-def test_voigtian_filter_images(data, sigma, lazy, device):
-    if lazy is True and device == gpu.values[0]:
-        return
-
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    assume(all(n > 1 for n in measurement.base_shape))
+def test_voigtian_filter_images(data, sigma_pixels, hw_pixels, lazy, device):
+    measurement = _with_sampling(
+        data.draw(abtem_st.images(lazy=lazy, device=device)), _LORENTZIAN_SAMPLING
+    )
+    sigma = tuple(s * d for s, d in zip(sigma_pixels, _LORENTZIAN_SAMPLING))
+    half_width = tuple(h * d for h, d in zip(hw_pixels, _LORENTZIAN_SAMPLING))
     try:
-        # Use sigma as both gaussian_sigma and lorentzian_gamma
-        filtered = measurement.voigtian_filter(sigma, sigma)
-        filtered.compute()
-        measurement.compute()
+        filtered = measurement.voigtian_filter(sigma, half_width).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
+    original = _as_float64(measurement)
 
-    if np.any(np.array(sigma)) > 1:
-        assert not np.allclose(filtered.array, measurement.array)
+    # Oracle: a single periodic convolution with the Voigt kernel, built as
+    # the full linear convolution of the Gaussian and Lorentzian kernels.
+    voigt_kernel = scipy.signal.convolve2d(
+        _scipy_gaussian_kernel(sigma_pixels), _analytic_lorentzian_kernel(hw_pixels)
+    )
+    expected = _convolve_base_axes(original, voigt_kernel, mode="wrap")
+    _assert_matches_reference(filtered.array, expected)
 
 
-def _delta_probe_image(gpts=64, lazy=False):
-    """A throwaway probe-intensity image for the filter tests below -- only
-    a non-trivial 2D image is needed, not any particular physics."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=gpts)
-    return wave.build((0, 0), lazy=lazy).intensity()
-
-
-def test_lorentzian_filter_changes_image():
-    """Lorentzian filter with a non-trivial HWHM should change the image."""
-    images = _delta_probe_image()
-    filtered = images.lorentzian_filter(0.5)
-    assert not np.allclose(filtered.array, images.array)
+def test_images_coordinates_spaced_by_sampling():
+    # Pixel i of a periodic image with sampling s sits at i * s; the last
+    # pixel is one sampling short of the extent, not at the extent.
+    images = Images(np.zeros((4, 5)), sampling=(0.5, 0.2))
+    x, y = images.coordinates
+    assert np.allclose(x, [0.0, 0.5, 1.0, 1.5])
+    assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
@@ -361,54 +772,71 @@ def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwarg
         )
 
 
-def test_voigtian_filter_changes_image():
-    """Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert not np.allclose(filtered.array, images.array)
+def _unit_delta_image(shape=(64, 96), device="cpu"):
+    """A unit delta on an anisotropically sampled grid, so each filter's
+    output is its own (normalized) impulse response with peak << 1 but
+    known exactly, and tolerances can be set relative to that peak."""
+    array = np.zeros(shape, dtype=get_dtype(complex=False))
+    array[shape[0] // 2, shape[1] // 2] = 1.0
+    images = Images(array, sampling=_LORENTZIAN_SAMPLING)
+    return images.to_gpu() if device == "gpu" else images
 
 
-def test_voigtian_filter_pure_gaussian_limit():
-    """voigtian_filter with lorentzian_gamma=0 must equal gaussian_filter."""
-    images = _delta_probe_image()
-    sigma = 0.4
-    gauss = images.gaussian_filter(sigma)
-    voigt = images.voigtian_filter(sigma, 0.0)
-    assert np.allclose(gauss.array, voigt.array, atol=1e-5)
+# Anisotropic widths in pixels; half-widths are multiples of 0.5 px so the
+# Lorentzian truncation window ends on a pixel (see _analytic_lorentzian_kernel).
+_LIMIT_SIGMA_PIXELS = (2.0, 1.25)
+_LIMIT_HW_PIXELS = (1.5, 2.5)
+_LIMIT_SIGMA = tuple(s * d for s, d in zip(_LIMIT_SIGMA_PIXELS, _LORENTZIAN_SAMPLING))
+_LIMIT_HW = tuple(h * d for h, d in zip(_LIMIT_HW_PIXELS, _LORENTZIAN_SAMPLING))
 
 
-def test_voigtian_filter_pure_lorentzian_limit():
-    """voigtian_filter with gaussian_sigma=0 must equal lorentzian_filter."""
-    images = _delta_probe_image()
-    hw = 0.4
-    lor = images.lorentzian_filter(hw)
-    voigt = images.voigtian_filter(0.0, hw)
-    assert np.allclose(lor.array, voigt.array, atol=1e-5)
+def _reference_impulse_response(kernel, shape=(64, 96)):
+    delta = np.zeros(shape)
+    delta[shape[0] // 2, shape[1] // 2] = 1.0
+    return scipy.ndimage.convolve(delta, kernel, mode="wrap")
 
 
-def test_pseudo_voigtian_filter_changes_image():
-    """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert not np.allclose(filtered.array, images.array)
+@devices
+def test_voigtian_filter_matches_convolved_kernels(device):
+    """The Voigt impulse response must equal the numerical (linear)
+    convolution of the Gaussian and the Lorentzian kernels."""
+    out = _unit_delta_image(device=device).voigtian_filter(_LIMIT_SIGMA, _LIMIT_HW)
+    voigt_kernel = scipy.signal.convolve2d(
+        _scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS),
+        _analytic_lorentzian_kernel(_LIMIT_HW_PIXELS),
+    )
+    _assert_matches_reference(out.array, _reference_impulse_response(voigt_kernel))
 
 
-def test_pseudo_voigtian_filter_pure_gaussian_limit():
-    """pseudo_voigtian_filter with eta=0 must equal gaussian_filter."""
-    images = _delta_probe_image()
-    sigma = 0.4
-    gauss = images.gaussian_filter(sigma)
-    pv = images.pseudo_voigtian_filter(sigma, 1.0, eta=0.0)
-    assert np.allclose(gauss.array, pv.array, atol=1e-5)
+@devices
+def test_voigtian_filter_pure_gaussian_limit(device):
+    """voigtian_filter with lorentzian_gamma=0 must be a pure Gaussian."""
+    out = _unit_delta_image(device=device).voigtian_filter(_LIMIT_SIGMA, 0.0)
+    expected = _reference_impulse_response(_scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS))
+    _assert_matches_reference(out.array, expected)
 
 
-def test_pseudo_voigtian_filter_pure_lorentzian_limit():
-    """pseudo_voigtian_filter with eta=1 must equal lorentzian_filter."""
-    images = _delta_probe_image()
-    hw = 0.4
-    lor = images.lorentzian_filter(hw)
-    pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
-    assert np.allclose(lor.array, pv.array, atol=1e-5)
+@devices
+def test_voigtian_filter_pure_lorentzian_limit(device):
+    """voigtian_filter with gaussian_sigma=0 must be a pure Lorentzian."""
+    out = _unit_delta_image(device=device).voigtian_filter(0.0, _LIMIT_HW)
+    expected = _reference_impulse_response(_analytic_lorentzian_kernel(_LIMIT_HW_PIXELS))
+    _assert_matches_reference(out.array, expected)
+
+
+@pytest.mark.parametrize("eta", [0.0, 0.3, 1.0])
+@devices
+def test_pseudo_voigtian_filter_mixes_components(eta, device):
+    """pseudo_voigtian_filter = (1 - eta) * Gaussian + eta * Lorentzian
+    (Nguyen et al. 2014), including the pure limits eta = 0 and eta = 1."""
+    out = _unit_delta_image(device=device).pseudo_voigtian_filter(
+        _LIMIT_SIGMA, _LIMIT_HW, eta=eta
+    )
+    gaussian = _reference_impulse_response(_scipy_gaussian_kernel(_LIMIT_SIGMA_PIXELS))
+    lorentzian = _reference_impulse_response(
+        _analytic_lorentzian_kernel(_LIMIT_HW_PIXELS)
+    )
+    _assert_matches_reference(out.array, (1 - eta) * gaussian + eta * lorentzian)
 
 
 # Maps _apply_convolve_2d_on_axes' internal mode names onto the
@@ -609,14 +1037,251 @@ def test_dtype_preserving_operations_keep_complex():
         )
 
 
-def test_filter_boundary_modes():
-    """All four filter methods accept all three boundary modes without error."""
-    images = _delta_probe_image(gpts=32)
-    for boundary in ("periodic", "reflect", "constant"):
-        images.gaussian_filter(0.3, boundary=boundary).array
-        images.lorentzian_filter(0.3, boundary=boundary).array
-        images.voigtian_filter(0.3, 0.3, boundary=boundary).array
-        images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
+def _integer_frequencies(n, fftshift):
+    """Integer frequency indices of an `n`-point axis in storage order."""
+    frequencies = np.rint(np.fft.fftfreq(n, 1 / n)).astype(int)
+    return np.fft.fftshift(frequencies) if fftshift else frequencies
+
+
+def _step_bin_masks(scaled_r_squared, scale, num_bins, radial_sampling=1, width=1):
+    """The pixels of each step bin of `azimuthal_average`, in exact arithmetic.
+
+    The radii are in units of the smallest angular sampling and the integer array
+    `scaled_r_squared` is `scale * r**2`. Bin k holds the pixels with
+    `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
+    which for an integer `scaled_r_squared` is a comparison with the ceilings
+    of `scale` times the squared edges."""
+    step, full_width = Fraction(radial_sampling), Fraction(width)
+    masks = []
+    for k in range(num_bins):
+        lower, upper = k * step - full_width / 2, k * step + full_width / 2
+        mask = scaled_r_squared < math.ceil(scale * upper**2)
+        if lower > 0:
+            mask &= scaled_r_squared >= math.ceil(scale * lower**2)
+        masks.append(mask)
+    return masks
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(48, 36), (37, 50)])
+def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift):
+    """With the default radial sampling and width, bin k holds the pixels with
+    (k - 1/2) <= sqrt(i**2 + j**2) < (k + 1/2) in units of the angular sampling,
+    which no pixel radius sits on, so the bins hold the same pixels at every
+    pattern size. The bins are chosen on the host in double precision whatever
+    the configured precision, which only sets the dtype of the data averaged
+    (see ..._four_to_three_sampling_ratio_is_independent_of_precision)."""
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 16.29,
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
+
+    i = _integer_frequencies(gpts[0], fftshift)[:, None]
+    j = _integer_frequencies(gpts[1], fftshift)[None, :]
+    r_squared = i**2 + j**2
+    n = -min(i.min(), j.min())
+
+    # The oracle's own bins: each pixel inside the last bin edge is in exactly one.
+    masks = _step_bin_masks(r_squared, 1, n)
+    inside = r_squared < math.ceil((n - Fraction(1, 2)) ** 2)
+    assert np.array_equal(np.sum(masks, axis=0), inside)
+
+    expected = [data[mask].mean() for mask in masks]
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize(
+    "gpts, extent, radial_sampling", [((18, 18), 10.0, 1.0), ((64, 64), 20.0, 3.0)]
+)
+def test_lazy_azimuthal_average_declares_its_bins(gpts, extent, radial_sampling):
+    rng = np.random.default_rng(0)
+    patterns = DiffractionPatterns(
+        rng.random((4,) + gpts),
+        sampling=1 / extent,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))],
+    )
+    eager = patterns.azimuthal_average(radial_sampling=radial_sampling)
+    lazy = patterns.ensure_lazy(chunks=(2, -1, -1)).azimuthal_average(
+        radial_sampling=radial_sampling
+    )
+
+    assert lazy.array.shape == eager.array.shape
+    assert lazy.array.compute().shape == eager.array.shape
+    assert np.array_equal(lazy.array[:, -1].compute(), eager.array[:, -1])
+
+
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
+    weighting_function,
+):
+    # A 512 x 512 pattern; arrays of its size in the graph would be megabytes.
+    patterns = DiffractionPatterns(
+        da.zeros((2, 512, 512), chunks=(1, 512, 512)),
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    profiles = patterns.azimuthal_average(weighting_function=weighting_function)
+
+    graph = dict(profiles.array.__dask_graph__())
+    assert len(pickle.dumps(graph)) < 200_000
+
+
+def test_lazy_azimuthal_average_computes_the_step_bounds_once_for_all_blocks(
+    monkeypatch,
+):
+    calls = []
+    bounds = DiffractionPatterns._azimuthal_step_bounds
+
+    def counting_bounds(*args):
+        calls.append(1)
+        return bounds(*args)
+
+    monkeypatch.setattr(
+        DiffractionPatterns, "_azimuthal_step_bounds", staticmethod(counting_bounds)
+    )
+    data = np.random.default_rng(0).random((4, 32, 32))
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 20.0,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))],
+    )
+    eager = patterns.azimuthal_average()
+    del calls[:]
+
+    lazy = patterns.ensure_lazy(chunks=(1, -1, -1)).azimuthal_average()
+    assert len(calls) == 0
+    computed = lazy.array.compute(scheduler="synchronous")
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(computed, eager.array)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_azimuthal_average_rejects_an_unknown_weighting_function_at_the_call(lazy):
+    patterns = DiffractionPatterns(
+        np.ones((16, 16)), sampling=1 / 10.0, metadata={"energy": 200e3}
+    )
+    if lazy:
+        patterns = patterns.ensure_lazy()
+    with pytest.raises(ValueError, match="weighting function must be"):
+        patterns.azimuthal_average(weighting_function="bad")
+
+
+def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of_precision():
+    data = np.random.default_rng(0).random((128, 96)) + 1.0
+    profiles = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision}):
+            patterns = DiffractionPatterns(
+                data.astype(precision),
+                sampling=(1 / 30.0, 1 / 22.5),
+                metadata={"energy": 200e3},
+            )
+            profiles[precision] = patterns.azimuthal_average().array
+
+    assert profiles["float32"].shape == profiles["float64"].shape
+    np.testing.assert_allclose(
+        profiles["float32"].astype(np.float64), profiles["float64"], rtol=1e-6, atol=0
+    )
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_rule(
+    fftshift,
+):
+    """With sampling (1 / (3 a), 1 / (2 a)) the pixels at frequency (0, +-1) have
+    the radius 3 / 2 in units of the finer sampling, exactly on the edge between
+    bins 1 and 2, but the ratio of the angular samplings is not exactly 3 / 2 in
+    floating point. They belong to bin 2."""
+    a = 5.431
+    gpts = (48, 32)
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    patterns = DiffractionPatterns(
+        data,
+        sampling=(1 / (3 * a), 1 / (2 * a)),
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
+
+    i = _integer_frequencies(gpts[0], fftshift)[:, None]
+    j = _integer_frequencies(gpts[1], fftshift)[None, :]
+    # (2 r)**2 in units of the finer sampling is the integer 4 i**2 + 9 j**2.
+    n = 24
+    assert -i.min() == n and 3 * -j.min() == 2 * n
+    masks = _step_bin_masks(4 * i**2 + 9 * j**2, 4, n)
+
+    expected = [data[mask].mean() for mask in masks]
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize(
+    "gpts, radial_sampling, width",
+    [((30, 30), "0.2", "0.4"), ((25, 24), "0.1", "0.2")],
+)
+def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
+    gpts, radial_sampling, width
+):
+    """Bin edges at decimal multiples of the sampling, such as 2.0 = 20 * 0.1,
+    are exact: 1.9 / 0.1 is 18.999999999999996 in floating point."""
+    data = np.random.default_rng(0).random(gpts) + 1.0
+
+    patterns = DiffractionPatterns(
+        data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
+    )
+    profiles = patterns.azimuthal_average(
+        radial_sampling=float(radial_sampling), width=float(width)
+    )
+
+    i = _integer_frequencies(gpts[0], True)[:, None]
+    j = _integer_frequencies(gpts[1], True)[None, :]
+    n = math.ceil(-min(i.min(), j.min()) / Fraction(radial_sampling))
+    masks = _step_bin_masks(
+        i**2 + j**2,
+        1,
+        n,
+        radial_sampling=Fraction(radial_sampling),
+        width=Fraction(width),
+    )
+    expected = [
+        data[mask].astype(np.float64).mean() if mask.any() else 0.0 for mask in masks
+    ]
+
+    assert profiles.shape == (n,)
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
+
+
+@pytest.mark.slow
+def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_bin():
+    """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
+    centered at 2116 and half a unit from the next edge, which float32 radii of
+    that size cannot resolve. Slow (a 4240 x 96 pattern in 2118 bins): it guards
+    against a return to radii in the configured precision."""
+    data = np.zeros((4240, 96), dtype=np.float32)
+    data[2120 + 2116, 48 + 46] = 1.0
+    with abtem.config.set({"precision": "float32"}):
+        patterns = DiffractionPatterns(
+            data, sampling=1 / 50.0, fftshift=True, metadata={"energy": 200e3}
+        )
+        profiles = patterns.azimuthal_average(
+            max_angle=2118 * patterns.angular_sampling[0]
+        )
+
+    assert profiles.shape == (2118,)
+    assert np.flatnonzero(profiles.array).tolist() == [2116]
 
 
 @requires_gpu
@@ -738,27 +1403,6 @@ def test_gaussian_source_size_lazy_matches_eager_at_edges():
     np.testing.assert_allclose(lazy, eager, atol=1e-10)
 
 
-def test_lorentzian_filter_lazy():
-    """Lorentzian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.lorentzian_filter(0.5)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_voigtian_filter_lazy():
-    """Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_pseudo_voigtian_filter_lazy():
-    """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
 # @given(data=st.data())
 # @pytest.mark.parametrize('lazy', [True, False])
 # @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -767,34 +1411,125 @@ def test_pseudo_voigtian_filter_lazy():
 #     measurement.diffractograms()
 
 
+def _periodic_gaussian_blob(gpts, sampling, center, sigma):
+    """exp(-|r - center|² / (2 sigma²)) on a periodic grid (minimum-image
+    distance), peak 1."""
+    extent = [n * d for n, d in zip(gpts, sampling)]
+    coords = []
+    for n, d, c, L in zip(gpts, sampling, center, extent):
+        r = np.arange(n) * d - c
+        coords.append(r - L * np.round(r / L))
+    x, y = np.meshgrid(*coords, indexing="ij")
+    return np.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+
+def _make_images(array, sampling, lazy, device):
+    array = array.astype(get_dtype(complex=False))
+    if lazy:
+        array = da.from_array(array, chunks=(array.shape[0] // 2, -1))
+    images = Images(array, sampling=sampling)
+    return images.to_gpu() if device == "gpu" else images
+
+
+def _line_values(line):
+    return np.asarray(asnumpy(line.compute().array), dtype=np.float64)
+
+
+@lazy_params
+@devices
+def test_images_interpolate_line_through_grid_nodes(lazy, device):
+    """A line running along a grid row/column, sampled at the grid spacing,
+    samples only grid nodes, where spline interpolation is exact -- so the
+    profile equals that row/column of the image. The image is anisotropic in
+    shape and sampling so that an x/y mix-up changes the result."""
+    rng = np.random.default_rng(7)
+    gpts, sampling = (48, 64), (0.2, 0.15)
+    array = rng.random(gpts)
+    images = _make_images(array, sampling, lazy, device)
+    extent = images.extent
+
+    # Along y at x = 0 (the first row of the array).
+    line = images.interpolate_line(start=(0, 0), end=(0, extent[1]), gpts=gpts[1])
+    _assert_matches_reference(_line_values(line), array[0])
+
+    # Along x at y = y_j (the j-th column).
+    j = 17
+    line = images.interpolate_line(
+        start=(0, j * sampling[1]), end=(extent[0], j * sampling[1]), gpts=gpts[0]
+    )
+    _assert_matches_reference(_line_values(line), array[:, j])
+
+
+@settings(max_examples=10, deadline=None)
 @given(data=st.data())
 @lazy_params
 @devices
-def test_images_interpolate_line(data, lazy, device):
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
-    image = wave.build((0, 0), lazy=lazy).intensity()
+def test_images_interpolate_line_at_position(data, lazy, device):
+    """A line of length L at any angle through the centre c of a rotationally
+    symmetric Gaussian blob exp(-|r - c|²/2σ²) samples exp(-t²/2σ²),
+    t = -L/2 ... L/2, independent of the angle (analytic profile)."""
+    # Anisotropic sampling, so pixel/physical-unit mix-ups show; the line
+    # may extend past the image edge, where the image is periodic.
+    gpts, sampling, sigma, length, n = (128, 160), (0.1, 0.08), 0.8, 6.0, 121
+    center = data.draw(
+        st.tuples(
+            *(
+                st.floats(min_value=0, max_value=g * d, exclude_max=True)
+                for g, d in zip(gpts, sampling)
+            )
+        ),
+        label="center",
+    )
+    angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle")
 
-    line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.0)
-    assert np.allclose(
-        image.to_cpu().compute().array[0], line.to_cpu().compute().array,
-        rtol=1e-6, atol=1e-6,
+    images = _make_images(
+        _periodic_gaussian_blob(gpts, sampling, center, sigma), sampling, lazy, device
+    )
+    line = images.interpolate_line_at_position(
+        center=center, angle=angle, extent=length, gpts=n, endpoint=True
     )
 
-    coordinate = st.floats(min_value=0, max_value=wave.extent[0])
-    center = data.draw(st.tuples(coordinate, coordinate))
-    angle1 = data.draw(st.floats(min_value=0, max_value=360.0))
-    angle2 = data.draw(st.floats(min_value=0, max_value=360.0))
-    width = data.draw(st.floats(min_value=0, max_value=2.0))
+    t = np.linspace(-length / 2, length / 2, n)
+    expected = np.exp(-(t**2) / (2 * sigma**2))
+    # Cubic-spline interpolation of a Gaussian 8-10 pixels wide errs by
+    # ~1e-4 of the peak; 1e-3 still rejects any off-centre or mis-rotated
+    # line (a 0.1 Å offset changes the profile by ~1e-2 of the peak).
+    _assert_matches_reference(_line_values(line), expected, rel=1e-3)
 
-    image = wave.build(center, lazy=lazy).intensity()
-    line1 = image.interpolate_line_at_position(
-        center=center, angle=angle1, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu().compute()
-    line2 = image.interpolate_line_at_position(
-        center=center, angle=angle2, extent=wave.extent[0] / 2, width=width, gpts=128
-    ).to_cpu().compute()
+    # Averaging across a perpendicular width preserves the rotational
+    # symmetry: the profile must not depend on the angle.
+    width = data.draw(st.floats(min_value=0.1, max_value=2.0), label="width")
+    other_angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle2")
+    wide = [
+        _line_values(
+            images.interpolate_line_at_position(
+                center=center, angle=a, extent=length, gpts=n, width=width
+            )
+        )
+        for a in (angle, other_angle)
+    ]
+    _assert_matches_reference(wide[0], wide[1], rel=1e-3)
 
-    assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
+
+@devices
+@pytest.mark.parametrize("order", [1, 3])
+def test_interpolate_stack_just_below_grid_nodes(device, order):
+    """Coordinates a hair below a grid node must give that node's value. With
+    float64 coordinates on a float32 image, cupyx's spline kernel took the
+    index from the float32-rounded coordinate and the weights from the
+    float64 one, and returned the value at the next node instead."""
+    rng = np.random.default_rng(11)
+    array = rng.random((16, 24)).astype(np.float32)
+    k = np.arange(1, 15)
+    positions = np.stack([k - 1e-12, np.full(k.shape, 5.0)], axis=-1)
+    if device == "gpu":
+        cp = pytest.importorskip("cupy")
+        values = _interpolate_stack(
+            cp.asarray(array), cp.asarray(positions), mode="wrap", order=order
+        )
+    else:
+        values = _interpolate_stack(array, positions, mode="wrap", order=order)
+    np.testing.assert_allclose(asnumpy(values), array[k, 5], rtol=0, atol=1e-5)
 
 
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
@@ -883,11 +1618,11 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True])
 @devices
-def test_diffraction_patterns_polar_binning(data, lazy, device):
+def test_diffraction_patterns_polar_binning(data, device):
+    """The lazy polar_binning must compute the same bins as the eager one."""
     measurement = data.draw(
-        abtem_st.diffraction_patterns(lazy=lazy, device=device, min_base_side=16)
+        abtem_st.diffraction_patterns(lazy=True, device=device, min_base_side=16)
     )
 
     nbins_radial = data.draw(
@@ -914,8 +1649,7 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
     )
 
     rotation = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=360.0))
-    print(nbins_radial)
-    measurement.polar_binning(
+    kwargs = dict(
         nbins_radial=nbins_radial,
         nbins_azimuthal=nbins_azimuthal,
         inner=inner,
@@ -923,22 +1657,26 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
         rotation=rotation,
     )
 
-    step_size = data.draw(
-        abtem_st.sensible_floats(
-            min_value=min(measurement.angular_sampling),
-            max_value=max(min(measurement.angular_sampling), outer - inner),
-        )
-    )
+    lazy = measurement.polar_binning(**kwargs)
+    assert lazy.is_lazy
+    lazy = lazy.compute()
+    eager = measurement.compute().polar_binning(**kwargs)
 
-    # measurement.radial_binning(step_size=step_size,
-    #                           inner=inner,
-    #                           outer=outer)
+    assert isinstance(lazy, PolarMeasurements)
+    assert lazy.shape == measurement.ensemble_shape + (nbins_radial, nbins_azimuthal)
+    np.testing.assert_allclose(
+        asnumpy(lazy.array), asnumpy(eager.array), rtol=1e-6, atol=0
+    )
 
 
 @given(data=st.data())
 @lazy_params
 @devices
 def test_diffraction_patterns_center_of_mass(data, lazy, device):
+    # Property: the center of mass is a physical quantity, so it cannot depend on
+    # the storage order of the pattern. Re-storing the same pattern in the other
+    # order (centred <-> unshifted; unshifted is by definition the ifftshift of
+    # centred) must give the same center of mass, in both units.
     measurement = data.draw(
         abtem_st.diffraction_patterns(
             lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
@@ -946,46 +1684,258 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     )
     assume(len(_scan_sampling(measurement)) > 0)
 
-    print(measurement.shape, measurement.axes_metadata)
+    array = measurement.compute().array
+    xp = get_array_module(array)
+    if measurement.fftshift:
+        reordered = xp.fft.ifftshift(array, axes=(-2, -1))
+    else:
+        reordered = xp.fft.fftshift(array, axes=(-2, -1))
 
-    measurement.center_of_mass().compute()
+    other = DiffractionPatterns(
+        reordered,
+        sampling=measurement.sampling,
+        ensemble_axes_metadata=measurement.ensemble_axes_metadata,
+        metadata=measurement.metadata,
+        fftshift=not measurement.fftshift,
+    )
+
+    angular_limits = measurement.angular_limits
+    for units, scale in (
+        ("1/Å", max(abs(k) for limit in measurement.limits for k in limit)),
+        ("mrad", max(abs(a) for limit in angular_limits for a in limit)),
+    ):
+        com = asnumpy(measurement.center_of_mass(units=units).compute().array)
+        other_com = asnumpy(other.center_of_mass(units=units).array)
+        # Only the float32 summation order differs between the two (~1e-6 of
+        # the scale); a storage-order bug displaces the COM by whole pixels,
+        # i.e. by multiples of 1 / (n // 2) >= 1 / 16 of the scale (the
+        # strategy's base side is <= 32).
+        np.testing.assert_allclose(com, other_com, rtol=0, atol=1e-4 * scale)
+
+
+def _delta_diffraction_patterns(gpts, sampling, fftshift, index, device):
+    # A unit delta at integer frequency index `index` (fftfreq-style: negative
+    # values count from the end), i.e. at k = index * sampling. In centred storage
+    # the zero frequency sits at pixel n // 2 (np.fft.fftshift convention); in
+    # unshifted storage it sits at pixel 0 (np.fft.fftfreq convention).
+    array = np.zeros(gpts, dtype=np.float32)
+    if fftshift:
+        array[gpts[0] // 2 + index[0], gpts[1] // 2 + index[1]] = 1.0
+    else:
+        array[index[0] % gpts[0], index[1] % gpts[1]] = 1.0
+
+    return DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=sampling,
+        fftshift=fftshift,
+        metadata={"energy": 100e3},
+    )
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("captured_fraction", [1.0, 0.5, 0.1])
-def test_diffraction_patterns_center_of_mass_is_normalized(device, captured_fraction):
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize(
+    "gpts, sampling",
+    [
+        ((32, 32), (0.1, 0.1)),
+        ((33, 33), (0.1, 0.1)),
+        # Non-square grid and anisotropic sampling: an x/y swap of the shape or
+        # of the sampling changes the answer.
+        ((32, 33), (0.1, 0.12)),
+    ],
+)
+def test_diffraction_patterns_center_of_mass_of_delta(device, fftshift, gpts, sampling):
+    # The COM of a single delta is its own position: k = (3 * dkx, -2 * dky). In
+    # mrad, alpha = lambda * k * 1e3 (the convention of angular_sampling).
+    index = (3, -2)
+    measurement = _delta_diffraction_patterns(gpts, sampling, fftshift, index, device)
+
+    for units in ("1/Å", "mrad"):
+        expected = index[0] * sampling[0] + 1.0j * index[1] * sampling[1]
+        if units == "mrad":
+            expected = expected * energy2wavelength(100e3) * 1e3
+
+        com = complex(asnumpy(measurement.center_of_mass(units=units).array))
+
+        # One nonzero pixel: the only error is float32 rounding of the coordinate
+        # (~6e-8 relative); 1e-6 is ~10 float32 ulps. A one-pixel error is >= 1/3.6
+        # relative.
+        assert com == pytest.approx(expected, rel=1e-6), units
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("units", ["1/Å", "mrad"])
+@pytest.mark.parametrize("gpts", [(32, 33), (33, 32)])
+def test_diffractogram_of_plane_wave_peaks_at_its_frequency(device, units, gpts):
+    # |FFT|^2 of exp(2 pi i (kx x + ky y)), with k on the DFT grid, is a single
+    # delta at +k (numpy's forward-FFT sign convention), so the diffractogram's
+    # center of mass is k itself, and lambda * k * 1e3 in mrad.
+    sampling = (0.2, 0.25)
+    kx = 3 / (gpts[0] * sampling[0])
+    ky = -2 / (gpts[1] * sampling[1])
+    x = np.arange(gpts[0]) * sampling[0]
+    y = np.arange(gpts[1]) * sampling[1]
+    image = np.exp(2j * np.pi * (kx * x[:, None] + ky * y[None])).astype(np.complex64)
+
+    images = Images(
+        copy_to_device(image, device), sampling=sampling, metadata={"energy": 100e3}
+    )
+    com = complex(asnumpy(images.diffractograms().center_of_mass(units=units).array))
+
+    expected = kx + 1.0j * ky
+    if units == "mrad":
+        expected = expected * energy2wavelength(100e3) * 1e3
+
+    # float32 FFT leakage off the peak is ~1e-7 relative; a one-pixel error is
+    # >= 1 / 3.6 relative.
+    assert com == pytest.approx(expected, rel=1e-5)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_diffraction_patterns_coordinates_match_fftfreq(device, fftshift):
+    # The frequencies of an n-point DFT with real-space spacing d are
+    # np.fft.fftfreq(n, d) in unshifted order, and np.fft.fftshift of that in
+    # centred order. A reciprocal sampling dk corresponds to d = 1 / (n * dk).
+    # Even and odd axes place the zero frequency differently.
+    sampling = (0.1, 0.12)
+    wavelength_mrad = energy2wavelength(100e3) * 1e3
+    for gpts in ((32, 32), (33, 33), (32, 33)):
+        measurement = DiffractionPatterns(
+            copy_to_device(np.zeros(gpts, dtype=np.float32), device),
+            sampling=sampling,
+            fftshift=fftshift,
+            metadata={"energy": 100e3},
+        )
+
+        for i in range(2):
+            case = f"gpts={gpts}, axis {i}"
+            expected = np.fft.fftfreq(gpts[i], d=1 / (gpts[i] * sampling[i]))
+            if fftshift:
+                expected = np.fft.fftshift(expected)
+
+            # float64 coordinates: 1e-12 is ~1e4 ulps of |k| <= 2 1/Å.
+            np.testing.assert_allclose(
+                measurement.coordinates[i], expected, rtol=0, atol=1e-12, err_msg=case
+            )
+            # Angular coordinates follow the configured precision (float32 by
+            # default, ~6e-8 relative); 1e-6 of a pixel is far below a 1-pixel
+            # error.
+            np.testing.assert_allclose(
+                asnumpy(measurement.angular_coordinates[i]),
+                expected * wavelength_mrad,
+                rtol=1e-6,
+                atol=1e-6 * wavelength_mrad * sampling[i],
+                err_msg=case,
+            )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_diffraction_patterns_center_of_mass_is_normalized(device):
     # A center of mass is a normalized (intensity-weighted average) quantity, so
     # scaling the total intensity of a diffraction pattern must not change the
     # computed center of mass. This did not hold before the sum was normalized by
     # the total captured intensity: https://github.com/abTEM/abTEM/discussions/402
-    gpts = 33
+    # Storage order, odd and even grids and units are covered exactly by
+    # test_diffraction_patterns_center_of_mass_of_delta.
+    #
+    # A Gaussian sampled symmetrically about pixel (n // 2 + shift) has its COM
+    # exactly at that pixel, i.e. at k = shift * sampling, provided it is neither
+    # truncated nor wrapped: the nearest edge is >= 32 - 10 = 22 px = 7.3 sigma
+    # away, where the tail is exp(-7.3**2 / 2) ~ 3e-12.
+    gpts = 64
     sampling = 0.4436
-    shift = (-10, 10)
+    sigma = 3.0
+    shift = (-10, 7)
 
-    y, x = np.mgrid[0:gpts, 0:gpts]
-    disk = np.exp(-((y - gpts // 2) ** 2 + (x - gpts // 2) ** 2) / (2 * 3.0**2))
-    disk = np.roll(disk, shift, axis=(0, 1))
-    disk = copy_to_device((disk / disk.sum() * captured_fraction).astype(np.float32), device)
-
-    measurement = DiffractionPatterns(disk, sampling=sampling, fftshift=True)
-
-    com = measurement.center_of_mass(units="1/Å").array
-
+    i, j = np.mgrid[0:gpts, 0:gpts]
+    disk = np.exp(
+        -((i - gpts // 2 - shift[0]) ** 2 + (j - gpts // 2 - shift[1]) ** 2)
+        / (2 * sigma**2)
+    )
     expected = (shift[0] * sampling) + 1.0j * (shift[1] * sampling)
-    assert abs(com - expected) < 0.1 * abs(expected)
+
+    for captured_fraction in (1.0, 0.5, 0.1):
+        measurement = DiffractionPatterns(
+            copy_to_device(
+                (disk / disk.sum() * captured_fraction).astype(np.float32), device
+            ),
+            sampling=sampling,
+            fftshift=True,
+            metadata={"energy": 100e3},
+        )
+
+        com = complex(asnumpy(measurement.center_of_mass().array))
+
+        # float32 sums over ~4e3 pixels: ~1e-6 relative. A one-pixel error is
+        # 1 / |shift| = 1 / 12.2 ~ 8% relative.
+        assert abs(com - expected) < 1e-4 * abs(expected), captured_fraction
 
 
-@given(data=st.data())
 @lazy_params
 @devices
-def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
-    measurement = data.draw(
-        abtem_st.diffraction_patterns(
-            lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
-        )
+def test_diffraction_patterns_integrated_center_of_mass(lazy, device):
+    # Patterns whose center of mass at scan position r is the gradient of a
+    # band-limited periodic field phi(r), which the iCOM must give back (up to the
+    # constant that makes each image's minimum zero): the Fourier-space
+    # integration is exact for a field on the DFT grid. Each pattern has unit
+    # total intensity on the zero-frequency pixel and its x and y neighbours,
+    # which carry the weights g_x / dk and g_y / dk. The second member of the
+    # ensemble holds twice the gradient.
+    scan_gpts, scan_sampling, dk = (12, 10), (0.3, 0.25), 0.5
+    extent = [n * d for n, d in zip(scan_gpts, scan_sampling)]
+    x, y = np.meshgrid(
+        *(np.arange(n) * d for n, d in zip(scan_gpts, scan_sampling)), indexing="ij"
     )
-    assume(len(_scan_sampling(measurement)) > 1)
-    measurement.integrated_center_of_mass().compute()
+    u, v = 2 * np.pi * x / extent[0], 2 * np.pi * y / extent[1]
+    phi = 0.1 * np.cos(u + 2 * v) + 0.05 * np.sin(2 * u - v)
+    gx = (-0.1 * np.sin(u + 2 * v) + 0.1 * np.cos(2 * u - v)) * 2 * np.pi / extent[0]
+    gy = (-0.2 * np.sin(u + 2 * v) - 0.05 * np.cos(2 * u - v)) * 2 * np.pi / extent[1]
+
+    array = np.zeros((2,) + scan_gpts + (8, 8))
+    for member, scale in enumerate((1.0, 2.0)):
+        array[member, ..., 5, 4] = scale * gx / dk
+        array[member, ..., 4, 5] = scale * gy / dk
+        array[member, ..., 4, 4] = 1 - scale * (gx + gy) / dk
+    array = array.astype(np.float32)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 6, 5, -1, -1))
+    measurement = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=dk,
+        fftshift=True,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            ScanAxis(sampling=scan_sampling[0]),
+            ScanAxis(sampling=scan_sampling[1]),
+        ],
+        metadata={"energy": 100e3},
+    )
+
+    icom = measurement.integrated_center_of_mass()
+
+    assert isinstance(icom, Images)
+    assert icom.is_lazy == lazy
+    expected = np.stack([scale * phi - (scale * phi).min() for scale in (1.0, 2.0)])
+    # float32 patterns: ~1e-6 of the field; a field integrated along the wrong
+    # axis or with the wrong sampling is wrong by its own magnitude.
+    np.testing.assert_allclose(
+        asnumpy(icom.compute().array), expected, rtol=0, atol=1e-4 * expected.max()
+    )
+
+
+@pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
+def test_integrate_gradient_offset_is_per_member(chunks):
+    rng = np.random.default_rng(0)
+    gradient = rng.normal(size=(3, 16, 20)) + 1j * rng.normal(size=(3, 16, 20))
+    gradient *= np.array([1.0, 5.0, 0.3])[:, None, None]
+    kwargs = dict(sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))])
+
+    eager = Images(gradient, **kwargs).integrate_gradient()
+    lazy = Images(da.from_array(gradient, chunks=chunks), **kwargs).integrate_gradient()
+
+    np.testing.assert_allclose(eager.array.min(axis=(-2, -1)), 0.0, atol=1e-12)
+    np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-12)
 
 
 @given(data=st.data())
@@ -999,8 +1949,33 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
         abtem_st.sensible_floats(min_value=0.0, max_value=min(measurement.max_angles))
     )
     inner = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=outer))
-    measurement.bandlimit(inner, outer).compute()
-    measurement.block_direct().compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    # Oracle: the scattering angle of each pixel from np.fft.fftfreq (see
+    # test_diffraction_patterns_coordinates_match_fftfreq); bandlimit keeps
+    # inner < alpha < outer and zeroes the rest. Pixels within rounding of an
+    # edge could go either way and are left out of the comparison.
+    wavelength_mrad = energy2wavelength(measurement.metadata["energy"]) * 1e3
+    angles = []
+    for n, dk in zip(measurement.base_shape, measurement.sampling):
+        k = np.fft.fftfreq(n, d=1 / (n * dk))
+        angles.append((np.fft.fftshift(k) if measurement.fftshift else k))
+    alpha = np.hypot(angles[0][:, None], angles[1][None]) * wavelength_mrad
+    keep = (alpha > inner) & (alpha < outer)
+    tolerance = 1e-5 * alpha.max()
+    certain = (np.abs(alpha - inner) > tolerance) & (np.abs(alpha - outer) > tolerance)
+
+    bandlimited = measurement.bandlimit(inner, outer)
+    assert bandlimited.is_lazy == lazy
+    values = asnumpy(bandlimited.compute().array)
+    np.testing.assert_array_equal(
+        values[..., certain], (original * keep)[..., certain]
+    )
+
+    # Without a semiangle_cutoff in the metadata, block_direct zeroes only the
+    # zero-angle pixel.
+    blocked = asnumpy(measurement.block_direct().compute().array)
+    np.testing.assert_array_equal(blocked, original * (alpha > 0))
 
 
 @settings(deadline=None, max_examples=10)
@@ -1014,7 +1989,27 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
         )
     )
     assume(len(_scan_sampling(measurement)) > 1)
-    measurement.gaussian_source_size(sigma).compute()
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+
+    # Oracle: a periodic Gaussian filter over the first two scan axes, with sigma
+    # in units of each axis' own scan sampling, and no smoothing of the other
+    # ensemble axes or within the patterns.
+    sigma_pixels = [0.0] * original.ndim
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+    for i in scan_axes:
+        sigma_pixels[i] = sigma / measurement.ensemble_axes_metadata[i].sampling
+    expected = scipy.ndimage.gaussian_filter(original, sigma_pixels, mode="wrap")
+
+    filtered = measurement.gaussian_source_size(sigma)
+    assert filtered.is_lazy == lazy
+    # float32 data in [0, 1).
+    np.testing.assert_allclose(
+        asnumpy(filtered.compute().array), expected, rtol=0, atol=1e-5
+    )
 
 
 @settings(suppress_health_check=(HealthCheck.data_too_large,))
@@ -1035,8 +2030,9 @@ def test_polar_measurements_integrate(data, lazy, device):
         st.one_of(st.just((radial_inner, radial_outer)), st.none())
     )
 
+    # Azimuthal limits are in radians.
     azimuthal_outer = data.draw(
-        abtem_st.sensible_floats(min_value=0.0, max_value=360.0)
+        abtem_st.sensible_floats(min_value=0.0, max_value=2 * np.pi)
     )
     azimuthal_inner = data.draw(
         abtem_st.sensible_floats(min_value=0.0, max_value=azimuthal_outer)
@@ -1045,10 +2041,64 @@ def test_polar_measurements_integrate(data, lazy, device):
         st.one_of(st.just((azimuthal_inner, azimuthal_outer)), st.none())
     )
 
-    measurement.integrate(
+    # Oracle: the documented rule, as masks over the bins. A bin is included if
+    # its center lies in [lower, upper) of the limits, the azimuth modulo 2 pi.
+    # Draws with a center within rounding of a limit are rejected.
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+    radial_centers = (
+        measurement.radial_offset
+        + (np.arange(measurement.shape[-2]) + 0.5) * measurement.radial_sampling
+    )
+    azimuthal_centers = (
+        measurement.azimuthal_offset
+        + (np.arange(measurement.shape[-1]) + 0.5) * measurement.azimuthal_sampling
+    )
+    for limit in (radial_inner, radial_outer):
+        assume(np.abs(radial_centers - limit).min() > 1e-9 * (1 + abs(limit)))
+    radial_mask = (radial_centers >= radial_inner) & (radial_centers < radial_outer)
+
+    if azimuthal_limits is None or azimuthal_outer - azimuthal_inner >= 2 * np.pi:
+        azimuthal_mask = np.ones(len(azimuthal_centers), dtype=bool)
+    else:
+        offsets = (azimuthal_centers - azimuthal_inner) % (2 * np.pi)
+        span = azimuthal_outer - azimuthal_inner
+        assume(np.abs(offsets - span).min() > 1e-9)
+        assume(np.abs(offsets - 2 * np.pi).min() > 1e-9)
+        azimuthal_mask = offsets < span
+
+    # The (first two) scan axes become the base axes of the result, last.
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+
+    def assert_matches(result, mask, case):
+        expected = np.moveaxis(
+            (original * mask).sum(axis=(-2, -1)),
+            scan_axes,
+            range(-len(scan_axes), 0),
+        )
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-5,
+            atol=1e-5,
+            err_msg=case,
+        )
+
+    radial_selection = radial_mask if radial_limits is not None else True
+    selected = np.outer(radial_selection & np.ones_like(radial_mask), azimuthal_mask)
+    integrated = measurement.integrate(
         radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-    ).compute()
-    measurement.integrate_radial(radial_inner, radial_outer).compute()
+    )
+    assert integrated.is_lazy == lazy
+    assert_matches(integrated, selected, "integrate")
+    assert_matches(
+        measurement.integrate_radial(radial_inner, radial_outer),
+        radial_mask[:, None],
+        "integrate_radial",
+    )
 
     max_region = int(np.prod(tuple(n - 1 for n in measurement.shape[-2:])))
     detector_regions = st.lists(
@@ -1057,54 +2107,224 @@ def test_polar_measurements_integrate(data, lazy, device):
         elements=st.integers(min_value=0, max_value=max_region),
         unique=True,
     )
-
-    measurement.integrate(detector_regions=data.draw(detector_regions)).compute()
+    regions = data.draw(detector_regions)
+    region_mask = np.zeros(measurement.shape[-2:], dtype=bool)
+    region_mask.flat[regions] = True
+    assert_matches(
+        measurement.integrate(detector_regions=regions), region_mask, "regions"
+    )
 
 
 @given(data=st.data())
 @lazy_params
 @devices
 def test_line_profiles_interpolate(data, lazy, device):
+    # Interpolating to twice the points puts every second point on an old grid
+    # node, where the spline reproduces the data, over the same extent. A shift
+    # of the new grid by any fraction of a sample moves these points off the
+    # nodes; the data are random in [0, 1), so 1e-5 is far below that error.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.interpolate().compute()
+    n = measurement.base_shape[0]
+    original = asnumpy(measurement.copy().compute().array)
+
+    interpolated = measurement.interpolate(gpts=2 * n)
+
+    assert interpolated.is_lazy == lazy
+    assert np.isclose(interpolated.extent, measurement.extent)
+    assert np.isclose(interpolated.sampling, measurement.sampling / 2)
+    values = asnumpy(interpolated.compute().array)
+    assert values.shape == original.shape[:-1] + (2 * n,)
+    np.testing.assert_allclose(values[..., ::2], original, rtol=1e-5, atol=1e-5)
 
 
 @given(data=st.data(), reps=st.integers(min_value=1, max_value=3))
 @lazy_params
 @devices
 def test_line_profiles_tile(data, reps, lazy, device):
+    # Oracle: np.tile along the base axis only.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.tile(reps).compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    tiled = measurement.tile(reps)
+
+    assert tiled.is_lazy == lazy
+    assert np.isclose(tiled.extent, reps * measurement.extent)
+    expected = np.tile(original, (1,) * (original.ndim - 1) + (reps,))
+    np.testing.assert_array_equal(asnumpy(tiled.compute().array), expected)
+
+
+@pytest.mark.parametrize(
+    "shape, sampling, new_sampling, new_shape",
+    [
+        # 10.8 / 0.3 is 36.00000000000001 in floats; the images still have 36 pixels.
+        ((10, 5), 1.08, 0.3, (36, 18)),
+        # The extent 3 * 0.1 is 0.30000000000000004; at its own sampling the image
+        # keeps its 3 pixels.
+        ((2, 3), 0.1, 0.1, (2, 3)),
+    ],
+)
+@pytest.mark.parametrize("method", ["fft", "spline"])
+def test_images_interpolate_to_a_sampling_that_divides_the_extent(
+    shape, sampling, new_sampling, new_shape, method
+):
+    images = Images(np.random.default_rng(0).random(shape), sampling=sampling)
+    assert images.interpolate(sampling=new_sampling, method=method).shape == new_shape
+
+
+def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
+    profiles = RealSpaceLineProfiles(np.random.default_rng(0).random(10), sampling=1.08)
+    assert profiles.interpolate(sampling=0.3).shape == (36,)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_interpolate_line_of_zero_length(lazy):
+    # Without a width, a line of zero length is the value at its point, with or
+    # without the endpoint; there is no direction to average a width across.
+    array = np.random.default_rng(0).random((40, 40))
+    images = Images(array, sampling=0.1)
+    if lazy:
+        images = images.ensure_lazy()
+
+    expected = scipy.ndimage.map_coordinates(array, [[10.0], [10.0]], order=3)
+    for endpoint in (False, True):
+        profile = images.interpolate_line(
+            start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
+        )
+        assert profile.shape == (1,), endpoint
+        np.testing.assert_allclose(
+            profile.compute().array, expected, rtol=1e-10, err_msg=str(endpoint)
+        )
+
+    with pytest.raises(ValueError, match="zero length cannot be averaged"):
+        images.interpolate_line(start=(1, 1), end=(1, 1), sampling=0.1, width=0.3)
+
+
+def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
+    images = Images(np.random.default_rng(0).random((10, 5)), sampling=1.08)
+    assert images.interpolate(sampling=1e9).shape == (1, 1)
+    profiles = RealSpaceLineProfiles(np.random.default_rng(0).random(10), sampling=1.08)
+    assert profiles.interpolate(sampling=1e9).shape == (1,)
 
 
 @lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
+    # A periodic field with a few Fourier components on a square 4 x 4 Å cell
+    # sampled anisotropically. The default line runs along y at x = 0 over one
+    # period, so its profile is periodic too. Taking the line and then
+    # interpolating it (2-D and 1-D splines), or interpolating the image (FFT,
+    # exact for a band-limited field) and then taking the line, must both give
+    # the field along the line: the spline path to its own error of 3e-3 of the
+    # amplitude, the FFT path to float32 rounding (5e-7). A line displaced by
+    # 0.1 Å is wrong by about 0.1 of the amplitude.
+    length, gpts = 4.0, (40, 32)
 
-    if not lazy:
-        images.compute()
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x + y + 0.4) / length) + 0.5 * np.sin(
+            2 * np.pi * (x - 3 * y) / length
+        )
 
-    assert np.allclose(
-        images.interpolate_line().interpolate(0.01).array,
-        images.interpolate(0.01).interpolate_line().array,
-        rtol=0.01,
+    axes = [np.arange(n) * length / n for n in gpts]
+    images = Images(
+        field(*np.meshgrid(*axes, indexing="ij")),
+        sampling=tuple(length / n for n in gpts),
     )
+    if lazy:
+        images = images.lazy()
+
+    expected = field(0.0, np.arange(400) * 0.01)
+    for name, profile, rel in (
+        ("line, then interpolate", images.interpolate_line().interpolate(0.01), 1e-2),
+        ("interpolate, then line", images.interpolate(0.01).interpolate_line(), 1e-5),
+    ):
+        assert profile.is_lazy == lazy, name
+        np.testing.assert_allclose(
+            asnumpy(profile.compute().array),
+            expected,
+            rtol=0,
+            atol=rel * np.abs(expected).max(),
+            err_msg=name,
+        )
 
 
+def _periodic_spline_interpolate(array, gpts, order, lazy, device):
+    images = abtem.Images(copy_to_device(array, device), sampling=0.1)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=gpts, method="spline", boundary="periodic", order=order
+    )
+    return asnumpy(interpolated.compute().array)
+
+
+@devices
 @lazy_params
-def test_interpolate_periodic_spline_and_fft(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(
+    lazy, order, device
+):
+    # A periodic interpolant commutes with rolling the image by whole pixels. The
+    # image has 40 x 30 pixels and is interpolated to 80 x 90, so one old pixel is
+    # 2 new pixels along x and 3 along y and the rolled output is a whole-pixel roll.
+    array = np.random.default_rng(0).random((40, 30))
 
-    if not lazy:
-        images.compute()
-
-    spline_interpolated = images.interpolate(
-        method="spline", sampling=0.05, boundary="periodic", order=5
+    interpolated_roll = _periodic_spline_interpolate(
+        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy, device
     )
-    fft_interpolated = images.interpolate(method="fft", sampling=0.05)
-    array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)
+    rolled_interpolation = np.roll(
+        _periodic_spline_interpolate(array, (80, 90), order, lazy, device),
+        (10, 21),
+        axis=(0, 1),
+    )
+
+    # The two sides agree to within 20 eps of the data scale in the dtype the device
+    # stores (float64 on the CPU, float32 on Metal and torch); the tolerance of 200 eps
+    # leaves a margin of 10 over that, and a roll that is off by one pixel differs by
+    # about 0.5 of the data scale.
+    eps = np.finfo(interpolated_roll.dtype).eps
+    np.testing.assert_allclose(
+        interpolated_roll, rolled_interpolation, rtol=0, atol=200 * eps * array.max()
+    )
+
+
+@devices
+@lazy_params
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_reproduces_a_band_limited_field(
+    lazy, order, device
+):
+    # Interpolating a periodic field with a few Fourier components from 40 x 30 to
+    # 53 x 41 points (a factor that is not an integer) must give the field itself at
+    # the new positions j * extent / gpts. A constant shift of the coordinates, which
+    # a roll test does not see, moves the result by up to 0.2 of the amplitude for a
+    # shift of half a pixel. The spline's own error is 9e-4 at order 2 and 2e-4 at
+    # order 3.
+    extent = (4.0, 3.0)
+    gpts, new_gpts = (40, 30), (53, 41)
+
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x / extent[0] + y / extent[1] + 0.1)) + 0.5 * (
+            np.sin(2 * np.pi * (x / extent[0] - 3 * y / extent[1]))
+        )
+
+    def sample(points):
+        axes = [np.arange(n) * length / n for n, length in zip(points, extent)]
+        return field(*np.meshgrid(*axes, indexing="ij"))
+
+    sampling = tuple(e / n for e, n in zip(extent, gpts))
+    images = abtem.Images(copy_to_device(sample(gpts), device), sampling=sampling)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=new_gpts, method="spline", boundary="periodic", order=order
+    ).compute()
+
+    expected = sample(new_gpts)
+    np.testing.assert_allclose(
+        asnumpy(interpolated.array),
+        expected,
+        rtol=0,
+        atol=2e-3 * np.abs(expected).max(),
+    )
 
 
 @given(
@@ -1126,25 +2346,38 @@ def test_diffraction_patterns_interpolate_uniform(gpts, extent):
     )
 
 
+_DISC_SIGMA = 1.0
+_DISC_SAMPLING = (0.02, 0.03)
+_DISC_GPTS = (500, 333)
+
+
 @given(
-    gpts=st.tuples(
-        st.integers(min_value=50, max_value=100),
-        st.integers(min_value=50, max_value=100),
-    ),
-    radius=st.floats(min_value=5, max_value=20),
-    sampling=st.tuples(
-        st.floats(min_value=0.05, max_value=1), st.floats(min_value=0.05, max_value=1)
-    ),
     position=st.tuples(
-        st.floats(min_value=0.0, max_value=0), st.floats(min_value=0.0, max_value=0.0)
+        st.floats(min_value=0.0, max_value=_DISC_GPTS[0] * _DISC_SAMPLING[0]),
+        st.floats(min_value=0.0, max_value=_DISC_GPTS[1] * _DISC_SAMPLING[1]),
     ),
+    radius=st.floats(min_value=0.5 * _DISC_SIGMA, max_value=3.0 * _DISC_SIGMA),
 )
-def test_integrate_disc(gpts, radius, sampling, position):
-    array = np.ones(gpts)
-    measurement = Images(array, sampling=sampling)
-    output = measurement.integrate_disc(position=position, radius=radius)
-    expected = (radius / sampling[0]) * (radius / sampling[1]) * np.pi
-    assert np.abs(output - expected) < 4 * np.pi * radius
+def test_integrate_disc(position, radius):
+    """A disc of radius R centred on a 2-D Gaussian blob of width σ (anywhere
+    in the periodic image, including across its border) captures the
+    fraction 1 - exp(-R²/2σ²) of the blob's total.
+
+    Tolerance: integrate_disc anti-aliases the disc edge with a linear ramp
+    one mean pixel (d = 0.025 Å) wide, which can grow the effective radius by
+    at most d/2; the fraction then changes by at most
+    (d/2) max_R dF/dR = (d/2σ) e^(-1/2) ≈ 0.30 d/σ = 0.0075 (σ = 1 Å). The
+    sampling is anisotropic, so an x/y sampling mix-up misplaces the disc.
+    """
+    array = _periodic_gaussian_blob(_DISC_GPTS, _DISC_SAMPLING, position, _DISC_SIGMA)
+    array /= array.sum()
+    measurement = Images(array, sampling=_DISC_SAMPLING)
+
+    captured = measurement.integrate_disc(position=position, radius=radius)
+
+    expected = 1 - np.exp(-(radius**2) / (2 * _DISC_SIGMA**2))
+    tolerance = 0.30 * np.mean(_DISC_SAMPLING) / _DISC_SIGMA
+    assert abs(captured - expected) < tolerance
 
 
 # @given(sigma=st.floats(min_value=.1, max_value=.5),
@@ -1177,16 +2410,31 @@ def make_images(shape=(32, 32), sampling=(0.1, 0.1), value=None, complex_=False)
 
 
 class TestImagesCrop:
+    # Anisotropic shape and sampling, extent (3.2, 2.0) Å, so that x/y
+    # mix-ups in the crop region change the result. Every crop below is an
+    # exact whole number of pixels, so the expected region is unambiguous:
+    # pixel i covers [i d, (i + 1) d).
+    _shape, _sampling = (32, 40), (0.1, 0.05)
+
+    def _images(self):
+        return make_images(self._shape, self._sampling)
+
     def test_crop_reduces_extent(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.5, 1.5))
-        assert cropped.extent[0] <= imgs.extent[0]
-        assert cropped.extent[1] <= imgs.extent[1]
+        imgs = self._images()
+        cropped = imgs.crop((1.5, 1.0))
+        # 1.5 Å / 0.1 Å = 15 and 1.0 Å / 0.05 Å = 20 pixels from the origin.
+        assert cropped.base_shape == (15, 20)
+        assert np.allclose(cropped.extent, (1.5, 1.0))
+        assert np.allclose(cropped.sampling, imgs.sampling)
+        np.testing.assert_array_equal(cropped.array, imgs.array[:15, :20])
 
     def test_crop_centered(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.0, 1.0), centered=True)
-        assert cropped.base_shape[0] <= imgs.base_shape[0]
+        imgs = self._images()
+        cropped = imgs.crop((1.2, 1.0), centered=True)
+        # Centred: lower corner at extent/2 - crop/2 = (1.0, 0.5) Å, i.e.
+        # pixel (10, 10); 12 x 20 pixels.
+        assert cropped.base_shape == (12, 20)
+        np.testing.assert_array_equal(cropped.array, imgs.array[10:22, 10:30])
 
     def test_crop_too_large_raises(self):
         imgs = make_images((32, 32), (0.1, 0.1))
@@ -1199,9 +2447,11 @@ class TestImagesCrop:
             imgs.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
 
     def test_crop_with_offset(self):
-        imgs = make_images((32, 32), (0.1, 0.1))
-        cropped = imgs.crop((1.0, 1.0), offset=(0.5, 0.5))
-        assert cropped.base_shape[0] <= imgs.base_shape[0]
+        imgs = self._images()
+        cropped = imgs.crop((1.5, 1.0), offset=(0.5, 0.3))
+        # Lower corner (0.5, 0.3) Å = pixel (5, 6); 15 x 20 pixels.
+        assert cropped.base_shape == (15, 20)
+        np.testing.assert_array_equal(cropped.array, imgs.array[5:20, 6:26])
 
 
 class TestImagesComplexAccessors:
@@ -1217,14 +2467,17 @@ class TestImagesComplexAccessors:
         assert np.allclose(imag.array, imgs.array.imag)
 
     def test_phase(self):
-        imgs = make_images(complex_=True)
+        # Shifted so that the values cover all four quadrants.
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         phase = imgs.phase()
-        assert np.all(np.abs(phase.array) <= np.pi + 1e-10)
+        assert not np.iscomplexobj(phase.array)
+        np.testing.assert_allclose(phase.array, np.angle(imgs.array))
 
     def test_abs(self):
-        imgs = make_images(complex_=True)
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         ab = imgs.abs()
-        assert np.all(ab.array >= 0)
+        assert not np.iscomplexobj(ab.array)
+        np.testing.assert_allclose(ab.array, np.abs(imgs.array))
 
     def test_real_on_real_raises(self):
         imgs = make_images(complex_=False)
@@ -1233,29 +2486,100 @@ class TestImagesComplexAccessors:
 
 
 class TestImagesNormalizeEnsemble:
+    # Two members, the second an affine transform (x -> 10 x + 5) of the first.
+    _member = np.array([[1.0, 2.0], [3.0, 7.0]])
+    _arr = np.stack([_member, 10 * _member + 5])
+
+    def _images(self):
+        return Images(
+            self._arr,
+            sampling=(0.1, 0.1),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+
     def test_normalize_reduces_spread(self):
-        arr = np.array([[[1.0, 2.0], [3.0, 4.0]],
-                        [[10.0, 20.0], [30.0, 40.0]]])
-        from abtem.core.axes import OrdinalAxis
-        imgs = Images(arr, sampling=(0.1, 0.1),
-                      ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
-        normalized = imgs.normalize_ensemble()
-        assert normalized.array.shape == arr.shape
+        """Shifting by the min and scaling by the peak-to-peak range removes any
+        per-member offset and scale: both members map onto the same image,
+        spanning exactly [0, 1]."""
+        normalized = self._images().normalize_ensemble(scale="ptp", shift="min")
+        member = self._member
+        # Per member (the whole 2-D image, not each row of it).
+        expected = (member - member.min()) / (member.max() - member.min())
+        np.testing.assert_allclose(normalized.array[0], expected)
+        np.testing.assert_allclose(normalized.array[1], expected)
 
+    def test_normalize_default_mean_max(self):
+        """The defaults shift each member by its mean and divide by its max
+        (evaluated before shifting): the members' means become zero."""
+        normalized = self._images().normalize_ensemble()
+        for original, result in zip(self._arr, normalized.array):
+            np.testing.assert_allclose(
+                result, (original - original.mean()) / original.max()
+            )
+            assert abs(result.mean()) < 1e-12
 
-class TestImagesScanNoise:
-    def test_scan_noise_returns_images(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(
-            rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
-            num_components=5
-        ).compute()
-        assert isinstance(result, Images)
+    @lazy_params
+    @devices
+    @pytest.mark.parametrize("scale, shift", [("max", "mean"), ("max", "min")])
+    def test_matches_double_precision_oracle(self, scale, shift, lazy, device):
+        """Each member of a (3, 5, 7) ensemble, chunked along both base axes when
+        lazy, normalizes as its double-precision NumPy reduction says."""
+        array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(
+            np.float32
+        )
+        images = Images(
+            da.from_array(array, chunks=(1, 3, 4)) if lazy else array,
+            sampling=0.1,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+        ).copy_to_device(device)
 
-    def test_scan_noise_shape_preserved(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(1.0, 1e-6, 1e-4, num_components=5).compute()
-        assert result.base_shape == imgs.base_shape
+        normalized = images.normalize_ensemble(scale=scale, shift=shift)
+
+        assert normalized.is_lazy == lazy
+        computed = normalized.compute().array
+        assert_array_matches_device(computed, device)
+        reference = array.astype(np.float64)
+        expected = (
+            reference - getattr(np, shift)(reference, axis=(1, 2), keepdims=True)
+        ) / getattr(np, scale)(reference, axis=(1, 2), keepdims=True)
+        np.testing.assert_allclose(
+            asnumpy(computed), expected, rtol=0, atol=1e-6 * np.abs(expected).max()
+        )
+
+    def test_normalize_line_profiles_per_profile(self):
+        """For 1-D members the reduction runs along the single base axis."""
+        arr = np.array([[1.0, 3.0, 5.0], [2.0, 2.0, 8.0]])
+        profiles = RealSpaceLineProfiles(
+            arr, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
+        )
+        normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
+        np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
+
+    @devices
+    @pytest.mark.parametrize("scale, shift", [("ptp", "min"), ("max", "ptp")])
+    def test_lazy_matches_eager(self, scale, shift, device):
+        """A lazy measurement, chunked along both base axes, normalizes to the
+        eager result for 'ptp' as scale and as shift."""
+        array = (np.random.default_rng(0).random((3, 5, 7)) + 0.5).astype(get_dtype())
+        axes = [OrdinalAxis(values=(0, 1, 2))]
+        eager = Images(array, sampling=0.1, ensemble_axes_metadata=axes)
+        eager = eager.copy_to_device(device)
+        lazy = Images(
+            da.from_array(array, chunks=(1, 3, 4)),
+            sampling=0.1,
+            ensemble_axes_metadata=axes,
+        ).copy_to_device(device)
+        expected = asnumpy(eager.normalize_ensemble(scale=scale, shift=shift).array)
+        normalized = lazy.normalize_ensemble(scale=scale, shift=shift)
+        assert normalized.is_lazy
+        computed = normalized.array.compute()
+        assert_array_matches_device(computed, device)
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=0,
+            atol=1e-6 * np.abs(expected).max(),
+        )
 
 
 class TestImagesRelativeDifference:
@@ -1274,7 +2598,7 @@ class TestImagesRelativeDifference:
 
 
 # ---------------------------------------------------------------------------
-# DiffractionPatterns — integrate_radial, crop, poisson_noise with samples
+# DiffractionPatterns — integrate_radial, crop
 # ---------------------------------------------------------------------------
 
 def _dp(shape=(32, 32), fill=1.0):
@@ -1284,16 +2608,6 @@ def _dp(shape=(32, 32), fill=1.0):
 
 
 class TestDiffractionPatternsIntegrateRadial:
-    def test_returns_images_with_scan_axes(self):
-        arr = np.ones((4, 4, 16, 16))
-        dp = DiffractionPatterns(
-            arr, sampling=0.05,
-            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
-            metadata={"energy": 100e3},
-        )
-        result = dp.integrate_radial(inner=0, outer=10)
-        assert isinstance(result, Images)
-
     def test_inner_equals_outer_zero_result(self):
         dp = _dp()
         result = dp.integrate_radial(inner=5, outer=5)
@@ -1306,24 +2620,50 @@ class TestDiffractionPatternsIntegrateRadial:
         assert r2.array.sum() >= r1.array.sum()
 
 
+def _frequency_index_positions(n, fftshift):
+    """Map integer spatial-frequency index -> array position, in numpy's
+    fftfreq convention (shifted: zero frequency at n // 2)."""
+    freqs = np.fft.fftfreq(n, 1 / n)
+    if fftshift:
+        freqs = np.fft.fftshift(freqs)
+    return {int(round(f)): i for i, f in enumerate(freqs)}
+
+
 class TestDiffractionPatternsCrop:
-    def test_crop_reduces_max_angle(self):
-        dp = _dp((64, 64))
-        max_before = min(dp.max_angles)
-        cropped = dp.crop(max_angle=max_before / 2)
-        assert min(cropped.max_angles) <= min(dp.max_angles)
+    @pytest.mark.parametrize("fftshift", [True, False])
+    def test_crop_reduces_max_angle(self, fftshift):
+        """Cropping to max_angle keeps exactly the frequencies |m| dα <= max_angle
+        along each axis (an odd grid centred on zero frequency), with their
+        original values and unchanged sampling."""
+        shape, sampling, energy = (64, 48), (0.05, 0.08), 100e3
+        arr = np.random.default_rng(3).random(shape)
+        dp = DiffractionPatterns(
+            arr, sampling=sampling, fftshift=fftshift, metadata={"energy": energy}
+        )
+        # Anisotropic sampling: the same angle is a different number of
+        # frequency steps along x and y.
+        angular_sampling = [d * energy2wavelength(energy) * 1e3 for d in sampling]
+        max_angle = 10.2 * angular_sampling[0]  # 10 steps along x, 6 along y
+        n_max = [int(np.round(max_angle / a)) for a in angular_sampling]
+        assert n_max == [10, 6]
 
+        cropped = dp.crop(max_angle=max_angle)
 
-class TestDiffractionPatternsPoisson:
-    def test_poisson_with_samples(self):
-        dp = _dp((16, 16), fill=100.0)
-        noisy = dp.poisson_noise(total_dose=1e6, samples=4).compute()
-        assert noisy.shape[0] == 4
+        assert cropped.shape == (2 * n_max[0] + 1, 2 * n_max[1] + 1)
+        assert np.allclose(cropped.sampling, dp.sampling)
+        assert cropped.fftshift == fftshift
 
-    def test_poisson_nonnegative(self):
-        dp = _dp((16, 16), fill=50.0)
-        noisy = dp.poisson_noise(total_dose=1e5).compute()
-        assert np.all(noisy.array >= 0)
+        # Each kept frequency (m_x, m_y) must hold the original value at that
+        # frequency.
+        old = [_frequency_index_positions(n, fftshift) for n in shape]
+        new = [_frequency_index_positions(n, fftshift) for n in cropped.shape]
+        assert sorted(new[0]) == list(range(-n_max[0], n_max[0] + 1))
+        assert sorted(new[1]) == list(range(-n_max[1], n_max[1] + 1))
+        expected = np.zeros(cropped.shape)
+        for mx, i in new[0].items():
+            for my, j in new[1].items():
+                expected[i, j] = arr[old[0][mx], old[1][my]]
+        np.testing.assert_array_equal(cropped.array, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -1331,30 +2671,6 @@ class TestDiffractionPatternsPoisson:
 # ---------------------------------------------------------------------------
 
 class TestRealSpaceLineProfiles:
-    def _lp(self, n=64):
-        from abtem.core.axes import RealSpaceAxis
-        arr = np.ones(n)
-        return RealSpaceLineProfiles(arr, sampling=0.1)
-
-    def test_construction(self):
-        lp = self._lp()
-        assert lp.base_shape == (64,)
-
-    def test_extent(self):
-        lp = self._lp(32)
-        # RealSpaceLineProfiles.extent is a scalar float, not a tuple
-        assert np.isclose(lp.extent, 32 * 0.1)
-
-    def test_interpolate(self):
-        lp = self._lp()
-        result = lp.interpolate(sampling=0.05)
-        assert result.base_shape[0] > lp.base_shape[0]
-
-    def test_tile(self):
-        lp = self._lp(16)
-        tiled = lp.tile(3)
-        assert tiled.base_shape[0] == 48
-
     def test_sum_axis(self):
         arr = np.ones((4, 32))
         from abtem.core.axes import OrdinalAxis
@@ -1371,57 +2687,188 @@ class TestRealSpaceLineProfiles:
 # ---------------------------------------------------------------------------
 
 class TestPolarMeasurements:
-    def _polar(self, nbins_radial=8, nbins_azimuthal=6):
-        arr = np.ones((4, 4, nbins_radial, nbins_azimuthal))
+    # Base shape (3 radial, 4 azimuthal). With the default geometry below, radial
+    # bin i spans [5 i, 5 i + 5) mrad and azimuthal bin j spans
+    # [j pi / 2, (j + 1) pi / 2) rad, i.e. the bins of
+    # DiffractionPatterns.polar_binning(nbins_radial=3, nbins_azimuthal=4,
+    # inner=0, outer=15). Limits select the bins whose centers lie in
+    # [lower, upper), with the azimuth periodic in 2 pi.
+    #
+    # The non-uniform array is A[i, j] = 10 i + j, so
+    #   row sums    R_i = sum_j A[i, j] = 40 i + 6        -> R = (6, 46, 86)
+    #   column sums C_j = sum_i A[i, j] = 30 + 3 j        -> C = (30, 33, 36, 39)
+    #   total       = 6 + 46 + 86 = 138
+    # The second scan position holds 2 A, so every expected value doubles there.
+
+    def _polar(
+        self,
+        values="indexed",
+        radial_sampling=5.0,
+        radial_offset=0.0,
+        azimuthal_offset=0.0,
+        lazy=False,
+        device="cpu",
+    ):
+        i, j = np.meshgrid(np.arange(3), np.arange(4), indexing="ij")
+        base = np.ones((3, 4)) if values == "ones" else 10.0 * i + j
+        arr = np.stack([base, 2 * base])
+        arr = copy_to_device(arr, device)
+        if lazy:
+            arr = da.from_array(arr, chunks=(1, -1, -1))
         return PolarMeasurements(
             arr,
-            radial_sampling=5.0,
-            azimuthal_sampling=360.0 / nbins_azimuthal,
-            radial_offset=0.0,
-            azimuthal_offset=0.0,
-            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
+            radial_sampling=radial_sampling,
+            azimuthal_sampling=2 * np.pi / 4,
+            radial_offset=radial_offset,
+            azimuthal_offset=azimuthal_offset,
+            ensemble_axes_metadata=[ScanAxis()],
             metadata={"energy": 100e3},
         )
 
+    @staticmethod
+    def _values(result):
+        return np.asarray(result.compute().to_cpu().array)
+
     def test_construction(self):
         pm = self._polar()
-        assert pm.shape[-2] == 8
-        assert pm.shape[-1] == 6
+        assert pm.shape[-2] == 3
+        assert pm.shape[-1] == 4
+        assert pm.outer_angle == 15.0
+
+    # The bin selection is host NumPy on scalars; only the final sum runs on the
+    # (lazy or device) array, so each table is a loop inside one test per
+    # lazy/device pair.
+    _integrate_cases = (
+        # ones: every selected bin contributes 1.
+        ("ones", None, None, 12.0),  # all 3 x 4 bins
+        ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
+        ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
+        ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
+        # indexed: A[i, j] = 10 i + j.
+        ("indexed", None, None, 138.0),  # total
+        ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
+        ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
+        ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
+        ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
+        # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
+        ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
+        ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
+        # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
+        ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
+        ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
+        # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
+        ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
+    )
+
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values(self, lazy, device):
+        polar = {
+            values: self._polar(values=values, lazy=lazy, device=device)
+            for values in ("ones", "indexed")
+        }
+        for values, radial_limits, azimuthal_limits, expected in self._integrate_cases:
+            result = polar[values].integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{values}, {radial_limits}, {azimuthal_limits}",
+            )
+
+    _offset_cases = (
+        # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
+        ((25, 35), None, 132.0),  # R_1 + R_2
+        ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
+        # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
+        (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
+        (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
+        # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
+        (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
+        # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
+        ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
+    )
+
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values_with_offsets(self, lazy, device):
+        pm = self._polar(
+            radial_offset=20.0, azimuthal_offset=np.pi / 4, lazy=lazy, device=device
+        )
+        for radial_limits, azimuthal_limits, expected in self._offset_cases:
+            result = pm.integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{radial_limits}, {azimuthal_limits}",
+            )
+
+    def test_integrate_limits_on_inexact_bin_edges(self):
+        # With radial_sampling = 0.1 the edge 0.3 is bin index 3, although
+        # 0.3 / 0.1 == 2.9999999999999996 in floating point. (0, 0.3) must select
+        # all three radial bins: total = 138.
+        pm = self._polar(radial_sampling=0.1)
+        result = pm.integrate(radial_limits=(0, 0.3))
+        np.testing.assert_allclose(self._values(result), [138.0, 276.0])
+
+    def test_integrate_radial_limit_exceeded(self):
+        # outer_angle is 15 mrad; a limit extending over a whole further bin
+        # (center 17.5 mrad) asks for data that does not exist.
+        with pytest.raises(RuntimeError):
+            self._polar().integrate(radial_limits=(0, 20))
 
     def test_integrate_radial(self):
-        pm = self._polar()
-        result = pm.integrate_radial(0, pm.outer_angle)
-        assert isinstance(result, Images)
-
-    def test_integrate_all(self):
-        pm = self._polar()
-        result = pm.integrate(
-            radial_limits=(0, pm.outer_angle),
-            azimuthal_limits=None,
-        )
-        assert result.shape == pm.ensemble_shape
+        # integrate_radial(5, 15) == integrate(radial_limits=(5, 15)) = R_1 + R_2.
+        result = self._polar().integrate_radial(5, 15)
+        np.testing.assert_allclose(self._values(result), [132.0, 264.0])
 
     def test_integrate_with_detector_regions(self):
+        # Region k is flat index k of the (3, 4) base: region 1 = A[0, 1] = 1,
+        # region 4 = A[1, 0] = 10.
         pm = self._polar()
-        n_regions = pm.shape[-2] * pm.shape[-1]
-        result = pm.integrate(detector_regions=list(range(n_regions))).compute()
-        assert result is not None
+        result = pm.integrate(detector_regions=[1, 4])
+        np.testing.assert_allclose(self._values(result), [11.0, 22.0])
 
 
-# ---------------------------------------------------------------------------
-# ReciprocalSpaceLineProfiles
-# ---------------------------------------------------------------------------
+def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
+    # The CuPy branch of the FFT convolution imports cupyx.scipy.signal under
+    # catch_warnings, which swaps the process-wide filter list; entered from
+    # dask's threads at once, it can leave the import's filter installed or drop
+    # the user's. Run that branch on NumPy blocks, with cupyx.scipy.signal
+    # stood in by an empty module, and count the entries.
+    import abtem.measurements as measurements
 
-class TestReciprocalSpaceLineProfiles:
-    def test_from_ctf(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1), defocus=200.0)
-        profiles = ctf.profiles()
-        assert isinstance(profiles, ReciprocalSpaceLineProfiles)
+    names = ("cupyx", "cupyx.scipy", "cupyx.scipy.signal")
+    modules = {name: types.ModuleType(name) for name in names}
+    modules["cupyx"].scipy = modules["cupyx.scipy"]
+    modules["cupyx.scipy"].signal = modules["cupyx.scipy.signal"]
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, modules[name])
+    monkeypatch.setattr(measurements, "cp", np)
 
-    def test_shape(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1))
-        profiles = ctf.profiles()
-        assert len(profiles.base_shape) == 1
-        assert profiles.base_shape[0] > 0
+    entries = []
+
+    class CountingWarnings:
+        def __getattr__(self, name):
+            return getattr(warnings, name)
+
+        def catch_warnings(self, *args, **kwargs):
+            entries.append(None)
+            return warnings.catch_warnings(*args, **kwargs)
+
+    monkeypatch.setattr(measurements, "warnings", CountingWarnings())
+    # monkeypatch restores the flag, so the stand-in is not recorded as the real
+    # import
+    monkeypatch.setattr(measurements, "_cupyx_signal_imported", False)
+
+    images = Images(
+        da.ones((16, 32, 32), chunks=(1, 32, 32)),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(16)))],
+    )
+    images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
+
+    assert len(entries) == 1

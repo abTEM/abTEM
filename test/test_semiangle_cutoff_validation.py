@@ -53,11 +53,28 @@ def _probe_intensity(aperture):
     return np.abs(probe.build(lazy=False).array) ** 2
 
 
-@pytest.mark.parametrize("name", list(APERTURES))
-@pytest.mark.parametrize("semiangle_cutoff", [-5.0, -np.inf, np.nan])
-def test_a_negative_or_nan_cutoff_is_rejected(name, semiangle_cutoff):
-    with pytest.raises(ValueError, match="must be non-negative"):
-        APERTURES[name](semiangle_cutoff)
+def _not_rejected(names, semiangle_cutoffs, match):
+    """The (aperture, cutoff) pairs that construct without the ValueError, or
+    with another message."""
+    accepted = []
+    for name in names:
+        for semiangle_cutoff in semiangle_cutoffs:
+            try:
+                APERTURES[name](semiangle_cutoff)
+            except ValueError as error:
+                if match not in str(error):
+                    accepted.append((name, semiangle_cutoff, str(error)))
+            else:
+                accepted.append((name, semiangle_cutoff))
+    return accepted
+
+
+def test_a_negative_or_nan_cutoff_is_rejected():
+    # One validator for every aperture class, so one test loops over them.
+    assert (
+        _not_rejected(APERTURES, (-5.0, -np.inf, np.nan), "must be non-negative")
+        == []
+    )
 
 
 @pytest.mark.parametrize("make", [lambda: Aperture(20.0), lambda: CTF(20.0)])
@@ -81,27 +98,30 @@ def test_a_negative_cutoff_is_rejected_by_probe_and_distributions():
         nyquist_sampling(-5.0, ENERGY)
 
 
-@pytest.mark.parametrize("name", NOTHING_OPEN_AT_ZERO)
-def test_a_zero_cutoff_is_rejected_where_it_describes_no_aperture(name):
-    with pytest.raises(ValueError, match="semiangle_cutoff=0"):
-        APERTURES[name](0.0)
+def test_a_zero_cutoff_is_rejected_where_it_describes_no_aperture():
+    assert _not_rejected(NOTHING_OPEN_AT_ZERO, (0.0,), "semiangle_cutoff=0") == []
 
 
-@pytest.mark.parametrize("name", ["Aperture", "hard Aperture", "CTF"])
-def test_a_zero_cutoff_is_still_a_parallel_beam(name):
-    intensity = _probe_intensity(APERTURES[name](0.0))
+def test_a_zero_cutoff_is_still_a_parallel_beam():
+    not_flat = []
+    for name in ("Aperture", "hard Aperture", "CTF"):
+        intensity = _probe_intensity(APERTURES[name](0.0))
+        if not (
+            np.all(np.isfinite(intensity))
+            and np.allclose(intensity, intensity.flat[0], rtol=1e-6, atol=0)
+        ):
+            not_flat.append(name)
+    assert not_flat == []
 
-    assert np.all(np.isfinite(intensity))
-    np.testing.assert_allclose(intensity, intensity.flat[0], rtol=1e-6)
 
-
-@pytest.mark.parametrize("name", list(APERTURES))
-def test_a_positive_cutoff_gives_a_normalized_probe(name):
+def test_a_positive_cutoff_gives_a_normalized_probe():
     """Guards against rejecting valid apertures."""
-    intensity = _probe_intensity(APERTURES[name](20.0))
-
-    assert np.all(np.isfinite(intensity))
-    assert intensity.sum() > 0
+    not_normalized = []
+    for name, make in APERTURES.items():
+        intensity = _probe_intensity(make(20.0))
+        if not (np.all(np.isfinite(intensity)) and intensity.sum() > 0):
+            not_normalized.append(name)
+    assert not_normalized == []
 
 
 @pytest.mark.parametrize(
@@ -194,3 +214,31 @@ def test_block_direct_rejects_a_negative_radius():
 
     with pytest.raises(ValueError, match="radius must be non-negative"):
         patterns.block_direct(radius=-1.0)
+
+
+@pytest.mark.parametrize("cutoff", [np.array(10.0), np.array([10.0])])
+def test_block_direct_leaves_an_array_cutoff_in_the_metadata_unchanged(cutoff):
+    from abtem.waves import Waves
+
+    rng = np.random.default_rng(0)
+    array = (
+        rng.standard_normal((100, 100)) + 1j * rng.standard_normal((100, 100))
+    ).astype(np.complex64)
+
+    def patterns(semiangle_cutoff):
+        waves = Waves(
+            array,
+            energy=200e3,
+            sampling=0.5,
+            metadata={"semiangle_cutoff": semiangle_cutoff},
+        )
+        return waves, waves.diffraction_patterns()
+
+    expected = patterns(10.0)[1].block_direct().array
+    waves, diffraction_patterns = patterns(cutoff)
+
+    for _ in range(3):
+        np.testing.assert_array_equal(diffraction_patterns.block_direct().array, expected)
+
+    assert np.asarray(waves.metadata["semiangle_cutoff"]) == 10.0
+    assert np.asarray(diffraction_patterns.metadata["semiangle_cutoff"]) == 10.0
