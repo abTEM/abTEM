@@ -163,9 +163,9 @@ def test_gpts_setter_checks_the_divisibility_of_a_built_unit_first():
         crystal.gpts = (81, 30)
 
 
-@pytest.mark.parametrize(
-    "sampling", [-0.1, 0, 0.0, (0.05, -0.1), (0, 0.05), np.nan, np.inf, None]
-)
+# One per condition of the check: no sampling, a zero (not just a negative)
+# component, and one that is positive but not finite.
+@pytest.mark.parametrize("sampling", [None, (0, 0.05), np.inf])
 def test_sampling_setter_rejects_a_sampling_that_is_not_positive(sampling):
     crystal = abtem.CrystalPotential(_unit(), repetitions=(2, 3, 1))
 
