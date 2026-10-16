@@ -906,38 +906,22 @@ PRISM_SAMPLING = 0.1
 
 
 class TestSMatrixEnergyEnsemble:
-    def test_scalar_energy_unchanged(self):
-        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=100e3,
-                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
-        assert s.energy == 100e3
-        assert s.ensemble_shape == ()
-        assert s.ensemble_axes_metadata == []
-
-    def test_multi_energy_ensemble_shape(self):
+    def test_build(self):
+        """build() gives an SMatrixArray with the EnergyAxis, eagerly or lazily
+        (its members are compared with single-energy runs after reduction in
+        test_multi_energy_ensembles.py::
+        test_multi_energy_build_reduce_equals_single_energy_runs)."""
         s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
                     gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
-        assert s.ensemble_shape == (3,)
-        assert len(s.ensemble_axes_metadata) == 1
-        assert isinstance(s.ensemble_axes_metadata[0], EnergyAxis)
-        assert s.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
-
-    def test_build_eager_shape(self):
-        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
-                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
-        sma = s.build(lazy=False)
-        assert isinstance(sma, SMatrixArray)
-        assert sma.array.shape[0] == len(TEST_ENERGIES)
-        assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
-        assert sma.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
-
-    def test_build_lazy_shape(self):
-        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
-                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
-        sma = s.build(lazy=True)
-        assert sma.array.shape[0] == len(TEST_ENERGIES)
-        sma_computed = sma.compute()
-        assert sma_computed.array.shape[0] == len(TEST_ENERGIES)
-        assert isinstance(sma_computed.ensemble_axes_metadata[0], EnergyAxis)
+        eager = s.build(lazy=False)
+        lazy = s.build(lazy=True)
+        assert lazy.is_lazy
+        for sma in (eager, lazy.compute()):
+            assert isinstance(sma, SMatrixArray)
+            assert sma.array.shape[0] == len(TEST_ENERGIES)
+            assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
+            assert sma.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
+        np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -950,10 +934,13 @@ class TestSMatrixEnergyEnsemble:
 # ---------------------------------------------------------------------------
 
 
+# Each energy is reduced on its own and the measurements are stacked, eagerly
+# or lazily alike for every mode; the lazy stacking is run on C-PRISM.
 REDUCE_MODES = [
-    pytest.param(False, 1, id="prism_interp1"),
-    pytest.param(False, 2, id="prism_interp2"),
-    pytest.param(True, 2, id="cprism_interp2"),
+    pytest.param(False, 1, False, id="prism_interp1"),
+    pytest.param(False, 2, False, id="prism_interp2"),
+    pytest.param(True, 2, False, id="cprism_interp2"),
+    pytest.param(True, 2, True, id="cprism_interp2-lazy"),
 ]
 
 
@@ -965,77 +952,56 @@ def _reduce_potential():
 
 
 class TestSMatrixReduceEnergyEnsemble:
-    @pytest.mark.parametrize("upsample, interpolation", REDUCE_MODES)
-    @lazy_params
-    def test_scan_gains_energy_axis(self, upsample, interpolation, lazy):
+    @pytest.mark.parametrize("upsample, interpolation, lazy", REDUCE_MODES)
+    def test_scan_matches_single_energy(self, upsample, interpolation, lazy):
+        """Each energy slice of every detector's measurement must equal an
+        independent single-energy scan, which has no EnergyAxis."""
         potential = _reduce_potential()
         scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
-        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
-                    potential=potential, interpolation=interpolation,
-                    upsample=upsample)
-        measurement = s.scan(
-            scan=scan, detectors=abtem.AnnularDetector(inner=30, outer=70),
-            lazy=lazy,
-        )
-        if lazy:
-            measurement = measurement.compute()
 
-        assert measurement.shape[0] == len(TEST_ENERGIES)
-        energy_axis = measurement.ensemble_axes_metadata[0]
-        assert isinstance(energy_axis, EnergyAxis)
-        assert energy_axis.values == tuple(TEST_ENERGIES)
+        def detectors():
+            return [
+                abtem.AnnularDetector(inner=30, outer=70),
+                abtem.PixelatedDetector(max_angle=None),
+            ]
 
-    @pytest.mark.parametrize("upsample, interpolation", REDUCE_MODES)
-    def test_scan_matches_single_energy(self, upsample, interpolation):
-        """Each energy slice must equal an independent single-energy scan."""
-        potential = _reduce_potential()
-        scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
-        detector = abtem.AnnularDetector(inner=30, outer=70)
         kwargs = dict(semiangle_cutoff=PRISM_SEMIANGLE, potential=potential,
                       interpolation=interpolation, upsample=upsample)
 
         ensemble = SMatrix(energy=TEST_ENERGIES, **kwargs).scan(
-            scan=scan, detectors=detector, lazy=False
+            scan=scan, detectors=detectors(), lazy=lazy
         )
-        for i, energy in enumerate(TEST_ENERGIES):
-            reference = SMatrix(energy=energy, **kwargs).scan(
-                scan=scan, detectors=detector, lazy=False
-            )
-            assert np.allclose(
-                np.asarray(ensemble.array[i]), np.asarray(reference.array)
-            )
-
-    def test_scan_multiple_detectors(self):
-        potential = _reduce_potential()
-        scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
-        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
-                    potential=potential, interpolation=2)
-        measurements = s.scan(
-            scan=scan,
-            detectors=[abtem.AnnularDetector(inner=30, outer=70),
-                       abtem.PixelatedDetector(max_angle=None)],
-            lazy=False,
-        )
-        assert len(measurements) == 2
-        for measurement in measurements:
+        if lazy:
+            ensemble = ensemble.compute()
+        assert len(ensemble) == len(detectors())
+        for measurement in ensemble:
             assert measurement.shape[0] == len(TEST_ENERGIES)
             assert isinstance(measurement.ensemble_axes_metadata[0], EnergyAxis)
+            assert measurement.ensemble_axes_metadata[0].values == tuple(
+                TEST_ENERGIES
+            )
 
-    def test_scalar_energy_scan_has_no_energy_axis(self):
-        potential = _reduce_potential()
-        scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
-        measurement = SMatrix(
-            semiangle_cutoff=PRISM_SEMIANGLE, energy=100e3,
-            potential=potential, interpolation=2,
-        ).scan(scan=scan, detectors=abtem.AnnularDetector(inner=30, outer=70),
-               lazy=False)
-        assert not any(
-            isinstance(axis, EnergyAxis)
-            for axis in measurement.ensemble_axes_metadata
-        )
+        for i, energy in enumerate(TEST_ENERGIES):
+            references = SMatrix(energy=energy, **kwargs).scan(
+                scan=scan, detectors=detectors(), lazy=False
+            )
+            for measurement, reference in zip(ensemble, references):
+                name = f"{type(reference).__name__} at {energy:g} eV"
+                assert not any(
+                    isinstance(axis, EnergyAxis)
+                    for axis in reference.ensemble_axes_metadata
+                ), name
+                # max_angle=None is a pixel count, the same for every energy
+                member = np.asarray(measurement.array[i])
+                reference = np.asarray(reference.array)
+                assert member.shape == reference.shape, name
+                # lazy blocks are computed in the default single precision
+                np.testing.assert_allclose(
+                    member, reference, rtol=1e-5 if lazy else 1e-7,
+                    atol=1e-5 * np.abs(reference).max(), err_msg=name,
+                )
 
-    @lazy_params
-    def test_cprism_build_rejects_multiple_energies(self, lazy):
+    def test_cprism_build_rejects_multiple_energies(self):
         """C-PRISM build() must reject energy ensembles with a clear error.
 
         CompressedSMatrixArray has no ensemble machinery to carry an EnergyAxis,
@@ -1046,7 +1012,7 @@ class TestSMatrixReduceEnergyEnsemble:
                     gpts=PRISM_GPTS, sampling=PRISM_SAMPLING,
                     interpolation=2, upsample=True)
         with pytest.raises(NotImplementedError, match="multiple energies"):
-            s.build(lazy=lazy)
+            s.build(lazy=False)
 
     def test_upsample_without_compression_allows_multiple_energies(self):
         """The guard is scoped to an active compression.
@@ -1061,15 +1027,3 @@ class TestSMatrixReduceEnergyEnsemble:
         assert isinstance(sma, SMatrixArray)
         assert sma.array.shape[0] == len(TEST_ENERGIES)
         assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
-
-    def test_cprism_scan_supports_multiple_energies(self):
-        """The error on build() must not imply C-PRISM rejects energy ensembles."""
-        potential = _reduce_potential()
-        scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
-        measurement = SMatrix(
-            semiangle_cutoff=PRISM_SEMIANGLE, energy=TEST_ENERGIES,
-            potential=potential, interpolation=2, upsample=True,
-        ).scan(scan=scan, detectors=abtem.AnnularDetector(inner=30, outer=70),
-               lazy=False)
-        assert measurement.shape[0] == len(TEST_ENERGIES)
-        assert isinstance(measurement.ensemble_axes_metadata[0], EnergyAxis)
