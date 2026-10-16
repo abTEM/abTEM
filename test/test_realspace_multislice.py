@@ -588,16 +588,14 @@ def _full_expansion_potentials():
 class TestFullExpansionChunking:
     @pytest.mark.parametrize("device", ["cpu", gpu])
     @pytest.mark.parametrize("backscattered", [False, True])
+    # Lazy chunking is covered by the lazy single potential; lazy == eager for
+    # the ensembles is asserted by TestBackscatteringEnsemble.
     @pytest.mark.parametrize(
         "name, lazy",
         [
-            pytest.param(
-                name,
-                lazy,
-                marks=[pytest.mark.slow] if lazy and name != "potential" else [],
-            )
+            (name, lazy)
             for name in _full_expansion_potentials()
-            for lazy in (False, True)
+            for lazy in ((False, True) if name == "potential" else (False,))
         ],
     )
     def test_independent_of_the_potential_chunk_size(
