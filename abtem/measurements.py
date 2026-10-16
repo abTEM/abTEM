@@ -1302,9 +1302,11 @@ class _BaseMeasurement2D(BaseMeasurements):
         ----------
         start : two float, Atom, optional
             Starting position of the line [Å] (alternatively taken from a selected
-            atom).
+            atom). Default is (0, 0).
         end : two float, Atom, optional
             Ending position of the line [Å] (alternatively taken from a selected atom).
+            Default is (0, y extent): the default line runs along y across the
+            whole image.
         sampling : float
             Sampling of grid points along the line [1 / Å].
         gpts : int
@@ -1343,7 +1345,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         if end is None and fractional:
             end = (0.0, 1.0)
         elif end is None:
-            end = (0.0, self.extent[0])
+            end = (0.0, self.extent[1])
 
         if fractional:
             extent = self.extent

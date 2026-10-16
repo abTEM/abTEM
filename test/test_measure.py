@@ -1460,6 +1460,23 @@ def test_images_interpolate_line_through_grid_nodes(lazy, device):
     _assert_matches_reference(_line_values(line), array[:, j])
 
 
+@lazy_params
+@devices
+def test_images_default_interpolate_line_spans_the_y_extent(lazy, device):
+    """The default line runs from (0, 0) along y. On a non-square image
+    (extent 1.6 x 4.0 Å) it must span the y extent, so at the default sampling
+    (the grid spacing) it samples exactly the first row of the array, 40
+    points. Taking its length from the x extent gave 16 points."""
+    rng = np.random.default_rng(3)
+    array = rng.random((16, 40))
+    images = _make_images(array, 0.1, lazy, device)
+
+    for fractional in (False, True):
+        line = images.interpolate_line(fractional=fractional)
+        assert line.shape == (40,), fractional
+        _assert_matches_reference(_line_values(line), array[0])
+
+
 @settings(max_examples=10, deadline=None)
 @given(data=st.data())
 @lazy_params
