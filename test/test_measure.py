@@ -1873,17 +1873,56 @@ def test_diffraction_patterns_center_of_mass_is_normalized(device):
         assert abs(com - expected) < 1e-4 * abs(expected), captured_fraction
 
 
-@given(data=st.data())
 @lazy_params
 @devices
-def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
-    measurement = data.draw(
-        abtem_st.diffraction_patterns(
-            lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
-        )
+def test_diffraction_patterns_integrated_center_of_mass(lazy, device):
+    # Patterns whose center of mass at scan position r is the gradient of a
+    # band-limited periodic field phi(r), which the iCOM must give back (up to the
+    # constant that makes each image's minimum zero): the Fourier-space
+    # integration is exact for a field on the DFT grid. Each pattern has unit
+    # total intensity on the zero-frequency pixel and its x and y neighbours,
+    # which carry the weights g_x / dk and g_y / dk. The second member of the
+    # ensemble holds twice the gradient.
+    scan_gpts, scan_sampling, dk = (12, 10), (0.3, 0.25), 0.5
+    extent = [n * d for n, d in zip(scan_gpts, scan_sampling)]
+    x, y = np.meshgrid(
+        *(np.arange(n) * d for n, d in zip(scan_gpts, scan_sampling)), indexing="ij"
     )
-    assume(len(_scan_sampling(measurement)) > 1)
-    measurement.integrated_center_of_mass().compute()
+    u, v = 2 * np.pi * x / extent[0], 2 * np.pi * y / extent[1]
+    phi = 0.1 * np.cos(u + 2 * v) + 0.05 * np.sin(2 * u - v)
+    gx = (-0.1 * np.sin(u + 2 * v) + 0.1 * np.cos(2 * u - v)) * 2 * np.pi / extent[0]
+    gy = (-0.2 * np.sin(u + 2 * v) - 0.05 * np.cos(2 * u - v)) * 2 * np.pi / extent[1]
+
+    array = np.zeros((2,) + scan_gpts + (8, 8))
+    for member, scale in enumerate((1.0, 2.0)):
+        array[member, ..., 5, 4] = scale * gx / dk
+        array[member, ..., 4, 5] = scale * gy / dk
+        array[member, ..., 4, 4] = 1 - scale * (gx + gy) / dk
+    array = array.astype(np.float32)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 6, 5, -1, -1))
+    measurement = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=dk,
+        fftshift=True,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            ScanAxis(sampling=scan_sampling[0]),
+            ScanAxis(sampling=scan_sampling[1]),
+        ],
+        metadata={"energy": 100e3},
+    )
+
+    icom = measurement.integrated_center_of_mass()
+
+    assert isinstance(icom, Images)
+    assert icom.is_lazy == lazy
+    expected = np.stack([scale * phi - (scale * phi).min() for scale in (1.0, 2.0)])
+    # float32 patterns: ~1e-6 of the field; a field integrated along the wrong
+    # axis or with the wrong sampling is wrong by its own magnitude.
+    np.testing.assert_allclose(
+        asnumpy(icom.compute().array), expected, rtol=0, atol=1e-4 * expected.max()
+    )
 
 
 @pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
@@ -1911,8 +1950,33 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
         abtem_st.sensible_floats(min_value=0.0, max_value=min(measurement.max_angles))
     )
     inner = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=outer))
-    measurement.bandlimit(inner, outer).compute()
-    measurement.block_direct().compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    # Oracle: the scattering angle of each pixel from np.fft.fftfreq (see
+    # test_diffraction_patterns_coordinates_match_fftfreq); bandlimit keeps
+    # inner < alpha < outer and zeroes the rest. Pixels within rounding of an
+    # edge could go either way and are left out of the comparison.
+    wavelength_mrad = energy2wavelength(measurement.metadata["energy"]) * 1e3
+    angles = []
+    for n, dk in zip(measurement.base_shape, measurement.sampling):
+        k = np.fft.fftfreq(n, d=1 / (n * dk))
+        angles.append((np.fft.fftshift(k) if measurement.fftshift else k))
+    alpha = np.hypot(angles[0][:, None], angles[1][None]) * wavelength_mrad
+    keep = (alpha > inner) & (alpha < outer)
+    tolerance = 1e-5 * alpha.max()
+    certain = (np.abs(alpha - inner) > tolerance) & (np.abs(alpha - outer) > tolerance)
+
+    bandlimited = measurement.bandlimit(inner, outer)
+    assert bandlimited.is_lazy == lazy
+    values = asnumpy(bandlimited.compute().array)
+    np.testing.assert_array_equal(
+        values[..., certain], (original * keep)[..., certain]
+    )
+
+    # Without a semiangle_cutoff in the metadata, block_direct zeroes only the
+    # zero-angle pixel.
+    blocked = asnumpy(measurement.block_direct().compute().array)
+    np.testing.assert_array_equal(blocked, original * (alpha > 0))
 
 
 @settings(deadline=None, max_examples=10)
@@ -1926,7 +1990,27 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
         )
     )
     assume(len(_scan_sampling(measurement)) > 1)
-    measurement.gaussian_source_size(sigma).compute()
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+
+    # Oracle: a periodic Gaussian filter over the first two scan axes, with sigma
+    # in units of each axis' own scan sampling, and no smoothing of the other
+    # ensemble axes or within the patterns.
+    sigma_pixels = [0.0] * original.ndim
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+    for i in scan_axes:
+        sigma_pixels[i] = sigma / measurement.ensemble_axes_metadata[i].sampling
+    expected = scipy.ndimage.gaussian_filter(original, sigma_pixels, mode="wrap")
+
+    filtered = measurement.gaussian_source_size(sigma)
+    assert filtered.is_lazy == lazy
+    # float32 data in [0, 1).
+    np.testing.assert_allclose(
+        asnumpy(filtered.compute().array), expected, rtol=0, atol=1e-5
+    )
 
 
 @settings(suppress_health_check=(HealthCheck.data_too_large,))
@@ -1958,10 +2042,64 @@ def test_polar_measurements_integrate(data, lazy, device):
         st.one_of(st.just((azimuthal_inner, azimuthal_outer)), st.none())
     )
 
-    measurement.integrate(
+    # Oracle: the documented rule, as masks over the bins. A bin is included if
+    # its center lies in [lower, upper) of the limits, the azimuth modulo 2 pi.
+    # Draws with a center within rounding of a limit are rejected.
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+    radial_centers = (
+        measurement.radial_offset
+        + (np.arange(measurement.shape[-2]) + 0.5) * measurement.radial_sampling
+    )
+    azimuthal_centers = (
+        measurement.azimuthal_offset
+        + (np.arange(measurement.shape[-1]) + 0.5) * measurement.azimuthal_sampling
+    )
+    for limit in (radial_inner, radial_outer):
+        assume(np.abs(radial_centers - limit).min() > 1e-9 * (1 + abs(limit)))
+    radial_mask = (radial_centers >= radial_inner) & (radial_centers < radial_outer)
+
+    if azimuthal_limits is None or azimuthal_outer - azimuthal_inner >= 2 * np.pi:
+        azimuthal_mask = np.ones(len(azimuthal_centers), dtype=bool)
+    else:
+        offsets = (azimuthal_centers - azimuthal_inner) % (2 * np.pi)
+        span = azimuthal_outer - azimuthal_inner
+        assume(np.abs(offsets - span).min() > 1e-9)
+        assume(np.abs(offsets - 2 * np.pi).min() > 1e-9)
+        azimuthal_mask = offsets < span
+
+    # The (first two) scan axes become the base axes of the result, last.
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+
+    def assert_matches(result, mask, case):
+        expected = np.moveaxis(
+            (original * mask).sum(axis=(-2, -1)),
+            scan_axes,
+            range(-len(scan_axes), 0),
+        )
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-5,
+            atol=1e-5,
+            err_msg=case,
+        )
+
+    radial_selection = radial_mask if radial_limits is not None else True
+    selected = np.outer(radial_selection & np.ones_like(radial_mask), azimuthal_mask)
+    integrated = measurement.integrate(
         radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-    ).compute()
-    measurement.integrate_radial(radial_inner, radial_outer).compute()
+    )
+    assert integrated.is_lazy == lazy
+    assert_matches(integrated, selected, "integrate")
+    assert_matches(
+        measurement.integrate_radial(radial_inner, radial_outer),
+        radial_mask[:, None],
+        "integrate_radial",
+    )
 
     max_region = int(np.prod(tuple(n - 1 for n in measurement.shape[-2:])))
     detector_regions = st.lists(
@@ -1970,8 +2108,12 @@ def test_polar_measurements_integrate(data, lazy, device):
         elements=st.integers(min_value=0, max_value=max_region),
         unique=True,
     )
-
-    measurement.integrate(detector_regions=data.draw(detector_regions)).compute()
+    regions = data.draw(detector_regions)
+    region_mask = np.zeros(measurement.shape[-2:], dtype=bool)
+    region_mask.flat[regions] = True
+    assert_matches(
+        measurement.integrate(detector_regions=regions), region_mask, "regions"
+    )
 
 
 @given(data=st.data())
