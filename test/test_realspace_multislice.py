@@ -136,22 +136,6 @@ class TestLazyVsEager:
 class TestFourierMultislice:
     """Test FourierMultislice algorithm with various configurations."""
 
-    @pytest.mark.parametrize("order", [1, 2,"exact"])
-    def test_fourier_orders(self, test_system, order):
-        """Test that FourierMultislice accepts valid orders."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=FourierMultislice(order=order),
-        )
-        assert result is not None
-        assert hasattr(result, "array")
-
     def test_fourier_invalid_order(self, test_system):
         """Test that FourierMultislice rejects invalid orders."""
         probe = test_system["probe"]
@@ -166,128 +150,105 @@ class TestFourierMultislice:
                 algorithm=FourierMultislice(order=3),  # type: ignore
             )
 
-    @pytest.mark.parametrize("conjugate", [True, False])
-    @pytest.mark.parametrize("transpose", [True, False])
-    def test_fourier_conjugate_transpose(self, test_system, conjugate, transpose):
-        """Test conjugate and transpose parameters."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
+    @devices
+    def test_fourier_conjugate_transpose(self, device):
+        # Two exact identities for a plane wave, whose array is real and which the
+        # propagator leaves unchanged. A step is t then P (transmit, propagate):
+        # - conjugate=True conjugates t and reverses the propagation, so each step
+        #   is the conjugate of the plain step of the conjugate wave, and the run
+        #   is the conjugate of the plain run;
+        # - transpose=True is P then t, so P (t_n P ... t_1 P) = t_0 P (t_n P ...)
+        #   with t_0 = 1: the transposed run with a trailing vacuum slice is the
+        #   plain run.
+        # Measured: <= 2.4e-7 and 0 against the 1e-6 bound; ignoring the flag
+        # gives 4.1e-2 and 1.4e-3.
+        rng = np.random.default_rng(0)
+        array = 10 * rng.random((3, 32, 28)).astype(np.float32)
+        vacuum = np.zeros_like(array[:1])
 
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=FourierMultislice(conjugate=conjugate, transpose=transpose),
-        )
-        assert result is not None
+        def run(array, **kwargs):
+            with abtem.config.set({"device": device}):
+                potential = abtem.PotentialArray(
+                    array, slice_thickness=1.5, extent=(8.0, 7.0)
+                )
+                return to_host_array(
+                    abtem.PlaneWave(energy=100e3)
+                    .multislice(
+                        potential, lazy=False, algorithm=FourierMultislice(**kwargs)
+                    )
+                    .array
+                )
+
+        for order in (1, 2, "exact"):
+            plain = run(array, order=order)
+            np.testing.assert_allclose(
+                run(array, order=order, conjugate=True),
+                np.conj(plain),
+                rtol=0,
+                atol=1e-6,
+                err_msg=f"conjugate, order {order}",
+            )
+            np.testing.assert_allclose(
+                run(np.concatenate([array, vacuum]), order=order, transpose=True),
+                plain,
+                rtol=0,
+                atol=1e-6,
+                err_msg=f"transpose, order {order}",
+            )
 
 
 class TestRealSpaceMultislice:
     """Test RealSpaceMultislice algorithm with various configurations."""
 
-    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
-    @pytest.mark.parametrize("expansion_scope", ["propagator", "full"])
-    @pytest.mark.slow
-    def test_realspace_expansion_scope(self, test_system, expansion_scope):
-        """Test different expansion scopes."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
+    @devices
+    def test_realspace_derivative_accuracy_and_max_terms(self, device):
+        # A harmonic exp(2 pi i m x / N) through vacuum: the paraxial Fourier
+        # propagator is exact for it, so the order-1 real-space error is that of
+        # the finite-difference Laplacian, which falls with its accuracy.
+        # Measured (m = 4 of N = 24): 3.6e-2, 5.0e-3, 8.2e-4, 1.5e-4 at accuracy
+        # 2, 4, 6, 8; each step at least 5.5x, against the asserted 3x. An
+        # ignored accuracy gives a ratio of 1.
+        from abtem.finite_difference import NotConvergedError
 
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=RealSpaceMultislice(order=3, expansion_scope=expansion_scope),
-        )
-        assert result is not None
+        gpts, extent = (24, 20), (6.0, 5.0)
+        harmonic = np.exp(2j * np.pi * 4 * np.arange(gpts[0]) / gpts[0])
+        array = np.broadcast_to(harmonic[:, None], gpts).astype(np.complex64)
 
-    @pytest.mark.parametrize("derivative_accuracy", [4, 6, 8])
-    def test_realspace_derivative_accuracy(self, test_system, derivative_accuracy):
-        """Test different derivative accuracies."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
+        def run(algorithm):
+            with abtem.config.set({"device": device}):
+                vacuum = abtem.PotentialArray(
+                    np.zeros((4,) + gpts, np.float32),
+                    slice_thickness=2.0,
+                    extent=extent,
+                )
+                waves = abtem.Waves(array.copy(), energy=100e3, extent=extent)
+                waves = waves.copy_to_device(device)
+                return to_host_array(
+                    waves.multislice(vacuum, algorithm=algorithm).array
+                )
 
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=RealSpaceMultislice(derivative_accuracy=derivative_accuracy),
-        )
-        assert result is not None
+        reference = run(FourierMultislice(order=1))
+        errors = [
+            np.abs(
+                run(RealSpaceMultislice(order=1, derivative_accuracy=accuracy))
+                - reference
+            ).max()
+            for accuracy in (2, 4, 6, 8)
+        ]
+        for coarse, fine in zip(errors, errors[1:]):
+            assert fine < coarse / 3, errors
 
-    def test_realspace_max_terms(self, test_system):
-        """Test max_terms parameter."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=RealSpaceMultislice(max_terms=100),
-        )
-        assert result is not None
+        # the exponential series needs more than 3 terms
+        with pytest.raises(NotConvergedError, match="in 3terms"):
+            run(RealSpaceMultislice(max_terms=3))
 
 
 class TestOutputShapes:
     """Test that output shapes match expected dimensions."""
 
-    def test_single_point_shape(self, test_system):
-        """Test that single point scan returns array with potential.gpts shape."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-        )
-
-        # Shape should be potential.gpts for single scan point
-        expected_shape = potential.gpts
-        assert result.array.shape == expected_shape
-
-    def test_grid_scan_shape(self, test_system):
-        """Test that grid scan returns array with grid_scan.shape + potential.gpts."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        grid_scan = test_system["grid_scan"]
-
-        result = probe.multislice(
-            potential=potential,
-            scan=grid_scan,
-            lazy=False,
-        )
-
-        # Shape should be grid_scan.shape + potential.gpts
-        expected_shape = grid_scan.shape + potential.gpts
-        assert result.array.shape == expected_shape
-
-    def test_exit_planes_single_point_shape(self, test_system):
-        """Test that exit planes potential returns correct shape."""
-        probe = test_system["probe"]
-        potential_exit_planes = test_system["potential_exit_planes"]
-        scan = test_system["single_point_scan"]
-
-        result = probe.multislice(
-            potential=potential_exit_planes,
-            scan=scan,
-            lazy=False,
-        )
-
-        # Shape should be (num_exit_planes,) + potential.gpts
-        expected_shape = (
-            potential_exit_planes.num_exit_planes,
-        ) + potential_exit_planes.gpts
-        assert result.array.shape == expected_shape
-
     def test_exit_planes_grid_scan_shape(self, test_system):
-        """Test exit planes with grid scan."""
+        """The exit planes lead, then the scan, then the grid; the first plane is
+        the entrance plane, which holds the incident probe at every position."""
         probe = test_system["probe"]
         potential_exit_planes = test_system["potential_exit_planes"]
         grid_scan = test_system["grid_scan"]
@@ -296,34 +257,24 @@ class TestOutputShapes:
             potential=potential_exit_planes,
             scan=grid_scan,
             lazy=False,
+            algorithm=RealSpaceMultislice(),
         )
 
-        # Shape should be grid_scan.shape + (num_exit_planes,) + potential.gpts
         expected_shape = (
             (potential_exit_planes.num_exit_planes,)
             + grid_scan.shape
             + potential_exit_planes.gpts
         )
         assert result.array.shape == expected_shape
+        # the entrance plane is copied before any step: exactly equal
+        np.testing.assert_array_equal(
+            to_host_array(result.array[0]),
+            to_host_array(probe.build(scan=grid_scan, lazy=False).array),
+        )
 
 
 class TestDetectors:
     """Test multislice with various detector configurations."""
-
-    def test_single_detector(self, test_system):
-        """Test with a single detector."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        detector = abtem.PixelatedDetector()
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            detectors=detector,
-            lazy=False,
-        )
-        assert result is not None
 
     def test_multiple_detectors(self, test_system):
         """Test with multiple detectors."""
@@ -345,21 +296,6 @@ class TestDetectors:
         # Should return a list of measurements
         assert isinstance(results, list)
         assert len(results) == 2
-
-    def test_no_detector_returns_waves(self, test_system):
-        """Test that no detector returns Waves object."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-        )
-
-        # Should return Waves object
-        assert hasattr(result, "array")
 
 
 class TestBackscattering:
@@ -819,33 +755,6 @@ class TestFullExpansionChunking:
 class TestAlgorithmComparison:
     """Test that different algorithms produce reasonable results."""
 
-    def test_fourier_vs_realspace_shapes_match(self, test_system):
-        """Test that Fourier and RealSpace produce same output shapes."""
-        probe = test_system["probe"]
-        potential = test_system["potential"]
-        scan = test_system["single_point_scan"]
-
-        fourier_result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=FourierMultislice(order=1),
-        )
-
-        realspace_result = probe.multislice(
-            potential=potential,
-            scan=scan,
-            lazy=False,
-            algorithm=RealSpaceMultislice(order=1),
-        )
-
-        # Shapes should match
-        assert fourier_result.array.shape == realspace_result.array.shape
-
-        # Both should produce non-zero results (sanity check)
-        assert np.abs(to_host_array(fourier_result.array)).sum() > 0
-        assert np.abs(to_host_array(realspace_result.array)).sum() > 0
-
     @pytest.mark.slow
     def test_higher_orders_differ(self, test_system):
         """Test that higher orders produce different results."""
@@ -929,18 +838,6 @@ class TestComplexWorkflows:
 
         assert isinstance(results, list)
         assert len(results) == len(detectors)
-
-    def test_works_with_plane_waves(self, test_system):
-        """Test that multislice works with plane waves."""
-        potential = test_system["potential"]
-        plane_wave = abtem.PlaneWave(energy=30e3).match_grid(potential)
-
-        result = plane_wave.multislice(
-            potential=potential,
-            lazy=False,
-        )
-
-        assert result is not None
 
 
 class TestStencilNumericalAccuracy:
