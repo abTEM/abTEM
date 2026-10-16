@@ -23,7 +23,6 @@ except ImportError:
 
 
 @given(data=st.data())
-@lazy_params
 @devices
 @pytest.mark.parametrize(
     "measurement",
@@ -37,34 +36,37 @@ except ImportError:
     ],
 )
 @pytest.mark.skipif(hyperspy is None, reason="requires hyperspy")
-def test_hyperspy(data, measurement, lazy, device):
-    measurement = data.draw(measurement(lazy=lazy, device=device))
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
-        hyperspy_signal = measurement.to_hyperspy()
+def test_hyperspy(data, measurement, device):
+    for lazy in (False, True):
+        drawn = data.draw(measurement(lazy=lazy, device=device))
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            hyperspy_signal = drawn.to_hyperspy()
 
-    # HyperSpy orders the signal axes the other way round: the stored array
-    # with its base axes reversed. A potential is exported as a stack of
-    # images, one per slice, and unshifted diffraction patterns with the zero
-    # frequency at the centre.
-    stored = _host(measurement.array)
-    base_dims = measurement._base_dims
-    if isinstance(measurement, PotentialArray):
-        base_dims = 2
-    if isinstance(measurement, DiffractionPatterns) and not measurement.fftshift:
-        stored = np.fft.fftshift(stored, axes=(-2, -1))
-    assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims
-    base = tuple(range(stored.ndim - base_dims, stored.ndim))
-    expected = np.moveaxis(stored, base, base[::-1])
+        # HyperSpy orders the signal axes the other way round: the stored array
+        # with its base axes reversed. A potential is exported as a stack of
+        # images, one per slice, and unshifted diffraction patterns with the zero
+        # frequency at the centre.
+        stored = _host(drawn.array)
+        base_dims = drawn._base_dims
+        if isinstance(drawn, PotentialArray):
+            base_dims = 2
+        if isinstance(drawn, DiffractionPatterns) and not drawn.fftshift:
+            stored = np.fft.fftshift(stored, axes=(-2, -1))
+        assert len(hyperspy_signal.axes_manager.signal_axes) == base_dims, lazy
+        base = tuple(range(stored.ndim - base_dims, stored.ndim))
+        expected = np.moveaxis(stored, base, base[::-1])
 
-    signal_data = hyperspy_signal.data
-    if lazy:
-        signal_data = signal_data.compute()
-    if device == "mps":
-        # HyperSpy cannot hold torch backend arrays.
-        assert isinstance(signal_data, np.ndarray)
-    np.testing.assert_array_equal(asnumpy(signal_data), expected)
+        signal_data = hyperspy_signal.data
+        if lazy:
+            signal_data = signal_data.compute()
+        if device == "mps":
+            # HyperSpy cannot hold torch backend arrays.
+            assert isinstance(signal_data, np.ndarray)
+        np.testing.assert_array_equal(
+            asnumpy(signal_data), expected, err_msg=f"lazy={lazy}"
+        )
 
 
 # Exports of reciprocal-space Waves and of unshifted DiffractionPatterns carry the
