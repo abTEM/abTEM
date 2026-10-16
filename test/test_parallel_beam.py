@@ -8,11 +8,14 @@ what to pass instead.
 """
 
 import ase.build
+import dask.array as da
 import numpy as np
 import pytest
+from ase.spacegroup import crystal
 
 import abtem
 from abtem.core.energy import energy2wavelength
+from abtem.measurements import DiffractionPatterns
 from abtem.prism.s_matrix import SMatrix
 from abtem.transfer import CTF, Aperture, nyquist_sampling
 
@@ -48,26 +51,19 @@ def test_nyquist_sampling_of_a_positive_cutoff_is_unchanged():
     )
 
 
-@pytest.mark.parametrize(
-    "make_scan",
-    [
-        pytest.param(lambda: abtem.GridScan(), id="GridScan"),
-        pytest.param(lambda: abtem.LineScan(start=(0, 0), end=(3, 4)), id="LineScan"),
-    ],
-)
-def test_default_scan_of_a_parallel_beam_raises(potential, make_scan):
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=0)
-
-    with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
-        _haadf(probe, potential, make_scan())
-
-
-def test_default_scan_of_an_all_zero_cutoff_distribution_raises(potential):
-    cutoffs = abtem.distributions.from_values([0.0, 0.0])
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=cutoffs)
-
-    with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
-        _haadf(probe, potential, abtem.GridScan())
+def test_default_scan_of_a_parallel_beam_raises(potential):
+    parallel = abtem.Probe(energy=ENERGY, semiangle_cutoff=0)
+    all_zero = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=abtem.distributions.from_values([0.0, 0.0])
+    )
+    cases = [
+        ("GridScan", parallel, abtem.GridScan()),
+        ("LineScan", parallel, abtem.LineScan(start=(0, 0), end=(3, 4))),
+        ("all-zero cutoff distribution", all_zero, abtem.GridScan()),
+    ]
+    for name, probe, scan in cases:
+        with pytest.raises(ValueError, match="explicit `sampling` or `gpts`"):
+            _haadf(probe, potential, scan)
 
 
 def test_explicit_scan_of_a_parallel_beam_works(potential):
@@ -128,6 +124,69 @@ def test_block_direct_remedy_blocks_only_the_zero_angle_pixel(parallel_beam_patt
     assert [tuple(index) for index in changed] == [center]
 
 
+@pytest.mark.parametrize("extent", [(19.525, 19.525), (10.0, 14.0)])
+def test_block_direct_of_radius_zero_blocks_the_zero_angle_pixel_on_every_grid(extent):
+    # The zero-angle coordinate of a float32 grid is on some grids a tiny number of
+    # either sign instead of 0, which a radius of exactly 0 does not reach.
+    missed = []
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 4)
+        patterns = abtem.measurements.DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=(1 / extent[0], 1 / extent[1]),
+            fftshift=True,
+            metadata={"energy": ENERGY},
+        )
+        blocked = patterns.block_direct(radius=0, margin=False).array
+        zeroed = [tuple(int(i) for i in z) for z in np.argwhere(blocked == 0)]
+        if zeroed != [(shape[0] // 2, shape[1] // 2)]:
+            missed.append(gpts)
+
+    assert missed == []
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_block_direct_of_a_small_radius_blocks_only_the_zero_angle_pixel(fftshift):
+    # 41 x 50 points at 1 / 10 and 1 / 7 per Angstrom: the zero pixel of the first
+    # axis is at a coordinate of 1e-14 rather than 0, and the two angular samplings
+    # differ.
+    patterns = abtem.measurements.DiffractionPatterns(
+        np.ones((41, 50), dtype=np.float32),
+        sampling=(1 / 10.0, 1 / 7.0),
+        fftshift=fftshift,
+        metadata={"energy": ENERGY},
+    )
+    center = (20, 25) if fftshift else (0, 0)
+
+    for radius in (0, 1e-6, 0.4 * min(patterns.angular_sampling)):
+        blocked = patterns.block_direct(radius=radius, margin=False).array
+        zeroed = [tuple(int(i) for i in z) for z in np.argwhere(blocked == 0)]
+        assert zeroed == [center]
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_reciprocal_coordinates_are_whole_multiples_of_the_sampling(fftshift):
+    # Zero frequency is then exactly 0 and opposite frequencies are exact negatives,
+    # so bandlimit(inner=0) removes the zero-angle pixel on every grid.
+    sampling = (1 / 19.525, 1 / 10.0)
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 3)
+        patterns = abtem.measurements.DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=sampling,
+            fftshift=fftshift,
+            metadata={"energy": ENERGY},
+        )
+        for coordinates, n, d in zip(patterns.coordinates, shape, sampling):
+            expected = (np.arange(n) - n // 2) * d
+            if not fftshift:
+                expected = np.fft.ifftshift(expected)
+            np.testing.assert_array_equal(np.asarray(coordinates), expected)
+
+        center = (shape[0] // 2, shape[1] // 2) if fftshift else (0, 0)
+        assert patterns.bandlimit().array[center] == 0, gpts
+
+
 def test_block_direct_with_a_positive_cutoff_keeps_the_margin(potential):
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
     patterns = probe.multislice(potential).diffraction_patterns().compute()
@@ -135,6 +194,46 @@ def test_block_direct_with_a_positive_cutoff_keeps_the_margin(potential):
     expected = patterns.bandlimit(20 + max(patterns.angular_sampling), outer=np.inf)
 
     np.testing.assert_array_equal(patterns.block_direct().array, expected.array)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("fftshift", [False, True])
+def test_block_direct_without_a_cutoff_blocks_only_the_zero_angle_pixel(
+    fftshift, lazy
+):
+    array = np.ones((15, 20), dtype=np.float32)
+    if lazy:
+        array = da.from_array(array)
+    patterns = DiffractionPatterns(
+        array, sampling=(0.05, 0.04), fftshift=fftshift, metadata={"energy": 100e3}
+    )
+    assert "semiangle_cutoff" not in patterns.metadata
+
+    blocked = patterns.block_direct().compute()
+
+    zeroed = np.argwhere(blocked.array == 0)
+    zero_angle = (7, 10) if fftshift else (0, 0)
+    assert [tuple(index) for index in zeroed] == [zero_angle]
+
+
+def test_block_direct_without_a_cutoff_keeps_the_first_order_reflections():
+    atoms = crystal(
+        ["Sr", "Ti", "O"],
+        basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221,
+        cellpar=[3.905] * 3 + [90] * 3,
+    )
+    potential = abtem.Potential(atoms, sampling=0.1)
+    waves = abtem.PlaneWave(energy=100e3).multislice(potential)
+    patterns = waves.diffraction_patterns(max_angle=None, fftshift=True).compute()
+
+    blocked = patterns.block_direct()
+
+    center = tuple(n // 2 for n in patterns.shape[-2:])
+    first_order = (center[0] + 1, center[1])
+    assert patterns.array[first_order] > 0
+    assert blocked.array[first_order] == patterns.array[first_order]
+    assert blocked.array[center] == 0
 
 
 def test_ctf_default_angular_range_of_a_parallel_beam_raises():

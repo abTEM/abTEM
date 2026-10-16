@@ -14,11 +14,12 @@ import warnings
 
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Union
+from typing import Callable, Dict, Optional, Union
 
 import numpy as np
 from scipy.interpolate import interp1d
 
+from abtem.atoms import _box_strain_warning_silenced
 from abtem.core.ensemble import _wrap_with_array
 from abtem.inelastic.phonons import DummyFrozenPhonons
 from abtem.potentials.charge_density import ChargeDensityPotential, _generate_slices
@@ -300,6 +301,11 @@ class VASPPotential(ChargeDensityPotential):
         physical electrostatic reference and differs slice-to-slice, and from other
         potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
         is False.
+    non_orthogonal : bool, optional
+        Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
+        or on an orthogonal box (False). The default, None, uses the skewed grid
+        when the cell is non-orthogonal with a and b in the xy-plane, `plane` is
+        "xy" and no `box` is given, as `Potential` does.
     """
 
     def __init__(
@@ -318,6 +324,7 @@ class VASPPotential(ChargeDensityPotential):
         repetitions=(1, 1, 1),
         device: str = None,
         subtract_min: bool = False,
+        non_orthogonal: Optional[bool] = None,
     ):
         super().__init__(
             atoms=atoms,
@@ -333,6 +340,7 @@ class VASPPotential(ChargeDensityPotential):
             repetitions=repetitions,
             device=device,
             subtract_min=subtract_min,
+            non_orthogonal=non_orthogonal,
         )
 
         if isinstance(potcar, (str, Path)):
@@ -407,7 +415,9 @@ class VASPPotential(ChargeDensityPotential):
     def potcar(self):
         return self._potcar
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _vasp_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
@@ -435,9 +445,9 @@ class VASPPotential(ChargeDensityPotential):
         # re-detects the skew from the atoms.
         if self._non_orthogonal:
             kwargs["box"] = None
-        frozen_phonons_partial = (
-            self._get_ewald_potential().frozen_phonons._from_partitioned_args()
-        )
+        # See ChargeDensityPotential._partition_args: the Ewald potential holds
+        # these frozen phonons.
+        frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
         return partial(
             self._vasp_potential,
             frozen_phonons_partial=frozen_phonons_partial,

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import warnings
 from functools import partial
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import dask
 import dask.array as da
@@ -14,12 +14,12 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
-from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.fft import fft_crop
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -183,28 +183,6 @@ def _fourier_space_gaussian(k2, width):
     return np.exp(-1 / (4 * a**2) * k2)
 
 
-def _resolvable_ewald_width(
-    sampling: tuple[float, float], slice_thickness, factor: float = 4.0
-) -> float:
-    """The Ewald real-space/reciprocal-space splitting width needed to represent
-    nuclear point charges on a charge-density-derived grid.
-
-    The short-range correction's real-space cutoff -- and with it how far atoms
-    must be periodically padded and how many neighbouring image atoms have to be
-    stamped onto the grid in ``QuadratureProjectionIntegrals`` -- grows with
-    ``width``. A fixed, resolution-independent width (e.g. a constant 3 Angstrom)
-    therefore forces unnecessarily expensive padding on a small, finely sampled
-    cell. The width only needs to be a small multiple of the coarsest spacing the
-    Gaussian-smeared charge is actually represented on -- the in-plane pixel
-    sampling and the (FFT-uniform) z-spacing implied by the number of slices -- to
-    stay well resolved.
-    """
-    coarsest = max(
-        float(sampling[0]), float(sampling[1]), float(np.mean(slice_thickness))
-    )
-    return factor * coarsest
-
-
 def add_point_charges_fourier(
     array: np.ndarray, atoms: Atoms, broadening: float = 0.05, atoms_per_chunk: int = 256
 ) -> np.ndarray:
@@ -311,16 +289,13 @@ def _interpolate_between_cells(
     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
     coordinates = np.dot(coordinates, new_cell) + offset
 
-    padding = 3
-    padded_array = np.pad(array, ((padding,) * 2,) * 3, mode="wrap")
-
     inverse_old_cell = np.linalg.inv(np.array(old_cell))
     mapped_coordinates = np.dot(coordinates, inverse_old_cell) % 1.0
     mapped_coordinates *= array.shape
-    mapped_coordinates += padding
 
+    # "grid-wrap" makes the spline periodic with the array's own length.
     interpolated = map_coordinates(
-        padded_array, mapped_coordinates.T, mode="wrap", order=order
+        array, mapped_coordinates.T, mode="grid-wrap", order=order
     )
     interpolated = interpolated.reshape(new_shape)
     return interpolated
@@ -328,7 +303,7 @@ def _interpolate_between_cells(
 
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
     dz_charge = cell[2, 2] / array.shape[2]
-    nz = max(int(np.ceil((b - a) / dz_charge)), 2)
+    nz = max(safe_ceiling_int((b - a) / dz_charge), 2)
     slice_shape = gpts + (nz,)
 
     # The slice spans the same in-plane (a, b) geometry as the source cell -- just
@@ -342,11 +317,19 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     slice_box[1, :2] = cell_arr[1, :2]
     slice_box[2, 2] = b - a
 
-    slice_array = _interpolate_between_cells(
-        array, slice_shape, cell, slice_box, (0, 0, a)
-    )
-
     dz = (b - a) / slice_shape[-1]
+
+    # Midpoint rule: sample at a + (i + 1/2) dz. The samples used to start at
+    # z = a (a left Riemann sum), which centres the slice integral dz/2 below
+    # the slice centre -- a quarter of the slice thickness at the minimum of
+    # two samples. Summed over a full period the bias cancels, but per slice it
+    # shifts the long-range part of ChargeDensityPotential against the
+    # short-range quadrature part, which is placed correctly: for a neutral
+    # carbon atom on a slice boundary the slices above and below differed by
+    # 2x and the potential 3 A from the atom was ~1 eV A instead of ~0.
+    slice_array = _interpolate_between_cells(
+        array, slice_shape, cell, slice_box, (0, 0, a + dz / 2)
+    )
 
     return np.sum(slice_array, axis=-1) * dz
 
@@ -402,13 +385,14 @@ def _generate_slices(
         last_slice = len(ewald_potential)
 
     if ewald_potential.plane != "xy":
-        axes = plane_to_axes(ewald_potential.plane)
-        charge = np.moveaxis(charge, axes[:2], (0, 1))
-        atoms = ewald_potential.get_transformed_atoms()
+        # The charge density is rotated with the atoms, including the reversal of
+        # the axis that `_plane_rotation` reverses for the planes that need it.
+        charge = _grid_to_plane(charge, ewald_potential.plane)
+        atoms, _, frame = ewald_potential._transform_atoms()
     else:
-        atoms = ewald_potential.frozen_phonons.atoms
+        atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
 
-    atoms = ewald_potential.frozen_phonons.randomize(atoms)
+    atoms = ewald_potential.frozen_phonons._randomize_transformed(atoms, frame)
 
     charge = -np.fft.fftn(charge)
 
@@ -557,8 +541,11 @@ class ChargeDensityPotential(_PotentialBuilder):
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
     charge_density : numpy.ndarray
-        Valence-only electron density as a 3D NumPy array [electrons / Å^3]. See
-        above -- this must not be an all-electron density.
+        Valence-only electron density as a 3D NumPy array [electrons / Å^3],
+        shared by every configuration. A 4D array stacks charge densities along its
+        first axis: one for each configuration, or a single one (a first axis of
+        length one) shared by all of them. Any other number of charge densities
+        raises a `ValueError`. See above -- this must not be an all-electron density.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
         calculated by specifying either `sampling` or `gpts`.
@@ -575,27 +562,35 @@ class ChargeDensityPotential(_PotentialBuilder):
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
         slice indices after which an exit plane is desired, and hence during a
-        multislice simulation a measurement is created. If `exit_planes` is an integer,
-        a measurement will be collected every `exit_planes` number of slices.
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        `n`, a measurement is collected every `n` slices and after the last slice. The
+        first measurement is then taken at the entrance surface (zero thickness),
+        before any scattering, so the thickness series has ``1 + ceil(num_slices / n)``
+        planes; index it with ``[-1]`` for the exit surface. If `n` exceeds the number
+        of slices, only the exit surface is returned and no thickness axis is added.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to the `xy` plane of the
         potential, i.e. the propagation direction will be perpendicular to the provided
         plane. If str, must be a concatenation of two of 'x', 'y' and 'z'; the default
         value 'xy' indicates that potential slices are cuts parallel to the 'xy'-plane.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. A value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also be specified with two
+        arbitrary 3D vectors, which are mapped to the `x` and `y` directions of the
+        potential, respectively. The length of the vectors has no influence. If the
+        vectors are not perpendicular, the second vector is rotated in the plane to
+        become perpendicular to the first. A value of ((1., 0., 0.), (0., 1., 0.)) is
+        equivalent to 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
-        This is equivalent to translating the atoms.
-        The default is (0., 0., 0.).
+        Only the default (0., 0., 0.) is supported; any other origin raises a
+        `NotImplementedError`, because the valence part is interpolated from the
+        charge density of the atoms' own cell.
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined
-        from the atoms. If the box size does not match an integer number of the atoms'
-        cell, an affine transformation may be necessary to preserve periodicity,
-        determined by the `periodic` keyword.
+        The extent of the potential in `x`, `y` and `z`. Only the default is
+        supported, the atoms' cell repeated by `repetitions` (rotated to `plane`, and
+        for a non-orthogonal cell its best orthogonal cell); any other box raises a
+        `NotImplementedError`.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines
         how the atomic structure is transformed. If True, the periodicity of the atoms
@@ -616,7 +611,14 @@ class ChargeDensityPotential(_PotentialBuilder):
         physical electrostatic reference and differs slice-to-slice, and from other
         potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
         is False.
+    non_orthogonal : bool, optional
+        Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
+        or on an orthogonal box (False). The default, None, uses the skewed grid
+        when the cell is non-orthogonal with a and b in the xy-plane, `plane` is
+        "xy" and no `box` is given, as `Potential` does.
     """
+
+    _supports_box_and_origin = False
 
     def __init__(
         self,
@@ -633,6 +635,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
         subtract_min: bool = False,
+        non_orthogonal: Optional[bool] = None,
     ):
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
@@ -654,6 +657,22 @@ class ChargeDensityPotential(_PotentialBuilder):
                 cls_name=type(self).__name__,
             )
 
+        # A 3D charge density, or a stack of them along a first axis: one for
+        # every configuration, or one shared by all of them.
+        if self._charge_density.ndim == 4:
+            num_configurations = (
+                self._frozen_phonons.ensemble_shape[0]
+                if len(self._frozen_phonons.ensemble_shape)
+                else 1
+            )
+            num_densities = self._charge_density.shape[0]
+            if num_densities not in (1, num_configurations):
+                raise ValueError(
+                    f"{num_densities} charge densities were given for "
+                    f"{num_configurations} atomic configurations; give one, or one "
+                    "for each configuration."
+                )
+
         # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
         # vectors correctly for an orthogonal cell. For a skewed cell with
         # anisotropic repetitions, each row (lattice vector) must be scaled by its
@@ -673,6 +692,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            non_orthogonal=non_orthogonal,
         )
 
     @property
@@ -755,11 +775,22 @@ class ChargeDensityPotential(_PotentialBuilder):
                 charge_densities = charge_densities.to_delayed().ravel()
             elif hasattr(charge_densities, "compute"):
                 raise RuntimeError
+            elif charge_densities.shape[0] == 1 and n_ensemble > 1:
+                # One charge density shared by every configuration.
+                charge_densities = [charge_densities[0]] * n_ensemble
 
-            frozen_phonon_blocks = (
-                self._get_ewald_potential()
-                .frozen_phonons._partition_args(chunks, lazy=lazy)[0]
-            )
+            # The frozen phonons themselves, which the Ewald potential holds
+            # unchanged: building that potential only to read them fails on a
+            # skewed cell with repetitions, whose Ewald potential takes the
+            # one-cell atoms and no box, so the repeated slicing overruns it.
+            frozen_phonon_blocks = self.frozen_phonons._partition_args(
+                chunks, lazy=lazy
+            )[0]
+            if lazy:
+                # Iterating a dask array yields dask array slices, whose shapes
+                # dask cannot infer once wrapped by dask.delayed below; the
+                # delayed blocks of to_delayed() compose correctly.
+                frozen_phonon_blocks = frozen_phonon_blocks.to_delayed().ravel()
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (cd, fp) in enumerate(
@@ -778,16 +809,19 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         return (array,)
 
+    # The box was reported when the user left it to abTEM.
     @staticmethod
+    @_box_strain_warning_silenced()
     def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
             args = args.item()
 
+        default_atoms = kwargs.pop("_default_atoms")
         if args["atoms"] is not None:
-            atoms = frozen_phonons_partial(args["atoms"])
+            atoms = frozen_phonons_partial(args["atoms"]).item()
         else:
-            atoms = DummyFrozenPhonons(kwargs.pop("_default_atoms"))
+            atoms = DummyFrozenPhonons(default_atoms)
 
         charge_density = args["charge_density"]
         potential = ChargeDensityPotential(
@@ -808,9 +842,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         # matching _get_ewald_potential's box = None if self._non_orthogonal else ...
         if self._non_orthogonal:
             kwargs["box"] = None
-        frozen_phonons_partial = (
-            self._get_ewald_potential().frozen_phonons._from_partitioned_args()
-        )
+        # See _partition_args: the Ewald potential holds these frozen phonons.
+        frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
         return partial(
             self._charge_density_potential,
             frozen_phonons_partial=frozen_phonons_partial,
@@ -818,10 +851,15 @@ class ChargeDensityPotential(_PotentialBuilder):
             **kwargs,
         )
 
+    # The box it is given is this potential's own, not one the user gave.
+    @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(
-            width=_resolvable_ewald_width(self.sampling, self.slice_thickness)
-        )
+        # A width that followed the sampling and slice thickness made the
+        # slices of one potential add up to a projected potential that changed
+        # with the slicing (by ~1 %), and a width set by the sampling alone is
+        # too narrow for the kz content the slices keep; a fixed width
+        # satisfies both.
+        ewald_parametrization = EwaldParametrization(width=3)
 
         # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
         # internal ewald Potential: the box-given path forces an orthogonalising
@@ -858,9 +896,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
-            ewald_parametrization = EwaldParametrization(
-                width=_resolvable_ewald_width(self.sampling, self.slice_thickness)
-            )
+            ewald_parametrization = EwaldParametrization(width=3)
             # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
             # leave box=None so the ewald Potential auto-detects the skew geometry
             # rather than rectifying it.

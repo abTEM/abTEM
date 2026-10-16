@@ -7,6 +7,7 @@ cell, so the result is correctly placed on the skew lattice in both cases.
 """
 
 import numpy as np
+import pytest
 from ase import Atoms
 
 from abtem.magnetism.iam import magnetic_field_3d
@@ -18,42 +19,45 @@ def _fe_atoms(cell, position=(0.0, 0.0, 0.0)):
     return atoms
 
 
-def test_magnetic_field_3d_orthogonal_cell_runs():
-    """Sanity: an orthogonal cell still computes a finite magnetic field."""
-    atoms = _fe_atoms([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]])
-    field = magnetic_field_3d(atoms, gpts=(16, 16, 16), cutoff=2.0)
-    assert field.shape == (3, 16, 16, 16)
+_A = 3.0
+_CELLS = {
+    "orthogonal": np.diag([_A, _A, _A]),
+    "hexagonal": np.array(
+        [
+            [_A, 0.0, 0.0],
+            [_A * np.cos(np.deg2rad(60)), _A * np.sin(np.deg2rad(60)), 0.0],
+            [0.0, 0.0, _A],
+        ]
+    ),
+}
+
+
+@pytest.mark.parametrize("cell", list(_CELLS.values()), ids=list(_CELLS))
+def test_magnetic_field_3d_follows_the_atom_along_the_lattice_vectors(cell):
+    """Each pixel must sit at ``i*a/N + j*b/N + k*c/N``, so moving the atom by one
+    pixel step along a or b moves the field by exactly one pixel along that axis.
+
+    On the hexagonal cell this is what tells the parallelepiped grid from a Cartesian
+    rectangle: sampling the hexagonal cell on a rectangle of the same side lengths
+    (the bug the skew branch fixes) misses the shift along b by 31% of the peak field.
+    On the orthogonal cell it pins the legacy rectangular branch.
+    """
+    n = 16
+    position = np.array([0.5, 0.5, 1.5])  # away from the corner
+    field = magnetic_field_3d(_fe_atoms(cell, position), gpts=(n,) * 3, cutoff=2.0)
+    assert field.shape == (3, n, n, n)
     assert np.all(np.isfinite(field))
+    peak = np.abs(field).max()
+    assert peak > 0.0
 
-
-def test_magnetic_field_3d_non_orthogonal_cell_runs():
-    """A 60-deg hex cell now samples on the parallelepiped grid (not silently
-    wrong on a Cartesian rectangle that misses parts of the parallelogram)."""
-    a = 3.0
-    atoms = _fe_atoms(
-        [[a, 0.0, 0.0],
-         [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0.0],
-         [0.0, 0.0, 3.0]],
-        position=(0.5, 0.5, 1.5),  # away from the corner
-    )
-    field = magnetic_field_3d(atoms, gpts=(16, 16, 16), cutoff=2.0)
-    assert field.shape == (3, 16, 16, 16)
-    assert np.all(np.isfinite(field))
-    # the field should be non-trivial (atom is inside the parallelepiped)
-    assert float(np.max(np.abs(field))) > 0.0
-
-
-def test_magnetic_field_3d_skew_equivalent_to_orthogonal_at_orthogonal_limit():
-    """In the orthogonal limit (60-deg hex flattened to a rectangle, i.e. the
-    cell IS orthogonal), the parallelepiped sampling reduces to the rectangular
-    case and the result must match the legacy rectangular code path bit-for-bit."""
-    atoms = _fe_atoms(
-        [[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]],
-        position=(0.7, 1.2, 1.5),
-    )
-    field = magnetic_field_3d(atoms, gpts=(12, 12, 12), cutoff=2.0)
-    # Just a sanity check that the orthogonal path still produces the expected
-    # values (the dispatch in _superpose_field_3d uses the legacy rectangular
-    # branch when the cell is orthogonal).
-    assert field.shape == (3, 12, 12, 12)
-    assert float(np.max(np.abs(field))) > 0.0
+    for axis in (0, 1):
+        shifted = magnetic_field_3d(
+            _fe_atoms(cell, position + cell[axis] / n), gpts=(n,) * 3, cutoff=2.0
+        )
+        # the field is not periodic, so compare the overlap of the two grids
+        before = [slice(None)] * 4
+        after = [slice(None)] * 4
+        before[axis + 1] = slice(0, n - 1)
+        after[axis + 1] = slice(1, n)
+        error = np.abs(shifted[tuple(after)] - field[tuple(before)]).max() / peak
+        assert error < 1e-6, f"shift along lattice vector {axis}: {error:.2e}"

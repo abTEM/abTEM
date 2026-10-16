@@ -1,9 +1,15 @@
 import ast
+import os
+import platform
+import subprocess
+import sys
 from pathlib import Path
 
 import numba
 import pytest
 
+import abtem
+from abtem.core import backend
 from abtem.core.backend import _cap_numba_threads_to_omp_num_threads
 
 
@@ -161,3 +167,91 @@ def test_metal_backend_serializes_every_torch_call():
         "Decorate them, or add them to _UNLOCKED_BY_DESIGN with the reason "
         "they are safe."
     )
+
+
+# Importing PyTorch can break CuPy's kernel compilation in the same process
+# (observed with a ROCm build), so on a machine that cannot have a Metal device
+# neither asking for 'mps' nor collecting the tests may import it. Whether it is
+# imported is process-wide state, hence the fresh processes.
+_not_macos = pytest.mark.skipif(
+    backend._is_macos(), reason="the Metal backend is loaded on macOS"
+)
+
+
+def _run_in_fresh_process(code):
+    # The device is set explicitly: the torch-CPU job runs with it set to 'cpu'.
+    env = {**os.environ, "ABTEM_TORCH__DEVICE": "mps"}
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+@_not_macos
+def test_mps_is_refused_off_macos_without_importing_torch():
+    result = _run_in_fresh_process("""
+import sys
+
+import abtem
+from abtem.core import backend
+
+try:
+    backend.check_mps_is_available()
+except RuntimeError as error:
+    print(error)
+else:
+    raise SystemExit("check_mps_is_available() did not raise")
+
+print("TORCH_IMPORTED", "torch" in sys.modules or "abtem.core._torch" in sys.modules)
+""")
+
+    assert result.returncode == 0, result.stderr
+    assert "Metal requires macOS" in result.stdout
+    assert "TORCH_IMPORTED False" in result.stdout
+
+
+@_not_macos
+@pytest.mark.skipif(
+    str(abtem.config.get("torch.device")).lower() != "mps",
+    reason="torch is the configured backend (torch.device='cpu'), so loading it is intended",
+)
+def test_collecting_the_tests_does_not_import_torch(request):
+    """Read off this run's own collection (see pytest_collection_finish in
+    conftest.py) rather than collecting the suite again in a subprocess,
+    which took ~15 s: it covers the tests this run collected -- all of them
+    in a full run."""
+    assert not request.config._abtem_torch_imported_by_collection
+
+
+@pytest.mark.parametrize("machine", ["arm64", "x86_64"])
+def test_a_mac_is_left_to_torch_to_answer(monkeypatch, machine):
+    """Apple silicon and Intel Macs with an AMD GPU both have PyTorch's MPS
+    backend, so on macOS the request reaches it whatever the architecture."""
+
+    class FakeTorchBackend:
+        DEVICE = "mps"
+        TorchNDArray = object
+        torch_numpy = object()
+        asked = False
+
+        @classmethod
+        def _check_available(cls):
+            cls.asked = True
+            raise RuntimeError("torch's answer")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(backend, "tp", None)
+    monkeypatch.setattr(backend, "TorchNDArray", None)
+    monkeypatch.setattr(abtem.core, "_torch", FakeTorchBackend, raising=False)
+    monkeypatch.setitem(sys.modules, "abtem.core._torch", FakeTorchBackend)
+
+    with abtem.config.set({"torch.device": "mps"}):
+        with pytest.raises(RuntimeError, match="torch's answer"):
+            backend.check_mps_is_available()
+
+    assert FakeTorchBackend.asked

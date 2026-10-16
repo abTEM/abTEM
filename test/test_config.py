@@ -54,9 +54,12 @@ class TestPaths:
         assert paths[0] == "/somewhere/etc-abtem"
         assert "/etc/abtem" not in paths
 
-    def test_dask_config_paths_are_not_searched(self):
+    def test_dask_config_paths_are_not_searched(self, monkeypatch, tmp_path):
         """abTEM no longer picks up dask's config files as its own."""
         assert not set(dask.config.paths) & set(config.paths)
+        # Nor the directory DASK_CONFIG names.
+        monkeypatch.setenv("DASK_CONFIG", str(tmp_path))
+        assert str(tmp_path) not in config._get_paths()
 
 
 class TestYamlFiles:
@@ -227,22 +230,18 @@ class TestRuntimeAccess:
         assert config.get("fft") in ("numpy", "fftw", "mkl")
 
 
-@pytest.mark.parametrize(
-    "env_var, expected",
-    [("ABTEM_CONFIG", "gpu"), ("DASK_CONFIG", "cpu")],
-)
-def test_config_file_is_read_at_import(tmp_path, env_var, expected):
+def test_config_file_is_read_at_import(tmp_path):
     """End-to-end: the reported bug was about ``import abtem`` itself.
 
-    ``ABTEM_CONFIG`` must be honored; ``DASK_CONFIG`` must no longer be, so a
-    stray yaml file in dask's config directory cannot change abTEM's settings.
+    ``ABTEM_CONFIG`` must be honored. That ``DASK_CONFIG`` is not, is checked
+    in process by ``TestPaths::test_dask_config_paths_are_not_searched``.
     """
     write_config(tmp_path, "device: gpu")
 
     env = {
         k: v for k, v in os.environ.items() if k not in ("ABTEM_CONFIG", "DASK_CONFIG")
     }
-    env[env_var] = str(tmp_path)
+    env["ABTEM_CONFIG"] = str(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-c", "import abtem; print(abtem.config.get('device'))"],
@@ -252,4 +251,4 @@ def test_config_file_is_read_at_import(tmp_path, env_var, expected):
         check=True,
     )
 
-    assert result.stdout.strip() == expected
+    assert result.stdout.strip() == "gpu"

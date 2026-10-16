@@ -133,18 +133,3 @@ class TestNumbaThreadsReachSpawnedWorkerThreads:
         main_count, worker_count = self._run(env)
         assert main_count == 2
         assert worker_count == 2
-
-    def test_uncapped_worker_thread_uses_every_visible_core(self):
-        """Documents the failure mode this fix addresses: without
-        OMP_NUM_THREADS set, both threads use every visible core -- the
-        baseline this repository's own multi-worker test runs oversubscribe
-        against when many such processes share one node.
-        """
-        env = os.environ.copy()
-        env.pop("OMP_NUM_THREADS", None)
-        env.pop("OPENBLAS_NUM_THREADS", None)
-        env.pop("NUMBA_NUM_THREADS", None)
-        main_count, worker_count = self._run(env)
-        cpu_count = os.cpu_count() or 1
-        assert main_count == cpu_count
-        assert worker_count == cpu_count

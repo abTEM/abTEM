@@ -16,6 +16,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import ifft2
 from abtem.core.grid import spatial_frequencies
+from abtem.core.utils import get_dtype
 from abtem.prism._natural_neighbors import pairwise_weights
 from abtem.prism.utils import plane_waves, prism_wave_vectors
 from abtem.transfer import CTF
@@ -161,7 +162,7 @@ def partitioned_prism_wave_vectors(
         n += num_points_per_ring
         rings.append(xp.array([kx, ky]).T)
 
-    return xp.vstack(rings).astype(xp.float32)
+    return xp.vstack(rings).astype(get_dtype(complex=False))
 
 
 def array_row_intersection(a, b):
