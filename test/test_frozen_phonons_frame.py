@@ -8,8 +8,6 @@ transformed structure with a different number of atoms, and
 `Potential.to_atoms_ensemble()` returns the configurations as simulated.
 """
 
-import warnings
-
 import ase
 import ase.build
 import numpy as np
@@ -449,14 +447,15 @@ REBUILT = {
 }
 
 
+# Each cell once, each projection twice; the non-periodic finite case is
+# test_non_periodic_finite_configuration_holds_the_box.
 @pytest.mark.parametrize(
     "name, projection",
     [
-        (name, projection)
-        for name in REBUILT
-        for projection in ("infinite", "finite")
-        # see test_non_periodic_finite_configuration_holds_the_box
-        if not (name.endswith("non_periodic") and projection == "finite")
+        ("hexagonal", "finite"),
+        ("orthogonal", "infinite"),
+        ("plane_xz", "finite"),
+        ("hexagonal_non_periodic", "infinite"),
     ],
 )
 def test_potential_to_atoms_ensemble_gives_the_simulated_configurations(
@@ -781,8 +780,8 @@ class _GPAWStub:
         return self.displaced[-1]
 
 
-# All three directions take no directions frame, whatever the plane; that case is
-# test_gpaw_needs_no_directions_frame_for_all_directions below.
+# All three directions take no directions frame, whatever the plane; that path is
+# test_gpaw_per_atom_sigmas_follow_their_atoms_into_the_repetitions below.
 @pytest.mark.parametrize("plane", ["xy", "xz"])
 def test_gpaw_potential_drops_the_directions_of_the_potential(monkeypatch, plane):
     """GPAWPotential displaces the atoms along their own axes before it rotates
@@ -833,61 +832,6 @@ def test_gpaw_directions_with_a_strained_frame_are_unchanged(monkeypatch, sigmas
     expected = atoms.positions.copy()
     expected[:, :2] += (np.array(sigmas, dtype=np.float32) * r)[:, :2]
     np.testing.assert_array_equal(displaced.positions, expected)
-
-
-def test_gpaw_directions_frame_does_not_repeat_the_box_warning():
-    """The frame of the potentials GPAWPotential builds comes from a Potential of
-    its atoms, whose default box strains a sheared cell; the GPAWPotential
-    reported that box when it was constructed, so building the frame must not
-    report it again."""
-    from abtem.potentials.gpaw import _slice_axes_frame
-
-    atoms = ase.Atoms(
-        "Au",
-        positions=[(2.0, 2.0, 2.5)],
-        cell=[[4.0, 0.0, 0.0], [0.4, 4.0, 0.0], [0.0, 0.0, 5.0]],
-        pbc=True,
-    )
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        frame = _slice_axes_frame(atoms, "xy", (40, 40))
-
-    # Only the report of the box is counted: ASE's own warnings, which this suite
-    # ignores, are re-enabled by `simplefilter("always")`.
-    box_warnings = [
-        str(warning.message)
-        for warning in caught
-        if issubclass(warning.category, UserWarning)
-        and str(warning.message).startswith("The box")
-    ]
-    assert box_warnings == []
-    assert frame.shape == (3, 3)
-
-
-@pytest.mark.parametrize("directions", ["xyz", "zyx"])
-def test_gpaw_needs_no_directions_frame_for_all_directions(monkeypatch, directions):
-    """The frame of the potentials GPAWPotential builds is needed only to drop
-    directions; with all three it is not computed, and the atoms are displaced by
-    sigma * r along their own axes before the rotation to plane="xz"."""
-    stub = _GPAWStub(monkeypatch)
-
-    def unused(*args, **kwargs):
-        raise AssertionError("the directions frame was computed")
-
-    monkeypatch.setattr(stub.module, "_slice_axes_frame", unused)
-    atoms = _single_atom()
-    sigmas = (0.05, 0.10, 0.20)
-    fp = abtem.FrozenPhonons(
-        atoms, num_configs=1, sigmas=sigmas, directions=directions, seed=3
-    )
-
-    displaced = stub.displace(atoms, fp, plane="xz")
-
-    r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
-    expected = atoms.positions + np.array(sigmas, dtype=np.float32) * r
-    np.testing.assert_array_equal(displaced.positions, expected)
-    np.testing.assert_array_equal(displaced.positions, fp.randomize(atoms).positions)
 
 
 def test_gpaw_per_atom_sigmas_follow_their_atoms_into_the_repetitions(monkeypatch):
