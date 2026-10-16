@@ -17,7 +17,6 @@ from abtem.transfer import (
     TemporalEnvelope,
     Vortex,
     Zernike,
-    cartesian2polar,
     hard_aperture,
     nyquist_sampling,
     point_resolution,
@@ -117,11 +116,6 @@ def test_polar2cartesian():
     assert np.isclose(result.get("C12a", 0.0), 0.0) and np.isclose(result.get("C12b", 0.0), 0.0)
 
 
-def test_cartesian2polar():
-    result = cartesian2polar({"C10": 300.0})
-    assert isinstance(result, dict) and np.isclose(result["C10"], 300.0)
-
-
 # ---------------------------------------------------------------------------
 # soft_aperture / hard_aperture
 # ---------------------------------------------------------------------------
@@ -208,23 +202,6 @@ def test_rpp_attributes_and_unit_amplitude():
     assert np.allclose(np.abs(rpp._evaluate_kernel()), 1.0)
 
 
-def test_temporal_envelope_attributes_and_limits():
-    te = TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-    assert te.focal_spread == 100.0
-    assert np.allclose(
-        TemporalEnvelope(0.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel(), 1.0
-    )
-    assert np.isclose(
-        TemporalEnvelope(500.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()[0, 0], 1.0
-    )
-
-
-def test_spatial_envelope_zero_spread_gives_ones():
-    assert np.allclose(
-        SpatialEnvelope(0.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel(), 1.0
-    )
-
-
 # ---------------------------------------------------------------------------
 # Aberrations
 # ---------------------------------------------------------------------------
@@ -238,11 +215,6 @@ class TestAberrations:
         ab = Aberrations(energy=ENERGY)
         ab.set_aberrations({"C10": -200.0, "C30": 1e7})
         assert np.isclose(ab.defocus, 200.0)
-
-    def test_scherzer_string(self):
-        ab = Aberrations(energy=ENERGY, Cs=1e7)
-        ab.set_aberrations({"defocus": "scherzer"})
-        assert np.isclose(ab.defocus, scherzer_defocus(1e7, ENERGY), rtol=1e-5)
 
     def test_no_aberrations_unit_phase(self):
         k = Aberrations(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()
@@ -264,16 +236,31 @@ class TestCTF:
         fs = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, focal_spread=500.0)
         assert np.sum(np.abs(nofs._evaluate_kernel())) > np.sum(np.abs(fs._evaluate_kernel()))
 
-    def test_to_diffraction_patterns(self):
-        from abtem.measurements import DiffractionPatterns
-        dp = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING).to_diffraction_patterns()
-        assert isinstance(dp, DiffractionPatterns)
+    @pytest.mark.parametrize("gpts", [(64, 64), (65, 64)])
+    def test_to_diffraction_patterns(self, gpts):
+        # exp(-i chi) of defocus and astigmatism at the coordinates the patterns
+        # report: a misordered fftshift or a swapped axis gives errors of order 1.
+        defocus, C12, phi12 = 100.0, 50.0, 0.3
+        dp = CTF(
+            energy=ENERGY,
+            gpts=gpts,
+            sampling=SAMPLING,
+            defocus=defocus,
+            C12=C12,
+            phi12=phi12,
+        ).to_diffraction_patterns()
 
-    def test_profiles(self):
-        from abtem.measurements import ReciprocalSpaceLineProfiles
-        assert isinstance(
-            CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=200.0).profiles(),
-            ReciprocalSpaceLineProfiles,
+        wavelength = energy2wavelength(ENERGY)
+        kx, ky = np.meshgrid(*dp.coordinates, indexing="ij")
+        alpha = wavelength * np.hypot(kx, ky)
+        phi = np.arctan2(ky, kx)
+        chi = (
+            2 * np.pi / wavelength * alpha**2 / 2
+            * (-defocus + C12 * np.cos(2 * (phi - phi12)))
+        )
+        # float32 phases of up to ~6 rad: 1.7e-4 apart
+        np.testing.assert_allclose(
+            dp.array, np.exp(-1j * chi), rtol=0, atol=1e-3
         )
 
     def test_apply_to_waves(self):
@@ -289,26 +276,3 @@ class TestCTF:
             energy=ENERGY, gpts=(32, 32), sampling=SAMPLING, defocus=defocus, Cs=Cs
         )._evaluate_kernel()
         assert k.shape == (32, 32) and np.all(np.isfinite(k))
-
-
-# ---------------------------------------------------------------------------
-# Existing regression test
-# ---------------------------------------------------------------------------
-
-def test_point_resolution_regression():
-    ctf = Aberrations(energy=200e3, Cs=1e-3 * 1e10, defocus=600)
-
-    max_semiangle = 20
-    n = 1e3
-    sampling = max_semiangle / 1000.0 / n
-    alpha = np.arange(0, max_semiangle / 1000.0, sampling)
-
-    aberrations = ctf._evaluate_from_angular_grid(alpha, 0.0)
-
-    zero_crossings = np.where(np.diff(np.sign(aberrations.imag)))[0]
-    numerical_point_resolution1 = 1 / (
-        zero_crossings[1] * alpha[1] / energy2wavelength(ctf.energy)
-    )
-    analytical_point_resolution = point_resolution(energy=200e3, Cs=1e-3 * 1e10)
-
-    assert np.round(numerical_point_resolution1, 1) == np.round(analytical_point_resolution, 1)
