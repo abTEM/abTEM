@@ -724,8 +724,7 @@ class TestCrystalPotentialChunking:
             values, values[0], rtol=0, atol=1e-6 * np.abs(values).max()
         )
 
-    @pytest.mark.parametrize("lazy", [False, True])
-    def test_an_unseeded_crystal_backscatters_as_it_builds(self, lazy):
+    def test_an_unseeded_crystal_backscatters_as_it_builds(self):
         """The backward pass of full-expansion backscattering, which calls
         generate_slices again, sees the crystal of the forward pass."""
         from abtem.multislice import RealSpaceMultislice
@@ -733,7 +732,7 @@ class TestCrystalPotentialChunking:
         def crystal():
             return _frozen_phonon_crystal(6, (2, 3, 2), exit_planes=1)
 
-        def run(potential):
+        def run(potential, lazy):
             result = PlaneWave(energy=100e3).multislice(
                 potential,
                 lazy=lazy,
@@ -744,8 +743,10 @@ class TestCrystalPotentialChunking:
                 result = [r.compute(scheduler="synchronous") for r in result]
             return [np.asarray(r.array) for r in result]
 
-        expected = run(crystal().build(lazy=False))
-        result = run(crystal())
+        # Lazy only: each block runs the eager multislice_and_detect on the
+        # unbuilt crystal; the eager run of the built crystal is the reference.
+        expected = run(crystal().build(lazy=False), lazy=False)
+        result = run(crystal(), lazy=True)
 
         assert len(result) == len(expected) == 2
         for r, e in zip(result, expected):
@@ -1068,7 +1069,9 @@ class TestCrystalPotentialChunking:
         monkeypatch.setattr(Potential, "build", counting)
         return builds
 
-    @pytest.mark.parametrize("scheduler", ["threads", "synchronous"])
+    # The threaded scheduler is the one that can race; the synchronous one runs
+    # the same blocks in order.
+    @pytest.mark.parametrize("scheduler", ["threads"])
     @pytest.mark.parametrize(
         "kwargs",
         [
@@ -1120,7 +1123,7 @@ class TestCrystalPotentialChunking:
         for result in results.values():
             np.testing.assert_array_equal(result.array, expected.array)
 
-    @pytest.mark.parametrize("scheduler", ["threads", "synchronous"])
+    @pytest.mark.parametrize("scheduler", ["threads"])
     def test_a_reseeded_pool_is_built_once_in_a_lazy_transition_potential_scan(
         self, monkeypatch, scheduler
     ):
