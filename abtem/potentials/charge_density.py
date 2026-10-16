@@ -851,15 +851,49 @@ class ChargeDensityPotential(_PotentialBuilder):
             **kwargs,
         )
 
+    def _ewald_width(self) -> float:
+        """Width [Å] of the Gaussians splitting the nuclear point charges into a
+        long-range part (added to the density and solved by FFT) and a short-range
+        real-space correction, whose cutoff, and with it the atom padding and the
+        pixels stamped per atom, grows with the width.
+
+        The split is exact for any width only while both parts are resolved:
+
+        - 30 x sampling: the short-range part is clamped inside the inner radial
+          limit (sampling / 2) and its radial table is spaced by the sampling, so
+          the nucleus pixel and the table carry an error growing as the width
+          shrinks against the sampling (1.4e-4 of the maximum at 10 x sampling).
+        - 4 x the density spacing: the long-range part lives on the density grid
+          and is spline-interpolated from it (2e-4 at 2 x, 3e-5 at 4 x).
+        - 2 x the mean slice thickness: its kz content is cropped to the slice
+          count (per slice, against 3 Å: 6e-3 at 0.5 x, 4e-4 at 1 x, 8e-5 at 2 x).
+        - At most dev's fixed 3 Å, so a build is never wider (slower) than it.
+
+        It depends on the slice thickness, so different slicings of one cell use
+        different widths. They add up to its projection within 5.5e-5 of the
+        maximum at sampling 0.05 and 0.033 Å (tolerance 1e-4); from sampling 0.1 Å
+        the width is 3 Å as before.
+        """
+        cell = np.asarray(self.frozen_phonons.atoms.cell)
+        density_spacing = max(
+            np.linalg.norm(cell[i]) / n
+            for i, n in enumerate(self.charge_density.shape[-3:])
+        )
+        return float(
+            min(
+                3.0,
+                max(
+                    30 * max(self.sampling),
+                    4 * density_spacing,
+                    2 * float(np.mean(self.slice_thickness)),
+                ),
+            )
+        )
+
     # The box it is given is this potential's own, not one the user gave.
     @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
-        # A width that followed the sampling and slice thickness made the
-        # slices of one potential add up to a projected potential that changed
-        # with the slicing (by ~1 %), and a width set by the sampling alone is
-        # too narrow for the kz content the slices keep; a fixed width
-        # satisfies both.
-        ewald_parametrization = EwaldParametrization(width=3)
+        ewald_parametrization = EwaldParametrization(width=self._ewald_width())
 
         # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
         # internal ewald Potential: the box-given path forces an orthogonalising
@@ -896,7 +930,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
-            ewald_parametrization = EwaldParametrization(width=3)
+            ewald_parametrization = EwaldParametrization(width=self._ewald_width())
             # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
             # leave box=None so the ewald Potential auto-detects the skew geometry
             # rather than rectifying it.
