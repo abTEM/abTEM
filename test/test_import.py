@@ -13,6 +13,7 @@ cp.RawModule(...).get_function(...)), the subprocess exits non-zero with
 CUDARuntimeError: cudaErrorNoDevice.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -32,18 +33,10 @@ def _run_import(extra_env=None):
     )
 
 
-def test_import_succeeds():
-    """Baseline: import abtem works in the current environment."""
-    result = _run_import()
-    assert result.returncode == 0, result.stderr.decode()
-
-
+# find_spec, not a subprocess import: this runs at collection in every xdist
+# worker and the controller.
 requires_cupy = pytest.mark.skipif(
-    subprocess.run(
-        [sys.executable, "-c", "import cupy"],
-        capture_output=True,
-    ).returncode != 0,
-    reason="CuPy not installed",
+    importlib.util.find_spec("cupy") is None, reason="CuPy not installed"
 )
 
 
