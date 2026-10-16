@@ -429,14 +429,12 @@ def _generate_slices(
         slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
 
         if subtract_min:
-            # A per-slice constant shift doesn't change multislice-simulated
-            # intensities (it's spatially uniform, so it only contributes an
-            # overall, unobservable phase) -- but it does mean the potential's
-            # own absolute value, e.g. in vacuum, is not physically meaningful
-            # and differs slice-to-slice from the true electrostatic reference
-            # (and from other potential builders, e.g. GPAWPotential, which
-            # don't do this). Off by default; kept only for comparison with
-            # older results that relied on this normalization.
+            # A different constant for each slice: the phase of the whole wave
+            # changes, its intensities do not (Fourier multislice). Without it,
+            # the potential carries one constant offset for every slice, the
+            # mean sum(Z) w**2 / (2 eps0 V) of the short-range Ewald part,
+            # since the long-range part has no G=0 term. Neither is referenced
+            # to the vacuum; see the docstring of ChargeDensityPotential.
             slic._array -= slic._array.min()
         yield slic
 
@@ -604,13 +602,24 @@ class ChargeDensityPotential(_PotentialBuilder):
         The device used for calculating the potential. The default is determined by the
         user configuration file.
     subtract_min : bool, optional
-        If True, each slice's own minimum value is subtracted from it. This constant,
-        spatially uniform shift doesn't change multislice-simulated intensities (a
-        per-slice constant only contributes an overall, unobservable phase), but it
-        does mean the potential's absolute value -- e.g. in vacuum -- is not the
-        physical electrostatic reference and differs slice-to-slice, and from other
-        potential builders (e.g. :class:`.GPAWPotential`) that don't do this. Default
-        is False.
+        If True, each slice's own minimum value is subtracted from it, as earlier
+        versions of abTEM always did. Default is False. The periodic Poisson solve
+        fixes the potential only up to a constant, and neither setting references
+        it to zero in vacuum, as :class:`.Potential` and a non-periodic
+        :class:`.GPAWPotential` do, or to a zero cell average, as a periodic
+        :class:`.GPAWPotential` does. With False, the potential is offset from a
+        zero cell average by one constant, the same in every slice:
+        sum(Z) w**2 / (2 eps0 V) [V], with Z the atomic numbers, V the cell volume
+        and w = 3 Å the width of the internal Ewald split (in a slice, times its
+        thickness). The differences between slices, e.g. between a slab and its
+        vacuum, are kept; subtract the vacuum value to reference the vacuum to
+        zero. With True, the offset differs from slice to slice: the vacuum around
+        a laterally isolated object is close to zero, but the potential between the
+        atoms of a dense slice is removed, and the profile along z with it. A
+        constant in a slice only changes the phase of the whole wave, so the
+        intensities of the default multislice are the same either way; with
+        ``RealSpaceMultislice(expansion_scope="full")`` the constant enters the
+        propagator and the two settings differ.
     non_orthogonal : bool, optional
         Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
         or on an orthogonal box (False). The default, None, uses the skewed grid
