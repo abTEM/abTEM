@@ -1029,27 +1029,46 @@ class TestMultipleDetectorsInOnePass:
             assert measurement.compute().shape[0] == 2
 
 
-@requires_gpaw
 class TestFilterByIntensity:
     """It sorted by intensity, then sliced the *unsorted* list."""
 
     def test_keeps_the_strongest_transitions(self):
-        from abtem.inelastic.core_loss import SubshellTransitions
-
-        potential = SubshellTransitions(14, 1, 0, epsilon=25.0).get_transition_potentials(
-            extent=8.0, gpts=64, energy=ENERGY
+        # Synthetic 1s -> p transitions (see _synthetic_unbuilt_transition_potential)
+        # whose continuum states differ only in amplitude, so the intensities are
+        # known without building: proportional to 0.1**2, 1 and 0.5**2, that is
+        # 0.8 %, 79 % and 20 % of the total. The weakest comes first, so the
+        # unsorted slice keeps it.
+        pytest.importorskip("sympy")
+        r = np.linspace(1e-3, 20.0, 4000)
+        bound = AtomicWaveFunction(
+            RadialWavefunction(
+                n=1, l=0, energy=-188.0, radial_grid=r, radial_values=r * np.exp(-r)
+            ),
+            ml=0,
+        )
+        weak, strong, medium = (
+            (
+                bound,
+                AtomicWaveFunction(
+                    RadialWavefunction(
+                        n=None, l=1, energy=15.0, radial_grid=r,
+                        radial_values=scale * r * np.exp(-0.1 * r),
+                    ),
+                    ml=0,
+                ),
+            )
+            for scale in (0.1, 1.0, 0.5)
+        )
+        potential = TransitionPotential(
+            Z=5, transitions=[weak, strong, medium], extent=(8.0, 8.0),
+            gpts=(32, 32), energy=ENERGY, double_channel=False,
         )
 
-        intensities = potential.integrated_intensities()
-        order = np.argsort(-intensities)
-
-        filtered = potential.filter_by_intensity(0.5)
-        kept = {id(t) for t in filtered.transitions}
-
-        # Everything kept must be at least as strong as everything dropped.
-        strongest = [potential.transitions[i] for i in order]
-        kept_ranks = [i for i, t in enumerate(strongest) if id(t) in kept]
-        assert kept_ranks == list(range(len(kept_ranks)))
+        for threshold, expected in ((0.5, [strong]), (0.9, [strong, medium])):
+            filtered = potential.filter_by_intensity(threshold)
+            assert [id(t) for t in filtered.transitions] == [
+                id(t) for t in expected
+            ], threshold
 
 
 def test_a_single_transition_potential_equals_a_one_element_list():
