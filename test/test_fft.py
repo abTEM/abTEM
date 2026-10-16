@@ -198,13 +198,9 @@ def test_warn_slow_fft_size_thread_safe():
     assert len(calls) == 1
 
 
+@requires_gpu
 def test_cufft_cache_auto_resolves_device_relative():
     cp = pytest.importorskip("cupy")
-    try:
-        if cp.cuda.runtime.getDeviceCount() < 1:
-            pytest.skip("no GPU available")
-    except Exception:
-        pytest.skip("no usable CUDA/HIP runtime")
 
     from abtem.core import config
     from abtem.core import fft as abtem_fft
@@ -262,13 +258,9 @@ def test_unrelated_runtime_error_propagates():
         abtem_fft._cupy_fft_with_cache_fallback(fake_fft, object())
 
 
+@requires_gpu
 def test_cufft_cache_config_edge_values():
     cp = pytest.importorskip("cupy")
-    try:
-        if cp.cuda.runtime.getDeviceCount() < 1:
-            pytest.skip("no GPU available")
-    except Exception:
-        pytest.skip("no usable CUDA/HIP runtime")
 
     from abtem.core import config
     from abtem.core import fft as abtem_fft
@@ -307,13 +299,9 @@ def test_cufft_cache_config_edge_values():
     abtem_fft._configure_cufft_cache()
 
 
+@requires_gpu
 def test_plan_cache_entry_limit():
     cp = pytest.importorskip("cupy")
-    try:
-        if cp.cuda.runtime.getDeviceCount() < 1:
-            pytest.skip("no GPU available")
-    except Exception:
-        pytest.skip("no usable CUDA/HIP runtime")
 
     from abtem.core import config
     from abtem.core import fft as abtem_fft
