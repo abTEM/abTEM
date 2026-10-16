@@ -293,7 +293,7 @@ def test_gpaw_parametrization_reproduces_the_dft_atom(
 # One element for which the spin-polarized solve really fails is enough; Pu,
 # the other one known, took 9 s.
 @pytest.mark.parametrize("symbol", ["Sm"])
-@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.skipif(GPAWParametrization is None, reason="requires gpaw")
 @pytest.mark.slow
 def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
     """GPAW's spin-polarized radial solver fails for some open-shell f-element
