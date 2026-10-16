@@ -163,10 +163,9 @@ def two_gpw_files(tmp_path_factory):
     return paths
 
 
-@pytest.mark.parametrize("repeat", range(3))
-def test_potential_from_two_files_on_the_threaded_scheduler(
-    two_gpw_files, monkeypatch, repeat
-):
+# One run is enough: with _GPAW_LOCK replaced by a null context, 12 of 12 runs
+# failed (the members differed from their references).
+def test_potential_from_two_files_on_the_threaded_scheduler(two_gpw_files, monkeypatch):
     import gpaw.fftw
 
     from abtem.potentials.gpaw import GPAWPotential
