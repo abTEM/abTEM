@@ -67,6 +67,7 @@ from abtem.atoms import (
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
+from abtem.slicing import _integrate_planes
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -418,12 +419,15 @@ def slice_potential(
         thickness / n for n, thickness in zip(slice_chunks, slice_thicknesses)
     )
 
-    start = np.cumsum((0,) + slice_chunks)
+    bounds = np.cumsum((0,) + slice_chunks)
 
+    # The slice boundaries lie on planes, so each boundary plane is split between
+    # the slices on either side and the last slice takes half of plane 0, as the
+    # potential is periodic along z (see `_integrate_planes`).
     potential_sliced = np.stack(
         [
-            np.sum(potential_3d[..., start:stop], axis=-1) * dz
-            for start, stop, dz in zip(start[:-1], start[1:], z_samplings)
+            _integrate_planes(potential_3d, start, stop) * dz
+            for start, stop, dz in zip(bounds[:-1], bounds[1:], z_samplings)
         ],
         axis=-1,
     )

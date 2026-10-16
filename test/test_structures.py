@@ -7,10 +7,13 @@ import pytest
 from ase import Atoms, build
 from ase.build import bulk, cut, graphene
 from scipy.spatial import cKDTree
-from utils import cpu_float64, ignore_strain_warning
+from utils import float64_devices, ignore_strain_warning, plane_rotation_by_hand
 
 import abtem
 from abtem.atoms import (
+    _ODD_PLANE_REVERSED_AXIS,
+    _rotate_atoms_to_plane,
+    _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
     decompose_affine_transform,
@@ -22,6 +25,7 @@ from abtem.atoms import (
     is_cell_valid,
     merge_close_atoms,
     orthogonalize_cell,
+    pad_atoms,
     plane_to_axes,
     rotate_atoms,
     rotate_atoms_to_plane,
@@ -30,6 +34,7 @@ from abtem.atoms import (
     standardize_cell,
     wrap_with_tolerance,
 )
+from abtem.core.backend import asnumpy
 
 
 def fcc(orthogonal=False):
@@ -137,8 +142,7 @@ def mos2():
     return atoms
 
 
-@pytest.mark.parametrize("perturbation", [-1e-9, -1e-6, -1e-4, 1e-9, 1e-6, 1e-4])
-def test_orthogonalize_cell_does_not_drop_boundary_atom(perturbation):
+def test_orthogonalize_cell_does_not_drop_boundary_atom():
     # Regression test: the Mo atom in this hexagonal cell sits exactly on the
     # cell origin, a corner shared by two faces of the resulting orthogonal
     # supercell. Relaxed DFT/MLIP structures routinely leave such
@@ -150,11 +154,12 @@ def test_orthogonalize_cell_does_not_drop_boundary_atom(perturbation):
     atoms = mos2()
     reference = orthogonalize_cell(atoms.copy())
 
-    perturbed = atoms.copy()
-    perturbed.positions[0, :2] += perturbation
-    orthogonalized = orthogonalize_cell(perturbed)
+    for perturbation in (-1e-9, -1e-6, -1e-4, 1e-9, 1e-6, 1e-4):
+        perturbed = atoms.copy()
+        perturbed.positions[0, :2] += perturbation
+        orthogonalized = orthogonalize_cell(perturbed)
 
-    assert len(orthogonalized) == len(reference)
+        assert len(orthogonalized) == len(reference), perturbation
 
 
 def _near_orthorhombic_cell(noise):
@@ -247,23 +252,20 @@ def test_plane_to_axes():
 # is_cell_hexagonal / is_cell_orthogonal / is_cell_valid / standardize_cell
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("atoms,is_hex,is_ortho", [
-    (bulk("Be"), True, False),
-    (bulk("Al", cubic=True), False, True),
-])
-def test_cell_predicates(atoms, is_hex, is_ortho):
-    assert is_cell_hexagonal(atoms) == is_hex
-    assert is_cell_orthogonal(atoms) == is_ortho
+def test_cell_predicates():
+    hexagonal, cubic = bulk("Be"), bulk("Al", cubic=True)
+    assert is_cell_hexagonal(hexagonal) and not is_cell_orthogonal(hexagonal)
+    assert is_cell_orthogonal(cubic) and not is_cell_hexagonal(cubic)
+    # a Cell object and an array are accepted as well as Atoms
+    assert is_cell_hexagonal(hexagonal.cell)
+    assert is_cell_orthogonal(np.diag([3.0, 3.0, 3.0]))
 
-
-def test_is_cell_valid():
-    assert is_cell_valid(bulk("Al", cubic=True))
-    assert is_cell_valid(standardize_cell(bulk("Al", cubic=True)))
-
-
-def test_cell_predicate_alternate_inputs():
-    assert is_cell_hexagonal(bulk("Be").cell)           # accepts Cell object
-    assert is_cell_orthogonal(np.diag([3.0, 3.0, 3.0]))  # accepts ndarray
+    # valid: a along x, b in the xy plane, c along z
+    assert is_cell_valid(cubic)
+    assert is_cell_valid(hexagonal)
+    tilted = cubic.copy()
+    tilted.rotate(30, "y", rotate_cell=True)
+    assert not is_cell_valid(tilted)
 
 
 def test_standardize_cell():
@@ -276,21 +278,58 @@ def test_standardize_cell():
 # euler_to_rotation / rotation_matrix_to_euler round-trip
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("axes", ["xyz", "zxz", "zyz"])
-def test_euler_round_trip(axes):
-    angles = (0.1, 0.2, 0.3)
-    R = euler_to_rotation(*angles, axes=axes)
-    assert R.shape == (3, 3)
-    assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
-    assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10)
-    R2 = euler_to_rotation(*rotation_matrix_to_euler(R, axes=axes), axes=axes)
-    assert np.allclose(R, R2, atol=1e-10)
-
-
-def test_euler_zero_angles_and_extrinsic():
+def test_euler_round_trip():
     assert np.allclose(euler_to_rotation(0.0, 0.0, 0.0), np.eye(3))
-    R = euler_to_rotation(0.1, 0.2, 0.3, axes="zyx", convention="extrinsic")
-    assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
+    angles = (0.1, 0.2, 0.3)
+    for axes, convention in [
+        ("xyz", "intrinsic"),
+        ("zxz", "intrinsic"),
+        ("zyz", "intrinsic"),
+        ("zyx", "extrinsic"),
+    ]:
+        R = euler_to_rotation(*angles, axes=axes, convention=convention)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10), axes
+        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10), axes
+        recovered = rotation_matrix_to_euler(R, axes=axes, convention=convention)
+        R2 = euler_to_rotation(*recovered, axes=axes, convention=convention)
+        assert np.allclose(R, R2, atol=1e-10), axes
+
+
+def _Rx(t):
+    return np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+
+
+def _Ry(t):
+    return np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
+
+
+def _Rz(t):
+    return np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1]])
+
+
+@pytest.mark.parametrize("convention", ["intrinsic", "extrinsic"])
+@pytest.mark.parametrize(
+    "angles, expected",
+    [((0.4, 0.0, 0.0), _Rx(0.4)), ((0.0, 0.4, 0.0), _Ry(0.4)), ((0.0, 0.0, 0.4), _Rz(0.4))],
+)
+def test_euler_single_axis_is_standard_active_rotation(convention, angles, expected):
+    # Oracle: the textbook right-handed (counter-clockwise, active) rotation
+    # matrices, written out by hand. A single nonzero angle of an "xyz" sequence
+    # is a rotation about that axis, whatever the frame convention.
+    assert np.allclose(euler_to_rotation(*angles, axes="xyz", convention=convention), expected)
+
+
+def test_euler_composition_order():
+    # Pins the documented frame conventions (euler_sequence docstring):
+    # "intrinsic"/"static" = rotations about the *fixed* axes, applied in order,
+    # R = Rz(c) Ry(b) Rx(a); "extrinsic"/"rotating" = rotations about the moving
+    # axes, R = Rx(a) Ry(b) Rz(c). (Note: standard nomenclature, e.g. scipy's
+    # Rotation, calls fixed-axis rotations "extrinsic" -- abTEM's labels are the
+    # other way round, but the docstring describes the frames correctly.)
+    a, b, c = 0.3, 0.5, 0.7
+    assert np.allclose(euler_to_rotation(a, b, c, "xyz", "intrinsic"), _Rz(c) @ _Ry(b) @ _Rx(a))
+    assert np.allclose(euler_to_rotation(a, b, c, "xyz", "extrinsic"), _Rx(a) @ _Ry(b) @ _Rz(c))
+    assert np.allclose(euler_to_rotation(a, b, c, "zxz", "intrinsic"), _Rz(c) @ _Rx(b) @ _Rz(a))
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +385,26 @@ def test_rotate_atoms():
     assert np.allclose(atoms.positions, original_pos)  # original not modified
 
 
+@pytest.mark.parametrize("axes", ["zxz", "zyz", "xyz"])
+def test_rotate_atoms_quarter_turn_about_z(axes):
+    # A +90 deg (counter-clockwise, right-handed) rotation about z maps
+    # x -> y and y -> -x, for positions and cell vectors alike. Independent oracle:
+    # ASE's Atoms.rotate(90, "z"), documented as a right-handed rotation.
+    atoms = Atoms(
+        "HHe", positions=[[1.0, 0.0, 0.0], [0.3, 0.7, 1.1]], cell=[[4.0, 0, 0], [0, 5.0, 0], [0, 0, 6.0]]
+    )
+    angles = (0.0, 0.0, np.pi / 2) if axes == "xyz" else (np.pi / 2, 0.0, 0.0)
+    rotated = rotate_atoms(atoms, axes=axes, angles=angles)
+    assert np.allclose(rotated.positions[0], [0.0, 1.0, 0.0])
+    assert np.allclose(rotated.positions[1], [-0.7, 0.3, 1.1])
+    assert np.allclose(rotated.cell[:], [[0, 4.0, 0], [-5.0, 0, 0], [0, 0, 6.0]])
+
+    reference = atoms.copy()
+    reference.rotate(90, "z", rotate_cell=True)
+    assert np.allclose(rotated.positions, reference.positions)
+    assert np.allclose(rotated.cell[:], reference.cell[:])
+
+
 def test_rotate_atoms_preserves_distances():
     atoms = bulk("Al", cubic=True)
     rotated = rotate_atoms(atoms, angles=(0.3, 0.5, 0.1))
@@ -359,16 +418,129 @@ def test_rotate_atoms_preserves_distances():
 # rotate_atoms_to_plane / best_orthogonal_cell
 # ---------------------------------------------------------------------------
 
-def test_rotate_atoms_to_plane():
-    atoms = bulk("Al", cubic=True)
-    assert rotate_atoms_to_plane(atoms, plane="xy") is atoms
-    assert is_cell_valid(rotate_atoms_to_plane(atoms, plane="xz"))
+def _orthorhombic_test_atoms():
+    # Distinct cell lengths and a chiral (non-coplanar, all-distinct) motif well
+    # inside the cell, so that permutations, reflections and wrapping are visible.
+    return Atoms(
+        "HHeLiBe",
+        positions=[[0.2, 0.4, 1.1], [1.0, 2.5, 4.0], [1.5, 0.9, 2.2], [0.6, 1.8, 3.1]],
+        cell=[2.0, 3.0, 5.0],
+        pbc=True,
+    )
 
 
-def test_best_orthogonal_cell():
-    atoms = bulk("Al", cubic=True)
-    result = best_orthogonal_cell(np.array(atoms.cell))
-    assert result.shape == (3,) and np.all(result > 0)
+def test_rotate_atoms_to_plane_xy_leaves_the_atoms_unchanged():
+    atoms = _orthorhombic_test_atoms()
+    unchanged = rotate_atoms_to_plane(atoms, plane="xy")
+    assert np.array_equal(unchanged.positions, atoms.positions)
+    assert np.array_equal(unchanged.cell[:], atoms.cell[:])
+
+
+@pytest.mark.parametrize(
+    "plane, in_plane, normal", [("xz", (0, 2), 1), ("yz", (1, 2), 0), ("zx", (2, 0), 1)]
+)
+def test_rotate_atoms_to_plane_normal_along_z(plane, in_plane, normal):
+    # The first/second axis of the named plane become x/y, so the plane normal
+    # (the remaining axis) ends up along z, i.e. along the beam. For "xz" one of
+    # the axes is also reversed, which the wrap into the cell takes up.
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    lengths = atoms.cell.lengths()[[*in_plane, normal]]
+    assert np.allclose(rotated.cell[:], np.diag(lengths))
+    signs = plane_rotation_by_hand(plane).sum(axis=0)
+    expected = np.mod(atoms.positions[:, [*in_plane, normal]] * signs, lengths)
+    assert np.allclose(rotated.positions[:, :2], expected[:, :2])
+    assert list(rotated.symbols) == list(atoms.symbols)
+
+
+def _signed_volume(positions):
+    return np.linalg.det(positions[1:4] - positions[0])
+
+
+ALL_PLANES = ["xy", "yz", "zx", "xz", "yx", "zy"]
+
+
+@pytest.mark.parametrize("plane", ALL_PLANES)
+def test_rotate_atoms_to_plane_is_proper_rotation(plane):
+    # A rotation preserves handedness: the signed volume spanned by a chiral
+    # motif is invariant (a reflection flips its sign). The motif is well inside
+    # the cell, so wrapping translates all of it by the same lattice vector.
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    assert np.isclose(_signed_volume(rotated.positions), _signed_volume(atoms.positions))
+
+
+def _minimum_image_distances(atoms):
+    return atoms.get_all_distances(mic=True)
+
+
+@pytest.mark.parametrize("plane", ALL_PLANES)
+def test_rotate_atoms_to_plane_applies_a_rotation_and_a_lattice_translation(plane):
+    """Oracle, written out by hand rather than from plane_to_axes: the named axes
+    become x and y and the remaining axis z, with one axis reversed where that is
+    a reflection. The map is then a rotation (orthogonal, determinant +1), the
+    atoms are its image up to a translation by the rotated cell, and all
+    distances are kept."""
+    rotation = plane_rotation_by_hand(plane)
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+
+    atoms = _orthorhombic_test_atoms()
+    rotated, frame = _rotate_atoms_to_plane(atoms, plane)
+
+    np.testing.assert_allclose(frame, rotation, atol=1e-12)
+    np.testing.assert_allclose(frame @ frame.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(frame) == pytest.approx(1.0)
+
+    lengths = np.abs(np.array(atoms.cell) @ rotation).sum(axis=0)
+    np.testing.assert_allclose(rotated.cell[:], np.diag(lengths), atol=1e-12)
+    # inside the rotated cell ...
+    assert np.all(rotated.positions >= -1e-12)
+    assert np.all(rotated.positions < lengths)
+    # ... and the rotated atoms translated by a lattice vector
+    difference = rotated.positions - atoms.positions @ rotation
+    np.testing.assert_allclose(
+        difference - lengths * np.round(difference / lengths), 0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        _minimum_image_distances(rotated), _minimum_image_distances(atoms), atol=1e-12
+    )
+    assert list(rotated.symbols) == list(atoms.symbols)
+
+
+@pytest.mark.parametrize("plane", ["xz", "yx", "zy"])
+def test_odd_planes_reverse_exactly_one_axis(plane):
+    """For "xz", "yx" and "zy" keeping every axis in its direction would be a
+    reflection: exactly one axis, `_ODD_PLANE_REVERSED_AXIS`, is the negative of
+    the axis it comes from, wrapped into the cell, and the others are unchanged."""
+    atoms = _orthorhombic_test_atoms()
+    rotated = rotate_atoms_to_plane(atoms, plane=plane)
+    axes = plane_to_axes(plane)
+    for new, old in enumerate(axes):
+        length = atoms.cell[old, old]
+        sign = -1.0 if new == _ODD_PLANE_REVERSED_AXIS else 1.0
+        np.testing.assert_allclose(
+            rotated.positions[:, new],
+            np.mod(sign * atoms.positions[:, old], length),
+            atol=1e-12,
+        )
+
+
+@pytest.mark.parametrize(
+    "atoms, expected",
+    [
+        # fcc Al (a = 4.05 Å): both the conventional and the primitive cell have
+        # the conventional cubic cell as their smallest orthogonal supercell.
+        (bulk("Al", cubic=True), [4.05, 4.05, 4.05]),
+        (bulk("Al"), [4.05, 4.05, 4.05]),
+        # hcp Mg (a = 3.21, c = 5.21304 Å): orthorhombic cell (a, sqrt(3) a, c).
+        (bulk("Mg"), [3.21, np.sqrt(3) * 3.21, 5.21304]),
+    ],
+)
+def test_best_orthogonal_cell(atoms, expected):
+    assert np.allclose(best_orthogonal_cell(np.array(atoms.cell)), expected, rtol=1e-10)
+
+
+def test_best_orthogonal_cell_raises_for_degenerate_cell():
     with pytest.raises(RuntimeError):
         # Two zero-norm columns trigger the RuntimeError
         best_orthogonal_cell(np.array([[0., 0., 3.], [0., 0., 4.], [0., 0., 5.]]))
@@ -467,7 +639,6 @@ def _by_hand(atoms, box, repetitions=6):
     return out[np.sort(keep)]
 
 
-@cpu_float64
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c[0])
 def test_cell_with_its_diagonal_as_the_orthogonal_box(case):
     name, atoms, diagonal_is_the_box = case
@@ -483,23 +654,36 @@ def test_cell_with_its_diagonal_as_the_orthogonal_box(case):
     assert expected == pytest.approx(round(expected))
 
 
-@cpu_float64
-@pytest.mark.parametrize("case", _cases(), ids=lambda c: c[0])
+# The cell-level test above checks all of the cases; the potential is built for
+# a hexagonal and a monoclinic cell, a sheared one and one guard.
+_POTENTIAL_CASES = [
+    "BN x (1, 2, 1)",
+    "monoclinic c = (-8, 0, 5)",
+    "sheared b = (4, 3, 0)",
+    "BN",
+]
+
+
+@float64_devices
+@pytest.mark.parametrize(
+    "case",
+    [case for case in _cases() if case[0] in _POTENTIAL_CASES],
+    ids=lambda c: c[0],
+)
 def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     name, atoms, _ = case
     potential = abtem.Potential(atoms, **GRID)
     oracle = _by_hand(atoms, potential.box)
     assert len(potential.get_transformed_atoms()) == len(oracle)
 
-    actual = potential.build(lazy=False).array
-    expected = abtem.Potential(oracle, **GRID).build(lazy=False).array
+    actual = asnumpy(potential.build(lazy=False).array)
+    expected = asnumpy(abtem.Potential(oracle, **GRID).build(lazy=False).array)
     assert actual.shape == expected.shape
     np.testing.assert_allclose(
         actual, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
     )
 
 
-@cpu_float64
 @pytest.mark.parametrize(
     "atoms",
     [_bn() * (1, 2, 1), _two_atoms([[4, 0, 0], [0, 3, 0], [4, 0, 5]])],
@@ -512,7 +696,6 @@ def test_automatic_sampling_of_a_sheared_cell(atoms):
     assert potential.gpts == abtem.Potential(oracle, sampling="auto").gpts
 
 
-@cpu_float64
 def test_noise_in_the_off_diagonal_components_is_still_removed():
     atoms = _noisy_orthorhombic()
     assert tuple(np.diag(atoms.cell)) == tuple(best_orthogonal_cell(atoms.cell))
@@ -541,7 +724,7 @@ def _rectangular_bn():
     return orthogonalize_cell(_bn())
 
 
-@cpu_float64
+@float64_devices
 def test_atom_on_a_cell_boundary_by_round_off_is_not_dropped():
     # The atom at the origin of the rectangular BN cell sits at a scaled
     # coordinate of -3.6e-16 of this sheared cell, which `ase.build.cut` wraps to
@@ -553,14 +736,13 @@ def test_atom_on_a_cell_boundary_by_round_off_is_not_dropped():
 
     potential = abtem.Potential(atoms, **GRID)
     oracle = _by_hand(atoms, potential.box)
-    actual = potential.build(lazy=False).array
-    expected = abtem.Potential(oracle, **GRID).build(lazy=False).array
+    actual = asnumpy(potential.build(lazy=False).array)
+    expected = asnumpy(abtem.Potential(oracle, **GRID).build(lazy=False).array)
     np.testing.assert_allclose(
         actual, expected, rtol=0, atol=1e-10 * np.abs(expected).max()
     )
 
 
-@cpu_float64
 @pytest.mark.parametrize(
     "base",
     [
@@ -626,15 +808,15 @@ def _images_of(supercell, num_atoms):
     return [scaled[source == i] for i in range(num_atoms)]
 
 
-def _assert_same_images(actual, expected):
+def _assert_same_images(actual, expected, case=None):
     """Equal as sets of points in the periodic supercell, atom by atom."""
-    assert len(actual) == len(expected)
+    assert len(actual) == len(expected), case
     for points, reference in zip(actual, expected):
-        assert len(points) == len(reference)
+        assert len(points) == len(reference), case
         tree = cKDTree(np.mod(reference, 1.0) % 1.0, boxsize=1.0 + 1e-12)
         distance, nearest = tree.query(np.mod(points, 1.0) % 1.0)
-        assert distance.max() < 1e-6
-        assert len(set(nearest)) == len(reference)
+        assert distance.max() < 1e-6, case
+        assert len(set(nearest)) == len(reference), case
 
 
 def _with_source(atoms):
@@ -643,38 +825,26 @@ def _with_source(atoms):
     return atoms
 
 
-@pytest.mark.parametrize(
-    "name, base, seed",
-    [
-        ("graphene x (12, 12, 1)", graphene(vacuum=2.0) * (12, 12, 1), 1),
-        ("graphene x (12, 12, 1)", graphene(vacuum=2.0) * (12, 12, 1), 2),
-        ("graphene x (30, 30, 1)", graphene(vacuum=2.0) * (30, 30, 1), 1),
-        ("hcp Mg x (6, 6, 4)", bulk("Mg") * (6, 6, 4), 1),
-        ("hcp Mg x (6, 6, 4)", bulk("Mg") * (6, 6, 4), 2),
-        ("hcp Mg x (10, 10, 6)", bulk("Mg") * (10, 10, 6), 1),
-        (
-            "BN x (10, 10, 1)",
-            graphene(formula="BN", a=2.5, vacuum=2.0) * (10, 10, 1),
-            1,
-        ),
-        (
-            "BN x (20, 20, 1)",
-            graphene(formula="BN", a=2.5, vacuum=2.0) * (20, 20, 1),
-            1,
-        ),
-    ],
-    ids=lambda value: value if isinstance(value, str) else None,
-)
-def test_rattled_hexagonal_supercell_keeps_every_atom(name, base, seed):
+def test_rattled_hexagonal_supercell_keeps_every_atom():
     # Atoms within 0.1 % of the cell of an upper face of the orthogonal cell are
     # many in a cell of a few nanometres, and ase.build.cut loses them.
-    atoms = _rattled(base, seed)
-    box = tuple(best_orthogonal_cell(np.array(atoms.cell)))
+    bn = graphene(formula="BN", a=2.5, vacuum=2.0)
+    cases = [
+        ("graphene x (12, 12, 1)", graphene(vacuum=2.0) * (12, 12, 1), 2),
+        ("graphene x (30, 30, 1)", graphene(vacuum=2.0) * (30, 30, 1), 1),
+        ("hcp Mg x (6, 6, 4)", bulk("Mg") * (6, 6, 4), 2),
+        ("hcp Mg x (10, 10, 6)", bulk("Mg") * (10, 10, 6), 1),
+        ("BN x (10, 10, 1)", bn * (10, 10, 1), 1),
+        ("BN x (20, 20, 1)", bn * (20, 20, 1), 1),
+    ]
+    for name, base, seed in cases:
+        atoms = _rattled(base, seed)
+        box = tuple(best_orthogonal_cell(np.array(atoms.cell)))
 
-    orthogonal = orthogonalize_cell(atoms)
+        orthogonal = orthogonalize_cell(atoms)
 
-    assert len(orthogonal) == _expected_number_of_atoms(atoms, box)
-    assert np.allclose(np.array(orthogonal.cell), np.diag(box))
+        assert len(orthogonal) == _expected_number_of_atoms(atoms, box), name
+        assert np.allclose(np.array(orthogonal.cell), np.diag(box)), name
 
 
 def test_potential_of_a_rattled_hexagonal_supercell_keeps_every_atom():
@@ -700,16 +870,19 @@ def test_large_random_cell_with_a_box_keeps_every_atom(num_atoms, length, repeti
         assert len(orthogonal) == num_atoms * int(np.prod(repetitions))
 
 
-@pytest.mark.parametrize("fraction", [0.9960, 0.9972, 0.9990, 0.0005])
-@pytest.mark.parametrize("periods", [2, 3, 10])
-def test_atom_close_to_an_upper_face_is_kept(fraction, periods):
+def test_atom_close_to_an_upper_face_is_kept():
     # 0.9972 of a 4 A axis is 0.0112 A below the face: outside the 0.01 A that
     # orthogonalize_cell snaps, inside the 0.1 % band of the supercell for a box
     # of 12 A.
-    atoms = Atoms("C", positions=[(4.0 * fraction, 1.0, 1.0)], cell=[4.0, 3.0, 5.0])
-    atoms.pbc = True
-    orthogonal = orthogonalize_cell(atoms, box=(4.0 * periods, 3.0, 5.0))
-    assert len(orthogonal) == periods
+    for fraction, periods in itertools.product(
+        (0.9960, 0.9972, 0.9990, 0.0005), (2, 3, 10)
+    ):
+        atoms = Atoms(
+            "C", positions=[(4.0 * fraction, 1.0, 1.0)], cell=[4.0, 3.0, 5.0]
+        )
+        atoms.pbc = True
+        orthogonal = orthogonalize_cell(atoms, box=(4.0 * periods, 3.0, 5.0))
+        assert len(orthogonal) == periods, (fraction, periods)
 
 
 def test_plane_box_and_origin_together_keep_every_atom():
@@ -739,16 +912,21 @@ def _random_sheared_cases(count=40, seed=9):
     return cases
 
 
-@pytest.mark.parametrize("case", range(40))
-def test_supercell_equals_the_enumeration_of_its_images(case):
-    atoms, vectors = _random_sheared_cases()[case]
-    supercell = abtem.atoms._cut_supercell(_with_source(atoms), vectors, tolerance=0.01)
+def test_supercell_equals_the_enumeration_of_its_images():
+    for case, (atoms, vectors) in enumerate(_random_sheared_cases()):
+        supercell = abtem.atoms._cut_supercell(
+            _with_source(atoms), vectors, tolerance=0.01
+        )
 
-    assert len(supercell) == len(atoms) * round(abs(np.linalg.det(vectors)))
-    assert np.allclose(np.array(supercell.cell), vectors @ np.array(atoms.cell))
-    _assert_same_images(
-        _images_of(supercell, len(atoms)), _images_by_enumeration(atoms, vectors)
-    )
+        assert len(supercell) == len(atoms) * round(abs(np.linalg.det(vectors))), case
+        assert np.allclose(
+            np.array(supercell.cell), vectors @ np.array(atoms.cell)
+        ), case
+        _assert_same_images(
+            _images_of(supercell, len(atoms)),
+            _images_by_enumeration(atoms, vectors),
+            case,
+        )
 
 
 def test_supercell_of_a_rattled_crystal_equals_the_enumeration_of_its_images():
@@ -807,48 +985,48 @@ def _single_atom(scaled, cell):
     return Atoms("C", scaled_positions=[scaled], cell=cell, pbc=True)
 
 
-def _assert_images_of_one_atom(atoms, vectors):
+def _assert_images_of_one_atom(atoms, vectors, case=None):
     supercell = abtem.atoms._wrapped_supercell(atoms, vectors)
     expected = int(round(abs(np.linalg.det(vectors))))
 
-    assert len(supercell) == expected
+    assert len(supercell) == expected, case
     scaled = supercell.positions @ np.linalg.inv(np.array(supercell.cell))
-    _assert_same_images([scaled], _images_by_enumeration(atoms, vectors))
+    _assert_same_images([scaled], _images_by_enumeration(atoms, vectors), case)
 
 
-@pytest.mark.parametrize("distance", [1e-9, 1.0000001e-9, 5e-10])
-@pytest.mark.parametrize("scaled_xy", [(0.3, 0.2), (0.5, 0.5), (0.0, 0.0)])
-def test_atom_within_round_off_of_a_face_keeps_all_its_images(distance, scaled_xy):
+def test_atom_within_round_off_of_a_face_keeps_all_its_images():
     # 1 - 1e-9 is on the threshold at which a fractional coordinate counts as 1,
     # so the copies of one image, which differ by round-off, fall on both sides.
-    atoms = _single_atom((*scaled_xy, 1.0 - distance), graphene(vacuum=2).cell)
+    cell = graphene(vacuum=2).cell
+    for distance, scaled_xy in itertools.product(
+        (1e-9, 1.0000001e-9, 5e-10), ((0.3, 0.2), (0.5, 0.5), (0.0, 0.0))
+    ):
+        atoms = _single_atom((*scaled_xy, 1.0 - distance), cell)
 
-    _assert_images_of_one_atom(atoms, _HEX_VECTORS)
+        _assert_images_of_one_atom(atoms, _HEX_VECTORS, (distance, scaled_xy))
 
 
-@pytest.mark.parametrize("seed", [0, 1, 2])
-def test_images_at_a_rounding_tie_of_the_coordinates_are_not_counted_twice(seed):
+def test_images_at_a_rounding_tie_of_the_coordinates_are_not_counted_twice():
     # The scaled coordinates in the supercell are n * 1e-8 + 5e-9, which is a tie
     # of the rounding to 8 decimals, plus 3e-16 of round-off.
     cell = graphene(vacuum=2).cell
     newcell = _HEX_VECTORS @ np.array(cell)
-    rng = np.random.default_rng(seed)
-    for _ in range(100):
+    rng = np.random.default_rng(0)
+    for _ in range(300):
         scaled = np.round(rng.random(3), 8) + 5e-9 + rng.uniform(-3e-16, 3e-16, 3)
         atoms = _single_atom((0.0, 0.0, 0.5), cell)
         atoms.positions[:] = scaled @ newcell
 
-        _assert_images_of_one_atom(atoms, _HEX_VECTORS)
+        _assert_images_of_one_atom(atoms, _HEX_VECTORS, scaled)
 
 
-@pytest.mark.parametrize("length", [4.0, 40.0, 400.0])
-@pytest.mark.parametrize("distance", [2e-9, 5e-9])
-def test_atom_a_few_1e_9_of_a_period_from_a_face_keeps_all_its_images(length, distance):
-    cell = np.diag([length] * 3)
-    for y in np.linspace(0.1, 0.9, 50):
-        atoms = _single_atom((1.0 - distance, y, 0.37), cell)
+def test_atom_a_few_1e_9_of_a_period_from_a_face_keeps_all_its_images():
+    for length, distance in itertools.product((4.0, 40.0, 400.0), (2e-9, 5e-9)):
+        cell = np.diag([length] * 3)
+        for y in np.linspace(0.1, 0.9, 50):
+            atoms = _single_atom((1.0 - distance, y, 0.37), cell)
 
-        _assert_images_of_one_atom(atoms, _HEX_VECTORS)
+            _assert_images_of_one_atom(atoms, _HEX_VECTORS, (length, distance, y))
 
 
 # Cells whose lattice is rotated about the axis that becomes the beam direction.
@@ -858,13 +1036,22 @@ CELL = (4.0, 4.6, 5.3)
 
 
 # plane: the axis that becomes the beam direction, and the permutation of the axes
-PLANES = {"xz": ("y", (0, 2, 1)), "yz": ("x", (1, 2, 0)), "zx": ("y", (2, 0, 1))}
+# (for "xz", "yx" and "zy" one of them is also reversed, see
+# `plane_rotation_by_hand`)
+PLANES = {
+    "xz": ("y", (0, 2, 1)),
+    "yz": ("x", (1, 2, 0)),
+    "zx": ("y", (2, 0, 1)),
+    "yx": ("z", (1, 0, 2)),
+    "zy": ("x", (2, 1, 0)),
+}
 
 
 ANGLES = [30.0, 150.0]  # 150: the diagonal of the permuted cell is (-, -, +)
 
 
-NUM_ATOMS = [2, 3, 5]  # 3 is the only count dev does not raise for
+# standardize_cell used to raise an IndexError for every count but 3
+NUM_ATOMS = [2, 3, 5]
 
 
 def _unrotated(num_atoms):
@@ -887,25 +1074,32 @@ def _lengths(plane):
     return np.array(CELL)[list(PLANES[plane][1])]
 
 
-def _assert_is_the_unrotated_atoms_in_plane(transformed, num_atoms, plane):
+def _unrotated_in_plane(num_atoms, plane):
+    """The positions of the unrotated atoms in the frame of `plane`, up to
+    translations by the cell."""
+    return _unrotated(num_atoms).positions @ plane_rotation_by_hand(plane)
+
+
+def _assert_is_the_unrotated_atoms_in_plane(transformed, num_atoms, plane, case=""):
     lengths = _lengths(plane)
-    np.testing.assert_allclose(transformed.cell[:], np.diag(lengths), rtol=0, atol=1e-12)
-    assert len(transformed) == num_atoms
-    expected = _unrotated(num_atoms).positions[:, list(PLANES[plane][1])]
+    np.testing.assert_allclose(
+        transformed.cell[:], np.diag(lengths), rtol=0, atol=1e-12, err_msg=case
+    )
+    assert len(transformed) == num_atoms, case
+    expected = _unrotated_in_plane(num_atoms, plane)
     difference = transformed.positions - expected
     difference -= lengths * np.round(difference / lengths)
     # positions are a few A; a rotation by round-off moves them by ~1e-15 A
-    np.testing.assert_allclose(difference, 0.0, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(difference, 0.0, rtol=0, atol=1e-10, err_msg=case)
 
 
 @pytest.mark.parametrize("plane", list(PLANES))
-@pytest.mark.parametrize("angle", ANGLES)
-@pytest.mark.parametrize("num_atoms", NUM_ATOMS)
-def test_rotate_atoms_to_plane_undoes_a_rotation_about_the_beam(
-    num_atoms, angle, plane
-):
-    rotated = rotate_atoms_to_plane(_rotated(num_atoms, angle, plane), plane)
-    _assert_is_the_unrotated_atoms_in_plane(rotated, num_atoms, plane)
+def test_rotate_atoms_to_plane_undoes_a_rotation_about_the_beam(plane):
+    for num_atoms, angle in itertools.product(NUM_ATOMS, ANGLES):
+        rotated = rotate_atoms_to_plane(_rotated(num_atoms, angle, plane), plane)
+        _assert_is_the_unrotated_atoms_in_plane(
+            rotated, num_atoms, plane, f"{num_atoms} atoms, {angle} deg"
+        )
 
 
 @pytest.mark.parametrize("num_atoms", [2, 3])
@@ -932,21 +1126,25 @@ def test_standardize_cell_keeps_atoms_of_a_lattice_vector_along_minus_y(num_atom
 
 
 @pytest.mark.parametrize("plane", list(PLANES))
-@pytest.mark.parametrize("angle", ANGLES)
-@pytest.mark.parametrize("num_atoms", NUM_ATOMS)
 @pytest.mark.parametrize("box", [None, "lengths"], ids=["default_box", "box"])
-def test_potential_of_a_cell_rotated_about_the_beam(num_atoms, angle, plane, box):
+def test_potential_of_a_cell_rotated_about_the_beam(plane, box):
     """No strain is needed, so the construction reports none."""
     box = None if box is None else tuple(_lengths(plane))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        potential = abtem.Potential(
-            _rotated(num_atoms, angle, plane), sampling=0.1, plane=plane, box=box
+    for num_atoms, angle in itertools.product(NUM_ATOMS, ANGLES):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            potential = abtem.Potential(
+                _rotated(num_atoms, angle, plane), sampling=0.1, plane=plane, box=box
+            )
+        assert potential.box == pytest.approx(
+            tuple(_lengths(plane)), rel=0, abs=1e-12
+        ), (num_atoms, angle)
+        _assert_is_the_unrotated_atoms_in_plane(
+            potential.get_transformed_atoms(),
+            num_atoms,
+            plane,
+            f"{num_atoms} atoms, {angle} deg",
         )
-    assert potential.box == pytest.approx(tuple(_lengths(plane)), rel=0, abs=1e-12)
-    _assert_is_the_unrotated_atoms_in_plane(
-        potential.get_transformed_atoms(), num_atoms, plane
-    )
 
 
 def _rotated_about_x(num_atoms, angle):
@@ -967,17 +1165,15 @@ CELLS_IN_ANOTHER_PLANE = {
 }
 
 
-@pytest.mark.parametrize("name", list(CELLS_IN_ANOTHER_PLANE))
-def test_default_box_is_orthogonalize_cells_own(name):
+def test_default_box_is_orthogonalize_cells_own():
     """Oracle: orthogonalize_cell with no box rotates the atoms to the plane, then
     chooses its box from the rotated cell."""
-    atoms, plane = CELLS_IN_ANOTHER_PLANE[name]
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        expected = tuple(np.diag(abtem.orthogonalize_cell(atoms, plane=plane).cell))
-    assert abtem.Potential(atoms, sampling=0.1, plane=plane).box == pytest.approx(
-        expected, rel=0, abs=1e-12
-    )
+    for name, (atoms, plane) in CELLS_IN_ANOTHER_PLANE.items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cell = abtem.orthogonalize_cell(atoms, plane=plane).cell
+        box = abtem.Potential(atoms, sampling=0.1, plane=plane).box
+        assert box == pytest.approx(tuple(np.diag(cell)), rel=0, abs=1e-12), name
 
 
 @pytest.mark.parametrize("plane", list(PLANES))
@@ -1004,23 +1200,229 @@ def test_default_box_in_plane_xy_is_unchanged(atoms):
 
 
 @pytest.mark.parametrize("plane", list(PLANES))
-@pytest.mark.parametrize("angle", [0.0, 30.0])
-@pytest.mark.parametrize("num_atoms", [2, 5])
-def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(
-    num_atoms, angle, plane
-):
+def test_cut_cell_default_cell_is_the_cell_rotated_to_the_plane(plane):
     """cut_cell without a cell fits the atoms into the best orthogonal cell of the
     cell in the frame of the plane, the cell the atoms are cut from."""
-    atoms = _rotated(num_atoms, angle, plane)
-
-    cut = cut_cell(atoms, plane=plane)
-
     lengths = _lengths(plane)
-    np.testing.assert_allclose(cut.cell[:], np.diag(lengths), rtol=0, atol=1e-12)
-    assert len(cut) == num_atoms
-    expected = _unrotated(num_atoms).positions[:, list(PLANES[plane][1])]
-    # the atoms of the cut are in any order: each expected atom has one of them
-    difference = cut.positions[None, :, :] - expected[:, None, :]
-    difference -= lengths * np.round(difference / lengths)
-    nearest = np.linalg.norm(difference, axis=-1).min(axis=1)
-    np.testing.assert_allclose(nearest, 0.0, rtol=0, atol=1e-10)
+    for num_atoms, angle in itertools.product((2, 5), (0.0, 30.0)):
+        case = f"{num_atoms} atoms, {angle} deg"
+        atoms = _rotated(num_atoms, angle, plane)
+
+        cut = cut_cell(atoms, plane=plane)
+
+        np.testing.assert_allclose(
+            cut.cell[:], np.diag(lengths), rtol=0, atol=1e-12, err_msg=case
+        )
+        assert len(cut) == num_atoms, case
+        expected = _unrotated_in_plane(num_atoms, plane)
+        # the atoms of the cut are in any order: each expected atom has one of them
+        difference = cut.positions[None, :, :] - expected[:, None, :]
+        difference -= lengths * np.round(difference / lengths)
+        nearest = np.linalg.norm(difference, axis=-1).min(axis=1)
+        np.testing.assert_allclose(nearest, 0.0, rtol=0, atol=1e-10, err_msg=case)
+
+
+def _sorted_positions(atoms):
+    return atoms.positions[np.lexsort(np.round(atoms.positions, 6).T)]
+
+
+@pytest.mark.parametrize(
+    "pbc, origin",
+    [(True, (0.0, 0.0, 0.0)), (False, (0.0, 0.0, 0.0)), (False, (0.7, 0.3, 0.0))],
+)
+def test_cut_cell_keeps_atoms_given_outside_the_cell(pbc, origin):
+    """Moving an atom by whole lattice vectors leaves the repeated structure
+    unchanged, so it must leave the cut unchanged. Hexagonal, so the lattice
+    vectors are not the box axes; the cut has a margin, a nonzero origin, and
+    pbc False, where ``wrap`` does nothing."""
+    atoms = graphene(a=2.46, vacuum=2.0)
+    atoms.pbc = pbc
+    box = (4.26, 4.92, 4.0)
+    for margin in (0.0, 1.25, 3.0):
+        reference = cut_cell(atoms, cell=box, margin=margin, origin=origin)
+        for shift in [(-3, 0, 0), (0, 2, 0), (0, 0, 3), (2, -2, -2)]:
+            moved = atoms.copy()
+            moved.positions[0] += np.dot(shift, atoms.cell)
+            cut = cut_cell(moved, cell=box, margin=margin, origin=origin)
+
+            assert len(cut) == len(reference), (margin, shift)
+            np.testing.assert_allclose(
+                _sorted_positions(cut),
+                _sorted_positions(reference),
+                rtol=0,
+                atol=1e-9,
+                err_msg=f"margin {margin}, shift {shift}",
+            )
+
+
+def test_cut_cell_keeps_an_atom_at_the_upper_face_within_rounding():
+    """An atom 1e-15 short of the upper face of the cell is kept by the cut at the
+    position the cut keeps for the same atom at the lower face, where it is one
+    cell length further out than the cell it is given in."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    reference = Atoms("B", positions=[[0.0, 2.5, 2.0]], cell=cell, pbc=True)
+    atoms = Atoms("B", positions=[[4.0 - 1e-15, 2.5, 2.0]], cell=cell, pbc=True)
+
+    cut = cut_cell(atoms, cell=(8.0, 5.0, 4.0))
+
+    assert len(cut) == len(cut_cell(reference, cell=(8.0, 5.0, 4.0))) == 2
+    np.testing.assert_allclose(
+        np.sort(cut.positions[:, 0]), [0.0, 4.0], rtol=0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize(
+    "short, length, expected", [(6e-12, 8.0, 2), (1e-11, 40.0, 10), (1e-15, 40.0, 10)]
+)
+def test_cut_cell_keeps_every_image_the_crop_keeps_at_a_face_of_a_wide_box(
+    short, length, expected
+):
+    """The crop keeps an atom up to 1e-12 of the box length below the lower face of
+    the box, so the cut holds every image of an atom short of the upper face of its
+    cell by less than that, 1e-11 A short included when the box is 40 A wide:
+    one per cell along the box, as for an atom at the face."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    atoms = Atoms("B", positions=[[4.0 - short, 2.5, 2.0]], cell=cell, pbc=True)
+
+    cut = cut_cell(atoms, cell=(length, 5.0, 4.0))
+
+    assert len(cut) == expected
+
+
+def test_cut_cell_repeats_the_atoms_as_far_as_the_box_needs_and_no_further(
+    monkeypatch,
+):
+    """Atoms given many cells outside the cell are repeated as often as atoms
+    inside it, as the repeated structure holds every atom of the cell."""
+    atoms = bulk("Si", cubic=True)
+    built = []
+    multiply = Atoms.__mul__
+
+    def spy(self, repetitions):
+        repeated = multiply(self, repetitions)
+        built.append(len(repeated))
+        return repeated
+
+    monkeypatch.setattr(Atoms, "__mul__", spy)
+    reference = cut_cell(atoms, cell=(6.0, 6.0, 5.0), margin=2.0)
+    reference_built = max(built)
+
+    far = atoms.copy()
+    far.positions[0] -= 20 * far.cell.sum(0)
+    far.positions[1] += 20 * far.cell.sum(0)
+    built.clear()
+    cut = cut_cell(far, cell=(6.0, 6.0, 5.0), margin=2.0)
+
+    assert len(cut) == len(reference)
+    assert max(built) <= reference_built
+    np.testing.assert_allclose(
+        _sorted_positions(cut), _sorted_positions(reference), rtol=0, atol=1e-9
+    )
+
+
+def test_cut_cell_leaves_atoms_within_reach_of_the_repetitions_in_place():
+    """An atom given just outside the cell, on either side, has all its images in
+    the repetitions of the cell the box gives, so the cut holds the atoms of those
+    repetitions in order: the repetitions in turn, the atoms of the cell in each."""
+    cell = np.diag([4.0, 5.0, 4.0])
+    atoms = Atoms(
+        "B3",
+        positions=[[2.0, 2.5, 2.0], [-0.3, 1.0, -0.2], [1.0, -2.0, 2.7]],
+        cell=cell,
+        pbc=True,
+    )
+
+    cut = cut_cell(atoms, cell=(8.0, 10.0, 4.0))
+
+    shifts = itertools.product(range(3), range(3), range(2))
+    repeated = np.concatenate(
+        [atoms.positions + np.dot(shift, cell) for shift in shifts]
+    )
+    box = np.array([8.0, 10.0, 4.0])
+    kept = np.all((repeated >= -1e-12 * box) & (repeated < box - 1e-12 * box), axis=1)
+    np.testing.assert_array_equal(cut.positions, repeated[kept])
+
+
+# The atoms that cut_cell keeps from the cell and its margin, in order, for the
+# inputs of the tests below.
+SI_PRIMITIVE_MARGIN_POSITIONS = [
+    [5.43, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [1.3575, 1.3575, 1.3575],
+    [2.715, 2.715, 0.0],
+    [4.0725, 4.0725, 1.3575],
+    [2.715, 0.0, 2.715],
+    [4.0725, 1.3575, 4.0725],
+    [5.43, 2.715, 2.715],
+    [0.0, 5.43, 0.0],
+    [0.0, 2.715, 2.715],
+    [1.3575, 4.0725, 4.0725],
+    [2.715, 5.43, 2.715],
+    [0.0, 0.0, 5.43],
+    [2.715, 2.715, 5.43],
+    [5.43, 5.43, 5.43],
+]
+MOS2_PAST_THE_FACE_POSITIONS = [
+    [0.0, 0.0, 4.595],
+    [0.4823, 2.8366, 6.19],
+    [1.59, 0.918, 3.0],
+    [0.0, 3.6719, 3.0],
+    [1.59, 2.754, 4.595],
+]
+
+
+def test_cut_cell_keeps_the_order_of_the_atoms_the_repetitions_reach():
+    """FrozenPhonons draws the displacements of a cut by the index of the atom, so
+    the atoms the repetitions reach come in the same order wherever the images of
+    others are added: the margin images of a non-orthogonal cell, and the images
+    of an atom 0.08 A past the second lattice vector's face of a hexagonal cell,
+    follow them. The positions are those the cut had before it added images."""
+    primitive = cut_cell(bulk("Si"), margin=0.8)
+    assert len(primitive) == 18
+    np.testing.assert_allclose(
+        primitive.positions[:15], SI_PRIMITIVE_MARGIN_POSITIONS, rtol=0, atol=5e-5
+    )
+
+    atoms = build.mx2("MoS2", vacuum=3.0)
+    scaled = atoms.get_scaled_positions(wrap=False)
+    scaled[1, 1] = 1.03
+    atoms.set_scaled_positions(scaled)
+    hexagonal = cut_cell(atoms)
+    assert len(hexagonal) == 6
+    np.testing.assert_allclose(
+        hexagonal.positions[:5], MOS2_PAST_THE_FACE_POSITIONS, rtol=0, atol=5e-5
+    )
+
+
+@pytest.mark.parametrize("length, margin", [(4.0, 4.29), (20.0, 4.29), (5.0, 1.05)])
+def test_wrap_far_atoms_leaves_pad_atoms_every_image_of_every_atom(length, margin):
+    """Wherever an atom is given along x, the padding of the wrapped atom holds
+    all the atoms of the periodic structure within the margin, and the wrapped atom
+    is itself within the margin. An atom is moved only when it needs to be."""
+    margins = (margin, margin, margin)
+    given = np.arange(-7.5 * length, 7.5 * length, 0.37)
+    atoms = Atoms(
+        "B" * len(given),
+        positions=np.column_stack([given, np.ones_like(given), np.ones_like(given)]),
+        cell=np.diag([length, 5.0, 5.0]),
+        pbc=True,
+    )
+    wrapped = atoms.copy()
+
+    _wrap_far_atoms(wrapped, margins, "x")
+
+    moved = wrapped.positions[:, 0] != given
+    within = (given >= -margin) & (given < length + margin)
+    reached = (given >= margin - np.ceil(margin / length) * length) & (
+        given < (np.ceil(margin / length) + 1) * length - margin
+    )
+    np.testing.assert_array_equal(moved, ~(within & reached))
+    for x, new_x in zip(given, wrapped.positions[:, 0]):
+        single = Atoms("B", positions=[[new_x, 1.0, 1.0]], cell=atoms.cell, pbc=True)
+        padded = pad_atoms(single, margins, "x").positions[:, 0]
+        expected = x + length * np.arange(-12, 13)
+        expected = expected[
+            (expected >= -margin - 1e-12) & (expected < length + margin - 1e-12)
+        ]
+        np.testing.assert_allclose(np.sort(padded), expected, rtol=0, atol=1e-9)
+        assert -margin <= new_x < length + margin

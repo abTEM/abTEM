@@ -1,33 +1,42 @@
 """Tests for the ``torch.device`` configuration key of the torch backend.
 
 The key is read when the backend loads, so each test reloads it from scratch with
-the backend's state put back afterwards. Needs PyTorch, but not Apple silicon:
-the key's ``'cpu'`` value runs the backend on torch's CPU device.
+the backend's state put back afterwards. Needs PyTorch and either a Mac or
+``ABTEM_TORCH__DEVICE=cpu``: the key's ``'cpu'`` value runs the backend on torch's
+CPU device.
 """
 
 import numpy as np
 import pytest
 from ase.build import bulk
+from utils import requires_mps
 
 import abtem
-from abtem.core import _torch, backend
+from abtem.core import backend
 from abtem.core.backend import asnumpy, get_array_module
 
-pytest.importorskip("torch")
-
-# Selected with the other tests of the torch backend (see test_mps.py).
-pytestmark = [pytest.mark.torch, pytest.mark.mps, pytest.mark.metal]
+# Selected with the other tests of the torch backend (see test_mps.py), and run
+# only where it loads: the fixture below imports PyTorch, which a machine that
+# cannot use Metal must not do partway through a test run (see test_backend.py).
+pytestmark = requires_mps
 
 
 @pytest.fixture
 def unloaded_backend(monkeypatch):
+    """Put the backend's state back after the test; returns ``abtem.core._torch``."""
+    from abtem.core import _torch
+
     monkeypatch.setattr(backend, "tp", None)
     monkeypatch.setattr(backend, "TorchNDArray", None)
     monkeypatch.setattr(_torch, "DEVICE", "mps")
+    return _torch
 
 
-@pytest.mark.parametrize("value", ["cpu", "CPU", "Cpu"])
-def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend, value):
+def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend):
+    _torch = unloaded_backend
+    # Not the canonical spelling: the key is case-insensitive, and the one
+    # .lower() is all that differs between "cpu", "CPU" and "Cpu".
+    value = "CPU"
     atoms = bulk("Si", "diamond", a=5.43, cubic=True) * (2, 2, 3)
 
     with abtem.config.set(
@@ -48,13 +57,15 @@ def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend, value):
     )
 
 
-@pytest.mark.parametrize("value", [None, -1, "cuda", "", 1.5, ["cpu"]])
-def test_invalid_device_is_rejected_naming_the_key(unloaded_backend, value):
-    with abtem.config.set({"torch.device": value}):
-        with pytest.raises(ValueError, match="torch.device.*'mps' or 'cpu'"):
-            get_array_module("mps")
+def test_invalid_device_is_rejected_naming_the_key(unloaded_backend):
+    # A non-string, an unknown name and the empty string: the two halves of the
+    # check (isinstance, membership) plus the falsy edge.
+    for value in (None, "cuda", ""):
+        with abtem.config.set({"torch.device": value}):
+            with pytest.raises(ValueError, match="torch.device.*'mps' or 'cpu'"):
+                get_array_module("mps")
 
-    assert backend.tp is None
+        assert backend.tp is None, value
 
 
 def test_double_precision_is_still_refused_on_cpu(unloaded_backend):

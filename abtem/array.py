@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import json
 import operator
 import warnings
@@ -72,31 +73,28 @@ if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
 
 
+# Optional dependencies, imported on first use by _optional_module rather than
+# here: importing them made every `import abtem` slower, whether or not it ever
+# exported a TIFF, a HyperSpy signal or a quantem Dataset. A module set here
+# (as the tests do with stand-ins) is used as it is.
 tifffile: Optional[ModuleType] = None
-try:
-    import tifffile  # type: ignore
-except ImportError:
-    pass
-
-
 hs: Optional[ModuleType] = None
-try:
-    import hyperspy.api as hs  # type: ignore
-except ImportError:
-    pass
-
-
-xr: Optional[ModuleType] = None
-try:
-    import xarray as xr  # type: ignore
-except ImportError:
-    pass
-
 em: Optional[ModuleType] = None
-try:
-    import quantem as em  # type: ignore
-except ImportError:
-    pass
+
+
+def _optional_module(
+    attribute: str, name: str, message: str, error: type[Exception] = ImportError
+) -> ModuleType:
+    """The module `name`, imported once into this module's `attribute`; raises
+    `error` with `message` if it is not installed."""
+    module = globals()[attribute]
+    if module is None:
+        try:
+            module = importlib.import_module(name)
+        except ImportError as import_error:
+            raise error(message) from import_error
+        globals()[attribute] = module
+    return module
 
 
 ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
@@ -1732,6 +1730,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs = {**default_kwargs, **kwargs}
 
         if self.is_lazy:
+            if reduction_func in ("std", "var") and self.device == "mps":
+                # dask's moment_combine step casts to float64, which the
+                # single-precision torch backend refuses. Reducing each axis in
+                # one aggregate step skips it; the per-block partials it gathers
+                # have the reduced shape.
+                split_every = {
+                    axis: max(self.array.numblocks[axis], 2) for axis in axes
+                }
             kwargs["array"] = getattr(da, reduction_func)(
                 self.array, axes, split_every=split_every, keepdims=keepdims
             )
@@ -1768,7 +1774,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
-        if backend.tp is not None and get_array_module(self.array) is backend.tp:
+        self_array = self.array
+        if backend.tp is not None and get_array_module(self_array) is backend.tp:
             # dask infers a lazy result's dtype with NumPy's rules, under which a
             # NumPy scalar or array is strongly typed (float32 times np.float64(2)
             # is float64), and Metal holds no double precision. A Python scalar
@@ -1779,6 +1786,23 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     other_array = other_array.item()
                 else:
                     other_array = backend.tp.asarray(other_array)
+        elif (
+            cp is not None
+            and isinstance(other_array, (np.ndarray, cp.ndarray, da.core.Array))
+            and {get_array_module(self_array), get_array_module(other_array)}
+            == {np, cp}
+        ):
+            # CuPy refuses a host array as an operand, a 0-d one included,
+            # though it takes a NumPy scalar. The side on the host, measurement
+            # or operand, is moved to the device, so both operand orders give
+            # the same result there. On the device an array keeps its dtype, so
+            # the result is promoted as NumPy promotes it on the CPU. A lazy
+            # host operand is copied to the device block by block when the
+            # result is computed.
+            if get_array_module(self_array) is cp:
+                other_array = copy_to_device(other_array, "gpu")
+            else:
+                self_array = copy_to_device(self_array, "gpu")
 
         # Through the operator module rather than a direct call of the method
         # named by func, so that an operand that returns NotImplemented hands
@@ -1786,9 +1810,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         # supports raises TypeError.
         name = func.strip("_")
         if hasattr(operator, name):
-            array = getattr(operator, name)(self.array, other_array)
+            array = getattr(operator, name)(self_array, other_array)
         else:  # a reflected operation: "__rtruediv__" is other / self
-            array = getattr(operator, name[1:])(other_array, self.array)
+            array = getattr(operator, name[1:])(other_array, self_array)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -2212,10 +2236,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs :
             Keyword arguments passed to `tifffile.imwrite`.
         """
-        if tifffile is None:
-            raise RuntimeError(
-                "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile."
-            )
+        tifffile = _optional_module(
+            "tifffile",
+            "tifffile",
+            "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile.",
+            error=RuntimeError,
+        )
 
         array = self.array
         if self.is_lazy:
@@ -2526,10 +2552,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         This method requires Hyperspy to be installed. You can find more information
         about Hyperspy at https://hyperspy.org.
         """
-        if hs is None:
-            raise ImportError(
-                "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
-            )
+        hs = _optional_module(
+            "hs",
+            "hyperspy.api",
+            "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org.",
+        )
 
         if self._base_dims == 1:
             signal_type = hs.signals.Signal1D
@@ -2600,10 +2627,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ImportError
             If xarray is not installed.
         """
-        if xr is None:
+        # Imported here: xarray (with pandas) adds ~0.4 s to `import abtem`.
+        try:
+            import xarray as xr  # type: ignore
+        except ImportError as error:
             raise ImportError(
                 "This functionality of *ab*TEM requires xarray, see https://xarray.dev/."
-            )
+            ) from error
 
         coords = {}
         dims = []
@@ -2624,20 +2654,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             coords[axis.label] = dr
 
-        attrs = self.metadata
-        attrs["long_name"] = self.metadata["label"]
+        attrs = copy.deepcopy(self.metadata)
+        if "label" in attrs:
+            attrs["long_name"] = attrs["label"]
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
     def to_quantem(self):
         """
-        Convert ArrayObject to quantem Dataset object.
+        Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
+        origin is the coordinate of its first sample, in the units of the sampling; other
+        axes get origin 0 and sampling 1.
         """
 
-        if em is None:
-            raise ImportError(
-                "This functionality of *ab*TEM requires quantem, see https://github.com/electronmicroscopy/quantem."
-            )
+        em = _optional_module(
+            "em",
+            "quantem",
+            "This functionality of *ab*TEM requires quantem, see https://github.com/electronmicroscopy/quantem.",
+        )
 
         def _normalize_unit(unit):
             if unit is None:
@@ -2661,7 +2695,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for axis in self.axes_metadata:
             sampling.append(getattr(axis, "sampling", 1.0))
             units.append(_normalize_unit(getattr(axis, "units", None)))
-            origin.append(0.0)
+            origin.append(getattr(axis, "offset", 0.0))
 
         if self.is_lazy:
             self.compute()

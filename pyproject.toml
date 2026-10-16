@@ -22,16 +22,16 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 license = "GPL-3.0-or-later"
-license-files = ["LICENCE"]
+license-files = ["LICENSE"]
 
 dependencies = [
-    "numpy >= 2.0.0",
+    "numpy>=2.1.2",
     "pandas",
-    "matplotlib>=3.6",
+    "matplotlib>=3.8.4",
     "pyfftw",
     "scipy",
     "numba",
-    "dask>=2022.12.1,!=2025.12.*,!=2026.1.0,!=2026.1.1",
+    "dask>=2025.1.0,!=2025.12.*,!=2026.1.0,!=2026.1.1",  # defers to ArrayObject via __array_priority__
     "distributed",
     "zarr>=3.1",  # create_array(data=...) requires the 3.1 API
     "ase",
@@ -88,6 +88,7 @@ docs = [
 ]
 test = [
     "deepdiff>=8.6.1",
+    "hyperspy",
     "hypothesis>=6.151.5",
     "imageio>=2.37.2",
     "jupyter-client>=8.8.0",
@@ -96,6 +97,7 @@ test = [
     "pytest-xdist>=3.8.0",
     "sympy",
     "tox>=4.34.1",
+    "xarray",
 ]
 
 [tool.setuptools]

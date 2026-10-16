@@ -110,6 +110,103 @@ def plane_to_axes(plane: str) -> tuple[int, ...]:
     return axes + (last_axis.pop(),)
 
 
+#: The axis of the potential (0 for `x`, 1 for `y`, 2 for `z`) that is reversed
+#: when a plane given as a string is an odd permutation of the axes ("xz", "yx" and
+#: "zy"). A permutation of the axes alone would be a reflection; reversing one axis
+#: makes it a rotation. The second image axis `y` is reversed, so the beam keeps
+#: the direction and the entry face it had when the axes were only permuted (for
+#: "xz" it runs along +`y` of the atoms and enters at their y = 0 face); only the
+#: projected image is reversed along its second axis. Every site that rotates
+#: atoms, grids or vector components to a plane takes the reversed axis from
+#: `_plane_rotation`. Reversing `x` instead (0) would also need `_standardize_cell`
+#: changed: for a cell rotated about the beam it rotates the first in-plane
+#: lattice vector onto +`x`, which turns a reversed `x` into a reversed `y`.
+_ODD_PLANE_REVERSED_AXIS = 1
+
+
+def _plane_rotation(plane: str) -> np.ndarray:
+    """
+    The proper rotation `rotate_atoms_to_plane` applies to the atoms for a plane
+    given as a string, as a 3x3 matrix acting on row vectors (its columns are the
+    new axes in the frame of the atoms).
+
+    The first axis named by `plane` becomes `x`, the second `y`, and the remaining
+    axis `z`. For "xy", "yz" and "zx" that is a rotation. For "xz", "yx" and "zy"
+    it is a reflection, so the axis `_ODD_PLANE_REVERSED_AXIS` is also reversed.
+    """
+    axes = plane_to_axes(plane)
+    rotation = np.eye(3)[:, list(axes)]
+    if np.linalg.det(rotation) < 0.0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1.0
+    return rotation
+
+
+def _plane_reversed_axes(plane: str) -> list[int]:
+    """The axes of the frame of `plane` that point against the axis of the atoms
+    they come from."""
+    return [int(i) for i in np.flatnonzero(_plane_rotation(plane).sum(axis=0) < 0.0)]
+
+
+def _grid_to_plane(array, plane: str, first_axis: int = 0):
+    """
+    The values of a periodic grid over an orthogonal cell, as on the grid over the
+    cell rotated to `plane` by `rotate_atoms_to_plane`.
+
+    The three spatial axes of `array` start at `first_axis`. Grid point k sits at k
+    times the spacing, so along a reversed axis the point k goes to -k modulo the
+    number of points, as a position does when it is wrapped back into the cell.
+    """
+    axes = plane_to_axes(plane)
+    spatial = [first_axis + i for i in range(3)]
+    array = np.moveaxis(array, [first_axis + axis for axis in axes], spatial)
+    for axis in _plane_reversed_axes(plane):
+        array = np.roll(np.flip(array, axis=spatial[axis]), 1, axis=spatial[axis])
+    return array
+
+
+def _vector_field_to_plane(array, plane: str):
+    """
+    A vector field of shape (3, nx, ny, nz) on a periodic grid over an orthogonal
+    cell, as on the grid over the cell rotated to `plane`: the grid is moved as by
+    `_grid_to_plane` and the components are rotated with the positions.
+
+    The rotation is proper, so a pseudovector, such as a magnetic field, rotates the
+    same way as a vector.
+    """
+    array = _grid_to_plane(array, plane, first_axis=1)
+    array = array[list(plane_to_axes(plane))]
+    for axis in _plane_reversed_axes(plane):
+        array[axis] = -array[axis]
+    return array
+
+
+# The per-atom arrays that hold a pseudovector for each atom, which turn with the
+# atoms when they are rotated.
+_PSEUDOVECTOR_ARRAYS = ("magnetic_moments",)
+
+
+def _rotate_pseudovector_arrays(atoms: Atoms, linear_map: np.ndarray) -> None:
+    """
+    Turn the per-atom pseudovectors of `atoms`, such as magnetic moments, in place
+    with the linear map applied to their positions (a 3x3 matrix acting on row
+    vectors).
+
+    A pseudovector turns with the rotation part of the map, the orthogonal factor
+    of its polar decomposition: a strain has no single rule for it and leaves it.
+    Under an improper rotation it also changes sign.
+    """
+    names = [name for name in _PSEUDOVECTOR_ARRAYS if atoms.has(name)]
+    if not names:
+        return
+
+    u, _, vt = np.linalg.svd(np.asarray(linear_map, dtype=float))
+    rotation = u @ vt
+    rotation = rotation * np.sign(np.linalg.det(rotation))
+    for name in names:
+        vectors = atoms.get_array(name)
+        atoms.set_array(name, (vectors @ rotation).astype(vectors.dtype))
+
+
 def is_cell_hexagonal(atoms: Atoms | Cell) -> bool:
     """
     Check whether the cell of given atoms is hexagonal.
@@ -259,6 +356,7 @@ def _standardize_cell(atoms: Atoms, tol: float = 1e-12) -> tuple[Atoms, np.ndarr
         unit_vectors = Atoms(positions=np.eye(3))
         unit_vectors.rotate(-r, "z")
         rotation = unit_vectors.positions
+        _rotate_pseudovector_arrays(atoms, rotation)
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
@@ -679,7 +777,15 @@ def rotate_atoms_to_plane(
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
 ) -> Atoms:
     """
-    Rotate atoms so that their `xy` plane is rotated into a given plane.
+    Rotate atoms so that a given plane becomes their `xy` plane.
+
+    The first axis named by `plane` becomes `x`, the second `y` and the remaining
+    axis `z`, the propagation direction. The result is a rotation, never a mirror
+    image: for "xz", "yx" and "zy", where those axes alone would be a reflection,
+    the new `y` is the second named axis reversed. For "xz" the new `x` is `x`,
+    the new `y` is -`z` and the new `z` is `y` of the given atoms, so the beam
+    runs along +`y` and the image is reversed along its second axis. The atoms are
+    wrapped into the rotated cell.
 
     Parameters
     ----------
@@ -708,16 +814,22 @@ def _rotate_atoms_to_plane(
     if plane == "xy":
         return atoms, np.eye(3)
 
+    if not isinstance(plane, str):
+        raise NotImplementedError("plane must be given as a string, such as 'xz'.")
+
     atoms = atoms.copy()
-    if isinstance(plane, str):
-        axes = plane_to_axes(plane)
+    rotation = _plane_rotation(plane)
 
-    atoms.positions[:] = atoms.positions[:][:, list(axes)]
-    atoms.cell[:] = atoms.cell[:][:, list(axes)]
+    # A reversed axis gives the cell a negative lattice vector and the atoms
+    # negative coordinates along it; `_standardize_cell` makes the vector positive
+    # and wraps the atoms back into the cell, which translates them by it.
+    atoms.positions[:] = atoms.positions @ rotation
+    atoms.cell[:] = np.array(atoms.cell) @ rotation
+    _rotate_pseudovector_arrays(atoms, rotation)
 
-    atoms, rotation = _standardize_cell(atoms)
+    atoms, standard_rotation = _standardize_cell(atoms)
 
-    return atoms, np.eye(3)[:, list(axes)] @ rotation
+    return atoms, rotation @ standard_rotation
 
 
 def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
@@ -970,7 +1082,8 @@ BOX_STRAIN_WARNING_THRESHOLD = 1e-3
 _DEFAULT_BOX_MAX_REPETITIONS = 5
 
 # Set while a builder is rebuilt from an existing one (a lazy block, a copy): the
-# box was reported when the user gave it.
+# box, and atoms given far outside a non-periodic cell, were reported when the user
+# gave them.
 _box_strain_warning_suppressed = contextvars.ContextVar(
     "abtem_box_strain_warning_suppressed", default=False
 )
@@ -1051,12 +1164,12 @@ def _warn_if_box_is_strained(cell, box, plane="xy", default=False) -> None:
 
     If `default` is true, `box` is the one abTEM chose because none was given: the
     warning says so, names the ways to avoid the strain, and a box that holds no
-    whole repetition, or a cell that cannot be rotated to `plane`, is not an error
-    here but silent: the potential reports it when it places the atoms, if it does.
+    whole repetition is not an error here but silent: the potential reports it when
+    it places the atoms, if it does.
     """
     try:
         strain = _box_strain(cell, box, plane)
-    except (ValueError, RuntimeError):
+    except ValueError:
         if default:
             return
         raise
@@ -1149,21 +1262,27 @@ def orthogonalize_cell(
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential,
         i.e. provided plane is perpendicular to the propagation direction. If given as a
         string, it must be a concatenation of two of `x`, `y` and `z`; the default value
         'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. Providing a
-        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `rotate_atoms_to_plane`). The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential,
+        respectively. The length of the vectors has no influence. If the vectors are
+        not perpendicular, the second vector is rotated in the plane to become
+        perpendicular to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.))
+        is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         This is equivalent to translating the atoms. The default is (0., 0., 0.).
@@ -1290,6 +1409,7 @@ def orthogonalize_cell(
     if allow_transform:
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = np.diag(box)
+        _rotate_pseudovector_arrays(atoms, A)
 
     # elif not np.allclose(A, np.eye(3)):
     #    raise RuntimeError()
@@ -1352,7 +1472,7 @@ def cut_cell(
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell,
     ignoring periodicity. If the given atoms do not originally fill the cell, they are
-    first repeated until they do.
+    first repeated until they do, also when some of them lie outside the cell.
 
     Parameters
     ----------
@@ -1410,15 +1530,48 @@ def cut_cell(
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
     repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
+    floor_min = np.floor(scaled_corners.min(axis=0))
+
     new_atoms = atoms * repetitions
 
-    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    center_translate = np.dot(floor_min, atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
 
     new_atoms.positions[:] += center_translate - margin_translate
 
     new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
+
+    # The repetitions are the lattice shifts [first, first + repetitions). They reach
+    # every image in the region kept of an atom given in the cell, except in a
+    # non-orthogonal cell with a margin, and at a face within rounding. They miss
+    # those of an atom given outside the cell. Those images are placed directly, at
+    # the lattice shifts the region kept needs, and follow the atoms of the
+    # repetitions, which are as they would be without them. Their number is set by
+    # the box, not by how far outside the cell the atom is.
+    first = floor_min - scaled_margin.sum(0)
+    # The region kept is the one `atoms_in_cell` keeps, which allows 1e-12 of the box
+    # length at both faces of the box.
+    kept = scaled_corners - np.linalg.solve(
+        atoms.cell.T, np.array(margin) + 1e-12 * np.array(cell)
+    )
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    unreached = np.flatnonzero(
+        np.any(
+            (scaled_positions < kept.max(axis=0) - first - repetitions)
+            | (scaled_positions >= kept.min(axis=0) - first + 1),
+            axis=1,
+        )
+    )
+    # The region kept spans fewer than `repetitions` shifts along each axis.
+    steps = np.indices(repetitions).reshape(3, -1).T
+    shifts = np.ceil(kept.min(axis=0) - scaled_positions[unreached])[:, None] + steps
+    shifts = shifts.reshape(-1, 3)
+    reached = np.all((shifts >= first) & (shifts < first + repetitions), axis=1)
+    missed = atoms[np.repeat(unreached, len(steps))[~reached]]
+    missed.positions[:] += np.dot(shifts[~reached], atoms.cell)
+    missed.cell = cell
+    new_atoms.extend(atoms_in_cell(missed, margin=margin))
 
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
@@ -1479,6 +1632,43 @@ def wrap_and_snap_atoms(atoms: Atoms, copy: bool = True) -> Atoms:
     return atoms
 
 
+def _pad_images(margin: float, length: float) -> int:
+    """The number of cell lengths `pad_atoms` repeats a cell to each side."""
+    return int(np.ceil(margin / length))
+
+
+def _wrap_far_atoms(
+    atoms: Atoms, margins: tuple[float, float, float], directions: str = "xy"
+) -> None:
+    """
+    Wrap into the cell, in place, the atoms that `pad_atoms` would not keep with all
+    their images, along the given directions.
+
+    `pad_atoms` repeats the cell `_pad_images` times to each side and crops to the
+    margin. The images of an atom given outside the cell are all in the repetitions
+    only up to the distance they reach less the margin, and the atom itself is kept
+    only up to the margin. Wrapping the atoms further out, by whole cell lengths,
+    leaves the periodic structure unchanged. An atom closer to the cell is not moved.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to wrap, with an orthogonal cell.
+    margins : tuple of three floats
+        The padding margin along `x`, `y` and `z`.
+    directions : str
+        The directions to wrap along, as for `pad_atoms`.
+    """
+    for direction in directions:
+        axis = "xyz".index(direction)
+        length = atoms.cell[axis, axis]
+        reach = _pad_images(margins[axis], length) * length
+        slack = min(reach - margins[axis], margins[axis])
+        positions = atoms.positions[:, axis]
+        far = (positions < -slack) | (positions >= length + slack)
+        positions[far] = np.mod(positions[far], length)
+
+
 def pad_atoms(
     atoms: Atoms,
     margins: SupportsFloat | tuple[float, float, float],
@@ -1532,7 +1722,7 @@ def pad_atoms(
 
     reps = [1, 1, 1]
     for axis in axes:
-        reps[axis] = int(1 + 2 * np.ceil(margins[axis] / atoms.cell[axis, axis]))
+        reps[axis] = 1 + 2 * _pad_images(margins[axis], atoms.cell[axis, axis])
 
     if not any([rep > 1 for rep in reps]):
         return atoms

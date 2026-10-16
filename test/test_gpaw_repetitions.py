@@ -7,6 +7,7 @@ row scaling of a non-orthogonal cell is a separate mechanism.
 """
 
 import sys
+import tracemalloc
 
 import numpy as np
 import pytest
@@ -64,11 +65,11 @@ def _repeated(calculator, reps, slice_thickness, **kwargs):
     )
 
 
+# One slice thickness: the thickness does not change how the repetitions are
+# applied, and the other planes below take two more.
 @pytest.mark.parametrize("reps", [(2, 1, 1), (1, 1, 2), (2, 3, 2), (1, 3, 1)])
-@pytest.mark.parametrize("slice_thickness", [0.9, 1.2])
-def test_repetitions_equal_the_one_cell_potential_tiled(
-    calculator, reps, slice_thickness
-):
+def test_repetitions_equal_the_one_cell_potential_tiled(calculator, reps):
+    slice_thickness = 0.9
     unit = GPAWPotential(calculator, gpts=GPTS, slice_thickness=slice_thickness).build(
         lazy=False
     )
@@ -100,7 +101,10 @@ def test_integral_scales_with_the_number_of_cells(calculator, reps):
     "plane, gpts, slice_thickness, axes",
     [("xz", (32, 36), 0.4, (0, 2, 1)), ("yz", (28, 36), 1.6, (1, 2, 0))],
 )
-@pytest.mark.parametrize("reps", [(2, 1, 1), (1, 2, 1), (1, 1, 2), (2, 2, 2)])
+# A single repeated axis, which is in the plane for xz and the slicing axis for
+# yz, and two with a different count along each axis, which a mix-up of the axes
+# of the plane would not tile alike.
+@pytest.mark.parametrize("reps", [(2, 1, 1), (2, 3, 1), (1, 2, 3)])
 def test_repetitions_equal_the_one_cell_potential_tiled_in_other_planes(
     calculator, plane, gpts, slice_thickness, axes, reps
 ):
@@ -319,3 +323,40 @@ def test_frozen_phonons_with_other_positions_are_accepted(calculator):
     )
 
     assert potential.build(lazy=False).array.shape == (1, 4) + GPTS
+
+
+# The repetitions give a repeated grid of 33.0 MB in each case. A slice in the
+# second period, or late in a long stack of periods, takes its planes from a later
+# period; a slice as thick as the whole stack takes every plane of every period.
+@pytest.mark.parametrize(
+    "reps, gpts, slice_thickness, first_slice",
+    [
+        ((8, 8, 2), (64, 56), 0.9, 0),
+        ((8, 8, 2), (64, 56), 0.9, 5),
+        ((1, 1, 128), (32, 28), 0.9, 500),
+        ((1, 1, 128), (32, 28), 460.8, 0),
+    ],
+)
+def test_a_slice_with_repetitions_does_not_build_the_repeated_valence_grid(
+    calculator, reps, gpts, slice_thickness, first_slice
+):
+    repeated_bytes = calculator.get_electrostatic_potential().nbytes * np.prod(reps)
+    potential = GPAWPotential(
+        calculator, gpts=gpts, slice_thickness=slice_thickness, repetitions=reps
+    )
+
+    was_tracing = tracemalloc.is_tracing()
+    if not was_tracing:
+        tracemalloc.start()
+    # The peak counts from here on; this resets the peak of an outer tracing session.
+    tracemalloc.reset_peak()
+    start = tracemalloc.get_traced_memory()[0]
+    try:
+        list(potential.generate_slices(first_slice, first_slice + 1))
+        peak = tracemalloc.get_traced_memory()[1] - start
+    finally:
+        if not was_tracing:
+            tracemalloc.stop()
+
+    # Generating a slice needs the planes of the slice, not the repeated grid.
+    assert peak < repeated_bytes / 2

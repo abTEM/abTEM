@@ -201,21 +201,20 @@ def test_lazy_exit_waves_give_the_eager_result(components):
     np.testing.assert_allclose(lazy.array.compute(), eager.array, rtol=1e-5)
 
 
+# The components that need both moments give wrong values without either, which
+# test_components_match_the_reference and
+# test_unbiased_estimator_matches_the_sample_variance catch; what is left to check
+# is that the others skip one. unbiased adds no moment to the total.
 @pytest.mark.parametrize(
     "kwargs, formed",
     [
         (dict(components="elastic"), ["mean"]),
-        (dict(components="total"), ["configurations"]),
         (dict(components=("total",), unbiased=True), ["configurations"]),
-        (dict(components="diffuse"), ["mean", "configurations"]),
-        (dict(components="all"), ["mean", "configurations"]),
-        (dict(components="elastic", unbiased=True), ["mean", "configurations"]),
     ],
 )
 def test_only_the_moments_the_components_need_are_formed(monkeypatch, kwargs, formed):
     """The elastic component needs only the patterns of the mean wave, the total only
-    those of the configurations; the diffuse component, and the elastic one with
-    unbiased, need both."""
+    those of the configurations."""
     waves = _exit_waves()
     everything = elastic_diffuse_diffraction_patterns(
         waves, unbiased=kwargs.get("unbiased", False)
@@ -279,7 +278,9 @@ def test_block_direct_true_blocks_up_to_the_semiangle_cutoff(block_direct):
     """block_direct=True blocks what DiffractionPatterns.block_direct() blocks: with a
     20 mrad semiangle cutoff in the metadata, the bright-field disk and a margin of one
     pixel. Per pattern, a radius of 1 mrad (True taken as a number) blocks 5 pixels
-    here, the default 51 (angular sampling 7.7 x 6.2 mrad)."""
+    here, the default 51 (angular sampling 7.7 x 6.2 mrad). This is where a
+    numpy.bool_ taken as a number would show: without a cutoff a radius of 1 mrad
+    blocks the zero-angle pixel alone, as True does."""
     waves = _exit_waves(gpts=(48, 60), metadata={"semiangle_cutoff": 20.0})
     unblocked = elastic_diffuse_diffraction_patterns(waves, components="total")
     expected = unblocked.block_direct()
@@ -301,7 +302,6 @@ def _zeroed_pixels(blocked, unblocked):
     return [tuple(int(i) for i in index) for index in np.argwhere(zeroed)]
 
 
-@pytest.mark.parametrize("block_direct", [True, np.True_], ids=["bool", "numpy_bool"])
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -315,9 +315,7 @@ def _zeroed_pixels(blocked, unblocked):
     ],
     ids=["no_cutoff", "parallel_beam", "1e-6", "1e-3", "1.0", "no_aperture", "array"],
 )
-def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
-    metadata, block_direct
-):
+def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(metadata):
     """Without a semiangle cutoff, or with one smaller than the angular sampling
     (7.7 x 6.2 mrad here) or an infinite one, the direct beam is the zero-angle pixel
     alone, and only that pixel is blocked."""
@@ -325,7 +323,7 @@ def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
     unblocked = elastic_diffuse_diffraction_patterns(waves)
     center = tuple(n // 2 for n in unblocked.base_shape)
 
-    blocked = elastic_diffuse_diffraction_patterns(waves, block_direct=block_direct)
+    blocked = elastic_diffuse_diffraction_patterns(waves, block_direct=True)
 
     assert _zeroed_pixels(blocked, unblocked) == [center]
     np.testing.assert_array_equal(
@@ -346,19 +344,26 @@ def test_block_direct_true_with_an_invalid_cutoff_raises(semiangle_cutoff):
 
 
 def _sweep_grids():
-    """(extent, gpts, max_angle): one SrTiO3 cell and a 5 x 5 supercell over
-    gpts 32 to 300, and random grids."""
+    """(extent, gpts, max_angle): one SrTiO3 cell and a 5 x 5 supercell at even and
+    odd gpts, among them 116, 117 and 234, on which the zero-angle coordinate of a
+    plane-wave SrTiO3 pattern carried float32 roundoff when the rule was written;
+    and random rectangular grids, which between them use every max_angle mode.
+
+    A sweep of all gpts from 32 to 300 (568 grids) found no grid that these 30 do
+    not represent: today a radius of 0 blocks the zero-angle pixel on all of them,
+    and the rule holds on all of them."""
     grids = [
         ((extent, extent), (n, n), "cutoff")
         for extent in (3.905, 19.525)
-        for n in range(32, 301)
+        for n in (32, 33, 116, 117, 234, 299)
     ]
     rng = np.random.default_rng(0)
     max_angles = ["cutoff", "valid", "full", 10.0, 50.0]
-    while len(grids) < 2 * 269 + 30:
+    while len(grids) < 2 * 6 + 18:
         extent = tuple(float(x) for x in rng.uniform(2.0, 40.0, 2))
         gpts = tuple(int(x) for x in rng.integers(16, 200, 2))
         grids.append((extent, gpts, max_angles[rng.integers(len(max_angles))]))
+    assert {grid[2] for grid in grids} == set(max_angles)
     return grids
 
 
@@ -395,7 +400,7 @@ def test_block_direct_true_blocks_the_zero_angle_pixel_on_any_grid(function):
     reach its neighbours."""
     patterns_of = _SWEEP_FUNCTIONS[function]
     wrong = []
-    # NumPy's FFT needs no plan for each of the several hundred grid shapes.
+    # NumPy's FFT needs no plan for each of the grid shapes.
     with abtem.config.set({"fft": "numpy"}):
         for extent, gpts, max_angle in _sweep_grids():
             waves = _sweep_waves(extent, gpts, energy_axis=function == "phonon_loss")
@@ -432,33 +437,36 @@ def _probe_waves(extent, gpts, semiangle_cutoff, energy_axis=False):
     )
 
 
-@pytest.mark.parametrize("fraction", [0.3, 0.5, 0.7, 0.9, 0.99, 1.0, 1.5])
 @pytest.mark.parametrize(
     "extent, gpts",
     [((19.525, 19.525), (128, 128)), ((19.525, 9.7625), (128, 64))],
     ids=["isotropic", "anisotropic"],
 )
 @pytest.mark.parametrize("function", list(_SWEEP_FUNCTIONS))
-def test_block_direct_true_blocks_a_small_soft_aperture(
-    function, extent, gpts, fraction
-):
+def test_block_direct_true_blocks_a_small_soft_aperture(function, extent, gpts):
     """A soft aperture reaches the nearest pixels once the cutoff exceeds half the
     angular sampling; block_direct=True must still leave no direct-beam intensity.
-    The cutoff is a fraction of the smaller angular sampling (1.28 mrad)."""
+    The cutoff is a fraction of the smaller angular sampling (1.28 mrad), on both
+    sides of one half, where the rule switches to the disk and its margin, and up
+    to and past the full sampling."""
     sampling = abtem.Probe(energy=200e3, extent=extent, gpts=gpts).angular_sampling
-    waves = _probe_waves(
-        extent,
-        gpts,
-        fraction * min(sampling),
-        energy_axis=function == "phonon_loss",
-    )
     patterns_of = _SWEEP_FUNCTIONS[function]
-    with abtem.config.set({"device": "cpu"}):
-        unblocked = np.asarray(patterns_of(waves, max_angle="full").array)
-        blocked = np.asarray(
-            patterns_of(waves, max_angle="full", block_direct=True).array
+    leaking = []
+    for fraction in (0.3, 0.5, 0.7, 0.9, 0.99, 1.0, 1.5):
+        waves = _probe_waves(
+            extent,
+            gpts,
+            fraction * min(sampling),
+            energy_axis=function == "phonon_loss",
         )
-    assert np.abs(blocked).sum() < 1e-6 * np.abs(unblocked).sum()
+        with abtem.config.set({"device": "cpu"}):
+            unblocked = np.asarray(patterns_of(waves, max_angle="full").array)
+            blocked = np.asarray(
+                patterns_of(waves, max_angle="full", block_direct=True).array
+            )
+        if not np.abs(blocked).sum() < 1e-6 * np.abs(unblocked).sum():
+            leaking.append(fraction)
+    assert leaking == []
 
 
 def test_block_direct_true_keeps_the_first_order_reflections_of_a_plane_wave():
@@ -562,20 +570,15 @@ def test_unbiased_accepts_a_numpy_bool():
     assert result.metadata["unbiased"] is True
 
 
-@pytest.mark.parametrize("unbiased", [1, None, "yes"])
-def test_unbiased_must_be_a_bool(unbiased):
-    with pytest.raises(TypeError, match="unbiased must be a bool"):
-        elastic_diffuse_diffraction_patterns(_exit_waves(), unbiased=unbiased)
+def test_unbiased_must_be_a_bool():
+    for unbiased in (1, None, "yes"):
+        with pytest.raises(TypeError, match="unbiased must be a bool"):
+            elastic_diffuse_diffraction_patterns(_exit_waves(), unbiased=unbiased)
 
 
+# one per branch: not a dtype, and a dtype other than float32 or float64
 @pytest.mark.parametrize(
-    "reduction_dtype, error",
-    [
-        ("int32", ValueError),
-        ("float16", ValueError),
-        (-1, TypeError),
-        (object(), TypeError),
-    ],
+    "reduction_dtype, error", [("float16", ValueError), (object(), TypeError)]
 )
 def test_reduction_dtype_must_be_float32_or_float64(reduction_dtype, error):
     with pytest.raises(error, match="reduction_dtype must be float32 or float64"):
@@ -596,15 +599,9 @@ def test_exit_waves_need_a_frozen_phonon_axis():
         elastic_diffuse_diffraction_patterns(without)
 
 
+# the two ways to need the diffuse part (_needs_the_diffuse_part)
 @pytest.mark.parametrize(
-    "kwargs",
-    [
-        dict(components="diffuse"),
-        dict(components="all"),
-        dict(unbiased=True),
-        dict(components="elastic", unbiased=True),
-        dict(components=("total", "elastic"), unbiased=True),
-    ],
+    "kwargs", [dict(components="diffuse"), dict(components="elastic", unbiased=True)]
 )
 def test_a_single_configuration_raises_where_the_diffuse_part_is_needed(kwargs):
     with pytest.raises(ValueError, match="at least 2 frozen-phonon"):

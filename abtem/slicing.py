@@ -10,8 +10,17 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
-from abtem.core.utils import EqualityMixin, label_to_index, safe_equality
+from abtem.atoms import (
+    _stacklevel_outside_package,
+    is_cell_orthogonal,
+    wrap_and_snap_atoms,
+)
+from abtem.core.utils import (
+    EqualityMixin,
+    label_to_index,
+    safe_ceiling_int,
+    safe_equality,
+)
 
 # How far outside the cell along z [Å] a non-periodic potential places an atom in
 # its face slice before warning. A thermal displacement is a few times its
@@ -330,7 +339,7 @@ def commensurate_gpts(
     gpts = []
     for i in range(2):
         L = extent[i]
-        n_target = int(np.ceil(L / target_sampling))
+        n_target = safe_ceiling_int(L / target_sampling)
 
         x = positions[:, i] % L
         # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
@@ -430,8 +439,8 @@ def _validate_slice_thickness(
             )
         if thickness is not None:
             thickness = float(thickness)
-            n = float(np.ceil(thickness / slice_thickness))
-            validated_slice_thickness = (thickness / n,) * int(n)
+            n = max(safe_ceiling_int(thickness / slice_thickness), 1)
+            validated_slice_thickness = (thickness / n,) * n
         elif num_slices is not None:
             if isinstance(slice_thickness, np.ndarray):
                 slice_thickness = cast(float, slice_thickness.item())
@@ -643,11 +652,16 @@ class BaseSlicedAtoms(EqualityMixin):
 #     return closest_indices
 
 
+def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
+    """Whether each height lies more than `FACE_SLICE_WARNING_DISTANCE` outside
+    [0, height]."""
+    return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
+
+
 def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
     """Warn about atoms far enough outside [0, height] along z that placing them
     in the face slice is a guess at their depth, not a correction of it."""
-    outside = np.maximum(-z, z - height)
-    far = outside > FACE_SLICE_WARNING_DISTANCE
+    far = _far_outside_faces(z, height)
     if not np.any(far):
         return
 
@@ -658,7 +672,7 @@ def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
         "is right for a small displacement such as a frozen phonon, but puts an "
         "atom this far out at the wrong depth. Check the atomic positions against "
         "the cell height.",
-        stacklevel=3,
+        stacklevel=_stacklevel_outside_package(),
     )
 
 
@@ -865,3 +879,54 @@ class SlicedAtoms(BaseSlicedAtoms):
         atoms = self.atoms[in_slice]
         atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
+
+
+def _sum_planes(array, start: int, stop: int):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[-1]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
+
+
+def _integrate_planes(array, start: float, stop: float):
+    """
+    The integral of the planes of `array`, repeated periodically along its last
+    axis, from `start` to `stop` (`start` < `stop`), in units of the plane spacing:
+    multiply by the spacing for an integral over heights.
+
+    Plane k is the sample at the height k and stands for the heights from k - 1/2
+    to k + 1/2, so each plane is weighted by the length of its heights that lie
+    between the limits. Consecutive slices share their limit, so the weights of
+    every plane add up to one. A limit on a plane splits it between the slices on
+    either side (the trapezoidal rule), so the integral of a slice is centred on
+    the slice; summing the planes from the lower limit up to the upper one whole (a
+    left Riemann sum) would put it half a plane below the slice.
+    """
+    n = array.shape[-1]
+    # The limits half a plane up, so that plane k stands for the interval from k
+    # to k + 1. Python floats, so that the weights keep the dtype of `array`: a
+    # NumPy float64 scalar would promote float32 planes to float64.
+    u, v = float(start) + 0.5, float(stop) + 0.5
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        return (v - u) * array[..., first % n]
+
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[
+        ..., last % n
+    ]
+    if last > first + 1:
+        summed = summed + _sum_planes(array, first + 1, last)
+    return summed

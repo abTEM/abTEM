@@ -29,7 +29,9 @@ from scipy.interpolate import interp1d
 
 import abtem
 import abtem.potentials.gpaw as gpaw_module
+from abtem.inelastic.phonons import AtomsEnsemble, EnergyResolvedAtomsEnsemble
 from abtem.potentials.gpaw import GPAWPotential, _DummyGPAW
+from abtem.potentials.iam import CrystalPotential
 from utils import synthetic_transition_potential
 
 GPTS = (16, 16)
@@ -210,6 +212,26 @@ def test_a_list_of_calculators_has_one_configuration_each(fake_gpaw):
     potential = GPAWPotential(["a.gpw", _loaded("b.gpw")], gpts=GPTS)
 
     assert potential.num_configurations == potential.num_frozen_phonons == 2
+
+
+_TRAJECTORIES = {
+    "AtomsEnsemble": lambda: AtomsEnsemble([_atoms(), _atoms()]),
+    "EnergyResolvedAtomsEnsemble": lambda: EnergyResolvedAtomsEnsemble(
+        [[_atoms(), _atoms(), _atoms()], [_atoms(), _atoms(), _atoms()]],
+        energies=[0.0, 1.0],
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["path", "calculator"])
+@pytest.mark.parametrize("trajectory", _TRAJECTORIES)
+def test_one_calculator_rejects_a_trajectory(fake_gpaw, kind, trajectory):
+    with pytest.raises(ValueError, match="one calculator per frame"):
+        GPAWPotential(
+            _single_calculator(kind),
+            gpts=GPTS,
+            frozen_phonons=_TRAJECTORIES[trajectory](),
+        )
 
 
 @pytest.mark.parametrize("lazy", [True, False])
@@ -394,7 +416,10 @@ def test_loaded_calculators_between_paths(fake_gpaw, monkeypatch):
     assert max(counter.alive_while_slicing) == 1
 
 
-def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypatch):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_crystal_of_a_path_list_holds_one_read_calculator(
+    fake_gpaw, monkeypatch, lazy
+):
     counter = _CountReads(monkeypatch)
     crystal = abtem.CrystalPotential(
         GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS),
@@ -403,10 +428,11 @@ def test_a_crystal_of_a_path_list_holds_one_read_calculator(fake_gpaw, monkeypat
         seeds=(1, 2, 3),
     )
 
-    abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=False)
+    result = abtem.PlaneWave(energy=100e3).multislice(crystal, lazy=lazy)
+    if lazy:
+        result.compute(scheduler="threads")
 
-    # Each member may build the unit again (two reads per member).
-    assert counter.reads <= 6
+    assert counter.reads == 2
     assert max(counter.alive_while_slicing) == 1
 
 
@@ -441,19 +467,17 @@ def gpw_paths(tmp_path_factory):
     return paths
 
 
-@pytest.mark.parametrize(
-    "case", ["two paths", "one path in a list", "path and calculator", "frozen phonons"]
-)
+# Real-GPAW twins of test_an_eager_build_equals_the_lazy_build, which covers all
+# four inputs (also "one path in a list" and "path and calculator") with the fake
+# GPAW: these two check the fake against real .gpw files, for the two kinds of
+# eager read, a path list and one path with frozen phonons.
+@pytest.mark.parametrize("case", ["two paths", "frozen phonons"])
 def test_gpaw_eager_build_of_gpw_files(gpw_paths, case):
     from gpaw import GPAW
 
     atoms = GPAW(gpw_paths[0], txt=None).atoms
     inputs = {
         "two paths": lambda: dict(calculators=gpw_paths),
-        "one path in a list": lambda: dict(calculators=gpw_paths[:1]),
-        "path and calculator": lambda: dict(
-            calculators=[gpw_paths[0], GPAW(gpw_paths[1], txt=None)]
-        ),
         "frozen phonons": lambda: dict(
             calculators=gpw_paths[0],
             frozen_phonons=abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
@@ -471,20 +495,92 @@ def test_gpaw_eager_build_of_gpw_files(gpw_paths, case):
     np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)
 
 
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("wave", ["PlaneWave", "Probe"])
-@pytest.mark.parametrize("kind", ["path", "calculator"])
-def test_gpaw_single_calculator_multislice(gpw_paths, kind, wave, lazy):
-    from gpaw import GPAW
-
+def test_gpaw_single_calculator_multislice(gpw_paths):
+    # The real-GPAW twin of test_one_calculator_simulates_like_its_built_potential,
+    # which covers every kind x wave x lazy with the fake GPAW. One case checks the
+    # fake against a real .gpw file: a path, read lazily inside a probe multislice.
     def potential():
-        source = gpw_paths[0] if kind == "path" else GPAW(gpw_paths[0], txt=None)
-        return GPAWPotential(source, gpts=(32, 32))
+        return GPAWPotential(gpw_paths[0], gpts=(32, 32))
 
-    expected = _simulate(wave, potential().build(lazy=False), lazy=False)
-    result = _simulate(wave, potential(), lazy)
+    expected = _simulate("Probe", potential().build(lazy=False), lazy=False)
+    result = _simulate("Probe", potential(), lazy=True)
 
     assert potential().num_configurations == 1
     assert result.shape == expected.shape == (32, 32)
     scale = np.abs(expected.array).max()
     np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)
+
+
+def _gpaw_crystal(num_configs, repetitions, **kwargs):
+    unit = GPAWPotential(
+        "a.gpw",
+        gpts=GPTS,
+        frozen_phonons=abtem.FrozenPhonons(
+            _atoms(), num_configs=num_configs, sigmas=0.1, seed=1
+        ),
+    )
+    return CrystalPotential(unit, repetitions, **kwargs)
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+@pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (4, (2, 1, 2), dict(num_frozen_phonons=2, seeds=(5, 6))),  # reseeded
+        (2, (3, 1, 2), dict()),  # unseeded, pool enlarged from 2 to 3
+    ],
+    ids=["seeded", "enlarged"],
+)
+def test_a_crystal_of_a_frozen_phonon_gpaw_unit_builds(
+    fake_gpaw, num_configs, repetitions, kwargs
+):
+    crystal = _gpaw_crystal(num_configs, repetitions, **kwargs)
+
+    built = crystal.build(lazy=False)
+
+    assert built.shape[-3] == len(crystal)
+    assert np.abs(built.array).max() > 0
+
+
+def test_the_pool_unit_of_a_member_is_the_unit_with_the_seed_of_the_member(fake_gpaw):
+    crystal = _gpaw_crystal(4, (2, 1, 2), num_frozen_phonons=2, seeds=(5, 6))
+
+    for seed in (5, 6):
+        pool_unit = crystal._pool_unit_for_member(seed)
+        expected = GPAWPotential(
+            "a.gpw",
+            gpts=GPTS,
+            frozen_phonons=abtem.FrozenPhonons(
+                _atoms(), num_configs=4, sigmas=0.1, seed=seed
+            ),
+        )
+
+        assert pool_unit.calculators is crystal.potential_unit.calculators
+        np.testing.assert_array_equal(
+            pool_unit.build(lazy=False).array, expected.build(lazy=False).array
+        )
+
+
+@pytest.mark.filterwarnings("ignore:frozen-phonon pool .* is smaller:UserWarning")
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "num_configs, repetitions, kwargs",
+    [
+        (4, (2, 1, 2), dict(num_frozen_phonons=2, seeds=(5, 6), ensemble_mean=False)),
+        (2, (3, 1, 2), dict()),
+    ],
+    ids=["seeded", "enlarged"],
+)
+def test_a_crystal_of_a_frozen_phonon_gpaw_unit_simulates_as_it_builds(
+    fake_gpaw, num_configs, repetitions, kwargs, lazy
+):
+    expected = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs).build(lazy=False),
+        lazy=False,
+    )
+    result = abtem.PlaneWave(energy=100e3).multislice(
+        _gpaw_crystal(num_configs, repetitions, **kwargs), lazy=lazy
+    )
+    result = result.compute(scheduler="synchronous") if lazy else result
+
+    _assert_equal(result, expected)

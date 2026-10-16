@@ -6,7 +6,6 @@ import ctypes
 import importlib.util
 import logging
 import os
-import platform
 import sys
 import threading
 import warnings
@@ -46,27 +45,20 @@ except ImportError:
 try:
     import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
-    # same reasoning as the cupyx.scipy.signal guard below: this can fail even
-    # though cupyx itself imported, if the CUDA/ROCm libraries it eagerly
-    # pulls in aren't on the loader path. GPU code that needs cupyx_ndimage
-    # then fails at use time instead of blocking the abtem import.
+    # this can fail even though cupyx itself imported, if the CUDA/ROCm
+    # libraries it eagerly pulls in aren't on the loader path. GPU code that
+    # needs cupyx_ndimage then fails at use time instead of blocking the abtem
+    # import.
     cupyx_ndimage = None
 
 
-try:
-    # cupyx.scipy exposes submodules lazily; signal must be imported explicitly
-    # before ``get_scipy_module(...).signal`` can resolve it (the import emits a
-    # FutureWarning about the experimental cupyx.jit interface it uses
-    # internally)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        import cupyx.scipy.signal  # type: ignore  # noqa: F401
-except ImportError:
-    # this can fail even though cupyx itself imported: cupyx.scipy.signal
-    # eagerly imports cuBLAS-backed submodules, so an environment without the
-    # CUDA/ROCm libraries on the loader path fails here. GPU filters that need
-    # scipy.signal then fail at use time instead of blocking the abtem import.
-    pass
+def _is_macos() -> bool:
+    """Whether this machine can have a Metal (MPS) device.
+
+    Apple silicon and Intel Macs with an AMD GPU both can; whether this one
+    does is for PyTorch to answer.
+    """
+    return sys.platform == "darwin"
 
 
 def _preload_torch_openmp() -> bool:
@@ -89,7 +81,7 @@ def _preload_torch_openmp() -> bool:
         Whether torch can safely be imported later. False only when it is too
         late: pyfftw's runtime is already in the process and torch's is not.
     """
-    if sys.platform != "darwin" or platform.machine() != "arm64":
+    if not _is_macos():
         return True  # no Metal device to load torch for
     if "torch" in sys.modules:
         return True  # its runtime is already in, ahead of whatever follows
@@ -208,8 +200,6 @@ def check_mps_is_available():
                         "process. Import abtem (or torch) before pyfftw."
                     )
 
-                from abtem.core import _torch
-
                 torch_device = _config_get("torch.device")
                 if not isinstance(torch_device, str) or torch_device.lower() not in (
                     "mps",
@@ -219,7 +209,20 @@ def check_mps_is_available():
                         "The configuration key 'torch.device' must be 'mps' or "
                         f"'cpu', got {torch_device!r}."
                     )
-                _torch.DEVICE = torch_device.lower()
+                torch_device = torch_device.lower()
+
+                # Importing PyTorch can break CuPy's runtime kernel compilation
+                # in the same process (observed with ROCm), so a machine that
+                # cannot have a Metal device is refused before the import.
+                if torch_device == "mps" and not _is_macos():
+                    raise RuntimeError(
+                        "The Metal (MPS) backend is not available on this machine. "
+                        "Metal requires macOS; change the device to 'cpu'."
+                    )
+
+                from abtem.core import _torch
+
+                _torch.DEVICE = torch_device
 
                 _torch._check_available()
 

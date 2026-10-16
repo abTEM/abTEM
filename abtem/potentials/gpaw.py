@@ -21,10 +21,12 @@ from scipy.interpolate import interp1d
 
 from abtem.atoms import (
     _box_strain_warning_silenced,
+    _grid_to_plane,
     is_cell_orthogonal,
     plane_to_axes,
 )
 from abtem.core.axes import AxisMetadata
+from abtem.core.backend import copy_to_device
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,
@@ -42,6 +44,7 @@ from abtem.inelastic.phonons import (
 from abtem.parametrizations import LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.slicing import _integrate_planes
 
 try:
     from gpaw import GPAW
@@ -264,38 +267,42 @@ def _same_elements_and_cell(atoms, other):
     )
 
 
-# Slice limits are cumulative float sums, so a limit that is a whole number of planes
-# can lie a few units of roundoff below it. A limit within this fraction of a plane
-# below a plane boundary counts as on the boundary.
-_PLANE_TOLERANCE = 1e-6
-
-
-def integrate_slice(array, gpts, a, b, thickness):
+def integrate_slice(array, gpts, a, b, thickness, repetitions=(1, 1, 1)):
     """
     Integrate the planes of `array` along its last axis between the heights `a`
     and `b`, and Fourier interpolate the result to `gpts`.
 
-    Plane k covers the heights from k * dz to (k + 1) * dz, with dz the plane
-    spacing. A slice takes the planes from floor(a / dz) up to, not including,
-    floor(b / dz), so consecutive slices share their limit and every plane belongs
-    to exactly one slice. A slice that contains no plane gets zero.
-    """
-    nz = array.shape[2]
-    dz = thickness / nz
-    na = int(np.floor(a / dz + _PLANE_TOLERANCE))
-    nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
+    Plane k is the sample at the height k * dz, with dz the plane spacing, and
+    stands for the heights from k * dz - dz / 2 to k * dz + dz / 2; the grid is
+    periodic, so plane 0 also stands for the heights within dz / 2 below the
+    thickness. A slice takes each plane times the length of the plane's heights
+    that lie between `a` and `b`. Consecutive slices share their limit, so the
+    weights of every plane add up to dz. A limit on a plane splits it between the
+    slices on either side (the trapezoidal rule), so the integral of a slice is
+    centred on the slice. Taking the planes from floor(a / dz) to floor(b / dz)
+    whole (a left Riemann sum) put it dz / 2 below the slice.
 
-    if nb <= na:
+    `array` is one period of a grid repeated `repetitions` times along its three
+    axes, and `thickness` is the length of the repeated grid along the last axis.
+    The planes are taken from the one period and the integral is repeated in the
+    plane, which gives the same values as integrating the repeated grid, up to
+    the order of the float sum.
+    """
+    nz = array.shape[2] * repetitions[2]
+    dz = thickness / nz
+    # The limits in plane spacings; the repeated grid ends at plane nz.
+    start, stop = a / dz, min(b / dz, nz)
+
+    if stop <= start:
         return np.zeros(gpts, dtype=array.dtype)
 
-    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
-    new_shape = (nb - na,) + gpts
-    old_shape = (nb - na,) + slice_array.shape
+    summed = _integrate_planes(array, start, stop)
+
+    slice_array = np.tile(summed * dz, repetitions[:2])
+    old_shape = slice_array.shape
     slice_array = np.fft.fftn(slice_array)
     slice_array = fft_crop(slice_array, gpts)
-    slice_array = (
-        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
-    )
+    slice_array = np.fft.ifftn(slice_array).real * np.prod(gpts) / np.prod(old_shape)
     return slice_array
 
 
@@ -342,10 +349,13 @@ def _generate_slices(
     plane="xy",
     first_slice=0,
     last_slice=None,
+    device=None,
+    repetitions=(1, 1, 1),
 ):
     # `atoms` is the calculator's atoms or whole copies of them one after another
     # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
-    # correction of atom i of the calculator.
+    # correction of atom i of the calculator. `valence_potential` is that of one
+    # calculator cell.
     n = len(interpolators)
     potentials = []
     for i, interpolator in enumerate(interpolators):
@@ -359,6 +369,7 @@ def _generate_slices(
                 slice_thickness=slice_thickness,
                 projection="finite",
                 plane=plane,
+                device=device,
             )
         potentials.append(potential)
 
@@ -374,8 +385,11 @@ def _generate_slices(
         if not is_cell_orthogonal(atoms.cell):
             raise NotImplementedError
 
+        # The valence potential is rotated with the atoms, including the reversal
+        # of the axis that `_plane_rotation` reverses for the planes that need it.
         axes = plane_to_axes(potential.plane)
-        valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
+        valence_potential = _grid_to_plane(valence_potential, potential.plane)
+        repetitions = tuple(repetitions[axis] for axis in axes)
         transform_valence_potential = False
     # else:
     #    atoms = ewald_potential.frozen_phonons.atoms
@@ -387,6 +401,11 @@ def _generate_slices(
     elif transform_valence_potential is None:
         transform_valence_potential = True
 
+    if transform_valence_potential and repetitions != (1, 1, 1):
+        # `_interpolate_slice` maps the grid points of the slice into the cell of
+        # `atoms`, so it takes the valence potential of the repeated cell.
+        valence_potential = np.tile(valence_potential, repetitions)
+
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
 
@@ -395,14 +414,22 @@ def _generate_slices(
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array
 
+        # The valence potential is on the host; its slice is moved to the device
+        # of the slice array.
         if transform_valence_potential:
-            slic.array[:] -= _interpolate_slice(
+            valence_slice = _interpolate_slice(
                 valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
             )
         else:
-            slic.array[:] -= integrate_slice(
-                valence_potential, potential.gpts, a, b, potential.thickness
+            valence_slice = integrate_slice(
+                valence_potential,
+                potential.gpts,
+                a,
+                b,
+                potential.thickness,
+                repetitions,
             )
+        slic.array[:] -= copy_to_device(valence_slice, slic.array)
 
         yield slic
 
@@ -448,12 +475,14 @@ class GPAWPotential(_PotentialBuilder):
         i.e. provided plane is perpendicular to the propagation direction. If string,
         it must be a concatenation of two of 'x', 'y' and 'z';
         the default value 'xy' indicates that potential slices are cuts along the
-        `xy`-plane of the atoms. The plane may also be specified with two arbitrary
-        3D vectors, which are mapped to the `x` and `y` directions of the potential.
-        The length of the vectors has no influence. If the vectors are not
-        perpendicular, the second vector is rotated in the plane to become perpendicular
-        to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to
-        providing 'xy'.
+        `xy`-plane of the atoms. The atoms are rotated to the plane, never mirrored,
+        so for 'xz', 'yx' and 'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also
+        be specified with two arbitrary 3D vectors, which are mapped to the `x` and
+        `y` directions of the potential. The length of the vectors has no influence.
+        If the vectors are not perpendicular, the second vector is rotated in the
+        plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
         The origin relative to the provided Atoms mapped to the origin of the Potential.
         Only the default (0., 0., 0.) is supported; any other origin raises a
@@ -480,7 +509,9 @@ class GPAWPotential(_PotentialBuilder):
         ones too, which therefore get the small strain of a non-orthogonal cell's
         orthogonalization, while :class:`~abtem.potentials.iam.Potential` applies
         isotropic displacements without it. `directions` refers to the axes of the
-        potential, as in :class:`~abtem.potentials.iam.Potential`.
+        potential, as in :class:`~abtem.potentials.iam.Potential`. A trajectory
+        (:class:`~abtem.inelastic.phonons.AtomsEnsemble`) is not accepted: pass one
+        calculator per frame instead.
     repetitions : tuple of int
         Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
         applying frozen phonon displacements to calculate the potential contribution of
@@ -537,6 +568,13 @@ class GPAWPotential(_PotentialBuilder):
 
             if frozen_phonons is None:
                 frozen_phonons = DummyFrozenPhonons(atoms, num_configs=None)
+            elif frozen_phonons.ensemble_shape and not isinstance(
+                frozen_phonons, FrozenPhonons
+            ):
+                raise ValueError(
+                    "One calculator takes `FrozenPhonons`; for a trajectory, pass "
+                    "one calculator per frame."
+                )
             elif not _same_elements_and_cell(frozen_phonons.atoms, atoms):
                 raise ValueError(
                     "The frozen phonons must have the calculator's atoms: the same "
@@ -632,8 +670,6 @@ class GPAWPotential(_PotentialBuilder):
         valence_potential = calculator.valence_potential
 
         if self.repetitions != (1, 1, 1):
-            # The valence potential is periodic with the calculator's cell.
-            valence_potential = np.tile(valence_potential, self.repetitions)
             # cell_cv = calculator.gd.cell_cv * self.repetitions
             # N_c = tuple(
             #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
@@ -677,6 +713,8 @@ class GPAWPotential(_PotentialBuilder):
             slice_thickness=self.slice_thickness,
             first_slice=first_slice,
             last_slice=last_slice,
+            device=self.device,
+            repetitions=self.repetitions,
         ):
             yield slic
         # for slic in _generate_slices(
@@ -924,10 +962,8 @@ class GPAWParametrization:
         n = ae.n_sg.sum(0) / units.Bohr**3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
-    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
-        if isinstance(symbol, (int, np.int32, np.int64)):
-            symbol = chemical_symbols[symbol]
-
+    def _hankel_transform(self, n, k):
+        """f_x(k) = 3D Fourier transform of the radial density n, for k > 0."""
         try:
             from hankel import SymmetricFourierTransform
         except ImportError as e:
@@ -937,12 +973,18 @@ class GPAWParametrization:
             ) from e
 
         ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
+        return ht.transform(n, k * 2 * np.pi)[0]
+
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
         k = np.linspace(0.001, 12, 2000)
 
         n = self.charge(symbol, charge)
 
         # we do not calculate the Fourier Transform at k=0 for numerical reason
-        fx = ht.transform(n, k[1:] * 2 * np.pi)[0]
+        fx = self._hankel_transform(n, k[1:])
 
         # instead it is replaced by the exact value fx(0)=Z
         fx = np.concatenate([[atomic_numbers[symbol]], fx])
@@ -960,7 +1002,6 @@ class GPAWParametrization:
         if key in self._potential_functions:
             return self._potential_functions[key]
 
-        fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
         r = np.linspace(0, 20, 10000)
@@ -969,8 +1010,12 @@ class GPAWParametrization:
         fe0 = np.trapezoid(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
+        # The transform directly at the fit points, from the same density: the
+        # 2000-point table of x_ray_scattering_factor costs 20x the time and
+        # memory, and a second all-electron calculation.
+        fx = self._hankel_transform(n, k[k > 0])
         fe = np.zeros(len(k))
-        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
+        fe[k != 0] = (Z - fx) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
         # The Lobato functional form has near-degenerate parameter

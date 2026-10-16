@@ -108,16 +108,6 @@ def cluster(request):
         yield device, n_workers, client, local_cluster.scheduler.plugins[plugin.name]
 
 
-def test_extract_priority_reaches_the_distributed_scheduler(cluster):
-    device, _, _, plugin = cluster
-    image, waves = _haadf_and_waves(device)
-
-    ComputableList([image, waves]).compute(progress_bar=False)
-
-    assert plugin.priorities["_extract_blockwise_multi_output"] == {-_EXTRACT_PRIORITY}
-    assert plugin.priorities["apply_transform"] == {0}
-
-
 def test_a_single_output_block_is_not_annotated(cluster):
     """With one detector, the multislice task fuses with its extract and everything
     downstream; a priority there would reach the multislice work itself."""
@@ -150,6 +140,10 @@ def test_packed_blocks_are_released_as_they_are_extracted(cluster):
 
     computed = elastic_and_total().compute(progress_bar=False)
 
+    # The extract priority reaches the distributed scheduler; the multislice
+    # blocks themselves stay unprioritized.
+    assert plugin.priorities["_extract_blockwise_multi_output"] == {-_EXTRACT_PRIORITY}
+    assert plugin.priorities["apply_transform"] == {0}
     assert plugin.total == 32
     assert plugin.peak <= 3 * n_workers
     with warnings.catch_warnings():

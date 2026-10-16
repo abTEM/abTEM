@@ -268,26 +268,16 @@ class TestThermalWeighting:
                 dp_unweighted.array[i],
             )
 
+    # A zero, sub-pixel or infinite cutoff takes the same branch of
+    # _apply_block_direct; test_frozen_phonon_components::
+    # test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel covers them.
     @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
-    @pytest.mark.parametrize(
-        "metadata",
-        [
-            {},
-            {"semiangle_cutoff": 0.0},
-            {"semiangle_cutoff": 1e-3},
-            {"semiangle_cutoff": np.inf},
-        ],
-        ids=["no_cutoff", "parallel_beam", "1e-3", "no_aperture"],
-    )
     def test_block_direct_true_without_a_cutoff_blocks_the_zero_angle_pixel(
-        self, metadata, lazy
+        self, lazy
     ):
-        """Without a semiangle cutoff, or with one smaller than the angular sampling
-        or an infinite one, block_direct=True blocks the zero-angle pixel of every
-        unfolded pattern and nothing else."""
-        waves = _make_exit_waves(
-            [0.0, 0.02, 0.05, 0.10], gpts=48, lazy=lazy, metadata=metadata
-        )
+        """Without a semiangle cutoff block_direct=True blocks the zero-angle pixel
+        of every unfolded pattern and nothing else."""
+        waves = _make_exit_waves([0.0, 0.02, 0.05, 0.10], gpts=48, lazy=lazy)
         unfolded = _computed(phonon_loss_diffraction_patterns(waves, temperature=300.0))
         center = tuple(n // 2 for n in unfolded.shape[-2:])
 
@@ -359,8 +349,7 @@ class TestThermalWeighting:
             phonon_loss_diffraction_patterns(waves, components=old, temperature=300.0)
 
     @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
-    @pytest.mark.parametrize("block_direct", [True, 15.0])
-    def test_block_direct_gives_the_unfolded_patterns_blocked(self, block_direct, lazy):
+    def test_block_direct_gives_the_unfolded_patterns_blocked(self, lazy):
         """The direct beam is blocked before the unfolding, a per-pixel mask that
         gives the same result as blocking the unfolded patterns; True blocks up to
         the semiangle cutoff, as DiffractionPatterns.block_direct() does."""
@@ -371,14 +360,17 @@ class TestThermalWeighting:
             metadata={"semiangle_cutoff": 20.0},
         )
         unfolded = phonon_loss_diffraction_patterns(waves, temperature=300.0)
-        radius = None if block_direct is True else block_direct
-        expected = _computed(unfolded.block_direct(radius=radius))
+        for block_direct in (True, 15.0):
+            radius = None if block_direct is True else block_direct
+            expected = _computed(unfolded.block_direct(radius=radius))
 
-        blocked = phonon_loss_diffraction_patterns(
-            waves, temperature=300.0, block_direct=block_direct
-        )
+            blocked = phonon_loss_diffraction_patterns(
+                waves, temperature=300.0, block_direct=block_direct
+            )
 
-        np.testing.assert_array_equal(_computed(blocked), expected)
+            np.testing.assert_array_equal(
+                _computed(blocked), expected, err_msg=f"block_direct={block_direct}"
+            )
 
     def test_zero_temperature_puts_the_whole_signal_on_the_loss_side(self):
         """The limit T -> 0 has no thermal phonons (n = 0): loss weight 1, gain

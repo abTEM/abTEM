@@ -13,12 +13,12 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import _box_strain_warning_silenced, plane_to_axes
+from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
-from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.utils import get_dtype, itemset
+from abtem.core.fft import fft_crop
+from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -231,16 +231,13 @@ def _interpolate_between_cells(
     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
     coordinates = np.dot(coordinates, new_cell) + offset
 
-    padding = 3
-    padded_array = np.pad(array, ((padding,) * 2,) * 3, mode="wrap")
-
     inverse_old_cell = np.linalg.inv(np.array(old_cell))
     mapped_coordinates = np.dot(coordinates, inverse_old_cell) % 1.0
     mapped_coordinates *= array.shape
-    mapped_coordinates += padding
 
+    # "grid-wrap" makes the spline periodic with the array's own length.
     interpolated = map_coordinates(
-        padded_array, mapped_coordinates.T, mode="wrap", order=order
+        array, mapped_coordinates.T, mode="grid-wrap", order=order
     )
     interpolated = interpolated.reshape(new_shape)
     return interpolated
@@ -248,7 +245,7 @@ def _interpolate_between_cells(
 
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
     dz_charge = cell[2, 2] / array.shape[2]
-    nz = max(int(np.ceil((b - a) / dz_charge)), 2)
+    nz = max(safe_ceiling_int((b - a) / dz_charge), 2)
     slice_shape = gpts + (nz,)
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
@@ -277,8 +274,9 @@ def _generate_slices(
         last_slice = len(ewald_potential)
 
     if ewald_potential.plane != "xy":
-        axes = plane_to_axes(ewald_potential.plane)
-        charge = np.moveaxis(charge, axes[:2], (0, 1))
+        # The charge density is rotated with the atoms, including the reversal of
+        # the axis that `_plane_rotation` reverses for the planes that need it.
+        charge = _grid_to_plane(charge, ewald_potential.plane)
         atoms, _, frame = ewald_potential._transform_atoms()
     else:
         atoms, frame = ewald_potential.frozen_phonons.atoms, np.eye(3)
@@ -361,11 +359,14 @@ class ChargeDensityPotential(_PotentialBuilder):
         potential, i.e. the propagation direction will be perpendicular to the provided
         plane. If str, must be a concatenation of two of 'x', 'y' and 'z'; the default
         value 'xy' indicates that potential slices are cuts parallel to the 'xy'-plane.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped
-        to the `x` and `y` directions of the potential, respectively. The length of the
-        vectors has no influence. If the vectors are not perpendicular, the second
-        vector is rotated in the plane to become perpendicular to the first. A value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
+        The atoms are rotated to the plane, never mirrored, so for 'xz', 'yx' and
+        'zy' the second axis is reversed (see
+        `abtem.atoms.rotate_atoms_to_plane`). The plane may also be specified with two
+        arbitrary 3D vectors, which are mapped to the `x` and `y` directions of the
+        potential, respectively. The length of the vectors has no influence. If the
+        vectors are not perpendicular, the second vector is rotated in the plane to
+        become perpendicular to the first. A value of ((1., 0., 0.), (0., 1., 0.)) is
+        equivalent to 'xy'.
     origin : three float, optional
         The origin relative to the provided atoms mapped to the origin of the potential.
         Only the default (0., 0., 0.) is supported; any other origin raises a
@@ -594,27 +595,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             _default_atoms=self.frozen_phonons.atoms,
             **kwargs,
         )
-
-    def _interpolate_slice(self, array, cell, a, b):
-        slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
-
-        slice_box = np.diag(self.box[:2] + (b - a,))
-
-        slice_array = _interpolate_between_cells(
-            array, slice_shape, cell, slice_box, (0, 0, a)
-        )
-
-        pixel_thickness = slice_shape[-1] - 1
-
-        return np.trapezoid(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
-
-    def _integrate_slice(self, array, a, b):
-        dz = self.box[2] / array.shape[2]
-        na = int(np.floor(a / dz))
-        nb = int(np.floor(b / dz))
-        dx = (b - a) / (nb - na - 1)
-        slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
-        return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     # The box it is given is this potential's own, not one the user gave.
     @_box_strain_warning_silenced()

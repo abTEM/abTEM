@@ -70,28 +70,23 @@ def _run(setup, scatter_max_batch, counter=None):
         TransitionPotentialArray.filter_sites = original
 
 
-def test_filtering_does_not_scale_with_the_number_of_chunks(setup):
+def test_chunking_neither_multiplies_the_filter_calls_nor_changes_the_result(setup):
     """Chunking the sites more finely must not multiply the filter calls.
 
     filter_sites copies its mask back to the host, synchronising the device,
     so calling it per chunk stalls the pipeline once per chunk.
-    """
-    coarse, fine = {"calls": 0}, {"calls": 0}
-    _run(setup, scatter_max_batch=64, counter=coarse)
-    _run(setup, scatter_max_batch=1, counter=fine)
 
-    assert fine["calls"] == coarse["calls"]
-    # ... and it is one per slice, not one per chunk.
-    assert fine["calls"] <= 8
-
-
-def test_results_are_independent_of_the_chunk_size(setup):
-    """The threshold is per site, so chunking cannot change which sites
+    The threshold is per site, so chunking cannot change which sites
     contribute -- only the order in which their contributions are summed,
     which at the configured precision is a round-off level difference.
     """
-    coarse = _run(setup, scatter_max_batch=64)
-    fine = _run(setup, scatter_max_batch=1)
+    coarse_calls, fine_calls = {"calls": 0}, {"calls": 0}
+    coarse = _run(setup, scatter_max_batch=64, counter=coarse_calls)
+    fine = _run(setup, scatter_max_batch=1, counter=fine_calls)
+
+    assert fine_calls["calls"] == coarse_calls["calls"]
+    # ... and it is one per slice, not one per chunk.
+    assert fine_calls["calls"] <= 8
 
     # Two all-zero results (e.g. a filter that drops every site) would agree
     # trivially. This only rules that out for this setup, which is known to

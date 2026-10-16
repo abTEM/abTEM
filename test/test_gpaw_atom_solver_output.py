@@ -77,7 +77,10 @@ def test_concurrent_atom_solves():
     ]
     serial = [f(*a) for f, a in jobs]
     stdout = sys.stdout
-    for _ in range(5):
+    # A backstop: that no solver touches sys.stdout at all is checked
+    # deterministically by test_atom_solve_leaves_sys_stdout_alone, so two
+    # concurrent rounds (seconds each) do rather than five.
+    for _ in range(2):
         results = [None] * len(jobs)
 
         def work(i):
