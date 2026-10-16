@@ -86,48 +86,13 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
 # value-based for lazy results too.
 PRISM_VS_PROBE_TOLERANCES = dict(rtol=1e-5, atol=1e-8)
 
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@devices
-# @pytest.mark.parametrize('interpolation', [True, False])
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
-    potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
-
-    detector = data.draw(detector())
-    s_matrix = data.draw(
-        abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
-    )
-
-    s_matrix = s_matrix.round_gpts_to_interpolation()
-    probe = s_matrix.dummy_probes()
-
-    scan = GridScan()
-    assume(
-        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
-        or isinstance(detector, WavesDetector)
-    )
-
-    s_matrix_measurement = s_matrix.scan(
-        scan=scan, detectors=detector, lazy=lazy
-    ).to_cpu()
-    probe_measurement = probe.scan(
-        potential=potential, scan=scan, detectors=detector, lazy=lazy
-    ).to_cpu()
-
-    assert_array_objects_equal(
-        s_matrix_measurement, probe_measurement, **PRISM_VS_PROBE_TOLERANCES
-    )
+PRISM_SCAN_DETECTORS = [
+    abtem_st.segmented_detector,
+    abtem_st.flexible_annular_detector,
+    abtem_st.pixelated_detector,
+    abtem_st.waves_detector,
+    abtem_st.annular_detector,
+]
 
 
 @pytest.mark.slow
@@ -313,32 +278,24 @@ def test_plane_wave_expansion_follows_the_precision(
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @devices
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_prism_scan_match_probe_scan(data, detector, lazy, device):
-    # unlike test_s_matrix_matches_probe_no_interpolation, the scan here is
-    # matched to the probe explicitly (GridScan.match_probe) rather than left
-    # for s_matrix.scan()/probe.scan() to match on their own -- this pins that
-    # the explicit match_probe workflow agrees between the two reduction paths
+def test_prism_scan_match_probe_scan(data, lazy, device):
+    # The scan is either matched to the probe explicitly (GridScan.match_probe)
+    # or left for s_matrix.scan()/probe.scan() to match on their own: both
+    # workflows must agree between the two reduction paths. The detector is
+    # drawn, so each is compared across the run.
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
     s_matrix = data.draw(
         abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
     )
+    detector = data.draw(st.sampled_from(PRISM_SCAN_DETECTORS), label="detector")
     detector = data.draw(detector())
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
     scan = GridScan()
-    scan.match_probe(probe)
+    if data.draw(st.booleans(), label="match_probe"):
+        scan.match_probe(probe)
     assume(
         (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
         or isinstance(detector, WavesDetector)
