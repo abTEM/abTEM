@@ -1,6 +1,5 @@
 import os
 import sys
-import warnings
 import zlib
 
 # A non-interactive backend, before anything imports matplotlib (abtem does): on
@@ -156,11 +155,6 @@ def pytest_collection_finish(session):
 def pytest_configure(config):
     _cap_threads_per_worker(config)
     config.addinivalue_line("markers", "slow: mark test as slow to run")
-    # Ignore specific warnings globally
-    warnings.filterwarnings(
-        "ignore",
-        category=UserWarning,
-    )
     config.addinivalue_line(
         "markers",
         "multigpu: requires >=2 GPUs and dask-cuda; skipped otherwise",
