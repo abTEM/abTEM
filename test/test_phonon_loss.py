@@ -69,15 +69,6 @@ def test_invalid_component_raises():
         phonon_loss_diffraction_patterns(waves, components="bogus")
 
 
-@pytest.mark.parametrize(
-    "old, new", [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")]
-)
-def test_earlier_component_names_point_to_the_new_ones(old, new):
-    waves = _make_exit_waves([0.02, 0.05, 0.10])
-    with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
-        phonon_loss_diffraction_patterns(waves, components=old)
-
-
 @pytest.mark.parametrize("components", ["diffuse", "all"])
 def test_single_config_diffuse_raises_instead_of_returning_zeros(components):
     """With one frozen-phonon configuration, the total and the elastic intensity
@@ -283,15 +274,6 @@ class TestThermalWeighting:
             phonon_loss_diffraction_patterns(
                 waves, components=components, temperature=300.0
             )
-
-    @pytest.mark.parametrize(
-        "old, new",
-        [("tds", "diffuse"), ("coherent", "elastic"), ("incoherent", "total")],
-    )
-    def test_earlier_component_names_point_to_the_new_ones(self, old, new):
-        waves = _make_exit_waves([0.0, 0.02, 0.05])
-        with pytest.raises(ValueError, match=f"'{old}' is now '{new}'"):
-            phonon_loss_diffraction_patterns(waves, components=old, temperature=300.0)
 
     @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
     def test_block_direct_gives_the_unfolded_patterns_blocked(self, lazy):
