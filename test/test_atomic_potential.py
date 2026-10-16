@@ -427,6 +427,33 @@ class TestScatteringFactorIntegratorIsAPlainObject:
         assert len(integrator.scattering_factors) == 1
 
 
+def _assert_no_key_component_may_be_dropped(make, call, variations):
+    """Warm a shared integrator with ``call``'s defaults, then change one key
+    component at a time: the shared integrator must return exactly what a fresh
+    one does. ``call`` returns a tuple of arrays.
+
+    Each variation must also change the value, or a key that dropped that
+    component would hand back the warmed value and pass unseen.
+    """
+
+    def same(x, y):
+        return all(
+            a.shape == b.shape and a.dtype == b.dtype and np.array_equal(a, b)
+            for a, b in zip(x, y)
+        )
+
+    for component, other in variations:
+        shared = make()
+        warmed = call(shared)
+        got = call(shared, **{component: other})
+        reference = call(make(), **{component: other})
+        assert same(got, reference), f"{component}={other!r} served a stale value"
+        assert not same(warmed, reference), (
+            f"{component}={other!r} does not change the value, so dropping it "
+            "from the key would go unseen"
+        )
+
+
 class TestIntegratorCaches:
     """Caches in integrals.py, keyed on less than their value depends on.
 
@@ -494,50 +521,17 @@ class TestIntegratorCaches:
         precision="float32",
     ):
         with abtem.config.set({"precision": precision}):
-            return np.asarray(
-                integrator.get_scattering_factor(symbol, gpts, sampling, "cpu")
+            return (
+                np.asarray(
+                    integrator.get_scattering_factor(symbol, gpts, sampling, "cpu")
+                ),
             )
-
-    @pytest.mark.parametrize(
-        "component, other",
-        [
-            ("symbol", "As"),
-            ("gpts", (96, 96)),
-            ("sampling", (0.13, 0.13)),
-            ("precision", "float64"),
-        ],
-    )
-    def test_no_scattering_factor_key_component_may_be_dropped(
-        self, component, other
-    ):
-        shared = ScatteringFactorProjectionIntegrals()
-        self._scattering_factor(shared)
-        got = self._scattering_factor(shared, **{component: other})
-        reference = self._scattering_factor(
-            ScatteringFactorProjectionIntegrals(), **{component: other}
-        )
-        assert got.shape == reference.shape
-        assert got.dtype == reference.dtype
-        assert np.array_equal(got, reference)
 
     @staticmethod
     def _table(integrator, symbol="Ga", sampling=(0.10, 0.10), precision="float32"):
         with abtem.config.set({"precision": precision}):
             table = integrator.get_integral_table(symbol, sampling)
         return np.asarray(table.values), np.asarray(table.radial_gpts)
-
-    @pytest.mark.parametrize(
-        "component, other",
-        [("symbol", "As"), ("sampling", (0.13, 0.13)), ("precision", "float64")],
-    )
-    def test_no_integral_table_key_component_may_be_dropped(self, component, other):
-        shared = QuadratureProjectionIntegrals()
-        self._table(shared)
-        got = self._table(shared, **{component: other})
-        reference = self._table(
-            QuadratureProjectionIntegrals(), **{component: other}
-        )
-        assert all(np.array_equal(a, b) for a, b in zip(got, reference))
 
     @staticmethod
     def _gaussian_on_grid(
@@ -547,35 +541,40 @@ class TestIntegratorCaches:
 
         atoms = ase.build.bulk("Si", cubic=True)
         with abtem.config.set({"precision": precision, "fft": "numpy"}):
-            return np.asarray(
-                integrator.integrate_on_grid(
-                    atoms, a=0.0, b=1.0, gpts=gpts, sampling=sampling, device="cpu"
-                )
+            return (
+                np.asarray(
+                    integrator.integrate_on_grid(
+                        atoms, a=0.0, b=1.0, gpts=gpts, sampling=sampling, device="cpu"
+                    )
+                ),
             )
 
-    @pytest.mark.parametrize(
-        "component, other",
-        [
-            ("gpts", (96, 96)),
-            ("sampling", (0.13, 0.13)),
-            ("precision", "float64"),
-        ],
-    )
-    def test_no_sinc_key_component_may_be_dropped(self, component, other):
-        """The sinc is the only cached value on this path.
+    @pytest.mark.parametrize("cache", ["scattering_factor", "integral_table", "sinc"])
+    def test_no_key_component_may_be_dropped(self, cache):
+        """One case per cache (each builds its key separately); the components
+        of one key are looped over inside.
 
-        GaussianProjectionIntegrals' other two caches are deleted in this
-        commit, so its gaussians and corrections are recomputed on every call;
-        anything a shared integrator gets wrong here is the sinc.
+        The sinc case goes through integrate_on_grid, which also reads the
+        gaussian and correction caches; those two are probed on their own in
+        TestGaussianProjectionIntegralsUsable.
         """
-        shared = GaussianProjectionIntegrals()
-        self._gaussian_on_grid(shared)
-        got = self._gaussian_on_grid(shared, **{component: other})
-        reference = self._gaussian_on_grid(
-            GaussianProjectionIntegrals(), **{component: other}
-        )
-        assert got.shape == reference.shape
-        assert np.array_equal(got, reference)
+        grid = [("gpts", (96, 96)), ("sampling", (0.13, 0.13))]
+        precision = [("precision", "float64")]
+        make, call, variations = {
+            "scattering_factor": (
+                ScatteringFactorProjectionIntegrals,
+                self._scattering_factor,
+                [("symbol", "As"), *grid, *precision],
+            ),
+            "integral_table": (
+                QuadratureProjectionIntegrals,
+                self._table,
+                [("symbol", "As"), ("sampling", (0.13, 0.13)), *precision],
+            ),
+            "sinc": (GaussianProjectionIntegrals, self._gaussian_on_grid,
+                     [*grid, *precision]),
+        }[cache]
+        _assert_no_key_component_may_be_dropped(make, call, variations)
 
     def test_the_sorted_disk_is_not_served_across_precisions(self):
         """The disk is sized int(ceil(cutoff / min(sampling))), and `cutoff` is
@@ -682,25 +681,6 @@ class TestIntegratorCaches:
             self._build(integrator, gpts=(32 + 2 * n,) * 2)
         # full, not just bounded: every grid added entries, and some were evicted
         assert [len(cache) for cache in caches] == [4, 4]
-
-    @pytest.mark.parametrize(
-        "integrator_class",
-        [ScatteringFactorProjectionIntegrals, QuadratureProjectionIntegrals],
-    )
-    def test_a_cache_is_not_served_across_precisions(self, integrator_class):
-        """Every cached value is built through get_dtype.
-
-        The difference is ~1e-6 relative, which np.allclose with default
-        tolerances reports as equal -- so this must compare exactly.
-        """
-        shared = integrator_class()
-        with abtem.config.set({"precision": "float32"}):
-            self._build(shared)
-        with abtem.config.set({"precision": "float64"}):
-            got = self._build(shared)
-            reference = self._build(integrator_class())
-        assert got.array.dtype == reference.array.dtype
-        assert np.array_equal(got.array, reference.array)
 
     def test_results_do_not_depend_on_cache_state(self):
         """Vary the grid and the sampling independently, not together."""
@@ -1261,42 +1241,32 @@ class TestGaussianProjectionIntegralsUsable:
         )
 
     @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
-    @pytest.mark.parametrize(
-        "component, other",
-        [("symbol", "As"), ("gpts", (96, 96)), ("sampling", (0.13, 0.13))],
-    )
-    def test_no_parametrization_cache_key_component_may_be_dropped(
-        self, method, component, other
-    ):
-        """Both caches, every component -- not just the gaussians' precision.
+    def test_no_parametrization_cache_key_component_may_be_dropped(self, method):
+        """Both caches, every component including precision.
 
         The corrections cache had no key coverage at all, and neither cache's
-        sampling component was exercised by any test.
+        sampling component was exercised by any test. For precision the values
+        differ, not the dtype: both are float64 at either precision.
         """
-        base = dict(symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10))
-        probe = {**base, component: other}
 
-        shared = GaussianProjectionIntegrals()
-        getattr(shared, method)(**base)
-        got = np.asarray(getattr(shared, method)(**probe))
-        reference = np.asarray(
-            getattr(GaussianProjectionIntegrals(), method)(**probe)
+        def call(
+            integrator, symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10),
+            precision="float32",
+        ):
+            with abtem.config.set({"precision": precision}):
+                value = getattr(integrator, method)(symbol, gpts, sampling)
+            return (np.asarray(value),)
+
+        _assert_no_key_component_may_be_dropped(
+            GaussianProjectionIntegrals,
+            call,
+            [
+                ("symbol", "As"),
+                ("gpts", (96, 96)),
+                ("sampling", (0.13, 0.13)),
+                ("precision", "float64"),
+            ],
         )
-        assert got.shape == reference.shape
-        assert np.array_equal(got, reference)
-
-    @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
-    def test_neither_parametrization_cache_is_served_across_precisions(self, method):
-        args = dict(symbol="Ga", gpts=(64, 64), sampling=(0.10, 0.10))
-        shared = GaussianProjectionIntegrals()
-        with abtem.config.set({"precision": "float32"}):
-            getattr(shared, method)(**args)
-        with abtem.config.set({"precision": "float64"}):
-            served = np.asarray(getattr(shared, method)(**args))
-            correct = np.asarray(
-                getattr(GaussianProjectionIntegrals(), method)(**args)
-            )
-        assert np.array_equal(served, correct)
 
     def test_the_parametrization_arrays_are_cached(self):
         """integrate_on_grid runs once per slice per species and recomputed
@@ -1332,18 +1302,3 @@ class TestGaussianProjectionIntegralsUsable:
         assert len(restored._gaussians) == 0
         # and it must still work after the round trip
         self._build(restored)
-
-    def test_a_cache_is_not_served_across_precisions(self):
-        """Every cached value reaches get_dtype through spatial_frequencies."""
-        integrator = GaussianProjectionIntegrals()
-        with abtem.config.set({"precision": "float32"}):
-            integrator.get_gaussians("Ga", (64, 64), (0.1, 0.1))
-        with abtem.config.set({"precision": "float64"}):
-            served = integrator.get_gaussians("Ga", (64, 64), (0.1, 0.1))
-            correct = GaussianProjectionIntegrals().get_gaussians(
-                "Ga", (64, 64), (0.1, 0.1)
-            )
-        # Not a dtype assertion: both are float64 at either precision, so
-        # comparing dtypes passes whether or not the key carries precision.
-        # The values are what differ.
-        assert np.array_equal(served, correct)
