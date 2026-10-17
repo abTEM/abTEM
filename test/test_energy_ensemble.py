@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import abtem
 from abtem.bloch.dynamical import BlochWaves
 from abtem.core.axes import EnergyAxis, ThicknessAxis
+from abtem.core.energy import energy2wavelength
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.multislice import RealSpaceMultislice
@@ -249,6 +250,93 @@ class TestWavesEnergyEnsemble:
             Waves(array[:1], energy=200e3, sampling=0.1, ensemble_axes_metadata=one)
         member = Waves(array[:1], energy=80e3, sampling=0.1, ensemble_axes_metadata=one)
         assert member.energy == 80e3
+
+    def test_the_scalar_energy_is_compared_to_the_axis_within_rounding(self):
+        one = [EnergyAxis(values=(80e3,))]
+        array = np.ones((1, 8, 8), dtype=complex)
+        # an energy that went through a float round trip is still the axis's
+        Waves(array, energy=80e3 * (1 + 1e-12), sampling=0.1, ensemble_axes_metadata=one)
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            Waves(array, energy=80e3 * (1 + 1e-6), sampling=0.1, ensemble_axes_metadata=one)
+
+    def _stale_scalar_energy_file(self, path, kind):
+        """Write an energy ensemble to `path` in the form of an older abTEM, which
+        left the scalar energy of the first member beside the EnergyAxis."""
+        import zarr
+
+        members = [
+            Waves(np.ones((8, 8), dtype=complex), energy=energy, sampling=0.1)
+            for energy in ENERGIES
+        ]
+        stacked = abtem.stack(members, EnergyAxis(values=tuple(ENERGIES)))
+        stacked.to_zarr(path)
+
+        root = zarr.open(path, mode="r+")
+        if kind == "canonical":
+            metadata = dict(root.attrs["metadata0"])
+            metadata["energy"] = ENERGIES[0]
+            root.attrs["metadata0"] = metadata
+        else:
+            # abTEM <= 1.0.9 stored the constructor arguments instead
+            kwargs = stacked._pack_kwargs(stacked._copy_kwargs(exclude=("array",)))
+            kwargs["energy"] = ENERGIES[0]
+            kwargs["metadata"] = {**kwargs["metadata"], "energy": ENERGIES[0]}
+            del root.attrs["metadata0"]
+            root.attrs["kwargs0"] = kwargs
+            root.attrs["type0"] = "Waves"
+        return stacked
+
+    @pytest.mark.parametrize("kind", ["canonical", "legacy"])
+    def test_a_file_with_a_stale_scalar_energy_beside_the_axis_loads(self, kind):
+        """Files written before the scalar energy was dropped on stacking over
+        energies hold the first member's energy beside the EnergyAxis, which an
+        array object now refuses. Loading drops it, with a warning, and the axis
+        keeps the energies."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "waves.zarr")
+            stacked = self._stale_scalar_energy_file(path, kind)
+
+            with pytest.warns(UserWarning, match="leftover of an older abTEM"):
+                loaded = abtem.from_zarr(path).compute()
+
+        assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+        assert loaded.accelerator.energy is None
+        assert loaded.metadata["energy"] is None
+        np.testing.assert_array_equal(loaded.array, stacked.array)
+        for i, energy in enumerate(ENERGIES):
+            assert loaded[i].wavelength == energy2wavelength(energy)
+
+    def test_the_refusal_of_a_scalar_energy_points_to_the_loader(self):
+        with pytest.raises(ValueError, match="abtem.from_zarr"):
+            Waves(
+                np.ones((2, 8, 8), dtype=complex),
+                energy=80e3,
+                sampling=0.1,
+                ensemble_axes_metadata=[EnergyAxis(values=(80e3, 200e3))],
+            )
+
+    @devices
+    def test_concatenating_energy_axes_leaves_no_scalar_energy(self, device):
+        """Each array of a single-valued EnergyAxis keeps its own scalar energy;
+        the first one's is not that of the concatenation."""
+        from abtem.core.backend import get_array_module
+
+        members = [
+            abtem.stack(
+                [Waves(np.ones((8, 8), dtype=complex), energy=energy, sampling=0.1)],
+                EnergyAxis(values=(energy,)),
+            ).copy_to_device(device)
+            for energy in ENERGIES[:2]
+        ]
+        assert members[0].accelerator.energy == ENERGIES[0]
+
+        joined = abtem.concatenate(members, axis=0)
+
+        assert joined.ensemble_axes_metadata[0].values == tuple(ENERGIES[:2])
+        assert joined.accelerator.energy is None
+        assert get_array_module(joined.array) is get_array_module(members[0].array)
+        for i, energy in enumerate(ENERGIES[:2]):
+            assert joined[i].wavelength == energy2wavelength(energy)
 
     def test_stack_along_an_energy_axis_leaves_no_scalar_energy(self):
         """The axis carries each member's energy; the scalar energy of the first

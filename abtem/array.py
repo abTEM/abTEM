@@ -178,6 +178,42 @@ def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
     return None
 
 
+def _contradicting_energy_axis(scalar, axes) -> Optional[EnergyAxis]:
+    """The first `EnergyAxis` among `axes` holding an energy other than the scalar
+    energy `scalar` (compared to a relative 1e-9, not exactly), or None. A scalar
+    that is not a number, such as None, contradicts nothing."""
+    if not isinstance(scalar, Number):
+        return None
+    for axis in axes:
+        if isinstance(axis, EnergyAxis) and not np.allclose(
+            [float(value) for value in axis.values], float(scalar), rtol=1e-9, atol=0.0
+        ):
+            return axis
+    return None
+
+
+def _drop_stale_scalar_energy(axes, scalar_holders: Sequence[dict], source: str):
+    """Set to None the scalar energy (the "energy" entry of each dict in
+    `scalar_holders`) that contradicts an `EnergyAxis` among `axes`, with a warning.
+
+    Files written before an `EnergyAxis` was the one record of the energies of an
+    energy ensemble (such as the output of `stack` over energies) kept the scalar
+    energy of the first member beside the axis; `ArrayObject` now refuses that
+    combination, and the axis is what holds the energies, so loading drops the
+    leftover instead of failing."""
+    for holder in scalar_holders:
+        scalar = holder.get("energy")
+        axis = _contradicting_energy_axis(scalar, axes)
+        if axis is not None:
+            warnings.warn(
+                f"{source} holds the scalar energy {scalar} eV beside an EnergyAxis "
+                f"with the energies {tuple(axis.values)} eV, a leftover of an older "
+                "abTEM version; the scalar energy is ignored and the energies of the "
+                "EnergyAxis are used."
+            )
+            holder["energy"] = None
+
+
 def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
     """`transform._calculate_new_array(array_object)`, evaluated for each energy of
     a multi-energy ensemble on its own when the transform depends on the
@@ -1194,19 +1230,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             "energy": None if accelerator is None else accelerator.energy,
             'metadata["energy"]': self._metadata.get("energy"),
         }
-        for axis in self._ensemble_axes_metadata:
-            if not isinstance(axis, EnergyAxis):
-                continue
-            for name, scalar in scalars.items():
-                if isinstance(scalar, Number) and any(
-                    float(value) != float(scalar) for value in axis.values
-                ):
-                    raise ValueError(
-                        f"{name}={scalar} eV contradicts the EnergyAxis with the "
-                        f"energies {axis.values} eV of this "
-                        f"{self.__class__.__name__}; the axis carries the energy "
-                        "of each member, leave the scalar energy unset (None)."
-                    )
+        for name, scalar in scalars.items():
+            axis = _contradicting_energy_axis(scalar, self._ensemble_axes_metadata)
+            if axis is not None:
+                raise ValueError(
+                    f"{name}={scalar} eV contradicts the EnergyAxis with the "
+                    f"energies {tuple(axis.values)} eV of this "
+                    f"{self.__class__.__name__}; the axis carries the energy "
+                    "of each member, leave the scalar energy unset (None). When "
+                    "reading a file written by an older abTEM version, load it "
+                    "with abtem.from_zarr, which drops such a leftover scalar "
+                    "energy."
+                )
 
     def _is_base_axis(self, axis: int | tuple[int, ...]) -> bool:
         axis = number_to_tuple(axis)
@@ -2886,14 +2921,14 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
 
     # --- Detect format ---
     if "metadata0" in root.attrs:
-        return _from_zarr_canonical(root, chunks, decode_types)
+        return _from_zarr_canonical(root, chunks, decode_types, url)
     elif "kwargs0" in root.attrs:
-        return _from_zarr_legacy(root, chunks, decode_types)
+        return _from_zarr_legacy(root, chunks, decode_types, url)
     else:
         raise ValueError("Zarr file does not contain recognizable abTEM metadata.")
 
 
-def _from_zarr_canonical(root, chunks, decode_types):
+def _from_zarr_canonical(root, chunks, decode_types, url):
     import dask.array as da
 
     import abtem
@@ -2941,6 +2976,12 @@ def _from_zarr_canonical(root, chunks, decode_types):
 
         array = da.from_array(zarr_array, chunks=array_chunks)
 
+        _drop_stale_scalar_energy(
+            axes_list,
+            [metadata, *([] if kwargs is None else [kwargs])],
+            f"The zarr file {url}",
+        )
+
         try:
             obj = cls.from_array_and_metadata(
                 array,
@@ -2964,7 +3005,7 @@ def _from_zarr_canonical(root, chunks, decode_types):
     return imported[0] if len(imported) == 1 else imported
 
 
-def _from_zarr_legacy(root, chunks, decode_types):
+def _from_zarr_legacy(root, chunks, decode_types, url):
     import dask.array as da
     from dask import config
 
@@ -3003,6 +3044,12 @@ def _from_zarr_legacy(root, chunks, decode_types):
             array_chunks = chunks
 
         array = da.from_array(zarr_array, chunks=array_chunks)
+
+        _drop_stale_scalar_energy(
+            kwargs["ensemble_axes_metadata"],
+            [kwargs, kwargs.get("metadata") or {}],
+            f"The zarr file {url}",
+        )
 
         with config.set({"warnings.overspecified-grid": False}):
             imported.append(cls(array, **kwargs))
@@ -3113,8 +3160,14 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     axes_metadata = copy.deepcopy(arrays[0].axes_metadata)
     axes_metadata[axis] = concatenated_axes_metadata
 
+    metadata = arrays[0].metadata
+    # The scalar energy of the first array is not that of the others once the
+    # EnergyAxis holds theirs (see `stack`).
+    if _contradicting_energy_axis(metadata.get("energy"), axes_metadata) is not None:
+        metadata = {**metadata, "energy": None}
+
     return cls.from_array_and_metadata(
-        array=array, axes_metadata=axes_metadata, metadata=arrays[0].metadata
+        array=array, axes_metadata=axes_metadata, metadata=metadata
     )
 
 
