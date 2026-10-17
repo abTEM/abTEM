@@ -18,10 +18,10 @@ from utils import (
     gpu,
     ignore_strain_warning,
     plane_rotation_by_hand,
+    requires_gpu,
     rotated_by_hand,
     si_cubic_atoms,
     si_diamond_atoms,
-    requires_gpu,
 )
 
 import abtem
@@ -670,44 +670,38 @@ def test_skew_finite_potential_built_on_a_device_matches_the_cpu_build(lazy, dev
     )
 
 
-@requires_gpu
-@pytest.mark.parametrize("precision", ["float32", "float64"])
-@pytest.mark.parametrize("chunk_size", [None, 37])
-def test_cuda_skew_kernel_matches_the_cpu_skew_kernel(precision, chunk_size):
-    # The native CUDA kernel of #599 against the numba kernel it follows, on a
-    # hexagonal grid with atoms anywhere in and just outside the cell, a
-    # per-atom truncation and, with chunk_size, the sorted disk streamed in
-    # chunks with their global offset.
+def _skew_stamps_on_the_cpu_and_with_cuda(
+    dtype, gpts, cell, positions, rng, chunk_size=None, radius=12
+):
+    """The numba skew kernel and the CUDA skew kernel on the same input: the
+    (expected, result) arrays, the CUDA one with the sorted disk streamed in
+    chunks of ``chunk_size`` pixels, when given."""
     import cupy as cp
 
     from abtem.core._cuda import interpolate_radial_functions_skew as cuda_kernel
     from abtem.integrals import interpolate_radial_functions_skew as cpu_kernel
 
-    dtype = np.dtype(precision)
-    rng = np.random.default_rng(5)
-    gpts = (48, 40)
-    cell = np.array([[2.5 * 4, 0.0], [-1.25 * 4, 2.5 * 4 * np.sqrt(3) / 2]])
+    n_atoms = len(positions)
     sampling_vectors = np.stack([cell[0] / gpts[0], cell[1] / gpts[1]])
     inv_jacobian = np.linalg.inv(sampling_vectors.T)
 
-    positions = (rng.random((7, 2)) * 1.1 - 0.05) @ cell
-    positions = positions.astype(dtype)
+    positions = np.asarray(positions).astype(dtype)
     radial_gpts = np.geomspace(0.01, 2.0, 60).astype(dtype)
     radial_functions = (
-        np.exp(-radial_gpts[None] * rng.uniform(1, 3, (7, 1)))
+        np.exp(-radial_gpts[None] * rng.uniform(1, 3, (n_atoms, 1)))
     ).astype(dtype)
     radial_derivative = np.zeros_like(radial_functions)
     radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(
         radial_gpts
     )
 
-    disk = disk_meshgrid(12)
+    disk = disk_meshgrid(radius)
     radii = np.linalg.norm(
         disk[:, :1] * sampling_vectors[0] + disk[:, 1:] * sampling_vectors[1], axis=1
     )
     order = np.argsort(radii)
     disk = np.ascontiguousarray(disk[order])
-    disk_counts = np.searchsorted(radii[order], rng.uniform(0.5, 2.2, 7))
+    disk_counts = np.searchsorted(radii[order], rng.uniform(0.5, 2.2, n_atoms))
 
     expected = np.zeros(gpts, dtype=dtype)
     cpu_kernel(
@@ -734,11 +728,116 @@ def test_cuda_skew_kernel_matches_the_cpu_skew_kernel(precision, chunk_size):
             cuda_kernel(disk_indices=chunk, chunk_offset=start, **kwargs)
 
     assert result.dtype == dtype
+    return expected, cp.asnumpy(result)
+
+
+def _assert_stamps_agree(result, expected, dtype):
+    # The two kernels differ in rounding only: the numba one computes the
+    # geometry in float64, the CUDA one in the slice precision (with the fused
+    # multiply-adds nvcc emits), so a distance at a bin edge of the radial grid
+    # can fall in the neighbouring bin, a few eps of the maximum.
     scale = np.abs(expected).max()
     assert scale > 0
     np.testing.assert_allclose(
-        cp.asnumpy(result), expected, rtol=0, atol=10 * np.finfo(dtype).eps * scale
+        result, expected, rtol=0, atol=50 * np.finfo(dtype).eps * scale
     )
+
+
+def _skew_cell(angle, length=10.0):
+    angle = np.deg2rad(angle)
+    return length * np.array([[1.0, 0.0], [np.cos(angle), np.sin(angle)]])
+
+
+@requires_gpu
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("chunk_size", [None, 37])
+def test_cuda_skew_kernel_matches_the_cpu_skew_kernel(precision, chunk_size):
+    # The native CUDA kernel of #599 against the numba kernel it follows, on a
+    # hexagonal grid with atoms anywhere in and just outside the cell, a
+    # per-atom truncation and, with chunk_size, the sorted disk streamed in
+    # chunks with their global offset.
+    dtype = np.dtype(precision)
+    rng = np.random.default_rng(5)
+    gpts = (48, 40)
+    cell = np.array([[2.5 * 4, 0.0], [-1.25 * 4, 2.5 * 4 * np.sqrt(3) / 2]])
+    positions = (rng.random((7, 2)) * 1.1 - 0.05) @ cell
+
+    expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
+        dtype, gpts, cell, positions, rng, chunk_size
+    )
+    _assert_stamps_agree(result, expected, dtype)
+
+
+@requires_gpu
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("angle", [20, 90, 160])
+def test_cuda_skew_kernel_matches_the_cpu_at_extreme_angles_and_far_atoms(
+    precision, angle
+):
+    # Acute and obtuse cells, where the ellipse of the cutoff disk in pixel
+    # space is most elongated, with atoms up to a fifth of a cell outside it on
+    # every side: their fractional coordinates are negative or beyond the grid
+    # and the bounds test of the kernel clips the stamp.
+    dtype = np.dtype(precision)
+    rng = np.random.default_rng(angle)
+    gpts = (48, 40)
+    cell = _skew_cell(angle)
+    positions = (rng.random((12, 2)) * 1.4 - 0.2) @ cell
+
+    expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
+        dtype, gpts, cell, positions, rng
+    )
+    _assert_stamps_agree(result, expected, dtype)
+
+
+@requires_gpu
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("chunk_size", [None, 37])
+def test_cuda_skew_kernel_rounds_atoms_at_pixel_midpoints_to_even(
+    precision, chunk_size
+):
+    # An atom whose fractional pixel coordinate is exactly k + 1/2 sits on a
+    # tie, and the kernel must pick the pixel the numba kernel (round half to
+    # even) picks: the other choice moves the whole stamp by a pixel, a 6%
+    # difference. The cell is dyadic, a1 = (1/8, 0), a2 = (1/16, 1/8), with
+    # inv_jacobian = [[8, -4], [0, 8]], so the coordinates are exact in float32
+    # and float64 and the tie is a tie on the device too.
+    dtype = np.dtype(precision)
+    rng = np.random.default_rng(3)
+    gpts = (32, 32)
+    cell = np.array([[4.0, 0.0], [2.0, 4.0]])
+    positions = []
+    for m in (-0.5, 0.5, 1.5, 2.5, 3.5):  # fractional coordinate along a2
+        for k in (-0.5, 0.5, 1.5, 2.5, 7.5):  # along a1
+            y = m / 8
+            positions.append(((k + 4 * y) / 8, y))
+
+    expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
+        dtype, gpts, cell, positions, rng, chunk_size, radius=10
+    )
+    _assert_stamps_agree(result, expected, dtype)
+
+
+@requires_gpu
+def test_cuda_skew_kernel_launches_more_atoms_than_the_grid_limit_in_blocks(
+    monkeypatch,
+):
+    # The atoms are launched along gridDim.y (at most 65535); the launcher
+    # splits larger slices into blocks. Lowering the limit to 3 makes 7 atoms
+    # take three launches, and the result is still the numba kernel's.
+    import abtem.core._cuda
+
+    monkeypatch.setattr(abtem.core._cuda, "_MAX_ATOMS_PER_LAUNCH", 3)
+    dtype = np.dtype("float32")
+    rng = np.random.default_rng(11)
+    gpts = (48, 40)
+    cell = _skew_cell(60)
+    positions = (rng.random((7, 2)) * 1.1 - 0.05) @ cell
+
+    expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
+        dtype, gpts, cell, positions, rng
+    )
+    _assert_stamps_agree(result, expected, dtype)
 
 
 @requires_gpu
