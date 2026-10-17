@@ -143,8 +143,8 @@ class TestWavesBuilderEnergyProperty:
 
     def test_energy_is_a_plain_float_or_a_distribution(self):
         """A scalar energy stays a float with no ensemble axes; several energies
-        are a distribution with one EnergyAxis. (SMatrix.energy of several
-        energies is the first one.)"""
+        are a distribution with one EnergyAxis and leave the accelerator without
+        an energy."""
         from abtem.distributions import BaseDistribution
 
         builders = {
@@ -162,8 +162,10 @@ class TestWavesBuilderEnergyProperty:
             assert scalar.ensemble_axes_metadata == [], name
 
             ensemble = cls(energy=TEST_ENERGIES, gpts=32, sampling=0.1, **kwargs)
-            if cls is not SMatrix:
-                assert isinstance(ensemble.energy, BaseDistribution), name
+            assert isinstance(ensemble.energy, BaseDistribution), name
+            np.testing.assert_array_equal(ensemble.energy.values, TEST_ENERGIES)
+            assert ensemble.accelerator.energy is None, name
+            assert ensemble.metadata["energy"] is None, name
             assert ensemble.ensemble_shape == (3,), name
             (axis,) = ensemble.ensemble_axes_metadata
             assert isinstance(axis, EnergyAxis), name
@@ -227,9 +229,30 @@ class TestWavesEnergyEnsemble:
         )
         assert single.wavelength == energy2wavelength(100e3)
 
+    def test_a_scalar_energy_contradicting_the_energy_axis_is_refused(self):
+        """The EnergyAxis is the one record of the energies of an ensemble: a
+        scalar energy, given as the energy or in the metadata, is refused unless
+        it is the energy of every member."""
+        array = np.ones((2, 8, 8), dtype=complex)
+        axis = EnergyAxis(values=(80e3, 200e3))
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            Waves(array, energy=80e3, sampling=0.1, ensemble_axes_metadata=[axis])
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            abtem.DiffractionPatterns(
+                np.ones((2, 8, 8)),
+                sampling=0.1,
+                ensemble_axes_metadata=[axis],
+                metadata={"energy": 80e3},
+            )
+        one = [EnergyAxis(values=(80e3,))]
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            Waves(array[:1], energy=200e3, sampling=0.1, ensemble_axes_metadata=one)
+        member = Waves(array[:1], energy=80e3, sampling=0.1, ensemble_axes_metadata=one)
+        assert member.energy == 80e3
+
     def test_stack_along_an_energy_axis_leaves_no_scalar_energy(self):
-        """The axis carries each member's energy. A scalar energy taken from the
-        first member would take precedence over it for every member."""
+        """The axis carries each member's energy; the scalar energy of the first
+        member would contradict it."""
         members = [
             Waves(np.ones((32, 32), dtype=complex), energy=energy, sampling=0.1)
             for energy in ENERGIES
@@ -922,6 +945,19 @@ class TestSMatrixEnergyEnsemble:
             assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
             assert sma.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
         np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+
+        # the expansion of the ensemble is that of the built array, the union of
+        # the energies' expansions, which the highest energy's holds
+        highest = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=max(TEST_ENERGIES),
+                          gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        assert len(s) == len(eager.wave_vectors) == len(highest)
+        assert len(SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=min(TEST_ENERGIES),
+                           gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)) < len(s)
+        assert s.shape == eager.shape[:2] + s.gpts
+        # the constructor arguments, from which every block is rebuilt
+        # (_from_partitioned_args), keep every energy
+        copied = SMatrix(**s._copy_kwargs())
+        np.testing.assert_array_equal(copied.energy.values, TEST_ENERGIES)
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import warnings
 from abc import abstractmethod
 from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
@@ -11,7 +10,6 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import (
-    _stacklevel_outside_package,
     is_cell_orthogonal,
     wrap_and_snap_atoms,
 )
@@ -22,10 +20,12 @@ from abtem.core.utils import (
     safe_equality,
 )
 
-# How far outside the cell along z [Å] a non-periodic potential places an atom in
-# its face slice before warning. A thermal displacement is a few times its
-# standard deviation, which rarely exceeds 0.25 Å, so this is about 8 sigma: no
-# frozen phonon reaches it, but a misplaced atom or a wrong cell height does.
+# How far outside the cell along z [Å] an atom given to a non-periodic potential
+# with the infinite projection is kept in its face slice; further out it is
+# folded onto its image in the cell, with a warning when the potential is made.
+# A thermal displacement is a few times its standard deviation, which rarely
+# exceeds 0.25 Å, so this is about 8 sigma: no frozen phonon reaches it, but a
+# misplaced atom or a wrong cell height does.
 FACE_SLICE_WARNING_DISTANCE = 2.0
 
 
@@ -658,24 +658,6 @@ def _far_outside_faces(z: np.ndarray, height: float) -> np.ndarray:
     return np.maximum(-z, z - height) > FACE_SLICE_WARNING_DISTANCE
 
 
-def _warn_far_outside_faces(z: np.ndarray, height: float) -> None:
-    """Warn about atoms far enough outside [0, height] along z that placing them
-    in the face slice is a guess at their depth, not a correction of it."""
-    far = _far_outside_faces(z, height)
-    if not np.any(far):
-        return
-
-    warnings.warn(
-        f"{int(far.sum())} atom(s) lie more than {FACE_SLICE_WARNING_DISTANCE} Å "
-        f"outside the cell along z (0 to {height:.4g} Å). A non-periodic potential "
-        "keeps an atom that left the cell in the face slice it left through, which "
-        "is right for a small displacement such as a frozen phonon, but puts an "
-        "atom this far out at the wrong depth. Check the atomic positions against "
-        "the cell height.",
-        stacklevel=_stacklevel_outside_package(),
-    )
-
-
 class SliceIndexedAtoms(BaseSlicedAtoms):
     """
     Sliced atoms assigning each atom to a specific slice index.
@@ -755,9 +737,6 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         # depend on z within a slice, so the projected potential is conserved
         # exactly, where dropping the atom lost its whole contribution.
         if not wrap:
-            _warn_far_outside_faces(
-                self.atoms.positions[:, 2], float(np.sum(self.slice_thickness))
-            )
             labels = np.minimum(labels, len(self) - 1)
 
         # After a wrap there is no atom outside the cell, so say so rather

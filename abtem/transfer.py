@@ -339,10 +339,10 @@ class BaseTransferFunction(
 class BaseAperture(BaseTransferFunction):
     """Base class for apertures. Documented in the subclasses."""
 
-    # Why a zero semiangle cutoff is invalid for this aperture type, or None where
-    # it is valid: an Aperture or CTF with a zero cutoff keeps the zero-angle pixel,
-    # i.e. a parallel beam.
-    _zero_semiangle_cutoff_error: Optional[str] = None
+    # Whether a zero semiangle cutoff leaves this aperture no open area, so that
+    # its probe would be NaN (an all-zero aperture normalized 0/0). An Aperture or
+    # CTF with a zero cutoff keeps the zero-angle pixel, i.e. a parallel beam.
+    _closed_at_zero_cutoff: bool = False
 
     def __init__(
         self,
@@ -406,8 +406,8 @@ class BaseAperture(BaseTransferFunction):
     def _validate_semiangle_cutoff(
         self, semiangle_cutoff: float | BaseDistribution | None
     ) -> float | BaseDistribution | None:
-        """Reject a negative (or NaN) semiangle cutoff, and a zero one where this
-        aperture type has no use for it. None (not set) passes through."""
+        """Reject a negative (or NaN) semiangle cutoff, and a zero one where it
+        leaves no open area. None (not set) passes through."""
         if semiangle_cutoff is None:
             return semiangle_cutoff
 
@@ -421,13 +421,10 @@ class BaseAperture(BaseTransferFunction):
         if np.any(np.isnan(values)) or np.any(values < 0.0):
             raise ValueError(f"semiangle_cutoff must be non-negative, got {shown}.")
 
-        if self._zero_semiangle_cutoff_error is not None and np.any(values == 0.0):
-            name = type(self).__name__
-            article = "An" if name[0] in "AEIOU" else "A"
+        if self._closed_at_zero_cutoff and np.any(values == 0.0):
             raise ValueError(
-                f"{article} {name} with semiangle_cutoff=0 "
-                f"{self._zero_semiangle_cutoff_error}; give a positive "
-                "semiangle_cutoff."
+                f"A {type(self).__name__} with semiangle_cutoff=0 has no open area; "
+                "give a positive semiangle_cutoff."
             )
 
         return semiangle_cutoff
@@ -680,7 +677,7 @@ class Bullseye(BaseAperture):
         Corner radius in mrads. Default value is 0.0
     """
 
-    _zero_semiangle_cutoff_error = "has no open area"
+    _closed_at_zero_cutoff = True
 
     def __init__(
         self,
@@ -890,7 +887,7 @@ class Vortex(BaseAperture):
         ignored.
     """
 
-    _zero_semiangle_cutoff_error = "has no open area"
+    _closed_at_zero_cutoff = True
 
     def __init__(
         self,
@@ -964,8 +961,6 @@ class AnnularAperture(BaseAperture):
         ignored.
     """
 
-    _zero_semiangle_cutoff_error = "has no open area"
-
     def __init__(
         self,
         inner_cutoff: float,
@@ -994,21 +989,15 @@ class AnnularAperture(BaseAperture):
         """Also reject a semiangle cutoff that does not exceed the inner cutoff,
         for which the annulus is empty; run by __init__ and the setter alike."""
         semiangle_cutoff = super()._validate_semiangle_cutoff(semiangle_cutoff)
-        if semiangle_cutoff is None:
+        if semiangle_cutoff is None or isinstance(semiangle_cutoff, BaseDistribution):
+            # A distribution is not supported: the evaluation asserts a scalar.
             return semiangle_cutoff
 
-        if isinstance(semiangle_cutoff, BaseDistribution):
-            smallest = float(np.min(semiangle_cutoff.values))
-            shown = f"a distribution with smallest value {smallest!r}"
-        else:
-            smallest = float(semiangle_cutoff)
-            shown = repr(semiangle_cutoff)
-
-        if self._inner_cutoff >= smallest:
+        if self._inner_cutoff >= semiangle_cutoff:
             raise ValueError(
                 f"inner_cutoff ({self._inner_cutoff!r}) must be smaller than "
-                f"semiangle_cutoff ({shown}); otherwise the AnnularAperture has "
-                "no open area."
+                f"semiangle_cutoff ({semiangle_cutoff!r}); otherwise the "
+                "AnnularAperture has no open area."
             )
 
         return semiangle_cutoff
@@ -1064,7 +1053,7 @@ class Zernike(BaseAperture):
         ignored.
     """
 
-    _zero_semiangle_cutoff_error = "has no open area"
+    _closed_at_zero_cutoff = True
 
     def __init__(
         self,
@@ -1129,10 +1118,6 @@ class Zernike(BaseAperture):
 
 
 class RadialPhasePlate(BaseAperture):
-    _zero_semiangle_cutoff_error = (
-        "has a phase pattern of zero radius, so it does nothing"
-    )
-
     def __init__(
         self,
         num_flips: int,
