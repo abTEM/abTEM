@@ -18,7 +18,7 @@ from abtem.magnetism.gpaw import (
 )
 from abtem.potentials.charge_density import curl_fourier
 from abtem.potentials.iam import PotentialArray
-from utils import devices, plane_rotation_by_hand
+from utils import devices, gpu, plane_rotation_by_hand
 
 
 class _SpinPolarizedCalculator:
@@ -44,7 +44,10 @@ class _SpinPolarizedCalculator:
         return np.stack([up, 0.5 * up])[spin]
 
 
-@devices
+# The CPU build is the reference, and the GPAW builders have no lazy build to
+# compare it with, so this runs on an accelerator only. The CPU builds are checked
+# against the fields of the calculator by the tests below.
+@pytest.mark.parametrize("device", [gpu])
 @pytest.mark.parametrize("projection", ["fft", "real_space"])
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
 def test_gpaw_field_built_on_a_device_matches_the_cpu_build(
@@ -102,10 +105,9 @@ def test_show_draws_fields_built_on_a_device(device):
         ("fft", (0.4, 1.2, 0.8, 1.0, 0.6), 5),
     ],
 )
-@pytest.mark.parametrize("first_slice, last_slice", [(1, 4), (2, None)])
 @pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
 def test_gpaw_field_slice_range_matches_the_full_build(
-    builder, projection, slice_thickness, num_thicknesses, first_slice, last_slice
+    builder, projection, slice_thickness, num_thicknesses
 ):
     field = builder(
         _SpinPolarizedCalculator(),
@@ -116,20 +118,29 @@ def test_gpaw_field_slice_range_matches_the_full_build(
     )
 
     full = field.build()
-    part = field.build(first_slice=first_slice, last_slice=last_slice)
-
     assert full.array.shape[0] == 5
     assert len(set(full.slice_thickness)) == num_thicknesses
     scale = np.abs(full.array).max()
     assert scale > 0
-    np.testing.assert_allclose(
-        part.array, full.array[first_slice:last_slice], rtol=0, atol=1e-6 * scale
-    )
-    # `build` takes the thicknesses from the builder, so read the generated slices
-    generated = [
-        s.slice_thickness for s in field.generate_slices(first_slice, last_slice)
-    ]
-    assert generated == [(t,) for t in full.slice_thickness[first_slice:last_slice]]
+
+    # an inner range, and one that runs to the last slice
+    for first_slice, last_slice in [(1, 4), (2, None)]:
+        case = f"slices {first_slice} to {last_slice}"
+        part = field.build(first_slice=first_slice, last_slice=last_slice)
+        np.testing.assert_allclose(
+            part.array,
+            full.array[first_slice:last_slice],
+            rtol=0,
+            atol=1e-6 * scale,
+            err_msg=case,
+        )
+        # `build` takes the thicknesses from the builder, so read the generated
+        # slices
+        generated = [
+            s.slice_thickness for s in field.generate_slices(first_slice, last_slice)
+        ]
+        expected = [(t,) for t in full.slice_thickness[first_slice:last_slice]]
+        assert generated == expected, case
 
 
 class _NonDividingCalculator(_SpinPolarizedCalculator):

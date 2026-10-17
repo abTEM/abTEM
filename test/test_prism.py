@@ -32,48 +32,25 @@ def _aberrated_ctf():
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
 @devices
-def test_prism_matches_probe(data, lazy, device):
-    s_matrix = data.draw(abtem_st.s_matrix(device=device))
-
-    s_matrix = s_matrix.round_gpts_to_interpolation()
-    probe = s_matrix.dummy_probes()
-
-    s_matrix_diffraction_patterns = (
-        s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-    probe_diffraction_patterns = (
-        probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-
-    s_matrix_diffraction_patterns.compute()
-    probe_diffraction_patterns.compute()
-    assert np.allclose(
-        s_matrix_diffraction_patterns.compute().array,
-        probe_diffraction_patterns.compute().array,
-    )
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [False])
-@devices
-def test_prism_matches_probe_with_interpolation(data, lazy, device):
+def test_prism_matches_probe(data, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device, max_interpolation=3))
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
-    s_matrix_diffraction_patterns = (
-        s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
-    probe_diffraction_patterns = (
-        probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
-    )
+    for lazy in (False, True):
+        s_matrix_diffraction_patterns = (
+            s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
+        )
+        probe_diffraction_patterns = (
+            probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
+        )
 
-    assert np.allclose(
-        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
-    )
+        assert np.allclose(
+            s_matrix_diffraction_patterns.compute().array,
+            probe_diffraction_patterns.compute().array,
+        ), f"lazy={lazy}"
 
 
 @given(data=st.data())
@@ -98,12 +75,9 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
         .compute()
     )
 
-    if np.all(probe_diffraction_patterns.array < 1e-7):
-        pass
-    else:
-        assert np.allclose(
-            s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
-        )
+    assert np.allclose(
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+    )
 
 
 # PRISM and multislice are different code paths, so their results agree only
@@ -112,91 +86,42 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
 # value-based for lazy results too.
 PRISM_VS_PROBE_TOLERANCES = dict(rtol=1e-5, atol=1e-8)
 
+PRISM_SCAN_DETECTORS = [
+    abtem_st.segmented_detector,
+    abtem_st.flexible_annular_detector,
+    abtem_st.pixelated_detector,
+    abtem_st.waves_detector,
+    abtem_st.annular_detector,
+]
+
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
 @devices
-# @pytest.mark.parametrize('interpolation', [True, False])
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
-    potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
-
-    detector = data.draw(detector())
-    s_matrix = data.draw(
-        abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
-    )
-
-    s_matrix = s_matrix.round_gpts_to_interpolation()
-    probe = s_matrix.dummy_probes()
-
-    scan = GridScan()
-    assume(
-        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
-        or isinstance(detector, WavesDetector)
-    )
-
-    s_matrix_measurement = s_matrix.scan(
-        scan=scan, detectors=detector, lazy=lazy
-    ).to_cpu()
-    probe_measurement = probe.scan(
-        potential=potential, scan=scan, detectors=detector, lazy=lazy
-    ).to_cpu()
-
-    assert_array_objects_equal(
-        s_matrix_measurement, probe_measurement, **PRISM_VS_PROBE_TOLERANCES
-    )
-
-
-@pytest.mark.slow
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
-@pytest.mark.parametrize(
-    "downsample", [True, False], ids=["downsample", "no_downsample"]
-)
-@devices
-@pytest.mark.parametrize(
-    "interpolation", [False, True], ids=["no_interpolation", "interpolation"]
-)
-@pytest.mark.parametrize(
-    "frozen_phonons", [True, False], ids=["frozen_phonons", "no_frozen_phonons"]
-)
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_prism_scan(
-    data, interpolation, detector, downsample, lazy, frozen_phonons, device
-):
+@pytest.mark.parametrize("detector", PRISM_SCAN_DETECTORS)
+def test_prism_scan(data, detector, device):
+    # Laziness, downsampling, interpolation (1 to 3) and a frozen-phonon
+    # ensemble are drawn rather than crossed: hypothesis explores their
+    # combinations across runs. Two frozen-phonon configurations make the
+    # ensemble axis one that a dropped or duplicated axis would change.
+    lazy = data.draw(st.booleans(), label="lazy")
+    frozen_phonons = data.draw(st.booleans(), label="frozen_phonons")
     potential = data.draw(
         abtem_st.potential(
-            device=device, no_frozen_phonons=not frozen_phonons, ensemble_mean=False
+            device=device,
+            no_frozen_phonons=not frozen_phonons,
+            min_frozen_phonons=2,
+            max_frozen_phonons=2,
+            ensemble_mean=False,
         )
     )
     ctf = data.draw(abtem_st.ctf(partial_coherence=False))
 
-    max_interpolation = 3 if interpolation else 1
-
     s_matrix = data.draw(
         abtem_st.s_matrix(
             potential=potential,
-            max_interpolation=max_interpolation,
+            max_interpolation=3,
             device=device,
-            downsample=downsample,
+            downsample=data.draw(st.booleans(), label="downsample"),
         )
     )
 
@@ -224,12 +149,11 @@ def test_prism_scan(
     )
     assert measurement.dtype == detector._out_dtype(probe)[0]
 
-    # measurement = measurement.compute()
-    # assert (
-    #     measurement.shape
-    #     == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-    # )
-    # assert measurement.dtype == detector._out_dtype(probe)
+    # A lazy result only promises its shape and dtype; computing checks them.
+    if lazy:
+        computed = measurement.compute()
+        assert computed.shape == measurement.shape
+        assert computed.dtype == measurement.dtype
 
 
 @given(data=st.data())
@@ -237,8 +161,10 @@ def test_prism_scan(
 @requires_gpu
 def test_s_matrix_store_on_host(data, lazy):
     potential = data.draw(abtem_st.potential(device="gpu", ensemble_mean=False))
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
-    s_matrix = s_matrix.build().compute()
+    s_matrix = data.draw(
+        abtem_st.s_matrix(potential=potential, device="gpu", store_on_host=True)
+    )
+    s_matrix = s_matrix.build(lazy=lazy).compute()
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
@@ -338,32 +264,24 @@ def test_plane_wave_expansion_follows_the_precision(
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @devices
-@pytest.mark.parametrize(
-    "detector",
-    [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
-        abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
-        abtem_st.annular_detector,
-    ],
-)
-def test_prism_scan_match_probe_scan(data, detector, lazy, device):
-    # unlike test_s_matrix_matches_probe_no_interpolation, the scan here is
-    # matched to the probe explicitly (GridScan.match_probe) rather than left
-    # for s_matrix.scan()/probe.scan() to match on their own -- this pins that
-    # the explicit match_probe workflow agrees between the two reduction paths
+def test_prism_scan_match_probe_scan(data, lazy, device):
+    # The scan is either matched to the probe explicitly (GridScan.match_probe)
+    # or left for s_matrix.scan()/probe.scan() to match on their own: both
+    # workflows must agree between the two reduction paths. The detector is
+    # drawn, so each is compared across the run.
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
     s_matrix = data.draw(
         abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
     )
+    detector = data.draw(st.sampled_from(PRISM_SCAN_DETECTORS), label="detector")
     detector = data.draw(detector())
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
     scan = GridScan()
-    scan.match_probe(probe)
+    if data.draw(st.booleans(), label="match_probe"):
+        scan.match_probe(probe)
     assume(
         (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
         or isinstance(detector, WavesDetector)

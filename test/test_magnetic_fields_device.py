@@ -40,31 +40,50 @@ def _build(cls, atoms, device, lazy):
     return field.build(lazy=lazy).compute()
 
 
+_cpu_references = {}
+
+
+def _cpu_reference(cls, symbols, precision):
+    """The eager CPU build, once per worker: most of a build is the integral
+    table, which every new field computes again."""
+    key = (cls, symbols, precision)
+    if key not in _cpu_references:
+        with abtem.config.set({"precision": precision}):
+            _cpu_references[key] = _build(cls, _atoms(symbols=symbols), "cpu", False)
+    return _cpu_references[key]
+
+
 @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("precision", ["float32", "float64"])
-@pytest.mark.parametrize("lazy", [False, True])
-# One element: generate_slices yields the integrator's array as it is and build()
-# copies it into its buffer. Two elements: generate_slices adds it into a buffer.
-@pytest.mark.parametrize("symbols", ["Fe2", "FeO"])
-def test_build_on_device_matches_cpu(cls, device, precision, lazy, symbols):
-    atoms = _atoms(symbols=symbols)
-    with abtem.config.set({"precision": precision}):
-        reference = _build(cls, atoms, "cpu", lazy=False)
-        field = _build(cls, atoms, device, lazy=lazy)
+def test_build_on_device_matches_cpu(cls, device, precision):
+    """A build on `device`, eager and lazy, equals the eager CPU build. On the CPU
+    that leaves the lazy build to compare."""
+    # One element: generate_slices yields the integrator's array as it is and
+    # build() copies it into its buffer. Two elements: generate_slices adds it into
+    # a buffer.
+    for symbols in ("Fe2", "FeO"):
+        reference = _cpu_reference(cls, symbols, precision)
+        assert reference.array.dtype == np.dtype(precision)
+        assert np.abs(reference.array).max() > 0
 
-    assert get_array_module(field.array) is get_array_module(device)
-    assert field.array.dtype == np.dtype(precision)
-    assert field.array.shape == reference.array.shape
-    assert np.abs(reference.array).max() > 0
+        for lazy in (True,) if device == "cpu" else (False, True):
+            case = f"{symbols}, lazy={lazy}"
+            with abtem.config.set({"precision": precision}):
+                field = _build(cls, _atoms(symbols=symbols), device, lazy=lazy)
 
-    rtol = 1e-5 if precision == "float32" else 1e-12
-    np.testing.assert_allclose(
-        asnumpy(field.array),
-        reference.array,
-        rtol=rtol,
-        atol=rtol * np.abs(reference.array).max(),
-    )
+            assert get_array_module(field.array) is get_array_module(device), case
+            assert field.array.dtype == np.dtype(precision), case
+            assert field.array.shape == reference.array.shape, case
+
+            rtol = 1e-5 if precision == "float32" else 1e-12
+            np.testing.assert_allclose(
+                asnumpy(field.array),
+                reference.array,
+                rtol=rtol,
+                atol=rtol * np.abs(reference.array).max(),
+                err_msg=case,
+            )
 
 
 @pytest.mark.parametrize("cls", [MagneticField, VectorPotential])

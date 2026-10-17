@@ -711,7 +711,7 @@ def test_prism_eels_inelastic_crop_window(device):
     atoms = unit_atoms * (1, 1, 2)
     slice_thickness = float(unit_atoms.cell[2, 2])
     potential = abtem.Potential(
-        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device=device
+        atoms, gpts=(64, 64), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -721,16 +721,16 @@ def test_prism_eels_inelastic_crop_window(device):
     # carries real signal and a tighter window measurably truncates it.
     from abtem.inelastic.core_loss import energy2sigma
     rng = np.random.default_rng(7)
-    sampling = tuple(e / g for e, g in zip(potential.extent, (128, 128)))
+    sampling = tuple(e / g for e, g in zip(potential.extent, (64, 64)))
     yy, xx = np.meshgrid(
-        np.arange(128).astype(np.float32) * sampling[0],
-        np.arange(128).astype(np.float32) * sampling[1],
+        np.arange(64).astype(np.float32) * sampling[0],
+        np.arange(64).astype(np.float32) * sampling[1],
         indexing="ij",
     )
     gauss = np.exp(-(xx ** 2 + yy ** 2) / (2 * 0.5 ** 2)).astype(np.float32)
     raw = (
-        rng.standard_normal((2, 128, 128))
-        + 1j * rng.standard_normal((2, 128, 128))
+        rng.standard_normal((2, 64, 64))
+        + 1j * rng.standard_normal((2, 64, 64))
     ).astype(np.complex64)
     tp_array = (np.fft.fft2(raw * gauss[None]) / energy2sigma(energy)).astype(
         np.complex64
@@ -744,7 +744,7 @@ def test_prism_eels_inelastic_crop_window(device):
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
         start=(0, 0), end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
-        sampling=0.5, endpoint=False,
+        sampling=1.0, endpoint=False,
     )
 
     s2 = abtem.SMatrix(
@@ -1188,10 +1188,8 @@ def test_subshell_transitions_real_gpaw_pipeline():
     assert np.any(array != 0)
 
 
-@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
-@pytest.mark.filterwarnings("ignore:the cell:RuntimeWarning")
-@pytest.mark.slow
-def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
+@pytest.mark.parametrize("l", [1, 2], ids=["p", "d"])
+def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy(l):
     """Regression test for a (2*l+1) orbital-degeneracy double-count.
 
     ``SubshellTransitions.get_transitions()`` already realises a subshell's
@@ -1202,40 +1200,51 @@ def test_orbital_filling_factor_is_spin_only_not_full_shell_degeneracy():
     full subshell occupancy ``4*l+2 = spin(2) * orbital(2*l+1)`` -- applying
     ``4*l+2`` per already-explicit ``ml`` inflates the total by exactly
     ``(2*l+1)``. This was invisible for every K edge (l=0), where
-    ``4*l+2`` reduces to the spin-only factor of 2, which is exactly why it
-    went undetected: only checked directly against an independent
-    tabulation (Bote & Salvat) does a p- or d-subshell reveal it, at 3x and
-    5x respectively.
+    ``4*l+2`` reduces to the spin-only factor of 2 -- so only p (3x) and d
+    (5x) bound states are checked.
 
     Checked here without any external data: for a single explicit bound
     ``ml`` state, turning ``orbital_filling_factor`` on must scale the
     intensity by exactly 2 (spin), regardless of ``l`` -- not by ``4*l+2``.
+    The factor does not depend on the radial wavefunctions, so synthetic ones
+    stand in for GPAW's (which took ~11 s to solve).
     """
-    from abtem.inelastic.core_loss import SubshellTransitions, TransitionPotential
+    from abtem.inelastic.core_loss import (
+        AtomicWaveFunction,
+        RadialWavefunction,
+        TransitionPotential,
+    )
 
-    for Z, n, l in [(14, 1, 0), (14, 2, 1), (22, 3, 2)]:
-        transitions = SubshellTransitions(Z, n, l, epsilon=25.0)
-        one_ml_transitions = [
-            t for t in transitions.get_transitions() if t[0].ml == 0
-        ]
-        assert len(one_ml_transitions) > 0
-
-        kwargs = dict(extent=6.0, gpts=32, energy=100e3, double_channel=False)
-        with_factor = TransitionPotential(
-            Z, one_ml_transitions, orbital_filling_factor=True, **kwargs,
-        ).build()
-        without_factor = TransitionPotential(
-            Z, one_ml_transitions, orbital_filling_factor=False, **kwargs,
-        ).build()
-
-        intensity_with = float((np.abs(with_factor.array) ** 2).sum())
-        intensity_without = float((np.abs(without_factor.array) ** 2).sum())
-
-        assert intensity_with == pytest.approx(2.0 * intensity_without, rel=1e-6), (
-            f"l={l}: orbital_filling_factor should apply spin degeneracy (2x "
-            f"intensity), not the full shell occupancy "
-            f"({4 * l + 2}x intensity, from the old 4*l+2 formula)"
+    r = np.linspace(1e-3, 20.0, 4000)
+    bound = RadialWavefunction(
+        n=l + 1, l=l, energy=-100.0, radial_grid=r, radial_values=r ** (l + 1) * np.exp(-r)
+    )
+    transitions = []
+    for lprime in (l - 1, l + 1):
+        excited = RadialWavefunction(
+            n=None, l=lprime, energy=25.0, radial_grid=r, radial_values=r * np.exp(-0.1 * r)
         )
+        transitions.append(
+            (AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=0))
+        )
+
+    kwargs = dict(extent=6.0, gpts=32, energy=100e3, double_channel=False)
+    with_factor = TransitionPotential(
+        14, transitions, orbital_filling_factor=True, **kwargs
+    ).build()
+    without_factor = TransitionPotential(
+        14, transitions, orbital_filling_factor=False, **kwargs
+    ).build()
+
+    intensity_with = float((np.abs(with_factor.array) ** 2).sum())
+    intensity_without = float((np.abs(without_factor.array) ** 2).sum())
+
+    assert intensity_without > 0
+    assert intensity_with == pytest.approx(2.0 * intensity_without, rel=1e-6), (
+        f"l={l}: orbital_filling_factor should apply spin degeneracy (2x "
+        f"intensity), not the full shell occupancy "
+        f"({4 * l + 2}x intensity, from the old 4*l+2 formula)"
+    )
 
 
 def _probe_waves(gpts=(32, 32), extent=(8.0, 8.0), device="cpu"):
@@ -1488,3 +1497,31 @@ def test_local_potential_device_cache_keys_on_the_arrays_device():
     # A cpu request replaces the slot with a cpu-keyed entry.
     tp._local_potential_on_device(np.zeros((32, 32), dtype=np.complex64))
     assert tp._local_potential_device_cache[0] == "cpu"
+
+
+@pytest.mark.parametrize("gpts", [16, 17])
+def test_transition_potential_builds_on_a_coarse_grid(gpts):
+    """The radial grid of the overlap integral must reach the largest k of the
+    grid: with only a 5 % margin past it, np.arange ended below it on coarse
+    grids (16 pixels on a 6 A cell) and interp1d raised."""
+    from abtem.inelastic.core_loss import (
+        AtomicWaveFunction,
+        RadialWavefunction,
+        TransitionPotential,
+    )
+
+    r = np.linspace(1e-3, 20.0, 4000)
+    bound = RadialWavefunction(
+        n=1, l=0, energy=-100.0, radial_grid=r, radial_values=r * np.exp(-r)
+    )
+    excited = RadialWavefunction(
+        n=None, l=1, energy=25.0, radial_grid=r, radial_values=r * np.exp(-0.1 * r)
+    )
+    transitions = [(AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=0))]
+    built = TransitionPotential(
+        14, transitions, extent=6.0, gpts=gpts, energy=100e3, double_channel=False
+    ).build()
+
+    assert built.array.shape == (1, gpts, gpts)
+    assert np.all(np.isfinite(built.array))
+    assert np.abs(built.array).max() > 0

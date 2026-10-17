@@ -215,21 +215,16 @@ print("TORCH_IMPORTED", "torch" in sys.modules or "abtem.core._torch" in sys.mod
 
 
 @_not_macos
-def test_collecting_the_tests_does_not_import_torch():
-    result = _run_in_fresh_process(f"""
-import sys
-
-import pytest
-
-exit_code = pytest.main(
-    ["--collect-only", "-q", "-p", "no:cacheprovider", {str(Path(__file__).parent)!r}]
+@pytest.mark.skipif(
+    str(abtem.config.get("torch.device")).lower() != "mps",
+    reason="torch is the configured backend (torch.device='cpu'), so loading it is intended",
 )
-print("COLLECT_EXIT", int(exit_code))
-print("TORCH_IMPORTED", "torch" in sys.modules or "abtem.core._torch" in sys.modules)
-""")
-
-    assert "COLLECT_EXIT 0" in result.stdout, result.stdout[-2000:] + result.stderr
-    assert "TORCH_IMPORTED False" in result.stdout
+def test_collecting_the_tests_does_not_import_torch(request):
+    """Read off this run's own collection (see pytest_collection_finish in
+    conftest.py) rather than collecting the suite again in a subprocess,
+    which took ~15 s: it covers the tests this run collected -- all of them
+    in a full run."""
+    assert not request.config._abtem_torch_imported_by_collection
 
 
 @pytest.mark.parametrize("machine", ["arm64", "x86_64"])

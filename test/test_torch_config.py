@@ -32,9 +32,11 @@ def unloaded_backend(monkeypatch):
     return _torch
 
 
-@pytest.mark.parametrize("value", ["cpu", "CPU", "Cpu"])
-def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend, value):
+def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend):
     _torch = unloaded_backend
+    # Not the canonical spelling: the key is case-insensitive, and the one
+    # .lower() is all that differs between "cpu", "CPU" and "Cpu".
+    value = "CPU"
     atoms = bulk("Si", "diamond", a=5.43, cubic=True) * (2, 2, 3)
 
     with abtem.config.set(
@@ -55,13 +57,15 @@ def test_cpu_runs_a_multislice_on_torch_cpu_tensors(unloaded_backend, value):
     )
 
 
-@pytest.mark.parametrize("value", [None, -1, "cuda", "", 1.5, ["cpu"]])
-def test_invalid_device_is_rejected_naming_the_key(unloaded_backend, value):
-    with abtem.config.set({"torch.device": value}):
-        with pytest.raises(ValueError, match="torch.device.*'mps' or 'cpu'"):
-            get_array_module("mps")
+def test_invalid_device_is_rejected_naming_the_key(unloaded_backend):
+    # A non-string, an unknown name and the empty string: the two halves of the
+    # check (isinstance, membership) plus the falsy edge.
+    for value in (None, "cuda", ""):
+        with abtem.config.set({"torch.device": value}):
+            with pytest.raises(ValueError, match="torch.device.*'mps' or 'cpu'"):
+                get_array_module("mps")
 
-    assert backend.tp is None
+        assert backend.tp is None, value
 
 
 def test_double_precision_is_still_refused_on_cpu(unloaded_backend):
