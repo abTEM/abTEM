@@ -142,8 +142,7 @@ def test_slit_spectrum_sums_the_pixels_of_two_gaussian_peaks(extent, device):
         ensemble_axes_metadata=[EnergyLossAxis(values=(0.05,), units="eV")],
         metadata={"energy": energy},
     )
-    if device == "gpu":
-        dp = dp.to_gpu()
+    dp = dp.copy_to_device(device)
 
     detector = SpectralSlitDetector(width=25.0, q_min=7.5, q_max=57.5, angle=angle)
     spectrum = momentum_resolved_spectrum(dp, detector)

@@ -528,8 +528,7 @@ def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
         extent=(4.0, 4.0),
         ensemble_axes_metadata=[abtem.core.axes.OrdinalAxis(values=(0, 1))],
     )
-    if device == "gpu":
-        waves = waves.to_gpu()
+    waves = waves.copy_to_device(device)
 
     for gpts in (None, ()):
         with abtem.config.set({"precision": "float64"}):

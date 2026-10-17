@@ -735,8 +735,7 @@ def test_lorentzian_family_reflect_with_a_kernel_larger_than_the_chunked_image(
         images = Images(
             da.from_array(array, chunks=(8, 10)) if lazy else array, sampling=sampling
         )
-        if device == "gpu":
-            images = images.to_gpu()
+        images = images.copy_to_device(device)
         filtered = {
             "lorentzian": images.lorentzian_filter(half_width, boundary="reflect"),
             "voigtian": images.voigtian_filter(sigma, half_width, boundary="reflect"),
@@ -1681,7 +1680,7 @@ def test_diffraction_patterns_interpolate_line_at_frequencies(fftshift, lazy, de
     dp = DiffractionPatterns(
         array, sampling=sampling, fftshift=fftshift, metadata={"energy": 100e3}
     )
-    dp = dp.to_gpu() if device == "gpu" else dp
+    dp = dp.copy_to_device(device)
 
     lo = [-(n // 2) * d for n, d in zip(gpts, sampling)]
     hi = [(n // 2 - 1) * d for n, d in zip(gpts, sampling)]
