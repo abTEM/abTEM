@@ -4,7 +4,6 @@ import itertools
 from typing import Iterable, Literal, Optional, Sequence
 
 import numpy as np
-import pandas as pd  # type: ignore
 from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
@@ -383,6 +382,8 @@ def retrieve_structure_factor_values(
 
     if convert_to_numpy:
         array = cp.asnumpy(array)
+
+    import pandas as pd  # type: ignore  # here: it adds ~0.3 s to `import abtem`
 
     df = pd.Series(array, index=hkl_source)
     # copy=True: under pandas copy-on-write to_numpy() may return a read-only

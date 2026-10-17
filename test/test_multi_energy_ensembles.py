@@ -52,6 +52,23 @@ def _exit_waves(potential, energy, lazy=False):
     return probe.multislice(potential, scan=_scan(potential), lazy=lazy)
 
 
+_exit_waves_cache = {}
+
+
+def _cached_exit_waves(energy, device):
+    """The eager exit waves of `_potential(device)` at `energy` (one or several).
+    The diffraction-pattern tests below all start from these, so each is computed
+    once per worker; every call returns a copy."""
+    key = (tuple(np.atleast_1d(energy)), np.ndim(energy), device)
+    if key not in _exit_waves_cache:
+        _exit_waves_cache[key] = _exit_waves(_potential(device), energy)
+    return _exit_waves_cache[key].copy()
+
+
+def _cached_patterns(energy, device):
+    return _cached_exit_waves(energy, device).diffraction_patterns(max_angle="full")
+
+
 def _close(a, b, atol=1e-12):
     # the arrays of a GPU run are CuPy arrays, which NumPy does not convert
     a, b = asnumpy(a), asnumpy(b)
@@ -60,11 +77,11 @@ def _close(a, b, atol=1e-12):
 
 # --- multi-energy S-matrix scans (#502) -----------------------------------------
 
-_PRISM_CONFIGURATIONS = pytest.mark.parametrize(
-    "kwargs",
-    [dict(), dict(interpolation=2), dict(interpolation=2, upsample=True)],
-    ids=["interpolation_1", "interpolation_2", "interpolation_2_upsampled"],
-)
+_PRISM_CONFIGURATIONS = {
+    "interpolation_1": dict(),
+    "interpolation_2": dict(interpolation=2),
+    "interpolation_2_upsampled": dict(interpolation=2, upsample=True),
+}
 
 
 def _prism(potential, energy, detector, lazy=False, **kwargs):
@@ -81,9 +98,26 @@ def _same_pixels(a, b):
     return a.crop(gpts=shape).array, b.crop(gpts=shape).array
 
 
-@pytest.mark.parametrize("lazy", [False, True])
-@_PRISM_CONFIGURATIONS
-@pytest.mark.parametrize("max_angle", ["valid", "cutoff", "full", 60])
+# A string max_angle ("valid", "cutoff", "full") is a pixel count that does not
+# depend on the energy, so the detector leaves every energy alike
+# (PixelatedDetector._match_ensemble) and one string stands for all three; a number
+# of mrad is cropped to the highest energy's pixel count. Every PRISM configuration
+# is run eagerly, lazily only with interpolation.
+@pytest.mark.parametrize(
+    "max_angle, kwargs, lazy",
+    [
+        (max_angle, kwargs, False)
+        for max_angle in ("full", 60)
+        for kwargs in _PRISM_CONFIGURATIONS.values()
+    ]
+    + [(max_angle, dict(interpolation=2), True) for max_angle in ("full", 60)],
+    ids=[
+        f"{max_angle}-{name}-eager"
+        for max_angle in ("full", 60)
+        for name in _PRISM_CONFIGURATIONS
+    ]
+    + [f"{max_angle}-interpolation_2-lazy" for max_angle in ("full", 60)],
+)
 def test_multi_energy_prism_pixelated_equals_single_energy_runs(
     max_angle, kwargs, lazy
 ):
@@ -252,6 +286,9 @@ def test_multi_energy_frozen_phonon_build_reduce_equals_single_energy_runs(
     for j, measurement in enumerate(multi):
         names = [type(a).__name__ for a in measurement.axes_metadata]
         assert names[0] == "EnergyAxis"
+        # each energy averages the configurations, as a single-energy reduction
+        # and SMatrix.scan do (test_frozen_phonon_build_reduce_follows_ensemble_mean)
+        assert "FrozenPhononsAxis" not in names
         assert measurement.axes_metadata[0].values == ENERGIES
 
     for i, energy in enumerate(ENERGIES):
@@ -303,54 +340,33 @@ def test_frozen_phonon_build_reduce_follows_ensemble_mean():
         _close(eager.array, multislice.array, atol=1e-5)
 
 
-def test_multi_energy_frozen_phonon_build_reduce_averages_the_configurations():
-    """Each energy of an eager multi-energy reduction averages the
-    configurations, as a separate single-energy `SMatrix.scan` of the same
-    frozen phonons does. (A lazy reduction already averaged them.)"""
-    potential = _frozen_phonon_potential()
-    detector = abtem.AnnularDetector(30, 60)
-    multi = _build_and_reduce(potential, list(ENERGIES), detector)
-    assert [type(a).__name__ for a in multi.axes_metadata] == [
-        "EnergyAxis",
-        "RealSpaceAxis",
-        "RealSpaceAxis",
-    ]
-    for i, energy in enumerate(ENERGIES):
-        single = _prism(_frozen_phonon_potential(), energy, detector)
-        _close(multi[i].array, single.array, atol=1e-10)
-
-
 # --- per-energy diffraction patterns (#503) -----------------------------------
 
 
+_OPERATIONS = {
+    "polar_binning": lambda p: p.polar_binning(4, 4, 30, 100),
+    "radial_binning": lambda p: p.radial_binning(step_size=5, inner=30, outer=100),
+    "integrate_radial": lambda p: p.integrate_radial(30, 100),
+    "center_of_mass_mrad": lambda p: p.center_of_mass(units="mrad"),
+    "block_direct": lambda p: p.block_direct(),
+    "bandlimit": lambda p: p.bandlimit(30, 100),
+}
+
+
+# Every method is split into energies by the same `_per_energy` decorator, which
+# indexes and restacks lazy patterns as it does eager ones. Lazily, it is run on a
+# method with a shared outer angle (polar_binning) and on one that moves the scan
+# axes into its base (center_of_mass).
 @devices
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
-    "operation",
-    [
-        lambda p: p.polar_binning(4, 4, 30, 100),
-        lambda p: p.radial_binning(step_size=5, inner=30, outer=100),
-        lambda p: p.integrate_radial(30, 100),
-        lambda p: p.center_of_mass(units="mrad"),
-        lambda p: p.block_direct(),
-        lambda p: p.bandlimit(30, 100),
-    ],
-    ids=[
-        "polar_binning",
-        "radial_binning",
-        "integrate_radial",
-        "center_of_mass_mrad",
-        "block_direct",
-        "bandlimit",
-    ],
+    "name, lazy",
+    [(name, False) for name in _OPERATIONS]
+    + [("polar_binning", True), ("center_of_mass_mrad", True)],
+    ids=list(_OPERATIONS) + ["polar_binning-lazy", "center_of_mass_mrad-lazy"],
 )
-def test_diffraction_pattern_methods_equal_single_energy_runs(
-    operation, lazy, device
-):
-    potential = _potential(device)
-    multi = _exit_waves(potential, list(ENERGIES)).diffraction_patterns(
-        max_angle="full"
-    )
+def test_diffraction_pattern_methods_equal_single_energy_runs(name, lazy, device):
+    operation = _OPERATIONS[name]
+    multi = _cached_patterns(list(ENERGIES), device)
     if lazy:
         multi = multi.lazy()
     result = operation(multi)
@@ -358,16 +374,13 @@ def test_diffraction_pattern_methods_equal_single_energy_runs(
 
     axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
     for i, energy in enumerate(ENERGIES):
-        single = operation(
-            _exit_waves(potential, energy).diffraction_patterns(max_angle="full")
-        )
+        single = operation(_cached_patterns(energy, device))
         _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
 
 
 @devices
 def test_pixelated_integration_equals_the_annular_detector_for_each_energy(device):
-    potential = _potential(device)
-    waves = _exit_waves(potential, list(ENERGIES))
+    waves = _cached_exit_waves(list(ENERGIES), device)
     pixelated = (
         abtem.PixelatedDetector(max_angle="full")
         .detect(waves)
@@ -377,9 +390,7 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
 
     # the annular detector moves the energy axis behind the scan axes
     axis = [type(a).__name__ for a in pixelated.axes_metadata].index("EnergyAxis")
-    annular_axis = [type(a).__name__ for a in annular.axes_metadata].index(
-        "EnergyAxis"
-    )
+    annular_axis = [type(a).__name__ for a in annular.axes_metadata].index("EnergyAxis")
     for i in range(len(ENERGIES)):
         _close(
             np.take(asnumpy(pixelated.array), i, axis=axis),
@@ -388,19 +399,19 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
         )
 
 
+# The default outer angle is resolved by the `_per_energy` decorator before the
+# patterns are split, alike for both methods and for lazy and eager patterns.
 @devices
-@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
-    "name, args", [("polar_binning", (4, 4)), ("radial_binning", ())]
+    "name, args, lazy",
+    [("polar_binning", (4, 4), True), ("radial_binning", (), False)],
+    ids=["polar_binning-lazy", "radial_binning"],
 )
 def test_default_outer_is_the_same_for_every_energy(name, args, lazy, device):
     # each energy's own maximum angle would give radial axes that cannot stack, or
     # that are labelled with the first energy's; the ensemble's, the highest
     # energy's, is reached by every energy
-    potential = _potential(device)
-    multi = _exit_waves(potential, list(ENERGIES)).diffraction_patterns(
-        max_angle="full"
-    )
+    multi = _cached_patterns(list(ENERGIES), device)
     shared = min(multi.max_angles)
     if lazy:
         multi = multi.lazy()
@@ -409,9 +420,6 @@ def test_default_outer_is_the_same_for_every_energy(name, args, lazy, device):
 
     axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
     for i, energy in enumerate(ENERGIES):
-        single = getattr(
-            _exit_waves(potential, energy).diffraction_patterns(max_angle="full"),
-            name,
-        )(*args, outer=shared)
+        single = getattr(_cached_patterns(energy, device), name)(*args, outer=shared)
         _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
         assert result.radial_sampling == pytest.approx(single.radial_sampling)

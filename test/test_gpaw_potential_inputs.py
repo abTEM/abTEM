@@ -467,19 +467,17 @@ def gpw_paths(tmp_path_factory):
     return paths
 
 
-@pytest.mark.parametrize(
-    "case", ["two paths", "one path in a list", "path and calculator", "frozen phonons"]
-)
+# Real-GPAW twins of test_an_eager_build_equals_the_lazy_build, which covers all
+# four inputs (also "one path in a list" and "path and calculator") with the fake
+# GPAW: these two check the fake against real .gpw files, for the two kinds of
+# eager read, a path list and one path with frozen phonons.
+@pytest.mark.parametrize("case", ["two paths", "frozen phonons"])
 def test_gpaw_eager_build_of_gpw_files(gpw_paths, case):
     from gpaw import GPAW
 
     atoms = GPAW(gpw_paths[0], txt=None).atoms
     inputs = {
         "two paths": lambda: dict(calculators=gpw_paths),
-        "one path in a list": lambda: dict(calculators=gpw_paths[:1]),
-        "path and calculator": lambda: dict(
-            calculators=[gpw_paths[0], GPAW(gpw_paths[1], txt=None)]
-        ),
         "frozen phonons": lambda: dict(
             calculators=gpw_paths[0],
             frozen_phonons=abtem.FrozenPhonons(atoms, 2, sigmas=0.1, seed=1),
@@ -497,18 +495,15 @@ def test_gpaw_eager_build_of_gpw_files(gpw_paths, case):
     np.testing.assert_allclose(result.array, expected.array, rtol=0, atol=1e-6 * scale)
 
 
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("wave", ["PlaneWave", "Probe"])
-@pytest.mark.parametrize("kind", ["path", "calculator"])
-def test_gpaw_single_calculator_multislice(gpw_paths, kind, wave, lazy):
-    from gpaw import GPAW
-
+def test_gpaw_single_calculator_multislice(gpw_paths):
+    # The real-GPAW twin of test_one_calculator_simulates_like_its_built_potential,
+    # which covers every kind x wave x lazy with the fake GPAW. One case checks the
+    # fake against a real .gpw file: a path, read lazily inside a probe multislice.
     def potential():
-        source = gpw_paths[0] if kind == "path" else GPAW(gpw_paths[0], txt=None)
-        return GPAWPotential(source, gpts=(32, 32))
+        return GPAWPotential(gpw_paths[0], gpts=(32, 32))
 
-    expected = _simulate(wave, potential().build(lazy=False), lazy=False)
-    result = _simulate(wave, potential(), lazy)
+    expected = _simulate("Probe", potential().build(lazy=False), lazy=False)
+    result = _simulate("Probe", potential(), lazy=True)
 
     assert potential().num_configurations == 1
     assert result.shape == expected.shape == (32, 32)

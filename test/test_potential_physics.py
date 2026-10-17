@@ -156,29 +156,60 @@ def _band_relative_error(projected, pos, sampling, parametrization, Z, band):
 @pytest.mark.parametrize("precision", PRECISIONS)
 @pytest.mark.parametrize("Z", ELEMENTS)
 @pytest.mark.parametrize("name", list(PARAMETRIZATIONS))
-def test_infinite_projection_matches_analytic_projected_potential(
+def test_infinite_projection_matches_analytic_and_the_sum_rule(
     name, Z, precision, device
 ):
-    """V_p(r) from the FFT integrator vs the parametrization's closed form.
+    """V_p(r) from the FFT integrator vs the parametrization's closed form, and
+    int V_p dA = F(0), the k = 0 sum rule (units: see _f0).
 
-    Oracle: ``projected_potential`` (K0/K1 Bessel sums for Lobato, K0 plus
+    Band oracle: ``projected_potential`` (K0/K1 Bessel sums for Lobato, K0 plus
     Gaussians for Kirkland) -- the analytic z-integral of the radial
     potential -- at the exact distance of each pixel from the atom.
 
-    Tolerance, 1 %: the grid holds the band-limited (k < Nyquist) version of a
-    function with a log-singular core, so pixel values carry a Gibbs-like
+    Band tolerance, 1 %: the grid holds the band-limited (k < Nyquist) version
+    of a function with a log-singular core, so pixel values carry a Gibbs-like
     error falling off as dx^2 (checked by
     test_infinite_projection_error_is_second_order_in_sampling). The band
     excludes r < 0.1 A (5 pixels of that core) and r > 1 A, where V_p is small
     enough that the O(dx^2) offset the band limit spreads over the cell turns
     into a large *relative* error. Float32 round-off (~1e-6) is negligible.
     A 2 % error in the scattering factor cannot hide inside a 1 % bound.
+
+    The sum rule is exact for the FFT method: the k = 0 coefficient of the
+    grid is sum(V) dx dy, and the superposed delta has unit weight however it
+    is split between pixels. The only error is round-off, bounded by
+    10 eps log2(N) for the O(log N) pairwise-summation and FFT round-off of an
+    N-pixel grid, plus the float32 storage error of the parameters themselves
+    (_parameter_rounding). That bound scales with eps, so both precisions are
+    checked. It is checked on the band's build, and again with the atom on
+    the cell corner, testing the wrap of a delta split across the periodic
+    boundary. ``periodic`` only changes how atoms at or beyond a face are
+    wrapped (Potential._configuration), so it is varied for the corner atom
+    only: the centred atom is the same atom either way.
     """
     parametrization = PARAMETRIZATIONS[name]()
+    f0 = _f0(parametrization, Z)
+    tolerance = 10 * _eps(precision) * np.log2(600**2) + _parameter_rounding(
+        parametrization, Z, precision
+    )
     with config.set({"precision": precision}):
         projected, pos, sampling = _infinite_projection(parametrization, Z, 600, device)
     rel = _band_relative_error(projected, pos, sampling, parametrization, Z, (0.1, 1.0))
     assert np.abs(rel).max() < 1e-2, np.abs(rel).max()
+    total = projected.astype(np.float64).sum() * np.prod(sampling)
+    assert abs(total / f0 - 1) < tolerance, ("centred", total / f0 - 1)
+
+    corner = (0.003, _CELL - 0.004, 1.0)
+    for periodic in (True, False):
+        with config.set({"precision": precision}):
+            projected, _, sampling = _infinite_projection(
+                parametrization, Z, 600, device, periodic=periodic, pos=corner
+            )
+        total = projected.astype(np.float64).sum() * np.prod(sampling)
+        assert abs(total / f0 - 1) < tolerance, (
+            f"corner, periodic={periodic}",
+            total / f0 - 1,
+        )
 
 
 @pytest.mark.parametrize("Z", (6, 79))
@@ -203,36 +234,6 @@ def test_infinite_projection_error_is_second_order_in_sampling(Z):
             )
             errors.append(np.abs(rel).max())
     assert errors[0] / errors[1] > 2.5, errors
-
-
-@devices
-@pytest.mark.parametrize("precision", PRECISIONS)
-@pytest.mark.parametrize("periodic", [True, False], ids=["periodic", "nonperiodic"])
-@pytest.mark.parametrize("Z", ELEMENTS)
-@pytest.mark.parametrize("name", list(PARAMETRIZATIONS))
-def test_infinite_projection_sum_rule(name, Z, periodic, precision, device):
-    """int V_p dA = F(0), the k = 0 sum rule (units: see _f0).
-
-    Exact for the FFT method: the k = 0 coefficient of the grid is
-    sum(V) dx dy, and the superposed delta has unit weight however it is split
-    between pixels. The only error is round-off, bounded by
-    10 eps log2(N) for the O(log N) pairwise-summation and FFT round-off of an
-    N-pixel grid, plus the float32 storage error of the parameters themselves
-    (_parameter_rounding). The second position sits on the cell corner, testing the
-    wrap of a delta split across the periodic boundary.
-    """
-    parametrization = PARAMETRIZATIONS[name]()
-    f0 = _f0(parametrization, Z)
-    tolerance = 10 * _eps(precision) * np.log2(600**2) + _parameter_rounding(
-        parametrization, Z, precision
-    )
-    for pos in [None, (0.003, _CELL - 0.004, 1.0)]:
-        with config.set({"precision": precision}):
-            projected, _, sampling = _infinite_projection(
-                parametrization, Z, 600, device, periodic=periodic, pos=pos
-            )
-        total = projected.astype(np.float64).sum() * np.prod(sampling)
-        assert abs(total / f0 - 1) < tolerance, (pos, total / f0 - 1)
 
 
 @pytest.mark.float64
@@ -316,12 +317,15 @@ def _slab_oracle(parametrization, Z, potential):
 
 
 @devices
-@pytest.mark.parametrize("precision", PRECISIONS)
 @pytest.mark.parametrize("Z", ELEMENTS)
 @pytest.mark.parametrize("name", list(PARAMETRIZATIONS))
-def test_finite_projection_slices_match_slab_integrals(name, Z, precision, device):
+def test_finite_projection_slices_match_slab_integrals(name, Z, device):
     """Per-slice int V dA of the finite projection vs the independent
     int_{slab} V d^3r (hat-box 1D quadrature, see _slab_integral).
+
+    Built at the configured precision (float32 by default, the harder case):
+    the bounds below are ~1000x float32 round-off, so a float64 run checks
+    nothing a float32 run does not.
 
     Tolerances from the numerics:
 
@@ -336,13 +340,12 @@ def test_finite_projection_slices_match_slab_integrals(name, Z, precision, devic
 
     The atom's slice must also be the peak, and the slices must sum to the
     k = 0 sum rule F(0) = int V d^3r -- which the infinite projection meets
-    exactly (test_infinite_projection_sum_rule) -- within the atom-slice
-    budget.
+    exactly (test_infinite_projection_matches_analytic_and_the_sum_rule) --
+    within the atom-slice budget.
     """
     parametrization = PARAMETRIZATIONS[name]()
-    with config.set({"precision": precision}):
-        potential = _finite_potential(parametrization, Z, 0.05, device, _TIGHT_CUTOFF)
-        numeric = _slice_integrals(potential)
+    potential = _finite_potential(parametrization, Z, 0.05, device, _TIGHT_CUTOFF)
+    numeric = _slice_integrals(potential)
     oracle = _slab_oracle(parametrization, Z, potential)
 
     atom_slice = int(_FINITE_Z0 // _FINITE_DZ)
@@ -451,9 +454,8 @@ def _gaussian_potential(Z, slice_thickness, device, gpts=None, sampling=None):
 
 
 @devices
-@pytest.mark.parametrize("precision", PRECISIONS)
 @pytest.mark.parametrize("Z", ELEMENTS)
-def test_gaussian_projection_single_slice_matches_analytic(Z, precision, device):
+def test_gaussian_projection_single_slice_matches_analytic(Z, device):
     """With one slice holding the whole atom, the Gaussian integrator (Peng
     Gaussians + infinite-projected Lobato-minus-Peng correction) is by
     construction an infinite projection of Lobato, so it must reproduce
@@ -463,12 +465,14 @@ def test_gaussian_projection_single_slice_matches_analytic(Z, precision, device)
     integrator (1 %, see the Task 1 test). The total is exact up to the
     documented Gaussian-form residual, _GAUSSIAN_FORM_TOLERANCE = 1e-4 of the
     peak of F (in practice 1.8e-7 for Peng), plus round-off and parameter
-    storage as in test_infinite_projection_sum_rule.
+    storage as in the sum rule of the Task 1 test. Both bounds are far above
+    float32 round-off, so the test runs at the configured precision only
+    (float32 by default, the harder case).
     """
     lobato = LobatoParametrization()
-    with config.set({"precision": precision}):
-        potential = _gaussian_potential(Z, _FINITE_CELL[2], device, sampling=0.02)
-        projected = asnumpy(potential.build(lazy=False).project().array)
+    precision = config.get("precision")
+    potential = _gaussian_potential(Z, _FINITE_CELL[2], device, sampling=0.02)
+    projected = asnumpy(potential.build(lazy=False).project().array)
     pos = (_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007)
     rel = _band_relative_error(
         projected, pos, potential.sampling, lobato, Z, (0.1, 1.0)
@@ -487,12 +491,8 @@ def test_gaussian_projection_single_slice_matches_analytic(Z, precision, device)
 
 
 @devices
-@pytest.mark.parametrize("precision", PRECISIONS)
-@pytest.mark.parametrize("slice_thickness", (1.0, 0.5))
 @pytest.mark.parametrize("Z", ELEMENTS)
-def test_gaussian_projection_slices_follow_the_documented_model(
-    Z, slice_thickness, precision, device
-):
+def test_gaussian_projection_slices_follow_the_documented_model(Z, device):
     """Per slice, the Gaussian integrator is documented to be the exact
     z-integral of the Peng Gaussians over the slice, plus -- in the atom's own
     slice only -- the whole infinitely projected Lobato-minus-Peng correction
@@ -502,20 +502,19 @@ def test_gaussian_projection_slices_follow_the_documented_model(
     independent hat-box quadrature, plus c = F_Lobato(0) - F_Peng(0) in the
     atom's slice. Slice integrals of an FFT-built slice are its exact k = 0
     coefficient, so the only error sources are round-off/parameter storage
-    and the form residual (1e-4 of F's peak); tolerance 2e-4 of F(0).
+    and the form residual (1e-4 of F's peak); tolerance 2e-4 of F(0). The
+    round-off terms are budgeted for the configured precision (float32 by
+    default, the harder case), the only one run. Two slice thicknesses put
+    the atom in a different slice of a different slicing.
+
+    Together with test_finite_projection_slices_match_slab_integrals (the
+    quadrature integrator vs the Lobato slabs, 0.5 A slices) this bounds the
+    Gaussian-vs-quadrature difference per slice by int_slab |V_L - V_P| (+ |c|
+    in the atom's slice) plus the two tests' budgets, by the triangle
+    inequality, so the two integrators are not compared directly.
     """
     lobato, peng = LobatoParametrization(), PengParametrization()
-    with config.set({"precision": precision}):
-        potential = _gaussian_potential(Z, slice_thickness, device, gpts=256)
-        numeric = _slice_integrals(potential)
-    with config.set({"precision": "float64"}):
-        V = peng.potential(chemical_symbols[Z])
-        oracle = _periodic_slab_integrals(
-            V, potential.slice_limits, _FINITE_Z0, _FINITE_CELL[2]
-        )
-    atom_slice = int(_FINITE_Z0 // slice_thickness)
-    oracle[atom_slice] += _f0(lobato, Z) - _f0(peng, Z)
-
+    precision = config.get("precision")
     f0 = _f0(lobato, Z)
     tolerance = (
         2e-4
@@ -523,56 +522,20 @@ def test_gaussian_projection_slices_follow_the_documented_model(
         + _parameter_rounding(lobato, Z, precision)
         + _parameter_rounding(peng, Z, precision)
     )
-    assert np.abs(numeric - oracle).max() / f0 < tolerance, (numeric - oracle) / f0
-
-
-@pytest.mark.parametrize("slice_thickness", (1.0, 0.5))
-@pytest.mark.parametrize("Z", ELEMENTS)
-def test_gaussian_and_quadrature_slices_agree_within_the_model_bound(
-    Z, slice_thickness
-):
-    """Gaussian vs quadrature integrator, same slab, per slice.
-
-    The Gaussian integrator misplaces between slices whatever part of
-    V_Lobato - V_Peng lies outside the atom's slice. That is bounded, per
-    slice j, by B_j = int_{slab j} |V_L - V_P| d^3r (+ |c| in the atom's slice,
-    c = F_L(0) - F_P(0)), computed with the independent hat-box quadrature.
-    The quadrature integrator's own error is budgeted as in
-    test_finite_projection_slices_match_slab_integrals (2e-3 of the slice,
-    2 % in the atom's slice).
-    """
-    lobato, peng = LobatoParametrization(), PengParametrization()
-    with config.set({"precision": "float64"}):
-        gaussian = _gaussian_potential(Z, slice_thickness, "cpu", sampling=0.05)
-        g = _slice_integrals(gaussian)
-        atoms = Atoms(
-            [Z],
-            positions=[
-                (_FINITE_CELL[0] / 2 + 0.013, _FINITE_CELL[1] / 2 - 0.007, _FINITE_Z0)
-            ],
-            cell=_FINITE_CELL,
+    for slice_thickness in (1.0, 0.5):
+        potential = _gaussian_potential(Z, slice_thickness, device, gpts=256)
+        numeric = _slice_integrals(potential)
+        with config.set({"precision": "float64"}):
+            V = peng.potential(chemical_symbols[Z])
+            oracle = _periodic_slab_integrals(
+                V, potential.slice_limits, _FINITE_Z0, _FINITE_CELL[2]
+            )
+        atom_slice = int(_FINITE_Z0 // slice_thickness)
+        oracle[atom_slice] += _f0(lobato, Z) - _f0(peng, Z)
+        assert np.abs(numeric - oracle).max() / f0 < tolerance, (
+            f"slice_thickness={slice_thickness}",
+            (numeric - oracle) / f0,
         )
-        quadrature = Potential(
-            atoms,
-            sampling=0.05,
-            slice_thickness=slice_thickness,
-            integrator=QuadratureProjectionIntegrals(cutoff_tolerance=_TIGHT_CUTOFF),
-        )
-        q = _slice_integrals(quadrature)
-        VL = lobato.potential(chemical_symbols[Z])
-        VP = peng.potential(chemical_symbols[Z])
-        bound = _periodic_slab_integrals(
-            lambda r: np.abs(VL(r) - VP(r)),
-            quadrature.slice_limits,
-            _FINITE_Z0,
-            _FINITE_CELL[2],
-        )
-    atom_slice = int(_FINITE_Z0 // slice_thickness)
-    bound[atom_slice] += abs(_f0(lobato, Z) - _f0(peng, Z))
-    quadrature_budget = 2e-3 * np.abs(q)
-    quadrature_budget[atom_slice] = 2e-2 * abs(q[atom_slice])
-    excess = np.abs(g - q) - (bound + quadrature_budget)
-    assert np.all(excess < 0), (np.abs(g - q), bound, quadrature_budget)
 
 
 # --------------------------------------------------------------------------

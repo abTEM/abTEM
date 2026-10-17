@@ -129,18 +129,19 @@ def test_smatrix_sampling_does_not_rescale_its_built_potential(potential_array, 
         ).compute()
 
 
-@pytest.mark.parametrize("upsample", [False, True])
-@pytest.mark.parametrize("lazy", [True, False])
+# Neither laziness nor upsampling is crossed: the check sits in
+# SMatrix._from_partitioned_args, which every build, scan and reduction, eager
+# or lazy, goes through before either enters.
 @pytest.mark.parametrize("change", ["sampling", "extent"])
 def test_smatrix_with_a_changed_grid_is_refused_by_every_route(
-    potential_array, change, lazy, upsample
+    potential_array, change
 ):
+    lazy = True
     smatrix = SMatrix(
         potential=potential_array,
         energy=ENERGY,
         semiangle_cutoff=20,
         interpolation=2,
-        upsample=upsample,
     )
     if change == "sampling":
         smatrix.sampling = 0.05

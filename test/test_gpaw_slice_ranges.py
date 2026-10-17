@@ -60,26 +60,30 @@ def _relative_difference(a, b):
     return np.abs(a - b).max() / np.abs(b).max()
 
 
-@pytest.mark.parametrize("reps", [(1, 1, 1), (2, 3, 2), (1, 1, 4)])
-@pytest.mark.parametrize("first, last", [(1, 3), (2, None), (0, 2)])
-def test_generate_slices_of_a_range_equal_the_slices_of_the_whole(
-    calculator, reps, first, last
-):
+# One cell, and a cell repeated along every axis (the slices of the second cell
+# along z included); the ranges are a loop, against the one whole build.
+@pytest.mark.parametrize("reps", [(1, 1, 1), (2, 3, 2)])
+def test_generate_slices_of_a_range_equal_the_slices_of_the_whole(calculator, reps):
     potential = _potential(calculator, reps)
     whole = potential.build(lazy=False).array
-    stop = len(potential) if last is None else last
 
-    part = np.stack(
-        [
-            s.array[0]
-            for s in potential.generate_slices(first_slice=first, last_slice=last)
-        ]
-    )
+    for first, last in ((1, 3), (2, None), (0, 2)):
+        stop = len(potential) if last is None else last
+        part = np.stack(
+            [
+                s.array[0]
+                for s in potential.generate_slices(first_slice=first, last_slice=last)
+            ]
+        )
 
-    assert part.shape == whole[first:stop].shape
-    np.testing.assert_allclose(
-        part, whole[first:stop], rtol=0, atol=1e-10 * np.abs(whole).max()
-    )
+        assert part.shape == whole[first:stop].shape, (first, last)
+        np.testing.assert_allclose(
+            part,
+            whole[first:stop],
+            rtol=0,
+            atol=1e-10 * np.abs(whole).max(),
+            err_msg=f"slices {first}:{last}",
+        )
 
 
 def test_a_range_of_a_single_slice(calculator):
@@ -136,20 +140,20 @@ def _built_array(potential):
     )
 
 
+# 4 slices in chunks of 2, and 16 in chunks of 3, the last one short. Chunks of
+# one slice are taken by the configuration test below.
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize(
-    "reps, chunk_size", [((1, 1, 1), 2), ((1, 1, 4), 2), ((1, 1, 4), 1), ((1, 1, 4), 3)]
-)
 def test_chunked_multislice_equals_the_multislice_of_the_built_potential(
-    calculator, lazy, reps, chunk_size
+    calculator, lazy
 ):
-    potential = _chunked_potential(calculator, reps)
-    array = _built_array(potential)
+    for reps, chunk_size in (((1, 1, 1), 2), ((1, 1, 4), 3)):
+        potential = _chunked_potential(calculator, reps)
+        array = _built_array(potential)
 
-    exit_wave = _exit_wave(potential, lazy, potential_chunk_size=chunk_size)
-    reference = _exit_wave(array, lazy)
+        exit_wave = _exit_wave(potential, lazy, potential_chunk_size=chunk_size)
+        reference = _exit_wave(array, lazy)
 
-    assert _relative_difference(exit_wave, reference) < 1e-10
+        assert _relative_difference(exit_wave, reference) < 1e-10, (reps, chunk_size)
 
 
 @pytest.mark.parametrize("chunk_size", [1, 3])

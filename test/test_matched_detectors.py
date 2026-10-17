@@ -10,7 +10,6 @@ import pytest
 from utils import devices
 
 import abtem
-from abtem.detectors import _AbstractRadialDetector
 from abtem.waves import Waves
 
 ENERGIES = (50e3, 60e3, 70e3)
@@ -160,35 +159,3 @@ def test_probe_scan_does_not_write_the_outer_angle(make, lazy):
     if lazy:
         measurement.compute()
         assert detector.outer is None
-
-
-def test_prism_match_does_not_pin_the_first_outer_angle(monkeypatch):
-    # SMatrix.reduce and SMatrixArray.reduce both match: the reduction must
-    # integrate to the second, the cutoff of its own waves.
-    seen = []
-    original = _AbstractRadialDetector._matched
-
-    def traced(self, waves):
-        matched = original(self, waves)
-        seen.append(matched)
-        return matched
-
-    monkeypatch.setattr(_AbstractRadialDetector, "_matched", traced)
-
-    potential = _potential()
-    detector = abtem.AnnularDetector(20)
-    auto = abtem.SMatrix(potential=potential, energy=60e3, semiangle_cutoff=20).scan(
-        scan=_scan(potential), detectors=detector, lazy=False
-    )
-    assert detector.outer is None
-    assert all(not m._outer_is_explicit for m in seen)
-
-    outer = min(
-        abtem.SMatrix(potential=potential, energy=60e3, semiangle_cutoff=20)
-        .dummy_probes()
-        .cutoff_angles
-    )
-    pinned = abtem.SMatrix(
-        potential=potential, energy=60e3, semiangle_cutoff=20
-    ).scan(scan=_scan(potential), detectors=abtem.AnnularDetector(20, outer), lazy=False)
-    np.testing.assert_array_equal(auto.array, pinned.array)

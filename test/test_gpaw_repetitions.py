@@ -65,11 +65,11 @@ def _repeated(calculator, reps, slice_thickness, **kwargs):
     )
 
 
+# One slice thickness: the thickness does not change how the repetitions are
+# applied, and the other planes below take two more.
 @pytest.mark.parametrize("reps", [(2, 1, 1), (1, 1, 2), (2, 3, 2), (1, 3, 1)])
-@pytest.mark.parametrize("slice_thickness", [0.9, 1.2])
-def test_repetitions_equal_the_one_cell_potential_tiled(
-    calculator, reps, slice_thickness
-):
+def test_repetitions_equal_the_one_cell_potential_tiled(calculator, reps):
+    slice_thickness = 0.9
     unit = GPAWPotential(calculator, gpts=GPTS, slice_thickness=slice_thickness).build(
         lazy=False
     )
@@ -101,10 +101,10 @@ def test_integral_scales_with_the_number_of_cells(calculator, reps):
     "plane, gpts, slice_thickness, axes",
     [("xz", (32, 36), 0.4, (0, 2, 1)), ("yz", (28, 36), 1.6, (1, 2, 0))],
 )
-@pytest.mark.parametrize(
-    "reps",
-    [(2, 1, 1), (1, 2, 1), (1, 1, 2), (2, 2, 2), (2, 3, 1), (1, 2, 3)],
-)
+# A single repeated axis, which is in the plane for xz and the slicing axis for
+# yz, and two with a different count along each axis, which a mix-up of the axes
+# of the plane would not tile alike.
+@pytest.mark.parametrize("reps", [(2, 1, 1), (2, 3, 1), (1, 2, 3)])
 def test_repetitions_equal_the_one_cell_potential_tiled_in_other_planes(
     calculator, plane, gpts, slice_thickness, axes, reps
 ):
