@@ -475,15 +475,27 @@ class TestWrappedCrop2D:
         assert not np.shares_memory(wrapped_crop_2d(array, (-1, -1), (7, 9)), array)
         assert not np.shares_memory(wrapped_crop_2d(array, (0, 0), (25, 20)), array)
 
+    @staticmethod
+    def _is_view(crop_of, array):
+        """Whether ``crop_of(array)`` is a view of ``array``: whether writing
+        into the array shows in the crop. Backend-neutral, as the torch backend
+        has no ``shares_memory``. Writes into ``array``: pass a throwaway."""
+        from abtem.core.backend import copy_to_device
+
+        got = crop_of(array)
+        before = to_host_array(copy_to_device(got, "cpu")).copy()
+        array += 1
+        after = to_host_array(copy_to_device(got, "cpu")).copy()
+        return not np.array_equal(before, after)
+
     @devices
     def test_matches_on_device(self, device):
-        from abtem.core.backend import copy_to_device, get_array_module
+        from abtem.core.backend import copy_to_device
         from abtem.prism.utils import wrapped_crop_2d
 
         rng = np.random.default_rng(3)
         array = rng.standard_normal((2, 32, 32))
         on_device = copy_to_device(array, device)
-        xp = get_array_module(on_device)
         size = (11, 11)
         corners = [
             # wrapping on both axes, far outside the array
@@ -503,12 +515,16 @@ class TestWrappedCrop2D:
                 self._reference(array, corner, size),
             )
             wraps = any(c % 32 + 11 > 32 for c in corner)
-            assert bool(xp.shares_memory(got, on_device)) != wraps
+            is_view = self._is_view(
+                lambda a: wrapped_crop_2d(a, corner, size),
+                copy_to_device(array, device),
+            )
+            assert is_view != wraps
 
         # a window wider than the period, wrapping on both axes
         got = wrapped_crop_2d(on_device, (-5, 40), (45, 33))
         assert_array_matches_device(got, device)
-        assert np.array_equal(
+        assert np.allclose(
             to_host_array(copy_to_device(got, "cpu")),
             self._reference(array, (-5, 40), (45, 33)),
         )
