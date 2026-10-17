@@ -342,3 +342,137 @@ def test_the_detector_validates_its_arguments_and_copies():
     assert copied.reduction_dtype == np.float64
     assert copied == detector
     assert PixelatedDetector(MAX_ANGLE).components is None
+
+
+# ---------------------------------------------------------------------------------
+# WavesDetector(average_frozen_phonons=True): the configuration-averaged wave <ψ>
+# ---------------------------------------------------------------------------------
+
+
+def _mean_wave_reference(scan, device, lazy, probe_kwargs=None):
+    """<ψ> by hand: the exit waves of every configuration, averaged afterwards."""
+    exit_waves = _run(
+        scan, device, lazy, _potential(False), WavesDetector(), **(probe_kwargs or {})
+    )
+    fp_axis = [
+        isinstance(ax, FrozenPhononsAxis) for ax in exit_waves.ensemble_axes_metadata
+    ].index(True)
+    exit_waves = exit_waves.compute() if lazy else exit_waves
+    return exit_waves, np.mean(_array(exit_waves), axis=fp_axis, dtype=np.complex128)
+
+
+@pytest.mark.parametrize("scan", [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_averaged_waves_detector_matches_the_mean_of_the_exit_waves(scan, lazy, device):
+    detector = WavesDetector(average_frozen_phonons=True)
+    result = _detected(scan, device, lazy, detector)
+    exit_waves, expected = _mean_wave_reference(scan, device, lazy)
+
+    assert isinstance(result, Waves)
+    assert result.is_lazy == lazy
+    assert not any(
+        isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
+    )
+    assert result.shape == expected.shape
+    assert result.shape == exit_waves.shape[1:]
+    assert result.dtype == exit_waves.dtype
+    assert result.metadata["num_configurations"] == N_CONFIGS
+    assert "frozen_phonon_average" not in result.metadata
+    assert result.axes_metadata == exit_waves.axes_metadata[1:]
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_averaged_waves_in_double_precision(lazy, device):
+    detector = WavesDetector(average_frozen_phonons=True, reduction_dtype="float64")
+    result = _detected(True, device, lazy, detector)
+    _, expected = _mean_wave_reference(True, device, lazy)
+
+    assert result.dtype == np.complex128
+    # the waves of the configurations are float32; the mean of them is not rounded
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=1e-12 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_the_default_waves_detector_keeps_every_configuration(lazy):
+    detector = WavesDetector()
+    assert not detector.average_frozen_phonons
+    result = _detected(True, "cpu", lazy, detector)
+    assert result.shape[0] == N_CONFIGS
+    assert isinstance(result.ensemble_axes_metadata[0], FrozenPhononsAxis)
+    assert "frozen_phonon_average" not in result.metadata
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_averaged_waves_keep_other_ensemble_axes(lazy):
+    """Other axes with an ensemble mean are not averaged for waves, as before."""
+    defocus = distributions.from_values(
+        np.array([-60.0, 90.0]), weights=np.array([0.5, 0.5]), ensemble_mean=True
+    )
+    result = _detected(
+        True,
+        "cpu",
+        lazy,
+        WavesDetector(average_frozen_phonons=True),
+        defocus=defocus,
+    )
+    exit_waves, expected = _mean_wave_reference(
+        True, "cpu", lazy, probe_kwargs=dict(defocus=defocus)
+    )
+    assert result.shape == expected.shape
+    assert result.shape[0] == 2
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_averaged_waves_without_frozen_phonons_raise(lazy):
+    atoms = _potential(True).frozen_phonons.atoms
+    potential = abtem.Potential(atoms, gpts=48, slice_thickness=2.0)
+    with pytest.raises(ValueError, match="FrozenPhononsAxis"):
+        PlaneWave(energy=100e3).multislice(
+            potential, WavesDetector(average_frozen_phonons=True), lazy=lazy
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_averaged_waves_of_frozen_phonons_kept_as_an_ensemble_raise(lazy):
+    with pytest.raises(ValueError, match="ensemble_mean=True"):
+        PlaneWave(energy=100e3).multislice(
+            _potential(False), WavesDetector(average_frozen_phonons=True), lazy=lazy
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_averaging_waves_directly_is_done_by_reduce_ensemble(lazy):
+    detector = WavesDetector(average_frozen_phonons=True)
+    raw = detector.detect(_exit_waves(lazy))
+    assert raw.shape == (N_CONFIGS, 2, 16, 20)
+
+    result = reduce_ensemble(raw)
+    assert result.shape == (2, 16, 20)
+    assert result.is_lazy == lazy
+    expected = np.mean(_array(_exit_waves(False)), axis=0)
+    np.testing.assert_allclose(_array(result), expected, rtol=1e-5, atol=1e-6)
+
+    with pytest.raises(ValueError, match="ensemble_mean=True"):
+        reduce_ensemble(detector.detect(_exit_waves(lazy, ensemble_mean=False)))
+
+
+def test_waves_detector_validates_its_arguments_and_copies():
+    with pytest.raises(ValueError, match="average_frozen_phonons"):
+        WavesDetector(reduction_dtype="float64")
+    with pytest.raises(TypeError, match="average_frozen_phonons"):
+        WavesDetector(average_frozen_phonons="yes")
+    detector = WavesDetector(average_frozen_phonons=True, reduction_dtype="float64")
+    copied = detector.copy()
+    assert copied.average_frozen_phonons
+    assert copied.reduction_dtype == np.float64
+    assert copied == detector

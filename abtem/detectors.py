@@ -2318,6 +2318,23 @@ class WavesDetector(BaseDetector):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    average_frozen_phonons : bool, optional
+       If True, return the configuration-averaged wave function <ψ> of a
+       frozen-phonon ensemble, the coherent (elastic) wave, instead of the wave
+       function of every configuration: the ``FrozenPhononsAxis`` is averaged when
+       the ensemble is reduced, as the multislice tasks finish, so the exit waves
+       of the configurations are not all kept. Other ensemble axes are kept as
+       they are. Requires a ``FrozenPhononsAxis`` with ``ensemble_mean=True``
+       among the ensemble axes; the average is formed when the ensemble is reduced,
+       as in the result of a multislice simulation, and a detector applied to
+       waves directly returns the waves of every configuration, to be reduced with
+       :func:`abtem.waves.reduce_ensemble`. For the elastic and diffuse
+       intensities in reciprocal space, use ``PixelatedDetector(components=...)``.
+       Default is False, which detects the wave function of every configuration.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+       Precision of the wave functions that are averaged: with ``'float64'`` the
+       detected waves are complex128 and so is their average. Only with
+       `average_frozen_phonons`. Default is None, the precision of the waves.
     """
 
     # The wave functions do not depend on the wavelength once computed, so a
@@ -2329,9 +2346,35 @@ class WavesDetector(BaseDetector):
         gpts: Optional[tuple[int, int]] = None,
         to_cpu: bool = False,
         url: Optional[str] = None,
+        average_frozen_phonons: bool = False,
+        reduction_dtype=None,
     ):
+        if not isinstance(average_frozen_phonons, (bool, np.bool_)):
+            raise TypeError(
+                "average_frozen_phonons must be a bool, got "
+                f"{type(average_frozen_phonons).__name__}"
+            )
+        reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+        if reduction_dtype is not None and not average_frozen_phonons:
+            raise ValueError("reduction_dtype applies to average_frozen_phonons")
         self._gpts = gpts
+        self._average_frozen_phonons = bool(average_frozen_phonons)
+        self._reduction_dtype = reduction_dtype
         super().__init__(to_cpu=to_cpu, url=url)
+
+    # A detector pickled before `average_frozen_phonons` detects every configuration.
+    _average_frozen_phonons: bool = False
+    _reduction_dtype: Optional[np.dtype] = None
+
+    @property
+    def average_frozen_phonons(self) -> bool:
+        """The wave function is averaged over the frozen phonons."""
+        return self._average_frozen_phonons
+
+    @property
+    def reduction_dtype(self) -> Optional[np.dtype]:
+        """Precision of the wave functions averaged over the frozen phonons."""
+        return self._reduction_dtype
 
     @property
     def gpts(self) -> Optional[tuple[int, int]]:
@@ -2339,6 +2382,8 @@ class WavesDetector(BaseDetector):
         return self._gpts
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
+        if self.reduction_dtype is not None:
+            return (np.result_type(self.reduction_dtype, np.complex64),)
         if self._gpts is not None:
             # fft_interpolate works in the configured precision
             return (get_dtype(complex=True),)
@@ -2352,6 +2397,9 @@ class WavesDetector(BaseDetector):
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
+        if self.average_frozen_phonons:
+            # Read by `reduce_ensemble`, which averages the frozen phonons.
+            metadata["frozen_phonon_average"] = True
         if self._gpts:
             # as `Waves.downsample` records it: the resampled waves keep the
             # band limit of the waves they were resampled from
@@ -2391,6 +2439,9 @@ class WavesDetector(BaseDetector):
             array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
         else:
             array = waves.array
+
+        if self.reduction_dtype is not None:
+            array = array.astype(self._out_dtype(waves)[0])
 
         return array
 
