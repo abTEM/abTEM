@@ -1025,7 +1025,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             metadata=metadata,
         )
 
-        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
@@ -1889,7 +1888,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
-        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._interpolation = interpolation
         self._window_gpts = tuple(window_gpts)
