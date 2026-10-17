@@ -2697,6 +2697,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             units.append(_normalize_unit(getattr(axis, "units", None)))
             origin.append(getattr(axis, "offset", 0.0))
 
+        # The signal units are the metadata units, as abTEM's own measurements set them
+        # ("arb. unit" by default). quantem only displays them, and reads the same
+        # symbols as abTEM ("Å", "%", "electrons"), so they are not normalized like
+        # the axis units. An empty string is a dimensionless signal and stays empty.
+        signal_units = self.metadata.get("units")
+        if signal_units is None:
+            signal_units = "arb. unit"
+
         # compute() replaces the array of the object it is called on; computing a
         # shallow copy leaves the caller lazy.
         exported = copy.copy(self).compute() if self.is_lazy else self
@@ -2708,7 +2716,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             origin=tuple(origin),
             sampling=tuple(sampling),
             units=tuple(units),
-            signal_units=self.metadata.get("units", "arb. units"),
+            signal_units=signal_units,
         )
 
         # Dataset.from_array takes no metadata; Dataset.metadata is the dict it

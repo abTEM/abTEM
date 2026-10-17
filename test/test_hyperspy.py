@@ -344,7 +344,16 @@ def test_to_quantem_leaves_a_lazy_object_lazy(kind, device, quantem_records):
 
 @pytest.mark.parametrize(
     "metadata, signal_units",
-    [({"units": "eV / e"}, "eV / e"), ({}, "arb. units")],
+    [
+        ({"units": "eV / e"}, "eV / e"),
+        ({"units": "%"}, "%"),
+        ({"units": "electrons"}, "electrons"),
+        ({"units": "Å"}, "Å"),
+        # An empty unit is a dimensionless signal, not a missing one.
+        ({"units": ""}, ""),
+        ({"units": None}, "arb. unit"),
+        ({}, "arb. unit"),
+    ],
 )
 def test_to_quantem_signal_units_are_the_metadata_units(
     metadata, signal_units, quantem_records
@@ -497,6 +506,28 @@ def test_quantem_calibration_of_real_space_and_scan_axes(device):
     # coordinates of the kept scan positions do.
     cropped = dataset.crop(((1, 0), (2, 0)), axes=(0, 1))
     np.testing.assert_allclose(cropped.origin[:2], (1.5, -1.2), rtol=0, atol=1e-12)
+
+
+@pytest.mark.quantem
+@pytest.mark.parametrize(
+    "metadata, signal_units",
+    [
+        ({"units": "arb. unit"}, "arb. unit"),
+        ({"units": "%"}, "%"),
+        ({"units": "electrons"}, "electrons"),
+        ({"units": "Å"}, "Å"),
+        ({"units": ""}, ""),
+        ({"units": None}, "arb. unit"),
+        ({}, "arb. unit"),
+    ],
+)
+def test_quantem_signal_units(metadata, signal_units):
+    _quantem_dataset_class()
+    images = Images(
+        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
+    )
+
+    assert images.to_quantem().signal_units == signal_units
 
 
 @pytest.mark.quantem
