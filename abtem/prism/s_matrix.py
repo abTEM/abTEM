@@ -4242,7 +4242,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # accelerator without an energy, as for PlaneWave and Probe
         if isinstance(energy, BaseDistribution):
             energy = energy.values
-        self._energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        if not (np.all(np.isfinite(energies)) and np.all(energies > 0.0)):
+            # None, for one, would give NaN wavelengths and a silently NaN S-matrix
+            raise ValueError(
+                f"energy must be positive and finite [eV], got {energy!r}."
+            )
+        self._energies = energies
         single = float(self._energies[0]) if len(self._energies) == 1 else None
         self._accelerator = Accelerator(energy=single)
 

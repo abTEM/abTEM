@@ -1017,6 +1017,18 @@ PRISM_SAMPLING = 0.1
 
 
 class TestSMatrixEnergyEnsemble:
+    @pytest.mark.parametrize("energy", [None, np.nan, 0.0, -100e3, [100e3, None]])
+    def test_an_unusable_energy_is_refused(self, energy):
+        """energy is required: None used to give a NaN wavelength, and a NaN
+        S-matrix without an error."""
+        kwargs = dict(semiangle_cutoff=PRISM_SEMIANGLE, gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        with pytest.raises(ValueError, match="energy must be positive and finite"):
+            SMatrix(energy=energy, **kwargs)
+
+        s = SMatrix(energy=100e3, **kwargs)
+        with pytest.raises(ValueError, match="energy must be positive and finite"):
+            s.energy = energy
+
     def test_build(self):
         """build() gives an SMatrixArray with the EnergyAxis, eagerly or lazily
         (its members are compared with single-energy runs after reduction in
