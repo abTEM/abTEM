@@ -2989,3 +2989,39 @@ def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
     images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
 
     assert len(entries) == 1
+
+
+@devices
+@pytest.mark.parametrize(
+    "method",
+    ["gaussian_filter", "lorentzian_filter", "source_size", "lorentzian_source_size"],
+)
+def test_filters_do_nothing_along_an_axis_sampled_at_zero(method, device):
+    # the axis of a scan whose positions coincide (a zero-extent GridScan axis)
+    # has sampling 0, so the widths in pixels divided by zero
+    rng = np.random.default_rng(3)
+    array = rng.random((5, 12)).astype(np.float32)
+    if method in ("gaussian_filter", "lorentzian_filter"):
+        def make(sampling):
+            return Images(array, sampling=sampling).copy_to_device(device)
+
+        apply = getattr(Images, method)
+    else:
+        def make(sampling):
+            axes = [ScanAxis(sampling=d, _main=True) for d in sampling]
+            return DiffractionPatterns(
+                array[:, :, None, None] * np.ones((1, 1, 4, 4), np.float32),
+                sampling=0.1,
+                ensemble_axes_metadata=axes,
+                metadata={"energy": 100e3},
+            ).copy_to_device(device)
+
+        name = "gaussian_source_size" if method == "source_size" else method
+        apply = getattr(DiffractionPatterns, name)
+
+    result = apply(make((0.0, 0.1)), 0.3).compute()
+    # equal to no width along that axis
+    expected = apply(make((1.0, 0.1)), (0.0, 0.3)).compute()
+    np.testing.assert_allclose(
+        asnumpy(result.array), asnumpy(expected.array), rtol=0, atol=1e-6
+    )

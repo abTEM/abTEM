@@ -1526,7 +1526,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             sigma = (sigma,) * 2
 
         sigma = (0,) * (len(self.shape) - 2) + tuple(
-            s / d for s, d in zip(sigma, self.sampling)
+            _width_in_pixels(s, d) for s, d in zip(sigma, self.sampling)
         )
 
         if xp is np:
@@ -1680,7 +1680,9 @@ class _BaseMeasurement2D(BaseMeasurements):
         if np.isscalar(half_width):
             half_width = (half_width,) * 2
 
-        hw_pixels = tuple(hw / d for hw, d in zip(half_width, self.sampling))
+        hw_pixels = tuple(
+            _width_in_pixels(hw, d) for hw, d in zip(half_width, self.sampling)
+        )
 
         # Two spatial axes are the trailing dims; build a true 2-D kernel.
         axes = (self.array.ndim - 2, self.array.ndim - 1)
@@ -3080,6 +3082,15 @@ def _gaussian_kernel_2d(
 _LORENTZIAN_SAFE_HW = 1.0 / np.sqrt(np.finfo(np.float64).max)  # ≈ 7.5e-155
 
 
+def _width_in_pixels(width: float, sampling: float) -> float:
+    """A filter width [Å] in pixels of `sampling` [Å]. An axis sampled at 0 Å,
+    such as that of a scan whose positions coincide (a zero-length line scan), is
+    constant along it, so a filter does nothing there: 0 pixels."""
+    if sampling == 0.0:
+        return 0.0
+    return width / sampling
+
+
 def _lorentzian_kernel_2d(
     hw_pixels: tuple[float, float],
     truncate: float = 10.0,
@@ -3463,8 +3474,8 @@ def _lorentzian_source_size(
 
     scan_sampling = _scan_sampling(measurements)
     hw_pixels = (
-        half_width[0] / scan_sampling[0],
-        half_width[1] / scan_sampling[1],
+        _width_in_pixels(half_width[0], scan_sampling[0]),
+        _width_in_pixels(half_width[1], scan_sampling[1]),
     )
     kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
@@ -3568,8 +3579,9 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
     for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
         if axis in _scan_axes(measurements):
             scan_sampling = _scan_sampling(measurements)[i]
-            padded_sigma += (sigma[i] / scan_sampling,)
-            depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+            sigma_pixels = _width_in_pixels(sigma[i], scan_sampling)
+            padded_sigma += (sigma_pixels,)
+            depth += (min(int(np.ceil(4.0 * sigma_pixels)), n),)
             i += 1
         else:
             padded_sigma += (0.0,)
