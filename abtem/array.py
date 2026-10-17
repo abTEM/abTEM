@@ -2665,6 +2665,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
         origin is the coordinate of its first sample, in the units of the sampling; other
         axes get origin 0 and sampling 1.
+
+        The units of the axes are converted to quantem's spelling (for example "A" and
+        "A^-1"), and an axis without units gets "pixels". The signal units are the
+        "units" entry of the metadata, passed on unchanged; if there is none they are
+        "arb. unit". The metadata is deep-copied into the metadata of the Dataset, so
+        changing one does not change the other.
+
+        A quantem Dataset holds NumPy arrays only: a lazy object is computed (the
+        object itself stays lazy) and an array on a GPU is copied to the host.
+
+        Returns
+        -------
+        dataset : quantem.core.datastructures.Dataset
         """
 
         em = _optional_module(
