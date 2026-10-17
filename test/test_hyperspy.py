@@ -284,6 +284,19 @@ def test_to_quantem_leaves_a_lazy_object_lazy(device, quantem_records):
 
 
 @devices
+def test_to_quantem_exports_a_host_array(device, quantem_records):
+    # quantem's Dataset holds NumPy arrays only and rejects CuPy arrays.
+    images = Images(
+        np.arange(np.prod(GPTS), dtype=np.float32).reshape(GPTS), sampling=SAMPLING
+    ).copy_to_device(device)
+
+    images.to_quantem()
+
+    assert type(quantem_records["array"]) is np.ndarray
+    np.testing.assert_array_equal(quantem_records["array"], _host(images.array))
+
+
+@devices
 def test_exports_invert_to_the_stored_coefficients(device):
     pytest.importorskip("xarray")
     waves = _waves(False, device, reciprocal_space=True)

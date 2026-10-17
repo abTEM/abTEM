@@ -2700,8 +2700,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy:
             self.compute()
 
+        # A quantem Dataset holds NumPy arrays only: it rejects CuPy arrays.
         dataset = em.core.datastructures.Dataset.from_array(
-            array=self.array,
+            array=asnumpy(self.array),
             name=type(self).__name__,
             origin=tuple(origin),
             sampling=tuple(sampling),
