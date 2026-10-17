@@ -414,18 +414,56 @@ def test_reciprocal_axes_of_several_energies_are_those_of_each_energy(device):
 
 
 @devices
-def test_cropping_to_an_angle_is_refused_for_several_energies(device):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_cropping_to_an_angle_is_refused_for_several_energies(lazy, device):
     # the pixels within an angle differ between the energies, so the crops would
     # not stack; cropping every energy to the highest energy's pixel count instead
     # cut the lower energies at a smaller angle than asked for
+    multi = _cached_patterns(list(ENERGIES), device)
+    if lazy:
+        multi = multi.lazy()
+        assert multi.is_lazy
+
+    # refused when called, not when computed
     with pytest.raises(ValueError, match="several energies"):
-        _cached_patterns(list(ENERGIES), device).crop(max_angle=100)
+        multi.crop(max_angle=100)
 
     # a single energy is cropped to the angle
     single = _cached_patterns(ENERGIES[1], device)
     cropped = single.crop(max_angle=100)
     assert cropped.angular_limits[0][1] == pytest.approx(
         100, abs=single.angular_sampling[0]
+    )
+
+
+def _indexed_patterns(energy, device):
+    cell = (ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)).cell
+    return _cached_patterns(energy, device).index_diffraction_spots(cell=cell)
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_indexed_cropping_to_an_angle_is_refused_for_several_energies(lazy, device):
+    # the spots within an angle differ between the energies: the highest energy's
+    # wavelength used to be applied to all of them
+    multi = _indexed_patterns(list(ENERGIES), device)
+    if lazy:
+        multi = multi.lazy()
+        assert multi.is_lazy
+
+    with pytest.raises(ValueError, match="several energies"):
+        multi.crop(max_angle=100)
+
+    # k_max does not depend on the wavelength, and a single energy takes an angle
+    k_max = 0.8
+    cropped = multi.crop(k_max=k_max)
+    assert cropped.shape[-1] < multi.shape[-1]
+    single = _indexed_patterns(ENERGIES[1], device)
+    assert single.crop(max_angle=100).shape[-1] < single.shape[-1]
+    index = [type(a).__name__ for a in multi.ensemble_axes_metadata].index("EnergyAxis")
+    _close(
+        np.take(asnumpy(cropped.compute().array), 1, axis=index),
+        single.crop(k_max=k_max).array,
     )
 
 
