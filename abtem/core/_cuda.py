@@ -343,11 +343,14 @@ def interpolate_radial_functions(
     )
 
 
-
 _INTERPOLATE_RADIAL_SKEW_KERNEL = r"""
 template<typename T> __device__ __forceinline__ int rn_cast(T x);
-template<> __device__ __forceinline__ int rn_cast<float >(float  x) { return __float2int_rn(x);  }
-template<> __device__ __forceinline__ int rn_cast<double>(double x) { return __double2int_rn(x); }
+template<> __device__ __forceinline__ int rn_cast<float>(float x) {
+    return __float2int_rn(x);
+}
+template<> __device__ __forceinline__ int rn_cast<double>(double x) {
+    return __double2int_rn(x);
+}
 
 // The skew-grid version of interpolate_radial_impl, following the CPU kernel
 // interpolate_radial_functions_skew (abtem/integrals.py) line by line. Pixel
@@ -435,13 +438,19 @@ SKEW_KERNEL(interpolate_radial_skew_f64, double)
 _interpolate_radial_skew_f32 = None
 _interpolate_radial_skew_f64 = None
 
+# gridDim.y limit of CUDA: the atoms of the skew kernel are launched along y, so
+# more than this many atoms of one element in a slice go in several launches.
+_MAX_ATOMS_PER_LAUNCH = 65535
+
 
 def _init_interpolate_radial_skew_kernels():
     global _interpolate_radial_skew_f32, _interpolate_radial_skew_f64
     if _interpolate_radial_skew_f32 is None:
         mod = cp.RawModule(code=_INTERPOLATE_RADIAL_SKEW_KERNEL)
-        _interpolate_radial_skew_f32 = mod.get_function("interpolate_radial_skew_f32")
+        # f32 is the sentinel tested above, so it is published last: a thread
+        # that sees it set must also find f64.
         _interpolate_radial_skew_f64 = mod.get_function("interpolate_radial_skew_f64")
+        _interpolate_radial_skew_f32 = mod.get_function("interpolate_radial_skew_f32")
 
 
 def interpolate_radial_functions_skew(
@@ -466,7 +475,7 @@ def interpolate_radial_functions_skew(
     radius-sorted disk starting at global index ``chunk_offset``, and
     ``disk_counts`` gives each atom's global truncation index.
     """
-    if len(positions) == 0:
+    if len(positions) == 0 or len(disk_indices) == 0:
         return array
 
     _init_interpolate_radial_skew_kernels()
@@ -487,7 +496,6 @@ def interpolate_radial_functions_skew(
         kernel = _interpolate_radial_skew_f32
 
     block = (256, 1, 1)
-    grid = (math.ceil(n_disk / 256), n_atoms, 1)
 
     positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
     disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
@@ -499,17 +507,23 @@ def interpolate_radial_functions_skew(
     sv = np.asarray(sampling_vectors, dtype=float)
     ij = np.asarray(inv_jacobian, dtype=float)
 
-    kernel(
-        grid, block,
-        (array, positions_xy, disk_i32, counts_i32,
-         fp(sv[0, 0]), fp(sv[0, 1]), fp(sv[1, 0]), fp(sv[1, 1]),
-         fp(ij[0, 0]), fp(ij[0, 1]), fp(ij[1, 0]), fp(ij[1, 1]),
-         rg, rf, rd,
-         fp(dt), fp(r0),
-         np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
-         np.int32(rows), np.int32(cols), np.int32(chunk_offset)),
-    )
+    # The atoms are launched along gridDim.y, which is limited to 65535: a slice
+    # with more atoms of one element than that goes in consecutive launches of
+    # row-slices of the per-atom arrays (the kernel indexes them from 0).
+    for first in range(0, n_atoms, _MAX_ATOMS_PER_LAUNCH):
+        last = min(first + _MAX_ATOMS_PER_LAUNCH, n_atoms)
+        kernel(
+            (math.ceil(n_disk / 256), last - first, 1), block,
+            (array, positions_xy[first:last], disk_i32, counts_i32[first:last],
+             fp(sv[0, 0]), fp(sv[0, 1]), fp(sv[1, 0]), fp(sv[1, 1]),
+             fp(ij[0, 0]), fp(ij[0, 1]), fp(ij[1, 0]), fp(ij[1, 1]),
+             rg, rf[first:last], rd[first:last],
+             fp(dt), fp(r0),
+             np.int32(n_radial), np.int32(n_disk), np.int32(last - first),
+             np.int32(rows), np.int32(cols), np.int32(chunk_offset)),
+        )
     return array
+
 
 def interpolate_bilinear(x, v, u, vw, uw):
     B, H, W = x.shape

@@ -14,7 +14,8 @@ On a CUDA machine::
 
 A larger supercell, double precision::
 
-    python benchmarks/benchmark_skew_finite_projection.py --repeat 8 8 --precision float64
+    python benchmarks/benchmark_skew_finite_projection.py \\
+        --repeat 8 8 --precision float64
 """
 
 import argparse
@@ -32,16 +33,29 @@ from abtem.core.backend import asnumpy, cp
 from abtem.potentials.iam import Potential
 
 
+def _has_cuda_device():
+    if cp is None:
+        return False
+    try:
+        return cp.cuda.runtime.getDeviceCount() > 0
+    except cp.cuda.runtime.CUDARuntimeError:
+        return False
+
+
 def _build(atoms, device, native, reps, **kwargs):
+    previous = abtem.integrals.NATIVE_SKEW_CUDA_KERNEL
     abtem.integrals.NATIVE_SKEW_CUDA_KERNEL = native
-    times, array = [], None
-    for _ in range(reps):
-        start = time.perf_counter()
-        potential = Potential(atoms, device=device, **kwargs).build(lazy=False)
-        array = potential.array
-        if device == "gpu":
-            cp.cuda.Device().synchronize()
-        times.append(time.perf_counter() - start)
+    try:
+        times, array = [], None
+        for _ in range(reps):
+            start = time.perf_counter()
+            potential = Potential(atoms, device=device, **kwargs).build(lazy=False)
+            array = potential.array
+            if device == "gpu":
+                cp.cuda.Device().synchronize()
+            times.append(time.perf_counter() - start)
+    finally:
+        abtem.integrals.NATIVE_SKEW_CUDA_KERNEL = previous
     return min(times), asnumpy(array)
 
 
@@ -51,12 +65,14 @@ def main():
     parser.add_argument("--layers", type=int, default=4)
     parser.add_argument("--sampling", type=float, default=0.05)
     parser.add_argument("--slice-thickness", type=float, default=1.0)
-    parser.add_argument("--precision", choices=("float32", "float64"), default="float32")
+    parser.add_argument(
+        "--precision", choices=("float32", "float64"), default="float32"
+    )
     parser.add_argument("--reps", type=int, default=3)
     args = parser.parse_args()
 
-    if cp is None:
-        raise SystemExit("CuPy is not available")
+    if not _has_cuda_device():
+        raise SystemExit("this benchmark needs CuPy and a CUDA device")
     abtem.config.set({"precision": args.precision})
 
     atoms = graphene(formula="BN", a=2.504, vacuum=2.0)
@@ -94,7 +110,6 @@ def main():
             f"{label:>22}: {gpu_time:8.3f} s  "
             f"max |gpu - cpu| / max = {np.abs(array - reference).max() / scale:.2e}"
         )
-    abtem.integrals.NATIVE_SKEW_CUDA_KERNEL = True
 
 
 if __name__ == "__main__":
