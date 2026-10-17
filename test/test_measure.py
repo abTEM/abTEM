@@ -2999,7 +2999,7 @@ def test_filters_do_nothing_along_an_axis_sampled_at_zero(method, device):
     # the axis of a scan whose positions coincide (a zero-extent GridScan axis)
     # has sampling 0, so the widths in pixels divided by zero
     rng = np.random.default_rng(3)
-    array = rng.random((5, 12)).astype(np.float32)
+    array = rng.random((5, 12)).astype(get_dtype(complex=False))
     if method in ("gaussian_filter", "lorentzian_filter"):
         def make(sampling):
             return Images(array, sampling=sampling).copy_to_device(device)
@@ -3008,8 +3008,9 @@ def test_filters_do_nothing_along_an_axis_sampled_at_zero(method, device):
     else:
         def make(sampling):
             axes = [ScanAxis(sampling=d, _main=True) for d in sampling]
+            ones = np.ones((1, 1, 4, 4), get_dtype(complex=False))
             return DiffractionPatterns(
-                array[:, :, None, None] * np.ones((1, 1, 4, 4), np.float32),
+                array[:, :, None, None] * ones,
                 sampling=0.1,
                 ensemble_axes_metadata=axes,
                 metadata={"energy": 100e3},
