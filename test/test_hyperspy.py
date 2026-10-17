@@ -353,6 +353,155 @@ def test_to_quantem_exports_a_host_array(device, quantem_records):
     np.testing.assert_array_equal(quantem_records["array"], _host(images.array))
 
 
+# The tests below run against the real quantem package rather than the
+# quantem_records stand-in: the calibration is read back from the Dataset as
+# quantem stores it, and its own slicing is used to check that `origin` is the
+# coordinate of index 0.
+
+
+def _quantem_dataset_class():
+    return pytest.importorskip("quantem.core.datastructures").Dataset
+
+
+def _quantem_coordinates(dataset, axis: int) -> np.ndarray:
+    return (
+        dataset.origin[axis] + np.arange(dataset.shape[axis]) * (dataset.sampling[axis])
+    )
+
+
+def _abtem_coordinates(array_object) -> list:
+    return [
+        np.asarray(axis.coordinates(n))
+        for axis, n in zip(array_object.axes_metadata, array_object.shape)
+    ]
+
+
+@pytest.mark.quantem
+@devices
+@pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
+def test_quantem_accepts_every_export(kind, device):
+    Dataset = _quantem_dataset_class()
+    exported = _lazy_exports(device)[kind]
+    eager = exported.copy().compute()
+
+    dataset = exported.to_quantem()
+
+    assert type(dataset) is Dataset
+    # Reciprocal-space waves are exported as diffraction patterns.
+    if kind == "reciprocal_space_waves":
+        assert dataset.name == "DiffractionPatterns"
+    else:
+        assert dataset.name == type(exported).__name__
+    assert dataset.shape == exported.shape
+    assert len(dataset.origin) == len(dataset.sampling) == len(dataset.units)
+    assert dataset.signal_units == exported.metadata["units"]
+    assert dataset.metadata == exported.metadata
+    assert dataset.metadata is not exported.metadata
+    assert exported.is_lazy
+    assert type(dataset.array) is np.ndarray
+    if kind in ("reciprocal_space_waves", "diffraction_patterns_unshifted"):
+        expected = np.fft.fftshift(_host(eager.array), axes=(-2, -1))
+    else:
+        expected = _host(eager.array)
+    np.testing.assert_array_equal(dataset.array, expected)
+
+
+@pytest.mark.quantem
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "reciprocal_space_waves",
+        "diffraction_patterns_centred",
+        "diffraction_patterns_unshifted",
+    ],
+)
+@lazy_params
+@devices
+def test_quantem_calibration_of_frequency_axes(kind, lazy, device):
+    _quantem_dataset_class()
+    exported = _frequency_exports(kind, lazy, device)
+
+    dataset = exported.to_quantem()
+
+    assert dataset.units == ["pixels", "A^-1", "A^-1"]
+    np.testing.assert_array_equal(dataset.origin[0], 0.0)
+    np.testing.assert_array_equal(dataset.sampling[0], 1.0)
+    for i, axis in enumerate((-2, -1)):
+        _assert_frequencies(_quantem_coordinates(dataset, axis), i)
+        # quantem's own slicing moves the origin to the coordinate of the first
+        # kept index: starting at the centre pixel puts k = 0 at the origin.
+        index = [slice(None)] * dataset.ndim
+        index[axis] = slice(GPTS[i] // 2, None)
+        centre_on = dataset[tuple(index)]
+        dk = 1 / (GPTS[i] * SAMPLING[i])
+        assert abs(centre_on.origin[axis]) <= 1e-12 * dk
+
+
+@pytest.mark.quantem
+@devices
+def test_quantem_calibration_of_real_space_and_scan_axes(device):
+    _quantem_dataset_class()
+    scan_axes = [
+        ScanAxis(label="x", sampling=0.5, offset=1.0, units="Å"),
+        ScanAxis(label="y", sampling=0.4, offset=-2.0, units="Å"),
+    ]
+    images = Images(
+        np.zeros((4, 5, *GPTS), dtype=np.float32),
+        sampling=SAMPLING,
+        ensemble_axes_metadata=scan_axes,
+    ).copy_to_device(device)
+
+    dataset = images.to_quantem()
+
+    assert dataset.units == ["A"] * 4
+    np.testing.assert_allclose(dataset.origin, (1.0, -2.0, 0.0, 0.0), rtol=0)
+    np.testing.assert_allclose(dataset.sampling, (0.5, 0.4, *SAMPLING), rtol=0)
+    for axis, coordinates in enumerate(_abtem_coordinates(images)):
+        np.testing.assert_allclose(
+            _quantem_coordinates(dataset, axis), coordinates, rtol=0, atol=1e-12
+        )
+    # quantem's crop shifts the origin by the cropped samples, as abTEM's
+    # coordinates of the kept scan positions do.
+    cropped = dataset.crop(((1, 0), (2, 0)), axes=(0, 1))
+    np.testing.assert_allclose(cropped.origin[:2], (1.5, -1.2), rtol=0, atol=1e-12)
+
+
+@pytest.mark.quantem
+@devices
+def test_quantem_calibration_of_polar_measurements(device):
+    _quantem_dataset_class()
+    inner, outer, rotation = 5.0, 25.0, 0.3
+    nbins_radial, nbins_azimuthal = 4, 6
+    waves = _waves(False, device, reciprocal_space=False)
+    diffraction_patterns = waves.diffraction_patterns(max_angle=None, fftshift=True)
+    assert min(diffraction_patterns.max_angles) > outer
+    polar = diffraction_patterns.polar_binning(
+        nbins_radial=nbins_radial,
+        nbins_azimuthal=nbins_azimuthal,
+        inner=inner,
+        outer=outer,
+        rotation=rotation,
+    )
+
+    dataset = polar.to_quantem()
+
+    assert dataset.units[-2:] == ["mrad", "rad"]
+    # The radial origin is the inner angle in mrad, the azimuthal origin the
+    # rotation in rad.
+    np.testing.assert_allclose(dataset.origin[-2:], (inner, rotation), rtol=1e-12)
+    np.testing.assert_allclose(
+        dataset.sampling[-2:],
+        ((outer - inner) / nbins_radial, 2 * np.pi / nbins_azimuthal),
+        rtol=1e-12,
+    )
+    # The ensemble axis (OrdinalAxis) has no offset, so only the polar axes.
+    for axis in (-2, -1):
+        coordinates = _abtem_coordinates(polar)[axis]
+        np.testing.assert_allclose(
+            _quantem_coordinates(dataset, axis), coordinates, rtol=1e-12
+        )
+
+
 @devices
 def test_exports_invert_to_the_stored_coefficients(device):
     pytest.importorskip("xarray")
