@@ -45,6 +45,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import (
     asnumpy,
+    copy_to_device,
     cp,
     get_array_module,
     get_ndimage_module,
@@ -5169,22 +5170,37 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _azimuthal_step_bounds(
-        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        device: str = "cpu",
     ) -> tuple[np.ndarray, np.ndarray]:
-        """The first and last step bin of every pixel, as int32 arrays on the host.
-        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
-        x, y = np.meshgrid(*coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
-        del x, y
+        """The first and last step bin of every pixel, as int32 arrays on `device`.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes.
+
+        The bins are found in double precision on the host, then copied to the
+        device once: every block of a lazy average shares the copy instead of
+        transferring both arrays itself. The radii are computed by broadcasting
+        and the bounds in place, so at most two pattern-sized float64 arrays exist
+        at once, rather than a meshgrid and its temporaries.
+        """
+        x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
+        r = np.hypot(x[:, None], y[None, :])
         # Bin k holds r with k * radial_sampling - width / 2 <= r <
         # k * radial_sampling + width / 2, that is first <= k <= last. The
         # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
         # multiple of the sampling is not missed by rounding noise.
-        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
-        first = first.astype(np.int32)
-        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
-        last = last.astype(np.int32)
-        return first, last
+        def bound(q, shift, offset):
+            np.add(q, shift, out=q)
+            np.divide(q, radial_sampling, out=q)
+            np.add(q, offset, out=q)
+            np.round(q, 7, out=q)
+            np.floor(q, out=q)
+            return q.astype(np.int32)
+
+        first = bound(r.copy(), -width / 2, 1.0)
+        last = bound(r, width / 2, 0.0)  # r itself is not needed after this
+        return copy_to_device(first, device), copy_to_device(last, device)
 
     @staticmethod
     def _azimuthal_average(
@@ -5206,6 +5222,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(array)
 
         if weighting_function == "step":
+            # Already on the device of the array (see _azimuthal_step_bounds).
             first, last = (xp.asarray(bound) for bound in step_bounds)
         else:
             x, y = np.meshgrid(
@@ -5306,7 +5323,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             step_bounds = self._azimuthal_step_bounds
             if self.is_lazy:
                 step_bounds = dask.delayed(step_bounds, pure=True)
-            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+            kwargs = dict(
+                step_bounds=step_bounds(
+                    coordinates, radial_sampling, width, device=self.device
+                )
+            )
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 

@@ -1136,15 +1136,40 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
+@devices
+@pytest.mark.parametrize(
+    "gpts, radial_sampling, width", [((33, 48), 1.0, 1.0), ((40, 40), 0.7, 2.5)]
+)
+def test_azimuthal_step_bounds_are_the_bins_on_the_device(
+    gpts, radial_sampling, width, device
+):
+    # the bins of every pixel, written out with a meshgrid; the bounds are made
+    # on the device of the patterns once, for every block to share
+    coordinates = tuple(np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) for n in gpts)
+    x, y = np.meshgrid(*coordinates, indexing="ij")
+    r = np.sqrt(x**2 + y**2)
+    expected_first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
+    expected_last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
+
+    first, last = DiffractionPatterns._azimuthal_step_bounds(
+        coordinates, radial_sampling, width, device=device
+    )
+
+    for bound, expected in ((first, expected_first), (last, expected_last)):
+        assert_array_matches_device(bound, device)
+        assert bound.dtype == np.int32
+        np.testing.assert_array_equal(asnumpy(bound), expected.astype(np.int32))
+
+
 def test_lazy_azimuthal_average_computes_the_step_bounds_once_for_all_blocks(
     monkeypatch,
 ):
     calls = []
     bounds = DiffractionPatterns._azimuthal_step_bounds
 
-    def counting_bounds(*args):
+    def counting_bounds(*args, **kwargs):
         calls.append(1)
-        return bounds(*args)
+        return bounds(*args, **kwargs)
 
     monkeypatch.setattr(
         DiffractionPatterns, "_azimuthal_step_bounds", staticmethod(counting_bounds)
