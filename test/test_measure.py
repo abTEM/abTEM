@@ -1488,8 +1488,7 @@ def _make_images(array, sampling, lazy, device):
     array = array.astype(get_dtype(complex=False))
     if lazy:
         array = da.from_array(array, chunks=(array.shape[0] // 2, -1))
-    images = Images(array, sampling=sampling)
-    return images.to_gpu() if device == "gpu" else images
+    return Images(array, sampling=sampling).copy_to_device(device)
 
 
 def _line_values(line):
