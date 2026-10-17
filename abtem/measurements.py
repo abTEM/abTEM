@@ -5225,16 +5225,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
             # Already on the device of the array (see _azimuthal_step_bounds).
             first, last = (xp.asarray(bound) for bound in step_bounds)
         else:
-            x, y = np.meshgrid(
-                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
-                indexing="ij",
-            )
-            r = np.sqrt(x**2 + y**2)
+            # Broadcast rather than meshgrid, which not every array module has.
+            x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
+            r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
-        # the summed values are assigned back in.
-        values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
+        # the summed values are assigned back in. On the device of the array:
+        # a host array cannot take the device sums assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)

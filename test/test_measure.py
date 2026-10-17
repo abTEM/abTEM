@@ -1137,6 +1137,36 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
 
 
 @devices
+@lazy_params
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+def test_azimuthal_average_on_a_device_equals_the_cpu_average(
+    weighting_function, lazy, device
+):
+    # the averages were collected in a host array, so on CuPy every eager or
+    # lazy average failed assigning the device sums into it
+    data = np.random.default_rng(1).random((3, 33, 40)).astype(np.float32)
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    )
+    expected = patterns.azimuthal_average(weighting_function=weighting_function)
+
+    on_device = patterns.copy_to_device(device)
+    if lazy:
+        on_device = on_device.ensure_lazy(chunks=(1, -1, -1))
+    result = on_device.azimuthal_average(weighting_function=weighting_function)
+    result = result.compute()
+
+    assert_array_matches_device(result.array, device)
+    np.testing.assert_allclose(
+        asnumpy(result.array), expected.array, rtol=1e-6, atol=1e-7
+    )
+
+
+@devices
 @pytest.mark.parametrize(
     "gpts, radial_sampling, width", [((33, 48), 1.0, 1.0), ((40, 40), 0.7, 2.5)]
 )
