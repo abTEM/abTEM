@@ -350,6 +350,7 @@ _OPERATIONS = {
     "center_of_mass_mrad": lambda p: p.center_of_mass(units="mrad"),
     "block_direct": lambda p: p.block_direct(),
     "bandlimit": lambda p: p.bandlimit(30, 100),
+    "azimuthal_average": lambda p: p.azimuthal_average(radial_sampling=5),
 }
 
 
@@ -401,6 +402,50 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
 
 # The default outer angle is resolved by the `_per_energy` decorator before the
 # patterns are split, alike for both methods and for lazy and eager patterns.
+@devices
+def test_reciprocal_axes_of_several_energies_are_those_of_each_energy(device):
+    # the axes (and so `show` and the exports) are in 1/Å, which does not depend on
+    # the wavelength: only the angles do
+    multi = _cached_patterns(list(ENERGIES), device)
+    for energy in ENERGIES:
+        single = _cached_patterns(energy, device)
+        for axis, expected in zip(multi.base_axes_metadata, single.base_axes_metadata):
+            assert axis.units == expected.units == "1/Å"
+            assert axis.sampling == pytest.approx(expected.sampling)
+            assert axis.offset == pytest.approx(expected.offset)
+
+
+@devices
+def test_cropping_to_an_angle_is_refused_for_several_energies(device):
+    # the pixels within an angle differ between the energies, so the crops would
+    # not stack; cropping every energy to the highest energy's pixel count instead
+    # cut the lower energies at a smaller angle than asked for
+    with pytest.raises(ValueError, match="several energies"):
+        _cached_patterns(list(ENERGIES), device).crop(max_angle=100)
+
+    # a single energy is cropped to the angle
+    single = _cached_patterns(ENERGIES[1], device)
+    cropped = single.crop(max_angle=100)
+    assert cropped.angular_limits[0][1] == pytest.approx(
+        100, abs=single.angular_sampling[0]
+    )
+
+
+@devices
+@pytest.mark.parametrize(
+    "arguments", [{"max_frequency": 0.8}, {"gpts": (21, 31)}], ids=["frequency", "gpts"]
+)
+def test_cropping_to_a_frequency_or_pixel_count_serves_several_energies(
+    arguments, device
+):
+    result = _cached_patterns(list(ENERGIES), device).crop(**arguments)
+
+    axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
+    for i, energy in enumerate(ENERGIES):
+        single = _cached_patterns(energy, device).crop(**arguments)
+        _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
+
+
 @devices
 @pytest.mark.parametrize(
     "name, args, lazy",

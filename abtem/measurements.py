@@ -4265,6 +4265,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def angular_sampling(self) -> tuple[float, float]:
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
+
+        The angular sampling scales with the wavelength. For diffraction patterns of
+        several energies it is that of the highest energy, which is not the sampling
+        of the other energies: index one energy first to get its own. Methods that
+        use scattering angles evaluate each energy with its own sampling.
         """
         wavelength = energy2wavelength(self._get_energy())
         return (
@@ -4274,7 +4279,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def max_angles(self) -> tuple[float, float]:
-        """Maximum scattering angle in `x` and `y` [mrad]."""
+        """Maximum scattering angle in `x` and `y` [mrad]. For diffraction patterns of
+        several energies, that of the highest energy (see `angular_sampling`)."""
         return (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
@@ -4308,7 +4314,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_limits(self) -> list[tuple[float, float]]:
-        """Lowest and highest scattering angle in `x` and `y` [mrad]."""
+        """Lowest and highest scattering angle in `x` and `y` [mrad]. For diffraction
+        patterns of several energies, those of the highest energy (see
+        `angular_sampling`)."""
 
         limits = self.limits
         wavelength = energy2wavelength(self._get_energy())
@@ -4343,7 +4351,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
-        """Scattering angle coordinates [mrad]."""
+        """Scattering angle coordinates [mrad]. For diffraction patterns of several
+        energies, those of the highest energy (see `angular_sampling`)."""
 
         # Derived from `coordinates` so the storage order (shifted or
         # unshifted, even or odd n) is handled in one place.
@@ -5119,6 +5128,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         max_frequency : float, optional
             The maximum included spatial frequency in the cropped diffraction patterns.
         gpts : tuple of int
@@ -5136,6 +5146,19 @@ class DiffractionPatterns(_BaseMeasurement2D):
             raise ValueError(
                 "provide exactly one of 'max_angle', 'max_frequency' or 'gpts'"
             )
+
+        if max_angle is not None:
+            from abtem.array import _multi_energy_axis
+
+            if _multi_energy_axis(self) is not None:
+                # The number of pixels within an angle depends on the wavelength,
+                # so the energies would not stack.
+                raise ValueError(
+                    "`max_angle` cannot crop diffraction patterns of several "
+                    "energies, since the pixels within an angle differ between the "
+                    "energies: pass `max_frequency` or `gpts`, or index one energy "
+                    "first."
+                )
 
         if gpts is None and max_angle is not None:
             gpts = (
