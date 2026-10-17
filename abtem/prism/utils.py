@@ -78,19 +78,116 @@ def window_crop(positions: np.ndarray, window_gpts, gpts):
     return minimum_crop(positions, window_gpts)
 
 
-def wrapped_crop_2d(
+def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
+    """Two slices covering ``[start, stop)`` on a periodic axis of length ``n``.
+
+    ``start`` may be any integer. Normalising it into ``[0, n)`` first leaves
+    only two cases -- the window fits, or it wraps once -- which is what two
+    slices can express.
+
+    The previous implementation assumed ``-n <= start < n`` and ``0 < stop <= 2n``
+    and split on the raw values. For a window lying entirely in negative indices
+    (``stop <= 0``) it produced ``slice(0, stop)``, which is Python's *negative
+    indexing* and selects ``n + stop`` elements rather than none, so the two
+    pieces concatenated to ``n + size`` elements instead of ``size``. The
+    mis-shaped array then surfaced as a broadcast error frames away from here.
+
+    Raises
+    ------
+    RuntimeError
+        If ``stop - start > n``. Two slices cannot cover more than one period;
+        ``wrapped_crop_2d`` catches this and takes its general path.
+    """
+    size = stop - start
+
+    if size > n:
+        raise RuntimeError(
+            f"a window of {size} elements exceeds the period {n} and cannot be "
+            f"expressed as two slices (start = {start}, stop = {stop})"
+        )
+
+    start %= n
+    stop = start + size
+
+    if stop <= n:
+        return slice(start, stop), slice(0, 0)
+
+    return slice(start, None), slice(0, stop - n)
+
+
+def _wrapped_gather_2d(
     array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]
 ) -> np.ndarray:
-    """The ``size`` window of the last two axes of ``array`` starting at ``corner``,
-    with both axes periodic.
+    """``wrapped_crop_2d`` for windows wider than one period.
 
-    Gathers by modulo index, which is total for any corner (also far outside the
-    array) and any size (also wider than one period). The result is a copy.
+    Gathers by modulo index, which is total for any corner and any size. It
+    copies through fancy indexing, so it is kept off the common path -- but it
+    is correct where the slice pair cannot be, and unlike the ``xp.pad(...,
+    mode="wrap")`` fallback it replaced, it does not fail for windows spanning
+    several periods.
     """
     xp = get_array_module(array)
     i = (corner[0] + xp.arange(size[0])) % array.shape[-2]
     j = (corner[1] + xp.arange(size[1])) % array.shape[-1]
     return array[..., i[:, None], j[None, :]]
+
+
+def _check_crop_shape(cropped: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    """Fail here rather than at a broadcast three frames downstream.
+
+    A wrongly sized crop used to reach the caller intact and only show up as an
+    operand-shape mismatch elsewhere. The check is a shape comparison, so it
+    costs nothing on the hot path, and it is a complete detector for this class
+    of defect: when the slice pair is wrong it is the shape that is wrong.
+    """
+    if cropped.shape[-2:] != tuple(size):
+        raise RuntimeError(
+            f"wrapped_crop_2d produced {cropped.shape[-2:]}, expected {tuple(size)}"
+        )
+    return cropped
+
+
+def wrapped_crop_2d(
+    array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]
+) -> np.ndarray:
+    upper_corner = (corner[0] + size[0], corner[1] + size[1])
+
+    xp = get_array_module(array)
+
+    try:
+        a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
+        b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
+    except RuntimeError:
+        return _wrapped_gather_2d(array, corner, size)
+
+    A = array[..., a, b]
+    B = array[..., c, b]
+    D = array[..., c, d]
+    C = array[..., a, d]
+
+    if A.size == 0:
+        AB = B
+    elif B.size == 0:
+        AB = A
+    else:
+        AB = xp.concatenate([A, B], axis=-2)
+
+    if C.size == 0:
+        CD = D
+    elif D.size == 0:
+        CD = C
+    else:
+        CD = xp.concatenate([C, D], axis=-2)
+
+    if CD.size == 0:
+        return _check_crop_shape(AB, size)
+
+    if AB.size == 0:
+        cropped = CD
+    else:
+        cropped = xp.concatenate([AB, CD], axis=-1)
+
+    return _check_crop_shape(cropped, size)
 
 
 def prism_wave_vectors(
