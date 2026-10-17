@@ -1170,11 +1170,12 @@ def test_azimuthal_average_on_a_device_equals_the_cpu_average(
 
 @devices
 @pytest.mark.parametrize("scheduler", ["synchronous", "threads"])
-def test_lazy_azimuthal_average_on_a_device_shares_one_bounds_node_across_blocks(
+def test_lazy_azimuthal_average_on_a_device_matches_the_eager_average_per_scheduler(
     device, scheduler
 ):
-    # six blocks read the bounds the delayed node made on the device once; each
-    # must give exactly what the eager average on that device gives
+    # six blocks read the bounds the delayed node made on the device; each must give
+    # what the eager average on that device gives. Within rounding: a device sums a
+    # block of one pattern in a different order than a batch of six.
     data = np.random.default_rng(2).random((6, 33, 40)).astype(np.float32)
     patterns = DiffractionPatterns(
         data,
@@ -1191,7 +1192,9 @@ def test_lazy_azimuthal_average_on_a_device_shares_one_bounds_node_across_blocks
     result_array = result.array.compute(scheduler=scheduler)
 
     assert_array_matches_device(result_array, device)
-    np.testing.assert_array_equal(asnumpy(result_array), asnumpy(eager.array))
+    np.testing.assert_allclose(
+        asnumpy(result_array), asnumpy(eager.array), rtol=1e-5, atol=1e-7
+    )
 
 
 @devices
@@ -1224,14 +1227,25 @@ def test_on_device_of_copies_from_another_gpu():
 
 @devices
 @pytest.mark.parametrize(
-    "gpts, radial_sampling, width", [((33, 48), 1.0, 1.0), ((40, 40), 0.7, 2.5)]
+    "gpts, scales, radial_sampling, width",
+    [
+        ((33, 48), (1.0, 1.0), 1.0, 1.0),
+        ((40, 40), (1.0, 1.0), 0.7, 2.5),
+        # unequal x and y sampling: non-integer radii, where np.hypot and
+        # sqrt(x**2 + y**2) can differ in the last bit of r
+        ((33, 48), (1.0, 1.5), 1.0, 1.0),
+        ((40, 36), (1.0, 1.25), 0.5, 2.0),
+    ],
 )
 def test_azimuthal_step_bounds_are_the_bins_on_the_device(
-    gpts, radial_sampling, width, device
+    gpts, scales, radial_sampling, width, device
 ):
     # the bins of every pixel, written out with a meshgrid; the bounds are made
     # on the device of the patterns once, for every block to share
-    coordinates = tuple(np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) for n in gpts)
+    coordinates = tuple(
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * scale
+        for n, scale in zip(gpts, scales)
+    )
     x, y = np.meshgrid(*coordinates, indexing="ij")
     r = np.sqrt(x**2 + y**2)
     expected_first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
