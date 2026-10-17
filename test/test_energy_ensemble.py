@@ -881,6 +881,8 @@ class TestBlochWavesEnergyEnsemble:
             assert [type(a) for a in result.ensemble_axes_metadata] == axes
             assert result.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
             assert result.shape[0] == len(BLOCH_ENERGIES)
+            # the EnergyAxis is the one record of the energies
+            assert result.metadata["energy"] is None
 
         union = {tuple(hkl): j for j, hkl in enumerate(dp_single.miller_indices)}
         for i, energy in enumerate(BLOCH_ENERGIES):
@@ -899,6 +901,9 @@ class TestBlochWavesEnergyEnsemble:
                     assert not any(
                         isinstance(a, EnergyAxis) for a in result.axes_metadata
                     ), message
+                # each member reports its own energy, not the first
+                assert patterns[i]._get_energy() == dp._get_energy() == energy
+                assert exit_waves[i].wavelength == ew.wavelength, message
 
                 indices = [union[tuple(hkl)] for hkl in dp.miller_indices]
                 member = np.asarray(patterns.array[i])
@@ -917,6 +922,39 @@ class TestBlochWavesEnergyEnsemble:
                     np.asarray(exit_waves.array[i]), reference, rtol=0,
                     atol=1e-5 * np.abs(reference).max(), err_msg=message,
                 )
+
+    def test_energy_matches_plane_wave_contract(self, bw_multi):
+        """Several energies are a distribution, as PlaneWave.energy, and leave
+        the accelerator (and so the wavelength) without an energy; the
+        distribution round-trips through the constructor. One energy stays a
+        float."""
+        from abtem.core.energy import EnergyUndefinedError
+        from abtem.distributions import BaseDistribution
+
+        plane_wave = PlaneWave(energy=BLOCH_ENERGIES, gpts=8, extent=2.0)
+        for obj in (bw_multi, bw_multi.rotate("x", np.array([0.0, 0.01]))):
+            assert isinstance(obj.energy, BaseDistribution)
+            np.testing.assert_array_equal(
+                obj.energy.values, plane_wave.energy.values
+            )
+            np.testing.assert_array_equal(
+                obj.energy.weights, plane_wave.energy.weights
+            )
+        assert bw_multi.accelerator.energy is plane_wave.accelerator.energy is None
+        with pytest.raises(EnergyUndefinedError):
+            bw_multi.wavelength
+
+        rebuilt = BlochWaves(
+            bw_multi.structure_factor, energy=bw_multi.energy,
+            sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX,
+        )
+        np.testing.assert_array_equal(rebuilt._energies, BLOCH_ENERGIES)
+
+        single = bw_multi.select_energy(BLOCH_ENERGIES[1])
+        assert isinstance(single.energy, float)
+        assert single.energy == single.accelerator.energy == BLOCH_ENERGIES[1]
+        # the multi-energy object keeps its own (absent) accelerator energy
+        assert bw_multi.accelerator.energy is None
 
     def test_inactive_beams_are_zero(self, bw_multi, dp_single):
         """Beams inactive at a given energy must have zero intensity in the output.
