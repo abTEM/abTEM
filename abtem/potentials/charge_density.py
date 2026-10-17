@@ -308,7 +308,13 @@ def _interpolate_between_cells(
     return interpolated
 
 
-def _interpolate_slice(array, cell, gpts, sampling, a, b):
+def _interpolate_slice(
+    array, cell, gpts, sampling, a, b, slice_cell=None, origin=(0.0, 0.0, 0.0)
+):
+    # `slice_cell`, when given, is the cell whose in-plane vectors the slice spans
+    # (the box of a potential laid out in a box other than the cell of `array`),
+    # with `origin` the position of its corner in the frame of `cell`; by default
+    # the slice spans the in-plane vectors of `cell` from its corner.
     dz_charge = cell[2, 2] / array.shape[2]
     nz = max(safe_ceiling_int((b - a) / dz_charge), 2)
     slice_shape = gpts + (nz,)
@@ -318,7 +324,7 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     # interpolation between cells preserves the in-plane skew (the previous
     # diagonal slice_box silently rectified non-orthogonal cells onto a Cartesian
     # rectangle, losing the parallelogram shape).
-    cell_arr = np.asarray(cell, dtype=float)
+    cell_arr = np.asarray(cell if slice_cell is None else slice_cell, dtype=float)
     slice_box = np.zeros((3, 3))
     slice_box[0, :2] = cell_arr[0, :2]
     slice_box[1, :2] = cell_arr[1, :2]
@@ -335,7 +341,7 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     # carbon atom on a slice boundary the slices above and below differed by
     # 2x and the potential 3 A from the atom was ~1 eV A instead of ~0.
     slice_array = _interpolate_between_cells(
-        array, slice_shape, cell, slice_box, (0, 0, a + dz / 2)
+        array, slice_shape, cell, slice_box, np.add(origin, (0, 0, a + dz / 2))
     )
 
     return np.sum(slice_array, axis=-1) * dz
