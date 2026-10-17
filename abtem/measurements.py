@@ -7398,10 +7398,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
 def _validate_temperature(temperature) -> float:
     """The temperature [K] as a Python float, so that k_B T is formed in double
-    precision. A bool, and a negative or non-finite value, raise; a negative
-    temperature would swap the loss and gain weights."""
-    if isinstance(temperature, (bool, np.bool_)):
-        raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+    precision. A negative or non-finite value raises; a negative temperature
+    would swap the loss and gain weights."""
     temperature = float(temperature)
     if not (np.isfinite(temperature) and temperature >= 0.0):
         raise ValueError(
