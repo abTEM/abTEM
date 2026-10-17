@@ -514,6 +514,7 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_wa
         assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
 
 
+@pytest.mark.float64  # sets double precision in its body; Metal cannot hold it
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
     """Without resampling the detected waves are the waves themselves, so a

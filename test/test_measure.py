@@ -720,6 +720,8 @@ def test_lorentzian_family_reflect_with_a_kernel_larger_than_the_chunked_image(
     half_width = tuple(h * d for h, d in zip(hw_pixels, sampling))
     sigma = tuple(s * d for s, d in zip(sigma_pixels, sampling))
     array = np.random.default_rng(1).random((16, 20))
+    # the configured precision (float32 on Metal), the oracle stays in float64
+    image = array.astype(get_dtype(complex=False))
 
     lorentzian = _analytic_lorentzian_kernel(hw_pixels)
     voigt = scipy.signal.convolve2d(_scipy_gaussian_kernel(sigma_pixels), lorentzian)
@@ -733,7 +735,7 @@ def test_lorentzian_family_reflect_with_a_kernel_larger_than_the_chunked_image(
 
     for lazy in (False, True):
         images = Images(
-            da.from_array(array, chunks=(8, 10)) if lazy else array, sampling=sampling
+            da.from_array(image, chunks=(8, 10)) if lazy else image, sampling=sampling
         )
         images = images.copy_to_device(device)
         filtered = {
