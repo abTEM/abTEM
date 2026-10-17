@@ -563,6 +563,35 @@ def _sum_run_length_encoded(array, result, separators):
             result[i, x] = total
 
 
+def _sum_runs(array, separators):
+    """Sum the runs of `array` (n_batch, n_selected) between `separators` into a
+    zeroed (n_batch, n_runs) array, with the kernel of the array's backend: the
+    CuPy RawKernel, the torch scatter-add, or the Numba loop. A complex array is
+    summed as its real and imaginary parts."""
+    xp = get_array_module(array)
+    if xp.iscomplexobj(array):
+        return _sum_runs(array.real, separators) + 1j * _sum_runs(
+            array.imag, separators
+        )
+    array = xp.ascontiguousarray(array)
+    result = xp.zeros((array.shape[0], len(separators) - 1), dtype=array.dtype)
+    if xp is cp:
+        sum_run_length_encoded_cuda(array, result, separators)
+    elif backend.tp is not None and xp is backend.tp:
+        from abtem.core._torch import sum_run_length_encoded
+
+        sum_run_length_encoded(array, result, separators)
+    else:
+        _sum_run_length_encoded(array, result, separators)
+    return result
+
+
+#: Average the step bins of `DiffractionPatterns.azimuthal_average` in one pass
+#: over the pixels (#602); False averages them bin by bin with a pattern-sized
+#: mask each, as before. Kept as a switch for benchmarking.
+AZIMUTHAL_STEP_SINGLE_PASS = True
+
+
 def _cupy_safe_coordinates(array, coordinates):
     """Cast map_coordinates coordinates to the precision CuPy computes in.
 
@@ -5224,6 +5253,42 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return copy_to_device(first, device), copy_to_device(last, device)
 
     @staticmethod
+    def _azimuthal_step_runs(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        num_bins: int,
+        device: str = "cpu",
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The pixels of every step bin as runs, for a single-pass average: the
+        flat pixel indices ordered by bin, the separators of the bins' runs and
+        the number of pixels in each bin, on `device`.
+
+        A pixel is in the bins `first..last` of `_azimuthal_step_bounds`, which
+        is one bin with the default `width == radial_sampling` and several for
+        overlapping bins; it then appears once in the run of each.
+        """
+        first, last = DiffractionPatterns._azimuthal_step_bounds(
+            coordinates, radial_sampling, width
+        )
+        first = np.maximum(first.ravel().astype(np.int64), 0)
+        last = np.minimum(last.ravel().astype(np.int64), num_bins - 1)
+        counts = np.maximum(last - first + 1, 0)
+        pixels = np.repeat(np.arange(first.size, dtype=np.int64), counts)
+        # the bin of each copy of a pixel: its first bin plus the copy's rank
+        starts = np.cumsum(counts) - counts
+        bins = np.repeat(first - starts, counts)
+        bins += np.arange(pixels.size, dtype=np.int64)
+        order = np.argsort(bins, kind="stable")
+        bin_counts = np.bincount(bins, minlength=num_bins)[:num_bins]
+        separators = np.concatenate(([0], np.cumsum(bin_counts))).astype(np.int64)
+        return (
+            copy_to_device(pixels[order], device),
+            copy_to_device(separators, device),
+            copy_to_device(bin_counts, device),
+        )
+
+    @staticmethod
     def _azimuthal_average(
         array: np.ndarray,
         centers: np.ndarray,
@@ -5232,15 +5297,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        step_runs: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
-        `step_bounds` are the first and last bin of every pixel for the step
-        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
-        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
-        weighting.
+        `step_runs` (`_azimuthal_step_runs`) average the step bins in one pass;
+        `step_bounds` are the first and last bin of every pixel, for averaging
+        the step bins one by one. `coordinates` are the 1-D pixel-unit
+        coordinates of the x and y axes and `coordinate_dtype` the precision they
+        are cast to, for the Gaussian weighting.
         """
         xp = get_array_module(array)
+
+        if step_runs is not None:
+            # One gather of the binned pixels and one summing pass, instead of a
+            # pattern-sized mask and masked sum per bin.
+            pixels, separators, counts = (
+                _on_device_of(run, array) for run in step_runs
+            )
+            flat = array.reshape((-1, array.shape[-2] * array.shape[-1]))
+            sums = _sum_runs(flat[:, pixels], separators)
+            # an empty bin averages to 0, as bin by bin
+            values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
+            return values.reshape(array.shape[:-2] + centers.shape)
 
         if weighting_function == "step":
             # On the device of the array, unless a node shared by the blocks was
@@ -5344,14 +5423,32 @@ class DiffractionPatterns(_BaseMeasurement2D):
             # two int32 arrays of 2 * 4 * n_pixels bytes (34 MB for 2048 x 2048), on
             # the device of the patterns, for as long as the graph or any of its
             # blocks is alive.
-            step_bounds = self._azimuthal_step_bounds
-            if self.is_lazy:
-                step_bounds = dask.delayed(step_bounds, pure=True)
-            kwargs = dict(
-                step_bounds=step_bounds(
-                    coordinates, radial_sampling, width, device=self.device
+            #
+            # By default the node holds the bins as runs instead (#602): the
+            # binned pixel indices (int64, 8 * n_pixels bytes with the default
+            # non-overlapping bins), averaged in one pass.
+            if AZIMUTHAL_STEP_SINGLE_PASS:
+                step_runs = self._azimuthal_step_runs
+                if self.is_lazy:
+                    step_runs = dask.delayed(step_runs, pure=True)
+                kwargs = dict(
+                    step_runs=step_runs(
+                        coordinates,
+                        radial_sampling,
+                        width,
+                        len(centers),
+                        device=self.device,
+                    )
                 )
-            )
+            else:
+                step_bounds = self._azimuthal_step_bounds
+                if self.is_lazy:
+                    step_bounds = dask.delayed(step_bounds, pure=True)
+                kwargs = dict(
+                    step_bounds=step_bounds(
+                        coordinates, radial_sampling, width, device=self.device
+                    )
+                )
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 

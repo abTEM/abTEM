@@ -1,14 +1,16 @@
-"""Benchmark the step bounds of ``DiffractionPatterns.azimuthal_average`` (#602, item 3).
+"""Benchmark the step-weighted ``DiffractionPatterns.azimuthal_average`` (#602).
 
-Compares the current ``_azimuthal_step_bounds`` (one float64 radius array reused in
-place, copied to the device once per call) with the previous one (a meshgrid and
-about six pattern-sized float64 temporaries on the host, copied to the device by
-every block). For each pattern size it reports:
+Compares the single-pass average (``abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS =
+True``: the pixels of every bin gathered once and summed in one pass) with the
+bin-by-bin average (``False``: a pattern-sized mask and masked sum per bin). For
+each pattern size it reports:
 
-- the peak host memory of building the bounds (``tracemalloc``);
-- the wall time of an eager and of a lazy (``--blocks`` blocks) average on the
-  chosen device, and the GPU memory-pool peak when the device is a GPU;
-- whether the two implementations give identical averages.
+- the peak host memory of building the step bounds, before #602 (a meshgrid and
+  its temporaries) and now (``tracemalloc``);
+- the best wall time of an eager and of a lazy (``--blocks`` blocks) average on
+  the chosen device, bin by bin and single pass, and the CuPy memory-pool total
+  when the device is a GPU;
+- the largest difference between the two averages, relative to their maximum.
 
 Examples
 --------
@@ -34,13 +36,15 @@ import numpy as np
 import abtem
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy, cp
+import abtem.measurements
 from abtem.measurements import DiffractionPatterns
 
 CURRENT = DiffractionPatterns._azimuthal_step_bounds
 
 
 def _previous_step_bounds(coordinates, radial_sampling, width, device="cpu"):
-    """The bounds before #602: on the host, so each block copied them itself."""
+    """The bounds before #602, for their host memory: a meshgrid and its
+    temporaries."""
     x, y = np.meshgrid(*coordinates, indexing="ij")
     r = np.sqrt(x**2 + y**2)
     del x, y
@@ -75,8 +79,8 @@ def _host_peak(bounds, n):
     return peak
 
 
-def _run(bounds, patterns, device, reps):
-    DiffractionPatterns._azimuthal_step_bounds = staticmethod(bounds)
+def _run(single_pass, patterns, device, reps):
+    abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS = single_pass
     try:
         times, result = [], None
         if device == "gpu":
@@ -96,7 +100,7 @@ def _run(bounds, patterns, device, reps):
             pool_peak = cp.get_default_memory_pool().total_bytes()
         return min(times), pool_peak, result
     finally:
-        DiffractionPatterns._azimuthal_step_bounds = CURRENT
+        abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS = True
 
 
 def main():
@@ -113,25 +117,26 @@ def main():
     abtem.config.set({"device": args.device})
 
     print(
-        f"{'n':>6} {'mode':>6} {'host peak old/new MB':>22} {'time old/new s':>18}"
-        f" {'gpu pool old/new MB':>21} identical"
+        f"{'n':>6} {'mode':>6} {'bounds host MB before/now':>26}"
+        f" {'time loop/single s':>20} {'gpu pool loop/single MB':>24} max rel diff"
     )
     for n in args.sizes:
         host = [_host_peak(b, n) / 1e6 for b in (_previous_step_bounds, CURRENT)]
         for lazy in (False, True):
             patterns = _patterns(n, args.members, args.device, lazy, args.blocks)
-            old = _run(_previous_step_bounds, patterns, args.device, args.reps)
-            new = _run(CURRENT, patterns, args.device, args.reps)
+            old = _run(False, patterns, args.device, args.reps)
+            new = _run(True, patterns, args.device, args.reps)
             pool = (
                 f"{old[1] / 1e6:9.1f}/{new[1] / 1e6:<9.1f}"
                 if args.device == "gpu"
                 else f"{'-':>21}"
             )
+            difference = np.abs(new[2] - old[2]).max() / np.abs(old[2]).max()
             print(
                 f"{n:6d} {'lazy' if lazy else 'eager':>6} "
-                f"{host[0]:10.1f}/{host[1]:<10.1f} "
-                f"{old[0]:8.3f}/{new[0]:<8.3f} {pool} "
-                f"{np.array_equal(old[2], new[2])}"
+                f"{host[0]:12.1f}/{host[1]:<12.1f} "
+                f"{old[0]:9.3f}/{new[0]:<9.3f} {pool:>24} "
+                f"{difference:.1e}"
             )
 
 

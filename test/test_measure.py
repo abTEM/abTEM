@@ -1138,6 +1138,54 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
+
+@devices
+@lazy_params
+@pytest.mark.parametrize(
+    "radial_sampling, width, complex_",
+    [(1.0, 1.0, False), (0.7, 2.5, False), (3.0, 1.0, False), (1.0, 1.0, True)],
+)
+def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
+    radial_sampling, width, complex_, lazy, device, monkeypatch
+):
+    # One gather and one summing pass over the pixels of every step bin, against
+    # a mask per bin: the default bins, overlapping ones (a pixel in several
+    # bins), gaps between bins, and complex patterns.
+    import abtem.measurements
+
+    rng = np.random.default_rng(2)
+    data = rng.random((3, 33, 40))
+    if complex_:
+        data = data + 1j * rng.random((3, 33, 40))
+    patterns = DiffractionPatterns(
+        data.astype(np.complex64 if complex_ else np.float32),
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
+    ).copy_to_device(device)
+    if lazy:
+        patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
+
+    def average():
+        result = patterns.azimuthal_average(
+            radial_sampling=radial_sampling, width=width
+        )
+        return result.compute()
+
+    monkeypatch.setattr(abtem.measurements, "AZIMUTHAL_STEP_SINGLE_PASS", False)
+    expected = average()
+    monkeypatch.setattr(abtem.measurements, "AZIMUTHAL_STEP_SINGLE_PASS", True)
+    result = average()
+
+    assert_array_matches_device(result.array, device)
+    assert result.array.dtype == expected.array.dtype
+    assert result.shape == expected.shape
+    np.testing.assert_allclose(
+        asnumpy(result.array), asnumpy(expected.array), rtol=1e-6, atol=1e-7
+    )
+
+
 @devices
 @lazy_params
 @pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
