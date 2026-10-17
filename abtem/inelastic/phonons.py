@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from typing import (
@@ -69,18 +68,6 @@ def _as_frame(frame: Optional[np.ndarray]) -> np.ndarray:
     if frame.shape != (3, 3):
         raise ValueError(f"A frame must be a 3x3 matrix, not of shape {frame.shape}.")
     return frame
-
-
-def _accepts_keyword(method: Callable, name: str) -> bool:
-    """Whether a method accepts a keyword argument of the given name."""
-    try:
-        parameters = inspect.signature(method).parameters.values()
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.name == name or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
 
 
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
@@ -535,9 +522,8 @@ class FrozenPhonons(BaseFrozenPhonons):
             return self._randomize(
                 atoms, frame=frame, directions_frame=directions_frame
             )
-        # A subclass's own randomize, which may take the atoms only.
-        if _accepts_keyword(self.randomize, "frame"):
-            return self.randomize(atoms, frame=frame)
+        # A subclass's own randomize takes the atoms only, as documented on
+        # BaseFrozenPhonons.randomize.
         return self.randomize(atoms)
 
     def _randomize(
