@@ -2188,7 +2188,9 @@ class WavesDetector(BaseDetector):
         return self._gpts
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
-        if self._gpts is not None:
+        # An empty gpts asks for no resampling, as None does (the other _out_*
+        # methods and _calculate_new_array test it the same way).
+        if self._gpts:
             # fft_interpolate works in the configured precision
             return (get_dtype(complex=True),)
         return (waves.dtype,)

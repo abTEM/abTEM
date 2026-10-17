@@ -280,6 +280,69 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
 
 
 @devices
+def test_explicit_sites_outside_a_non_periodic_cell_are_folded_as_the_potential_does(
+    device,
+):
+    """A non-periodic potential takes an atom given more than 2 Å outside its
+    cell along z as its image in the cell, and keeps one closer to a face in
+    the face slice. Explicit ``sites=`` of the same atoms must be sliced the
+    same way, so the scan equals ``sites=None`` exactly. They went straight
+    into the face slice unfolded: the atom at z = -3 Å, which the potential
+    puts at z = 5 Å (slice 2), was ionised in slice 0, and every exit plane
+    from slice 0 on differed.
+    """
+    from abtem.inelastic.core_loss import _extract_scattering_sites
+
+    # 4 slices of 2 Å. The first atom is 3 Å below the entrance face (folded
+    # to 5 Å, slice 2), the second 1 Å above the exit face (clamped, slice 3).
+    atoms = ase.Atoms(
+        "AuAu", positions=[(1.0, 1.0, -3.0), (3.0, 3.0, 9.0)], cell=(4, 4, 8)
+    )
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, exit_planes=1,
+            device=device,
+        )
+
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        explicit = _extract_scattering_sites(potential, atoms)
+    slices = [list(indices) for indices in explicit._slice_index]
+    assert slices == [[], [], [0], [1]]
+    assert slices == [list(i) for i in potential.get_sliced_atoms()._slice_index]
+    # The given atoms are not changed.
+    assert atoms.positions[0, 2] == -3.0
+
+    tp = synthetic_transition_potential(
+        Z=79, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=1, energy=100e3, device=device,
+    )
+    probe = _make_probe(potential, device)
+
+    def run(sites):
+        return to_host_array(
+            probe.transition_potential_scan(
+                potential=potential, transition_potentials=tp, scan=(1.0, 1.0),
+                detectors=abtem.AnnularDetector(inner=0, outer=40),
+                sites=sites, lazy=False,
+            )
+        )
+
+    auto = run(None)
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        explicit_result = run(atoms)
+
+    # The same sites in the same slices: the same computation.
+    assert np.abs(auto).max() > 0
+    np.testing.assert_array_equal(explicit_result, auto)
+
+    # A site within 2 Å of a face is not folded; it stays in the face slice.
+    near = atoms[1:]
+    near_sites = _extract_scattering_sites(potential, near)
+    assert [len(i) for i in near_sites._slice_index] == [0, 0, 0, 1]
+    assert near_sites.atoms.positions[0, 2] == 9.0
+
+
+@devices
 def test_transition_potential_scan_crystal_potential_matches_manual_tile(device):
     """Auto-extracted sites from a CrystalPotential must produce the same
     result as a regular Potential built from a manually-tiled supercell.

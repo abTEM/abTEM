@@ -964,8 +964,15 @@ def _warn_if_given_atoms_far_outside_along_z(
     outside the cell along z of a non-periodic potential that does not
     transform its cell. They are folded into the cell as images of the repeated
     structure, which is unlikely to be meant if the cell should enclose them."""
+    _warn_if_atoms_far_outside_along_z(_given_configurations(frozen_phonons))
+
+
+def _warn_if_atoms_far_outside_along_z(configurations: Sequence[Atoms]) -> None:
+    """Warn, once for all of `configurations`, about their atoms more than
+    `FACE_SLICE_WARNING_DISTANCE` outside the cell along z, which a
+    non-periodic potential folds into the cell (`_fold_far_outside_faces`)."""
     counts = []
-    for atoms in _given_configurations(frozen_phonons):
+    for atoms in configurations:
         height = float(np.array(atoms.cell)[2, 2])
         counts.append(int(_far_outside_faces(atoms.positions[:, 2], height).sum()))
     if not any(counts):

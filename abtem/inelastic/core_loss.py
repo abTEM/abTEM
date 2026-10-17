@@ -1682,6 +1682,7 @@ def _extract_scattering_sites(potential, sites):
     """
     from abtem.slicing import SliceIndexedAtoms
 
+    explicit = sites is not None
     if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
@@ -1690,10 +1691,30 @@ def _extract_scattering_sites(potential, sites):
     if isinstance(sites, Atoms):
         # Follow the potential's own convention, so explicitly passed sites
         # are sliced exactly as sites=None would be.
+        periodic = getattr(potential, "periodic", True)
+        if not periodic and explicit:
+            # A non-periodic potential takes the atoms it is given more than
+            # FACE_SLICE_WARNING_DISTANCE outside its cell along z as their
+            # images in the cell, and slices them there; the atoms closer to a
+            # face stay where they are and are clamped to the face slice below.
+            # The potential's own atoms (sites=None) are folded already, so
+            # only explicit sites are folded and warned about here, by the same
+            # rule. Without it, a site at z = -5 Å in a 20 Å cell was ionised
+            # in the entrance face slice, where the potential has the atom at
+            # z = 15 Å.
+            from abtem.potentials.iam import (
+                _fold_far_outside_faces,
+                _warn_if_atoms_far_outside_along_z,
+            )
+
+            _warn_if_atoms_far_outside_along_z([sites])
+            sites = sites.copy()
+            _fold_far_outside_faces(sites)
+
         sites = SliceIndexedAtoms(
             sites,
             slice_thickness=potential.slice_thickness,
-            wrap=getattr(potential, "periodic", True),
+            wrap=periodic,
         )
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError(
