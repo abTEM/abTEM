@@ -970,6 +970,11 @@ class AnnularAperture(BaseAperture):
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
     ):
+        if isinstance(inner_cutoff, BaseDistribution):
+            raise ValueError(
+                "AnnularAperture does not support a distribution of inner_cutoff; "
+                "give a single value."
+            )
         if not inner_cutoff >= 0.0:
             raise ValueError(
                 f"inner_cutoff must be non-negative, got {inner_cutoff!r}."
@@ -989,9 +994,16 @@ class AnnularAperture(BaseAperture):
         """Also reject a semiangle cutoff that does not exceed the inner cutoff,
         for which the annulus is empty; run by __init__ and the setter alike."""
         semiangle_cutoff = super()._validate_semiangle_cutoff(semiangle_cutoff)
-        if semiangle_cutoff is None or isinstance(semiangle_cutoff, BaseDistribution):
-            # A distribution is not supported: the evaluation asserts a scalar.
+        if semiangle_cutoff is None:
             return semiangle_cutoff
+
+        if isinstance(semiangle_cutoff, BaseDistribution):
+            # The evaluation takes a single cutoff, and the annulus has no
+            # ensemble axis for the distribution (unlike Aperture's).
+            raise ValueError(
+                "AnnularAperture does not support a distribution of "
+                "semiangle_cutoff; give a single value."
+            )
 
         if self._inner_cutoff >= semiangle_cutoff:
             raise ValueError(
@@ -1019,7 +1031,11 @@ class AnnularAperture(BaseAperture):
         alpha = xp.array(alpha)
         semiangle_cutoff = self.semiangle_cutoff
         inner_cutoff = self._inner_cutoff
-        assert isinstance(semiangle_cutoff, SupportsFloat)
+        if not isinstance(semiangle_cutoff, SupportsFloat):
+            raise TypeError(
+                "AnnularAperture needs a single semiangle_cutoff, got "
+                f"{type(semiangle_cutoff).__name__}."
+            )
 
         semiangle_cutoff = semiangle_cutoff / 1e3
         inner_cutoff = inner_cutoff / 1e3

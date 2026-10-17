@@ -141,6 +141,31 @@ def test_annular_aperture_setter_rejects_an_empty_annulus():
     assert np.all(np.isfinite(intensity)) and intensity.sum() > 0
 
 
+def test_annular_aperture_rejects_a_distribution_of_either_cutoff():
+    """The annulus takes single cutoffs: a distribution of the outer cutoff used to
+    pass construction and fail at evaluation, and one of the inner cutoff to
+    fail in a comparison."""
+    values = abtem.distributions.from_values
+    with pytest.raises(ValueError, match="distribution of semiangle_cutoff"):
+        AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=values([3.0, 20.0]))
+
+    with pytest.raises(ValueError, match="distribution of inner_cutoff"):
+        AnnularAperture(inner_cutoff=values([1.0, 5.0]), semiangle_cutoff=20.0)
+
+    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
+    with pytest.raises(ValueError, match="distribution of semiangle_cutoff"):
+        aperture.semiangle_cutoff = values([10.0, 20.0])
+    assert aperture.semiangle_cutoff == 20.0
+
+
+def test_annular_aperture_evaluation_raises_for_a_non_scalar_cutoff():
+    """An exception rather than an assert, which `python -O` would remove."""
+    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
+    aperture._semiangle_cutoff = abtem.distributions.from_values([10.0, 20.0])
+    with pytest.raises(TypeError, match="single semiangle_cutoff"):
+        aperture._evaluate_from_angular_grid(np.zeros((4, 4)), np.zeros((4, 4)))
+
+
 def test_zernike_rejects_a_negative_center_hole():
     with pytest.raises(ValueError, match="center_hole_cutoff must be non-negative"):
         Zernike(-1.0, np.pi / 2, semiangle_cutoff=30.0)
