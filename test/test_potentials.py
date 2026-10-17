@@ -1365,6 +1365,60 @@ class TestSliceIndexedAtomsWrapping:
             assert far[0].filename == __file__, case
 
     @pytest.mark.parametrize("lazy", [False, True])
+    def test_lazily_read_members_given_far_outside_along_z_warn_when_computed(
+        self, lazy
+    ):
+        """The members of a lazily read trajectory are not known when the
+        potential is constructed; each is checked when its block is computed,
+        once per block and not once per slice."""
+        import dask
+
+        from abtem.inelastic.phonons import AtomsEnsemble
+
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        trajectory = AtomsEnsemble(
+            [dask.delayed(atoms.copy)() for _ in range(2)], cell=atoms.cell
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            potential = Potential(
+                trajectory, gpts=8, slice_thickness=1.0, periodic=False
+            )
+
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=lazy).compute()
+
+        far = [r for r in records if "outside the cell along z" in str(r.message)]
+        assert len(far) == 2
+        assert all(
+            str(r.message).startswith("1 atom(s) are given more than 2.0 Å")
+            for r in far
+        )
+
+    @pytest.mark.parametrize(
+        "plane, height", [("xz", 5.0), ("yz", 4.0)], ids=["xz", "yz"]
+    )
+    def test_atoms_given_far_outside_a_rotated_cell_warn(self, plane, height):
+        """An orthogonal cell rotated to another plane folds the atoms given far
+        outside along its new z, the old y for "xz" and the old x for "yz", and
+        says so; atoms far outside along the other axes are in-plane."""
+        atoms = Atoms(
+            "B4",
+            positions=[(1, 1, 1), (6.5, 1, 1), (1, 7.5, 1), (1, 1, 8.5)],
+            cell=[4.0, 5.0, 6.0],
+            pbc=True,
+        )
+        with pytest.warns(
+            UserWarning,
+            match=rf"^1 atom\(s\) are given more than 2.0 Å outside the cell "
+            rf"along z \(0 to {height:.4g} Å\)",
+        ):
+            Potential(atoms, gpts=8, slice_thickness=1.0, periodic=False, plane=plane)
+
+    @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])
     def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
         self, device, lazy
