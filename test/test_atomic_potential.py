@@ -945,6 +945,53 @@ class TestGaussianProjectionIntegralsUsable:
         with pytest.raises(ValueError, match="superposition of Gaussians"):
             GaussianProjectionIntegrals(gaussian_parametrization=name)
 
+    @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
+    @pytest.mark.parametrize(
+        "centre, width",
+        [(20.0, 0.5), (0.0744, 1e-4)],
+        ids=["far_bump", "narrow_bump"],
+    )
+    def test_a_peng_subclass_that_is_not_gaussian_form_is_refused(
+        self, method, centre, width
+    ):
+        """The class check admits any Peng subclass, so one whose projected
+        scattering factor carries a bump is not a Gaussian sum and must be
+        refused where it is used, on the grid the build uses."""
+        from abtem.parametrizations import PengParametrization
+
+        class Bumped(PengParametrization):
+            def projected_scattering_factor(self, symbol, *args, **kwargs):
+                base = super().projected_scattering_factor(symbol, *args, **kwargs)
+
+                def factor(k2):
+                    k2 = np.asarray(k2)
+                    return base(k2) * (
+                        1.0 + 3.0 * np.exp(-((k2 - centre) ** 2) / width)
+                    )
+
+                return factor
+
+        integrator = GaussianProjectionIntegrals(gaussian_parametrization=Bumped())
+        with pytest.raises(ValueError, match="not a superposition of Gaussians"):
+            getattr(integrator, method)("Si", (128, 128), (0.1, 0.1))
+
+    def test_a_bad_table_entry_is_caught_at_the_element_that_uses_it(self):
+        """A table with a sixth term, which Peng's own five-term function
+        ignores, was added to the field while get_corrections and cutoff still
+        saw five: refused at the element that has it, the others unaffected."""
+        import copy
+
+        from abtem.parametrizations import PengParametrization
+
+        parameters = copy.deepcopy(PengParametrization().parameters)
+        parameters["Si"] = [list(row) + [1.0] for row in parameters["Si"]]
+        integrator = GaussianProjectionIntegrals(
+            gaussian_parametrization=PengParametrization(parameters=parameters)
+        )
+        assert integrator.get_gaussians("Ga", (32, 32), (0.1, 0.1)).shape[0] == 5
+        with pytest.raises(ValueError, match="superposition of Gaussians for 'Si'"):
+            integrator.get_gaussians("Si", (32, 32), (0.1, 0.1))
+
     def test_the_gaussian_count_follows_the_parametrization(self):
         """The loop bound was hardcoded to 5 while the source became
         configurable, so a sixth Gaussian was silently dropped.

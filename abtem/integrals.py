@@ -368,6 +368,46 @@ def _sinc_on_device(gpts, sampling, device, device_key):
         return sinc(gpts, sampling, "gpu")
 
 
+# Largest scale-relative deviation between a Gaussian-form parametrization and
+# the Gaussian sum rebuilt from its own parameters. Peng reaches 1.8e-07 at
+# float32; Kirkland and Lobato are 0.275 and 2.3-3.8.
+_GAUSSIAN_FORM_TOLERANCE = 1e-4
+
+
+def _check_gaussian_form(parametrization, symbol: str, gpts, sampling):
+    """Raise if the parametrization's own projected scattering factor is not the
+    Gaussian sum of its ``scaled_parameters`` on the grid about to be used.
+
+    The class check in ``GaussianProjectionIntegrals`` admits any Peng subclass,
+    including one whose function is not Gaussian-form or whose table has a
+    different number of terms from the function. Both sides are evaluated at the
+    configured precision, so the verdict does not depend on it.
+    """
+    fp_dtype = get_dtype(complex=False)
+    parameters = np.asarray(
+        parametrization.scaled_parameters(symbol, "projected_scattering_factor"),
+        dtype=fp_dtype,
+    )
+    k, _ = polar_spatial_frequencies(gpts, sampling)
+    k2 = np.asarray(k, dtype=fp_dtype) ** 2.0
+    own = np.asarray(
+        parametrization.projected_scattering_factor(symbol)(k2), dtype=fp_dtype
+    )
+    gaussians = parameters[0][:, None, None] * np.exp(
+        -parameters[1][:, None, None] * k2
+    )
+    # Scale-relative: at large k^2 both sides are ~0 and a per-element relative
+    # tolerance compares noise with noise.
+    deviation = float(np.abs(gaussians.sum(0) - own).max() / np.abs(own).max())
+    if not deviation <= _GAUSSIAN_FORM_TOLERANCE:
+        raise ValueError(
+            f"{type(parametrization).__name__} is not a superposition of Gaussians "
+            f"for {symbol!r}: its projected scattering factor differs from the "
+            f"Gaussian sum of its parameters by {deviation:.3g} of the peak "
+            f"(tolerance {_GAUSSIAN_FORM_TOLERANCE:g})"
+        )
+
+
 class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     """
     Parameters
@@ -377,9 +417,11 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         correcting the dependence of the potential close to the nuclear core.
         Default is the Lobato parametrization.
     gaussian_parametrization : str or Parametrization, optional
-        The Gaussian radial potential parametrization to integrate. Must be
-        parametrization described by a superposition of Gaussians. Default is the Peng
-        parametrization.
+        The Gaussian radial potential parametrization to integrate. Must be a
+        :class:`~abtem.parametrizations.PengParametrization` (or a subclass of it)
+        whose projected scattering factor is a superposition of Gaussians, as
+        built from its ``scaled_parameters``; other parametrizations raise a
+        ValueError. Default is the Peng parametrization.
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the
         potential [eV / e]. Default is 1e-3.
@@ -470,7 +512,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     @property
     def gaussian_parametrization(self):
         """The Gaussian radial potential parametrization that is superposed to build
-        the projected field. Must be a superposition of Gaussians."""
+        the projected field: a :class:`~abtem.parametrizations.PengParametrization`
+        whose projected scattering factor is a superposition of Gaussians."""
         return self._gaussian_parametrization
 
     @property
@@ -498,6 +541,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if cached is not None:
             return cached
 
+        _check_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+
         return self._gaussians.put(
             key,
             gaussian_projected_scattering_factors(
@@ -510,6 +555,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         cached = self._corrections.get(key)
         if cached is not None:
             return cached
+
+        _check_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
 
         return self._corrections.put(
             key,
