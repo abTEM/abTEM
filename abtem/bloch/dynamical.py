@@ -53,7 +53,7 @@ from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.energy import Accelerator, energy2sigma, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_interpolate, warn_if_slow_gpu_fft
 from abtem.core.grid import Grid
@@ -1433,6 +1433,21 @@ def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
     return ensemble
 
 
+def _validate_energies(energy) -> np.ndarray:
+    # one or several energies [eV] as a 1D array; accepts the distribution
+    # that .energy returns, so the constructor arguments round-trip
+    if isinstance(energy, BaseDistribution):
+        energy = energy.values
+    return np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+
+
+def _energy_or_distribution(energies: np.ndarray) -> float | BaseDistribution:
+    # a float for one energy, the distribution of several, as PlaneWave.energy
+    if len(energies) > 1:
+        return validate_distribution(energies)
+    return float(energies[0])
+
+
 class BlochWaves:
     """The BlochWaves class represents a set of Bloch waves. It may be used to calculate
     the dynamical diffraction patterns.
@@ -1508,9 +1523,13 @@ class BlochWaves:
         self._use_wave_eq = validate_use_wave_eq(use_wave_eq)
         self._device = validate_device(device)
 
-        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
-        self._energy = float(energies[0])  # always scalar; .energy property is backward-compat
-        self._energies = energies          # full array for multi-energy paths
+        energies = _validate_energies(energy)
+        self._energies = energies
+        # several energies are carried by the EnergyAxis of the results alone
+        # and leave the accelerator without an energy, as for PlaneWave and Probe
+        self._accelerator = Accelerator(
+            energy=float(energies[0]) if len(energies) == 1 else None
+        )
 
         def select_beams(e: float) -> np.ndarray:
             mask = filter_reciprocal_space_vectors(
@@ -1593,8 +1612,8 @@ class BlochWaves:
         """
         clone = object.__new__(BlochWaves)
         clone.__dict__.update(self.__dict__)  # shallow copy all attrs
-        clone._energy = float(e)
         clone._energies = np.array([float(e)])
+        clone._accelerator = Accelerator(energy=float(e))
         # Translate _energy_hkl_masks[idx] (boolean over union_hkl) back to a
         # boolean mask over the full structure_factor.hkl index space.
         e_mask = np.zeros(len(self._hkl_mask), dtype=bool)
@@ -1647,8 +1666,14 @@ class BlochWaves:
         return self._structure_factor
 
     @property
-    def energy(self) -> float:
-        return self._energy
+    def accelerator(self) -> Accelerator:
+        """The accelerator; it has no energy when there are several energies."""
+        return self._accelerator
+
+    @property
+    def energy(self) -> float | BaseDistribution:
+        """Electron energy [eV], or the distribution of several energies."""
+        return _energy_or_distribution(self._energies)
 
     @property
     def num_bloch_waves(self) -> int:
@@ -1657,8 +1682,8 @@ class BlochWaves:
 
     @property
     def wavelength(self) -> float:
-        """The wavelength of the electrons [Å]."""
-        return energy2wavelength(self.energy)
+        """The wavelength of the electrons [Å]. Undefined for several energies."""
+        return self.accelerator.wavelength
 
     def excitation_errors(self) -> np.ndarray:
         """Excitation errors for the Bloch waves [1/Å], in the form set by
@@ -1766,7 +1791,7 @@ class BlochWaves:
                 EnergyAxis(values=tuple(float(e) for e in self._energies))
             ],
             metadata={
-                "energy": list(self._energies),
+                "energy": None,
                 "sg_max": self._sg_max,
                 "g_max": self.g_max,
             },
@@ -1992,7 +2017,7 @@ class BlochWaves:
                 ensemble_axes_metadata=[energy_ax]
                 + first_result.ensemble_axes_metadata,
                 metadata={
-                    "energy": list(energies),
+                    "energy": None,
                     "sg_max": self.sg_max,
                     "g_max": self.g_max,
                     "label": "Intensity",
@@ -2108,7 +2133,9 @@ class BlochWaves:
                 energy=None,
                 ensemble_axes_metadata=[energy_ax]
                 + results[0].ensemble_axes_metadata,
-                metadata=results[0].metadata,
+                # the first energy's metadata, without its energy: the
+                # EnergyAxis carries the energy of each member
+                metadata={**results[0].metadata, "energy": None},
             )
 
         # --- Single-energy path (unchanged) ---
@@ -2336,11 +2363,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._structure_factor = structure_factor
         # Mirrors BlochWaves.__init__: a list/array of energies runs the
         # calculation at each energy, with an EnergyAxis after the rotation
-        # axes of the results. self._energy stays a scalar for backward
-        # compatibility.
-        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
-        self._energy = float(energies[0])
-        self._energies = energies
+        # axes of the results.
+        self._energies = _validate_energies(energy)
         self._centering = centering
         self._sg_max = sg_max
         self._g_max = g_max
@@ -2348,11 +2372,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._device = validate_device(device)
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
-        # The base implementation reads each __init__ kwarg back off `self`
-        # via getattr, which for "energy" would return the scalar
-        # backward-compat `.energy` property -- silently dropping every
-        # energy but the first whenever a block (one per dask chunk of the
-        # rotation ensemble, see _partial_transform) gets reconstructed.
+        # Every block (one per dask chunk of the rotation ensemble, see
+        # _partial_transform) is rebuilt from these kwargs and must keep every
+        # energy; pass a plain array rather than the .energy distribution.
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
         if "energy" in kwargs:
             kwargs["energy"] = self._energies.copy()
@@ -2443,8 +2465,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return self._use_degrees
 
     @property
-    def energy(self) -> float:
-        return self._energy
+    def energy(self) -> float | BaseDistribution:
+        """Electron energy [eV], or the distribution of several energies."""
+        return _energy_or_distribution(self._energies)
 
     @property
     def centering(self) -> str:
@@ -2799,7 +2822,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             metadata={
                 "label": "intensity",
                 "units": "arb. unit",
-                "energy": list(self._energies) if self._energy_shape else self.energy,
+                # an energy ensemble carries its energies on the EnergyAxis
+                "energy": None if self._energy_shape else self.energy,
                 "sg_max": self.sg_max,
                 "g_max": self.g_max,
             },

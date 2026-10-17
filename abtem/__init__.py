@@ -22,6 +22,7 @@ from abtem.detectors import (
     SpectralAnnularDetector,
     SpectralSlitDetector,
     WavesDetector,
+    WindowedPixelatedDetector,
 )
 from abtem.inelastic.core_loss import TransitionPotentialArray
 from abtem.inelastic.phonons import (
@@ -79,6 +80,7 @@ __all__ = [
     "SegmentedDetector",
     "FlexibleAnnularDetector",
     "PixelatedDetector",
+    "WindowedPixelatedDetector",
     "WavesDetector",
     "Images",
     "DiffractionPatterns",
