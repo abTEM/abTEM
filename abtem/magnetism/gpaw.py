@@ -117,6 +117,13 @@ _ROTATION_X_INTO_Z = R.from_euler("xyz", (0.0, np.pi / 2, 0.0)).as_matrix()
 _ROTATION_Y_INTO_Z = R.from_euler("xyz", (np.pi / 2, 0.0, 0.0)).as_matrix()
 
 
+#: Relative difference of the aggregate x and y magnitudes below which
+#: `_auto_rotation_matrix_for_vector_field` treats them as equal. Round-off in
+#: a symmetric crystal's field is about 1e-5 (hcp Co: +2.3e-6 and -9.1e-6 for
+#: its hexagonal and orthogonal cells).
+_AUTO_ROTATION_TIE_TOLERANCE = 1e-4
+
+
 def _auto_rotation_matrix_for_vector_field(vector_field: np.ndarray) -> np.ndarray:
     """
     Rotation matrix that swaps whichever of the in-plane (x, y) components
@@ -151,13 +158,6 @@ def _auto_rotation_matrix_for_vector_field(vector_field: np.ndarray) -> np.ndarr
     if Syy - Sxx <= _AUTO_ROTATION_TIE_TOLERANCE * max(Sxx, Syy):
         return _ROTATION_X_INTO_Z
     return _ROTATION_Y_INTO_Z
-
-
-#: Relative difference of the aggregate x and y magnitudes below which
-#: `_auto_rotation_matrix_for_vector_field` treats them as equal. Round-off in
-#: a symmetric crystal's field is about 1e-5 (hcp Co: +2.3e-6 and -9.1e-6 for
-#: its hexagonal and orthogonal cells).
-_AUTO_ROTATION_TIE_TOLERANCE = 1e-4
 
 
 def _check_unsupported_ensemble_params(frozen_phonons, repetitions):
@@ -916,6 +916,9 @@ def gpaw_magnetic_fields(
         Forwarded to `GPAWVectorPotential`/`GPAWMagneticField`. Defaults to
         `"auto"`: automatically swap the larger-magnitude in-plane
         component into z (see `_auto_rotation_matrix_for_vector_field`).
+        In-plane magnitudes that agree to within a relative 1e-4 are a tie,
+        which picks x, so that the choice for a crystal whose symmetry makes
+        them equal (such as a hexagonal magnet) is not decided by round-off.
     include_magnetic_field : bool
         If True, also build the magnetic field `B` (not used by
         `combined_potential`, only for inspection/visualization). Roughly
