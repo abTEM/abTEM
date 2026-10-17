@@ -240,6 +240,22 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     return getattr(xp, name)
 
 
+def _on_device_of(array, like):
+    """`array` as an array on the device `like` lives on.
+
+    This is `xp.asarray` -- no copy when `array` is already there -- except for
+    CuPy, where an array on another GPU is not converted by `asarray` and cannot be
+    mixed with `like`: it is copied onto the GPU of `like`, read off `like` itself
+    rather than the current-device context, which can differ under multi-GPU use.
+    """
+    xp = get_array_module(like)
+    if cp is not None and xp is cp:
+        if get_array_module(array) is not cp or array.device != like.device:
+            with like.device:
+                return cp.array(array)
+    return xp.asarray(array)
+
+
 def _spatial_frequency_squared(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -5180,9 +5196,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         The bins are found in double precision on the host, then copied to the
         device once: every block of a lazy average shares the copy instead of
-        transferring both arrays itself. The radii are computed by broadcasting
-        and the bounds in place, so at most two pattern-sized float64 arrays exist
-        at once, rather than a meshgrid and its temporaries.
+        transferring both arrays itself. Blocks that find the copy on another device
+        than their own (the node ran on a different worker, with several GPUs in one
+        process) copy it themselves: see `_on_device_of`.
+
+        The radii are computed by broadcasting and the bounds in place, so at most
+        two pattern-sized float64 arrays exist at once, rather than a meshgrid and
+        its temporaries.
         """
         x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
         r = np.hypot(x[:, None], y[None, :])
@@ -5222,8 +5242,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         xp = get_array_module(array)
 
         if weighting_function == "step":
-            # Already on the device of the array (see _azimuthal_step_bounds).
-            first, last = (xp.asarray(bound) for bound in step_bounds)
+            # On the device of the array, unless a node shared by the blocks was
+            # computed elsewhere (see _azimuthal_step_bounds).
+            first, last = (_on_device_of(bound, array) for bound in step_bounds)
         else:
             # Broadcast rather than meshgrid, which not every array module has.
             x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
@@ -5318,7 +5339,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centers = np.arange(num_bins) * radial_sampling
 
         if weighting_function == "step":
-            # One node shared by every block, which holds the pattern-sized bounds.
+            # One node shared by every block, which holds the pattern-sized bounds:
+            # two int32 arrays of 2 * 4 * n_pixels bytes (34 MB for 2048 x 2048), on
+            # the device of the patterns, for as long as the graph or any of its
+            # blocks is alive.
             step_bounds = self._azimuthal_step_bounds
             if self.is_lazy:
                 step_bounds = dask.delayed(step_bounds, pure=True)

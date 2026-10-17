@@ -17,6 +17,7 @@ import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
+    _gpu_count,
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
@@ -27,7 +28,7 @@ from utils import (
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+from abtem.core.backend import asnumpy, copy_to_device, cp, get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import get_dtype, safe_ceiling_int
 from abtem.measurements import (
@@ -40,6 +41,7 @@ from abtem.measurements import (
     _gaussian_kernel_2d,
     _gaussian_kernels_1d,
     _interpolate_stack,
+    _on_device_of,
     _scan_sampling,
     _scan_shape,
 )
@@ -1164,6 +1166,60 @@ def test_azimuthal_average_on_a_device_equals_the_cpu_average(
     np.testing.assert_allclose(
         asnumpy(result.array), expected.array, rtol=1e-6, atol=1e-7
     )
+
+
+@devices
+@pytest.mark.parametrize("scheduler", ["synchronous", "threads"])
+def test_lazy_azimuthal_average_on_a_device_shares_one_bounds_node_across_blocks(
+    device, scheduler
+):
+    # six blocks read the bounds the delayed node made on the device once; each
+    # must give exactly what the eager average on that device gives
+    data = np.random.default_rng(2).random((6, 33, 40)).astype(np.float32)
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 20.0,
+        fftshift=True,
+        metadata={"energy": 200e3},
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(6)))],
+    ).copy_to_device(device)
+    eager = patterns.azimuthal_average(radial_sampling=0.7, width=1.3)
+
+    lazy = patterns.ensure_lazy(chunks=(1, -1, -1))
+    assert lazy.array.numblocks[0] == 6
+    result = lazy.azimuthal_average(radial_sampling=0.7, width=1.3)
+    result_array = result.array.compute(scheduler=scheduler)
+
+    assert_array_matches_device(result_array, device)
+    np.testing.assert_array_equal(asnumpy(result_array), asnumpy(eager.array))
+
+
+@devices
+def test_on_device_of_copies_only_what_is_not_on_the_device(device):
+    like = copy_to_device(np.zeros((3, 4), dtype=np.float32), device)
+    xp = get_array_module(like)
+
+    on_device = xp.arange(6, dtype=np.int32)
+    assert _on_device_of(on_device, like) is on_device
+
+    host = np.arange(6, dtype=np.int32)
+    copied = _on_device_of(host, like)
+    assert_array_matches_device(copied, device)
+    np.testing.assert_array_equal(asnumpy(copied), host)
+
+
+@pytest.mark.skipif(_gpu_count() < 2, reason="needs two GPUs")
+def test_on_device_of_copies_from_another_gpu():
+    # a bounds node computed on one GPU read by a block that lives on another
+    with cp.cuda.Device(1):
+        bounds = cp.arange(6, dtype=np.int32)
+    with cp.cuda.Device(0):
+        like = cp.zeros((3, 4), dtype=np.float32)
+
+    copied = _on_device_of(bounds, like)
+
+    assert copied.device == like.device
+    np.testing.assert_array_equal(cp.asnumpy(copied), np.arange(6))
 
 
 @devices
