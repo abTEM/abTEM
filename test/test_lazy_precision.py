@@ -24,6 +24,7 @@ from abtem import (
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy, copy_to_device
 from abtem.core.fft import fft2, fft2_convolve
+from abtem.core.utils import get_dtype
 from abtem.measurements import DiffractionPatterns, Images
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
@@ -553,8 +554,6 @@ SAME_PRECISION_IN_AND_OUT = {
 
 def _single_precision_input(kind, lazy):
     """Input data in the dtype of the configured precision."""
-    from abtem.core.utils import get_dtype
-
     if kind == "waves":
         array = _complex_data(get_dtype(complex=True))
         cls_kwargs = dict(energy=100e3)
@@ -589,3 +588,32 @@ def test_methods_and_transforms_keep_the_precision_of_their_input(
             expected = np.result_type(expected, np.complex64)
         assert eager.array.dtype == expected
         _check(lazy, eager, member_offset_free=name == "integrate_gradient")
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize(
+    "transform",
+    [
+        Bullseye(4, 3.0, 3, 0.5, 20),
+        RadialPhasePlate(2, 30.0),
+        SpatialEnvelope(angular_spread=2, C30=1e4),
+    ],
+    ids=["bullseye", "radial_phase_plate", "spatial_envelope"],
+)
+def test_single_precision_transforms_agree_with_double_precision(transform, device):
+    """The single-precision kernels equal the double-precision ones to rounding: in
+    particular the phase plate's flips must not depend on the precision."""
+    result = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision, "fft": "numpy"}):
+            waves = Waves(
+                _complex_data(get_dtype(complex=True)),
+                energy=100e3,
+                sampling=0.1,
+                ensemble_axes_metadata=_members(),
+            ).copy_to_device(device)
+            result[precision] = asnumpy(transform._evaluate_kernel(waves))
+    assert result["float32"].dtype == np.result_type(
+        np.float32, np.complex64 if np.iscomplexobj(result["float32"]) else np.float32
+    )
+    np.testing.assert_allclose(result["float32"], result["float64"], atol=1e-5)

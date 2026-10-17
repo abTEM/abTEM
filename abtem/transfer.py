@@ -824,8 +824,8 @@ class Bullseye(BaseAperture):
                             t_deg += 360.0 / self._spoke_num / 2.0
 
                         t = np.deg2rad(t_deg)
-                        ct = np.cos(t)
-                        st = np.sin(t)
+                        ct = float(np.cos(t))
+                        st = float(np.sin(t))
 
                         u = kx * ct + ky * st
                         v = ky * ct - kx * st
@@ -849,8 +849,8 @@ class Bullseye(BaseAperture):
                         t_deg += 360.0 / self._spoke_num / 2.0
 
                     t = np.deg2rad(t_deg)
-                    ct = np.cos(t)
-                    st = np.sin(t)
+                    ct = float(np.cos(t))
+                    st = float(np.sin(t))
 
                     u = kx * ct + ky * st
                     v = ky * ct - kx * st
@@ -1205,10 +1205,18 @@ class RadialPhasePlate(BaseAperture):
         else:
             alpha_normed = (alpha_normed - alpha_normed.min()) / ptp
 
-        phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
-        phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
+        # The sign of sin(pi * k) at the integer k reached outside the cutoff is set
+        # by rounding, so this is deliberately evaluated in float64 whatever the
+        # configured precision: in float32 it flips the phase of most of the grid.
+        flipped = (
+            xp.sin(alpha_normed.astype(xp.float64) * np.pi * (self.num_flips + 1))
+            < 0.0
+        )
+        # The exponent is 0 or phase_shift: built in the dtype of the grid, so that
+        # the complex result is in the configured precision without a cast.
+        flipped = flipped.astype(alpha.dtype) * self.phase_shift
 
-        return phase_shift.astype(get_dtype(complex=True))
+        return xp.exp(1.0j * flipped)
 
 
 class TemporalEnvelope(BaseTransferFunction):
@@ -1615,7 +1623,9 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
 
         unpacked = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
-        angular_spread = unpacked[-1] / 1e3
+        # An array, so that its sign (a float64 NumPy scalar for a plain float)
+        # does not widen the single-precision envelope.
+        angular_spread = xp.asarray(unpacked[-1] / 1e3, dtype=get_dtype(complex=False))
         parameters = dict(zip(polar_symbols, unpacked[:-1]))
 
         alpha = xp.array(alpha)
@@ -1719,7 +1729,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
             * (dchi_dk**2 + dchi_dphi**2)
         )
 
-        return array.astype(get_dtype(complex=False))
+        return array
 
 
 class Aberrations(BaseTransferFunction, _HasAberrations):
