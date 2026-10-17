@@ -41,6 +41,14 @@ from abtem.potentials.charge_density import ChargeDensityPotential
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.slicing import _validate_slice_thickness
 
+# These densities are not a valence density of their atoms (random values, no
+# electrons, or all of them), so ChargeDensityPotential warns that it cannot
+# subtract the core and builds the potential of the density as given, which is
+# what these tests check.
+ignore_core_count_warning = pytest.mark.filterwarnings(
+    "ignore:charge_density integrates to:UserWarning"
+)
+
 
 def _build_with_numpy_fft(potential):
     from abtem.core import config
@@ -3010,6 +3018,7 @@ class _FakeCalculator:
         return np.array([16, 12, 20])
 
 
+@ignore_core_count_warning
 @float64_devices
 @ignore_strain_warning
 def test_charge_density_potential_accepts_its_own_box():
@@ -3044,6 +3053,7 @@ def _sampled_density(shape, rotation=np.eye(3)):
     return _chiral_charge_density_at(*old)
 
 
+@ignore_core_count_warning
 @float64_devices
 @pytest.mark.parametrize("plane", ["xz", "yx", "zy", "yz", "zx"])
 def test_charge_density_potential_in_a_plane_is_that_of_the_rotated_system(plane):
@@ -3067,6 +3077,7 @@ def test_charge_density_potential_in_a_plane_is_that_of_the_rotated_system(plane
     _assert_same(actual.array, expected.array)
 
 
+@ignore_core_count_warning
 @ignore_strain_warning
 def test_charge_density_potential_default_box_follows_the_plane_and_cell():
     rho = _charge_density()
@@ -3116,6 +3127,7 @@ class TestRejectingBuildersValidateTheirArguments:
     of the arguments is the shared `_validate_box` / `_validate_origin`, so one
     test per builder checks that each reaches it."""
 
+    @ignore_core_count_warning
     def test_only_the_default_box_and_origin_are_accepted(self, build):
         for kwargs in [
             dict(box=(4.0, 3.0, 5.0)),
@@ -3132,6 +3144,7 @@ class TestRejectingBuildersValidateTheirArguments:
             with pytest.raises(NotImplementedError, match="default box"):
                 build(**kwargs)
 
+    @ignore_core_count_warning
     def test_invalid_box_or_origin_raises(self, build):
         for origin in [(1.0, 0.5), ("1", "0", "0"), (np.nan, 0.0, 0.0), 1.0]:
             with pytest.raises(ValueError, match="origin"):
@@ -3947,6 +3960,7 @@ def test_charge_density_repetitions_are_judged_by_the_repeated_cell():
         assert "[[1, 0, 0], [1, " in str(records[0].message), repetitions
 
 
+@ignore_core_count_warning
 @ignore_strain_warning
 @pytest.mark.parametrize("plane", ["xz", "yz"])
 @pytest.mark.parametrize(
