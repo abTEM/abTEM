@@ -668,10 +668,15 @@ class _OwnRandomize(abtem.FrozenPhonons):
         return atoms
 
 
+class _OwnRandomizeWithFrame(abtem.FrozenPhonons):
+    def randomize(self, atoms, frame=None):
+        return super().randomize(atoms, frame=frame)
+
+
 @pytest.mark.parametrize("plane", ["xy", "xz"])
 def test_a_subclass_with_its_own_randomize_keeps_working(plane):
     """A subclass whose randomize takes the atoms only is called with the atoms
-    only."""
+    only; one that takes a frame gets it."""
     atoms = ase.build.bulk("Si", cubic=True)
     own = _OwnRandomize(atoms, num_configs=2, sigmas=0.05, seed=1)
     potential = abtem.Potential(own, sampling=0.2, plane=plane)
@@ -680,6 +685,20 @@ def test_a_subclass_with_its_own_randomize_keeps_working(plane):
     for configuration in potential.to_atoms_ensemble():
         np.testing.assert_allclose(configuration.positions, expected, atol=1e-10)
     assert potential.build(lazy=False).array.shape[0] == 2
+
+    sigmas = (0.05, 0.10, 0.20)
+    with_frame = _OwnRandomizeWithFrame(atoms, num_configs=1, sigmas=sigmas, seed=1)
+    plain = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=1)
+    np.testing.assert_array_equal(
+        abtem.Potential(with_frame, sampling=0.2, plane=plane)
+        .to_atoms_ensemble()
+        .trajectory[0]
+        .positions,
+        abtem.Potential(plain, sampling=0.2, plane=plane)
+        .to_atoms_ensemble()
+        .trajectory[0]
+        .positions,
+    )
 
 
 class _StoredConfiguration(DummyFrozenPhonons):
