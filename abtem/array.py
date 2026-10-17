@@ -2711,9 +2711,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             signal_units=self.metadata.get("units", "arb. units"),
         )
 
-        # preserve abTEM metadata if present
-        if hasattr(self, "metadata"):
-            dataset._metadata = dict(self.metadata)
+        # Dataset.from_array takes no metadata; Dataset.metadata is the dict it
+        # holds, empty for a new dataset.
+        dataset.metadata.update(self.metadata)
 
         return dataset
 

@@ -121,12 +121,16 @@ def _assert_quantem_calibration(records, expected):
 
 @pytest.fixture
 def quantem_records(monkeypatch):
-    """Replace quantem by a stand-in whose Dataset.from_array records its kwargs."""
+    """Replace quantem by a stand-in whose Dataset.from_array records its kwargs,
+    and the dataset's metadata under "metadata". The tests against the real
+    package are marked `quantem`."""
     captured = {}
 
     def from_array(**kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(**kwargs)
+        # Like quantem's Dataset, an empty metadata dict exposed as `metadata`.
+        captured["metadata"] = {}
+        return SimpleNamespace(metadata=captured["metadata"], **kwargs)
 
     fake = SimpleNamespace(
         core=SimpleNamespace(
@@ -321,6 +325,19 @@ def test_to_quantem_signal_units_are_the_metadata_units(
     images.to_quantem()
 
     assert quantem_records["signal_units"] == signal_units
+
+
+def test_to_quantem_copies_the_metadata(quantem_records):
+    metadata = {"label": "intensity", "units": "arb. unit", "energy": 100e3}
+    images = Images(
+        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
+    )
+
+    dataset = images.to_quantem()
+
+    assert dataset.metadata == metadata
+    dataset.metadata["energy"] = 0.0
+    assert images.metadata == metadata
 
 
 @devices
