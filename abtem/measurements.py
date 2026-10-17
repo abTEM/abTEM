@@ -830,6 +830,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             to reduce an ensemble kept with ``ensemble_mean=False``.
         """
         if axis is None:
+            if "frozen_phonon_moments" in self.metadata:
+                # The amplitudes and intensities of a PixelatedDetector with
+                # components: the frozen phonons are averaged coherently and split
+                # into components before the other axes are averaged.
+                return _frozen_phonon_components_from_moments(self).reduce_ensemble()
+
             axis = tuple(
                 i
                 for i, axis_metadata in enumerate(self.axes_metadata)
@@ -7764,6 +7770,101 @@ def elastic_diffuse_diffraction_patterns(
     )
 
     return result._apply_block_direct(block_direct)
+
+
+def _frozen_phonon_components_from_moments(measurements: BaseMeasurements):
+    """The components a ``PixelatedDetector`` with ``components`` detected, from its
+    measurements with the ``frozen_phonon_moments`` metadata.
+
+    The measurements hold, per configuration, the real quantities named in
+    ``metadata["frozen_phonon_moments"]["channels"]`` stacked along the first base
+    axis: the real and imaginary part of the amplitude ψ and its intensity |ψ|². The
+    ``FrozenPhononsAxis`` is averaged first, over that axis alone, which gives the
+    mean amplitude m and the total T, and the components are formed from these as
+    in :func:`elastic_diffuse_diffraction_patterns`. Every other ensemble axis is
+    kept for the incoherent reduction of ``reduce_ensemble`` that follows.
+    """
+    from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
+
+    info = measurements.metadata["frozen_phonon_moments"]
+    names = tuple(info["components"])
+    unbiased = info["unbiased"]
+    channels = info["channels"]
+
+    axes = measurements.ensemble_axes_metadata
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(axes)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "a PixelatedDetector with components needs a FrozenPhononsAxis in the "
+            "ensemble axes, e.g. from FrozenPhonons as the potential of the "
+            "multislice simulation."
+        )
+    if not axes[fp_axis_idx]._ensemble_mean:
+        raise ValueError(
+            "a PixelatedDetector with components needs the frozen phonons averaged: "
+            "build them with ensemble_mean=True. With ensemble_mean=False, detect "
+            "the exit waves with a WavesDetector and use "
+            "elastic_diffuse_diffraction_patterns."
+        )
+
+    N = measurements.shape[fp_axis_idx]
+    if N < 2 and _needs_the_diffuse_part(names, unbiased):
+        raise ValueError(
+            "the diffuse component, and the elastic component with unbiased=True, "
+            f"need at least 2 frozen-phonon configurations, got N={N}. The diffuse "
+            "intensity is the variance of the diffracted amplitude across "
+            "configurations, which is exactly zero for a single configuration."
+        )
+
+    # The averages of ψ and |ψ|² over the configurations, in the reduction of the
+    # array (a dask tree reduction when lazy).
+    mean = measurements.reduce_ensemble(axis=fp_axis_idx)
+    array = mean.array
+    size = array.shape[-2] // len(channels)
+    quantities = {
+        name: array[..., i * size : (i + 1) * size, :]
+        for i, name in enumerate(channels)
+    }
+
+    elastic = None
+    if "real" in quantities:
+        elastic = quantities["real"] ** 2 + quantities["imag"] ** 2
+    parts = _form_frozen_phonon_components(
+        quantities.get("intensity"), elastic, N, names, unbiased
+    )
+
+    ensemble_axes_metadata = list(mean.ensemble_axes_metadata)
+    if info["stacked"]:
+        xp = get_array_module(parts[0])
+        array = _array_module_fn(parts[0], xp, "stack")(parts, axis=0)
+        ensemble_axes_metadata = [
+            OrdinalAxis(label="component", values=names)
+        ] + ensemble_axes_metadata
+    else:
+        array = parts[0]
+
+    metadata = {
+        key: value
+        for key, value in mean.metadata.items()
+        if key != "frozen_phonon_moments"
+    }
+    metadata["frozen_phonon_component"] = list(names) if info["stacked"] else names[0]
+    metadata["num_configurations"] = N
+    metadata["unbiased"] = unbiased
+
+    return mean.__class__.from_array_and_metadata(
+        array,
+        axes_metadata=ensemble_axes_metadata + mean.base_axes_metadata,
+        metadata=metadata,
+    )
 
 
 def phonon_loss_diffraction_patterns(
