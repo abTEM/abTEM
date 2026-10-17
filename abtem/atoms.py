@@ -1346,54 +1346,9 @@ def orthogonalize_cell(
             else:
                 return atoms
 
-        # `best_orthogonal_cell` computes box lengths as norms of (possibly
-        # repeated) lattice vectors. For a near-orthorhombic cell whose
-        # off-diagonal components are smaller than about 2e-8 relative to the
-        # corresponding diagonal entry, those norms round to the exact
-        # diagonal entries in float64, so `diag(cell) == box` can be True
-        # even though `is_cell_orthogonal` (tol=1e-12) still correctly
-        # reports the cell as non-orthogonal. This is a relative, not
-        # absolute, effect: a 5000 A cell can carry noise up to ~1e-4 A and
-        # still trip it, while a 5 A cell only does so below ~1e-7 A. No
-        # repetition is needed in this case, just removal of the numerical
-        # residual, so remove it by zeroing the off-diagonal components
-        # directly, rather than falling through to the general repeat-and-cut
-        # path below (which assumes real repetition is needed to reach
-        # `box`).
-        #
-        # A Gram-Schmidt process on the three vectors would only guarantee
-        # they end up mutually orthogonal, not axis-aligned: if the noise
-        # sits in the first vector (whose direction seeds the process), the
-        # result is a valid orthogonal box rotated slightly off the
-        # coordinate axes, which is not what the rest of this function
-        # assumes. Zeroing the off-diagonal components directly is both
-        # simpler and correct when they are noise.
-        #
-        # A sheared cell is not noise, though its diagonal can equal its best
-        # orthogonal box too: the shortest lattice vector along an axis has the
-        # length of the cell's own diagonal entry when an off-diagonal
-        # component is a whole multiple of the matching component of another
-        # vector (a hexagonal cell repeated an even number of times along its
-        # second vector, a monoclinic cell whose c vector leans by a whole a
-        # vector). Such a cell goes through the repeat-and-cut path below like
-        # any other non-orthogonal cell.
-        cell = np.array(atoms.cell, dtype=float)
-        off_diagonal = cell[~np.eye(3, dtype=bool)]
-        max_off_diagonal = np.max(np.abs(off_diagonal))
-        relative_off_diagonal = max_off_diagonal / atoms.cell.lengths().max()
-        if relative_off_diagonal <= 1e-6:
-            orthogonal_cell = np.diag(np.diag(cell))
-
-            atoms = atoms.copy()
-            atoms.set_cell(orthogonal_cell)
-            atoms.wrap()
-
-            if return_transform:
-                return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
-            elif return_transform_matrix:
-                return atoms, np.eye(3)
-            else:
-                return atoms
+        # A non-orthogonal cell whose diagonal is its box -- a sheared cell, or
+        # off-diagonal noise too small to change the box lengths -- goes through
+        # the repeat-and-cut path below like any other non-orthogonal cell.
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
