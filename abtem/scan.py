@@ -615,6 +615,13 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
+        if self.sampling == 0.0:
+            # A zero-length line given only `gpts` has the sampling 0, which
+            # cannot give a number of positions once the line is lengthened: keep
+            # `gpts` and derive the sampling from the new extent instead.
+            self._adjust_sampling()
+            return
+
         self._gpts = max(
             safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint), 1
         )

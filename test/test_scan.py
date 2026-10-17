@@ -299,3 +299,31 @@ def test_a_zero_length_line_scan_keeps_its_requested_sampling(endpoint):
     assert (scan.gpts, scan.sampling) == (1, 0.3)
     scan = LineScan(start=(1, 1), end=(1, 1), gpts=3, endpoint=endpoint)
     assert scan.sampling == 0.0
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_a_zero_length_line_scan_of_gpts_keeps_them_when_one_end_moves(endpoint):
+    # its sampling is 0, which cannot give the number of positions of a longer line
+    for end_to_move in ("end", "start"):
+        scan = LineScan(start=(1, 1), end=(1, 1), gpts=3, endpoint=endpoint)
+        if end_to_move == "end":
+            scan.end = (3.0, 1.0)
+        else:
+            scan.start = (-1.0, 1.0)
+        assert scan.gpts == 3
+        assert scan.sampling == pytest.approx(2.0 / 2 if endpoint else 2.0 / 3)
+        assert scan.get_positions().shape == (3, 2)
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_a_zero_length_line_scan_of_gpts_can_have_a_margin(endpoint):
+    # the first end to move derives a sampling from `gpts`, which the second keeps
+    # as for any other line
+    scan = LineScan(start=(1, 1), end=(1, 1), gpts=3, endpoint=endpoint).add_margin(1.0)
+    assert (scan.start, scan.end) == ((0.0, 1.0), (2.0, 1.0))
+    sampling = 1.0 / 2 if endpoint else 1.0 / 3
+    assert scan.sampling == pytest.approx(sampling)
+    assert scan.gpts == (5 if endpoint else 6)
+    positions = scan.get_positions()
+    assert positions.shape == (scan.gpts, 2)
+    np.testing.assert_allclose(positions[0], (0.0, 1.0))
