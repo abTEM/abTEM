@@ -882,6 +882,10 @@ class GridScan(HasGrid2DMixin, BaseScan):
         End corner of the scan [Å]. May be given as fractional coordinate
         if `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
+        An `end` equal to `start` is a scan of one position, a single point. Its
+        `gpts` stay undefined, as for any scan without `gpts` or `sampling`, until
+        a probe is matched (as when scanning), which gives (1, 1); more than one
+        position along an axis is refused.
     gpts : two int, optional
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one
         of gpts or sampling.
@@ -931,7 +935,8 @@ class GridScan(HasGrid2DMixin, BaseScan):
             # user-defined one-point scan and when such a scan is partitioned into
             # blocks for lazy evaluation.
             # Without gpts a zero extent gives one position along every axis, as
-            # for `LineScan` and `Grid`.
+            # for `LineScan` and `Grid`; `gpts` itself stays undefined until the
+            # sampling is, as for any other scan without gpts or sampling.
             single_point = gpts is None or bool(np.all(np.array(gpts) == 1))
             degenerate = all(d == 0.0 for d in extent)
 

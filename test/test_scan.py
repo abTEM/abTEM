@@ -269,6 +269,20 @@ def test_scans_of_a_zero_extent_have_one_position():
     assert scan.gpts == (4, 1)
 
 
+def test_a_grid_scan_of_a_single_point_without_gpts_has_one_position_once_matched():
+    # gpts are undefined until a sampling is, as for any scan without gpts or
+    # sampling, and then one position along each axis, as for LineScan
+    scan = GridScan(start=(1, 2), end=(1, 2))
+    assert scan.gpts is None
+    line = LineScan(start=(1, 2), end=(1, 2))
+    assert line.gpts is None
+
+    scan.match_probe(_probe())
+    line.match_probe(_probe())
+    assert scan.gpts == (1, 1) and line.gpts == 1
+    np.testing.assert_array_equal(scan.get_positions().reshape(-1, 2), [[1, 2]])
+
+
 @pytest.mark.filterwarnings("error")
 def test_a_zero_length_line_scan_points_along_x():
     import matplotlib
