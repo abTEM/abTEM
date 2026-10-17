@@ -1927,7 +1927,7 @@ class PixelatedDetector(BaseDetector):
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
-        from abtem.array import _multi_energy_axis, _without_scalar_energy
+        from abtem.array import _multi_energy_axis
 
         # A string max_angle crops every energy to the same pixels already.
         if (
@@ -1938,10 +1938,9 @@ class PixelatedDetector(BaseDetector):
         ):
             return self
 
-        # The highest energy of the axis decides, not a scalar energy that may
-        # have been left on the waves.
+        # The highest energy of the axis decides.
         matched = self.copy()
-        matched._ensemble_gpts = self._crop_gpts(_without_scalar_energy(waves))
+        matched._ensemble_gpts = self._crop_gpts(waves)
         return matched
 
     def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:

@@ -36,6 +36,7 @@ from abtem.array import ArrayObject, _validate_array_items, stack
 from abtem.core import backend, config
 from abtem.core.axes import (
     AxisMetadata,
+    EnergyAxis,
     LinearAxis,
     NonLinearAxis,
     RealSpaceAxis,
@@ -6992,6 +6993,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ]
         ensemble_axes_metadata.insert(axis, axis_metadata)
         metadata = diffraction_spots[0].metadata
+        if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+            # the axis carries every member's energy (see ArrayObject._stack)
+            metadata = {**metadata, "energy": None}
 
         return IndexedDiffractionPatterns(
             intensities, miller_indices, positions, ensemble_axes_metadata, metadata

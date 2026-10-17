@@ -178,67 +178,6 @@ def _multi_energy_axis(array_object: "ArrayObject") -> Optional[int]:
     return None
 
 
-def _copy_with_scalar_energy(array_object: "ArrayObject", energy: Optional[float]):
-    """A copy of `array_object` sharing its array, with `energy` as its scalar
-    energy: `accelerator.energy`, and `metadata["energy"]` where the key is
-    present."""
-    kwargs = array_object._copy_kwargs(exclude=("array",))
-    kwargs["array"] = array_object._array
-    if "energy" in kwargs:
-        kwargs["energy"] = energy
-    if "energy" in (kwargs.get("metadata") or {}):
-        kwargs["metadata"]["energy"] = energy
-    return array_object.__class__(**kwargs)
-
-
-def _with_the_energy_of_a_single_valued_energy_axis(array_object: "ArrayObject"):
-    """`array_object`, or a copy of it carrying the energy of its single-valued
-    `EnergyAxis` in place of a different scalar energy.
-
-    A scalar energy (`accelerator.energy` or `metadata["energy"]`) takes
-    precedence over the axis in `resolve_energy`, so waves that carry both, with
-    an axis value that differs from the scalar, are evaluated at the wrong
-    wavelength. This is the state of a lazy block holding one energy of such
-    waves. The copy shares the array; the object itself is returned when it has
-    no such axis or no scalar energy that differs from the axis value.
-    """
-    axis = next(
-        (
-            axis
-            for axis in array_object.ensemble_axes_metadata
-            if isinstance(axis, EnergyAxis) and len(axis.values) == 1
-        ),
-        None,
-    )
-    if axis is None:
-        return array_object
-
-    energy = float(axis.values[0])
-    accelerator = getattr(array_object, "accelerator", None)
-    scalars = (
-        None if accelerator is None else accelerator.energy,
-        array_object._metadata.get("energy"),
-    )
-    if all(scalar is None or float(scalar) == energy for scalar in scalars):
-        return array_object
-
-    return _copy_with_scalar_energy(array_object, energy)
-
-
-def _without_scalar_energy(array_object: "ArrayObject"):
-    """`array_object`, or a copy of it with no scalar energy, so that only its
-    `EnergyAxis` decides the energies (see `resolve_energy`). The copy shares the
-    array."""
-    accelerator = getattr(array_object, "accelerator", None)
-    scalars = (
-        None if accelerator is None else accelerator.energy,
-        array_object._metadata.get("energy"),
-    )
-    if all(scalar is None for scalar in scalars):
-        return array_object
-    return _copy_with_scalar_energy(array_object, None)
-
-
 def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
     """`transform._calculate_new_array(array_object)`, evaluated for each energy of
     a multi-energy ensemble on its own when the transform depends on the
@@ -251,27 +190,18 @@ def _calculate_new_array_per_energy(transform, array_object: "ArrayObject"):
     ensemble axes, among the array object's own axes in their natural order,
     which is the order every `_calculate_new_array` returns. This runs on the
     whole array of an eager call and on every block of a lazy one, whatever
-    energies the block holds. An array object with a single-valued energy axis,
-    such as a block holding one energy, is transformed at that energy even if it
-    carries a different scalar energy; one without such a scalar energy is
-    transformed as it is, not as a copy.
+    energies the block holds.
     """
     if not getattr(transform, "_splits_energy_ensembles", False):
         return transform._calculate_new_array(array_object)
 
     index = _multi_energy_axis(array_object)
     if index is None:
-        return transform._calculate_new_array(
-            _with_the_energy_of_a_single_valued_energy_axis(array_object)
-        )
+        return transform._calculate_new_array(array_object)
 
-    energies = array_object.ensemble_axes_metadata[index].values
     members = []
-    for j, energy in enumerate(energies):
+    for j in range(array_object.ensemble_shape[index]):
         items = array_object.get_items((slice(None),) * index + (j,))
-        if items.get("energy") is not None:
-            # A scalar energy on the ensemble is not this member's.
-            items["energy"] = energy
         members.append(transform._calculate_new_array(array_object.__class__(**items)))
 
     axis = len(transform.ensemble_shape) + index
@@ -1193,6 +1123,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
         self._check_axes_metadata()
+        self._check_energy_matches_energy_axes()
 
         super().__init__(**kwargs)
 
@@ -1250,6 +1181,32 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     f"number of values for ordinal axis ({len(axis)}), does not match"
                     f"size of dimension ({n})"
                 )
+
+    def _check_energy_matches_energy_axes(self) -> None:
+        """Refuse a scalar energy that is not the energy of every member of an
+        `EnergyAxis`. The axis is the one record of the energies of an energy
+        ensemble, which leaves its scalar energy (`accelerator.energy` and
+        `metadata["energy"]`) unset, as a probe built with several energies does;
+        a scalar energy beside the axis would be read as the energy of every
+        member."""
+        accelerator = getattr(self, "_accelerator", None)
+        scalars = {
+            "energy": None if accelerator is None else accelerator.energy,
+            'metadata["energy"]': self._metadata.get("energy"),
+        }
+        for axis in self._ensemble_axes_metadata:
+            if not isinstance(axis, EnergyAxis):
+                continue
+            for name, scalar in scalars.items():
+                if isinstance(scalar, Number) and any(
+                    float(value) != float(scalar) for value in axis.values
+                ):
+                    raise ValueError(
+                        f"{name}={scalar} eV contradicts the EnergyAxis with the "
+                        f"energies {axis.values} eV of this "
+                        f"{self.__class__.__name__}; the axis carries the energy "
+                        "of each member, leave the scalar energy unset (None)."
+                    )
 
     def _is_base_axis(self, axis: int | tuple[int, ...]) -> bool:
         axis = number_to_tuple(axis)
@@ -2749,6 +2706,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ]
         ensemble_axes_metadata.insert(axis, axis_metadata)
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
+        if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
+            # The axis carries every member's energy, as for a probe built with
+            # several energies; the first member's scalar energy is not theirs.
+            if "energy" in kwargs:
+                kwargs["energy"] = None
+            if "energy" in (kwargs.get("metadata") or {}):
+                kwargs["metadata"]["energy"] = None
         return cls(**kwargs)
 
     def _partition_ensemble_axes_metadata(
@@ -3110,17 +3074,7 @@ def stack(
 
     axis_metadata = validate_axis_metadata(axis_metadata)
 
-    stacked = arrays[0]._stack(arrays, axis_metadata, axis)
-    if isinstance(axis_metadata, EnergyAxis) and len(axis_metadata.values) > 1:
-        # The scalar energy of the first member would misrepresent the others
-        # and take precedence over the axis (resolve_energy); the axis carries
-        # every member's energy, as for a probe built with several energies,
-        # whose metadata["energy"] is None as well.
-        if getattr(stacked, "accelerator", None) is not None:
-            stacked.accelerator.energy = None
-        if "energy" in stacked._metadata:
-            stacked._metadata["energy"] = None
-    return stacked
+    return arrays[0]._stack(arrays, axis_metadata, axis)
 
 
 def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:

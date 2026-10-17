@@ -227,9 +227,30 @@ class TestWavesEnergyEnsemble:
         )
         assert single.wavelength == energy2wavelength(100e3)
 
+    def test_a_scalar_energy_contradicting_the_energy_axis_is_refused(self):
+        """The EnergyAxis is the one record of the energies of an ensemble: a
+        scalar energy, given as the energy or in the metadata, is refused unless
+        it is the energy of every member."""
+        array = np.ones((2, 8, 8), dtype=complex)
+        axis = EnergyAxis(values=(80e3, 200e3))
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            Waves(array, energy=80e3, sampling=0.1, ensemble_axes_metadata=[axis])
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            abtem.DiffractionPatterns(
+                np.ones((2, 8, 8)),
+                sampling=0.1,
+                ensemble_axes_metadata=[axis],
+                metadata={"energy": 80e3},
+            )
+        one = [EnergyAxis(values=(80e3,))]
+        with pytest.raises(ValueError, match="contradicts the EnergyAxis"):
+            Waves(array[:1], energy=200e3, sampling=0.1, ensemble_axes_metadata=one)
+        member = Waves(array[:1], energy=80e3, sampling=0.1, ensemble_axes_metadata=one)
+        assert member.energy == 80e3
+
     def test_stack_along_an_energy_axis_leaves_no_scalar_energy(self):
-        """The axis carries each member's energy. A scalar energy taken from the
-        first member would take precedence over it for every member."""
+        """The axis carries each member's energy; the scalar energy of the first
+        member would contradict it."""
         members = [
             Waves(np.ones((32, 32), dtype=complex), energy=energy, sampling=0.1)
             for energy in ENERGIES

@@ -5221,7 +5221,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 window_gpts=results[0].window_gpts,
                 device=self.device,
                 ensemble_axes_metadata=[energy_ax] + results[0].ensemble_axes_metadata,
-                metadata=results[0].metadata,
+                metadata={**results[0].metadata, "energy": None},
             )
 
         # --- Single-energy path (unchanged) ---
