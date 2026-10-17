@@ -307,6 +307,22 @@ def test_to_quantem_leaves_a_lazy_object_lazy(kind, device, quantem_records):
     assert type(quantem_records["array"]) is np.ndarray
 
 
+@pytest.mark.parametrize(
+    "metadata, signal_units",
+    [({"units": "eV / e"}, "eV / e"), ({}, "arb. units")],
+)
+def test_to_quantem_signal_units_are_the_metadata_units(
+    metadata, signal_units, quantem_records
+):
+    images = Images(
+        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
+    )
+
+    images.to_quantem()
+
+    assert quantem_records["signal_units"] == signal_units
+
+
 @devices
 def test_to_quantem_exports_a_host_array(device, quantem_records):
     # quantem's Dataset holds NumPy arrays only and rejects CuPy arrays.

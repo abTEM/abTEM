@@ -2708,7 +2708,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             origin=tuple(origin),
             sampling=tuple(sampling),
             units=tuple(units),
-            signal_units=getattr(self, "units", "arb. units"),
+            signal_units=self.metadata.get("units", "arb. units"),
         )
 
         # preserve abTEM metadata if present
