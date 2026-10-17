@@ -5206,6 +5206,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
         r = np.hypot(x[:, None], y[None, :])
+
         # Bin k holds r with k * radial_sampling - width / 2 <= r <
         # k * radial_sampling + width / 2, that is first <= k <= last. The
         # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
