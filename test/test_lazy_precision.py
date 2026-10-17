@@ -591,6 +591,40 @@ def test_methods_and_transforms_keep_the_precision_of_their_input(
 
 
 @cuda_and_cpu
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_center_of_mass_of_integer_counts_follows_the_configured_precision(
+    precision, lazy, device
+):
+    counts = np.random.default_rng(3).integers(0, 50, size=(MEMBERS,) + GRID)
+    assert not np.issubdtype(counts.dtype, np.floating)
+    with abtem.config.set({"precision": precision, "fft": "numpy"}):
+        array = da.from_array(counts, chunks=(1,) + GRID) if lazy else counts
+        patterns = DiffractionPatterns(
+            array,
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        com = patterns.center_of_mass()
+        expected = np.result_type(np.dtype(precision), np.complex64)
+        assert com.array.dtype == expected
+        assert com.copy().compute().array.dtype == expected
+
+        reference = DiffractionPatterns(
+            counts.astype(np.float64),
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        with abtem.config.set({"precision": "float64"}):
+            reference = reference.center_of_mass().compute().array
+        rtol = 1e-5 if precision == "float32" else 1e-12
+        computed = asnumpy(com.copy().compute().array)
+        np.testing.assert_allclose(computed, asnumpy(reference), rtol=rtol, atol=1e-6)
+
+
+@cuda_and_cpu
 @pytest.mark.parametrize(
     "transform",
     [
