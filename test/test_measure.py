@@ -1523,6 +1523,32 @@ def test_images_interpolate_line_through_grid_nodes(lazy, device):
 
 @lazy_params
 @devices
+def test_images_interpolate_line_of_a_width_below_two_pixels_is_on_the_line(
+    lazy, device
+):
+    """A width under two pixels has one perpendicular sample, which belongs on
+    the line: through grid nodes it equals the line of no width. It was placed
+    half a pixel off (linspace(-0.5, 0.5, 1) is -0.5), averaging in effect the
+    node with its neighbour."""
+    rng = np.random.default_rng(11)
+    gpts, sampling = (24, 32), (0.2, 0.15)
+    array = rng.random(gpts)
+    images = _make_images(array, sampling, lazy, device)
+    extent = images.extent
+
+    for width in (0.0, 0.1, 0.25):  # one sample, below 2 * min(sampling) = 0.3
+        line = images.interpolate_line(
+            start=(7 * sampling[0], 0),
+            end=(7 * sampling[0], extent[1]),
+            gpts=gpts[1],
+            width=width,
+            order=1,
+        )
+        _assert_matches_reference(_line_values(line), array[7])
+
+
+@lazy_params
+@devices
 def test_images_default_interpolate_line_spans_the_y_extent(lazy, device):
     """The default line runs from (0, 0) along y. On a non-square image
     (extent 1.6 x 4.0 Å) it must span the y extent, so at the default sampling
