@@ -1951,7 +1951,7 @@ class PixelatedDetector(BaseDetector):
         url: Optional[str] = None,
         components: Optional[str | Sequence[str]] = None,
         unbiased: bool = False,
-        reduction_dtype=None,
+        reduction_dtype: Optional[str | np.dtype] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
         if not reciprocal_space and isinstance(resample, str):
@@ -1965,7 +1965,7 @@ class PixelatedDetector(BaseDetector):
         if components is None:
             if unbiased or reduction_dtype is not None:
                 raise ValueError("unbiased and reduction_dtype apply to components")
-            self._component_names: tuple[str, ...] = ()
+            self._component_names = ()
             self._components_stacked = False
         else:
             if not reciprocal_space or resample:
@@ -2355,7 +2355,7 @@ class WavesDetector(BaseDetector):
         to_cpu: bool = False,
         url: Optional[str] = None,
         average_frozen_phonons: bool = False,
-        reduction_dtype=None,
+        reduction_dtype: Optional[str | np.dtype] = None,
     ):
         if not isinstance(average_frozen_phonons, (bool, np.bool_)):
             raise TypeError(
