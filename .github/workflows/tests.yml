@@ -35,6 +35,9 @@ concurrency:
 env:
   RUNSLOW: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && 'true' || 'false' }}
 
+# -n logical, not auto: auto counts physical cores, 2 on GitHub's 4-vCPU
+# runners, so the suite ran on two workers. (Needs psutil, which distributed
+# brings in; without it xdist falls back to auto.)
 jobs:
   tests:
     name: ${{ matrix.os }} / python ${{ matrix.python-version }}
@@ -63,7 +66,7 @@ jobs:
         run: uv sync --group test
 
       - name: Run tests
-        run: uv run pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+        run: uv run pytest test -n logical ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
   # Tests the declared minimum versions: each lower bound of the runtime
   # dependencies in `pyproject.toml` (`[project].dependencies`) is pinned
@@ -103,7 +106,7 @@ jobs:
           uv pip install --python .venv -c constraints.txt -e . --group test
 
       - name: Run tests
-        run: .venv/bin/pytest test -n auto ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+        run: .venv/bin/pytest test -n logical ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
   # The torch backend (device 'mps') on torch's CPU device: runs the test cases
   # that exercise it without Apple hardware. Its single-precision rules apply on
@@ -132,7 +135,7 @@ jobs:
       - name: Run the torch backend's tests
         env:
           ABTEM_TORCH__DEVICE: cpu
-        run: uv run pytest test -n auto -m torch ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
+        run: uv run pytest test -n logical -m torch ${{ env.RUNSLOW == 'true' && '--runslow' || '' }}
 
   # A single, stable check to require in branch protection on main, that
   # exists (at all) only for a run that includes --runslow -- PRs into main,

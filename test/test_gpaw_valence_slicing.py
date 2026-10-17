@@ -52,22 +52,26 @@ def _slice_limits(slice_thickness):
     return potential.get_sliced_atoms().slice_limits, potential.thickness
 
 
-@pytest.mark.parametrize("slice_thickness", SLICE_THICKNESSES + [0.05, 0.15])
-def test_the_weights_of_every_plane_add_up_to_its_spacing(slice_thickness):
-    limits, depth = _slice_limits(slice_thickness)
-    gpts = (4, 3)
+# The pure-numpy tests below loop over the slice thicknesses inside one test:
+# each case takes milliseconds, so a test ID per thickness added only
+# collection overhead. The thickness is named in every assertion message.
 
-    # A potential that is 1 on plane k and 0 elsewhere: the slices must add up to
-    # the plane's weight dz once.
-    dz = depth / NZ
-    for plane in range(NZ):
-        array = np.zeros(gpts + (NZ,))
-        array[..., plane] = 1.0
-        total = sum(
-            integrate_slice(array, gpts, a, b, depth).sum() / np.prod(gpts)
-            for a, b in limits
-        )
-        assert total == pytest.approx(dz, rel=1e-12)
+
+def test_the_weights_of_every_plane_add_up_to_its_spacing():
+    gpts = (4, 3)
+    for slice_thickness in SLICE_THICKNESSES + [0.05, 0.15]:
+        limits, depth = _slice_limits(slice_thickness)
+        # A potential that is 1 on plane k and 0 elsewhere: the slices must add
+        # up to the plane's weight dz once.
+        dz = depth / NZ
+        for plane in range(NZ):
+            array = np.zeros(gpts + (NZ,))
+            array[..., plane] = 1.0
+            total = sum(
+                integrate_slice(array, gpts, a, b, depth).sum() / np.prod(gpts)
+                for a, b in limits
+            )
+            assert total == pytest.approx(dz, rel=1e-12), (slice_thickness, plane)
 
 
 def _plane_weights(start, stop):
@@ -87,29 +91,25 @@ def _plane_weights(start, stop):
     return weights
 
 
-@pytest.mark.parametrize("slice_thickness", SLICE_THICKNESSES)
-def test_each_plane_is_weighted_by_its_heights_in_the_slice(slice_thickness):
+def test_each_plane_is_weighted_by_its_heights_in_the_slice():
     # n equal slices of nz planes: slice k runs from k * nz / n to (k + 1) * nz / n
     # plane spacings. The oracle uses no float slice limits. A plane has the value
     # j + 1, so the integral of a slice identifies which planes it holds and with
     # what weights, not only how many.
-    limits, depth = _slice_limits(slice_thickness)
     gpts = (2, 2)
-    n = len(limits)
-    dz = depth / NZ
     array = np.ones(gpts + (NZ,)) * np.arange(1, NZ + 1)
+    for slice_thickness in SLICE_THICKNESSES:
+        limits, depth = _slice_limits(slice_thickness)
+        n = len(limits)
+        dz = depth / NZ
+        for k, (a, b) in enumerate(limits):
+            weights = _plane_weights(Fraction(k * NZ, n), Fraction((k + 1) * NZ, n))
+            expected = dz * float(sum(w * (j + 1) for j, w in enumerate(weights)))
+            result = integrate_slice(array, gpts, a, b, depth)
+            assert result == pytest.approx(expected, abs=1e-12), (slice_thickness, k)
 
-    for k, (a, b) in enumerate(limits):
-        weights = _plane_weights(Fraction(k * NZ, n), Fraction((k + 1) * NZ, n))
-        expected = dz * float(sum(w * (j + 1) for j, w in enumerate(weights)))
-        result = integrate_slice(array, gpts, a, b, depth)
-        assert result == pytest.approx(expected, abs=1e-12)
 
-
-@pytest.mark.parametrize("slice_thickness", SLICE_THICKNESSES + [0.05, 0.15])
-def test_slice_integrals_of_a_smooth_potential_are_centred_on_the_slices(
-    slice_thickness,
-):
+def test_slice_integrals_of_a_smooth_potential_are_centred_on_the_slices():
     # The planes of cos(q z + 0.3), one period over the depth, against its exact
     # integral through each slice. The error of the planes is of second order in
     # dz: the trapezoidal rule over the whole planes, (q dz)^2 / 12 of a slice, and
@@ -117,45 +117,54 @@ def test_slice_integrals_of_a_smooth_potential_are_centred_on_the_slices(
     # heights. Taking the planes from floor(a / dz) whole put each slice integral
     # dz / 2 below its slice, up to 0.14 off here (0.8 A), and gave slices thinner
     # than a plane either none or a whole plane.
-    limits, depth = _slice_limits(slice_thickness)
     gpts = (2, 2)
-    dz = depth / NZ
-    q = 2 * np.pi / depth
-    z = np.arange(NZ) * dz
-    array = np.ones(gpts + (1,)) * np.cos(q * z + 0.3)
+    for slice_thickness in SLICE_THICKNESSES + [0.05, 0.15]:
+        message = f"slice_thickness={slice_thickness}"
+        limits, depth = _slice_limits(slice_thickness)
+        dz = depth / NZ
+        q = 2 * np.pi / depth
+        z = np.arange(NZ) * dz
+        array = np.ones(gpts + (1,)) * np.cos(q * z + 0.3)
 
-    def antiderivative(z):
-        return np.sin(q * z + 0.3) / q
+        def antiderivative(z):
+            return np.sin(q * z + 0.3) / q
 
-    result = np.array([integrate_slice(array, gpts, a, b, depth) for a, b in limits])
-    exact = np.array([antiderivative(b) - antiderivative(a) for a, b in limits])
-    exact = exact[:, None, None] * np.ones(gpts)
+        result = np.array(
+            [integrate_slice(array, gpts, a, b, depth) for a, b in limits]
+        )
+        exact = np.array([antiderivative(b) - antiderivative(a) for a, b in limits])
+        exact = exact[:, None, None] * np.ones(gpts)
 
-    scale = np.abs(exact).max()
-    atol = (q * dz) ** 2 / 12 * scale + 2 * dz**2 / 8 * q
-    np.testing.assert_allclose(result, exact, rtol=0, atol=atol)
+        scale = np.abs(exact).max()
+        atol = (q * dz) ** 2 / 12 * scale + 2 * dz**2 / 8 * q
+        np.testing.assert_allclose(result, exact, rtol=0, atol=atol, err_msg=message)
 
-    # With every limit on a plane the trapezoidal rule integrates the one harmonic
-    # to (q dz / 2) cot(q dz / 2) of its integral, without a shift.
-    planes = np.array(limits) / dz
-    if np.allclose(planes, np.rint(planes), rtol=0, atol=1e-9):
-        quadrature = (q * dz / 2) / np.tan(q * dz / 2)
-        np.testing.assert_allclose(result, quadrature * exact, rtol=0, atol=1e-12)
+        # With every limit on a plane the trapezoidal rule integrates the one
+        # harmonic to (q dz / 2) cot(q dz / 2) of its integral, without a shift.
+        planes = np.array(limits) / dz
+        if np.allclose(planes, np.rint(planes), rtol=0, atol=1e-9):
+            quadrature = (q * dz / 2) / np.tan(q * dz / 2)
+            np.testing.assert_allclose(
+                result, quadrature * exact, rtol=0, atol=1e-12, err_msg=message
+            )
 
 
-@pytest.mark.parametrize("slice_thickness", SLICE_THICKNESSES)
-def test_slices_of_the_valence_potential_add_up_to_the_whole_cell(slice_thickness):
-    limits, depth = _slice_limits(slice_thickness)
+def test_slices_of_the_valence_potential_add_up_to_the_whole_cell():
     gpts = (8, 6)
     array = np.random.default_rng(0).normal(size=gpts + (NZ,))
+    for slice_thickness in SLICE_THICKNESSES:
+        limits, depth = _slice_limits(slice_thickness)
+        slices = [integrate_slice(array, gpts, a, b, depth) for a, b in limits]
 
-    slices = [integrate_slice(array, gpts, a, b, depth) for a, b in limits]
-
-    assert all(np.isfinite(s).all() for s in slices)
-    whole = array.sum(-1) * depth / NZ
-    np.testing.assert_allclose(
-        np.sum(slices, 0), whole, rtol=0, atol=1e-12 * np.abs(whole).max()
-    )
+        assert all(np.isfinite(s).all() for s in slices), slice_thickness
+        whole = array.sum(-1) * depth / NZ
+        np.testing.assert_allclose(
+            np.sum(slices, 0),
+            whole,
+            rtol=0,
+            atol=1e-12 * np.abs(whole).max(),
+            err_msg=f"slice_thickness={slice_thickness}",
+        )
 
 
 def test_a_slice_thinner_than_a_plane_gets_its_part_of_the_plane():
@@ -196,12 +205,8 @@ def test_a_limit_splits_the_plane_whose_heights_it_lies_in(limit):
 @pytest.mark.parametrize(
     "reps", [(1, 1, 1), (2, 3, 1), (3, 1, 2), (1, 2, 3), (2, 1, 5)]
 )
-@pytest.mark.parametrize("slice_thickness", [0.1, 0.3, 0.4, 0.7, 1.1])
-@pytest.mark.parametrize("multiple", [True, False])
 @pytest.mark.parametrize("strided", [False, True])
-def test_integrate_slice_of_one_period_equals_that_of_the_repeated_grid(
-    reps, slice_thickness, multiple, strided
-):
+def test_integrate_slice_of_one_period_equals_that_of_the_repeated_grid(reps, strided):
     # One period of 6 x 5 x 7 points, so the three axes differ, with a plane
     # spacing of 0.1 A along the last axis.
     array = np.random.default_rng(0).normal(size=(6, 5, 7))
@@ -210,29 +215,38 @@ def test_integrate_slice_of_one_period_equals_that_of_the_repeated_grid(
         # the first axis of the calculator's grid.
         array = np.moveaxis(array, (1, 2), (0, 1))
     shape = array.shape
-    gpts = (shape[0] * reps[0], shape[1] * reps[1])
-    if not multiple:
-        gpts = (gpts[0] + 3, gpts[1] - 1)
     dz = 0.1
     length = shape[2] * reps[2] * dz
     atoms = Atoms("C", positions=[(0.1, 0.1, 0.1)], cell=(1.0, 1.0, length), pbc=True)
-    potential = Potential(atoms, sampling=0.5, slice_thickness=slice_thickness)
-    limits = list(potential.get_sliced_atoms().slice_limits)
-    # Slices from 1.5 planes below to 1.5 planes above each face between two
-    # periods take planes from both; the slice limits often land on the faces.
-    faces = [k * shape[2] * dz for k in range(1, reps[2])]
-    limits += [(z - 1.5 * dz, z + 1.5 * dz) for z in faces]
-    # A slice from inside the first period to inside the last holds the end of a
-    # period, whole periods and the start of a period.
-    limits.append((2.5 * dz, length - 1.5 * dz))
     repeated = np.tile(array, reps)
-
-    for a, b in limits:
-        expected = integrate_slice(repeated, gpts, a, b, potential.thickness)
-        result = integrate_slice(array, gpts, a, b, potential.thickness, reps)
-        np.testing.assert_allclose(
-            result, expected, rtol=0, atol=1e-13 * np.abs(repeated).max()
-        )
+    # The slice thickness only moves the limits, and whether gpts is a multiple
+    # of the repeated grid only changes the Fourier crop after the planes are
+    # summed; each case takes milliseconds, so they are looped over here.
+    for slice_thickness in (0.1, 0.3, 0.4, 0.7, 1.1):
+        potential = Potential(atoms, sampling=0.5, slice_thickness=slice_thickness)
+        limits = list(potential.get_sliced_atoms().slice_limits)
+        # Slices from 1.5 planes below to 1.5 planes above each face between two
+        # periods take planes from both; the slice limits often land on the
+        # faces.
+        faces = [k * shape[2] * dz for k in range(1, reps[2])]
+        limits += [(z - 1.5 * dz, z + 1.5 * dz) for z in faces]
+        # A slice from inside the first period to inside the last holds the end
+        # of a period, whole periods and the start of a period.
+        limits.append((2.5 * dz, length - 1.5 * dz))
+        for multiple in (True, False):
+            gpts = (shape[0] * reps[0], shape[1] * reps[1])
+            if not multiple:
+                gpts = (gpts[0] + 3, gpts[1] - 1)
+            for a, b in limits:
+                expected = integrate_slice(repeated, gpts, a, b, potential.thickness)
+                result = integrate_slice(array, gpts, a, b, potential.thickness, reps)
+                np.testing.assert_allclose(
+                    result,
+                    expected,
+                    rtol=0,
+                    atol=1e-13 * np.abs(repeated).max(),
+                    err_msg=f"{slice_thickness=}, {multiple=}, slice {a}:{b}",
+                )
 
 
 @pytest.fixture(scope="module")
@@ -257,66 +271,76 @@ def double_precision_numpy_fft():
 needs_gpaw = pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
 
 
+# The GPAW tests below build the one-slice (or one-cell) reference once and
+# loop over the slicings compared with it: a test ID per slicing rebuilt the
+# reference every time, and the module-scoped calculator fixture is solved
+# again in every xdist worker that runs one of them.
+
+
 @needs_gpaw
-@pytest.mark.parametrize("slice_thickness", SLICE_THICKNESSES)
 def test_gpaw_potential_slices_add_up_to_the_projection(
-    calculator, double_precision_numpy_fft, slice_thickness
+    calculator, double_precision_numpy_fft
 ):
     gpts = (32, 28)
     whole = GPAWPotential(calculator, gpts=gpts, slice_thickness=3.6).build(lazy=False)
-    sliced = GPAWPotential(
-        calculator, gpts=gpts, slice_thickness=slice_thickness
-    ).build(lazy=False)
+    for slice_thickness in SLICE_THICKNESSES:
+        sliced = GPAWPotential(
+            calculator, gpts=gpts, slice_thickness=slice_thickness
+        ).build(lazy=False)
 
-    assert np.isfinite(sliced.array).all()
-    # The slices add up to the one-slice projection to the accuracy of the
-    # per-atom core corrections (6.6e-7 of the maximum).
-    error = np.abs(sliced.array.sum(0) - whole.array[0]).max()
-    assert error < 1e-5 * np.abs(whole.array).max()
+        assert np.isfinite(sliced.array).all(), slice_thickness
+        # The slices add up to the one-slice projection to the accuracy of the
+        # per-atom core corrections (6.6e-7 of the maximum).
+        error = np.abs(sliced.array.sum(0) - whole.array[0]).max()
+        assert error < 1e-5 * np.abs(whole.array).max(), (slice_thickness, error)
 
 
 @needs_gpaw
 @pytest.mark.parametrize(
     "plane, gpts, length", [("xz", (32, 36), 2.8), ("yz", (28, 36), 3.2)]
 )
-@pytest.mark.parametrize("slice_thickness", [0.1, 0.35, 0.4, 0.7, 0.8])
 def test_gpaw_potential_slices_add_up_to_the_projection_in_other_planes(
-    calculator, double_precision_numpy_fft, plane, gpts, length, slice_thickness
+    calculator, double_precision_numpy_fft, plane, gpts, length
 ):
     whole = GPAWPotential(
         calculator, gpts=gpts, slice_thickness=length, plane=plane
     ).build(lazy=False)
-    sliced = GPAWPotential(
-        calculator, gpts=gpts, slice_thickness=slice_thickness, plane=plane
-    ).build(lazy=False)
+    for slice_thickness in (0.1, 0.35, 0.4, 0.7, 0.8):
+        sliced = GPAWPotential(
+            calculator, gpts=gpts, slice_thickness=slice_thickness, plane=plane
+        ).build(lazy=False)
 
-    assert np.isfinite(sliced.array).all()
-    error = np.abs(sliced.array.sum(0) - whole.array[0]).max()
-    assert error < 1e-5 * np.abs(whole.array).max()
+        assert np.isfinite(sliced.array).all(), slice_thickness
+        error = np.abs(sliced.array.sum(0) - whole.array[0]).max()
+        assert error < 1e-5 * np.abs(whole.array).max(), (slice_thickness, error)
 
 
 @needs_gpaw
-@pytest.mark.parametrize("reps", [(1, 1, 2), (2, 3, 2)])
 @pytest.mark.parametrize("slice_thickness", [0.1, 0.3, 0.4, 0.6])
 def test_repeated_gpaw_potential_in_thin_slices_is_the_one_cell_potential_tiled(
-    calculator, double_precision_numpy_fft, reps, slice_thickness
+    calculator, double_precision_numpy_fft, slice_thickness
 ):
     gpts = (32, 28)
     unit = GPAWPotential(calculator, gpts=gpts, slice_thickness=slice_thickness).build(
         lazy=False
     )
-    repeated = GPAWPotential(
-        calculator,
-        gpts=(gpts[0] * reps[0], gpts[1] * reps[1]),
-        slice_thickness=slice_thickness,
-        repetitions=reps,
-    ).build(lazy=False)
+    for reps in [(1, 1, 2), (2, 3, 2)]:
+        repeated = GPAWPotential(
+            calculator,
+            gpts=(gpts[0] * reps[0], gpts[1] * reps[1]),
+            slice_thickness=slice_thickness,
+            repetitions=reps,
+        ).build(lazy=False)
 
-    tiled = np.tile(unit.array, (reps[2], reps[0], reps[1]))
-    assert repeated.array.shape == tiled.shape
-    np.testing.assert_allclose(
-        repeated.array, tiled, rtol=0, atol=1e-5 * np.abs(tiled).max()
-    )
+        tiled = np.tile(unit.array, (reps[2], reps[0], reps[1]))
+        assert repeated.array.shape == tiled.shape, reps
+        np.testing.assert_allclose(
+            repeated.array,
+            tiled,
+            rtol=0,
+            atol=1e-5 * np.abs(tiled).max(),
+            err_msg=f"repetitions={reps}",
+        )
 
 
 def _converged_calculator(atoms):
@@ -346,15 +370,13 @@ def test_gpaw_potential_in_plane_xz_is_that_of_the_calculation_rotated_by_hand(
     )
     kwargs = dict(gpts=(32, 36), slice_thickness=0.7)
 
-    in_plane = GPAWPotential(
-        _converged_calculator(atoms), plane="xz", **kwargs
-    ).build(lazy=False)
+    in_plane = GPAWPotential(_converged_calculator(atoms), plane="xz", **kwargs).build(
+        lazy=False
+    )
     rotated = GPAWPotential(
         _converged_calculator(rotated_by_hand(atoms, "xz")), **kwargs
     ).build(lazy=False)
 
     assert in_plane.array.shape == rotated.array.shape
     scale = np.abs(rotated.array).max()
-    np.testing.assert_allclose(
-        in_plane.array, rotated.array, rtol=0, atol=1e-4 * scale
-    )
+    np.testing.assert_allclose(in_plane.array, rotated.array, rtol=0, atol=1e-4 * scale)

@@ -6,7 +6,7 @@ import types
 import warnings
 from fractions import Fraction
 
-import ase
+import ase  # noqa: F401 (the tests PR #352 adds use it)
 import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
@@ -17,7 +17,6 @@ import strategies as abtem_st
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
-    array_is_close,
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
@@ -37,7 +36,6 @@ from abtem.measurements import (
     MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
-    ReciprocalSpaceLineProfiles,
     _apply_convolve_2d_on_axes,
     _gaussian_kernel_2d,
     _gaussian_kernels_1d,
@@ -82,14 +80,15 @@ def test_scanned_measurement_type():
         ensemble_axes_metadata=ensemble_axes_metadata,
         metadata={"energy": 100e3},
     )
-
-    # with pytest.raises(RuntimeError):
-    #    measurement.integrate_radial(inner=0, outer=10)
+    # Scan axes ahead of another ensemble axis still become the image axes.
+    images = measurement.integrate_radial(inner=0, outer=10)
+    assert isinstance(images, Images)
+    assert images.shape == (10, 10, 10)
+    assert isinstance(images.ensemble_axes_metadata[0], OrdinalAxis)
 
 
 @settings(max_examples=5)
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["__add__", "__sub__", "__mul__", "__truediv__"])
 @lazy_params
 @devices
 @pytest.mark.parametrize(
@@ -101,7 +100,10 @@ def test_scanned_measurement_type():
         abtem_st.polar_measurements,
     ],
 )
-def test_add_subtract(data, measurement, method, lazy, device):
+def test_add_subtract(data, measurement, lazy, device):
+    # Every operator goes through ArrayObject._arithmetic, so the operators are
+    # looped here; the measurement class decides _copy_kwargs and the
+    # compatibility check.
     measurement = data.draw(measurement(lazy=lazy, device=device))
     # A second operand distinct from the first, b = 2a + 1 (>= 1, so safe to
     # divide by), so that no two of +, -, *, / can give the same result.
@@ -113,30 +115,45 @@ def test_add_subtract(data, measurement, method, lazy, device):
     )
     # compute() replaces a lazy object's array in place, so take the oracle
     # values from copies: computing the operands themselves would make the
-    # operation below run eagerly even when lazy=True.
+    # operations below run eagerly even when lazy=True.
     a = asnumpy(measurement.copy().compute().array)
     b = asnumpy(other.copy().compute().array)
 
-    new_measurement = getattr(measurement, method)(other)
-    assert new_measurement.array is not measurement.array
-    assert new_measurement.is_lazy == lazy
+    for name in ("add", "sub", "mul", "truediv"):
+        new_measurement = getattr(measurement, f"__{name}__")(other)
+        assert new_measurement.array is not measurement.array, name
+        assert new_measurement.is_lazy == lazy, name
 
-    # Oracle: the same elementwise operation on the plain numpy arrays.
-    expected = getattr(np.asarray(a, dtype=np.float64), method)(b)
-    np.testing.assert_allclose(
-        asnumpy(new_measurement.compute().array), expected, rtol=1e-6
-    )
-    # Not in place: the left operand is left untouched.
-    np.testing.assert_array_equal(asnumpy(measurement.compute().array), a)
+        # Oracle: the same elementwise operation on the plain numpy arrays.
+        expected = getattr(operator, name)(np.asarray(a, dtype=np.float64), b)
+        np.testing.assert_allclose(
+            asnumpy(new_measurement.compute().array), expected, rtol=1e-6, err_msg=name
+        )
+        # Not in place: the left operand is left untouched.
+        np.testing.assert_array_equal(
+            asnumpy(measurement.copy().compute().array), a, err_msg=name
+        )
+
+        # In place: an eager measurement is updated in its own array, and a lazy
+        # one is refused rather than silently replaced by a new lazy object.
+        target = measurement.copy()
+        if lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(target, f"__i{name}__")(other)
+            continue
+        result = getattr(target, f"__i{name}__")(other)
+        assert result.array is target.array, name
+        np.testing.assert_allclose(
+            asnumpy(target.array), expected, rtol=1e-6, err_msg=name
+        )
 
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
 @pytest.mark.parametrize(
     "scalar_type", ["python", "numpy_float64", "numpy_float32", "0d_array"]
 )
-def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
+def test_reflected_arithmetic_with_a_scalar(scalar_type, lazy, device):
     # Oracle: the same operation with the scalar on the left of the plain array.
     # The array is not symmetric under any of the operations, so a reflected
     # operation computed in the forward order (`2 / m` as `m / 2`) fails.
@@ -153,17 +170,19 @@ def test_reflected_arithmetic_with_a_scalar(scalar_type, op, lazy, device):
         da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
     ).copy_to_device(device)
 
-    result = getattr(operator, op)(scalar, measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(scalar, measurement)
 
-    assert isinstance(result, Images)
-    assert result.is_lazy == lazy
-    expected = getattr(operator, op)(host_scalar, array)
-    np.testing.assert_allclose(
-        asnumpy(result.compute().array),
-        expected,
-        rtol=1e-6,
-        atol=1e-6 * np.abs(expected).max(),
-    )
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        expected = getattr(operator, op)(host_scalar, array)
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @devices
@@ -186,19 +205,18 @@ def test_numpy_scalar_on_the_left_of_a_measurement_without_base_axes(device):
         np.testing.assert_allclose(asnumpy(result.array), op(2.0, array), rtol=1e-6)
 
 
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
-def test_unsupported_left_operand_raises_type_error(op):
+def test_unsupported_left_operand_raises_type_error():
     # A reflected operator declines an operand it does not support, so Python
     # raises its own TypeError rather than the measurement raising another error.
     measurement = Images(np.ones((2, 3)), sampling=0.1)
-    with pytest.raises(TypeError, match="unsupported operand"):
-        getattr(operator, op)(object(), measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        with pytest.raises(TypeError, match="unsupported operand"):
+            getattr(operator, op)(object(), measurement)
 
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv", "pow"])
-def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
+def test_dask_array_on_the_left_of_a_measurement(lazy, device):
     # Oracle: the same operation on the plain arrays. The two operands differ in
     # every element, so an operation computed in the forward order fails for
     # sub, truediv and pow. The result is lazy whenever either operand is.
@@ -209,16 +227,23 @@ def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
     ).copy_to_device(device)
     dask_left = copy_to_device(da.from_array(left, chunks=(1, 3)), device)
 
-    result = getattr(operator, op)(dask_left, measurement)
+    for op in ("add", "sub", "mul", "truediv", "pow"):
+        result = getattr(operator, op)(dask_left, measurement)
 
-    assert isinstance(result, Images)
-    assert result.is_lazy
-    computed = result.compute().array
-    assert_array_matches_device(computed, device)
-    expected = getattr(operator, op)(left.astype(np.float64), array.astype(np.float64))
-    np.testing.assert_allclose(
-        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
-    )
+        assert isinstance(result, Images), op
+        assert result.is_lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        expected = getattr(operator, op)(
+            left.astype(np.float64), array.astype(np.float64)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @lazy_params
@@ -251,9 +276,7 @@ def test_measurement_as_a_map_blocks_keyword_argument():
 
 @lazy_params
 @devices
-@pytest.mark.parametrize("reflected", [False, True])
-@pytest.mark.parametrize("in_place", [False, True])
-@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize("form", ["forward", "reflected", "in_place"])
 @pytest.mark.parametrize(
     "operand_type",
     [
@@ -264,17 +287,14 @@ def test_measurement_as_a_map_blocks_keyword_argument():
         "numpy_float64_array",
     ],
 )
-def test_arithmetic_with_a_numpy_or_device_operand(
-    operand_type, op, in_place, reflected, lazy, device
-):
+def test_arithmetic_with_a_numpy_or_device_operand(operand_type, form, lazy, device):
     # Oracle: the same operation on the plain arrays in double precision. NumPy
     # promotes a single-precision measurement to double with any of these
     # operands; the torch backend holds single precision only and must give the
     # single-precision result instead, eager and lazy alike. An in-place
     # operation keeps single precision on every backend, and refuses a lazy
     # measurement rather than silently returning a new (lazy) object.
-    if in_place and reflected:
-        pytest.skip("an in-place operation has the measurement on the left")
+    in_place, reflected = form == "in_place", form == "reflected"
     xp = get_array_module(device)
     host_operand = {
         "numpy_float64": np.float64(-0.5),
@@ -288,39 +308,58 @@ def test_arithmetic_with_a_numpy_or_device_operand(
         xp.asarray(host_operand) if operand_type == "0d_device_array" else host_operand
     )
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
-    measurement = Images(
-        da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
-        sampling=(0.1, 0.2),
-    ).copy_to_device(device)
 
-    if in_place and lazy:
-        with pytest.raises(RuntimeError, match="inplace"):
-            getattr(operator, "i" + op)(measurement, operand)
-        return
+    for op in ("add", "sub", "mul", "truediv"):
+        # A fresh measurement for each operator: an in-place one changes it.
+        measurement = Images(
+            da.from_array(array, chunks=(1, 3)) if lazy else array.copy(),
+            sampling=(0.1, 0.2),
+        ).copy_to_device(device)
 
-    operands = (operand, measurement) if reflected else (measurement, operand)
-    result = getattr(operator, ("i" if in_place else "") + op)(*operands)
+        if in_place and lazy:
+            with pytest.raises(RuntimeError, match="inplace"):
+                getattr(operator, "i" + op)(measurement, operand)
+            continue
 
-    assert isinstance(result, Images)
-    assert result.is_lazy == lazy
-    computed = result.compute().array
-    assert_array_matches_device(computed, device)
-    if in_place or device == "mps":
-        assert asnumpy(computed).dtype == get_dtype()
-    host_operands = (array.astype(np.float64), np.asarray(host_operand, np.float64))
-    expected = getattr(operator, op)(
-        *(host_operands[::-1] if reflected else host_operands)
-    )
-    np.testing.assert_allclose(
-        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
-    )
+        operands = (operand, measurement) if reflected else (measurement, operand)
+        result = getattr(operator, ("i" if in_place else "") + op)(*operands)
+
+        assert isinstance(result, Images), op
+        assert result.is_lazy == lazy, op
+        computed = result.compute().array
+        assert_array_matches_device(computed, device)
+        if in_place or device == "mps":
+            assert asnumpy(computed).dtype == get_dtype(), op
+        host_operands = (
+            array.astype(np.float64),
+            np.asarray(host_operand, np.float64),
+        )
+        expected = getattr(operator, op)(
+            *(host_operands[::-1] if reflected else host_operands)
+        )
+        np.testing.assert_allclose(
+            asnumpy(computed),
+            expected,
+            rtol=1e-6,
+            atol=1e-6 * np.abs(expected).max(),
+            err_msg=op,
+        )
 
 
 @requires_gpu
 @lazy_params
-@pytest.mark.parametrize("reflected", [False, True])
 @pytest.mark.parametrize(
-    "operand_type", ["array", "dask_array", "measurement", "lazy_measurement"]
+    "operand_type, reflected",
+    [
+        ("array", False),
+        ("array", True),
+        ("dask_array", False),
+        ("dask_array", True),
+        # The reflected pair of two measurements is the forward pair with the
+        # devices swapped, which the device parameter covers.
+        ("measurement", False),
+        ("lazy_measurement", False),
+    ],
 )
 @pytest.mark.parametrize("device", ["gpu", "cpu"])
 def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
@@ -329,8 +368,6 @@ def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
     # The operand is on the other device. CuPy refuses NumPy arrays, so the side
     # on the host is moved to the device: the pair gives the same GPU result in
     # either order, eager or lazy.
-    if reflected and operand_type.endswith("measurement"):
-        pytest.skip("the reflected pair is the forward pair with devices swapped")
     other_device = "cpu" if device == "gpu" else "gpu"
     array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
     measurement = Images(
@@ -360,57 +397,56 @@ def test_arithmetic_between_cpu_and_gpu_data_gives_the_gpu_result(
     np.testing.assert_array_equal(asnumpy(computed), 2 * array)
 
 
-@settings(max_examples=5)
 @given(data=st.data())
-@pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
 @devices
-@pytest.mark.parametrize(
-    "measurement",
-    [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
-    ],
-)
-def test_inplace_add_subtract(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=False, device=device))
-    new_measurement = getattr(measurement, method)(measurement.copy())
-    assert new_measurement.array is measurement.array
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("method", ["sum", "mean", "std"])
-@devices
-@pytest.mark.parametrize(
-    "measurement",
-    [
-        abtem_st.images,
-        abtem_st.line_profiles,
-        abtem_st.diffraction_patterns,
-        abtem_st.polar_measurements,
-    ],
-)
-def test_reduce(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=True, device=device))
-
-    axes_indices = st.integers(
-        min_value=0, max_value=max(len(measurement.ensemble_shape) - 1, 0)
+def test_reduce(data, device):
+    # The measurement is drawn lazy and reduced both as it is and after computing
+    # it, so that both branches of _reduction run. Oracle: the NumPy reduction of
+    # the computed array in double precision.
+    measurement = data.draw(
+        st.one_of(
+            *(
+                strategy(lazy=True, device=device)
+                for strategy in (
+                    abtem_st.images,
+                    abtem_st.line_profiles,
+                    abtem_st.diffraction_patterns,
+                    abtem_st.polar_measurements,
+                )
+            )
+        )
     )
-    axes_indices = st.lists(
-        elements=axes_indices,
-        min_size=0,
-        max_size=len(measurement.ensemble_shape),
-        unique=True,
+    num_ensemble_axes = len(measurement.ensemble_shape)
+    axes = tuple(
+        data.draw(
+            st.lists(
+                st.integers(min_value=0, max_value=max(num_ensemble_axes - 1, 0)),
+                max_size=num_ensemble_axes,
+                unique=True,
+            )
+        )
     )
-    axes_indices = data.draw(axes_indices)
 
-    axes = tuple(axes_indices)
-    num_lost_dims = len(axes)
-
-    new_measurement = getattr(measurement.compute(), method)(axes)
-
-    assert len(new_measurement.shape) == len(measurement.shape) - num_lost_dims
+    eager = measurement.copy().compute()
+    array = np.asarray(asnumpy(eager.array), dtype=np.float64)
+    for method in ("sum", "mean", "std"):
+        # The data lie in [0, 1), so 1e-5 is far below any wrong-axis reduction.
+        expected = getattr(np, method)(array, axis=axes)
+        for source in (measurement, eager):
+            case = f"{method}, lazy={source.is_lazy}"
+            reduced = getattr(source, method)(axes)
+            assert type(reduced) is type(measurement), case
+            assert reduced.is_lazy == source.is_lazy, case
+            assert len(reduced.ensemble_axes_metadata) == num_ensemble_axes - len(
+                axes
+            ), case
+            np.testing.assert_allclose(
+                asnumpy(reduced.compute().array),
+                expected,
+                rtol=1e-5,
+                atol=1e-5,
+                err_msg=case,
+            )
 
 
 @composite
@@ -662,20 +698,6 @@ def test_images_coordinates_spaced_by_sampling():
     assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
 
 
-def _delta_probe_image(gpts=64, lazy=False):
-    """A throwaway probe-intensity image for the filter tests below -- only
-    a non-trivial 2D image is needed, not any particular physics."""
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=gpts)
-    return wave.build((0, 0), lazy=lazy).intensity()
-
-
-def test_lorentzian_filter_changes_image():
-    """Lorentzian filter with a non-trivial HWHM should change the image."""
-    images = _delta_probe_image()
-    filtered = images.lorentzian_filter(0.5)
-    assert not np.allclose(filtered.array, images.array)
-
-
 @pytest.mark.parametrize("precision", ["float32", "float64"])
 def test_lorentzian_filter_respects_precision_config(precision):
     """The Lorentzian family of filters must honour ``abtem.config['precision']``.
@@ -750,13 +772,6 @@ def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwarg
         )
 
 
-def test_voigtian_filter_changes_image():
-    """Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert not np.allclose(filtered.array, images.array)
-
-
 def _unit_delta_image(shape=(64, 96), device="cpu"):
     """A unit delta on an anisotropically sampled grid, so each filter's
     output is its own (normalized) impulse response with peak << 1 but
@@ -807,13 +822,6 @@ def test_voigtian_filter_pure_lorentzian_limit(device):
     out = _unit_delta_image(device=device).voigtian_filter(0.0, _LIMIT_HW)
     expected = _reference_impulse_response(_analytic_lorentzian_kernel(_LIMIT_HW_PIXELS))
     _assert_matches_reference(out.array, expected)
-
-
-def test_pseudo_voigtian_filter_changes_image():
-    """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
-    images = _delta_probe_image()
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert not np.allclose(filtered.array, images.array)
 
 
 @pytest.mark.parametrize("eta", [0.0, 0.3, 1.0])
@@ -1054,25 +1062,24 @@ def _step_bin_masks(scaled_r_squared, scale, num_bins, radial_sampling=1, width=
     return masks
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("fftshift", [True, False])
 @pytest.mark.parametrize("gpts", [(48, 36), (37, 50)])
-def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, precision):
+def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift):
     """With the default radial sampling and width, bin k holds the pixels with
     (k - 1/2) <= sqrt(i**2 + j**2) < (k + 1/2) in units of the angular sampling,
     which no pixel radius sits on, so the bins hold the same pixels at every
-    precision and every pattern size."""
+    pattern size. The bins are chosen on the host in double precision whatever
+    the configured precision, which only sets the dtype of the data averaged
+    (see ..._four_to_three_sampling_ratio_is_independent_of_precision)."""
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data,
-            sampling=1 / 16.29,
-            fftshift=fftshift,
-            metadata={"energy": 200e3},
-        )
-        profiles = patterns.azimuthal_average()
+    patterns = DiffractionPatterns(
+        data,
+        sampling=1 / 16.29,
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
 
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
@@ -1084,12 +1091,9 @@ def test_azimuthal_average_step_bins_partition_the_pattern(gpts, fftshift, preci
     inside = r_squared < math.ceil((n - Fraction(1, 2)) ** 2)
     assert np.array_equal(np.sum(masks, axis=0), inside)
 
-    expected = [data[mask].astype(np.float64).mean() for mask in masks]
-    rtol = 1e-6 if precision == "float32" else 1e-12
+    expected = [data[mask].mean() for mask in masks]
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
 @pytest.mark.parametrize(
@@ -1192,28 +1196,25 @@ def test_azimuthal_average_with_a_four_to_three_sampling_ratio_is_independent_of
     )
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize("fftshift", [True, False])
 def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_rule(
-    fftshift, precision
+    fftshift,
 ):
     """With sampling (1 / (3 a), 1 / (2 a)) the pixels at frequency (0, +-1) have
     the radius 3 / 2 in units of the finer sampling, exactly on the edge between
     bins 1 and 2, but the ratio of the angular samplings is not exactly 3 / 2 in
-    floating point. They belong to bin 2 at every precision."""
+    floating point. They belong to bin 2."""
     a = 5.431
     gpts = (48, 32)
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data,
-            sampling=(1 / (3 * a), 1 / (2 * a)),
-            fftshift=fftshift,
-            metadata={"energy": 200e3},
-        )
-        profiles = patterns.azimuthal_average()
+    patterns = DiffractionPatterns(
+        data,
+        sampling=(1 / (3 * a), 1 / (2 * a)),
+        fftshift=fftshift,
+        metadata={"energy": 200e3},
+    )
+    profiles = patterns.azimuthal_average()
 
     i = _integer_frequencies(gpts[0], fftshift)[:, None]
     j = _integer_frequencies(gpts[1], fftshift)[None, :]
@@ -1222,34 +1223,28 @@ def test_azimuthal_average_with_a_three_to_two_sampling_ratio_follows_the_bin_ru
     assert -i.min() == n and 3 * -j.min() == 2 * n
     masks = _step_bin_masks(4 * i**2 + 9 * j**2, 4, n)
 
-    expected = [data[mask].astype(np.float64).mean() for mask in masks]
-    rtol = 1e-6 if precision == "float32" else 1e-12
+    expected = [data[mask].mean() for mask in masks]
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
-@pytest.mark.parametrize("precision", ["float32", "float64"])
 @pytest.mark.parametrize(
     "gpts, radial_sampling, width",
     [((30, 30), "0.2", "0.4"), ((25, 24), "0.1", "0.2")],
 )
 def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
-    gpts, radial_sampling, width, precision
+    gpts, radial_sampling, width
 ):
     """Bin edges at decimal multiples of the sampling, such as 2.0 = 20 * 0.1,
     are exact: 1.9 / 0.1 is 18.999999999999996 in floating point."""
     data = np.random.default_rng(0).random(gpts) + 1.0
 
-    with abtem.config.set({"precision": precision}):
-        data = data.astype(precision)
-        patterns = DiffractionPatterns(
-            data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
-        )
-        profiles = patterns.azimuthal_average(
-            radial_sampling=float(radial_sampling), width=float(width)
-        )
+    patterns = DiffractionPatterns(
+        data, sampling=1 / 16.29, fftshift=True, metadata={"energy": 200e3}
+    )
+    profiles = patterns.azimuthal_average(
+        radial_sampling=float(radial_sampling), width=float(width)
+    )
 
     i = _integer_frequencies(gpts[0], True)[:, None]
     j = _integer_frequencies(gpts[1], True)[None, :]
@@ -1265,17 +1260,16 @@ def test_azimuthal_average_with_decimal_steps_follows_the_bin_rule(
         data[mask].astype(np.float64).mean() if mask.any() else 0.0 for mask in masks
     ]
 
-    rtol = 1e-6 if precision == "float32" else 1e-12
     assert profiles.shape == (n,)
-    np.testing.assert_allclose(
-        profiles.array.astype(np.float64), expected, rtol=rtol, atol=0
-    )
+    np.testing.assert_allclose(profiles.array, expected, rtol=1e-12, atol=0)
 
 
+@pytest.mark.slow
 def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_bin():
     """The pixel at frequency (2116, 46) has the radius 2116.49994, in the bin
     centered at 2116 and half a unit from the next edge, which float32 radii of
-    that size cannot resolve."""
+    that size cannot resolve. Slow (a 4240 x 96 pattern in 2118 bins): it guards
+    against a return to radii in the configured precision."""
     data = np.zeros((4240, 96), dtype=np.float32)
     data[2120 + 2116, 48 + 46] = 1.0
     with abtem.config.set({"precision": "float32"}):
@@ -1288,16 +1282,6 @@ def test_azimuthal_average_in_float32_keeps_pixels_of_a_large_pattern_in_their_b
 
     assert profiles.shape == (2118,)
     assert np.flatnonzero(profiles.array).tolist() == [2116]
-
-
-def test_filter_boundary_modes():
-    """All four filter methods accept all three boundary modes without error."""
-    images = _delta_probe_image(gpts=32)
-    for boundary in ("periodic", "reflect", "constant"):
-        images.gaussian_filter(0.3, boundary=boundary).array
-        images.lorentzian_filter(0.3, boundary=boundary).array
-        images.voigtian_filter(0.3, 0.3, boundary=boundary).array
-        images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
 
 
 @requires_gpu
@@ -1417,27 +1401,6 @@ def test_gaussian_source_size_lazy_matches_eager_at_edges():
         .array
     )
     np.testing.assert_allclose(lazy, eager, atol=1e-10)
-
-
-def test_lorentzian_filter_lazy():
-    """Lorentzian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.lorentzian_filter(0.5)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_voigtian_filter_lazy():
-    """Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.voigtian_filter(0.3, 0.3)
-    assert np.isfinite(filtered.array.compute()).all()
-
-
-def test_pseudo_voigtian_filter_lazy():
-    """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
-    images = _delta_probe_image(gpts=32, lazy=True)
-    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
-    assert np.isfinite(filtered.array.compute()).all()
 
 
 # @given(data=st.data())
@@ -1770,7 +1733,6 @@ def _delta_diffraction_patterns(gpts, sampling, fftshift, index, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("units", ["1/Å", "mrad"])
 @pytest.mark.parametrize("fftshift", [True, False])
 @pytest.mark.parametrize(
     "gpts, sampling",
@@ -1782,24 +1744,23 @@ def _delta_diffraction_patterns(gpts, sampling, fftshift, index, device):
         ((32, 33), (0.1, 0.12)),
     ],
 )
-def test_diffraction_patterns_center_of_mass_of_delta(
-    device, units, fftshift, gpts, sampling
-):
+def test_diffraction_patterns_center_of_mass_of_delta(device, fftshift, gpts, sampling):
     # The COM of a single delta is its own position: k = (3 * dkx, -2 * dky). In
     # mrad, alpha = lambda * k * 1e3 (the convention of angular_sampling).
     index = (3, -2)
     measurement = _delta_diffraction_patterns(gpts, sampling, fftshift, index, device)
 
-    expected = index[0] * sampling[0] + 1.0j * index[1] * sampling[1]
-    if units == "mrad":
-        expected = expected * energy2wavelength(100e3) * 1e3
+    for units in ("1/Å", "mrad"):
+        expected = index[0] * sampling[0] + 1.0j * index[1] * sampling[1]
+        if units == "mrad":
+            expected = expected * energy2wavelength(100e3) * 1e3
 
-    com = complex(asnumpy(measurement.center_of_mass(units=units).array))
+        com = complex(asnumpy(measurement.center_of_mass(units=units).array))
 
-    # One nonzero pixel: the only error is float32 rounding of the coordinate
-    # (~6e-8 relative); 1e-6 is ~10 float32 ulps. A one-pixel error is >= 1/3.6
-    # relative.
-    assert com == pytest.approx(expected, rel=1e-6)
+        # One nonzero pixel: the only error is float32 rounding of the coordinate
+        # (~6e-8 relative); 1e-6 is ~10 float32 ulps. A one-pixel error is >= 1/3.6
+        # relative.
+        assert com == pytest.approx(expected, rel=1e-6), units
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -1832,56 +1793,57 @@ def test_diffractogram_of_plane_wave_peaks_at_its_frequency(device, units, gpts)
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("fftshift", [True, False])
-@pytest.mark.parametrize("gpts", [(32, 32), (33, 33), (32, 33)])
-def test_diffraction_patterns_coordinates_match_fftfreq(device, fftshift, gpts):
+def test_diffraction_patterns_coordinates_match_fftfreq(device, fftshift):
     # The frequencies of an n-point DFT with real-space spacing d are
     # np.fft.fftfreq(n, d) in unshifted order, and np.fft.fftshift of that in
     # centred order. A reciprocal sampling dk corresponds to d = 1 / (n * dk).
+    # Even and odd axes place the zero frequency differently.
     sampling = (0.1, 0.12)
-    measurement = DiffractionPatterns(
-        copy_to_device(np.zeros(gpts, dtype=np.float32), device),
-        sampling=sampling,
-        fftshift=fftshift,
-        metadata={"energy": 100e3},
-    )
     wavelength_mrad = energy2wavelength(100e3) * 1e3
-
-    for i in range(2):
-        expected = np.fft.fftfreq(gpts[i], d=1 / (gpts[i] * sampling[i]))
-        if fftshift:
-            expected = np.fft.fftshift(expected)
-
-        # float64 coordinates: 1e-12 is ~1e4 ulps of |k| <= 2 1/Å.
-        np.testing.assert_allclose(
-            measurement.coordinates[i], expected, rtol=0, atol=1e-12
+    for gpts in ((32, 32), (33, 33), (32, 33)):
+        measurement = DiffractionPatterns(
+            copy_to_device(np.zeros(gpts, dtype=np.float32), device),
+            sampling=sampling,
+            fftshift=fftshift,
+            metadata={"energy": 100e3},
         )
-        # Angular coordinates follow the configured precision (float32 by
-        # default, ~6e-8 relative); 1e-6 of a pixel is far below a 1-pixel error.
-        np.testing.assert_allclose(
-            asnumpy(measurement.angular_coordinates[i]),
-            expected * wavelength_mrad,
-            rtol=1e-6,
-            atol=1e-6 * wavelength_mrad * sampling[i],
-        )
+
+        for i in range(2):
+            case = f"gpts={gpts}, axis {i}"
+            expected = np.fft.fftfreq(gpts[i], d=1 / (gpts[i] * sampling[i]))
+            if fftshift:
+                expected = np.fft.fftshift(expected)
+
+            # float64 coordinates: 1e-12 is ~1e4 ulps of |k| <= 2 1/Å.
+            np.testing.assert_allclose(
+                measurement.coordinates[i], expected, rtol=0, atol=1e-12, err_msg=case
+            )
+            # Angular coordinates follow the configured precision (float32 by
+            # default, ~6e-8 relative); 1e-6 of a pixel is far below a 1-pixel
+            # error.
+            np.testing.assert_allclose(
+                asnumpy(measurement.angular_coordinates[i]),
+                expected * wavelength_mrad,
+                rtol=1e-6,
+                atol=1e-6 * wavelength_mrad * sampling[i],
+                err_msg=case,
+            )
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("units", ["1/Å", "mrad"])
-@pytest.mark.parametrize("fftshift", [True, False])
-@pytest.mark.parametrize("gpts", [64, 65])
-@pytest.mark.parametrize("captured_fraction", [1.0, 0.5, 0.1])
-def test_diffraction_patterns_center_of_mass_is_normalized(
-    device, units, fftshift, gpts, captured_fraction
-):
+def test_diffraction_patterns_center_of_mass_is_normalized(device):
     # A center of mass is a normalized (intensity-weighted average) quantity, so
     # scaling the total intensity of a diffraction pattern must not change the
     # computed center of mass. This did not hold before the sum was normalized by
     # the total captured intensity: https://github.com/abTEM/abTEM/discussions/402
+    # Storage order, odd and even grids and units are covered exactly by
+    # test_diffraction_patterns_center_of_mass_of_delta.
     #
     # A Gaussian sampled symmetrically about pixel (n // 2 + shift) has its COM
     # exactly at that pixel, i.e. at k = shift * sampling, provided it is neither
     # truncated nor wrapped: the nearest edge is >= 32 - 10 = 22 px = 7.3 sigma
     # away, where the tail is exp(-7.3**2 / 2) ~ 3e-12.
+    gpts = 64
     sampling = 0.4436
     sigma = 3.0
     shift = (-10, 7)
@@ -1891,39 +1853,75 @@ def test_diffraction_patterns_center_of_mass_is_normalized(
         -((i - gpts // 2 - shift[0]) ** 2 + (j - gpts // 2 - shift[1]) ** 2)
         / (2 * sigma**2)
     )
-    if not fftshift:
-        # Unshifted storage is by definition the ifftshift of centred storage.
-        disk = np.fft.ifftshift(disk)
-    disk = copy_to_device(
-        (disk / disk.sum() * captured_fraction).astype(np.float32), device
-    )
-
-    measurement = DiffractionPatterns(
-        disk, sampling=sampling, fftshift=fftshift, metadata={"energy": 100e3}
-    )
-
-    com = complex(asnumpy(measurement.center_of_mass(units=units).array))
-
     expected = (shift[0] * sampling) + 1.0j * (shift[1] * sampling)
-    if units == "mrad":
-        expected = expected * energy2wavelength(100e3) * 1e3
 
-    # float32 sums over ~4e3 pixels: ~1e-6 relative. A one-pixel error is
-    # 1 / |shift| = 1 / 12.2 ~ 8% relative.
-    assert abs(com - expected) < 1e-4 * abs(expected)
+    for captured_fraction in (1.0, 0.5, 0.1):
+        measurement = DiffractionPatterns(
+            copy_to_device(
+                (disk / disk.sum() * captured_fraction).astype(np.float32), device
+            ),
+            sampling=sampling,
+            fftshift=True,
+            metadata={"energy": 100e3},
+        )
+
+        com = complex(asnumpy(measurement.center_of_mass().array))
+
+        # float32 sums over ~4e3 pixels: ~1e-6 relative. A one-pixel error is
+        # 1 / |shift| = 1 / 12.2 ~ 8% relative.
+        assert abs(com - expected) < 1e-4 * abs(expected), captured_fraction
 
 
-@given(data=st.data())
 @lazy_params
 @devices
-def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
-    measurement = data.draw(
-        abtem_st.diffraction_patterns(
-            lazy=lazy, min_scan_dims=1, device=device, min_base_side=16
-        )
+def test_diffraction_patterns_integrated_center_of_mass(lazy, device):
+    # Patterns whose center of mass at scan position r is the gradient of a
+    # band-limited periodic field phi(r), which the iCOM must give back (up to the
+    # constant that makes each image's minimum zero): the Fourier-space
+    # integration is exact for a field on the DFT grid. Each pattern has unit
+    # total intensity on the zero-frequency pixel and its x and y neighbours,
+    # which carry the weights g_x / dk and g_y / dk. The second member of the
+    # ensemble holds twice the gradient.
+    scan_gpts, scan_sampling, dk = (12, 10), (0.3, 0.25), 0.5
+    extent = [n * d for n, d in zip(scan_gpts, scan_sampling)]
+    x, y = np.meshgrid(
+        *(np.arange(n) * d for n, d in zip(scan_gpts, scan_sampling)), indexing="ij"
     )
-    assume(len(_scan_sampling(measurement)) > 1)
-    measurement.integrated_center_of_mass().compute()
+    u, v = 2 * np.pi * x / extent[0], 2 * np.pi * y / extent[1]
+    phi = 0.1 * np.cos(u + 2 * v) + 0.05 * np.sin(2 * u - v)
+    gx = (-0.1 * np.sin(u + 2 * v) + 0.1 * np.cos(2 * u - v)) * 2 * np.pi / extent[0]
+    gy = (-0.2 * np.sin(u + 2 * v) - 0.05 * np.cos(2 * u - v)) * 2 * np.pi / extent[1]
+
+    array = np.zeros((2,) + scan_gpts + (8, 8))
+    for member, scale in enumerate((1.0, 2.0)):
+        array[member, ..., 5, 4] = scale * gx / dk
+        array[member, ..., 4, 5] = scale * gy / dk
+        array[member, ..., 4, 4] = 1 - scale * (gx + gy) / dk
+    array = array.astype(np.float32)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 6, 5, -1, -1))
+    measurement = DiffractionPatterns(
+        copy_to_device(array, device),
+        sampling=dk,
+        fftshift=True,
+        ensemble_axes_metadata=[
+            OrdinalAxis(values=(0, 1)),
+            ScanAxis(sampling=scan_sampling[0]),
+            ScanAxis(sampling=scan_sampling[1]),
+        ],
+        metadata={"energy": 100e3},
+    )
+
+    icom = measurement.integrated_center_of_mass()
+
+    assert isinstance(icom, Images)
+    assert icom.is_lazy == lazy
+    expected = np.stack([scale * phi - (scale * phi).min() for scale in (1.0, 2.0)])
+    # float32 patterns: ~1e-6 of the field; a field integrated along the wrong
+    # axis or with the wrong sampling is wrong by its own magnitude.
+    np.testing.assert_allclose(
+        asnumpy(icom.compute().array), expected, rtol=0, atol=1e-4 * expected.max()
+    )
 
 
 @pytest.mark.parametrize("chunks", [((2, 1), 16, 20), ((1, 1, 1), 16, 20)])
@@ -1951,8 +1949,33 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
         abtem_st.sensible_floats(min_value=0.0, max_value=min(measurement.max_angles))
     )
     inner = data.draw(abtem_st.sensible_floats(min_value=0.0, max_value=outer))
-    measurement.bandlimit(inner, outer).compute()
-    measurement.block_direct().compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    # Oracle: the scattering angle of each pixel from np.fft.fftfreq (see
+    # test_diffraction_patterns_coordinates_match_fftfreq); bandlimit keeps
+    # inner < alpha < outer and zeroes the rest. Pixels within rounding of an
+    # edge could go either way and are left out of the comparison.
+    wavelength_mrad = energy2wavelength(measurement.metadata["energy"]) * 1e3
+    angles = []
+    for n, dk in zip(measurement.base_shape, measurement.sampling):
+        k = np.fft.fftfreq(n, d=1 / (n * dk))
+        angles.append((np.fft.fftshift(k) if measurement.fftshift else k))
+    alpha = np.hypot(angles[0][:, None], angles[1][None]) * wavelength_mrad
+    keep = (alpha > inner) & (alpha < outer)
+    tolerance = 1e-5 * alpha.max()
+    certain = (np.abs(alpha - inner) > tolerance) & (np.abs(alpha - outer) > tolerance)
+
+    bandlimited = measurement.bandlimit(inner, outer)
+    assert bandlimited.is_lazy == lazy
+    values = asnumpy(bandlimited.compute().array)
+    np.testing.assert_array_equal(
+        values[..., certain], (original * keep)[..., certain]
+    )
+
+    # Without a semiangle_cutoff in the metadata, block_direct zeroes only the
+    # zero-angle pixel.
+    blocked = asnumpy(measurement.block_direct().compute().array)
+    np.testing.assert_array_equal(blocked, original * (alpha > 0))
 
 
 @settings(deadline=None, max_examples=10)
@@ -1966,7 +1989,27 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
         )
     )
     assume(len(_scan_sampling(measurement)) > 1)
-    measurement.gaussian_source_size(sigma).compute()
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+
+    # Oracle: a periodic Gaussian filter over the first two scan axes, with sigma
+    # in units of each axis' own scan sampling, and no smoothing of the other
+    # ensemble axes or within the patterns.
+    sigma_pixels = [0.0] * original.ndim
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+    for i in scan_axes:
+        sigma_pixels[i] = sigma / measurement.ensemble_axes_metadata[i].sampling
+    expected = scipy.ndimage.gaussian_filter(original, sigma_pixels, mode="wrap")
+
+    filtered = measurement.gaussian_source_size(sigma)
+    assert filtered.is_lazy == lazy
+    # float32 data in [0, 1).
+    np.testing.assert_allclose(
+        asnumpy(filtered.compute().array), expected, rtol=0, atol=1e-5
+    )
 
 
 @settings(suppress_health_check=(HealthCheck.data_too_large,))
@@ -1998,10 +2041,64 @@ def test_polar_measurements_integrate(data, lazy, device):
         st.one_of(st.just((azimuthal_inner, azimuthal_outer)), st.none())
     )
 
-    measurement.integrate(
+    # Oracle: the documented rule, as masks over the bins. A bin is included if
+    # its center lies in [lower, upper) of the limits, the azimuth modulo 2 pi.
+    # Draws with a center within rounding of a limit are rejected.
+    original = asnumpy(measurement.copy().compute().array).astype(np.float64)
+    radial_centers = (
+        measurement.radial_offset
+        + (np.arange(measurement.shape[-2]) + 0.5) * measurement.radial_sampling
+    )
+    azimuthal_centers = (
+        measurement.azimuthal_offset
+        + (np.arange(measurement.shape[-1]) + 0.5) * measurement.azimuthal_sampling
+    )
+    for limit in (radial_inner, radial_outer):
+        assume(np.abs(radial_centers - limit).min() > 1e-9 * (1 + abs(limit)))
+    radial_mask = (radial_centers >= radial_inner) & (radial_centers < radial_outer)
+
+    if azimuthal_limits is None or azimuthal_outer - azimuthal_inner >= 2 * np.pi:
+        azimuthal_mask = np.ones(len(azimuthal_centers), dtype=bool)
+    else:
+        offsets = (azimuthal_centers - azimuthal_inner) % (2 * np.pi)
+        span = azimuthal_outer - azimuthal_inner
+        assume(np.abs(offsets - span).min() > 1e-9)
+        assume(np.abs(offsets - 2 * np.pi).min() > 1e-9)
+        azimuthal_mask = offsets < span
+
+    # The (first two) scan axes become the base axes of the result, last.
+    scan_axes = [
+        i
+        for i, axis in enumerate(measurement.ensemble_axes_metadata)
+        if isinstance(axis, ScanAxis)
+    ][:2]
+
+    def assert_matches(result, mask, case):
+        expected = np.moveaxis(
+            (original * mask).sum(axis=(-2, -1)),
+            scan_axes,
+            range(-len(scan_axes), 0),
+        )
+        np.testing.assert_allclose(
+            asnumpy(result.compute().array),
+            expected,
+            rtol=1e-5,
+            atol=1e-5,
+            err_msg=case,
+        )
+
+    radial_selection = radial_mask if radial_limits is not None else True
+    selected = np.outer(radial_selection & np.ones_like(radial_mask), azimuthal_mask)
+    integrated = measurement.integrate(
         radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-    ).compute()
-    measurement.integrate_radial(radial_inner, radial_outer).compute()
+    )
+    assert integrated.is_lazy == lazy
+    assert_matches(integrated, selected, "integrate")
+    assert_matches(
+        measurement.integrate_radial(radial_inner, radial_outer),
+        radial_mask[:, None],
+        "integrate_radial",
+    )
 
     max_region = int(np.prod(tuple(n - 1 for n in measurement.shape[-2:])))
     detector_regions = st.lists(
@@ -2010,24 +2107,50 @@ def test_polar_measurements_integrate(data, lazy, device):
         elements=st.integers(min_value=0, max_value=max_region),
         unique=True,
     )
-
-    measurement.integrate(detector_regions=data.draw(detector_regions)).compute()
+    regions = data.draw(detector_regions)
+    region_mask = np.zeros(measurement.shape[-2:], dtype=bool)
+    region_mask.flat[regions] = True
+    assert_matches(
+        measurement.integrate(detector_regions=regions), region_mask, "regions"
+    )
 
 
 @given(data=st.data())
 @lazy_params
 @devices
 def test_line_profiles_interpolate(data, lazy, device):
+    # Interpolating to twice the points puts every second point on an old grid
+    # node, where the spline reproduces the data, over the same extent. A shift
+    # of the new grid by any fraction of a sample moves these points off the
+    # nodes; the data are random in [0, 1), so 1e-5 is far below that error.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.interpolate().compute()
+    n = measurement.base_shape[0]
+    original = asnumpy(measurement.copy().compute().array)
+
+    interpolated = measurement.interpolate(gpts=2 * n)
+
+    assert interpolated.is_lazy == lazy
+    assert np.isclose(interpolated.extent, measurement.extent)
+    assert np.isclose(interpolated.sampling, measurement.sampling / 2)
+    values = asnumpy(interpolated.compute().array)
+    assert values.shape == original.shape[:-1] + (2 * n,)
+    np.testing.assert_allclose(values[..., ::2], original, rtol=1e-5, atol=1e-5)
 
 
 @given(data=st.data(), reps=st.integers(min_value=1, max_value=3))
 @lazy_params
 @devices
 def test_line_profiles_tile(data, reps, lazy, device):
+    # Oracle: np.tile along the base axis only.
     measurement = data.draw(abtem_st.line_profiles(lazy=lazy, device=device))
-    measurement.tile(reps).compute()
+    original = asnumpy(measurement.copy().compute().array)
+
+    tiled = measurement.tile(reps)
+
+    assert tiled.is_lazy == lazy
+    assert np.isclose(tiled.extent, reps * measurement.extent)
+    expected = np.tile(original, (1,) * (original.ndim - 1) + (reps,))
+    np.testing.assert_array_equal(asnumpy(tiled.compute().array), expected)
 
 
 @pytest.mark.parametrize(
@@ -2054,28 +2177,23 @@ def test_line_profiles_interpolate_to_a_sampling_that_divides_the_extent():
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("endpoint", [False, True])
-def test_interpolate_line_of_zero_length_gives_the_point_value_without_width(
-    endpoint, lazy
-):
+def test_interpolate_line_of_zero_length(lazy):
+    # Without a width, a line of zero length is the value at its point, with or
+    # without the endpoint; there is no direction to average a width across.
     array = np.random.default_rng(0).random((40, 40))
     images = Images(array, sampling=0.1)
     if lazy:
         images = images.ensure_lazy()
 
-    profile = images.interpolate_line(
-        start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
-    )
     expected = scipy.ndimage.map_coordinates(array, [[10.0], [10.0]], order=3)
-    assert profile.shape == (1,)
-    np.testing.assert_allclose(profile.compute().array, expected, rtol=1e-10)
-
-
-@pytest.mark.parametrize("lazy", [False, True])
-def test_interpolate_line_of_zero_length_cannot_be_averaged_over_a_width(lazy):
-    images = Images(np.random.default_rng(0).random((40, 40)), sampling=0.1)
-    if lazy:
-        images = images.ensure_lazy()
+    for endpoint in (False, True):
+        profile = images.interpolate_line(
+            start=(1, 1), end=(1, 1), sampling=0.1, endpoint=endpoint
+        )
+        assert profile.shape == (1,), endpoint
+        np.testing.assert_allclose(
+            profile.compute().array, expected, rtol=1e-10, err_msg=str(endpoint)
+        )
 
     with pytest.raises(ValueError, match="zero length cannot be averaged"):
         images.interpolate_line(start=(1, 1), end=(1, 1), sampling=0.1, width=0.3)
@@ -2090,34 +2208,42 @@ def test_interpolating_to_a_sampling_far_above_the_extent_gives_one_point():
 
 @lazy_params
 def test_line_profiles_interpolate_comparison(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
+    # A periodic field with a few Fourier components on a square 4 x 4 Å cell
+    # sampled anisotropically. The default line runs along y at x = 0 over one
+    # period, so its profile is periodic too. Taking the line and then
+    # interpolating it (2-D and 1-D splines), or interpolating the image (FFT,
+    # exact for a band-limited field) and then taking the line, must both give
+    # the field along the line: the spline path to its own error of 3e-3 of the
+    # amplitude, the FFT path to float32 rounding (5e-7). A line displaced by
+    # 0.1 Å is wrong by about 0.1 of the amplitude.
+    length, gpts = 4.0, (40, 32)
 
-    if not lazy:
-        images.compute()
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x + y + 0.4) / length) + 0.5 * np.sin(
+            2 * np.pi * (x - 3 * y) / length
+        )
 
-    assert np.allclose(
-        images.interpolate_line().interpolate(0.01).array,
-        images.interpolate(0.01).interpolate_line().array,
-        rtol=0.01,
+    axes = [np.arange(n) * length / n for n in gpts]
+    images = Images(
+        field(*np.meshgrid(*axes, indexing="ij")),
+        sampling=tuple(length / n for n in gpts),
     )
+    if lazy:
+        images = images.lazy()
 
-
-@lazy_params
-def test_interpolate_periodic_spline_and_fft(lazy):
-    atoms = ase.build.bulk("Si", cubic=True)
-    images = abtem.PlaneWave(energy=100e3, sampling=0.05).multislice(atoms).intensity()
-
-    if not lazy:
-        images.compute()
-
-    spline_interpolated = images.interpolate(
-        method="spline", sampling=0.05, boundary="periodic", order=5
-    )
-    fft_interpolated = images.interpolate(method="fft", sampling=0.05)
-    assert array_is_close(
-        spline_interpolated.array, fft_interpolated.array, rel_tol=0.01
-    )
+    expected = field(0.0, np.arange(400) * 0.01)
+    for name, profile, rel in (
+        ("line, then interpolate", images.interpolate_line().interpolate(0.01), 1e-2),
+        ("interpolate, then line", images.interpolate(0.01).interpolate_line(), 1e-5),
+    ):
+        assert profile.is_lazy == lazy, name
+        np.testing.assert_allclose(
+            asnumpy(profile.compute().array),
+            expected,
+            rtol=0,
+            atol=rel * np.abs(expected).max(),
+            err_msg=name,
+        )
 
 
 def _periodic_spline_interpolate(array, gpts, order, lazy, device):
@@ -2341,14 +2467,17 @@ class TestImagesComplexAccessors:
         assert np.allclose(imag.array, imgs.array.imag)
 
     def test_phase(self):
-        imgs = make_images(complex_=True)
+        # Shifted so that the values cover all four quadrants.
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         phase = imgs.phase()
-        assert np.all(np.abs(phase.array) <= np.pi + 1e-10)
+        assert not np.iscomplexobj(phase.array)
+        np.testing.assert_allclose(phase.array, np.angle(imgs.array))
 
     def test_abs(self):
-        imgs = make_images(complex_=True)
+        imgs = make_images(complex_=True) - (0.5 + 0.5j)
         ab = imgs.abs()
-        assert np.all(ab.array >= 0)
+        assert not np.iscomplexobj(ab.array)
+        np.testing.assert_allclose(ab.array, np.abs(imgs.array))
 
     def test_real_on_real_raises(self):
         imgs = make_images(complex_=False)
@@ -2453,21 +2582,6 @@ class TestImagesNormalizeEnsemble:
         )
 
 
-class TestImagesScanNoise:
-    def test_scan_noise_returns_images(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(
-            rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
-            num_components=5
-        ).compute()
-        assert isinstance(result, Images)
-
-    def test_scan_noise_shape_preserved(self):
-        imgs = make_images((16, 16))
-        result = imgs.scan_noise(1.0, 1e-6, 1e-4, num_components=5).compute()
-        assert result.base_shape == imgs.base_shape
-
-
 class TestImagesRelativeDifference:
     def test_zero_difference(self):
         imgs = make_images()
@@ -2484,7 +2598,7 @@ class TestImagesRelativeDifference:
 
 
 # ---------------------------------------------------------------------------
-# DiffractionPatterns — integrate_radial, crop, poisson_noise with samples
+# DiffractionPatterns — integrate_radial, crop
 # ---------------------------------------------------------------------------
 
 def _dp(shape=(32, 32), fill=1.0):
@@ -2494,16 +2608,6 @@ def _dp(shape=(32, 32), fill=1.0):
 
 
 class TestDiffractionPatternsIntegrateRadial:
-    def test_returns_images_with_scan_axes(self):
-        arr = np.ones((4, 4, 16, 16))
-        dp = DiffractionPatterns(
-            arr, sampling=0.05,
-            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
-            metadata={"energy": 100e3},
-        )
-        result = dp.integrate_radial(inner=0, outer=10)
-        assert isinstance(result, Images)
-
     def test_inner_equals_outer_zero_result(self):
         dp = _dp()
         result = dp.integrate_radial(inner=5, outer=5)
@@ -2562,47 +2666,11 @@ class TestDiffractionPatternsCrop:
         np.testing.assert_array_equal(cropped.array, expected)
 
 
-class TestDiffractionPatternsPoisson:
-    def test_poisson_with_samples(self):
-        dp = _dp((16, 16), fill=100.0)
-        noisy = dp.poisson_noise(total_dose=1e6, samples=4).compute()
-        assert noisy.shape[0] == 4
-
-    def test_poisson_nonnegative(self):
-        dp = _dp((16, 16), fill=50.0)
-        noisy = dp.poisson_noise(total_dose=1e5).compute()
-        assert np.all(noisy.array >= 0)
-
-
 # ---------------------------------------------------------------------------
 # RealSpaceLineProfiles
 # ---------------------------------------------------------------------------
 
 class TestRealSpaceLineProfiles:
-    def _lp(self, n=64):
-        from abtem.core.axes import RealSpaceAxis
-        arr = np.ones(n)
-        return RealSpaceLineProfiles(arr, sampling=0.1)
-
-    def test_construction(self):
-        lp = self._lp()
-        assert lp.base_shape == (64,)
-
-    def test_extent(self):
-        lp = self._lp(32)
-        # RealSpaceLineProfiles.extent is a scalar float, not a tuple
-        assert np.isclose(lp.extent, 32 * 0.1)
-
-    def test_interpolate(self):
-        lp = self._lp()
-        result = lp.interpolate(sampling=0.05)
-        assert result.base_shape[0] > lp.base_shape[0]
-
-    def test_tile(self):
-        lp = self._lp(16)
-        tiled = lp.tile(3)
-        assert tiled.base_shape[0] == 48
-
     def test_sum_axis(self):
         arr = np.ones((4, 32))
         from abtem.core.axes import OrdinalAxis
@@ -2667,68 +2735,76 @@ class TestPolarMeasurements:
         assert pm.shape[-1] == 4
         assert pm.outer_angle == 15.0
 
-    @pytest.mark.parametrize(
-        "values, radial_limits, azimuthal_limits, expected",
-        [
-            # ones: every selected bin contributes 1.
-            ("ones", None, None, 12.0),  # all 3 x 4 bins
-            ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
-            ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
-            ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
-            # indexed: A[i, j] = 10 i + j.
-            ("indexed", None, None, 138.0),  # total
-            ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
-            ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
-            ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
-            ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
-            # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
-            ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
-            ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
-            # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
-            ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
-            ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
-            # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
-            ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
-        ],
+    # The bin selection is host NumPy on scalars; only the final sum runs on the
+    # (lazy or device) array, so each table is a loop inside one test per
+    # lazy/device pair.
+    _integrate_cases = (
+        # ones: every selected bin contributes 1.
+        ("ones", None, None, 12.0),  # all 3 x 4 bins
+        ("ones", (0, 10), None, 8.0),  # radial bins 0, 1 -> 2 x 4
+        ("ones", None, (0, np.pi), 6.0),  # azimuthal bins 0, 1 -> 3 x 2
+        ("ones", (0, 10), (0, np.pi), 4.0),  # 2 x 2
+        # indexed: A[i, j] = 10 i + j.
+        ("indexed", None, None, 138.0),  # total
+        ("indexed", (0, 10), None, 52.0),  # R_0 + R_1 = 6 + 46
+        ("indexed", (5, 15), None, 132.0),  # R_1 + R_2 = 46 + 86
+        ("indexed", None, (0, np.pi), 63.0),  # C_0 + C_1 = 30 + 33
+        ("indexed", None, (np.pi / 2, 2 * np.pi), 108.0),  # C_1 + C_2 + C_3
+        # Limits inside a bin: centers are 2.5, 7.5, 12.5 mrad.
+        ("indexed", (2, 12), None, 52.0),  # 2 <= 2.5, 7.5 < 12 -> R_0 + R_1
+        ("indexed", (3, 12), None, 46.0),  # 2.5 < 3 -> R_1 only
+        # Periodic azimuth: (-pi/2, pi/2) and (3pi/2, 5pi/2) are bins 3, 0.
+        ("indexed", None, (-np.pi / 2, np.pi / 2), 69.0),  # C_3 + C_0
+        ("indexed", None, (3 * np.pi / 2, 5 * np.pi / 2), 69.0),  # C_3 + C_0
+        # Combined: i in {1, 2}, j = 1 -> A[1, 1] + A[2, 1] = 11 + 21.
+        ("indexed", (5, 15), (np.pi / 2, np.pi), 32.0),
     )
-    @lazy_params
-    @pytest.mark.parametrize("device", ["cpu", gpu])
-    def test_integrate_values(
-        self, values, radial_limits, azimuthal_limits, expected, lazy, device
-    ):
-        pm = self._polar(values=values, lazy=lazy, device=device)
-        result = pm.integrate(
-            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-        )
-        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
 
-    @pytest.mark.parametrize(
-        "radial_limits, azimuthal_limits, expected",
-        [
-            # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
-            ((25, 35), None, 132.0),  # R_1 + R_2
-            ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
-            # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
-            (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
-            (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
-            # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
-            (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
-            # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
-            ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
-        ],
-    )
     @lazy_params
     @pytest.mark.parametrize("device", ["cpu", gpu])
-    def test_integrate_values_with_offsets(
-        self, radial_limits, azimuthal_limits, expected, lazy, device
-    ):
+    def test_integrate_values(self, lazy, device):
+        polar = {
+            values: self._polar(values=values, lazy=lazy, device=device)
+            for values in ("ones", "indexed")
+        }
+        for values, radial_limits, azimuthal_limits, expected in self._integrate_cases:
+            result = polar[values].integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{values}, {radial_limits}, {azimuthal_limits}",
+            )
+
+    _offset_cases = (
+        # radial_offset = 20: radial bin i spans [20 + 5 i, 25 + 5 i).
+        ((25, 35), None, 132.0),  # R_1 + R_2
+        ((0, 25), None, 6.0),  # nothing below the offset -> R_0 only
+        # azimuthal_offset = pi/4: bin j spans [pi/4 + j pi/2, 3pi/4 + j pi/2).
+        (None, (np.pi / 4, 5 * np.pi / 4), 63.0),  # C_0 + C_1
+        (None, (3 * np.pi / 4, 7 * np.pi / 4), 69.0),  # C_1 + C_2
+        # Bin 3 spans [7pi/4, 9pi/4), i.e. it wraps through 0.
+        (None, (-np.pi / 4, np.pi / 4), 39.0),  # C_3
+        # Combined: i = 0, j in {1, 2} -> A[0, 1] + A[0, 2] = 1 + 2.
+        ((20, 25), (3 * np.pi / 4, 7 * np.pi / 4), 3.0),
+    )
+
+    @lazy_params
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_integrate_values_with_offsets(self, lazy, device):
         pm = self._polar(
             radial_offset=20.0, azimuthal_offset=np.pi / 4, lazy=lazy, device=device
         )
-        result = pm.integrate(
-            radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
-        )
-        np.testing.assert_allclose(self._values(result), [expected, 2 * expected])
+        for radial_limits, azimuthal_limits, expected in self._offset_cases:
+            result = pm.integrate(
+                radial_limits=radial_limits, azimuthal_limits=azimuthal_limits
+            )
+            np.testing.assert_allclose(
+                self._values(result),
+                [expected, 2 * expected],
+                err_msg=f"{radial_limits}, {azimuthal_limits}",
+            )
 
     def test_integrate_limits_on_inexact_bin_edges(self):
         # With radial_sampling = 0.1 the edge 0.3 is bin index 3, although
@@ -2755,25 +2831,6 @@ class TestPolarMeasurements:
         pm = self._polar()
         result = pm.integrate(detector_regions=[1, 4])
         np.testing.assert_allclose(self._values(result), [11.0, 22.0])
-
-
-# ---------------------------------------------------------------------------
-# ReciprocalSpaceLineProfiles
-# ---------------------------------------------------------------------------
-
-class TestReciprocalSpaceLineProfiles:
-    def test_from_ctf(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1), defocus=200.0)
-        profiles = ctf.profiles()
-        assert isinstance(profiles, ReciprocalSpaceLineProfiles)
-
-    def test_shape(self):
-        from abtem.transfer import CTF
-        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1))
-        profiles = ctf.profiles()
-        assert len(profiles.base_shape) == 1
-        assert profiles.base_shape[0] > 0
 
 
 def test_lazy_filters_set_the_warning_filters_once(monkeypatch):

@@ -962,10 +962,8 @@ class GPAWParametrization:
         n = ae.n_sg.sum(0) / units.Bohr**3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
-    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
-        if isinstance(symbol, (int, np.int32, np.int64)):
-            symbol = chemical_symbols[symbol]
-
+    def _hankel_transform(self, n, k):
+        """f_x(k) = 3D Fourier transform of the radial density n, for k > 0."""
         try:
             from hankel import SymmetricFourierTransform
         except ImportError as e:
@@ -975,12 +973,18 @@ class GPAWParametrization:
             ) from e
 
         ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
+        return ht.transform(n, k * 2 * np.pi)[0]
+
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
         k = np.linspace(0.001, 12, 2000)
 
         n = self.charge(symbol, charge)
 
         # we do not calculate the Fourier Transform at k=0 for numerical reason
-        fx = ht.transform(n, k[1:] * 2 * np.pi)[0]
+        fx = self._hankel_transform(n, k[1:])
 
         # instead it is replaced by the exact value fx(0)=Z
         fx = np.concatenate([[atomic_numbers[symbol]], fx])
@@ -998,7 +1002,6 @@ class GPAWParametrization:
         if key in self._potential_functions:
             return self._potential_functions[key]
 
-        fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
         r = np.linspace(0, 20, 10000)
@@ -1007,8 +1010,12 @@ class GPAWParametrization:
         fe0 = np.trapezoid(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
+        # The transform directly at the fit points, from the same density: the
+        # 2000-point table of x_ray_scattering_factor costs 20x the time and
+        # memory, and a second all-electron calculation.
+        fx = self._hankel_transform(n, k[k > 0])
         fe = np.zeros(len(k))
-        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
+        fe[k != 0] = (Z - fx) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
         # The Lobato functional form has near-degenerate parameter
