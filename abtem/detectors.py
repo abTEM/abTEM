@@ -1917,7 +1917,13 @@ class PixelatedDetector(BaseDetector):
     reduction_dtype : {None, 'float32', 'float64'}, optional
         Precision of the amplitudes and intensities that are averaged, see
         :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
-        `components`. Default is None, the precision of the exit waves.
+        `components`. Default is None, the precision of the exit waves. The diffuse
+        intensity is the difference of the total and the elastic intensity, so
+        where it is far below the Bragg peaks (weak thermal displacements, a plane
+        wave or a large probe) it is limited by the rounding of the large
+        intensities: in single precision it can be off by as much as the diffuse
+        intensity itself, and even negative. Use ``reduction_dtype='float64'`` for
+        a weak diffuse signal.
     """
 
     # Cropping and resampling work on pixels and 1/Å, the same for every energy

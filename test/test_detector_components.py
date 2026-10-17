@@ -267,13 +267,13 @@ def test_a_single_configuration_has_no_diffuse_part(lazy):
             _detected(False, "cpu", lazy, PixelatedDetector(MAX_ANGLE, **kwargs), 1)
 
 
-def _exit_waves(lazy, ensemble_mean=True, seed=3):
+def _exit_waves(lazy, ensemble_mean=True, seed=3, mean=2.0, device="cpu"):
     """Configurations ψ_j = μ + noise_j with a frozen-phonon axis followed by a second
     ensemble axis (2 members)."""
     rng = np.random.default_rng(seed)
     shape = (N_CONFIGS, 2, 16, 20)
     array = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex64)
-    array = array + 2 * np.ones(shape[1:], dtype=np.complex64)
+    array = array + mean * np.ones(shape[1:], dtype=np.complex64)
     if lazy:
         array = da.from_array(array, chunks=(1, 1, 16, 20))
     return Waves(
@@ -284,7 +284,7 @@ def _exit_waves(lazy, ensemble_mean=True, seed=3):
             FrozenPhononsAxis(_ensemble_mean=ensemble_mean),
             OrdinalAxis(label="member", values=(0, 1)),
         ],
-    )
+    ).copy_to_device(device)
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -306,6 +306,42 @@ def test_detecting_waves_directly_and_reducing(lazy, unbiased):
     # the members of the second axis keep their own components
     assert result.shape == (3, 2) + reference.base_shape
     _assert_close(result, reference, rtol=1e-5)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
+    """The diffuse part is the difference of two large numbers where it is far below the
+    Bragg peaks: a strong mean wave (300 against noise of 1 per pixel) puts 1e10 in the
+    central pixel against a diffuse part of a few hundred, which the single-precision
+    reduction loses to rounding. ``reduction_dtype='float64'`` does not."""
+    reference = _array(
+        elastic_diffuse_diffraction_patterns(
+            _exit_waves(False, ensemble_mean=False, mean=300.0),
+            max_angle="cutoff",
+            parity="same",
+            reduction_dtype="float64",
+        )
+    )[2]
+    scale = reference.max()
+    assert scale > 0
+
+    errors = {}
+    for reduction_dtype in (None, "float64"):
+        detector = PixelatedDetector(
+            "cutoff", components="diffuse", reduction_dtype=reduction_dtype
+        )
+        raw = detector.detect(_exit_waves(lazy, mean=300.0, device=device))
+        diffuse = _array(reduce_ensemble(raw))
+        assert diffuse.shape[-2:] == reference.shape[-2:]
+        errors[reduction_dtype] = np.abs(diffuse - reference).max() / scale
+
+    # float64 rounds at 1e-16 of the 1e10 central pixel
+    assert errors["float64"] < 1e-8
+    # Not a tolerance to hold but the caveat the docstring documents: the default
+    # precision is off by a sizeable fraction of the diffuse maximum, so a weak
+    # diffuse signal needs reduction_dtype="float64".
+    assert errors[None] > 1e-2
 
 
 def test_detecting_waves_directly_without_a_mean_raises_on_reduction():
