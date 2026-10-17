@@ -396,9 +396,12 @@ def _average_frozen_phonon_waves(waves: Waves) -> Waves:
 
 def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     """The ensemble with its axes flagged for averaging averaged, without squeezing
-    any axis. Wave functions keep every member of an ensemble."""
+    any axis. Wave functions keep every member of an ensemble, except the frozen
+    phonons of those from a ``WavesDetector`` with ``average_frozen_phonons``."""
     if isinstance(ensemble, BaseMeasurements):
         return ensemble.reduce_ensemble()
+    if ensemble.metadata.get("frozen_phonon_average"):
+        return _average_frozen_phonon_waves(ensemble)
     return ensemble
 
 

@@ -48,9 +48,7 @@ def _run(scan, device, lazy, potential, detectors, **probe_kwargs):
         probe = Probe(energy=100e3, semiangle_cutoff=20, device=device, **probe_kwargs)
         probe.grid.match(potential)
         grid_scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
-        return probe.scan(
-            potential, scan=grid_scan, detectors=detectors, lazy=lazy
-        )
+        return probe.scan(potential, scan=grid_scan, detectors=detectors, lazy=lazy)
     return PlaneWave(energy=100e3, device=device, **probe_kwargs).multislice(
         potential, detectors, lazy=lazy
     )
@@ -266,9 +264,7 @@ def test_a_single_configuration_has_no_diffuse_part(lazy):
         dict(components="elastic", unbiased=True),
     ):
         with pytest.raises(ValueError, match="at least 2"):
-            _detected(
-                False, "cpu", lazy, PixelatedDetector(MAX_ANGLE, **kwargs), 1
-            )
+            _detected(False, "cpu", lazy, PixelatedDetector(MAX_ANGLE, **kwargs), 1)
 
 
 def _exit_waves(lazy, ensemble_mean=True, seed=3):
@@ -478,3 +474,188 @@ def test_waves_detector_validates_its_arguments_and_copies():
     assert copied.average_frozen_phonons
     assert copied.reduction_dtype == np.float64
     assert copied == detector
+
+
+# ---------------------------------------------------------------------------------
+# The same options through the PRISM scan, eagerly (every S-matrix member is detected
+# in turn and the frozen-phonon moments accumulated) and lazily
+# ---------------------------------------------------------------------------------
+
+
+def _prism_scan(
+    device, lazy, detector, ensemble_mean=True, num_configs=N_CONFIGS, **kw
+):
+    s_matrix = abtem.SMatrix(
+        energy=100e3,
+        semiangle_cutoff=20,
+        potential=_potential(ensemble_mean, num_configs),
+        interpolation=1,
+        device=device,
+    )
+    grid_scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+    return s_matrix.scan(scan=grid_scan, detectors=detector, lazy=lazy, **kw)
+
+
+def _prism_reference(device, lazy, ctf=None, **kwargs):
+    """The exit waves of every configuration of the PRISM scan, reduced by hand."""
+    exit_waves = _prism_scan(
+        device, lazy, WavesDetector(), ensemble_mean=False, ctf=ctf
+    )
+    exit_waves = exit_waves.compute() if lazy else exit_waves
+    return exit_waves, elastic_diffuse_diffraction_patterns(
+        exit_waves, max_angle=MAX_ANGLE, parity="same", **kwargs
+    )
+
+
+@pytest.mark.parametrize(
+    "lazy, disable_s_matrix_chunks",
+    [(False, "auto"), (True, False), (True, True)],
+)
+@pytest.mark.parametrize("unbiased", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_components_match_the_exit_wave_route(
+    lazy, disable_s_matrix_chunks, unbiased, device
+):
+    detector = PixelatedDetector(MAX_ANGLE, components="all", unbiased=unbiased)
+    kwargs = {} if not lazy else dict(disable_s_matrix_chunks=disable_s_matrix_chunks)
+    result = _prism_scan(device, lazy, detector, **kwargs)
+    _, reference = _prism_reference(device, lazy, unbiased=unbiased)
+
+    assert result.is_lazy == lazy
+    assert result.ensemble_axes_metadata[0].values == COMPONENTS
+    assert not any(
+        isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
+    )
+    assert result.metadata["num_configurations"] == N_CONFIGS
+    assert "frozen_phonon_moments" not in result.metadata
+    _assert_close(result, reference, rtol=2e-4)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_components_of_a_single_configuration(lazy):
+    # N = 1: elastic = total, and the diffuse part is refused, as for multislice
+    detector = PixelatedDetector(MAX_ANGLE, components=("total", "elastic"))
+    result = _array(_prism_scan("cpu", lazy, detector, num_configs=1))
+    np.testing.assert_allclose(result[0], result[1], rtol=1e-5, atol=1e-8)
+
+    with pytest.raises(ValueError, match="at least 2"):
+        _prism_scan(
+            "cpu",
+            lazy,
+            PixelatedDetector(MAX_ANGLE, components="diffuse"),
+            num_configs=1,
+        )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_components_average_other_axes_after_the_split(lazy):
+    """A weighted defocus distribution is averaged incoherently, after the frozen
+    phonons are averaged coherently, member by member in the eager scan."""
+    values = np.array([-60.0, 90.0])
+    weights = np.array([0.7, 0.3])
+    defocus = distributions.from_values(values, weights=weights, ensemble_mean=True)
+
+    result = _prism_scan(
+        "cpu",
+        lazy,
+        PixelatedDetector(MAX_ANGLE, components="all"),
+        ctf={"defocus": defocus},
+    )
+
+    expected = 0.0
+    for value, weight in zip(values, weights):
+        _, reference = _prism_reference("cpu", lazy, ctf={"defocus": float(value)})
+        expected = expected + weight * _array(reference)
+    expected = expected / weights.sum()
+
+    assert result.shape == expected.shape
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=2e-4 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_components_guards(lazy):
+    detector = PixelatedDetector(MAX_ANGLE, components="all")
+    with pytest.raises(ValueError, match="ensemble_mean=True"):
+        _prism_scan("cpu", lazy, detector, ensemble_mean=False)
+
+    atoms = _potential(True).frozen_phonons.atoms
+    s_matrix = abtem.SMatrix(
+        energy=100e3,
+        semiangle_cutoff=20,
+        potential=abtem.Potential(atoms, gpts=48, slice_thickness=2.0),
+        interpolation=1,
+    )
+    with pytest.raises(ValueError, match="FrozenPhononsAxis"):
+        s_matrix.scan(scan=(2.0, 2.0), detectors=detector, lazy=lazy)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_averaged_waves_match_the_mean_of_the_exit_waves(lazy, device):
+    result = _prism_scan(device, lazy, WavesDetector(average_frozen_phonons=True))
+    exit_waves, _ = _prism_reference(device, lazy)
+    expected = np.mean(_array(exit_waves), axis=0, dtype=np.complex128)
+
+    assert isinstance(result, Waves)
+    assert result.is_lazy == lazy
+    assert not any(
+        isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
+    )
+    assert result.shape == expected.shape == exit_waves.shape[1:]
+    assert result.metadata["num_configurations"] == N_CONFIGS
+    # the flag is consumed, not left on the averaged waves
+    assert "frozen_phonon_average" not in result.metadata
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_averaged_waves_without_the_option_keep_every_configuration(lazy):
+    result = _prism_scan("cpu", lazy, WavesDetector())
+    assert result.shape[0] == N_CONFIGS
+    assert "frozen_phonon_average" not in result.metadata
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_prism_averaged_waves_guards(lazy):
+    with pytest.raises(ValueError, match="ensemble_mean=True"):
+        _prism_scan(
+            "cpu", lazy, WavesDetector(average_frozen_phonons=True), ensemble_mean=False
+        )
+
+
+def test_prism_upsample_refuses_components_but_averages_waves():
+    # The compressed S-matrix stitches patterns by angle, which the components do
+    # not survive: refused at the call, not left to fail in the reduction.
+    s_matrix = abtem.SMatrix(
+        energy=100e3,
+        semiangle_cutoff=20,
+        potential=_potential(True),
+        interpolation=2,
+        upsample=True,
+    )
+    scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+    with pytest.raises(NotImplementedError, match="upsample"):
+        s_matrix.scan(
+            scan=scan, detectors=PixelatedDetector(MAX_ANGLE, components="all")
+        )
+
+    result = s_matrix.scan(
+        scan=scan, detectors=WavesDetector(average_frozen_phonons=True)
+    )
+    every = abtem.SMatrix(
+        energy=100e3,
+        semiangle_cutoff=20,
+        potential=_potential(False),
+        interpolation=2,
+        upsample=True,
+    ).scan(scan=scan, detectors=WavesDetector())
+    expected = np.mean(_array(every), axis=0, dtype=np.complex128)
+    assert result.shape == expected.shape
+    assert "frozen_phonon_average" not in result.metadata
+    np.testing.assert_allclose(
+        _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )

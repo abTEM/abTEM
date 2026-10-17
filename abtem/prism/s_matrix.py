@@ -59,7 +59,10 @@ from abtem.detectors import (
     WavesDetector,
     validate_detectors,
 )
-from abtem.measurements import BaseMeasurements
+from abtem.measurements import (
+    BaseMeasurements,
+    _frozen_phonon_components_from_moments,
+)
 from abtem.multislice import (
     allocate_measurement,
     allocate_multislice_measurements,
@@ -98,6 +101,15 @@ def _squeezed(measurements):
     # for the code that assembles several reductions.
     return _wrap_measurements(
         [_squeeze_flagged_axes(m) for m in ensure_list(measurements)]
+    )
+
+
+def _awaits_frozen_phonon_reduction(measurement):
+    # Detected by a PixelatedDetector with components or a WavesDetector with
+    # average_frozen_phonons: only the whole frozen-phonon ensemble can be reduced.
+    return (
+        "frozen_phonon_moments" in measurement.metadata
+        or "frozen_phonon_average" in measurement.metadata
     )
 
 
@@ -1575,9 +1587,13 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         detectors: BaseDetector | list[BaseDetector] = None,
         max_batch_reduction: int | str = "auto",
         reduction_scheme: str = "auto",
+        _defer_frozen_phonon_reduction: bool = False,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         # reduce, keeping the position axis of a bare position for the caller
-        # that assembles the results of several reductions
+        # that assembles the results of several reductions. A caller that holds
+        # one member of a frozen-phonon ensemble defers the frozen-phonon
+        # reduction of the detectors that need all the members (components,
+        # average_frozen_phonons) to itself.
         energy_axis = self._energy_axis()
         if energy_axis is not None:
             return self._reduce_per_energy(
@@ -1643,9 +1659,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             # which averages them in _finalize_lazy_measurements.
             measurements = [
                 (
-                    measurement.reduce_ensemble()
-                    if hasattr(measurement, "reduce_ensemble")
-                    else measurement
+                    measurement
+                    if _defer_frozen_phonon_reduction
+                    and _awaits_frozen_phonon_reduction(measurement)
+                    else _average_ensemble_axes(measurement)
                 )
                 for measurement in measurements
             ]
@@ -3342,6 +3359,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_taper: float = None,
         _blend_component: str = None,
         _blend_taper: float = None,
+        _defer_frozen_phonon_reduction: bool = False,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         # as SMatrixArray._reduce
         self.accelerator.check_is_defined()
@@ -3441,6 +3459,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ctf=ctf,
                 detectors=detectors,
                 max_batch_reduction=max_batch_reduction,
+                _defer_frozen_phonon_reduction=_defer_frozen_phonon_reduction,
             )
 
         if ctf is None:
@@ -5587,7 +5606,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if _averaged(measurement):
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
-                if squeeze:
+                if squeeze and "frozen_phonon_moments" in measurement.metadata:
+                    # The mean amplitude and intensity of the members: the
+                    # components are formed from them, with N the number of
+                    # members that were averaged.
+                    measurements[i] = _frozen_phonon_components_from_moments(
+                        measurement, num_configurations=num_blocks
+                    )
+                elif squeeze:
                     measurements[i] = measurement.squeeze((0,))
 
         return measurements
@@ -5851,7 +5877,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         def detect(s_matrix):
             return s_matrix.build(lazy=False)._reduce(
-                scan=scan, detectors=detectors, ctf=ctf
+                scan=scan,
+                detectors=detectors,
+                ctf=ctf,
+                _defer_frozen_phonon_reduction=True,
             )
 
         return self._detect_ensemble(
@@ -5973,6 +6002,19 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if self._upsample_enabled:
             # the compressed scattering matrix spans the full downsampled grid
             detectors = validate_detectors(detectors, self.dummy_probes())
+            if any(
+                getattr(detector, "components", None) is not None
+                for detector in ensure_list(detectors)
+            ):
+                # The reduction of the compressed matrix splits and stitches the
+                # diffraction patterns by angle, which does not carry the
+                # stacked amplitudes and intensities of the components.
+                raise NotImplementedError(
+                    "PixelatedDetector(components=...) is not supported with "
+                    "upsample=True. Use SMatrix without upsample, or multislice "
+                    "(Probe.scan), or detect the exit waves of every configuration "
+                    "with a WavesDetector and use elastic_diffuse_diffraction_patterns."
+                )
         else:
             detectors = validate_detectors(
                 detectors, self.dummy_probes(downsample=False)

@@ -7772,7 +7772,9 @@ def elastic_diffuse_diffraction_patterns(
     return result._apply_block_direct(block_direct)
 
 
-def _frozen_phonon_components_from_moments(measurements: BaseMeasurements):
+def _frozen_phonon_components_from_moments(
+    measurements: BaseMeasurements, num_configurations: Optional[int] = None
+):
     """The components a ``PixelatedDetector`` with ``components`` detected, from its
     measurements with the ``frozen_phonon_moments`` metadata.
 
@@ -7783,6 +7785,10 @@ def _frozen_phonon_components_from_moments(measurements: BaseMeasurements):
     mean amplitude m and the total T, and the components are formed from these as
     in :func:`elastic_diffuse_diffraction_patterns`. Every other ensemble axis is
     kept for the incoherent reduction of ``reduce_ensemble`` that follows.
+
+    ``num_configurations`` is the number of configurations N when the measurements
+    hold their mean already, as the eager PRISM scan accumulates it member by member
+    along a frozen-phonon axis of length 1; by default N is the length of that axis.
     """
     from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
 
@@ -7815,7 +7821,11 @@ def _frozen_phonon_components_from_moments(measurements: BaseMeasurements):
             "elastic_diffuse_diffraction_patterns."
         )
 
-    N = measurements.shape[fp_axis_idx]
+    N = (
+        measurements.shape[fp_axis_idx]
+        if num_configurations is None
+        else num_configurations
+    )
     if N < 2 and _needs_the_diffuse_part(names, unbiased):
         raise ValueError(
             "the diffuse component, and the elastic component with unbiased=True, "

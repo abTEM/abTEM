@@ -1906,8 +1906,10 @@ class PixelatedDetector(BaseDetector):
         and no `resample`. The components are formed when the ensemble is reduced,
         as in the result of a multislice simulation; a detector applied to waves
         directly returns the unreduced amplitudes and intensities, to be reduced
-        with :func:`abtem.waves.reduce_ensemble`. Default is None, which detects
-        the intensity of every configuration.
+        with :func:`abtem.waves.reduce_ensemble`. Supported by multislice and by
+        the PRISM scan (:meth:`abtem.prism.SMatrix.scan`), except with
+        ``upsample=True``, which raises ``NotImplementedError``. Default is None,
+        which detects the intensity of every configuration.
     unbiased : bool, optional
         Correct the (N - 1)/N bias of the diffuse intensity, see
         :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
