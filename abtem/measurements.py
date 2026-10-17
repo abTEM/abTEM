@@ -32,6 +32,7 @@ from ase.cell import Cell
 from matplotlib.axes import Axes
 from numba import jit  # type: ignore
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.array import ArrayObject, _validate_array_items, stack
 from abtem.core import backend, config
 from abtem.core.axes import (
@@ -56,6 +57,7 @@ from abtem.core.fft import _fft_dtype, fft_crop, fft_interpolate
 from abtem.core.grid import (
     adjusted_gpts,
     polar_spatial_frequencies,
+    reciprocal_cell,
     spatial_frequencies,
 )
 from abtem.core.units import get_conversion_factor
@@ -88,6 +90,23 @@ if TYPE_CHECKING:
 
 
 BaseMeasurementsSubclass = TypeVar("BaseMeasurementsSubclass", bound="BaseMeasurements")
+
+
+def _cell_sin_gamma(metadata: dict | None) -> float:
+    """Return ``sin(gamma)`` of the in-plane cell, where gamma is the angle between
+    the two lattice vectors.  Returns 1.0 for orthogonal cells (or if no cell metadata
+    is present), so ``dx * dy * _cell_sin_gamma(metadata)`` gives the correct pixel
+    area in all cases."""
+    if metadata is None:
+        return 1.0
+    cell = metadata.get("cell", None)
+    if cell is None:
+        return 1.0
+    cell = np.asarray(cell, dtype=float)
+    if is_cell_orthogonal(cell):
+        return 1.0
+    norms = np.linalg.norm(cell, axis=1)
+    return float(abs(np.linalg.det(cell)) / (norms[0] * norms[1]))
 
 
 def _scanned_measurement_type(
@@ -208,7 +227,9 @@ def _scan_shape(measurements: BaseMeasurements | BaseWaves) -> tuple[int, ...]:
 
 def _scan_area_per_pixel(measurements):
     if len(_scan_sampling(measurements)) == 2:
-        return np.prod(_scan_sampling(measurements))
+        return np.prod(_scan_sampling(measurements)) * _cell_sin_gamma(
+            measurements.metadata
+        )
     else:
         raise RuntimeError("Cannot infer pixel area from axes metadata.")
 
@@ -218,6 +239,29 @@ def _scan_extent(measurement):
     for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
         extent += (metadata.sampling * n,)
     return extent
+
+
+def _metric_grid(gpts, cell):
+    from abtem.core.grid import Grid
+
+    cell = np.asarray(cell, dtype=float)
+    extent = np.linalg.norm(cell, axis=1)
+    sampling = (float(extent[0] / gpts[0]), float(extent[1] / gpts[1]))
+    return Grid(gpts=gpts, sampling=sampling, cell=cell)
+
+
+def _metric_polar_angles(gpts, cell, wavelength, xp=np):
+    """Per-pixel physical scattering angle ``(alpha [mrad], phi [rad])`` of a skewed
+    diffraction-pattern grid, from the reciprocal metric of the real-space ``cell``."""
+    k, phi = _metric_grid(gpts, cell).polar_spatial_frequencies(xp=xp)
+    return k * wavelength * 1e3, phi
+
+
+def _metric_k_components(gpts, cell, wavelength, xp=np):
+    """Per-pixel physical scattering angles ``(alpha_x, alpha_y)`` [mrad] of a skewed
+    diffraction-pattern grid (unshifted FFT layout), from the real-space ``cell``."""
+    gx, gy = _metric_grid(gpts, cell).k_components(xp=xp)
+    return gx * wavelength * 1e3, gy * wavelength * 1e3
 
 
 def _array_module_fn(array, xp: ModuleType, name: str):
@@ -247,7 +291,9 @@ def _spatial_frequency_squared(
     """Squared spatial frequency grid, the shared (and expensive) part of
     :func:`_annular_detector_mask` — factored out so callers building many
     masks for the same ``gpts``/``sampling`` (e.g. a q-sweep) can compute it
-    once and reuse it."""
+    once and reuse it. Orthogonal grids only; a skewed grid instead uses the
+    square of :func:`_metric_polar_angles`, which depends on ``cell`` and
+    ``wavelength`` too."""
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
     )
@@ -262,15 +308,24 @@ def _annular_detector_mask(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     xp: ModuleType = np,
+    cell=None,
+    wavelength: Optional[float] = None,
     k2: Optional[np.ndarray] = None,
 ) -> np.ndarray | list[np.ndarray]:
     if k2 is None:
-        k2 = _spatial_frequency_squared(gpts, sampling, xp)
+        if cell is not None:
+            # physical scattering angle from the reciprocal metric (skewed grid)
+            alpha, _ = _metric_polar_angles(gpts, cell, wavelength, xp)
+            k2 = alpha**2
+        else:
+            k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=False)
+        bins = _shift_bins_without_wrap(
+            bins, offset, sampling, fill=False, cell=cell, wavelength=wavelength
+        )
 
     if fftshift:
         bins = xp.fft.fftshift(bins)
@@ -278,16 +333,42 @@ def _annular_detector_mask(
     return bins
 
 
-def _shift_bins_without_wrap(bins, offset, sampling, fill):
+def _hashable_cell(cell) -> Optional[tuple]:
+    """Convert a cell (array-like or ``None``) to a hashable, immutable form
+    suitable for use in an ``lru_cache`` key."""
+    if cell is None:
+        return None
+    return tuple(tuple(float(x) for x in row) for row in np.asarray(cell))
+
+
+def _offset_pixel_shifts(offset, sampling, cell=None, wavelength=None):
+    """Whole-pixel shifts along the two grid axes nearest to the Cartesian
+    ``offset`` (kx, ky) [same units as ``sampling``, mrad for a skewed cell].
+
+    On a skewed grid pixel ``(h1, h2)`` sits at ``h1 b1 + h2 b2``, where the
+    ``b_i`` are the reciprocal vectors of the real-space ``cell`` (rows
+    ``a_i``), so the pixel index of a physical frequency ``g`` is ``g . a_i``.
+    Dividing each offset component by the per-axis sampling, as on an
+    orthogonal grid (where ``a_i`` is along axis ``i``), would move the
+    region along the oblique ``b_i`` instead.
+    """
+    if cell is None:
+        return tuple(int(round(o / d)) for o, d in zip(offset, sampling))
+    g = np.asarray(offset, dtype=float) / (wavelength * 1e3)
+    return tuple(int(round(h)) for h in np.asarray(cell, dtype=float) @ g)
+
+
+def _shift_bins_without_wrap(bins, offset, sampling, fill, cell=None, wavelength=None):
     """Shift a detector mask or bin map in unshifted FFT layout by ``offset``
-    [same units as ``sampling``], rounded to whole pixels.
+    [same units as ``sampling``], rounded to whole pixels. A skewed grid needs its
+    real-space ``cell`` and the ``wavelength`` (see `_offset_pixel_shifts`).
 
     ``np.roll`` alone carries the bins that pass the Nyquist frequency round
     to the opposite side of the pattern, where they would collect pixels at
     unrelated frequencies; those positions are set to ``fill`` instead.
     """
     xp = get_array_module(bins)
-    shifts = tuple(int(round(o / d)) for o, d in zip(offset, sampling))
+    shifts = _offset_pixel_shifts(offset, sampling, cell, wavelength)
     bins = xp.roll(bins, shifts, (0, 1))
 
     for axis, (n, shift) in enumerate(zip(bins.shape, shifts)):
@@ -313,6 +394,8 @@ def _polar_bins_key(
     offset,
     fftshift,
     return_indices,
+    cell=None,
+    wavelength=None,
 ) -> tuple:
     """The canonical, hashable geometry key.
 
@@ -330,6 +413,8 @@ def _polar_bins_key(
         tuple(float(o) for o in offset),
         bool(fftshift),
         bool(return_indices),
+        _hashable_cell(cell),
+        None if wavelength is None else float(wavelength),
     )
 
 
@@ -343,6 +428,8 @@ def _radial_binning_device_arrays(
     rotation,
     offset,
     fftshift,
+    cell=None,
+    wavelength=None,
 ):
     """Flat bin indices and separators, resident on ``array``'s device.
 
@@ -366,6 +453,8 @@ def _radial_binning_device_arrays(
         offset,
         fftshift,
         True,
+        cell,
+        wavelength,
     )
 
     xp = get_array_module(array)
@@ -424,6 +513,8 @@ def _polar_detector_bins_cached(
     offset: tuple[float, float],
     fftshift: bool,
     return_indices: bool,
+    cell=None,
+    wavelength=None,
 ):
     """Cached bin geometry; see ``_polar_detector_bins``.
 
@@ -439,6 +530,11 @@ def _polar_detector_bins_cached(
 
     Returned containers are immutable and their arrays read-only: they are
     shared between all callers.
+
+    ``cell`` arrives here as the hashable (nested-tuple) form built by
+    ``_polar_bins_key`` -- converted back to an array before being passed on,
+    since ``_polar_detector_bins_uncached`` expects the array-like form
+    ``_metric_polar_angles`` requires.
     """
     result = _polar_detector_bins_uncached(
         gpts=gpts,
@@ -451,6 +547,8 @@ def _polar_detector_bins_cached(
         offset=offset,
         fftshift=fftshift,
         return_indices=return_indices,
+        cell=None if cell is None else np.asarray(cell),
+        wavelength=wavelength,
     )
     if return_indices:
         for array in result:
@@ -471,6 +569,8 @@ def _polar_detector_bins(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
+    cell=None,
+    wavelength: Optional[float] = None,
 ) -> np.ndarray | tuple[np.ndarray, ...]:
     """Bin geometry for a polar detector, cached on its arguments."""
     key = _polar_bins_key(
@@ -484,6 +584,8 @@ def _polar_detector_bins(
         offset,
         fftshift,
         return_indices,
+        cell,
+        wavelength,
     )
     return _polar_detector_bins_cached(*key)
 
@@ -499,10 +601,16 @@ def _polar_detector_bins_uncached(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
+    cell=None,
+    wavelength: Optional[float] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    alpha, phi = polar_spatial_frequencies(
-        gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
-    )
+    if cell is not None:
+        # physical (alpha, phi) from the reciprocal metric (skewed grid)
+        alpha, phi = _metric_polar_angles(gpts, cell, wavelength, np)
+    else:
+        alpha, phi = polar_spatial_frequencies(
+            gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
+        )
     phi = (phi - rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
@@ -517,7 +625,9 @@ def _polar_detector_bins_uncached(
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
     if np.any(np.array(offset) != 0.0):
-        bins = _shift_bins_without_wrap(bins, offset, sampling, fill=-1)
+        bins = _shift_bins_without_wrap(
+            bins, offset, sampling, fill=-1, cell=cell, wavelength=wavelength
+        )
 
     if fftshift:
         bins = np.fft.fftshift(bins)
@@ -1282,6 +1392,21 @@ class _BaseMeasurement2D(BaseMeasurements):
         The offset of the origin of the measurement coordinates [Å] or [1/Å].
         """
 
+    def _skew_cell(self) -> Optional[np.ndarray]:
+        """The non-orthogonal in-plane cell of the measurement, or None."""
+        cell = self.metadata.get("cell", None)
+        if cell is None:
+            return None
+        cell = np.asarray(cell, dtype=float)
+        return None if is_cell_orthogonal(cell) else cell
+
+    def _cartesian_to_pixels(self, vectors: np.ndarray, cell: np.ndarray) -> np.ndarray:
+        """Cartesian vectors [Å] (rows) as fractional pixel steps along the two
+        array axes of a skewed grid. Pixel ``(i, j)`` sits at
+        ``i a1 / n1 + j a2 / n2`` (``a_i`` the rows of the cell), so the steps
+        are the fractional coordinates ``r C^-1`` times the grid points."""
+        return vectors @ np.linalg.inv(cell) * np.array(self.base_shape, dtype=float)
+
     def interpolate_line(
         self,
         start: tuple[float, float] | Atom | None = None,
@@ -1363,9 +1488,20 @@ class _BaseMeasurement2D(BaseMeasurements):
         if margin != 0.0:
             scan.add_margin(margin)
 
-        positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
-        )
+        cell = self._skew_cell()
+        if cell is not None:
+            # Cartesian positions [Å or 1/Å] to fractional pixel indices of the
+            # skewed grid, from the pixel index of the measurement origin
+            origin_index = -np.asarray(self.offset, dtype=float) / np.asarray(
+                self.sampling, dtype=float
+            )
+            positions = xp.asarray(
+                self._cartesian_to_pixels(scan.get_positions(lazy=False), cell)
+                + origin_index
+            )
+        else:
+            cart_positions = scan.get_positions(lazy=False) - self.offset
+            positions = xp.asarray(cart_positions / self.sampling)
 
         if width:
             direction = xp.array(scan.end) - xp.array(scan.start)
@@ -1381,13 +1517,20 @@ class _BaseMeasurement2D(BaseMeasurements):
             # direction in physical units (Å) and only then converted to
             # pixels (`positions` is in pixels): applying the physical unit
             # vector directly in pixel space tilts and stretches the offsets
-            # whenever the sampling is anisotropic.
-            perpendicular_positions = (
+            # whenever the sampling is anisotropic or the cell is skewed.
+            perpendicular_offsets = (
                 xp.linspace(-n / 2, n / 2, int(n))[:, None]
                 * min(self.sampling)
                 * perpendicular_direction[None]
-                / xp.asarray(self.sampling)
             )
+            if cell is not None:
+                perpendicular_positions = xp.asarray(
+                    self._cartesian_to_pixels(asnumpy(perpendicular_offsets), cell)
+                )
+            else:
+                perpendicular_positions = perpendicular_offsets / xp.asarray(
+                    self.sampling
+                )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
@@ -2084,7 +2227,7 @@ class Images(_BaseMeasurement2D):
 
     @property
     def _area_per_pixel(self):
-        return np.prod(self.sampling)
+        return np.prod(self.sampling) * _cell_sin_gamma(self.metadata)
 
     @property
     def sampling(self) -> tuple[float, float]:
@@ -2151,6 +2294,7 @@ class Images(_BaseMeasurement2D):
             The integrated gradient.
         """
         self._check_is_complex()
+        cell = self.metadata.get("cell", None)
         if self.is_lazy:
             xp = get_array_module(self.array)
             array = self.array.rechunk(
@@ -2159,6 +2303,7 @@ class Images(_BaseMeasurement2D):
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
+                cell=cell,
                 # Real on purpose, unlike the dtype-preserving map_blocks
                 # elsewhere: the input is required to be complex (its real and
                 # imaginary parts are the two gradient components) and
@@ -2173,7 +2318,9 @@ class Images(_BaseMeasurement2D):
                 ),
             )
         else:
-            array = _integrate_gradient_2d(self.array, sampling=self.sampling)
+            array = _integrate_gradient_2d(
+                self.array, sampling=self.sampling, cell=cell
+            )
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -2945,14 +3092,26 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     #         return [0, self.extent]
 
 
-def _integrate_gradient_2d(gradient, sampling):
+def _integrate_gradient_2d(gradient, sampling, cell=None):
     xp = get_array_module(gradient)
     gx, gy = gradient.real, gradient.imag
     (nx, ny) = gx.shape[-2:]
-    ikx = xp.fft.fftfreq(nx, d=sampling[0])
-    iky = xp.fft.fftfreq(ny, d=sampling[1])
-    grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing="ij")
-    k = grid_ikx**2 + grid_iky**2
+
+    if cell is not None:
+        from abtem.core.grid import Grid
+
+        cell = np.asarray(cell, dtype=float)
+        extent = np.linalg.norm(cell, axis=1)
+        samp = (float(extent[0] / nx), float(extent[1] / ny))
+        grid = Grid(gpts=(nx, ny), sampling=samp, cell=cell)
+        grid_ikx, grid_iky = grid.k_components(xp=xp)
+        k = grid_ikx**2 + grid_iky**2
+    else:
+        ikx = xp.fft.fftfreq(nx, d=sampling[0])
+        iky = xp.fft.fftfreq(ny, d=sampling[1])
+        grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing="ij")
+        k = grid_ikx**2 + grid_iky**2
+
     k[k == 0] = 1e-12
     That = (xp.fft.fft2(gx) * grid_ikx + xp.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
     T = xp.real(xp.fft.ifft2(That))
@@ -4000,6 +4159,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centering,
         energy,
         radius,
+        grid_cell=None,
     ):
         from abtem.bloch.indexing import index_diffraction_spots
         from abtem.bloch.utils import filter_reciprocal_space_vectors
@@ -4066,6 +4226,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             energy=energy,
             radius=radius,
             orientation_matrices=orientation_matrices,
+            grid_cell=grid_cell,
         )
 
         xp = get_array_module(array)
@@ -4217,6 +4378,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 g_max=g_max,
                 centering=centering,
                 radius=radius,
+                grid_cell=self.metadata.get("cell", None),
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (mask.sum(),),
                 meta=get_array_module(self.array).array((), dtype=self.dtype),
@@ -4234,6 +4396,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centering=centering,
                 energy=energy if energies is None else energies[..., None, None],
                 radius=radius,
+                grid_cell=self.metadata.get("cell", None),
             )
 
         reciprocal_lattice_vectors = np.matmul(
@@ -4261,6 +4424,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """Sampling of diffraction patterns in `x` and `y` [1 / Å]."""
         return self._sampling
 
+    def _cartesian_to_pixels(self, vectors: np.ndarray, cell: np.ndarray) -> np.ndarray:
+        """Cartesian frequencies [1/Å] (rows) as fractional pixel steps of a
+        skewed grid. Pixel ``(h1, h2)`` sits at ``h1 b1 + h2 b2``, the ``b_i``
+        reciprocal to the rows ``a_i`` of the real-space cell, so the steps are
+        ``g . a_i``."""
+        return vectors @ cell.T
+
     @property
     def angular_sampling(self) -> tuple[float, float]:
         """
@@ -4275,10 +4445,18 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @property
     def max_angles(self) -> tuple[float, float]:
         """Maximum scattering angle in `x` and `y` [mrad]."""
-        return (
+        per_axis = (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
         )
+        if self.metadata.get("cell", None) is not None:
+            # On a skewed grid the largest isotropic (radial) detector angle is the
+            # inscribed circle of the reciprocal parallelogram. By the reciprocal
+            # metric this equals min(per_axis) (the sin(gamma)/|b| factors cancel to
+            # shape//2 * sampling), so report it isotropically for both axes.
+            inscribed = min(per_axis)
+            return inscribed, inscribed
+        return per_axis
 
     @property
     def max_frequency(self):
@@ -4667,6 +4845,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         fftshift,
         rotation,
         offset,
+        cell=None,
+        wavelength=None,
     ):
         xp = get_array_module(array)
 
@@ -4683,6 +4863,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             rotation=rotation,
             offset=offset,
             fftshift=fftshift,
+            cell=cell,
+            wavelength=wavelength,
         )
         n_bins = int(len(separators)) - 1
 
@@ -4773,6 +4955,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self._check_integration_limits(inner, outer)
         xp = get_array_module(self.array)
 
+        cell = self.metadata.get("cell", None)
+        wavelength = energy2wavelength(self._get_energy()) if cell is not None else None
+
         if self.is_lazy:
             array = self.array.map_blocks(
                 self._radial_binning,
@@ -4784,6 +4969,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 chunks=self.array.chunks[:-2]
                 + (
@@ -4807,6 +4994,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
             )
 
         radial_sampling = (outer - inner) / nbins_radial
@@ -4820,6 +5009,93 @@ class DiffractionPatterns(_BaseMeasurement2D):
             azimuthal_offset=rotation,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
+        )
+
+    def to_cartesian(
+        self,
+        gpts: Optional[tuple[int, int]] = None,
+        sampling: Optional[tuple[float, float]] = None,
+    ) -> "DiffractionPatterns":
+        """
+        Resample a non-orthogonal (skewed) diffraction pattern onto a regular Cartesian
+        ``(kx, ky)`` grid, so that it is laid out correctly in physical reciprocal space
+        (e.g. for ``.show()`` or saving). Diffraction patterns from an orthogonal grid
+        are returned unchanged.
+
+        Parameters
+        ----------
+        gpts : two int, optional
+            Shape of the output grid. Defaults to the input shape.
+        sampling : two float, optional
+            Reciprocal-space sampling of the output grid [1 / Å]. Defaults to the input
+            sampling.
+
+        Returns
+        -------
+        diffraction_patterns : DiffractionPatterns
+            The resampled (orthogonal) diffraction pattern(s), centred (``fftshift=True``).
+        """
+        from abtem.core.grid import Grid
+
+        cell = self.metadata.get("cell", None)
+        if cell is None:
+            return self
+
+        cell = np.asarray(cell, dtype=float)
+        gpts_src = tuple(int(n) for n in self.shape[-2:])
+        extent = np.linalg.norm(cell, axis=1)
+        real_sampling = (extent[0] / gpts_src[0], extent[1] / gpts_src[1])
+
+        # The Bragg spots are sharp (often single pixels) sitting on the oblique grid
+        # g = h1 b1 + h2 b2. Pull-interpolation onto a Cartesian grid would smear them
+        # along the (oblique) lattice directions, so instead we *forward-scatter*: each
+        # source pixel deposits its intensity into the nearest Cartesian pixel at its
+        # physical position. Each spot therefore lands on a single output pixel.
+        gx, gy = Grid(gpts=gpts_src, sampling=real_sampling, cell=cell).k_components()
+        gx, gy = np.asarray(gx), np.asarray(gy)
+
+        reciprocal = reciprocal_cell(cell)
+        if sampling is None:
+            sampling = (
+                float(np.linalg.norm(reciprocal[0])),
+                float(np.linalg.norm(reciprocal[1])),
+            )
+        if gpts is None:
+            gpts = gpts_src
+        gpts = (int(gpts[0]), int(gpts[1]))
+
+        array = self.array
+        if self.is_lazy:
+            array = array.compute()
+        array = asnumpy(array)
+        if self.fftshift:
+            array = np.fft.ifftshift(array, axes=(-2, -1))  # match k_components (fft order)
+
+        # target (Cartesian, centred) pixel index for every source pixel
+        ti = np.rint(gx / sampling[0]).astype(np.int64) + gpts[0] // 2
+        tj = np.rint(gy / sampling[1]).astype(np.int64) + gpts[1] // 2
+        valid = (ti >= 0) & (ti < gpts[0]) & (tj >= 0) & (tj < gpts[1])
+        ti_v, tj_v = ti[valid], tj[valid]
+
+        flat = array.reshape((-1,) + gpts_src)
+        n_frames = flat.shape[0]
+        out = np.zeros((n_frames,) + gpts, dtype=array.dtype)
+        # ti_v/tj_v (and thus valid) do not depend on the frame, so scatter-add every
+        # frame in one vectorized call instead of looping np.add.at per frame.
+        frame_idx = np.repeat(np.arange(n_frames), ti_v.size)
+        ti_tiled = np.tile(ti_v, n_frames)
+        tj_tiled = np.tile(tj_v, n_frames)
+        values = flat[:, valid].reshape(-1)
+        np.add.at(out, (frame_idx, ti_tiled, tj_tiled), values)
+        out = out.reshape(self.shape[:-2] + gpts)
+
+        metadata = {k: v for k, v in self.metadata.items() if k != "cell"}
+        return DiffractionPatterns(
+            out,
+            sampling=sampling,
+            fftshift=True,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
         )
 
     @_per_energy(shared_outer=True)
@@ -4866,7 +5142,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
     @staticmethod
-    def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):
+    def _integrate_fourier_space(
+        array, sampling, inner, outer, fftshift, offset, cell=None, wavelength=None
+    ):
         xp = get_array_module(array)
 
         bins = _annular_detector_mask(
@@ -4877,6 +5155,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             fftshift=fftshift,
             offset=offset,
             xp=xp,
+            cell=cell,
+            wavelength=wavelength,
         )
 
         return xp.sum(array * bins, axis=(-2, -1))
@@ -4934,6 +5214,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         xp = get_array_module(self.array)
 
+        cell = self.metadata.get("cell", None)
+        wavelength = energy2wavelength(self._get_energy()) if cell is not None else None
+
         if self.is_lazy:
             integrated_intensity = self.array.map_blocks(
                 self._integrate_fourier_space,
@@ -4942,6 +5225,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 meta=xp.array((), dtype=self.array.dtype),
             )
@@ -4953,6 +5238,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
@@ -4979,12 +5266,56 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
     @staticmethod
-    def _com(array: np.ndarray, x: np.ndarray, y: np.ndarray):
+    def _com(array: np.ndarray, gx: np.ndarray, gy: np.ndarray):
+        # `gx`/`gy` arrive already broadcast to 2D from `_com_grids`, on both the
+        # skew and orthogonal branches, so they are used directly rather than
+        # re-broadcast from 1D. The normalisation by total intensity is dev's --
+        # the centre of mass is an intensity-weighted mean, not a weighted sum.
         total_intensity = array.sum(axis=(-2, -1))
-        com_x = (array * x[:, None]).sum(axis=(-2, -1)) / total_intensity
-        com_y = (array * y[None]).sum(axis=(-2, -1)) / total_intensity
+        com_x = (array * gx).sum(axis=(-2, -1)) / total_intensity
+        com_y = (array * gy).sum(axis=(-2, -1)) / total_intensity
         com = com_x + 1.0j * com_y
         return com
+
+    def _com_grids(
+        self, units: str, xp
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return 2D ``(gx, gy)`` grids in the requested units, using the reciprocal
+        metric for skew cells so that the center-of-mass is in physical Cartesian
+        coordinates.  The returned arrays match the array layout (fftshifted if the
+        diffraction pattern is fftshifted)."""
+        cell = self.metadata.get("cell", None)
+        if cell is not None:
+            from abtem.core.grid import Grid
+
+            cell = np.asarray(cell, dtype=float)
+            extent = np.linalg.norm(cell, axis=1)
+            sampling = (
+                float(extent[0] / self.base_shape[-2]),
+                float(extent[1] / self.base_shape[-1]),
+            )
+            # k_components returns FFT-order (zero-freq at [0,0])
+            gx, gy = Grid(
+                gpts=self.base_shape, sampling=sampling, cell=cell
+            ).k_components(xp=xp)
+            if units == "mrad":
+                wavelength = energy2wavelength(self._get_energy())
+                gx = gx * wavelength * 1e3
+                gy = gy * wavelength * 1e3
+            # match array layout
+            if self.fftshift:
+                gx = xp.fft.fftshift(gx)
+                gy = xp.fft.fftshift(gy)
+            return gx, gy
+        else:
+            # orthogonal: separable 1D -> broadcast to 2D
+            if units == "mrad":
+                coords = self.angular_coordinates
+            else:
+                coords = self.coordinates
+            x, y = xp.asarray(coords[0]), xp.asarray(coords[1])
+            return x[:, None] * xp.ones_like(y)[None, :], \
+                   xp.ones_like(x)[:, None] * y[None, :]
 
     @_per_energy
     def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
@@ -5007,16 +5338,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Center-of-mass line profiles (returned if there is only one scan axis).
         """
 
-        if units == "mrad":
-            x, y = self.angular_coordinates
-        elif units == "1/Å":
-            x, y = self.coordinates
-        else:
+        if units not in ("mrad", "1/Å"):
             raise ValueError("units must be '1/Å' or 'mrad'")
 
         xp = get_array_module(self.array)
-
-        x, y = xp.asarray(x), xp.asarray(y)
+        gx, gy = self._com_grids(units, xp)
 
         if self.is_lazy:
             base_axes = tuple(
@@ -5027,13 +5353,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 self._com,
-                x=x,
-                y=y,
+                gx=gx,
+                gy=gy,
                 drop_axis=base_axes,
-                dtype=np.result_type(self.array.dtype, x.dtype, y.dtype, np.complex64),
+                dtype=np.result_type(
+                    self.array.dtype, gx.dtype, gy.dtype, np.complex64
+                ),
             )
         else:
-            array = self._com(self.array, x=x, y=y)
+            array = self._com(self.array, gx=gx, gy=gy)
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
@@ -5042,11 +5370,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         array: np.ndarray,
         inner: float,
         outer: float,
-        angular_coordinates: tuple[np.ndarray, np.ndarray],
+        alpha: np.ndarray,
     ):
-        alpha_x, alpha_y = angular_coordinates
-        alpha = np.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2)
-
         block = alpha > inner
 
         if outer != np.inf:
@@ -5076,16 +5401,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         xp = get_array_module(self.array)
 
+        cell = self.metadata.get("cell", None)
+        if cell is not None:
+            # _metric_polar_angles returns FFT-order; match array layout
+            alpha, _ = _metric_polar_angles(
+                self.base_shape, cell,
+                energy2wavelength(self._get_energy()), xp,
+            )
+            if self.fftshift:
+                alpha = xp.fft.fftshift(alpha)
+        else:
+            alpha_x, alpha_y = self.angular_coordinates
+            alpha = xp.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2)
+
         if self.is_lazy:
             array = self.array.map_blocks(
                 self._bandlimit,
                 inner=inner,
                 outer=outer,
-                angular_coordinates=self.angular_coordinates,
+                alpha=alpha,
                 meta=xp.array((), dtype=self.array.dtype),
             )
         else:
-            array = self._bandlimit(self.array, inner, outer, self.angular_coordinates)
+            array = self._bandlimit(self.array, inner, outer, alpha)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -5169,13 +5507,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _azimuthal_step_bounds(
-        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        radii: Optional[np.ndarray] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """The first and last step bin of every pixel, as int32 arrays on the host.
-        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
-        x, y = np.meshgrid(*coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
-        del x, y
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes.
+        `radii`, given for a skew cell, are the 2-D pixel-unit radii of the pixels
+        (from the reciprocal metric), used in place of `coordinates`."""
+        if radii is None:
+            x, y = np.meshgrid(*coordinates, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
+            del x, y
+        else:
+            r = np.asarray(radii, dtype=np.float64)
         # Bin k holds r with k * radial_sampling - width / 2 <= r <
         # k * radial_sampling + width / 2, that is first <= k <= last. The
         # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
@@ -5195,24 +5541,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        radii: Optional[np.ndarray] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
         `step_bounds` are the first and last bin of every pixel for the step
         weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
         axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
-        weighting.
+        weighting. `radii`, given for a skew cell, are the 2-D pixel-unit radii of
+        the pixels, used in place of `coordinates`.
         """
         xp = get_array_module(array)
 
         if weighting_function == "step":
             first, last = (xp.asarray(bound) for bound in step_bounds)
         else:
-            x, y = np.meshgrid(
-                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
-                indexing="ij",
-            )
-            r = np.sqrt(x**2 + y**2)
+            if radii is None:
+                x, y = np.meshgrid(
+                    *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
+                    indexing="ij",
+                )
+                r = np.sqrt(x**2 + y**2)
+            else:
+                r = xp.asarray(radii, dtype=coordinate_dtype)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
@@ -5301,14 +5652,34 @@ class DiffractionPatterns(_BaseMeasurement2D):
         num_bins = safe_ceiling_int(max_angle / radial_sampling)
         centers = np.arange(num_bins) * radial_sampling
 
+        # A skew cell's pixel radii are not separable in the x and y frequency
+        # indices: they come from the reciprocal metric, in the same pixel units.
+        radii = None
+        cell = self.metadata.get("cell", None)
+        if cell is not None:
+            # _metric_polar_angles returns FFT-order; match array layout
+            alpha, _ = _metric_polar_angles(
+                self.base_shape,
+                cell,
+                energy2wavelength(self._get_energy()),
+                np,
+            )
+            if self.fftshift:
+                alpha = np.fft.fftshift(alpha)
+            radii = alpha / unit
+
         if weighting_function == "step":
             # One node shared by every block, which holds the pattern-sized bounds.
             step_bounds = self._azimuthal_step_bounds
             if self.is_lazy:
                 step_bounds = dask.delayed(step_bounds, pure=True)
-            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+            kwargs = dict(
+                step_bounds=step_bounds(coordinates, radial_sampling, width, radii)
+            )
         else:
-            kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
+            kwargs = dict(
+                coordinates=coordinates, coordinate_dtype=get_dtype(), radii=radii
+            )
 
         if self.is_lazy:
             base_axes = tuple(
@@ -8058,6 +8429,12 @@ def momentum_resolved_spectrum(
         # annular detector path (which sums all pixels inside the mask).
         # n_perp is the number of perpendicular samples used internally.
         n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+        # The samples are spaced as on a grid of square pixels, sampling_inv
+        # wide; a pixel of a skewed grid covers 1 / sin(gamma) times that, so
+        # the samples overcount its pixels by 1 / sin(gamma).
+        sin_gamma = _cell_sin_gamma(dp.metadata)
+        if sin_gamma != 1.0:
+            n_perp = n_perp * sin_gamma
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
@@ -8098,10 +8475,18 @@ def momentum_resolved_spectrum(
         gpts = dp.shape[-2:]
         sampling = dp.angular_sampling
 
+        # A skewed cell's scattering angles, and the pixel shift of each disk
+        # centre, come from its reciprocal metric (see `_offset_pixel_shifts`).
+        cell = dp.metadata.get("cell", None)
+        wavelength = None if cell is None else energy2wavelength(dp._get_energy())
+
         # The spatial-frequency grid is the same for every q-step (only the
         # offset/roll differs), so compute it once rather than inside the
         # per-q loop below.
-        k2 = _spatial_frequency_squared(gpts, sampling, xp)
+        if cell is None:
+            k2 = _spatial_frequency_squared(gpts, sampling, xp)
+        else:
+            k2 = _metric_polar_angles(gpts, cell, wavelength, xp)[0] ** 2
 
         # Build all masks at once and stack: (n_q, gy, gx)
         masks = xp.stack(
@@ -8114,6 +8499,8 @@ def momentum_resolved_spectrum(
                     offset=(float(q * cos_a), float(q * sin_a)),
                     fftshift=dp.fftshift,
                     xp=xp,
+                    cell=cell,
+                    wavelength=wavelength,
                     k2=k2,
                 )
                 for q in q_values

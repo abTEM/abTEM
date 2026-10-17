@@ -29,6 +29,7 @@ from abtem.atoms import (
     wrap_and_snap_atoms,
     best_orthogonal_cell,
     cut_cell,
+    is_cell_ab_in_plane,
     is_cell_orthogonal,
     orthogonalize_cell,
     pad_atoms,
@@ -604,6 +605,7 @@ class _FieldBuilder(BaseField):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
         device: Optional[str] = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         self._array_object = array_object
 
@@ -618,23 +620,77 @@ class _FieldBuilder(BaseField):
         if box is not None:
             box = _validate_box(box)
 
-        if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
-            if not isinstance(plane, str):
-                raise NotImplementedError
-            default_box = _default_box(cell, plane)
-            if box is None:
-                box = default_box
-                if periodic and not box_given:
-                    _warn_if_box_is_strained(cell, box, plane, default=True)
-            elif periodic and box != default_box:
-                _warn_if_box_is_strained(cell, box, plane)
+        cell_array = np.array(cell, dtype=float)
+        # Resolve whether to build directly on the crystal's in-plane (a, b) grid instead
+        # of orthogonalising. This requires a and b to lie in the xy-plane so slicing
+        # along the beam stays valid; the in-plane cell may be non-orthogonal (a skewed
+        # grid) and/or the c-axis may be tilted out of z (the atoms then simply drift
+        # laterally with depth, captured by their true coordinates -- no shear or tilted
+        # propagator needed).
+        #   None  -> auto: use it iff the cell is non-orthogonal but a, b are in-plane,
+        #            plane is "xy" and no explicit box was requested.
+        #   True  -> force it (raise if a, b not in-plane / plane != "xy").
+        #   False -> force the orthogonalising path (legacy behaviour).
+        if non_orthogonal is None:
+            use_skew = (
+                not is_cell_orthogonal(cell_array)
+                and is_cell_ab_in_plane(cell_array)
+                and isinstance(plane, str)
+                and plane == "xy"
+                # A builder that supports only its default box drops a box it
+                # is given once it is checked; it was still asked for.
+                and not box_given
+            )
+        elif non_orthogonal:
+            if not is_cell_ab_in_plane(cell_array):
+                raise NotImplementedError(
+                    "non_orthogonal potentials require the a- and b-axes in the "
+                    "xy-plane (the c-axis may be tilted out of z)"
+                )
+            if not (isinstance(plane, str) and plane == "xy"):
+                raise NotImplementedError(
+                    "non_orthogonal potentials currently support only plane='xy'"
+                )
+            use_skew = True
+        else:
+            use_skew = False
+        self._non_orthogonal = use_skew
 
-        elif box is None:
-            box = tuple(np.diag(cell))
+        if use_skew:
+            cell_2d = cell_array[:2, :2]
+            extent = tuple(np.linalg.norm(cell_2d, axis=1))
+            box = (extent[0], extent[1], float(cell_array[2, 2]))
+            # Only carry a skewed in-plane metric when a and b are genuinely
+            # non-orthogonal; a tilted c-axis with an orthogonal (a, b) keeps a plain
+            # orthogonal grid (no spurious cell in the metadata / detectors).
+            in_plane_orthogonal = abs(float(cell_2d[0] @ cell_2d[1])) <= 1e-9 * (
+                extent[0] * extent[1]
+            )
+            self._grid = Grid(
+                extent=extent,
+                gpts=gpts,
+                sampling=sampling,
+                lock_extent=True,
+                cell=None if in_plane_orthogonal else cell_2d,
+            )
+        else:
+            if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                if not isinstance(plane, str):
+                    raise NotImplementedError
+                default_box = _default_box(cell, plane)
+                if box is None:
+                    box = default_box
+                    if periodic and not box_given:
+                        _warn_if_box_is_strained(cell, box, plane, default=True)
+                elif periodic and box != default_box:
+                    _warn_if_box_is_strained(cell, box, plane)
 
-        self._grid = Grid(
-            extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True
-        )
+            elif box is None:
+                box = tuple(np.diag(cell))
+
+            self._grid = Grid(
+                extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True
+            )
         self._device = validate_device(device)
 
         self._box = box
@@ -707,6 +763,11 @@ class _FieldBuilder(BaseField):
         # potential restored from a pickle skips `__init__` and may carry the
         # origin exactly as it was passed (None, a list).
         return _validate_origin(self._origin)
+
+    @property
+    def non_orthogonal(self) -> bool:
+        """Whether the potential is built on a non-orthogonal (skewed) in-plane grid."""
+        return self._non_orthogonal
 
     def __getitem__(self, item) -> PotentialArray:
         return self.build(lazy=False)[item]
@@ -819,6 +880,7 @@ class _FieldBuilder(BaseField):
             slice_thickness=self.slice_thickness[first_slice:last_slice],
             exit_planes=exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            cell=self.grid.cell,
         )
         return output_potential
 
@@ -922,8 +984,10 @@ def _pad_atoms_marking_images(
     index = padded.arrays.pop("abtem_pad_index")
     # An image is the given atom shifted by a nonzero multiple of the cell
     # lengths along a padded axis; the given atom itself is not shifted.
-    lengths = np.diag(np.array(atoms.cell))
-    shifts = np.round((padded.positions - atoms.positions[index]) / lengths)
+    # Measured in fractional coordinates, so that it also holds on a skewed
+    # cell, whose lattice vectors are not along the Cartesian axes.
+    inverse_cell = np.linalg.inv(np.array(atoms.cell, dtype=float))
+    shifts = np.round((padded.positions - atoms.positions[index]) @ inverse_cell)
     return padded, np.all(shifts == 0.0, axis=1)
 
 
@@ -1024,6 +1088,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         periodic: bool = True,
         integrator=None,
         device: Optional[str] = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
@@ -1042,6 +1107,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            non_orthogonal=non_orthogonal,
         )
 
         # Every build folds atoms given far outside along z into the cell; this
@@ -1129,6 +1195,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         """
         atoms = self.frozen_phonons.atoms.copy()
         atoms.set_array(SOURCE_INDEX, np.arange(len(atoms)))
+
+        if getattr(self, "_non_orthogonal", False):
+            # keep the non-orthogonal cell; the grid carries the skewed metric
+            return atoms, False, np.eye(3)
 
         # An orthogonal cell that only changes plane is rotated, as long as the
         # rotated cell is the box and there is no origin to translate it by.
@@ -1226,7 +1296,60 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # here. In place, because _displace returns atoms this potential
             # owns: neither the atoms the potential stores nor an object the
             # frozen phonons keep can be reached from here.
-            configuration = wrap_and_snap_atoms(atoms, copy=False)
+            if not getattr(self, "_non_orthogonal", False):
+                configuration = wrap_and_snap_atoms(atoms, copy=False)
+            else:
+                # Not wrap_and_snap_atoms: it snaps against `np.diag(cell)`,
+                # which is not the right boundary for a non-orthogonal cell.
+                # In place, for the same reason as above.
+                atoms.wrap(eps=0.0)
+                # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
+                # (floating-point artifact from ASE surface builders) become z ≈ cell_z
+                # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
+                # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
+                # outside all bins and is silently dropped.  Snap those back to 0.
+                cell_z = atoms.cell[2, 2]
+                atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+
+                # The same wrap(eps=0.0) issue affects the in-plane axes of a skewed
+                # cell: an atom at fractional 0 can evaluate to a tiny negative
+                # coordinate (floating point in the non-orthogonal inv(cell)) and wrap
+                # to ~1, where it falls outside the grid and is dropped -- breaking the
+                # primitive periodicity. Snap those boundary atoms back to 0.
+                scaled = atoms.get_scaled_positions(wrap=False)
+                snap = scaled > 1.0 - 1e-6
+                snap[:, 2] = False  # z handled above
+                if snap.any():
+                    atoms.positions = atoms.positions - snap.astype(float) @ np.asarray(
+                        atoms.cell
+                    )
+
+                # When the c-axis is tilted (has in-plane components) the 3D `wrap()`
+                # leaves atoms inside the supercell parallelepiped, but their (x, y)
+                # Cartesian coordinates can extend beyond the in-plane (a, b) box of the
+                # multislice grid -- so they would fall outside the grid and be silently
+                # skipped. Wrap each atom's (x, y) independently into the in-plane (a, b)
+                # parallelogram at its current z (the physically equivalent in-plane
+                # periodic image; the atoms are then in the same "z-separable" reference
+                # frame that the rest of the slicing/integration machinery assumes).
+                in_plane = np.asarray(atoms.cell[:2, :2], dtype=float)
+                c_tilted = (
+                    abs(atoms.cell[2, 0]) > 1e-12 or abs(atoms.cell[2, 1]) > 1e-12
+                )
+                if c_tilted:
+                    inv = np.linalg.inv(in_plane.T)
+                    uv = atoms.positions[:, :2] @ inv.T  # fractional (a, b) coords
+                    uv = uv - np.floor(uv)
+                    atoms.positions[:, :2] = uv @ in_plane
+                    # After the in-plane wrap the atoms are positioned as if c were
+                    # vertical; reflect that in the cell so downstream scaled-coordinate
+                    # checks (e.g. atoms_in_cell in pad_atoms) use the right reference.
+                    new_cell = np.array(atoms.cell, dtype=float)
+                    new_cell[2, 0] = 0.0
+                    new_cell[2, 1] = 0.0
+                    atoms.set_cell(new_cell, scale_atoms=False)
+
+                configuration = atoms
             # Repeats exactly the axes with a nonzero margin. A periodic
             # potential's atoms are never cut.
             return configuration, pad_atoms(configuration, margins=margins), margins
@@ -1236,6 +1359,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         # cell. A cut cell already holds the margin cut_cell supplied.
         if is_cut:
             in_cell = _in_cell(atoms)
+        elif getattr(self, "_non_orthogonal", False):
+            # The far-atom wraps below are along the Cartesian axes of an
+            # orthogonal cell; a skewed cell is only padded, along its lattice
+            # vectors.
+            atoms, in_cell = _pad_atoms_marking_images(atoms, margins)
         else:
             # The images of an atom given outside the cell come from pad_atoms,
             # which does not reach an atom given far outside: in-plane for a
@@ -1433,6 +1561,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     gpts=self.gpts,
                     sampling=self.sampling,
                     device=self.device,
+                    cell=self.cell,
                 )
 
                 if array is not None:
@@ -1455,6 +1584,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 slice_thickness=self.slice_thickness[start:stop],
                 exit_planes=exit_planes,
                 extent=self.extent,
+                cell=self.grid.cell,
             )
 
             if return_depth:
@@ -1562,7 +1692,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         and, whenever compatible with commensurability, a fast FFT size (all prime
         factors in {2, 3, 5, 7}); the commensurate grid nearest the target is kept
         when it is already such a size. Set the configuration option
-        'grid.round-to-fast-fft' to False for the plain commensurate grid.
+        'grid.round-to-fast-fft' to False for the plain commensurate grid. The
+        commensurability search follows the lattice vectors, so it is correct for
+        a non-orthogonal (skewed) cell too.
         For an `AtomsEnsemble` with more than one configuration (e.g. an MD
         trajectory), each configuration is an independent, generally
         non-commensurate snapshot, so commensurability is not attempted and the
@@ -1655,6 +1787,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
+    non_orthogonal : bool, optional
+        Whether to build the potential on a non-orthogonal (skewed) in-plane grid rather
+        than orthogonalising the cell into a supercell. The `z`-axis must be
+        perpendicular to the `xy`-plane (monoclinic-along-beam). If ``None`` (default)
+        this is detected automatically from the cell: a non-orthogonal but z-separable
+        cell (with ``plane='xy'`` and no explicit ``box``) builds a skewed grid, while an
+        orthogonal cell is unaffected. Pass ``False`` to force the legacy orthogonalising
+        behaviour, or ``True`` to require a skewed grid.
     """
 
     _exclude_from_copy = ("parametrization", "projection")
@@ -1676,6 +1816,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         periodic: bool = True,
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
+        non_orthogonal: bool | None = None,
     ):
         origin = _validate_origin(origin)
         if box is not None:
@@ -1687,8 +1828,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         # shared reference lattice: each configuration is an independent,
         # generally non-commensurate snapshot, and `atoms_obj` here is only the
         # first frame. A single-configuration `AtomsEnsemble` has no such
-        # ambiguity — that one frame *is* the configuration, just as it would be
-        # if passed as plain `Atoms` — so only skip commensurability search when
+        # ambiguity -- that one frame *is* the configuration, just as it would be
+        # if passed as plain `Atoms` -- so only skip commensurability search when
         # there is genuinely more than one configuration to be ambiguous about.
         has_multiple_configs = (
             isinstance(frozen_phonons, AtomsEnsemble) and frozen_phonons.num_configs > 1
@@ -1709,12 +1850,31 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 )
             return cut_cell(atoms_obj, cell=placed_box, plane=plane, origin=origin)
 
+        # Decide skew-native vs. legacy orthogonalising using the same
+        # criteria as _FieldBuilder.__init__'s own `use_skew` detection,
+        # so the grid this chooses is commensurate with whichever
+        # geometry the potential actually ends up built on. Deciding
+        # this here (rather than always calling _require_cell_transform,
+        # which predates skew-native support and knows nothing about
+        # `non_orthogonal`) is what makes 'auto' sampling correct for a
+        # skewed cell: without it, the target grid would be computed for
+        # an orthogonalised auxiliary supercell and then silently reused
+        # as the gpts of an entirely different (skewed) grid.
+        cell = np.array(atoms_obj.cell, dtype=float)
+        if non_orthogonal is None:
+            use_skew = (
+                not is_cell_orthogonal(cell)
+                and is_cell_ab_in_plane(cell)
+                and isinstance(plane, str)
+                and plane == "xy"
+                and box is None
+            )
+        else:
+            use_skew = bool(non_orthogonal)
+
         if sampling == "auto":
             if gpts is not None:
-                raise ValueError(
-                    "Cannot specify both gpts and sampling='auto'"
-                )
-            cell = np.array(atoms_obj.cell)
+                raise ValueError("Cannot specify both gpts and sampling='auto'")
             if not atoms_obj.pbc[:2].all() or has_multiple_configs:
                 # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
                 # translationally repeated, so commensurability has no meaning and
@@ -1732,6 +1892,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # transform, else the cell itself.
                 if box is not None:
                     extent = box[:2]
+                elif use_skew:
+                    extent = tuple(np.linalg.norm(cell[:2, :2], axis=1))
                 elif _require_cell_transform(
                     cell, box=None, plane=plane, origin=origin
                 ):
@@ -1741,35 +1903,46 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 gpts = tuple(safe_ceiling_int(extent[i] / 0.05) for i in range(2))
                 if round_auto_derived_gpts():
                     gpts = tuple(next_fast_fft_size(n) for n in gpts)
-            elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
-                if not isinstance(plane, str):
-                    raise NotImplementedError
-                if box is not None:
-                    auto_box = box
-                else:
-                    auto_box = _default_box(cell, plane)
-                extent = auto_box[:2]
-                # Place the atoms in the box so positions match the extent
-                _auto_atoms = _placed_atoms(auto_box)
-                gpts = commensurate_gpts(
-                    extent,
-                    _auto_atoms.positions,
-                    target_sampling=0.05,
-                    round_to_fast_fft=round_auto_derived_gpts(),
-                )
             else:
-                if box is not None:
-                    extent = box[:2]
-                    _auto_atoms = atoms_obj
+                if use_skew:
+                    cell_2d = cell[:2, :2]
+                    extent = tuple(np.linalg.norm(cell_2d, axis=1))
+                    gpts = commensurate_gpts(
+                        extent,
+                        atoms_obj.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                        cell=cell_2d,
+                    )
+                elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                    if not isinstance(plane, str):
+                        raise NotImplementedError
+                    if box is not None:
+                        auto_box = box
+                    else:
+                        auto_box = _default_box(cell, plane)
+                    extent = auto_box[:2]
+                    # Place the atoms in the box so positions match the extent
+                    _auto_atoms = _placed_atoms(auto_box)
+                    gpts = commensurate_gpts(
+                        extent,
+                        _auto_atoms.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                    )
                 else:
-                    extent = (float(cell[0, 0]), float(cell[1, 1]))
-                    _auto_atoms = atoms_obj
-                gpts = commensurate_gpts(
-                    extent,
-                    _auto_atoms.positions,
-                    target_sampling=0.05,
-                    round_to_fast_fft=round_auto_derived_gpts(),
-                )
+                    if box is not None:
+                        extent = box[:2]
+                        _auto_atoms = atoms_obj
+                    else:
+                        extent = tuple(np.linalg.norm(cell[:2, :2], axis=1))
+                        _auto_atoms = atoms_obj
+                    gpts = commensurate_gpts(
+                        extent,
+                        _auto_atoms.positions,
+                        target_sampling=0.05,
+                        round_to_fast_fft=round_auto_derived_gpts(),
+                    )
             sampling = None
 
         if slice_thickness == "auto":
@@ -1777,7 +1950,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
                 # Periodic in z: align slice boundaries with the crystal planes
                 # of the atoms as they are placed in the potential's box.
                 plane_atoms = atoms_obj
-                if _require_cell_transform(
+                # A skew-native potential keeps the cell, so its atoms are not
+                # placed in an orthogonal box.
+                if not use_skew and _require_cell_transform(
                     atoms_obj.cell, box=box, plane=plane, origin=origin
                 ):
                     if box is not None:
@@ -1821,6 +1996,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             box=box,
             periodic=periodic,
             integrator=integrator,
+            non_orthogonal=non_orthogonal,
         )
 
 
@@ -1834,6 +2010,7 @@ class FieldArray(BaseField, ArrayObject):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         # assert len(array.shape) == self._base_dims
 
@@ -1845,7 +2022,11 @@ class FieldArray(BaseField, ArrayObject):
             exit_planes, len(self._slice_thickness)
         )
         self._grid = Grid(
-            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
+            extent=extent,
+            gpts=array.shape[-2:],
+            sampling=sampling,
+            lock_gpts=True,
+            cell=cell,
         )
 
         super().__init__(
@@ -1853,6 +2034,17 @@ class FieldArray(BaseField, ArrayObject):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    @property
+    def metadata(self) -> dict:
+        cell = self.grid.cell
+        if cell is not None:
+            # the grid cell takes precedence so a non-orthogonal cell stays consistent
+            # with the grid (and overrides any stale cell carried in the metadata)
+            self._metadata["cell"] = tuple(map(tuple, cell.tolist()))
+        else:
+            self._metadata.pop("cell", None)
+        return self._metadata
 
     @property
     def num_configurations(self):
@@ -2109,6 +2301,14 @@ class FieldArray(BaseField, ArrayObject):
             )
         else:
             new_extent = None
+
+        if self.grid.cell is not None:
+            new_cell = self.grid.cell.copy()
+            new_cell[0] *= repetitions[0]
+            new_cell[1] *= repetitions[1]
+        else:
+            new_cell = None
+
         new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
 
         return self.__class__(
@@ -2116,6 +2316,7 @@ class FieldArray(BaseField, ArrayObject):
             slice_thickness=new_slice_thickness,
             extent=new_extent,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            cell=new_cell,
         )
 
     def to_hyperspy(self, transpose: bool = True):
@@ -2271,6 +2472,7 @@ class PotentialArray(BasePotential, FieldArray):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         if metadata is None:
             metadata = {}
@@ -2284,7 +2486,14 @@ class PotentialArray(BasePotential, FieldArray):
             exit_planes=exit_planes,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            cell=cell,
         )
+
+    @property
+    def _slice_kwargs(self) -> dict:
+        # The cell is the grid's, which a slice must keep: the "cell" its
+        # metadata carries is dropped by a grid without one.
+        return {**super()._slice_kwargs, "cell": self.cell}
 
     @staticmethod
     def _transmission_function(array, energy):
@@ -2338,6 +2547,7 @@ class PotentialArray(BasePotential, FieldArray):
             exit_planes=self.exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
+            cell=self.cell,
         )
         return t
 
@@ -2400,6 +2610,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
         super().__init__(
@@ -2410,13 +2621,14 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             exit_planes=exit_planes,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            cell=cell,
         )
 
     @property
     def _slice_kwargs(self) -> dict:
         # The constructor takes no metadata: a transmission function always has
         # the default metadata of a potential array.
-        return {"extent": self.extent, "energy": self.energy}
+        return {"extent": self.extent, "energy": self.energy, "cell": self.cell}
 
     def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         ensemble = (slice(None),) * len(self.ensemble_shape)
@@ -2608,16 +2820,35 @@ class CrystalPotential(_PotentialBuilder):
 
         assert hasattr(potential_unit, "device")
 
+        # Propagate the in-plane cell geometry: if the unit potential has a
+        # non-orthogonal grid, tile the full 3×3 cell so _FieldBuilder can
+        # detect and preserve the skew metric.  Do not pass ``box`` in that
+        # case -- _FieldBuilder derives it from the cell and ``box is None``
+        # is required for the auto-detection of the skew path.
+        unit_cell_2d = potential_unit.grid.cell
+        if unit_cell_2d is not None:
+            cell_3d = np.zeros((3, 3))
+            cell_3d[:2, :2] = np.asarray(unit_cell_2d)
+            cell_3d[2, 2] = potential_unit.thickness
+            cell_3d[0] *= repetitions[0]
+            cell_3d[1] *= repetitions[1]
+            cell_3d[2] *= repetitions[2]
+            cell = Cell(cell_3d)
+            init_box = None
+        else:
+            cell = Cell(np.diag(box))
+            init_box = box
+
         super().__init__(
             array_object=PotentialArray,
             gpts=gpts,
-            cell=Cell(np.diag(box)),
+            cell=cell,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
             device=potential_unit.device,
             plane="xy",
             origin=(0.0, 0.0, 0.0),
-            box=box,
+            box=init_box,
             periodic=True,
         )
 

@@ -38,7 +38,7 @@ from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
+from abtem.core.grid import Grid, GridUndefinedError, reciprocal_cell, spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -293,6 +293,32 @@ class BaseSMatrix(BaseWaves):
         return len(self.wave_vectors)
 
     @property
+    def _sampling_vectors(self) -> np.ndarray | None:
+        """The two real-space sampling vectors (rows, Cartesian) of the skewed grid, or
+        ``None`` for an orthogonal grid."""
+        cell = self.cell
+        if cell is None:
+            return None
+        return np.stack([cell[0] / self.gpts[0], cell[1] / self.gpts[1]])
+
+    def _cell_for_extent(
+        self, extent: tuple[float, float]
+    ) -> np.ndarray | None:
+        """Cell (2x2, rows) with the same lattice directions as the full cell but row
+        lengths rescaled to span ``extent`` (so it is consistent with a sub-window or a
+        down/upsampled grid of that extent). ``None`` for an orthogonal grid."""
+        cell = self.cell
+        if cell is None:
+            return None
+        full_extent = self.extent
+        return np.stack(
+            [
+                cell[0] * (extent[0] / full_extent[0]),
+                cell[1] * (extent[1] / full_extent[1]),
+            ]
+        )
+
+    @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
         wave_axes_metadata = super().base_axes_metadata
         return [
@@ -367,6 +393,7 @@ class BaseSMatrix(BaseWaves):
             gpts=window_gpts,
             ctf=ctf,
             energy=energy,
+            cell=self._cell_for_extent(self.window_extent),
             **kwargs,
         )
 
@@ -1012,9 +1039,14 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         device: str = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
+        cell: np.ndarray = None,
     ):
         self._grid = Grid(
-            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
+            extent=extent,
+            gpts=array.shape[-2:],
+            sampling=sampling,
+            lock_gpts=True,
+            cell=cell,
         )
         self._accelerator = Accelerator(energy=energy)
         self._wave_vectors = wave_vectors
@@ -1188,9 +1220,18 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             position_coefficients, dtype=get_dtype(complex=True)
         )
 
-        pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
-            self.window_offset
-        )
+        sampling_vectors = self._sampling_vectors
+        if sampling_vectors is None:
+            pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
+                self.window_offset
+            )
+        else:
+            # map Cartesian probe positions to (skewed) pixel indices via the inverse
+            # sampling-vector matrix J = [a1 | a2] (columns), i.e. pixel = J^-1 r.
+            inv_jacobian = np.linalg.inv(sampling_vectors.T)
+            pixel_positions = positions @ xp.asarray(
+                inv_jacobian.T, dtype=positions.dtype
+            ) - xp.asarray(self.window_offset)
 
         crop_corner, size, corners = window_crop(
             pixel_positions, self.window_gpts, self.gpts
@@ -1206,12 +1247,35 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         xp = get_array_module(self.wave_vectors)
 
         if isinstance(scan, GridScan):
-            x = xp.asarray(scan._x_coordinates())
-            y = xp.asarray(scan._y_coordinates())
+            u = xp.asarray(scan._x_coordinates())
+            v = xp.asarray(scan._y_coordinates())
+
+            # For skew cells the Cartesian scan position is
+            #   (x, y) = u * hat1 + v * hat2
+            # so the phase is exp(-2 pi i [u*(hat1.k) + v*(hat2.k)]),
+            # which stays separable in u and v.
+            cell = scan._cell
+            if cell is not None:
+                cell = xp.asarray(np.asarray(cell, dtype=float))
+                norms = xp.sqrt((cell**2).sum(axis=1))
+                hat1 = cell[0] / norms[0]
+                hat2 = cell[1] / norms[1]
+                k_u = (
+                    hat1[0] * self.wave_vectors[:, 0]
+                    + hat1[1] * self.wave_vectors[:, 1]
+                )
+                k_v = (
+                    hat2[0] * self.wave_vectors[:, 0]
+                    + hat2[1] * self.wave_vectors[:, 1]
+                )
+            else:
+                k_u = self.wave_vectors[:, 0]
+                k_v = self.wave_vectors[:, 1]
+
             coefficients = complex_exponential(
-                -2.0 * xp.pi * x[:, None, None] * self.wave_vectors[None, None, :, 0]
+                -2.0 * xp.pi * u[:, None, None] * k_u[None, None, :]
             ) * complex_exponential(
-                -2.0 * xp.pi * y[None, :, None] * self.wave_vectors[None, None, :, 1]
+                -2.0 * xp.pi * v[None, :, None] * k_v[None, None, :]
             )
         else:
             positions = xp.asarray(scan.get_positions())
@@ -1301,12 +1365,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
 
+                window_extent = (
+                    waves_array.shape[-2] * self.sampling[0],
+                    waves_array.shape[-1] * self.sampling[1],
+                )
                 waves = Waves(
                     waves_array,
                     sampling=self.sampling,
                     energy=self.energy,
                     ensemble_axes_metadata=ensemble_axes_metadata,
                     metadata=self.metadata,
+                    cell=self._cell_for_extent(window_extent),
                 )
 
                 indices = (
@@ -1447,9 +1516,16 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         """
         # integer Fourier-space indices identify the wave vectors exactly,
         # whatever floating point precision they are stored in
-        wave_vectors = self.wave_vectors
+        wave_vectors = asnumpy(self.wave_vectors)
+        cell = self.cell
+        if cell is None:
+            cell = np.diag(np.array(self.extent, dtype=float))
+        # A wave vector is k = n b1 + m b2 in the reciprocal basis of the cropping
+        # window, whose lattice vectors are those of the cell over the
+        # interpolation; n = k . a1 for the real-space window vectors a1, a2.
+        # This is k * extent / interpolation on an orthogonal cell.
         frequency_indices = np.rint(
-            asnumpy(wave_vectors) * np.array(self.extent) / np.array(self.interpolation)
+            wave_vectors @ np.asarray(cell, dtype=float).T / np.array(self.interpolation)
         ).astype(int)
         union_index = {(n, m): i for i, (n, m) in enumerate(frequency_indices.tolist())}
 
@@ -1515,7 +1591,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             )
             scan = validate_scan(
                 scan,
-                Probe._from_ctf(extent=self.extent, ctf=probe_ctf, energy=energies[0]),
+                Probe._from_ctf(
+                    extent=self.extent,
+                    ctf=probe_ctf,
+                    energy=energies[0],
+                    cell=self.grid.cell,
+                ),
             )
         detectors = self._match_detectors_to_energies(detectors, energies)
 
@@ -1604,7 +1685,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             scan = self.extent[0] / 2, self.extent[1] / 2
 
         scan = validate_scan(
-            scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
+            scan,
+            Probe._from_ctf(
+                extent=self.extent, ctf=ctf, energy=self.energy, cell=self.grid.cell
+            ),
         )
         detectors = detectors = validate_detectors(
             detectors, self.dummy_probes(downsample=False)
@@ -3456,7 +3540,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             scan = self.extent[0] / 2, self.extent[1] / 2
 
         scan = validate_scan(
-            scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
+            scan,
+            Probe._from_ctf(
+                extent=self.extent, ctf=ctf, energy=self.energy, cell=self.grid.cell
+            ),
         )
 
         detectors = validate_detectors(detectors, self.dummy_probes())
@@ -4312,11 +4399,22 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         n, m = _aperture_frequency_indices(self.dummy_probes(device="cpu"))
 
-        w, h = self.extent
+        cell = getattr(self.grid, "_cell", None)
 
         dtype = get_dtype(complex=False)
-        kx = n / w * dtype(self.interpolation[0])
-        ky = m / h * dtype(self.interpolation[1])
+        if cell is None:
+            w, h = self.extent
+
+            kx = n / w * dtype(self.interpolation[0])
+            ky = m / h * dtype(self.interpolation[1])
+        else:
+            # reciprocal-lattice points g = n*ix*b1 + m*iy*b2 (Cartesian), with b1, b2
+            # the reciprocal basis of the non-orthogonal cell.
+            reciprocal = reciprocal_cell(cell)
+            nx = n * dtype(self.interpolation[0])
+            my = m * dtype(self.interpolation[1])
+            kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]
+            ky = nx * reciprocal[0, 1] + my * reciprocal[1, 1]
 
         xp = get_array_module(self.device)
         return xp.asarray([kx, ky]).T
@@ -4673,7 +4771,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
         array = plane_waves(
-            wave_vectors[wave_vector_range], s_matrix.extent, s_matrix.gpts
+            wave_vectors[wave_vector_range],
+            s_matrix.extent,
+            s_matrix.gpts,
+            cell=getattr(s_matrix.grid, "_cell", None),
         )
 
         array *= np.prod(s_matrix.interpolation) / np.prod(array.shape[-2:])
@@ -4685,6 +4786,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ensemble_axes_metadata=[
                 OrdinalAxis(values=wave_vectors[wave_vector_range])
             ],
+            cell=s_matrix.grid.cell,
         )
 
         if s_matrix.potential is not None:
@@ -5142,6 +5244,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "over the potential ensemble."
             )
 
+        if self._upsample_enabled and self.grid.cell is not None:
+            raise NotImplementedError(
+                "SMatrix.build does not support upsample=True (the C-PRISM "
+                "algorithm) on a non-orthogonal (skewed) cell; the dense "
+                "plane-wave expansion and compressed wave vectors both assume an "
+                "orthogonal grid. Build the potential with non_orthogonal=False "
+                "to use an orthogonalised supercell instead, or use "
+                "upsample=False (the default) or interpolation=(1, 1)."
+            )
+
         self._check_upsample_exit_planes()
 
         lazy = validate_lazy(lazy)
@@ -5224,6 +5336,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 device=self.device,
                 ensemble_axes_metadata=[energy_ax] + results[0].ensemble_axes_metadata,
                 metadata=results[0].metadata,
+                # every energy is built on the one (possibly skewed) grid
+                cell=results[0].cell,
             )
 
         # --- Single-energy path (unchanged) ---
@@ -5334,6 +5448,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ensemble_axes_metadata=self.ensemble_axes_metadata
             + exit_planes_metadata
             + self.base_axes_metadata[:1],
+            cell=self.grid.cell,
         )
 
         waves.metadata.update(self._built_metadata)
@@ -5999,9 +6114,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         elif disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = False
 
-        if not lazy:
-            scan = validate_scan(scan, self)
+        # validate early so the scan picks up the cell from self.grid
+        # (needed for all code paths, not just the eager one)
+        scan = validate_scan(scan, self)
 
+        if not lazy:
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
@@ -6015,7 +6132,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             return _squeezed(measurements)
 
         if disable_s_matrix_chunks:
-            scan = validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
 

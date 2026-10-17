@@ -672,7 +672,7 @@ _POTENTIAL_CASES = [
 )
 def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     name, atoms, _ = case
-    potential = abtem.Potential(atoms, **GRID)
+    potential = abtem.Potential(atoms, non_orthogonal=False, **GRID)
     oracle = _by_hand(atoms, potential.box)
     assert len(potential.get_transformed_atoms()) == len(oracle)
 
@@ -690,7 +690,7 @@ def test_potential_of_a_cell_with_its_diagonal_as_the_orthogonal_box(case):
     ids=["BN x (1, 2, 1)", "monoclinic c = (4, 0, 5)"],
 )
 def test_automatic_sampling_of_a_sheared_cell(atoms):
-    potential = abtem.Potential(atoms, sampling="auto")
+    potential = abtem.Potential(atoms, sampling="auto", non_orthogonal=False)
     oracle = _by_hand(atoms, potential.box)
     # The grid that fits the atoms as the orthogonal cell holds them.
     assert potential.gpts == abtem.Potential(oracle, sampling="auto").gpts
@@ -734,7 +734,7 @@ def test_atom_on_a_cell_boundary_by_round_off_is_not_dropped():
     assert tuple(np.diag(atoms.cell)) == box
     assert len(orthogonalize_cell(atoms)) == len(atoms)
 
-    potential = abtem.Potential(atoms, **GRID)
+    potential = abtem.Potential(atoms, non_orthogonal=False, **GRID)
     oracle = _by_hand(atoms, potential.box)
     actual = asnumpy(potential.build(lazy=False).array)
     expected = asnumpy(abtem.Potential(oracle, **GRID).build(lazy=False).array)
@@ -849,7 +849,7 @@ def test_rattled_hexagonal_supercell_keeps_every_atom():
 
 def test_potential_of_a_rattled_hexagonal_supercell_keeps_every_atom():
     atoms = _rattled(graphene(vacuum=2.0) * (12, 12, 1), 1)
-    potential = abtem.Potential(atoms, sampling=0.2)
+    potential = abtem.Potential(atoms, sampling=0.2, non_orthogonal=False)
 
     transformed = potential.get_transformed_atoms()
 
@@ -1195,7 +1195,7 @@ def test_default_box_in_plane_xy_is_unchanged(atoms):
     """Guard: plane="xy" never rotates the cell, so its box is best_orthogonal_cell's."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        box = abtem.Potential(atoms, sampling=0.1).box
+        box = abtem.Potential(atoms, sampling=0.1, non_orthogonal=False).box
     assert box == tuple(best_orthogonal_cell(np.array(atoms.cell)))
 
 

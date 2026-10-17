@@ -36,9 +36,17 @@ def _float64():
         yield
 
 
-def _potential(device="cpu"):
+def _potential(device="cpu", non_orthogonal=None):
+    # The hexagonal cell is simulated on its skewed grid by default; C-PRISM
+    # (upsample=True) needs the orthogonal supercell, non_orthogonal=False.
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
-    return abtem.Potential(atoms, sampling=0.15, slice_thickness=2, device=device)
+    return abtem.Potential(
+        atoms,
+        sampling=0.15,
+        slice_thickness=2,
+        device=device,
+        non_orthogonal=non_orthogonal,
+    )
 
 
 def _scan(potential, gpts=(3, 5)):
@@ -121,7 +129,7 @@ def _same_pixels(a, b):
 def test_multi_energy_prism_pixelated_equals_single_energy_runs(
     max_angle, kwargs, lazy
 ):
-    potential = _potential()
+    potential = _potential(non_orthogonal=False if kwargs.get("upsample") else None)
     multi = _prism(
         potential,
         list(ENERGIES),

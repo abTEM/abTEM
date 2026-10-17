@@ -247,7 +247,13 @@ def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
 
     gpaw_potential_from_disk = GPAWPotential(path, gpts=(32, 32))
     gpaw_potential_from_disk = gpaw_potential_from_disk.build().compute()
-    assert gpaw_potential_from_disk == gpaw_potential
+    _live = np.asarray(gpaw_potential.array)
+    _disk = np.asarray(gpaw_potential_from_disk.array)
+    assert gpaw_potential_from_disk == gpaw_potential, (
+        "potential built from a live calculator differs from one built from the same "
+        f"calculator written to disk: max |diff| = {np.abs(_disk - _live).max():.3e}, "
+        f"{int((_disk != _live).sum())}/{_live.size} elements differ"
+    )
 
     gpaw_potential_from_disk_with_fp = GPAWPotential([path] * 2, gpts=(32, 32))
     gpaw_potential_from_disk_with_fp = (
@@ -255,9 +261,12 @@ def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
     )
 
     assert gpaw_potential_from_disk_with_fp.ensemble_shape == (2,)
-    assert np.all(
-        gpaw_potential_from_disk_with_fp.array[0]
-        == gpaw_potential_from_disk_with_fp.array[1]
+    _first = np.asarray(gpaw_potential_from_disk_with_fp.array[0])
+    _second = np.asarray(gpaw_potential_from_disk_with_fp.array[1])
+    assert np.all(_first == _second), (
+        "two ensemble configurations built from the SAME file differ: max |diff| = "
+        f"{np.abs(_first - _second).max():.3e}, "
+        f"{int((_first != _second).sum())}/{_first.size} elements differ"
     )
 
 
@@ -399,10 +408,36 @@ def test_gpaw_potential_reports_a_strained_default_box(
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         potential = GPAWPotential(
-            hexagonal_calculator, repetitions=repetitions, sampling=0.2, device=device
+            hexagonal_calculator,
+            repetitions=repetitions,
+            sampling=0.2,
+            device=device,
+            non_orthogonal=False,
         )
         potential.build(lazy=True).compute()
     assert len(_chosen_box_warnings(records)) == int(warns)
+
+
+@devices
+def test_gpaw_potential_in_the_orthogonal_box_of_a_hexagonal_cell_has_its_symmetry(
+    hexagonal_calculator, device
+):
+    # The orthogonal box (a, sqrt(3) a) holds two primitive cells related by
+    # half the box along both axes, so the potential is invariant under that
+    # shift. The core corrections used to be laid out on the skewed cell and the
+    # valence potential interpolated onto it, whatever the box (0.65 of the
+    # maximum off).
+    potential = GPAWPotential(
+        hexagonal_calculator,
+        gpts=(24, 42),
+        slice_thickness=1.0,
+        non_orthogonal=False,
+        device=device,
+    )
+    assert potential.box[:2] == pytest.approx((2.5, 2.5 * np.sqrt(3)))
+    array = asnumpy(potential.build(lazy=False).array)
+    shifted = np.roll(array, (12, 21), axis=(1, 2))
+    np.testing.assert_allclose(shifted, array, rtol=0, atol=1e-5 * np.abs(array).max())
 
 
 @pytest.fixture(scope="module")

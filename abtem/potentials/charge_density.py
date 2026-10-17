@@ -4,7 +4,7 @@ electrostatic potential in multislice simulations."""
 from __future__ import annotations
 
 from functools import partial
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import dask
 import dask.array as da
@@ -155,7 +155,9 @@ def _superpose_deltas(positions, array, scale=1):
 
 
 def _add_point_charges_real_space(array, atoms):
-    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for an
+    # orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(array.shape)
 
     inverse_cell = np.linalg.inv(np.array(atoms.cell))
     positions = np.dot(atoms.positions, inverse_cell)
@@ -181,10 +183,23 @@ def _fourier_space_gaussian(k2, width):
 
 
 def add_point_charges_fourier(
-    array: np.ndarray, atoms: Atoms, broadening: float = 0.05
+    array: np.ndarray, atoms: Atoms, broadening: float = 0.05, atoms_per_chunk: int = 256
 ) -> np.ndarray:
     """
     Add the nuclear point charges in Reciprocal space.
+
+    The per-atom phase factor ``exp(-2pi i k.r)`` is evaluated exactly (as an
+    analytic delta function in Fourier space, not a real-space interpolation of a
+    singularity), but reorganised for speed: for a plane-wave FFT grid, k is always
+    an integer combination ``h1 b1 + h2 b2 + h3 b3`` of the reciprocal lattice
+    vectors (true for both orthogonal and skewed cells), so
+    ``k.r = h1 s1 + h2 s2 + h3 s3`` for the atom's fractional coordinates
+    ``(s1, s2, s3)``. This separates the phase factor into three small 1D
+    exponentials (sizes nx, ny, nz) per atom instead of one exponential over the
+    full nx*ny*nz grid per atom, and the atom sum is then evaluated as a matrix
+    product (BLAS) rather than a Python loop. Atoms are processed in chunks to
+    bound peak memory. Numerically identical to the direct per-atom evaluation to
+    floating-point precision.
 
     Parameters
     ----------
@@ -195,13 +210,18 @@ def add_point_charges_fourier(
         determined.
     broadening : float
         Gaussian broadening of the point charges (default is 0.05).
+    atoms_per_chunk : int
+        Number of atoms processed per batch, bounding the peak memory of the
+        intermediate (two smallest grid axes x chunk) tensor.
 
     Returns
     -------
     density : numpy.ndarray
         3D charge density with added nuclear charges in reciprocal space.
     """
-    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for an
+    # orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(array.shape)
 
     kx, ky, kz = _spatial_frequencies(array.shape, atoms.cell)
 
@@ -213,9 +233,41 @@ def add_point_charges_fourier(
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
 
-    for atom in atoms:
-        scale = atom.number / pixel_volume
-        array += scale * broadening * _fourier_space_delta(kx, ky, kz, *atom.position)
+    n_atoms = len(atoms)
+    if n_atoms == 0:
+        return array
+
+    shape = array.shape
+    h_axes = [np.fft.fftfreq(n, d=1 / n) for n in shape]
+
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    scale = atoms.numbers / pixel_volume
+
+    # Contract the two smallest grid axes first, to bound the size of the
+    # (axis_a, axis_b, chunk) intermediate tensor -- e.g. the z-axis is usually
+    # much smaller than x/y since it has already been cropped to num_slices.
+    small_a, small_b, big = (int(i) for i in np.argsort(shape))
+
+    accum = np.zeros((shape[small_a], shape[small_b], shape[big]), dtype=complex)
+
+    for start in range(0, n_atoms, atoms_per_chunk):
+        stop = min(start + atoms_per_chunk, n_atoms)
+        s = scaled_positions[start:stop]
+        c = scale[start:stop]
+
+        phase_a = np.exp(-2j * np.pi * np.multiply.outer(h_axes[small_a], s[:, small_a]))
+        phase_b = np.exp(-2j * np.pi * np.multiply.outer(h_axes[small_b], s[:, small_b]))
+        phase_big = np.exp(-2j * np.pi * np.multiply.outer(h_axes[big], s[:, big]))
+        phase_big = phase_big * c[None, :]
+
+        pairwise = (phase_a[:, None, :] * phase_b[None, :, :]).reshape(-1, stop - start)
+        accum += (pairwise @ phase_big.T).reshape(
+            shape[small_a], shape[small_b], shape[big]
+        )
+
+    accum = np.moveaxis(accum, (0, 1, 2), (small_a, small_b, big))
+
+    array += accum * broadening
 
     return array
 
@@ -243,12 +295,27 @@ def _interpolate_between_cells(
     return interpolated
 
 
-def _interpolate_slice(array, cell, gpts, sampling, a, b):
+def _interpolate_slice(
+    array, cell, gpts, sampling, a, b, slice_cell=None, origin=(0.0, 0.0, 0.0)
+):
+    # `slice_cell`, when given, is the cell whose in-plane vectors the slice spans
+    # (the box of a potential laid out in a box other than the cell of `array`),
+    # with `origin` the position of its corner in the frame of `cell`; by default
+    # the slice spans the in-plane vectors of `cell` from its corner.
     dz_charge = cell[2, 2] / array.shape[2]
     nz = max(safe_ceiling_int((b - a) / dz_charge), 2)
     slice_shape = gpts + (nz,)
 
-    slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
+    # The slice spans the same in-plane (a, b) geometry as the source cell -- just
+    # with z thickness (b - a). Build slice_box as a full 3x3 cell so the
+    # interpolation between cells preserves the in-plane skew (the previous
+    # diagonal slice_box silently rectified non-orthogonal cells onto a Cartesian
+    # rectangle, losing the parallelogram shape).
+    cell_arr = np.asarray(cell if slice_cell is None else slice_cell, dtype=float)
+    slice_box = np.zeros((3, 3))
+    slice_box[0, :2] = cell_arr[0, :2]
+    slice_box[1, :2] = cell_arr[1, :2]
+    slice_box[2, 2] = b - a
 
     dz = (b - a) / slice_shape[-1]
 
@@ -261,7 +328,7 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     # carbon atom on a slice boundary the slices above and below differed by
     # 2x and the potential 3 A from the atom was ~1 eV A instead of ~0.
     slice_array = _interpolate_between_cells(
-        array, slice_shape, cell, slice_box, (0, 0, a + dz / 2)
+        array, slice_shape, cell, slice_box, np.add(origin, (0, 0, a + dz / 2))
     )
 
     return np.sum(slice_array, axis=-1) * dz
@@ -389,6 +456,11 @@ class ChargeDensityPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
+    non_orthogonal : bool, optional
+        Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
+        or on an orthogonal box (False). The default, None, uses the skewed grid
+        when the cell is non-orthogonal with a and b in the xy-plane, `plane` is
+        "xy" and no `box` is given, as `Potential` does.
     """
 
     _supports_box_and_origin = False
@@ -407,6 +479,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
@@ -453,6 +526,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            non_orthogonal=non_orthogonal,
         )
 
     @property
@@ -535,10 +609,13 @@ class ChargeDensityPotential(_PotentialBuilder):
                 # One charge density shared by every configuration.
                 charge_densities = [charge_densities[0]] * n_ensemble
 
-            frozen_phonon_blocks = (
-                self._get_ewald_potential()
-                .frozen_phonons._partition_args(chunks, lazy=lazy)[0]
-            )
+            # The frozen phonons themselves, which the Ewald potential holds
+            # unchanged: building that potential only to read them fails on a
+            # skewed cell with repetitions, whose Ewald potential takes the
+            # one-cell atoms and no box, so the repeated slicing overruns it.
+            frozen_phonon_blocks = self.frozen_phonons._partition_args(
+                chunks, lazy=lazy
+            )[0]
             if lazy:
                 # Iterating a dask array yields dask array slices, whose shapes
                 # dask cannot infer once wrapped by dask.delayed below; the
@@ -586,9 +663,17 @@ class ChargeDensityPotential(_PotentialBuilder):
         kwargs = self._copy_kwargs(
             exclude=("atoms", "charge_density"), cls=ChargeDensityPotential
         )
-        frozen_phonons_partial = (
-            self._get_ewald_potential().frozen_phonons._from_partitioned_args()
-        )
+        # self.box has already been resolved from None to a concrete tuple (see
+        # _FieldBuilder.__init__): non-orthogonal auto-detection only triggers when
+        # box is None, so feeding the resolved box back into a fresh
+        # ChargeDensityPotential (as happens on every lazy/dask block reconstruction)
+        # would silently skip skew detection and orthogonalise the cell. Reset it to
+        # None here so the reconstructed instance re-detects the skew from the atoms,
+        # matching _get_ewald_potential's box = None if self._non_orthogonal else ...
+        if self._non_orthogonal:
+            kwargs["box"] = None
+        # See _partition_args: the Ewald potential holds these frozen phonons.
+        frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
         return partial(
             self._charge_density_potential,
             frozen_phonons_partial=frozen_phonons_partial,
@@ -596,10 +681,56 @@ class ChargeDensityPotential(_PotentialBuilder):
             **kwargs,
         )
 
+    def _ewald_width(self) -> float:
+        """Width [Å] of the Gaussians splitting the nuclear point charges into a
+        long-range part (added to the density and solved by FFT) and a short-range
+        real-space correction, whose cutoff, and with it the atom padding and the
+        pixels stamped per atom, grows with the width.
+
+        The split is exact for any width only while both parts are resolved:
+
+        - 30 x sampling: the short-range part is clamped inside the inner radial
+          limit (sampling / 2) and its radial table is spaced by the sampling, so
+          the nucleus pixel and the table carry an error growing as the width
+          shrinks against the sampling (1.4e-4 of the maximum at 10 x sampling).
+        - 4 x the density spacing: the long-range part lives on the density grid
+          and is spline-interpolated from it (2e-4 at 2 x, 3e-5 at 4 x).
+        - 2 x the mean slice thickness: its kz content is cropped to the slice
+          count (per slice, against 3 Å: 6e-3 at 0.5 x, 4e-4 at 1 x, 8e-5 at 2 x).
+        - At most dev's fixed 3 Å, so a build is never wider (slower) than it.
+
+        It depends on the slice thickness, so different slicings of one cell use
+        different widths. They add up to its projection within 5.5e-5 of the
+        maximum at sampling 0.05 and 0.033 Å (tolerance 1e-4); from sampling 0.1 Å
+        the width is 3 Å as before.
+        """
+        cell = np.asarray(self.frozen_phonons.atoms.cell)
+        density_spacing = max(
+            np.linalg.norm(cell[i]) / n
+            for i, n in enumerate(self.charge_density.shape[-3:])
+        )
+        return float(
+            min(
+                3.0,
+                max(
+                    30 * max(self.sampling),
+                    4 * density_spacing,
+                    2 * float(np.mean(self.slice_thickness)),
+                ),
+            )
+        )
+
     # The box it is given is this potential's own, not one the user gave.
     @_box_strain_warning_silenced()
     def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=3)
+        ewald_parametrization = EwaldParametrization(width=self._ewald_width())
+
+        # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
+        # internal ewald Potential: the box-given path forces an orthogonalising
+        # build (``use_skew`` requires ``box is None``), which would silently
+        # rectify the skew cell. With ``box=None`` the Potential auto-detects the
+        # skew geometry and matches the parent's in-plane parallelogram.
+        box = None if self._non_orthogonal else self.box
 
         return Potential(
             atoms=self.frozen_phonons,
@@ -609,7 +740,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             slice_thickness=self.slice_thickness,
             projection="finite",
             plane=self.plane,
-            box=self.box,
+            box=box,
             origin=self.origin,
             exit_planes=self.exit_planes,
             device=self.device,
@@ -646,7 +777,11 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
-            ewald_parametrization = EwaldParametrization(width=3)
+            ewald_parametrization = EwaldParametrization(width=self._ewald_width())
+            # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
+            # leave box=None so the ewald Potential auto-detects the skew geometry
+            # rather than rectifying it.
+            box = None if self._non_orthogonal else self.box
             ewald_potential = Potential(
                 atoms=atoms,
                 gpts=self.gpts,
@@ -655,7 +790,7 @@ class ChargeDensityPotential(_PotentialBuilder):
                 slice_thickness=self.slice_thickness,
                 projection="finite",
                 plane=self.plane,
-                box=self.box,
+                box=box,
                 origin=self.origin,
                 exit_planes=self.exit_planes,
                 device=self.device,

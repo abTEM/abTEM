@@ -570,7 +570,12 @@ def test_compressed_s_matrix_array_round_trips_through_its_kwargs():
     from abtem.prism.s_matrix import CompressedSMatrixArray
 
     atoms = ase.build.mx2("WSe2", vacuum=2)
-    potential = abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
+    # the orthogonalising path: mx2 builds a hexagonal cell, which Potential would
+    # otherwise simulate on a skewed grid, where C-PRISM (upsample=True) is not
+    # supported
+    potential = abtem.Potential(
+        atoms, sampling=0.1, slice_thickness=2, non_orthogonal=False
+    )
     s_matrix = abtem.SMatrix(
         potential=potential,
         energy=60e3,
