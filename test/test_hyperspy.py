@@ -284,6 +284,20 @@ def test_to_quantem_origin_is_the_offset_of_scan_axes(device, quantem_records):
     )
 
 
+# The kinds of `_lazy_exports`, listed statically so that collecting the tests does
+# not build the objects.
+LAZY_EXPORT_KINDS = [
+    "real_space_waves",
+    "reciprocal_space_waves",
+    "images",
+    "line_profiles",
+    "diffraction_patterns_centred",
+    "diffraction_patterns_unshifted",
+    "polar_measurements",
+    "potential_array",
+]
+
+
 def _lazy_exports(device: str) -> dict:
     """A lazy object of each class (and export path) that to_quantem handles."""
     waves = _waves(True, device, reciprocal_space=False)
@@ -310,9 +324,13 @@ def _lazy_exports(device: str) -> dict:
     }
 
 
+def test_lazy_export_kinds_list_every_lazy_export():
+    assert LAZY_EXPORT_KINDS == list(_lazy_exports("cpu"))
+
+
 @ignore_unshifted_export
 @devices
-@pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
+@pytest.mark.parametrize("kind", LAZY_EXPORT_KINDS)
 def test_to_quantem_leaves_a_lazy_object_lazy(kind, device, quantem_records):
     lazy_object = _lazy_exports(device)[kind]
     assert lazy_object.is_lazy
@@ -392,7 +410,7 @@ def _abtem_coordinates(array_object) -> list:
 @ignore_unshifted_export
 @pytest.mark.quantem
 @devices
-@pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
+@pytest.mark.parametrize("kind", LAZY_EXPORT_KINDS)
 def test_quantem_accepts_every_export(kind, device):
     Dataset = _quantem_dataset_class()
     exported = _lazy_exports(device)[kind]
