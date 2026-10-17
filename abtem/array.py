@@ -2697,12 +2697,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             units.append(_normalize_unit(getattr(axis, "units", None)))
             origin.append(getattr(axis, "offset", 0.0))
 
-        if self.is_lazy:
-            self.compute()
+        # compute() replaces the array of the object it is called on; computing a
+        # shallow copy leaves the caller lazy.
+        exported = copy.copy(self).compute() if self.is_lazy else self
 
         # A quantem Dataset holds NumPy arrays only: it rejects CuPy arrays.
         dataset = em.core.datastructures.Dataset.from_array(
-            array=asnumpy(self.array),
+            array=asnumpy(exported.array),
             name=type(self).__name__,
             origin=tuple(origin),
             sampling=tuple(sampling),

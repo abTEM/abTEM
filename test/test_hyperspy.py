@@ -268,19 +268,43 @@ def test_to_quantem_origin_is_the_offset_of_scan_axes(device, quantem_records):
     )
 
 
+def _lazy_exports(device: str) -> dict:
+    """A lazy object of each class (and export path) that to_quantem handles."""
+    waves = _waves(True, device, reciprocal_space=False)
+    centred = waves.diffraction_patterns(max_angle=None, fftshift=True)
+    return {
+        "real_space_waves": waves,
+        "reciprocal_space_waves": _waves(True, device, reciprocal_space=True),
+        "images": waves.intensity(),
+        "line_profiles": waves.intensity().interpolate_line(
+            start=(0, 0), end=(1, 1), gpts=8
+        ),
+        "diffraction_patterns_centred": centred,
+        "diffraction_patterns_unshifted": waves.diffraction_patterns(
+            max_angle=None, fftshift=False
+        ),
+        "polar_measurements": centred.polar_binning(
+            nbins_radial=3, nbins_azimuthal=4, inner=1.0, outer=10.0
+        ),
+        "potential_array": PotentialArray(
+            da.zeros((2, *GPTS), chunks=(1, -1, -1), dtype=np.float32),
+            sampling=SAMPLING,
+            slice_thickness=1.0,
+        ).copy_to_device(device),
+    }
+
+
 @devices
-def test_to_quantem_leaves_a_lazy_object_lazy(device, quantem_records):
-    waves = _waves(True, device, reciprocal_space=True)
-    unshifted = _waves(True, device, reciprocal_space=False).diffraction_patterns(
-        max_angle=None, fftshift=False
-    )
-    assert not unshifted.fftshift
+@pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
+def test_to_quantem_leaves_a_lazy_object_lazy(kind, device, quantem_records):
+    lazy_object = _lazy_exports(device)[kind]
+    assert lazy_object.is_lazy
 
-    for lazy_object in (waves, unshifted):
-        lazy_object.to_quantem()
+    lazy_object.to_quantem()
 
-        assert lazy_object.is_lazy
-        assert isinstance(lazy_object.array, da.Array)
+    assert lazy_object.is_lazy
+    assert isinstance(lazy_object.array, da.Array)
+    assert type(quantem_records["array"]) is np.ndarray
 
 
 @devices
