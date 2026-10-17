@@ -15,7 +15,7 @@ import ase
 import dask.array as da
 import numpy as np
 import pytest
-from utils import gpu
+from utils import gpu, requires_mps
 
 import abtem
 from abtem import distributions
@@ -339,6 +339,8 @@ def test_detecting_waves_directly_and_reducing(lazy, unbiased, device):
     _assert_close(result, reference, rtol=1e-5)
 
 
+# Double precision: the collection hook of conftest.py skips it on Metal.
+@pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
@@ -373,6 +375,17 @@ def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
     # precision is off by a sizeable fraction of the diffuse maximum, so a weak
     # diffuse signal needs reduction_dtype="float64".
     assert errors[None] > 1e-2
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", [pytest.param("mps", marks=requires_mps)])
+def test_a_float64_reduction_is_refused_on_the_single_precision_backend(lazy, device):
+    """Metal cannot hold the float64 sums; it is said so, not left to fail obscurely."""
+    detector = PixelatedDetector(
+        "cutoff", components="diffuse", reduction_dtype="float64"
+    )
+    with pytest.raises(RuntimeError, match="single-precision backend"):
+        _array(reduce_ensemble(detector.detect(_exit_waves(lazy, device=device))))
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
