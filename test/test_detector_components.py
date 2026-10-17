@@ -385,6 +385,8 @@ def test_averaged_waves_detector_matches_the_mean_of_the_exit_waves(scan, lazy, 
     )
 
 
+# Double precision: the collection hook of conftest.py skips it on Metal.
+@pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_averaged_waves_in_double_precision(lazy, device):
