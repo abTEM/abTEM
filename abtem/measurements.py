@@ -3744,6 +3744,24 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _refuse_max_angle_for_several_energies(
+    measurements: "DiffractionPatterns | IndexedDiffractionPatterns",
+    alternatives: str,
+) -> None:
+    """Raise if `measurements` hold several energies, for a crop to a scattering
+    angle: the pixels (or spots) within an angle depend on the wavelength, so the
+    energies would not stack, and using one wavelength for all of them would crop
+    the others to the wrong angle."""
+    from abtem.array import _multi_energy_axis
+
+    if _multi_energy_axis(measurements) is not None:
+        raise ValueError(
+            "`max_angle` cannot crop diffraction patterns of several energies, since "
+            "the pixels or spots within an angle differ between the energies: "
+            f"pass {alternatives}, or index one energy first."
+        )
+
+
 def _per_energy(method=None, *, shared_outer: bool = False):
     """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
     ensemble on its own, and restack the results along the energy axis.
@@ -5148,17 +5166,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
         if max_angle is not None:
-            from abtem.array import _multi_energy_axis
-
-            if _multi_energy_axis(self) is not None:
-                # The number of pixels within an angle depends on the wavelength,
-                # so the energies would not stack.
-                raise ValueError(
-                    "`max_angle` cannot crop diffraction patterns of several "
-                    "energies, since the pixels within an angle differ between the "
-                    "energies: pass `max_frequency` or `gpts`, or index one energy "
-                    "first."
-                )
+            _refuse_max_angle_for_several_energies(self, "`max_frequency` or `gpts`")
 
         if gpts is None and max_angle is not None:
             gpts = (
@@ -6619,6 +6627,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         k_max : float, optional
             The maximum included reciprocal lattice vector in the cropped diffraction
             spots.
@@ -6630,6 +6639,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
 
         if max_angle is not None and k_max is None:
+            _refuse_max_angle_for_several_energies(self, "`k_max`")
             wavelength = energy2wavelength(self._get_energy())
             k_max = max_angle / wavelength / 1e3
 

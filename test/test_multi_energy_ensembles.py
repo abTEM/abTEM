@@ -400,8 +400,6 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
         )
 
 
-# The default outer angle is resolved by the `_per_energy` decorator before the
-# patterns are split, alike for both methods and for lazy and eager patterns.
 @devices
 def test_reciprocal_axes_of_several_energies_are_those_of_each_energy(device):
     # the axes (and so `show` and the exports) are in 1/Å, which does not depend on
@@ -446,6 +444,8 @@ def test_cropping_to_a_frequency_or_pixel_count_serves_several_energies(
         _close(np.take(asnumpy(result.array), i, axis=axis), single.array, atol=1e-10)
 
 
+# The default outer angle is resolved by the `_per_energy` decorator before the
+# patterns are split, alike for both methods and for lazy and eager patterns.
 @devices
 @pytest.mark.parametrize(
     "name, args, lazy",
