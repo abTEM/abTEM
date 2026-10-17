@@ -1692,8 +1692,9 @@ def _extract_scattering_sites(potential, sites):
         # Follow the potential's own convention, so explicitly passed sites
         # are sliced exactly as sites=None would be.
         periodic = getattr(potential, "periodic", True)
-        if not periodic and explicit:
-            # A non-periodic potential takes the atoms it is given more than
+        folds = getattr(potential, "_folds_atoms_far_outside_along_z", None)
+        if explicit and folds is not None and folds():
+            # Such a potential takes the atoms it is given more than
             # FACE_SLICE_WARNING_DISTANCE outside its cell along z as their
             # images in the cell, and slices them there; the atoms closer to a
             # face stay where they are and are clamped to the face slice below.

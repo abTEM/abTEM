@@ -1058,12 +1058,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if (
             not periodic
             and not _box_strain_warning_suppressed.get()
-            and not _require_cell_transform(
-                self._frozen_phonons.cell,
-                box=self.box,
-                plane=self.plane,
-                origin=self.origin,
-            )
+            and not self._requires_cell_transform()
         ):
             _warn_if_given_atoms_far_outside_along_z(self._frozen_phonons)
 
@@ -1082,6 +1077,28 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         """The integrator determining how the projection integrals for each slice is
         calculated."""
         return self._integrator
+
+    def _requires_cell_transform(self) -> bool:
+        """Whether the atoms are transformed (rotated, translated, repeated or
+        strained) to fill the potential."""
+        return _require_cell_transform(
+            self._frozen_phonons.cell,
+            box=self.box,
+            plane=self.plane,
+            origin=self.origin,
+        )
+
+    def _folds_atoms_far_outside_along_z(self) -> bool:
+        """Whether atoms given in the potential's own cell, more than
+        `FACE_SLICE_WARNING_DISTANCE` outside it along z, are folded into the cell
+        (`_fold_far_outside_faces`) when the slices are built: only for a
+        non-periodic potential whose atoms are not transformed and whose
+        integrator is infinite. A finite one wraps them by its margins."""
+        return (
+            not self.periodic
+            and not self.integrator.finite
+            and not self._requires_cell_transform()
+        )
 
     def _cutoffs(self):
         atoms = self.frozen_phonons.atoms

@@ -12,6 +12,7 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 CuPy isn't present.
 """
 import sys
+import warnings
 
 import ase
 import numpy as np
@@ -340,6 +341,38 @@ def test_explicit_sites_outside_a_non_periodic_cell_are_folded_as_the_potential_
     near_sites = _extract_scattering_sites(potential, near)
     assert [len(i) for i in near_sites._slice_index] == [0, 0, 0, 1]
     assert near_sites.atoms.positions[0, 2] == 9.0
+
+
+@pytest.mark.parametrize("variant", ["finite_integrator", "cell_transform"])
+def test_explicit_sites_are_folded_only_where_the_potential_folds(variant):
+    """The potential folds atoms far outside its cell along z only for an
+    infinite integrator and atoms it does not transform (a finite integrator
+    wraps by its margins; a transformed cell is not the cell of the given
+    atoms), so explicit sites are neither folded nor warned about by that rule
+    in the others."""
+    from abtem.inelastic.core_loss import _extract_scattering_sites
+    from abtem.integrals import GaussianProjectionIntegrals
+
+    atoms = ase.Atoms("Au", positions=[(1.0, 1.0, -3.0)], cell=(4, 4, 8))
+    kwargs = {
+        "finite_integrator": {"integrator": GaussianProjectionIntegrals()},
+        "cell_transform": {"origin": (0.0, 0.0, 1.0)},
+    }[variant]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the potential's own
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, **kwargs
+        )
+    assert not potential._folds_atoms_far_outside_along_z()
+
+    with warnings.catch_warnings():
+        # the fold's warning, not the face-slice one SliceIndexedAtoms raises
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.filterwarnings("error", message=".*given more than")
+        sites = _extract_scattering_sites(potential, atoms)
+
+    # clamped to the entrance face slice, not folded to z = 5 Å (slice 2)
+    assert [len(i) for i in sites._slice_index] == [1, 0, 0, 0]
 
 
 @devices
