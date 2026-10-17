@@ -28,6 +28,7 @@ from abtem.measurements import DiffractionPatterns, Images
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
 from abtem.tilt import BeamTilt
+from abtem.transfer import Bullseye, RadialPhasePlate, SpatialEnvelope
 from abtem.waves import Waves
 from utils import requires_gpu, synthetic_transition_potential
 
@@ -512,3 +513,79 @@ def test_lazy_prism_results_declare_their_block_precision(
             expected = np.result_type(expected, np.complex64)
         assert eager.array.dtype == expected
         _check(lazy, eager)
+
+
+SAME_PRECISION_IN_AND_OUT = {
+    "phase_shift": (
+        "waves",
+        lambda m: m.phase_shift(0.5),
+    ),
+    "integrate_gradient": (
+        "complex_images",
+        lambda m: m.integrate_gradient(),
+    ),
+    "center_of_mass": (
+        "patterns",
+        lambda m: m.center_of_mass(),
+    ),
+    "center_of_mass_mrad": (
+        "patterns",
+        lambda m: m.center_of_mass(units="mrad"),
+    ),
+    "ctf_with_angular_spread": (
+        "waves",
+        lambda m: m.apply_ctf(defocus=20, Cs=1e4, angular_spread=2),
+    ),
+    "spatial_envelope": (
+        "waves",
+        lambda m: m.apply_transform(SpatialEnvelope(angular_spread=2, C30=1e4)),
+    ),
+    "bullseye": (
+        "waves",
+        lambda m: m.apply_transform(Bullseye(4, 3.0, 3, 0.5, 20)),
+    ),
+    "radial_phase_plate": (
+        "waves",
+        lambda m: m.apply_transform(RadialPhasePlate(2, 30.0)),
+    ),
+}
+
+
+def _single_precision_input(kind, lazy):
+    """Input data in the dtype of the configured precision."""
+    from abtem.core.utils import get_dtype
+
+    if kind == "waves":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = dict(energy=100e3)
+        cls = Waves
+    elif kind == "complex_images":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = {}
+        cls = Images
+    else:
+        array = np.abs(_real_data(get_dtype(complex=False))) + 1
+        cls_kwargs = dict(metadata={"energy": 100e3})
+        cls = DiffractionPatterns
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return cls(array, sampling=0.1, ensemble_axes_metadata=_members(), **cls_kwargs)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("name", SAME_PRECISION_IN_AND_OUT)
+def test_methods_and_transforms_keep_the_precision_of_their_input(
+    name, precision, device
+):
+    """Data in the configured precision comes out in it: a float64 factor, such as
+    a NumPy scalar or a frequency grid, must not widen float32 data."""
+    kind, method = SAME_PRECISION_IN_AND_OUT[name]
+    with abtem.config.set({"precision": precision, "fft": "numpy"}):
+        lazy = method(_single_precision_input(kind, True).copy_to_device(device))
+        eager = method(_single_precision_input(kind, False).copy_to_device(device))
+        expected = np.dtype(precision)
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager, member_offset_free=name == "integrate_gradient")
