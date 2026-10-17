@@ -995,11 +995,6 @@ def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
     so that no atom depends on which side of a face round-off puts it: a
     fractional coordinate within 1e-9 of 1 is 0. The result carries the per-atom
     arrays of `atoms`.
-
-    Raises
-    ------
-    RuntimeError
-        If the translations do not fall into exactly |det(vectors)| classes.
     """
     cell = np.array(atoms.cell)
     vectors = np.rint(vectors).astype(np.int64)
@@ -1009,11 +1004,7 @@ def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
     # adjugate * det = |det| * inverse(vectors), exactly, for an integer matrix
     adjugate = np.rint(np.linalg.inv(vectors) * np.linalg.det(vectors)).astype(np.int64)
     determinant = int(np.rint(np.linalg.det(vectors)))
-    if not np.array_equal(vectors @ adjugate, determinant * np.eye(3, dtype=np.int64)):
-        raise RuntimeError(
-            f"The matrix {vectors.tolist()} is not invertible as an integer matrix; "
-            "please report this cell."
-        )
+    assert np.array_equal(vectors @ adjugate, determinant * np.eye(3, dtype=np.int64))
 
     corners = np.array(list(itertools.product((0, 1), repeat=3)), dtype=float)
     scaled_corners = np.linalg.solve(cell.T, (corners @ newcell).T).T
@@ -1027,11 +1018,8 @@ def _wrapped_supercell(atoms: Atoms, vectors: np.ndarray) -> Atoms:
     keys = (shifts @ adjugate) % abs(determinant)
     _, first = np.unique(keys, axis=0, return_index=True)
     shifts = shifts[np.sort(first)]
-    if len(shifts) != num_images:
-        raise RuntimeError(
-            f"The translations of the cell fall into {len(shifts)} classes in the "
-            f"supercell, expected {num_images}; please report this cell."
-        )
+    # the parallelepiped of the supercell holds one translation of every class
+    assert len(shifts) == num_images
 
     inverse = np.linalg.inv(newcell)
     fractional = (atoms.positions @ inverse)[:, None, :] + (

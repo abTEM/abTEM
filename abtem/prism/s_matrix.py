@@ -9,6 +9,7 @@ import warnings
 from abc import abstractmethod
 from functools import partial, reduce
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -5812,15 +5813,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # of a copy embedded per task; map_blocks traverses kwargs for
             # dask collections and materializes it before the call. Same
             # rationale as shared_constant_arg, which the multislice driver
-            # uses through the transform's partitioned args.
-            #
-            # dask.delayed(x, pure=True) tokenizes x via a content hash
-            # (~0.4 ms/MB, dominated by hashing the array's out-of-band
-            # buffers), which a sweep calling this method many times against
-            # the same live transition_potentials object would otherwise pay
-            # on every call. _as_pure_delayed() memoizes it on the object
-            # itself.
-            transition_potentials=transition_potentials._as_pure_delayed(),
+            # uses through the transform's partitioned args. pure=True keys it
+            # by a hash of its content, so a changed transition potential gets
+            # a new key.
+            transition_potentials=dask.delayed(transition_potentials, pure=True),
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,
