@@ -143,8 +143,8 @@ class TestWavesBuilderEnergyProperty:
 
     def test_energy_is_a_plain_float_or_a_distribution(self):
         """A scalar energy stays a float with no ensemble axes; several energies
-        are a distribution with one EnergyAxis. (SMatrix.energy of several
-        energies is the first one.)"""
+        are a distribution with one EnergyAxis and leave the accelerator without
+        an energy."""
         from abtem.distributions import BaseDistribution
 
         builders = {
@@ -162,8 +162,10 @@ class TestWavesBuilderEnergyProperty:
             assert scalar.ensemble_axes_metadata == [], name
 
             ensemble = cls(energy=TEST_ENERGIES, gpts=32, sampling=0.1, **kwargs)
-            if cls is not SMatrix:
-                assert isinstance(ensemble.energy, BaseDistribution), name
+            assert isinstance(ensemble.energy, BaseDistribution), name
+            np.testing.assert_array_equal(ensemble.energy.values, TEST_ENERGIES)
+            assert ensemble.accelerator.energy is None, name
+            assert ensemble.metadata["energy"] is None, name
             assert ensemble.ensemble_shape == (3,), name
             (axis,) = ensemble.ensemble_axes_metadata
             assert isinstance(axis, EnergyAxis), name
@@ -943,6 +945,19 @@ class TestSMatrixEnergyEnsemble:
             assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
             assert sma.ensemble_axes_metadata[0].values == tuple(TEST_ENERGIES)
         np.testing.assert_allclose(lazy.compute().array, eager.array, atol=1e-6)
+
+        # the expansion of the ensemble is that of the built array, the union of
+        # the energies' expansions, which the highest energy's holds
+        highest = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=max(TEST_ENERGIES),
+                          gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        assert len(s) == len(eager.wave_vectors) == len(highest)
+        assert len(SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=min(TEST_ENERGIES),
+                           gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)) < len(s)
+        assert s.shape == eager.shape[:2] + s.gpts
+        # the constructor arguments, from which every block is rebuilt
+        # (_from_partitioned_args), keep every energy
+        copied = SMatrix(**s._copy_kwargs())
+        np.testing.assert_array_equal(copied.energy.values, TEST_ENERGIES)
 
 
 # ---------------------------------------------------------------------------
