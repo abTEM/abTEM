@@ -433,6 +433,28 @@ def test_gpaw_potential_reports_a_strained_default_box(
     assert len(_chosen_box_warnings(records)) == int(warns)
 
 
+@devices
+def test_gpaw_potential_in_the_orthogonal_box_of_a_hexagonal_cell_has_its_symmetry(
+    hexagonal_calculator, device
+):
+    # The orthogonal box (a, sqrt(3) a) holds two primitive cells related by
+    # half the box along both axes, so the potential is invariant under that
+    # shift. The core corrections used to be laid out on the skewed cell and the
+    # valence potential interpolated onto it, whatever the box (0.65 of the
+    # maximum off).
+    potential = GPAWPotential(
+        hexagonal_calculator,
+        gpts=(24, 42),
+        slice_thickness=1.0,
+        non_orthogonal=False,
+        device=device,
+    )
+    assert potential.box[:2] == pytest.approx((2.5, 2.5 * np.sqrt(3)))
+    array = asnumpy(potential.build(lazy=False).array)
+    shifted = np.roll(array, (12, 21), axis=(1, 2))
+    np.testing.assert_allclose(shifted, array, rtol=0, atol=1e-5 * np.abs(array).max())
+
+
 @pytest.fixture(scope="module")
 def spinpolarised_calculator():
     from ase.build import graphene

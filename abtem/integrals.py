@@ -21,6 +21,7 @@ from abtem.atoms import is_cell_orthogonal
 from abtem.core import backend
 from abtem.core.backend import (
     asnumpy,
+    copy_to_device,
     cp,
     cupyx,
     device_name_from_array_module,
@@ -1563,11 +1564,16 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
 
         if skew:
-            if xp is cp:
-                raise NotImplementedError(
-                    "finite projection on a non-orthogonal grid is not yet supported on "
-                    "the GPU; use device='cpu' or projection='infinite'"
+            if xp is not np:
+                # The skew stamping kernel is a numba routine over host memory,
+                # so on an accelerator (CuPy or torch/Metal) the slice is built
+                # on the host, smoothing included, and copied to the device:
+                # the result is that of the CPU build. A native CuPy kernel is
+                # future work, tracked in abTEM issue #599.
+                host_array = self.integrate_on_grid(
+                    atoms, a, b, gpts, sampling, device="cpu", cell=cell
                 )
+                return copy_to_device(host_array, device)
             cell_arr = np.asarray(cell, dtype=float)
             sampling_vectors = np.stack(
                 [cell_arr[0] / gpts[0], cell_arr[1] / gpts[1]]

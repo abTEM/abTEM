@@ -648,6 +648,26 @@ def test_potential_auto_detects_non_orthogonal():
     assert Potential(ortho_atoms, gpts=(40, 40), slice_thickness=6).grid.is_orthogonal
 
 
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_skew_finite_potential_built_on_a_device_matches_the_cpu_build(lazy, device):
+    # The skewed finite projection is stamped on the host and copied to the
+    # device, so the device build is the CPU build to rounding. B and N carry
+    # two integral tables; the repetitions put several atoms of each in a slice.
+    atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (2, 1, 1)
+    atoms.pbc = True
+    kwargs = dict(gpts=(50, 25), slice_thickness=1.0, projection="finite")
+    expected = Potential(atoms, device="cpu", **kwargs).build(lazy=False).array
+    potential = Potential(atoms, device=device, **kwargs)
+    assert potential.non_orthogonal
+    built = potential.build(lazy=lazy).compute()
+    assert_array_matches_device(built.array, device)
+    scale = np.abs(expected).max()
+    np.testing.assert_allclose(
+        asnumpy(built.array), expected, rtol=0, atol=1e-6 * scale
+    )
+
+
 def test_tilted_c_axis_matches_orthogonal_supercell():
     """A crystal with a tilted c-axis (a, b orthogonal in-plane) is handled by placing
     the atoms at their true positions and propagating straight -- no tilt ramp -- so it
