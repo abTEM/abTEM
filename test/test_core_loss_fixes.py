@@ -1370,29 +1370,6 @@ def test_ensemble_indices_handle_a_multi_axis_potential_ensemble(device):
             _validate_potential_ensemble_indices(short, 1, potential)
 
 
-def test_ensemble_index_length_is_enforced():
-    """Every defect in this family was a caller passing too few indices.
-
-    The helper used to accept a short tuple silently, which let the exit-plane
-    part land on an ensemble axis.
-    """
-    from abtem.multislice import _validate_potential_ensemble_indices
-
-    class _Potential:
-        ensemble_shape = (2, 3)
-        exit_planes = (-1, 0, 1)
-
-    potential = _Potential()
-    assert _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential) == (
-        1,
-        2,
-        slice(1, 3),
-    )
-    for short in ((1,), ()):
-        with pytest.raises(ValueError, match="entries for an ensemble"):
-            _validate_potential_ensemble_indices(short, slice(1, 3), potential)
-
-
 def test_prism_driver_refuses_a_multi_configuration_potential():
     """Called directly it would silently return 1/num_configurations.
 
