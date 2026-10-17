@@ -3796,6 +3796,13 @@ def _per_energy(method=None, *, shared_outer: bool = False):
     return decorator if method is None else decorator(method)
 
 
+class UnshiftedExportWarning(UserWarning):
+    """`DiffractionPatterns` with `fftshift=False` are exported with the zero
+    frequency moved to the centre. Filter it out for patterns that are unshifted
+    as said, e.g. ``warnings.filterwarnings("ignore",
+    category=UnshiftedExportWarning)``."""
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -3812,9 +3819,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         If True, the diffraction patterns are assumed to have the zero-frequency
         component to the center of the spectrum, otherwise the center(s) are assumed to
         be at `(0, 0)`. With False, `to_hyperspy`, `to_data_array` and `to_quantem`
-        export an fftshifted copy, with increasing `kx` and `ky` coordinates, so
-        data that are already centred must be given with True: with the default
-        they are shifted a second time on export.
+        export an fftshifted copy, with increasing `kx` and `ky` coordinates, and
+        warn (`UnshiftedExportWarning`) that they do. Data that are already
+        centred must therefore be given with True: with the default they are
+        shifted a second time on export, while the coordinates and plots in
+        memory look right.
     ensemble_axes_metadata : list of AxisMetadata, optional
         List of metadata associated with the ensemble axes. The length and item order
         must match the ensemble axes.
@@ -3935,18 +3944,35 @@ class DiffractionPatterns(_BaseMeasurement2D):
         kwargs["fftshift"] = True
         return self.__class__(**kwargs)
 
+    def _warn_unshifted_export(self, method: str) -> None:
+        # The export shifts unshifted patterns. Patterns that are already centred
+        # but were made with the default fftshift=False are shifted by half the
+        # grid, which nothing else shows: the coordinates and plots in memory
+        # follow the flag (#603).
+        warnings.warn(
+            f"{method} exports these diffraction patterns with the zero frequency "
+            "moved from index 0 to the centre, because they have fftshift=False. "
+            "If the zero frequency is already at the centre, make them with "
+            "fftshift=True.",
+            UnshiftedExportWarning,
+            stacklevel=3,
+        )
+
     def to_hyperspy(self, transpose: bool = True):
         if not self.fftshift:
+            self._warn_unshifted_export("to_hyperspy")
             return self._fftshifted().to_hyperspy(transpose)
         return super().to_hyperspy(transpose)
 
     def to_data_array(self):
         if not self.fftshift:
+            self._warn_unshifted_export("to_data_array")
             return self._fftshifted().to_data_array()
         return super().to_data_array()
 
     def to_quantem(self):
         if not self.fftshift:
+            self._warn_unshifted_export("to_quantem")
             return self._fftshifted().to_quantem()
         return super().to_quantem()
 

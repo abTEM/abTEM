@@ -12,9 +12,19 @@ from utils import devices, lazy_params
 import abtem.array
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
-from abtem.measurements import DiffractionPatterns, Images, PolarMeasurements
+from abtem.measurements import (
+    DiffractionPatterns,
+    Images,
+    PolarMeasurements,
+    UnshiftedExportWarning,
+)
 from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
+
+# These tests export unshifted diffraction patterns on purpose.
+ignore_unshifted_export = pytest.mark.filterwarnings(
+    "ignore::abtem.measurements.UnshiftedExportWarning"
+)
 
 try:
     import hyperspy
@@ -22,6 +32,7 @@ except ImportError:
     hyperspy = None
 
 
+@ignore_unshifted_export
 @given(data=st.data())
 @devices
 @pytest.mark.parametrize(
@@ -222,6 +233,7 @@ def _frequency_exports(kind: str, lazy: bool, device: str):
     )
 
 
+@ignore_unshifted_export
 @pytest.mark.parametrize(
     "kind",
     [
@@ -298,6 +310,7 @@ def _lazy_exports(device: str) -> dict:
     }
 
 
+@ignore_unshifted_export
 @devices
 @pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
 def test_to_quantem_leaves_a_lazy_object_lazy(kind, device, quantem_records):
@@ -376,6 +389,7 @@ def _abtem_coordinates(array_object) -> list:
     ]
 
 
+@ignore_unshifted_export
 @pytest.mark.quantem
 @devices
 @pytest.mark.parametrize("kind", list(_lazy_exports("cpu")))
@@ -406,6 +420,7 @@ def test_quantem_accepts_every_export(kind, device):
     np.testing.assert_array_equal(dataset.array, expected)
 
 
+@ignore_unshifted_export
 @pytest.mark.quantem
 @pytest.mark.parametrize(
     "kind",
@@ -595,6 +610,7 @@ def test_polar_measurements_to_diffraction_patterns_export_centred(lazy, device)
         np.testing.assert_array_equal(_host(patterns.to_hyperspy().data), stored)
 
 
+@ignore_unshifted_export
 @lazy_params
 @devices
 def test_unshifted_diffraction_patterns_export_fftshifted(lazy, device):
@@ -618,3 +634,23 @@ def test_unshifted_diffraction_patterns_export_fftshifted(lazy, device):
     np.testing.assert_array_equal(
         _host(unshifted.to_hyperspy().data), _host(shifted.to_hyperspy().data)
     )
+
+
+@pytest.mark.parametrize("method", ["to_data_array", "to_hyperspy", "to_quantem"])
+def test_unshifted_diffraction_patterns_warn_on_export(method, quantem_records):
+    # Centred data made with the default fftshift=False are shifted by half the
+    # grid on export, which nothing in memory shows (#603).
+    pytest.importorskip(
+        {"to_data_array": "xarray", "to_hyperspy": "hyperspy"}.get(method, "numpy")
+    )
+    array = np.zeros(GPTS, dtype=np.float32)
+    array[GPTS[0] // 2, GPTS[1] // 2] = 1.0
+
+    with pytest.warns(UnshiftedExportWarning, match="fftshift=True"):
+        getattr(DiffractionPatterns(array, sampling=SAMPLING), method)()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UnshiftedExportWarning)
+        getattr(DiffractionPatterns(array, sampling=SAMPLING, fftshift=True), method)()
+        # reciprocal-space waves are unshifted by construction
+        getattr(_waves(False, "cpu", reciprocal_space=True), method)()

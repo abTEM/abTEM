@@ -676,7 +676,9 @@ class Waves(BaseWaves, ArrayObject):
 
     def _as_diffraction_patterns(self) -> DiffractionPatterns:
         """The Fourier coefficients of reciprocal-space waves, as unshifted
-        diffraction patterns on spatial-frequency axes [1/Å]."""
+        diffraction patterns on spatial-frequency axes [1/Å]. The exports shift
+        them directly: they are unshifted by construction, so the warning of
+        `DiffractionPatterns` about unshifted exports does not apply."""
         return DiffractionPatterns(
             self.array,
             sampling=self.reciprocal_space_sampling,
@@ -692,7 +694,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_hyperspy(transpose)
+            return self._as_diffraction_patterns()._fftshifted().to_hyperspy(transpose)
         return super().to_hyperspy(transpose)
 
     def to_data_array(self):
@@ -702,7 +704,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_data_array()
+            return self._as_diffraction_patterns()._fftshifted().to_data_array()
         return super().to_data_array()
 
     def to_quantem(self):
@@ -712,7 +714,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_quantem()
+            return self._as_diffraction_patterns()._fftshifted().to_quantem()
         return super().to_quantem()
 
     def convolve(
