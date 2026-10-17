@@ -324,6 +324,42 @@ class TestThermalWeighting:
         with pytest.raises(ValueError, match="must be finite and non-negative"):
             phonon_loss_diffraction_patterns(waves, temperature=temperature)
 
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32])
+    def test_the_temperature_is_used_in_double_precision(self, dtype):
+        """k_B T in the precision of a float16 or float32 scalar puts the gain
+        weight off by up to 7.6e-4 or 1.0e-9 (relative; 0.02 and 0.05 eV at 300 K);
+        the float64 unfolding shows either."""
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        expected = phonon_loss_diffraction_patterns(
+            waves, temperature=300.0, reduction_dtype="float64"
+        )
+        result = phonon_loss_diffraction_patterns(
+            waves, temperature=dtype(300.0), reduction_dtype="float64"
+        )
+        np.testing.assert_array_equal(
+            np.asarray(result.array), np.asarray(expected.array)
+        )
+
+    def test_a_temperature_whose_k_b_t_underflows_is_the_zero_temperature_limit(
+        self,
+    ):
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        zero = phonon_loss_diffraction_patterns(waves, temperature=0.0)
+        tiny = phonon_loss_diffraction_patterns(waves, temperature=5e-324)
+        np.testing.assert_array_equal(np.asarray(tiny.array), np.asarray(zero.array))
+
+    def test_a_very_high_temperature_splits_the_signal_evenly(self):
+        """n -> infinity: loss and gain weights both tend to 1/2."""
+        waves = _make_exit_waves([0.0, 0.02, 0.05])
+        diffuse = np.asarray(phonon_loss_diffraction_patterns(waves).array)
+
+        array = np.asarray(
+            phonon_loss_diffraction_patterns(waves, temperature=1e300).array
+        )
+
+        np.testing.assert_allclose(array[3:], diffuse[1:] / 2, rtol=1e-6)
+        np.testing.assert_allclose(array[:2], diffuse[:0:-1] / 2, rtol=1e-6)
+
     def test_a_low_temperature_unfolds_without_overflow_warnings(self):
         """E / k_B T overflows the exponential (0.1 eV at 1 K), where n -> 0 is the
         correct limit: the whole signal is loss, and nothing warns."""
