@@ -41,8 +41,18 @@ if cp is not None:
     from abtem.core._cuda import (
         interpolate_radial_functions as interpolate_radial_functions_cuda,
     )
+    from abtem.core._cuda import (
+        interpolate_radial_functions_skew as interpolate_radial_functions_skew_cuda,
+    )
 else:
     interpolate_radial_functions_cuda = None
+    interpolate_radial_functions_skew_cuda = None
+
+#: Build skewed finite projections on a CUDA device with the native kernel
+#: (abTEM issue #599). False builds them on the host and copies them to the
+#: device, as torch/Metal always does; kept as a switch for benchmarking and
+#: for comparing the two on a GPU.
+NATIVE_SKEW_CUDA_KERNEL = True
 
 if TYPE_CHECKING:
     from abtem.parametrizations import Parametrization
@@ -1564,12 +1574,13 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         xp = get_array_module(device)
 
         if skew:
-            if xp is not np:
-                # The skew stamping kernel is a numba routine over host memory,
-                # so on an accelerator (CuPy or torch/Metal) the slice is built
-                # on the host, smoothing included, and copied to the device:
-                # the result is that of the CPU build. A native CuPy kernel is
-                # future work, tracked in abTEM issue #599.
+            native_cuda = xp is cp and NATIVE_SKEW_CUDA_KERNEL
+            if xp is not np and not native_cuda:
+                # The CPU skew stamping kernel is a numba routine over host
+                # memory, so on torch/Metal (which has no kernel of its own), or
+                # on CuPy with the native kernel switched off, the slice is built
+                # on the host, smoothing included, and copied to the device: the
+                # result is that of the CPU build.
                 host_array = self.integrate_on_grid(
                     atoms, a, b, gpts, sampling, device="cpu", cell=cell
                 )
@@ -1597,9 +1608,9 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
                 # use a square mesh whose operator-norm bound (||inv_J||_op * R) safely
                 # contains the ellipse (the radial-out-of-range branch silently skips
                 # any pixels that turn out to be outside the actual Cartesian disk).
-                # skew is CPU-only, so no device caching applies, but the mesh itself
-                # (and its sort by true Cartesian radius) is cached like the
-                # orthogonal case, and truncated per atom/slice via disk_counts below
+                # The mesh (and its sort by true Cartesian radius) is cached like
+                # the orthogonal case, on the host and, for the CUDA kernel, on the
+                # device, and truncated per atom/slice via disk_counts below
                 # -- without this a parametrization whose cutoff exceeds the cell (e.g.
                 # the Ewald short-range correction) rescans the full, hugely oversized
                 # mesh for every slice even though most slices are far enough from the
@@ -1737,7 +1748,43 @@ class QuadratureProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
             else:
                 temp = array
 
-            if skew:
+            if skew and xp is cp:
+                # The native skew kernel (#599), streamed like the orthogonal
+                # one below; the sorted disk is cached on the device under the
+                # same kind of key.
+                disk_counts_device = cp.asarray(disk_counts)
+                skew_kwargs = dict(
+                    array=temp,
+                    positions=positions,
+                    disk_counts=disk_counts_device,
+                    sampling_vectors=sampling_vectors,
+                    inv_jacobian=inv_jacobian,
+                    radial_gpts=radial_gpts_device,
+                    radial_functions=radial_potential,
+                    radial_derivative=radial_potential_derivative,
+                )
+                chunk_size = 2_000_000
+                if len(disk) <= chunk_size:
+                    cache_key = disk_key + (
+                        _device_cache_key(device, like=disk_counts_device),
+                    )
+                    disk_device = self._device_arrays.get(cache_key)
+                    if disk_device is None:
+                        with disk_counts_device.device:
+                            disk_device = self._device_arrays.put(
+                                cache_key, cp.asarray(disk)
+                            )
+                    interpolate_radial_functions_skew_cuda(
+                        disk_indices=disk_device[:max_disk_count], **skew_kwargs
+                    )
+                else:
+                    for start in range(0, max_disk_count, chunk_size):
+                        disk_chunk = cp.asarray(disk[start : start + chunk_size])
+                        interpolate_radial_functions_skew_cuda(
+                            disk_indices=disk_chunk, chunk_offset=start, **skew_kwargs
+                        )
+                        del disk_chunk
+            elif skew:
                 interpolate_radial_functions_skew(
                     array=temp,
                     positions=positions,

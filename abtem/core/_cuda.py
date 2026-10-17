@@ -343,6 +343,174 @@ def interpolate_radial_functions(
     )
 
 
+
+_INTERPOLATE_RADIAL_SKEW_KERNEL = r"""
+template<typename T> __device__ __forceinline__ int rn_cast(T x);
+template<> __device__ __forceinline__ int rn_cast<float >(float  x) { return __float2int_rn(x);  }
+template<> __device__ __forceinline__ int rn_cast<double>(double x) { return __double2int_rn(x); }
+
+// The skew-grid version of interpolate_radial_impl, following the CPU kernel
+// interpolate_radial_functions_skew (abtem/integrals.py) line by line. Pixel
+// (k, m) sits at Cartesian k * a1 + m * a2; inv_jacobian (j00 j01; j10 j11)
+// maps an atom's Cartesian position to fractional pixel coordinates, which are
+// rounded to the nearest pixel as the CPU kernel rounds them (half to even).
+template<typename T>
+__device__ __forceinline__ void interpolate_radial_skew_impl(
+    T* __restrict__ array,
+    const T* __restrict__ positions,       // (n_atoms, 2) row-major
+    const int* __restrict__ disk_indices,  // (n_disk, 2) row-major, sorted by radius
+    const int* __restrict__ disk_counts,   // (n_atoms,) global truncation index
+    const T a1x, const T a1y, const T a2x, const T a2y,
+    const T j00, const T j01, const T j10, const T j11,
+    const T* __restrict__ radial_gpts,
+    const T* __restrict__ radial_funcs,    // (n_atoms, n_radial) row-major
+    const T* __restrict__ radial_deriv,    // (n_atoms, n_radial) row-major
+    const T dt,
+    const T r0,
+    const int n_radial,
+    const int n_disk,
+    const int n_atoms,
+    const int rows,
+    const int cols,
+    const int chunk_offset
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (i >= n_atoms || j >= n_disk) return;
+    if (chunk_offset + j >= disk_counts[i]) return;
+
+    T xi = positions[i * 2];
+    T yi = positions[i * 2 + 1];
+
+    int px = rn_cast<T>(j00 * xi + j01 * yi);
+    int py = rn_cast<T>(j10 * xi + j11 * yi);
+
+    int k = px + disk_indices[j * 2];
+    int m = py + disk_indices[j * 2 + 1];
+
+    if (k < 0 || k >= rows || m < 0 || m >= cols) return;
+
+    T rx = (T)k * a1x + (T)m * a2x - xi;
+    T ry = (T)k * a1y + (T)m * a2y - yi;
+    T r  = sqrt(rx * rx + ry * ry);
+
+    int idx = (int)floor(log(r / r0 + (T)1e-12) / dt);
+
+    T val;
+    int base = i * n_radial;
+    if (idx < 0) {
+        val = radial_funcs[base];
+    } else if (idx < n_radial - 1) {
+        T slope = radial_deriv[base + idx];
+        val = radial_funcs[base + idx] + (r - radial_gpts[idx]) * slope;
+    } else {
+        return;
+    }
+
+    atomicAdd(&array[k * cols + m], val);
+}
+
+#define SKEW_KERNEL(NAME, T)                                                   \
+extern "C" __global__ void NAME(                                               \
+    T* array, const T* positions, const int* disk_indices,                     \
+    const int* disk_counts,                                                    \
+    T a1x, T a1y, T a2x, T a2y, T j00, T j01, T j10, T j11,                    \
+    const T* radial_gpts, const T* radial_funcs, const T* radial_deriv,        \
+    T dt, T r0,                                                                \
+    int n_radial, int n_disk, int n_atoms, int rows, int cols, int chunk_offset \
+) {                                                                            \
+    interpolate_radial_skew_impl<T>(                                           \
+        array, positions, disk_indices, disk_counts,                           \
+        a1x, a1y, a2x, a2y, j00, j01, j10, j11,                                \
+        radial_gpts, radial_funcs, radial_deriv,                               \
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols, chunk_offset            \
+    );                                                                         \
+}
+
+SKEW_KERNEL(interpolate_radial_skew_f32, float)
+SKEW_KERNEL(interpolate_radial_skew_f64, double)
+"""
+
+_interpolate_radial_skew_f32 = None
+_interpolate_radial_skew_f64 = None
+
+
+def _init_interpolate_radial_skew_kernels():
+    global _interpolate_radial_skew_f32, _interpolate_radial_skew_f64
+    if _interpolate_radial_skew_f32 is None:
+        mod = cp.RawModule(code=_INTERPOLATE_RADIAL_SKEW_KERNEL)
+        _interpolate_radial_skew_f32 = mod.get_function("interpolate_radial_skew_f32")
+        _interpolate_radial_skew_f64 = mod.get_function("interpolate_radial_skew_f64")
+
+
+def interpolate_radial_functions_skew(
+    array,
+    positions,
+    disk_indices,
+    disk_counts,
+    sampling_vectors,
+    inv_jacobian,
+    radial_gpts,
+    radial_functions,
+    radial_derivative,
+    chunk_offset=0,
+):
+    """Launch the skew-grid radial-interpolation CUDA kernel (abTEM issue #599).
+
+    The CuPy counterpart of the numba kernel
+    ``abtem.integrals.interpolate_radial_functions_skew``, with the same
+    arguments; ``sampling_vectors`` (the rows a1, a2) and ``inv_jacobian``
+    (the inverse of ``sampling_vectors.T``) are small host arrays. As for
+    :func:`interpolate_radial_functions`, ``disk_indices`` may be a chunk of the
+    radius-sorted disk starting at global index ``chunk_offset``, and
+    ``disk_counts`` gives each atom's global truncation index.
+    """
+    if len(positions) == 0:
+        return array
+
+    _init_interpolate_radial_skew_kernels()
+
+    n_disk = disk_indices.shape[0]
+    n_atoms = positions.shape[0]
+    n_radial = radial_gpts.shape[0]
+    rows, cols = array.shape
+
+    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (n_radial - 1)).item()
+    r0 = float(radial_gpts[0].item())
+
+    if array.dtype == cp.float64:
+        fp = cp.float64
+        kernel = _interpolate_radial_skew_f64
+    else:
+        fp = cp.float32
+        kernel = _interpolate_radial_skew_f32
+
+    block = (256, 1, 1)
+    grid = (math.ceil(n_disk / 256), n_atoms, 1)
+
+    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
+    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
+    counts_i32 = cp.ascontiguousarray(disk_counts.astype(cp.int32, copy=False))
+    rg = cp.ascontiguousarray(radial_gpts.astype(fp, copy=False))
+    rf = cp.ascontiguousarray(radial_functions.astype(fp, copy=False))
+    rd = cp.ascontiguousarray(radial_derivative.astype(fp, copy=False))
+
+    sv = np.asarray(sampling_vectors, dtype=float)
+    ij = np.asarray(inv_jacobian, dtype=float)
+
+    kernel(
+        grid, block,
+        (array, positions_xy, disk_i32, counts_i32,
+         fp(sv[0, 0]), fp(sv[0, 1]), fp(sv[1, 0]), fp(sv[1, 1]),
+         fp(ij[0, 0]), fp(ij[0, 1]), fp(ij[1, 0]), fp(ij[1, 1]),
+         rg, rf, rd,
+         fp(dt), fp(r0),
+         np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
+         np.int32(rows), np.int32(cols), np.int32(chunk_offset)),
+    )
+    return array
+
 def interpolate_bilinear(x, v, u, vw, uw):
     B, H, W = x.shape
     out_H, out_W = v.shape

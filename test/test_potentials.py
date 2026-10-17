@@ -21,6 +21,7 @@ from utils import (
     rotated_by_hand,
     si_cubic_atoms,
     si_diamond_atoms,
+    requires_gpu,
 )
 
 import abtem
@@ -651,9 +652,10 @@ def test_potential_auto_detects_non_orthogonal():
 @devices
 @pytest.mark.parametrize("lazy", [False, True])
 def test_skew_finite_potential_built_on_a_device_matches_the_cpu_build(lazy, device):
-    # The skewed finite projection is stamped on the host and copied to the
-    # device, so the device build is the CPU build to rounding. B and N carry
-    # two integral tables; the repetitions put several atoms of each in a slice.
+    # On CUDA the skewed finite projection is stamped by its own kernel (#599),
+    # on torch/Metal on the host and copied to the device; either way the device
+    # build is the CPU build to rounding. B and N carry two integral tables; the
+    # repetitions put several atoms of each in a slice.
     atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (2, 1, 1)
     atoms.pbc = True
     kwargs = dict(gpts=(50, 25), slice_thickness=1.0, projection="finite")
@@ -665,6 +667,100 @@ def test_skew_finite_potential_built_on_a_device_matches_the_cpu_build(lazy, dev
     scale = np.abs(expected).max()
     np.testing.assert_allclose(
         asnumpy(built.array), expected, rtol=0, atol=1e-6 * scale
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("chunk_size", [None, 37])
+def test_cuda_skew_kernel_matches_the_cpu_skew_kernel(precision, chunk_size):
+    # The native CUDA kernel of #599 against the numba kernel it follows, on a
+    # hexagonal grid with atoms anywhere in and just outside the cell, a
+    # per-atom truncation and, with chunk_size, the sorted disk streamed in
+    # chunks with their global offset.
+    import cupy as cp
+
+    from abtem.core._cuda import interpolate_radial_functions_skew as cuda_kernel
+    from abtem.integrals import interpolate_radial_functions_skew as cpu_kernel
+
+    dtype = np.dtype(precision)
+    rng = np.random.default_rng(5)
+    gpts = (48, 40)
+    cell = np.array([[2.5 * 4, 0.0], [-1.25 * 4, 2.5 * 4 * np.sqrt(3) / 2]])
+    sampling_vectors = np.stack([cell[0] / gpts[0], cell[1] / gpts[1]])
+    inv_jacobian = np.linalg.inv(sampling_vectors.T)
+
+    positions = (rng.random((7, 2)) * 1.1 - 0.05) @ cell
+    positions = positions.astype(dtype)
+    radial_gpts = np.geomspace(0.01, 2.0, 60).astype(dtype)
+    radial_functions = (
+        np.exp(-radial_gpts[None] * rng.uniform(1, 3, (7, 1)))
+    ).astype(dtype)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(
+        radial_gpts
+    )
+
+    disk = disk_meshgrid(12)
+    radii = np.linalg.norm(
+        disk[:, :1] * sampling_vectors[0] + disk[:, 1:] * sampling_vectors[1], axis=1
+    )
+    order = np.argsort(radii)
+    disk = np.ascontiguousarray(disk[order])
+    disk_counts = np.searchsorted(radii[order], rng.uniform(0.5, 2.2, 7))
+
+    expected = np.zeros(gpts, dtype=dtype)
+    cpu_kernel(
+        expected, positions, disk, disk_counts, sampling_vectors, inv_jacobian,
+        radial_gpts, radial_functions, radial_derivative,
+    )
+
+    result = cp.zeros(gpts, dtype=dtype)
+    kwargs = dict(
+        array=result,
+        positions=cp.asarray(positions),
+        disk_counts=cp.asarray(disk_counts),
+        sampling_vectors=sampling_vectors,
+        inv_jacobian=inv_jacobian,
+        radial_gpts=cp.asarray(radial_gpts),
+        radial_functions=cp.asarray(radial_functions),
+        radial_derivative=cp.asarray(radial_derivative),
+    )
+    if chunk_size is None:
+        cuda_kernel(disk_indices=cp.asarray(disk), **kwargs)
+    else:
+        for start in range(0, int(disk_counts.max()), chunk_size):
+            chunk = cp.asarray(disk[start : start + chunk_size])
+            cuda_kernel(disk_indices=chunk, chunk_offset=start, **kwargs)
+
+    assert result.dtype == dtype
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        cp.asnumpy(result), expected, rtol=0, atol=10 * np.finfo(dtype).eps * scale
+    )
+
+
+@requires_gpu
+@pytest.mark.parametrize("lazy", [False, True])
+def test_skew_finite_potential_native_cuda_equals_the_host_build(lazy, monkeypatch):
+    # The CUDA build of a skewed finite potential with the native kernel against
+    # the host build copied to the device, which it replaces (#599).
+    import abtem.integrals
+
+    atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (2, 1, 1)
+    atoms.pbc = True
+    kwargs = dict(gpts=(50, 25), slice_thickness=1.0, projection="finite")
+
+    monkeypatch.setattr(abtem.integrals, "NATIVE_SKEW_CUDA_KERNEL", False)
+    host = Potential(atoms, device="gpu", **kwargs).build(lazy=lazy).compute()
+    monkeypatch.setattr(abtem.integrals, "NATIVE_SKEW_CUDA_KERNEL", True)
+    native = Potential(atoms, device="gpu", **kwargs).build(lazy=lazy).compute()
+
+    assert_array_matches_device(native.array, "gpu")
+    expected = asnumpy(host.array)
+    np.testing.assert_allclose(
+        asnumpy(native.array), expected, rtol=0, atol=1e-6 * np.abs(expected).max()
     )
 
 
