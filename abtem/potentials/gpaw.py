@@ -389,6 +389,8 @@ def _generate_slices(
     last_slice=None,
     device=None,
     repetitions=(1, 1, 1),
+    box=None,
+    origin=(0.0, 0.0, 0.0),
 ):
     # `atoms` is the calculator's atoms or whole copies of them one after another
     # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
@@ -407,6 +409,8 @@ def _generate_slices(
                 slice_thickness=slice_thickness,
                 projection="finite",
                 plane=plane,
+                box=box,
+                origin=origin,
                 device=device,
             )
         potentials.append(potential)
@@ -459,8 +463,16 @@ def _generate_slices(
         # The valence potential is on the host; its slice is moved to the device
         # of the slice array.
         if transform_valence_potential:
+            # The slice spans the box of the potential, not the cell of `atoms`.
             valence_slice = _interpolate_slice(
-                valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
+                valence_potential,
+                atoms.cell,
+                potential.gpts,
+                potential.sampling,
+                a,
+                b,
+                slice_cell=transformed_atoms.cell,
+                origin=origin,
             )
         else:
             valence_slice = integrate_slice(
@@ -785,6 +797,13 @@ class GPAWPotential(_PotentialBuilder):
             last_slice=last_slice,
             device=self.device,
             repetitions=self.repetitions,
+            # The core corrections are laid out in this potential's box. Left to
+            # detect it, a hexagonal cell would give them a skewed grid even when
+            # this potential was asked for an orthogonal one (non_orthogonal=False),
+            # as gpaw_magnetic_fields does; as in ChargeDensityPotential, the box
+            # is forwarded only when this potential is not skewed itself.
+            box=None if self._non_orthogonal else self.box,
+            origin=self.origin,
         ):
             yield slic
         # for slic in _generate_slices(
