@@ -380,6 +380,21 @@ def test_to_quantem_copies_the_metadata(quantem_records):
     assert images.metadata == metadata
 
 
+def test_to_quantem_does_not_share_nested_metadata(quantem_records):
+    images = Images(
+        np.zeros(GPTS, dtype=np.float32),
+        sampling=SAMPLING,
+        metadata={"label": "intensity", "units": "arb. unit", "nested": {"a": [1, 2]}},
+    )
+
+    dataset = images.to_quantem()
+
+    assert dataset.metadata["nested"] == {"a": [1, 2]}
+    dataset.metadata["nested"]["a"].append(3)
+    dataset.metadata["nested"]["b"] = 0
+    assert images.metadata["nested"] == {"a": [1, 2]}
+
+
 @devices
 def test_to_quantem_exports_a_host_array(device, quantem_records):
     # quantem's Dataset holds NumPy arrays only and rejects CuPy arrays.

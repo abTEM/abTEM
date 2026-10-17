@@ -2720,8 +2720,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         )
 
         # Dataset.from_array takes no metadata; Dataset.metadata is the dict it
-        # holds, empty for a new dataset.
-        dataset.metadata.update(self.metadata)
+        # holds, empty for a new dataset. Deep-copied, as in to_data_array, so that
+        # nested values are not shared with this object.
+        dataset.metadata.update(copy.deepcopy(self.metadata))
 
         return dataset
 
