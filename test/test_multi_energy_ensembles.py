@@ -403,6 +403,19 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
 # The default outer angle is resolved by the `_per_energy` decorator before the
 # patterns are split, alike for both methods and for lazy and eager patterns.
 @devices
+def test_reciprocal_axes_of_several_energies_are_those_of_each_energy(device):
+    # the axes (and so `show` and the exports) are in 1/Å, which does not depend on
+    # the wavelength: only the angles do
+    multi = _cached_patterns(list(ENERGIES), device)
+    for energy in ENERGIES:
+        single = _cached_patterns(energy, device)
+        for axis, expected in zip(multi.base_axes_metadata, single.base_axes_metadata):
+            assert axis.units == expected.units == "1/Å"
+            assert axis.sampling == pytest.approx(expected.sampling)
+            assert axis.offset == pytest.approx(expected.offset)
+
+
+@devices
 def test_cropping_to_an_angle_is_refused_for_several_energies(device):
     # the pixels within an angle differ between the energies, so the crops would
     # not stack; cropping every energy to the highest energy's pixel count instead
