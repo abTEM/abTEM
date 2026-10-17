@@ -258,6 +258,32 @@ def test_frozen_phonons_kept_as_an_ensemble_raise(lazy):
 
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
+def test_components_of_several_energies_have_the_pixel_count_of_the_highest(
+    lazy, device
+):
+    """As for any max_angle in mrad (#503), the energies are cropped alike, to the
+    pixels of the highest energy, so that they stack along the energy axis."""
+    energies = [80e3, 200e3]
+    potential = _potential(True)
+    components = PlaneWave(energy=energies, device=device).multislice(
+        potential, PixelatedDetector(MAX_ANGLE, components="all"), lazy=lazy
+    )
+    plain = PlaneWave(energy=energies, device=device).multislice(
+        potential, PixelatedDetector(MAX_ANGLE), lazy=lazy
+    )
+    highest = PlaneWave(energy=energies[-1], device=device).multislice(
+        potential, PixelatedDetector(MAX_ANGLE), lazy=lazy
+    )
+
+    assert components.shape == (3,) + plain.shape
+    assert plain.shape[-2:] == highest.shape[-2:]
+    np.testing.assert_allclose(
+        _array(components)[0], _array(plain), rtol=0, atol=1e-5 * _array(plain).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_a_single_configuration_has_no_diffuse_part(lazy, device):
     detector = PixelatedDetector(MAX_ANGLE, components=("total", "elastic"))
     result = _array(_detected(False, device, lazy, detector, num_configs=1))

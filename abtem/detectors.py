@@ -1908,8 +1908,10 @@ class PixelatedDetector(BaseDetector):
         directly returns the unreduced amplitudes and intensities, to be reduced
         with :func:`abtem.waves.reduce_ensemble`. Supported by multislice and by
         the PRISM scan (:meth:`abtem.prism.SMatrix.scan`), except with
-        ``upsample=True``, which raises ``NotImplementedError``. Default is None,
-        which detects the intensity of every configuration.
+        ``upsample=True``, which raises ``NotImplementedError``. With several
+        energies, every energy's components are cropped to the pixel count of the
+        highest energy, as for `max_angle` in mrad, so they stack along the energy
+        axis. Default is None, which detects the intensity of every configuration.
     unbiased : bool, optional
         Correct the (N - 1)/N bias of the diffuse intensity, see
         :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
