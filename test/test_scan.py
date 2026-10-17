@@ -184,7 +184,8 @@ def test_single_point_grid_scan_lazy(device, endpoint):
 
 
 def test_grid_scan_zero_extent_rejected():
-    """A degenerate extent is only allowed for a single-point scan."""
+    """A zero extent along every axis has one position, so more than one point
+    along an axis is refused."""
     with pytest.raises(ValueError, match="scan extent must be positive"):
         GridScan(start=(1.0, 1.0), end=(1.0, 1.0), gpts=(4, 4))
 
@@ -256,9 +257,45 @@ def test_zero_length_line_scan_measures_its_one_position(endpoint, lazy):
 
 
 def test_scans_of_a_zero_extent_have_one_position():
+    # as LineScan and Grid do; GridScan refused it unless gpts was given as 1
+    scan = GridScan(start=(1, 2), end=(1, 2), sampling=0.3)
+    assert scan.gpts == (1, 1)
+    np.testing.assert_array_equal(scan.get_positions().reshape(-1, 2), [[1, 2]])
     assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5).gpts == 1
     assert LineScan(start=(1, 1), end=(1, 1), sampling=0.5, endpoint=False).gpts == 1
     scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=True)
     assert scan.gpts == (5, 1)
     scan = GridScan(start=(0, 0), end=(2, 0), sampling=0.5, endpoint=False)
     assert scan.gpts == (4, 1)
+
+
+@pytest.mark.filterwarnings("error")
+def test_a_zero_length_line_scan_points_along_x():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    scan = LineScan(start=(1, 1), end=(1, 1), sampling=0.3)
+    np.testing.assert_array_equal(scan.direction, [1.0, 0.0])
+    assert scan.angle == 0.0
+
+    _, ax = plt.subplots()
+    band = scan.add_to_plot(ax, width=1.0)
+    np.testing.assert_allclose(band.get_xy(), (1.0, 0.5))
+    assert (band.get_width(), band.get_height(), band.angle) == (0.0, 1.0, 0.0)
+
+    scan.add_margin(1.0)
+    assert (scan.start, scan.end) == ((0.0, 1.0), (2.0, 1.0))
+    # sampled at no more than the requested sampling
+    assert scan.gpts > 1 and scan.sampling <= 0.3
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_a_zero_length_line_scan_keeps_its_requested_sampling(endpoint):
+    # its positions coincide, so they have no spacing of their own; 0.0 divided
+    # every later recalculation of gpts
+    scan = LineScan(start=(1, 1), end=(1, 1), sampling=0.3, endpoint=endpoint)
+    assert (scan.gpts, scan.sampling) == (1, 0.3)
+    scan = LineScan(start=(1, 1), end=(1, 1), gpts=3, endpoint=endpoint)
+    assert scan.sampling == 0.0
