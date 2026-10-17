@@ -137,13 +137,14 @@ def test_unbiased_and_float64_accumulation_match(
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_unbiased_scales_the_diffuse_part_by_n_over_n_minus_one(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_unbiased_scales_the_diffuse_part_by_n_over_n_minus_one(lazy, device):
     biased = _detected(
-        True, "cpu", lazy, PixelatedDetector(MAX_ANGLE, components="diffuse")
+        True, device, lazy, PixelatedDetector(MAX_ANGLE, components="diffuse")
     )
     unbiased = _detected(
         True,
-        "cpu",
+        device,
         lazy,
         PixelatedDetector(MAX_ANGLE, components="diffuse", unbiased=True),
     )
@@ -157,18 +158,19 @@ def test_unbiased_scales_the_diffuse_part_by_n_over_n_minus_one(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_components_follow_the_order_given_and_a_single_name_has_no_axis(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_components_follow_the_order_given_and_a_single_name_has_no_axis(lazy, device):
     everything = _detected(
-        True, "cpu", lazy, PixelatedDetector(MAX_ANGLE, components="all")
+        True, device, lazy, PixelatedDetector(MAX_ANGLE, components="all")
     )
     stacked = _detected(
         True,
-        "cpu",
+        device,
         lazy,
         PixelatedDetector(MAX_ANGLE, components=("diffuse", "total")),
     )
     single = _detected(
-        True, "cpu", lazy, PixelatedDetector(MAX_ANGLE, components="elastic")
+        True, device, lazy, PixelatedDetector(MAX_ANGLE, components="elastic")
     )
 
     assert stacked.ensemble_axes_metadata[0].values == ("diffuse", "total")
@@ -191,11 +193,12 @@ def test_components_follow_the_order_given_and_a_single_name_has_no_axis(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_the_total_is_the_mean_intensity_of_a_plain_pixelated_detector(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_total_is_the_mean_intensity_of_a_plain_pixelated_detector(lazy, device):
     # Both detectors see the same exit waves in one multislice run.
     total, intensity = _detected(
         True,
-        "cpu",
+        device,
         lazy,
         [
             PixelatedDetector(MAX_ANGLE, components="total"),
@@ -254,9 +257,10 @@ def test_frozen_phonons_kept_as_an_ensemble_raise(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_a_single_configuration_has_no_diffuse_part(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_a_single_configuration_has_no_diffuse_part(lazy, device):
     detector = PixelatedDetector(MAX_ANGLE, components=("total", "elastic"))
-    result = _array(_detected(False, "cpu", lazy, detector, num_configs=1))
+    result = _array(_detected(False, device, lazy, detector, num_configs=1))
     np.testing.assert_allclose(result[0], result[1], rtol=1e-5, atol=1e-8)
 
     for kwargs in (
@@ -264,7 +268,7 @@ def test_a_single_configuration_has_no_diffuse_part(lazy):
         dict(components="elastic", unbiased=True),
     ):
         with pytest.raises(ValueError, match="at least 2"):
-            _detected(False, "cpu", lazy, PixelatedDetector(MAX_ANGLE, **kwargs), 1)
+            _detected(False, device, lazy, PixelatedDetector(MAX_ANGLE, **kwargs), 1)
 
 
 def _exit_waves(lazy, ensemble_mean=True, seed=3, mean=2.0, device="cpu"):
@@ -289,10 +293,11 @@ def _exit_waves(lazy, ensemble_mean=True, seed=3, mean=2.0, device="cpu"):
 
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("unbiased", [False, True])
-def test_detecting_waves_directly_and_reducing(lazy, unbiased):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_detecting_waves_directly_and_reducing(lazy, unbiased, device):
     """One chunk per configuration and member when lazy, a tree reduction."""
     detector = PixelatedDetector("cutoff", components="all", unbiased=unbiased)
-    raw = detector.detect(_exit_waves(lazy))
+    raw = detector.detect(_exit_waves(lazy, device=device))
     assert "frozen_phonon_moments" in raw.metadata
 
     result = reduce_ensemble(raw)
@@ -344,9 +349,10 @@ def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
     assert errors[None] > 1e-2
 
 
-def test_detecting_waves_directly_without_a_mean_raises_on_reduction():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_detecting_waves_directly_without_a_mean_raises_on_reduction(device):
     detector = PixelatedDetector("cutoff", components="all")
-    raw = detector.detect(_exit_waves(False, ensemble_mean=False))
+    raw = detector.detect(_exit_waves(False, ensemble_mean=False, device=device))
     with pytest.raises(ValueError, match="ensemble_mean=True"):
         reduce_ensemble(raw)
 
@@ -434,30 +440,32 @@ def test_averaged_waves_in_double_precision(lazy, device):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_the_default_waves_detector_keeps_every_configuration(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_default_waves_detector_keeps_every_configuration(lazy, device):
     detector = WavesDetector()
     assert not detector.average_frozen_phonons
-    result = _detected(True, "cpu", lazy, detector)
+    result = _detected(True, device, lazy, detector)
     assert result.shape[0] == N_CONFIGS
     assert isinstance(result.ensemble_axes_metadata[0], FrozenPhononsAxis)
     assert "frozen_phonon_average" not in result.metadata
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_averaged_waves_keep_other_ensemble_axes(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_averaged_waves_keep_other_ensemble_axes(lazy, device):
     """Other axes with an ensemble mean are not averaged for waves, as before."""
     defocus = distributions.from_values(
         np.array([-60.0, 90.0]), weights=np.array([0.5, 0.5]), ensemble_mean=True
     )
     result = _detected(
         True,
-        "cpu",
+        device,
         lazy,
         WavesDetector(average_frozen_phonons=True),
         defocus=defocus,
     )
     exit_waves, expected = _mean_wave_reference(
-        True, "cpu", lazy, probe_kwargs=dict(defocus=defocus)
+        True, device, lazy, probe_kwargs=dict(defocus=defocus)
     )
     assert result.shape == expected.shape
     assert result.shape[0] == 2
@@ -485,9 +493,10 @@ def test_averaged_waves_of_frozen_phonons_kept_as_an_ensemble_raise(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_averaging_waves_directly_is_done_by_reduce_ensemble(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_averaging_waves_directly_is_done_by_reduce_ensemble(lazy, device):
     detector = WavesDetector(average_frozen_phonons=True)
-    raw = detector.detect(_exit_waves(lazy))
+    raw = detector.detect(_exit_waves(lazy, device=device))
     assert raw.shape == (N_CONFIGS, 2, 16, 20)
 
     result = reduce_ensemble(raw)
@@ -497,7 +506,9 @@ def test_averaging_waves_directly_is_done_by_reduce_ensemble(lazy):
     np.testing.assert_allclose(_array(result), expected, rtol=1e-5, atol=1e-6)
 
     with pytest.raises(ValueError, match="ensemble_mean=True"):
-        reduce_ensemble(detector.detect(_exit_waves(lazy, ensemble_mean=False)))
+        reduce_ensemble(
+            detector.detect(_exit_waves(lazy, ensemble_mean=False, device=device))
+        )
 
 
 def test_waves_detector_validates_its_arguments_and_copies():
@@ -568,15 +579,16 @@ def test_prism_components_match_the_exit_wave_route(
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_prism_components_of_a_single_configuration(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_components_of_a_single_configuration(lazy, device):
     # N = 1: elastic = total, and the diffuse part is refused, as for multislice
     detector = PixelatedDetector(MAX_ANGLE, components=("total", "elastic"))
-    result = _array(_prism_scan("cpu", lazy, detector, num_configs=1))
+    result = _array(_prism_scan(device, lazy, detector, num_configs=1))
     np.testing.assert_allclose(result[0], result[1], rtol=1e-5, atol=1e-8)
 
     with pytest.raises(ValueError, match="at least 2"):
         _prism_scan(
-            "cpu",
+            device,
             lazy,
             PixelatedDetector(MAX_ANGLE, components="diffuse"),
             num_configs=1,
@@ -584,7 +596,8 @@ def test_prism_components_of_a_single_configuration(lazy):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_prism_components_average_other_axes_after_the_split(lazy):
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_components_average_other_axes_after_the_split(lazy, device):
     """A weighted defocus distribution is averaged incoherently, after the frozen
     phonons are averaged coherently, member by member in the eager scan."""
     values = np.array([-60.0, 90.0])
@@ -592,7 +605,7 @@ def test_prism_components_average_other_axes_after_the_split(lazy):
     defocus = distributions.from_values(values, weights=weights, ensemble_mean=True)
 
     result = _prism_scan(
-        "cpu",
+        device,
         lazy,
         PixelatedDetector(MAX_ANGLE, components="all"),
         ctf={"defocus": defocus},
@@ -600,7 +613,7 @@ def test_prism_components_average_other_axes_after_the_split(lazy):
 
     expected = 0.0
     for value, weight in zip(values, weights):
-        _, reference = _prism_reference("cpu", lazy, ctf={"defocus": float(value)})
+        _, reference = _prism_reference(device, lazy, ctf={"defocus": float(value)})
         expected = expected + weight * _array(reference)
     expected = expected / weights.sum()
 
@@ -649,8 +662,9 @@ def test_prism_averaged_waves_match_the_mean_of_the_exit_waves(lazy, device):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_prism_averaged_waves_without_the_option_keep_every_configuration(lazy):
-    result = _prism_scan("cpu", lazy, WavesDetector())
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_averaged_waves_without_the_option_keep_every_configuration(lazy, device):
+    result = _prism_scan(device, lazy, WavesDetector())
     assert result.shape[0] == N_CONFIGS
     assert "frozen_phonon_average" not in result.metadata
 
