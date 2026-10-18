@@ -1309,19 +1309,24 @@ def test_azimuthal_step_bounds_are_the_bins_on_the_device(
         np.testing.assert_array_equal(asnumpy(bound), expected.astype(np.int32))
 
 
+@pytest.mark.parametrize(
+    "single_pass, name",
+    [(True, "_azimuthal_step_runs"), (False, "_azimuthal_step_bounds")],
+)
 def test_lazy_azimuthal_average_computes_the_step_bounds_once_for_all_blocks(
-    monkeypatch,
+    single_pass, name, monkeypatch
 ):
+    import abtem.measurements
+
+    monkeypatch.setattr(abtem.measurements, "AZIMUTHAL_STEP_SINGLE_PASS", single_pass)
     calls = []
-    bounds = DiffractionPatterns._azimuthal_step_bounds
+    build = getattr(DiffractionPatterns, name)
 
-    def counting_bounds(*args, **kwargs):
+    def counting_build(*args, **kwargs):
         calls.append(1)
-        return bounds(*args, **kwargs)
+        return build(*args, **kwargs)
 
-    monkeypatch.setattr(
-        DiffractionPatterns, "_azimuthal_step_bounds", staticmethod(counting_bounds)
-    )
+    monkeypatch.setattr(DiffractionPatterns, name, staticmethod(counting_build))
     data = np.random.default_rng(0).random((4, 32, 32))
     patterns = DiffractionPatterns(
         data,

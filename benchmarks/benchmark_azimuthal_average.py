@@ -5,8 +5,9 @@ True``: the pixels of every bin gathered once and summed in one pass) with the
 bin-by-bin average (``False``: a pattern-sized mask and masked sum per bin). For
 each pattern size it reports:
 
-- the peak host memory of building the step bounds, before #602 (a meshgrid and
-  its temporaries) and now (``tracemalloc``);
+- the peak host memory (``tracemalloc``) of building the step bins: the bounds
+  before #602 (a meshgrid and its temporaries), the bounds now, and the runs of
+  the single-pass average, which is the default path;
 - the best wall time of an eager and of a lazy (``--blocks`` blocks) average on
   the chosen device, bin by bin and single pass, and the CuPy memory-pool total
   when the device is a GPU;
@@ -34,15 +35,13 @@ import dask
 import numpy as np
 
 import abtem
+import abtem.measurements
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy, cp
-import abtem.measurements
 from abtem.measurements import DiffractionPatterns
 
-CURRENT = DiffractionPatterns._azimuthal_step_bounds
 
-
-def _previous_step_bounds(coordinates, radial_sampling, width, device="cpu"):
+def _previous_step_bounds(coordinates, radial_sampling, width, num_bins):
     """The bounds before #602, for their host memory: a meshgrid and its
     temporaries."""
     x, y = np.meshgrid(*coordinates, indexing="ij")
@@ -70,12 +69,27 @@ def _patterns(n, members, device, lazy, blocks):
     return patterns
 
 
-def _host_peak(bounds, n):
+def _step_bounds(coordinates, radial_sampling, width, num_bins):
+    return DiffractionPatterns._azimuthal_step_bounds(
+        coordinates, radial_sampling, width
+    )
+
+
+def _step_runs(coordinates, radial_sampling, width, num_bins):
+    return DiffractionPatterns._azimuthal_step_runs(
+        coordinates, radial_sampling, width, num_bins
+    )
+
+
+def _host_peak(build, n):
+    """The peak host memory of building the step bins of an n x n pattern with the
+    default bins."""
     coordinates = tuple(np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) for _ in range(2))
     tracemalloc.start()
-    bounds(coordinates, 1.0, 1.0)
+    result = build(coordinates, 1.0, 1.0, n // 2)
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
+    del result
     return peak
 
 
@@ -117,11 +131,14 @@ def main():
     abtem.config.set({"device": args.device})
 
     print(
-        f"{'n':>6} {'mode':>6} {'bounds host MB before/now':>26}"
+        f"{'n':>6} {'mode':>6} {'host MB meshgrid/bounds/runs':>28}"
         f" {'time loop/single s':>20} {'gpu pool loop/single MB':>24} max rel diff"
     )
     for n in args.sizes:
-        host = [_host_peak(b, n) / 1e6 for b in (_previous_step_bounds, CURRENT)]
+        host = [
+            _host_peak(build, n) / 1e6
+            for build in (_previous_step_bounds, _step_bounds, _step_runs)
+        ]
         for lazy in (False, True):
             patterns = _patterns(n, args.members, args.device, lazy, args.blocks)
             old = _run(False, patterns, args.device, args.reps)
@@ -134,7 +151,7 @@ def main():
             difference = np.abs(new[2] - old[2]).max() / np.abs(old[2]).max()
             print(
                 f"{n:6d} {'lazy' if lazy else 'eager':>6} "
-                f"{host[0]:12.1f}/{host[1]:<12.1f} "
+                f"{host[0]:10.1f}/{host[1]:8.1f}/{host[2]:<8.1f} "
                 f"{old[0]:9.3f}/{new[0]:<9.3f} {pool:>24} "
                 f"{difference:.1e}"
             )

@@ -5214,6 +5214,41 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_row_blocks(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        block_pixels: int = 1 << 16,
+    ):
+        """Yield `(start, first, last)` for blocks of whole rows of the pattern: the
+        first and last step bin of every pixel of the rows starting at row `start`,
+        as 2-D int32 arrays.
+
+        Bin k holds r with `k * radial_sampling - width / 2 <= r <
+        k * radial_sampling + width / 2`, that is `first <= k <= last`. The radii
+        are found in double precision, and the quotients are rounded as in
+        `safe_ceiling_int`, so an edge at a decimal multiple of the sampling is not
+        missed by rounding noise. The blocks hold about `block_pixels` pixels, so the
+        float64 temporaries stay small whatever the size of the pattern.
+        """
+        x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
+
+        def bound(q, shift, offset):
+            np.add(q, shift, out=q)
+            np.divide(q, radial_sampling, out=q)
+            np.add(q, offset, out=q)
+            np.round(q, 7, out=q)
+            np.floor(q, out=q)
+            return q.astype(np.int32)
+
+        rows = max(block_pixels // max(len(y), 1), 1)
+        for start in range(0, len(x), rows):
+            r = np.hypot(x[start : start + rows, None], y[None, :])
+            first = bound(r.copy(), -width / 2, 1.0)
+            last = bound(r, width / 2, 0.0)  # r itself is not needed after this
+            yield start, first, last
+
+    @staticmethod
     def _azimuthal_step_bounds(
         coordinates: tuple[np.ndarray, np.ndarray],
         radial_sampling: float,
@@ -5229,27 +5264,20 @@ class DiffractionPatterns(_BaseMeasurement2D):
         than their own (the node ran on a different worker, with several GPUs in one
         process) copy it themselves: see `_on_device_of`.
 
-        The radii are computed by broadcasting and the bounds in place, so at most
-        two pattern-sized float64 arrays exist at once, rather than a meshgrid and
-        its temporaries.
+        The bounds are found a block of rows at a time (see
+        `_azimuthal_step_row_blocks`) and written into the int32 results, so the
+        peak host memory is the two results and a few small blocks, rather than a
+        meshgrid and its pattern-sized temporaries.
         """
-        x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
-        r = np.hypot(x[:, None], y[None, :])
-
-        # Bin k holds r with k * radial_sampling - width / 2 <= r <
-        # k * radial_sampling + width / 2, that is first <= k <= last. The
-        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
-        # multiple of the sampling is not missed by rounding noise.
-        def bound(q, shift, offset):
-            np.add(q, shift, out=q)
-            np.divide(q, radial_sampling, out=q)
-            np.add(q, offset, out=q)
-            np.round(q, 7, out=q)
-            np.floor(q, out=q)
-            return q.astype(np.int32)
-
-        first = bound(r.copy(), -width / 2, 1.0)
-        last = bound(r, width / 2, 0.0)  # r itself is not needed after this
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        shape = tuple(len(c) for c in coordinates)
+        first = np.empty(shape, dtype=np.int32)
+        last = np.empty(shape, dtype=np.int32)
+        for start, first_rows, last_rows in row_blocks(
+            coordinates, radial_sampling, width
+        ):
+            first[start : start + len(first_rows)] = first_rows
+            last[start : start + len(last_rows)] = last_rows
         return copy_to_device(first, device), copy_to_device(last, device)
 
     @staticmethod
@@ -5266,24 +5294,59 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         A pixel is in the bins `first..last` of `_azimuthal_step_bounds`, which
         is one bin with the default `width == radial_sampling` and several for
-        overlapping bins; it then appears once in the run of each.
+        overlapping bins; it then appears once in the run of each. Within a bin
+        the pixels keep their order in the pattern.
+
+        The runs are sorted a block of rows at a time, in two passes over the
+        blocks of `_azimuthal_step_row_blocks`: the first counts the pixels of
+        every bin, which places the runs, and the second sorts each block by bin
+        and writes it into its place in the runs. Only the runs themselves, int32
+        indices when the pattern has fewer than 2**31 pixels, are pattern-sized.
         """
-        first, last = DiffractionPatterns._azimuthal_step_bounds(
-            coordinates, radial_sampling, width
-        )
-        first = np.maximum(first.ravel().astype(np.int64), 0)
-        last = np.minimum(last.ravel().astype(np.int64), num_bins - 1)
-        counts = np.maximum(last - first + 1, 0)
-        pixels = np.repeat(np.arange(first.size, dtype=np.int64), counts)
-        # the bin of each copy of a pixel: its first bin plus the copy's rank
-        starts = np.cumsum(counts) - counts
-        bins = np.repeat(first - starts, counts)
-        bins += np.arange(pixels.size, dtype=np.int64)
-        order = np.argsort(bins, kind="stable")
-        bin_counts = np.bincount(bins, minlength=num_bins)[:num_bins]
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        size = int(np.prod([len(c) for c in coordinates]))
+        index_dtype = np.int32 if size < 2**31 else np.int64
+
+        def clipped(first, last):
+            # the bins of a pixel, first..last, within 0..num_bins - 1
+            first = np.maximum(first.ravel(), 0)
+            last = np.minimum(last.ravel(), num_bins - 1)
+            return first, last, np.maximum(last - first + 1, 0)
+
+        # a bin is in the range of a pixel from its first to its last: a bincount
+        # of the firsts less a bincount of the bins after the lasts, accumulated
+        delta = np.zeros(num_bins + 1, dtype=np.int64)
+        for _, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            valid = counts > 0
+            delta += np.bincount(first[valid], minlength=num_bins + 1)
+            delta -= np.bincount(last[valid] + 1, minlength=num_bins + 1)
+        bin_counts = np.cumsum(delta)[:num_bins]
         separators = np.concatenate(([0], np.cumsum(bin_counts))).astype(np.int64)
+
+        pixels = np.empty(int(separators[-1]), dtype=index_dtype)
+        cursor = separators[:-1].copy()  # next free place in the run of each bin
+        for start, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            first = first.astype(np.int64)
+            if counts.size and counts.max() <= 1:  # no pixel in several bins
+                pixel = np.flatnonzero(counts)
+                bins = first[pixel]
+            else:
+                pixel = np.repeat(np.arange(first.size, dtype=np.int64), counts)
+                # the bin of each copy of a pixel: its first bin plus the copy's rank
+                starts = np.cumsum(counts) - counts
+                bins = np.repeat(first - starts, counts)
+                bins += np.arange(pixel.size, dtype=np.int64)
+            order = np.argsort(bins, kind="stable")
+            bins = bins[order]
+            block_counts = np.bincount(bins, minlength=num_bins)
+            block_starts = np.cumsum(block_counts) - block_counts
+            places = cursor[bins] + (np.arange(bins.size) - block_starts[bins])
+            pixels[places] = pixel[order] + start * len(coordinates[1])
+            cursor += block_counts
         return (
-            copy_to_device(pixels[order], device),
+            copy_to_device(pixels, device),
             copy_to_device(separators, device),
             copy_to_device(bin_counts, device),
         )
@@ -5425,7 +5488,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             # blocks is alive.
             #
             # By default the node holds the bins as runs instead (#602): the
-            # binned pixel indices (int64, 8 * n_pixels bytes with the default
+            # binned pixel indices (int32, 4 * n_pixels bytes with the default
             # non-overlapping bins), averaged in one pass.
             if AZIMUTHAL_STEP_SINGLE_PASS:
                 step_runs = self._azimuthal_step_runs
