@@ -285,19 +285,19 @@ def test_a_grid_scan_of_a_single_point_without_gpts_has_one_position_once_matche
 
 @pytest.mark.filterwarnings("error")
 def test_a_zero_length_line_scan_points_along_x():
-    import matplotlib
-
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     scan = LineScan(start=(1, 1), end=(1, 1), sampling=0.3)
     np.testing.assert_array_equal(scan.direction, [1.0, 0.0])
     assert scan.angle == 0.0
 
-    _, ax = plt.subplots()
-    band = scan.add_to_plot(ax, width=1.0)
-    np.testing.assert_allclose(band.get_xy(), (1.0, 0.5))
-    assert (band.get_width(), band.get_height(), band.angle) == (0.0, 1.0, 0.0)
+    fig, ax = plt.subplots()
+    try:
+        band = scan.add_to_plot(ax, width=1.0)
+        np.testing.assert_allclose(band.get_xy(), (1.0, 0.5))
+        assert (band.get_width(), band.get_height(), band.angle) == (0.0, 1.0, 0.0)
+    finally:
+        plt.close(fig)
 
     scan.add_margin(1.0)
     assert (scan.start, scan.end) == ((0.0, 1.0), (2.0, 1.0))

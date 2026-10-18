@@ -286,11 +286,16 @@ class TestCTF:
             (False, {"gpts": 64}, 64, 50),
             (False, {"max_angle": 30}, 128, 30),
             (False, {"max_angle": 30, "gpts": 64}, 64, 30),
+            # unequal sizes: a swapped axis in the grid or the extent shows
+            (True, {"gpts": (64, 48)}, (64, 48), own_max_angle),
+            (True, {"max_angle": 30, "gpts": (48, 64)}, (48, 64), 30),
+            (False, {"gpts": (64, 48)}, (64, 48), 50),
+            (False, {"max_angle": 30, "gpts": (48, 64)}, (48, 64), 30),
         ):
             case = f"grid={grid}, {kwargs}"
             dp = ctf(grid).to_diffraction_patterns(**kwargs)
 
-            assert dp.shape == (gpts, gpts), case
+            assert dp.shape == tuple(np.broadcast_to(gpts, (2,))), case
             # Even gpts: the fftshifted grid reaches exactly n/2 pixels out.
             np.testing.assert_allclose(
                 dp.max_angles, max_angle, rtol=1e-6, err_msg=case
