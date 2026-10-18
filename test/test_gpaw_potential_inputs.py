@@ -41,8 +41,13 @@ def _atoms():
     return Atoms("C", positions=[(0.6, 0.8, 1.0)], cell=(2.0, 2.0, 2.0), pbc=True)
 
 
+#: The valence potential's shape. GPAW puts it on the "fine" grid, which has twice
+#: the resolution of the density grid `gd` in each direction.
+_FINE_SHAPE = (12, 10, 8)
+
+
 def _valence_potential(seed):
-    return np.random.default_rng(seed).standard_normal((12, 10, 8))
+    return np.random.default_rng(seed).standard_normal(_FINE_SHAPE)
 
 
 @pytest.fixture
@@ -57,7 +62,13 @@ def fake_gpaw(monkeypatch):
             self.density = SimpleNamespace(
                 Q_aL={0: np.zeros(1)},
                 nt_sG=np.zeros((1, 2, 2, 2)),
-                gd=SimpleNamespace(new_descriptor=lambda comm: None),
+                # GPAWPotential reads gd.N_c to size the refined grid, so the
+                # stand-in descriptor carries the coarse grid _FINE_SHAPE implies.
+                gd=SimpleNamespace(
+                    new_descriptor=lambda comm: SimpleNamespace(
+                        N_c=tuple(n // 2 for n in _FINE_SHAPE)
+                    )
+                ),
                 D_asp={0: np.zeros((1, 1))},
             )
             self.setups = None
@@ -450,6 +461,76 @@ def test_eager_reads_of_a_path_list_do_not_use_the_configured_scheduler(
 
     with dask.config.set(scheduler=refuse):
         _eager(entry_point, GPAWPotential(["a.gpw", "b.gpw"], gpts=GPTS))
+
+
+def test_gridrefinement_is_relative_to_the_density_grid(fake_gpaw):
+    """gridrefinement is relative to the coarse density grid `gd` (matching the
+    old, documented semantics), not to valence_potential's own shape, which
+    already sits on GPAW's once-refined "fine grid" (2x the density grid; see
+    test_gpaw.py for that convention on a real calculator).
+
+    gridrefinement=1 and 2 therefore both floor to the fine grid and agree
+    exactly, while 3 refines past it and changes the built potential. (It used
+    to be accepted but never applied anywhere.)"""
+
+    def build(gridrefinement):
+        return GPAWPotential(
+            "a.gpw", gpts=GPTS, slice_thickness=0.2, gridrefinement=gridrefinement
+        ).build(lazy=False)
+
+    native = build(1)
+    assert np.all(np.isfinite(native.array))
+    np.testing.assert_array_equal(build(2).array, native.array)
+
+    refined = build(3)
+    assert np.all(np.isfinite(refined.array))
+    assert not np.allclose(refined.array, native.array)
+
+
+def test_integrate_slice_thin_slice_gives_no_nan():
+    """A target slice thinner than (or misaligned with) the source grid's own z
+    spacing can land entirely between two grid points (nb == na): zero grid points
+    summed, and a 0/0 in the rescaling -- NaN, which then poisons the whole
+    potential once combined with other slices. Regression test for the fix
+    (always include at least one source grid point)."""
+    rng = np.random.RandomState(0)
+    array = rng.rand(8, 8, 4)  # a coarse 4-point z-grid over a 1.0 A cell
+    thickness = 1.0
+    dz = thickness / array.shape[2]  # 0.25 A
+
+    # [a, b) falls strictly between two source grid points -> na == nb == 0
+    a, b = 0.51 * dz, 0.99 * dz
+    assert int(np.floor(a / dz)) == int(np.floor(b / dz))
+
+    result = gpaw_module.integrate_slice(
+        array, gpts=(8, 8), a=a, b=b, thickness=thickness
+    )
+    assert np.all(np.isfinite(result))
+
+
+def test_refine_grid_reproduces_source_on_upsampling():
+    """_refine_grid must be a band-limited (exact, for a band-limited source)
+    upsampling: the original samples must reappear unchanged at the corresponding
+    positions of the refined grid."""
+    rng = np.random.RandomState(0)
+    # A source that is exactly band-limited on this grid (a handful of nonzero
+    # low-frequency Fourier coefficients, Hermitian-symmetric so the real-space
+    # array comes out real), matching what a plane-wave-derived potential is.
+    shape = (6, 6, 4)
+    array_hat = np.zeros(shape, dtype=complex)
+    for k in [(0, 0, 0), (1, 0, 0), (0, 1, 1)]:
+        value = rng.rand() + 1j * rng.rand()
+        array_hat[k] = value
+        neg_k = tuple(-ki % ni for ki, ni in zip(k, shape))
+        array_hat[neg_k] = np.conj(value)
+    array = np.fft.ifftn(array_hat).real
+
+    factor = 3
+    new_shape = tuple(n * factor for n in shape)
+    refined = gpaw_module._refine_grid(array, new_shape)
+
+    assert refined.shape == new_shape
+    np.testing.assert_allclose(refined[::factor, ::factor, ::factor], array, atol=1e-8)
 
 
 @pytest.fixture(scope="module")

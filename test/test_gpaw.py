@@ -137,6 +137,21 @@ def gpaw_calculator_bonding():
     return atoms.calc
 
 
+def test_valence_potential_is_on_twice_the_density_grid(gpaw_calculator_no_bonding):
+    """GPAWPotential's gridrefinement is relative to the density grid `gd` and
+    floors at valence_potential's shape, assuming GPAW puts the electrostatic
+    potential on its fine grid, twice the density grid in each direction. The
+    fake GPAW in test_gpaw_potential_inputs.py, which tests gridrefinement itself
+    without GPAW, makes the same assumption; this checks it on a real
+    calculator."""
+    from abtem.potentials.gpaw import _DummyGPAW
+
+    calculator = _DummyGPAW.from_gpaw(gpaw_calculator_no_bonding)
+    assert calculator.valence_potential.shape == tuple(
+        2 * n for n in calculator.gd.N_c
+    )
+
+
 def assert_psae_matches_abtem(calc, grid_spacing=0.02):
     with _ps2ae_compatible_density():
         ps2ae_potential = PS2AE(calc, grid_spacing=grid_spacing)
