@@ -725,11 +725,21 @@ def _cupy_safe_coordinates(array, coordinates):
 def _interpolate_stack(
     array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
 ):
+    """Spline-interpolate a stack of arrays at given fractional-pixel positions.
+
+    `array`'s trailing `ndim` axes (`ndim = positions.shape[-1]`, e.g. 2 for
+    images/diffraction patterns, 3 for a potential volume) are the spatial axes
+    interpolated over; any leading axes are treated as an ensemble/batch dimension.
+    `positions` holds one `ndim`-tuple of pixel coordinates per output point, with
+    arbitrary leading shape (e.g. `(N,)` for a plain line, or `(N, n_perp)` when
+    averaging across a perpendicular width).
+    """
     map_coordinates = get_ndimage_module(array).map_coordinates
     xp = get_array_module(array)
+    ndim = positions.shape[-1]
 
     positions_shape = positions.shape
-    positions = positions.reshape((-1, 2))
+    positions = positions.reshape((-1, ndim))
 
     old_shape = array.shape
 
@@ -737,9 +747,9 @@ def _interpolate_stack(
         # The periodic padding below only reaches 2 * order pixels beyond the
         # array, and map_coordinates fills everything past it with zeros, so
         # positions further outside must first be wrapped into the array.
-        positions = positions % xp.asarray(old_shape[-2:], dtype=positions.dtype)
+        positions = positions % xp.asarray(old_shape[-ndim:], dtype=positions.dtype)
 
-    array = array.reshape((-1,) + array.shape[-2:])
+    array = array.reshape((-1,) + array.shape[-ndim:])
 
     if mode == "grid-wrap":
         # The spline is periodic with the array length: no padding is needed.
@@ -747,15 +757,22 @@ def _interpolate_stack(
         kwargs = {**kwargs, "mode": "grid-wrap"}
     else:
         padding = 2 * order
-        array = xp.pad(array, ((0, 0), (padding,) * 2, (padding,) * 2), mode=mode)
 
+    # The padding shifts the origin by `padding` along every spatial axis; apply
+    # that offset after the wrap above, which is taken modulo the unpadded shape.
     positions = _cupy_safe_coordinates(array, positions + padding)
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
+    # Pad one ensemble member at a time rather than the whole stack at once: for a
+    # large ensemble (e.g. frozen phonons), padding the full stack in one call would
+    # multiply the padded array's memory by the ensemble size; padding per member
+    # keeps peak memory to a single padded array.
+    pad_width = ((padding,) * 2,) * ndim
     for i in range(array.shape[0]):
-        map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
+        member = xp.pad(array[i], pad_width, mode=mode) if padding else array[i]
+        map_coordinates(member, positions.T, output=output[i], order=order, **kwargs)
 
-    output = output.reshape(old_shape[:-2] + positions_shape[:-1])
+    output = output.reshape(old_shape[:-ndim] + positions_shape[:-1])
     return output
 
 
@@ -1531,10 +1548,49 @@ class _BaseMeasurement2D(BaseMeasurements):
         elif end is None:
             end = (0.0, self.extent[1])
 
-        if fractional:
-            extent = self.extent
+        cell = self.metadata.get("cell", None)
+        skewed = cell is not None and not is_cell_orthogonal(
+            np.asarray(cell, dtype=float)
+        )
+
+        # `conversion_cell`'s rows are the lattice vectors to convert between
+        # Cartesian and fractional coordinates with (Cartesian = frac @ cell, i.e.
+        # frac = Cartesian @ inv(cell) -- no transpose; that would instead apply the
+        # *reciprocal*-lattice basis change, landing on the wrong fraction for any
+        # non-symmetric cell). `metadata["cell"]` always holds the real-space
+        # lattice; a reciprocal-space measurement (e.g. DiffractionPatterns) instead
+        # needs the reciprocal lattice vectors (rows b1, b2) -- reciprocal_cell()
+        # is the same shared helper Grid.k_components / artists._build_skew_mesh use
+        # for this real-vs-reciprocal distinction, so using the real-space cell
+        # directly here would silently apply an Å-scale transform to 1/Å-scale
+        # positions.
+        conversion_cell = None
+        if skewed:
+            cell_arr = np.asarray(cell, dtype=float)
+            if isinstance(self.base_axes_metadata[0], ReciprocalSpaceAxis):
+                conversion_cell = reciprocal_cell(cell_arr)
+            else:
+                conversion_cell = cell_arr
+
+        if (
+            fractional
+            and conversion_cell is not None
+            and not isinstance(start, Atom)
+            and not isinstance(end, Atom)
+        ):
+            # LineScan's own fractional handling assumes an orthogonal grid
+            # (Cartesian = fractional * extent per axis), which is wrong for a
+            # non-orthogonal cell: it would scale along Cartesian x/y instead of
+            # along the (possibly skewed) lattice directions. Convert fractional
+            # (u, v) -> Cartesian (x, y) ourselves via the true cell, then hand
+            # LineScan already-Cartesian coordinates.
+            start = tuple(np.asarray(start, dtype=float) @ conversion_cell)
+            end = tuple(np.asarray(end, dtype=float) @ conversion_cell)
+            scan_fractional = False
+            scan_extent = None
         else:
-            extent = None
+            scan_fractional = fractional
+            scan_extent = self.extent if fractional else None
 
         scan = LineScan(
             start=start,
@@ -1542,8 +1598,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             gpts=gpts,
             sampling=sampling,
             endpoint=endpoint,
-            potential=extent,
-            fractional=fractional,
+            potential=scan_extent,
+            fractional=scan_fractional,
         )
 
         if margin != 0.0:
@@ -1599,9 +1655,6 @@ class _BaseMeasurement2D(BaseMeasurements):
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
-            # raise NotImplementedError("Lazy interpolation not implemented.")
-            # TDOO: Implement lazy interpolation
-
             # The base (spatial) axes are the *last* len(self.base_shape) axes
             # of self.array -- any ensemble axes come first. da.map_blocks's
             # drop_axis must name their actual positions; previously this used
@@ -2797,18 +2850,46 @@ class _BaseMeasurement1D(BaseMeasurements):
         start, end = self.metadata["start"], self.metadata["end"]
         from abtem.scan import LineScan
 
-        return LineScan(start=start, end=end, sampling=sampling)
+        # start/end may carry a depth (z) coordinate (e.g. a non-projected 3D line
+        # profile); add_to_plot draws the lateral projection of the line, so only the
+        # (x, y) part is relevant here.
+        return LineScan(start=start[:2], end=end[:2], sampling=sampling)
 
-    def _add_to_plot(self, *args, **kwargs):
+    def add_to_plot(self, ax, **kwargs):
+        """
+        Add a visualization of the location of the line profile(s) to a matplotlib
+        plot, e.g. an image of the potential or measurement the line profile(s) were
+        interpolated from.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes or Visualization
+            The axes of the matplotlib plot the visualization should be added to.
+        kwargs :
+            Additional options for matplotlib.pyplot.plot (or
+            matplotlib.patches.Rectangle if the line profile(s) were created with a
+            nonzero `width`) as keyword arguments.
+
+        Returns
+        -------
+        artist : matplotlib.lines.Line2D or matplotlib.patches.Rectangle
+            The plotted line, or, if `width` is nonzero, the rectangle indicating the
+            averaging width.
+        """
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
-                "The metadata does not contain the keys 'start' and 'end'"
+                "The metadata does not contain the keys 'start' and 'end'; "
+                "add_to_plot requires line profiles produced by interpolate_line "
+                "or interpolate_line_at_position"
             )
 
         if "width" in self.metadata:
+            # Always draw the width the profile was actually averaged over -- a
+            # caller-supplied `width` here would misrepresent the real averaging
+            # region the plotted data came from.
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_plot(*args, **kwargs)
+        return self._line_scan().add_to_plot(ax, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
@@ -2948,6 +3029,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         title: str | bool = True,
         units: Optional[str] = None,
         legend: bool = False,
+        logscale: bool = False,
         interact: bool = False,
         display: bool = True,
         **kwargs,
@@ -2983,6 +3065,8 @@ class _BaseMeasurement1D(BaseMeasurements):
             Add a legend to the plot. The labels will be derived from
         units : str, optional
             The units used for the x-axis. The given units must be compatible.
+        logscale : bool
+            If True, the y-axis is shown on a logarithmic scale. Default is False.
         interact : bool
             If True, create an interactive visualization. This requires enabling the
             `ipympl` Matplotlib backend.
@@ -3012,6 +3096,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             interactive=not interact and display,
             legend=legend,
             common_scale=common_scale,
+            logscale=logscale,
             **kwargs,
         )
 
