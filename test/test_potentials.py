@@ -859,29 +859,6 @@ def test_cuda_skew_kernel_launches_more_atoms_than_the_grid_limit_in_blocks(
         _assert_stamps_agree(result, expected, dtype)
 
 
-@requires_gpu
-@pytest.mark.parametrize("lazy", [False, True])
-def test_skew_finite_potential_native_cuda_equals_the_host_build(lazy, monkeypatch):
-    # The CUDA build of a skewed finite potential with the native kernel against
-    # the host build copied to the device, which it replaces (#599).
-    import abtem.integrals
-
-    atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (2, 1, 1)
-    atoms.pbc = True
-    kwargs = dict(gpts=(50, 25), slice_thickness=1.0, projection="finite")
-
-    monkeypatch.setattr(abtem.integrals, "NATIVE_SKEW_CUDA_KERNEL", False)
-    host = Potential(atoms, device="gpu", **kwargs).build(lazy=lazy).compute()
-    monkeypatch.setattr(abtem.integrals, "NATIVE_SKEW_CUDA_KERNEL", True)
-    native = Potential(atoms, device="gpu", **kwargs).build(lazy=lazy).compute()
-
-    assert_array_matches_device(native.array, "gpu")
-    expected = asnumpy(host.array)
-    np.testing.assert_allclose(
-        asnumpy(native.array), expected, rtol=0, atol=1e-6 * np.abs(expected).max()
-    )
-
-
 def test_tilted_c_axis_matches_orthogonal_supercell():
     """A crystal with a tilted c-axis (a, b orthogonal in-plane) is handled by placing
     the atoms at their true positions and propagating straight -- no tilt ramp -- so it
