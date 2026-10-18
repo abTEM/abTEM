@@ -40,6 +40,15 @@ ELEMENTS = (6, 14, 29, 79)
 PRECISIONS = ("float32", "float64")
 
 
+# These densities are not a valence density of their atoms (random values, no
+# electrons, or all of them), so ChargeDensityPotential warns that it cannot
+# subtract the core and builds the potential of the density as given, which is
+# what these tests check.
+ignore_core_count_warning = pytest.mark.filterwarnings(
+    "ignore:charge_density integrates to:UserWarning"
+)
+
+
 def _f0(parametrization, Z) -> float:
     """``projected_scattering_factor(k=0)``.
 
@@ -575,6 +584,7 @@ def _gaussian_electrons(Z, z0, sigma):
     return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 def test_charge_density_point_charges_give_the_ewald_projected_potential(device):
@@ -651,6 +661,7 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential(device)
     )
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 @pytest.mark.parametrize("z0", (3.3, 4.0))
@@ -770,6 +781,7 @@ def _reference_potential(name, reference, sampling, device):
     return potential, atoms, array / 0.5
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 @pytest.mark.parametrize("sampling, width", [(0.1, 3.0), (0.05, 1.5)])
@@ -804,6 +816,7 @@ def test_charge_density_mean_reference_averages_to_zero(name, sampling, width, d
         assert abs(vacuum - expected) < 0.02, (vacuum, expected)
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 @pytest.mark.parametrize("name", ["atom", "slab"])
@@ -818,12 +831,14 @@ def test_charge_density_vacuum_reference_zeros_the_vacuum(name, device):
     assert abs(array.mean() - expected) < 0.02, (array.mean(), expected)
 
 
+@ignore_core_count_warning
 def test_charge_density_vacuum_reference_needs_vacuum():
     """Bulk has no slice free of electrons; reference="vacuum" says so."""
     with pytest.raises(ValueError, match="vacuum slice"):
         _reference_potential("bulk", "vacuum", 0.1, "cpu")
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 def test_charge_density_references_give_the_same_intensities(device):
