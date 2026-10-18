@@ -824,20 +824,39 @@ def test_cuda_skew_kernel_launches_more_atoms_than_the_grid_limit_in_blocks(
 ):
     # The atoms are launched along gridDim.y (at most 65535); the launcher
     # splits larger slices into blocks. Lowering the limit to 3 makes 7 atoms
-    # take three launches, and the result is still the numba kernel's.
-    import abtem.core._cuda
+    # take three launches of 3, 3 and 1 atoms, the default limit one launch of
+    # all 7, and either way the result is the numba kernel's. The launches are
+    # counted by wrapping the compiled kernels, since a launcher that did not
+    # split would pass the comparison on its own, 7 atoms fitting in one launch.
+    import abtem.core._cuda as cuda
 
-    monkeypatch.setattr(abtem.core._cuda, "_MAX_ATOMS_PER_LAUNCH", 3)
+    cuda._init_interpolate_radial_skew_kernels()  # compile, then wrap below
+    atoms_per_launch = []
+
+    def counting(kernel):
+        def launch(grid, *args, **kwargs):
+            atoms_per_launch.append(grid[1])
+            return kernel(grid, *args, **kwargs)
+
+        return launch
+
+    for name in ("_interpolate_radial_skew_f32", "_interpolate_radial_skew_f64"):
+        monkeypatch.setattr(cuda, name, counting(getattr(cuda, name)))
+
     dtype = np.dtype("float32")
-    rng = np.random.default_rng(11)
-    gpts = (48, 40)
     cell = _skew_cell(60)
-    positions = (rng.random((7, 2)) * 1.1 - 0.05) @ cell
+    n_atoms = 7
+    for limit, expected_launches in ((cuda._MAX_ATOMS_PER_LAUNCH, [7]), (3, [3, 3, 1])):
+        monkeypatch.setattr(cuda, "_MAX_ATOMS_PER_LAUNCH", limit)
+        atoms_per_launch.clear()
+        rng = np.random.default_rng(11)
+        positions = (rng.random((n_atoms, 2)) * 1.1 - 0.05) @ cell
 
-    expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
-        dtype, gpts, cell, positions, rng
-    )
-    _assert_stamps_agree(result, expected, dtype)
+        expected, result = _skew_stamps_on_the_cpu_and_with_cuda(
+            dtype, (48, 40), cell, positions, rng
+        )
+        assert atoms_per_launch == expected_launches, f"limit {limit}"
+        _assert_stamps_agree(result, expected, dtype)
 
 
 @requires_gpu
