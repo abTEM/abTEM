@@ -1255,22 +1255,6 @@ class AnnularDetector(_AbstractRadialDetector):
         )
         return diffraction_patterns
 
-    def get_detector_regions(self, waves: Optional[BaseWaves] = None):
-        """
-        Not available for the annular detector, which has a single region.
-
-        Use :meth:`get_detector_region` (singular) to obtain the annular detector's
-        (sensitivity-weighted) efficiency map. The plural ``get_detector_regions`` is
-        for multi-region detectors (``FlexibleAnnularDetector``, ``SegmentedDetector``).
-        """
-        self._raise_region_arity_error(
-            has="has a single region",
-            use="get_detector_region",
-            use_is_for="its sensitivity-weighted efficiency map (singular); the plural "
-            "'get_detector_regions' is for multi-region detectors "
-            "(FlexibleAnnularDetector, SegmentedDetector)",
-        )
-
 
 def _slit_detector_mask(
     gpts: tuple[int, int],

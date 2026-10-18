@@ -140,10 +140,12 @@ def test_radial_sensitivity():
     ).get_detector_regions(reference)
     assert plain_regions.metadata["label"] == "detector regions"
 
-    # The plural get_detector_regions is not available on the single-region annular
-    # detector; it guides the user to the singular get_detector_region.
-    with pytest.raises(NotImplementedError, match="get_detector_region"):
-        abtem.AnnularDetector(inner=0, outer=40).get_detector_regions(reference)
+    # The plural get_detector_regions keeps working on the annular detector, as it did
+    # before the sensitivity was added.
+    annular_regions = abtem.AnnularDetector(inner=0, outer=40).get_detector_regions(
+        reference
+    )
+    assert annular_regions.metadata["label"] == "detector regions"
 
     # Conversely, the singular get_detector_region is not available on multi-region
     # detectors; it guides the user to the plural get_detector_regions.
