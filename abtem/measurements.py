@@ -46,6 +46,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import (
     asnumpy,
+    copy_to_device,
     cp,
     get_array_module,
     get_ndimage_module,
@@ -238,6 +239,22 @@ def _array_module_fn(array, xp: ModuleType, name: str):
     if isinstance(array, da.core.Array):
         return getattr(da, name)
     return getattr(xp, name)
+
+
+def _on_device_of(array, like):
+    """`array` as an array on the device `like` lives on.
+
+    This is `xp.asarray` -- no copy when `array` is already there -- except for
+    CuPy, where an array on another GPU is not converted by `asarray` and cannot be
+    mixed with `like`: it is copied onto the GPU of `like`, read off `like` itself
+    rather than the current-device context, which can differ under multi-GPU use.
+    """
+    xp = get_array_module(like)
+    if cp is not None and xp is cp:
+        if get_array_module(array) is not cp or array.device != like.device:
+            with like.device:
+                return cp.array(array)
+    return xp.asarray(array)
 
 
 def _spatial_frequency_squared(
@@ -545,6 +562,35 @@ def _sum_run_length_encoded(array, result, separators):
             for j in range(separators[x], separators[x + 1]):
                 total += array[i, j]
             result[i, x] = total
+
+
+def _sum_runs(array, separators):
+    """Sum the runs of `array` (n_batch, n_selected) between `separators` into a
+    zeroed (n_batch, n_runs) array, with the kernel of the array's backend: the
+    CuPy RawKernel, the torch scatter-add, or the Numba loop. A complex array is
+    summed as its real and imaginary parts."""
+    xp = get_array_module(array)
+    if xp.iscomplexobj(array):
+        return _sum_runs(array.real, separators) + 1j * _sum_runs(
+            array.imag, separators
+        )
+    array = xp.ascontiguousarray(array)
+    result = xp.zeros((array.shape[0], len(separators) - 1), dtype=array.dtype)
+    if xp is cp:
+        sum_run_length_encoded_cuda(array, result, separators)
+    elif backend.tp is not None and xp is backend.tp:
+        from abtem.core._torch import sum_run_length_encoded
+
+        sum_run_length_encoded(array, result, separators)
+    else:
+        _sum_run_length_encoded(array, result, separators)
+    return result
+
+
+#: Average the step bins of `DiffractionPatterns.azimuthal_average` in one pass
+#: over the pixels (#602); False averages them bin by bin with a pattern-sized
+#: mask each, as before. Kept as a switch for benchmarking.
+AZIMUTHAL_STEP_SINGLE_PASS = True
 
 
 def _cupy_safe_coordinates(array, coordinates):
@@ -5279,23 +5325,145 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     @staticmethod
+    def _azimuthal_step_row_blocks(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        block_pixels: int = 1 << 16,
+    ):
+        """Yield `(start, first, last)` for blocks of whole rows of the pattern: the
+        first and last step bin of every pixel of the rows starting at row `start`,
+        as 2-D int32 arrays.
+
+        Bin k holds r with `k * radial_sampling - width / 2 <= r <
+        k * radial_sampling + width / 2`, that is `first <= k <= last`. The radii
+        are found in double precision, and the quotients are rounded as in
+        `safe_ceiling_int`, so an edge at a decimal multiple of the sampling is not
+        missed by rounding noise. The blocks hold about `block_pixels` pixels, so the
+        float64 temporaries stay small whatever the size of the pattern.
+        """
+        x, y = (np.asarray(c, dtype=np.float64) for c in coordinates)
+
+        def bound(q, shift, offset):
+            np.add(q, shift, out=q)
+            np.divide(q, radial_sampling, out=q)
+            np.add(q, offset, out=q)
+            np.round(q, 7, out=q)
+            np.floor(q, out=q)
+            return q.astype(np.int32)
+
+        rows = max(block_pixels // max(len(y), 1), 1)
+        for start in range(0, len(x), rows):
+            r = np.hypot(x[start : start + rows, None], y[None, :])
+            first = bound(r.copy(), -width / 2, 1.0)
+            last = bound(r, width / 2, 0.0)  # r itself is not needed after this
+            yield start, first, last
+
+    @staticmethod
     def _azimuthal_step_bounds(
-        coordinates: tuple[np.ndarray, np.ndarray], radial_sampling: float, width: float
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        device: str = "cpu",
     ) -> tuple[np.ndarray, np.ndarray]:
-        """The first and last step bin of every pixel, as int32 arrays on the host.
-        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes."""
-        x, y = np.meshgrid(*coordinates, indexing="ij")
-        r = np.sqrt(x**2 + y**2)
-        del x, y
-        # Bin k holds r with k * radial_sampling - width / 2 <= r <
-        # k * radial_sampling + width / 2, that is first <= k <= last. The
-        # quotients are rounded as in safe_ceiling_int, so an edge at a decimal
-        # multiple of the sampling is not missed by rounding noise.
-        first = np.floor(np.round((r - width / 2) / radial_sampling + 1, 7))
-        first = first.astype(np.int32)
-        last = np.floor(np.round((r + width / 2) / radial_sampling, 7))
-        last = last.astype(np.int32)
-        return first, last
+        """The first and last step bin of every pixel, as int32 arrays on `device`.
+        `coordinates` are the 1-D pixel-unit coordinates of the x and y axes.
+
+        The bins are found in double precision on the host, then copied to the
+        device once: every block of a lazy average shares the copy instead of
+        transferring both arrays itself. Blocks that find the copy on another device
+        than their own (the node ran on a different worker, with several GPUs in one
+        process) copy it themselves: see `_on_device_of`.
+
+        The bounds are found a block of rows at a time (see
+        `_azimuthal_step_row_blocks`) and written into the int32 results, so the
+        peak host memory is the two results and a few small blocks, rather than a
+        meshgrid and its pattern-sized temporaries.
+        """
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        shape = tuple(len(c) for c in coordinates)
+        first = np.empty(shape, dtype=np.int32)
+        last = np.empty(shape, dtype=np.int32)
+        for start, first_rows, last_rows in row_blocks(
+            coordinates, radial_sampling, width
+        ):
+            first[start : start + len(first_rows)] = first_rows
+            last[start : start + len(last_rows)] = last_rows
+        return copy_to_device(first, device), copy_to_device(last, device)
+
+    @staticmethod
+    def _azimuthal_step_runs(
+        coordinates: tuple[np.ndarray, np.ndarray],
+        radial_sampling: float,
+        width: float,
+        num_bins: int,
+        device: str = "cpu",
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The pixels of every step bin as runs, for a single-pass average: the
+        flat pixel indices ordered by bin, the separators of the bins' runs and
+        the number of pixels in each bin, on `device`.
+
+        A pixel is in the bins `first..last` of `_azimuthal_step_bounds`, which
+        is one bin with the default `width == radial_sampling` and several for
+        overlapping bins; it then appears once in the run of each. With
+        overlapping bins (`width > radial_sampling`) the runs, and the gather of
+        the pixels they index, are larger than the pattern by a factor of about
+        `width / radial_sampling`. Within a bin the pixels keep their order in the
+        pattern.
+
+        The runs are sorted a block of rows at a time, in two passes over the
+        blocks of `_azimuthal_step_row_blocks`: the first counts the pixels of
+        every bin, which places the runs, and the second sorts each block by bin
+        and writes it into its place in the runs. Only the runs themselves, int32
+        indices when the pattern has fewer than 2**31 pixels, are pattern-sized.
+        """
+        row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+        size = int(np.prod([len(c) for c in coordinates]))
+        index_dtype = np.int32 if size < 2**31 else np.int64
+
+        def clipped(first, last):
+            # the bins of a pixel, first..last, within 0..num_bins - 1
+            first = np.maximum(first.ravel(), 0)
+            last = np.minimum(last.ravel(), num_bins - 1)
+            return first, last, np.maximum(last - first + 1, 0)
+
+        # a bin is in the range of a pixel from its first to its last: a bincount
+        # of the firsts less a bincount of the bins after the lasts, accumulated
+        delta = np.zeros(num_bins + 1, dtype=np.int64)
+        for _, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            valid = counts > 0
+            delta += np.bincount(first[valid], minlength=num_bins + 1)
+            delta -= np.bincount(last[valid] + 1, minlength=num_bins + 1)
+        bin_counts = np.cumsum(delta)[:num_bins]
+        separators = np.concatenate(([0], np.cumsum(bin_counts))).astype(np.int64)
+
+        pixels = np.empty(int(separators[-1]), dtype=index_dtype)
+        cursor = separators[:-1].copy()  # next free place in the run of each bin
+        for start, first, last in row_blocks(coordinates, radial_sampling, width):
+            first, last, counts = clipped(first, last)
+            first = first.astype(np.int64)
+            if counts.size and counts.max() <= 1:  # no pixel in several bins
+                pixel = np.flatnonzero(counts)
+                bins = first[pixel]
+            else:
+                pixel = np.repeat(np.arange(first.size, dtype=np.int64), counts)
+                # the bin of each copy of a pixel: its first bin plus the copy's rank
+                starts = np.cumsum(counts) - counts
+                bins = np.repeat(first - starts, counts)
+                bins += np.arange(pixel.size, dtype=np.int64)
+            order = np.argsort(bins, kind="stable")
+            bins = bins[order]
+            block_counts = np.bincount(bins, minlength=num_bins)
+            block_starts = np.cumsum(block_counts) - block_counts
+            places = cursor[bins] + (np.arange(bins.size) - block_starts[bins])
+            pixels[places] = pixel[order] + start * len(coordinates[1])
+            cursor += block_counts
+        return (
+            copy_to_device(pixels, device),
+            copy_to_device(separators, device),
+            copy_to_device(bin_counts, device),
+        )
 
     @staticmethod
     def _azimuthal_average(
@@ -5306,29 +5474,44 @@ class DiffractionPatterns(_BaseMeasurement2D):
         coordinates: Optional[tuple[np.ndarray, np.ndarray]] = None,
         coordinate_dtype: Optional[np.dtype] = None,
         step_bounds: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        step_runs: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     ):
         """Azimuthal averages of the pixel-unit patterns in the last two axes.
 
-        `step_bounds` are the first and last bin of every pixel for the step
-        weighting. `coordinates` are the 1-D pixel-unit coordinates of the x and y
-        axes and `coordinate_dtype` the precision they are cast to, for the Gaussian
-        weighting.
+        `step_runs` (`_azimuthal_step_runs`) average the step bins in one pass;
+        `step_bounds` are the first and last bin of every pixel, for averaging
+        the step bins one by one. `coordinates` are the 1-D pixel-unit
+        coordinates of the x and y axes and `coordinate_dtype` the precision they
+        are cast to, for the Gaussian weighting.
         """
         xp = get_array_module(array)
 
-        if weighting_function == "step":
-            first, last = (xp.asarray(bound) for bound in step_bounds)
-        else:
-            x, y = np.meshgrid(
-                *(xp.asarray(c, dtype=coordinate_dtype) for c in coordinates),
-                indexing="ij",
+        if step_runs is not None:
+            # One gather of the binned pixels and one summing pass, instead of a
+            # pattern-sized mask and masked sum per bin.
+            pixels, separators, counts = (
+                _on_device_of(run, array) for run in step_runs
             )
-            r = np.sqrt(x**2 + y**2)
+            flat = array.reshape((-1, array.shape[-2] * array.shape[-1]))
+            sums = _sum_runs(flat[:, pixels], separators)
+            # an empty bin averages to 0, as bin by bin
+            values = sums / xp.maximum(counts, 1).astype(sums.real.dtype)
+            return values.reshape(array.shape[:-2] + centers.shape)
+
+        if weighting_function == "step":
+            # On the device of the array, unless a node shared by the blocks was
+            # computed elsewhere (see _azimuthal_step_bounds).
+            first, last = (_on_device_of(bound, array) for bound in step_bounds)
+        else:
+            # Broadcast rather than meshgrid, which not every array module has.
+            x, y = (xp.asarray(c, dtype=coordinate_dtype) for c in coordinates)
+            r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2)
 
         # Follow the input dtype: the default float64 both ignores the
         # configured precision and silently drops the imaginary part when
-        # the summed values are assigned back in.
-        values = np.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
+        # the summed values are assigned back in. On the device of the array:
+        # a host array cannot take the device sums assigned into it.
+        values = xp.zeros(array.shape[:-2] + centers.shape, dtype=array.dtype)
         for i, center in enumerate(centers):
             if weighting_function == "step":
                 mask = (first <= i) & (i <= last)
@@ -5383,7 +5566,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             For the 'step' weighting function, this is the full width of the ring: bin
             `k` holds the pixels with
             `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
-            so the default bins do not overlap.
+            so the default bins do not overlap. With overlapping bins
+            (`width > radial_sampling`) the pixel runs gathered and summed, and
+            their memory, grow in proportion to `width / radial_sampling`.
             For the 'gaussian' weighting function, the weight is
             `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
             of `width / 2`.
@@ -5413,11 +5598,38 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centers = np.arange(num_bins) * radial_sampling
 
         if weighting_function == "step":
-            # One node shared by every block, which holds the pattern-sized bounds.
-            step_bounds = self._azimuthal_step_bounds
-            if self.is_lazy:
-                step_bounds = dask.delayed(step_bounds, pure=True)
-            kwargs = dict(step_bounds=step_bounds(coordinates, radial_sampling, width))
+            # One node shared by every block, which holds the pattern-sized bounds:
+            # two int32 arrays of 2 * 4 * n_pixels bytes (34 MB for 2048 x 2048), on
+            # the device of the patterns, for as long as the graph or any of its
+            # blocks is alive.
+            #
+            # By default the node holds the bins as runs instead (#602): the
+            # binned pixel indices (int32, 4 * n_pixels bytes with the default
+            # non-overlapping bins), averaged in one pass. With overlapping bins
+            # (width > radial_sampling) the runs and the gather of the pixels they
+            # index scale as width / radial_sampling.
+            if AZIMUTHAL_STEP_SINGLE_PASS:
+                step_runs = self._azimuthal_step_runs
+                if self.is_lazy:
+                    step_runs = dask.delayed(step_runs, pure=True)
+                kwargs = dict(
+                    step_runs=step_runs(
+                        coordinates,
+                        radial_sampling,
+                        width,
+                        len(centers),
+                        device=self.device,
+                    )
+                )
+            else:
+                step_bounds = self._azimuthal_step_bounds
+                if self.is_lazy:
+                    step_bounds = dask.delayed(step_bounds, pure=True)
+                kwargs = dict(
+                    step_bounds=step_bounds(
+                        coordinates, radial_sampling, width, device=self.device
+                    )
+                )
         else:
             kwargs = dict(coordinates=coordinates, coordinate_dtype=get_dtype())
 
