@@ -97,6 +97,10 @@ class RadialSensitivity:
     detectors typically have a non-uniform angular response, e.g. a gradual roll-off
     towards the edges or a measured gain curve.
 
+    The angle is measured from the detector centre, i.e. from the optical axis displaced
+    by the detector's ``offset``, so that the sensitivity moves with an offset detector
+    and ``inner``/``outer`` refer to the same radii as the sensitivity.
+
     The sensitivity is a weight in the range ``[0, 1]``, where 1 is full sensitivity;
     weights greater than 1 are unphysical and rejected. It may be specified in two ways:
 
@@ -903,13 +907,14 @@ class _AbstractRadialDetector(BaseDetector):
         if self.sensitivity is not None:
             # Show the continuous per-pixel efficiency [%] so the radial sensitivity is
             # visible, rather than the (here uninformative) discrete region labels.
-            # The weights are a function of the angle from the optical axis, as in
-            # `polar_binning`, which weights the patterns before shifting the bins.
+            # The weights are a function of the angle from the detector centre
+            # (including any offset), as in `polar_binning`.
             weights = _radial_weight_map(
                 gpts=tuple(gpts),
                 sampling=angular_sampling,
                 sensitivity=self.sensitivity,
                 fftshift=True,
+                offset=offset,
             )
             array = np.where(inside, weights * 100.0, np.nan).astype(
                 get_dtype(complex=False)
@@ -1201,6 +1206,7 @@ class AnnularDetector(_AbstractRadialDetector):
                 sampling=angular_sampling,
                 sensitivity=self.sensitivity,
                 fftshift=fftshift,
+                offset=self.offset,
             )
             # Select (rather than multiply) by the weight: a sensitivity callable that is
             # undefined (e.g. NaN) outside [inner, outer] must not corrupt pixels that are

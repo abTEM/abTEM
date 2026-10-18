@@ -3,9 +3,10 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
-from utils import gpu, to_host_array
+from utils import devices, gpu, lazy_params, to_host_array
 
 import abtem
+from abtem.detectors import _gpts_and_sampling_from_obj
 
 
 @given(data=st.data())
@@ -189,6 +190,146 @@ def test_radial_sensitivity():
     assert inside.max() <= 100.0 + 1e-4
 
 
+def _sensitivity_probe(device):
+    return abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=20, gpts=256, device=device
+    )
+
+
+def _hand_region(gpts, sampling, inner, outer, sensitivity, shift=(0, 0)):
+    """The sensitivity-weighted annular region on a grid in unshifted FFT layout, by
+    hand in float64. The detector centre is displaced by ``shift`` pixels (the
+    detectors round an offset to whole pixels)."""
+    freqs = [np.fft.fftfreq(n, 1 / (s * n)) for n, s in zip(gpts, sampling)]
+    kx, ky = np.meshgrid(*freqs, indexing="ij")
+    alpha = np.sqrt(
+        (kx - shift[0] * sampling[0]) ** 2 + (ky - shift[1] * sampling[1]) ** 2
+    )
+    return np.where((alpha >= inner) & (alpha < outer), sensitivity(alpha), 0.0)
+
+
+def _hand_weighted_signal(waves, inner, outer, sensitivity, shift=(0, 0)):
+    """The sensitivity-weighted annular signal of ``waves``, summed by hand in float64
+    from the raw diffraction pattern."""
+    dp = to_host_array(
+        waves.diffraction_patterns(max_angle="full", parity="same", fftshift=False)
+    ).astype(np.float64)
+    region = _hand_region(
+        dp.shape[-2:], waves.angular_sampling, inner, outer, sensitivity, shift
+    )
+    return float((dp * region).sum())
+
+
+@devices
+@lazy_params
+@pytest.mark.parametrize("offset", [(0.0, 0.0), (5.0, -3.0)])
+def test_radial_sensitivity_agrees_between_detectors(device, lazy, offset):
+    # The sensitivity is a function of the angle from the detector centre, offset
+    # included, for every radial detector. Reference: a float64 sum by hand.
+    inner, outer = 20.0, 80.0
+
+    def sensitivity(alpha):
+        return (100.0 - alpha) / 80.0
+
+    waves = _sensitivity_probe(device).build(lazy=False)
+    shift = tuple(int(round(o / s)) for o, s in zip(offset, waves.angular_sampling))
+    expected = _hand_weighted_signal(waves, inner, outer, sensitivity, shift)
+
+    # The same signal with the weights centred on the optical axis, which an offset
+    # detector must not use.
+    axis_centred = _hand_weighted_signal(waves, inner, outer, sensitivity, (0, 0))
+    if offset != (0.0, 0.0):
+        assert not np.isclose(expected, axis_centred, rtol=1e-2)
+
+    waves = _sensitivity_probe(device).build(lazy=lazy)
+    annular = abtem.AnnularDetector(
+        inner=inner, outer=outer, offset=offset, sensitivity=sensitivity
+    )
+    segmented = abtem.SegmentedDetector(
+        nbins_radial=3,
+        nbins_azimuthal=4,
+        inner=inner,
+        outer=outer,
+        offset=offset,
+        sensitivity=sensitivity,
+    )
+
+    assert np.isclose(to_host_array(annular.detect(waves)).sum(), expected, rtol=2e-4)
+    assert np.isclose(to_host_array(segmented.detect(waves)).sum(), expected, rtol=2e-4)
+
+    if offset == (0.0, 0.0):
+        flexible = abtem.FlexibleAnnularDetector(
+            step_size=5.0, inner=inner, outer=outer, sensitivity=sensitivity
+        )
+        assert np.isclose(
+            to_host_array(flexible.detect(waves)).sum(), expected, rtol=2e-4
+        )
+
+
+@devices
+@pytest.mark.parametrize("offset", [(0.0, 0.0), (5.0, -3.0)])
+def test_radial_sensitivity_detector_region_follows_the_offset(device, offset):
+    # AnnularDetector.get_detector_region is the efficiency [%] the detector applies,
+    # centred on the (whole-pixel) offset detector centre.
+    inner, outer = 20.0, 80.0
+
+    def sensitivity(alpha):
+        return (100.0 - alpha) / 80.0
+
+    waves = _sensitivity_probe(device).build(lazy=False)
+    shift = tuple(int(round(o / s)) for o, s in zip(offset, waves.angular_sampling))
+    gpts, sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+    region = _hand_region(gpts, sampling, inner, outer, sensitivity, shift)
+
+    detector = abtem.AnnularDetector(
+        inner=inner, outer=outer, offset=offset, sensitivity=sensitivity
+    )
+    shown = to_host_array(detector.get_detector_region(waves, fftshift=False))
+    assert np.allclose(shown, region * 100.0, atol=1e-3)
+
+
+@pytest.mark.parametrize("order", [("float64", "float32"), ("float32", "float64")])
+def test_radial_sensitivity_follows_the_configured_precision(order):
+    # The weight map is cached per grid; the cache must not hand a float64 map to
+    # float32 patterns (or the reverse), which would widen the measurement.
+    from abtem.measurements import _radial_weight_map
+
+    def sensitivity(alpha):
+        return alpha / 40.0
+
+    expected_dtype = {"float32": np.float32, "float64": np.float64}
+    detectors = (
+        abtem.AnnularDetector(inner=0, outer=20, sensitivity=sensitivity),
+        abtem.FlexibleAnnularDetector(
+            step_size=1.0, inner=0, outer=20, sensitivity=sensitivity
+        ),
+        abtem.SegmentedDetector(
+            nbins_radial=2,
+            nbins_azimuthal=4,
+            inner=0,
+            outer=20,
+            sensitivity=sensitivity,
+        ),
+    )
+
+    for precision in order:
+        with abtem.config.set({"precision": precision}):
+            waves = _sensitivity_probe("cpu").build(lazy=False)
+            for detector in detectors:
+                measurement = detector.detect(waves)
+                assert measurement.array.dtype == expected_dtype[precision], (
+                    type(detector).__name__,
+                    precision,
+                )
+
+            weights = _radial_weight_map(
+                (64, 64), [1.0, 1.0], abtem.RadialSensitivity(sensitivity)
+            )
+            assert weights.dtype == expected_dtype[precision]
+            # The map is shared between callers, so it is read-only.
+            assert not weights.flags.writeable
+
+
 def test_detector_show_crops_to_outer_angle():
     """show() crops the view to a small margin above the outer angle instead of the full
     (often much larger) sampling-limited angle, for a tighter default visualization."""
@@ -206,6 +347,14 @@ def test_detector_show_crops_to_outer_angle():
         abtem.AnnularDetector(inner=40, outer=100, sensitivity=lambda a: a / 100.0),
         abtem.FlexibleAnnularDetector(step_size=5, inner=40, outer=100),
         abtem.SegmentedDetector(nbins_radial=2, nbins_azimuthal=4, inner=40, outer=100),
+        abtem.SegmentedDetector(
+            nbins_radial=2,
+            nbins_azimuthal=4,
+            inner=40,
+            outer=100,
+            offset=(10.0, 0.0),
+            sensitivity=lambda a: a / 150.0,
+        ),
     ):
         detector.show(probe)
         xlim = plt.gcf().axes[0].get_xlim()

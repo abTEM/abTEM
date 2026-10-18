@@ -255,25 +255,30 @@ def _spatial_frequency_squared(
     return kx[:, None] ** 2 + ky[None] ** 2
 
 
-@lru_cache(maxsize=32)
 def _radial_weight_map(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
     sensitivity: Callable,
     fftshift: bool = False,
     xp: ModuleType = np,
+    offset: tuple[float, float] = (0.0, 0.0),
 ) -> np.ndarray:
     """
     Build a per-pixel radial sensitivity weight map for a diffraction pattern grid.
 
     The weight of each pixel is given by evaluating ``sensitivity`` at the radial
-    scattering angle (in mrad) of that pixel.
+    scattering angle (in mrad) of that pixel, measured from the detector centre, i.e.
+    from the optical axis displaced by ``offset``. The offset is applied like the
+    detector masks and bins apply it (whole pixels, without wrapping), so a weight
+    always belongs to the same pixels as its detector region; pixels shifted in from
+    beyond the Nyquist frequency get a weight of 0.
 
     The map depends only on the grid/sensitivity, not on any diffraction pattern data,
-    so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp) is
-    evaluated once and reused across dask blocks/scan positions instead of being
-    recomputed (including, for a measured sensitivity curve, the GPU-to-CPU round trip
-    of the interpolation) on every call.
+    so results are cached: the same (gpts, sampling, sensitivity, fftshift, xp,
+    offset) at the same precision is evaluated once and reused across dask
+    blocks/scan positions instead of being recomputed (including, for a measured
+    sensitivity curve, the GPU-to-CPU round trip of the interpolation) on every call.
+    The returned array is shared between callers and must not be modified.
 
     Parameters
     ----------
@@ -287,22 +292,57 @@ def _radial_weight_map(
         If True, the zero-frequency is shifted to the center of the array.
     xp : module, optional
         The array module (``numpy`` or ``cupy``) of the returned weight map.
+    offset : two float, optional
+        Offset of the detector centre from the optical axis [mrad].
 
     Returns
     -------
     weights : np.ndarray
         Per-pixel sensitivity weights with shape ``gpts``.
     """
+    # The precision is part of the cache key: the map must follow the configured
+    # precision, or a cached float64 map would widen float32 patterns.
+    return _radial_weight_map_cached(
+        tuple(int(n) for n in gpts),
+        tuple(float(d) for d in sampling),
+        sensitivity,
+        bool(fftshift),
+        xp,
+        tuple(float(o) for o in offset),
+        get_dtype(complex=False),
+    )
+
+
+@lru_cache(maxsize=32)
+def _radial_weight_map_cached(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    sensitivity: Callable,
+    fftshift: bool,
+    xp: ModuleType,
+    offset: tuple[float, float],
+    dtype,
+) -> np.ndarray:
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
     )
 
     alpha = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
 
-    weights = xp.asarray(sensitivity(alpha), dtype=get_dtype(complex=False))
+    weights = xp.asarray(sensitivity(alpha), dtype=dtype)
+    if xp is np:
+        # A private copy: the callable may hand back an array it owns, and the
+        # cached map is made read-only below.
+        weights = np.array(weights, dtype=dtype)
+
+    if np.any(np.array(offset) != 0.0):
+        weights = _shift_bins_without_wrap(weights, offset, sampling, fill=0.0)
 
     if fftshift:
         weights = xp.fft.fftshift(weights)
+
+    if xp is np:
+        weights.flags.writeable = False
 
     return weights
 
@@ -4748,6 +4788,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sensitivity=sensitivity,
                 fftshift=fftshift,
                 xp=xp,
+                offset=offset,
             )
             array = array * weights
 
