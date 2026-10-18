@@ -3781,6 +3781,24 @@ def _diffraction_pattern_resampling_gpts(
     return gpts, validated_sampling
 
 
+def _refuse_max_angle_for_several_energies(
+    measurements: "DiffractionPatterns | IndexedDiffractionPatterns",
+    alternatives: str,
+) -> None:
+    """Raise if `measurements` hold several energies, for a crop to a scattering
+    angle: the pixels (or spots) within an angle depend on the wavelength, so the
+    energies would not stack, and using one wavelength for all of them would crop
+    the others to the wrong angle."""
+    from abtem.array import _multi_energy_axis
+
+    if _multi_energy_axis(measurements) is not None:
+        raise ValueError(
+            "`max_angle` cannot crop diffraction patterns of several energies, since "
+            "the pixels or spots within an angle differ between the energies: "
+            f"pass {alternatives}, or index one energy first."
+        )
+
+
 def _per_energy(method=None, *, shared_outer: bool = False):
     """Evaluate a `DiffractionPatterns` method for each energy of a multi-energy
     ensemble on its own, and restack the results along the energy axis.
@@ -4302,6 +4320,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def angular_sampling(self) -> tuple[float, float]:
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
+
+        The angular sampling scales with the wavelength. For diffraction patterns of
+        several energies it is that of the highest energy, which is not the sampling
+        of the other energies: index one energy first to get its own. Methods that
+        use scattering angles evaluate each energy with its own sampling.
         """
         wavelength = energy2wavelength(self._get_energy())
         return (
@@ -4311,7 +4334,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def max_angles(self) -> tuple[float, float]:
-        """Maximum scattering angle in `x` and `y` [mrad]."""
+        """Maximum scattering angle in `x` and `y` [mrad]. For diffraction patterns of
+        several energies, that of the highest energy (see `angular_sampling`)."""
         return (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
@@ -4345,7 +4369,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_limits(self) -> list[tuple[float, float]]:
-        """Lowest and highest scattering angle in `x` and `y` [mrad]."""
+        """Lowest and highest scattering angle in `x` and `y` [mrad]. For diffraction
+        patterns of several energies, those of the highest energy (see
+        `angular_sampling`)."""
 
         limits = self.limits
         wavelength = energy2wavelength(self._get_energy())
@@ -4388,7 +4414,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:
-        """Scattering angle coordinates [mrad]."""
+        """Scattering angle coordinates [mrad]. For diffraction patterns of several
+        energies, those of the highest energy (see `angular_sampling`)."""
 
         # Derived from `coordinates` so the storage order (shifted or
         # unshifted, even or odd n) is handled in one place.
@@ -5173,6 +5200,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         max_frequency : float, optional
             The maximum included spatial frequency in the cropped diffraction patterns.
         gpts : tuple of int
@@ -5190,6 +5218,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             raise ValueError(
                 "provide exactly one of 'max_angle', 'max_frequency' or 'gpts'"
             )
+
+        if max_angle is not None:
+            _refuse_max_angle_for_several_energies(self, "`max_frequency` or `gpts`")
 
         if gpts is None and max_angle is not None:
             gpts = (
@@ -6335,7 +6366,9 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-@jit(nopython=True, nogil=True)
+# cache=True keeps the compiled kernel on disk: compiling it took seconds on the
+# first call in every process and pytest-xdist worker.
+@jit(nopython=True, nogil=True, cache=True)
 def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
     for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
@@ -6650,6 +6683,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
+            Not available for diffraction patterns of several energies.
         k_max : float, optional
             The maximum included reciprocal lattice vector in the cropped diffraction
             spots.
@@ -6661,6 +6695,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
 
         if max_angle is not None and k_max is None:
+            _refuse_max_angle_for_several_energies(self, "`k_max`")
             wavelength = energy2wavelength(self._get_energy())
             k_max = max_angle / wavelength / 1e3
 
