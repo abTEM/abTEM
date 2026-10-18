@@ -3047,7 +3047,11 @@ def test_filters_do_nothing_along_an_axis_sampled_at_zero(method, device):
         apply = getattr(DiffractionPatterns, name)
 
     result = apply(make((0.0, 0.1)), 0.3).compute()
-    # equal to no width along that axis
+    # equal to no width along that axis. Margin: the two routes run the same
+    # kernel, so on CPU they agree exactly (measured worst difference 0.0) and
+    # atol=1e-6 only leaves room for accelerator rounding; a width that is
+    # applied along the zero-sampled axis moves the result by >= 1e-3 (Gaussian)
+    # to 7e-2 (Lorentzian), 3 to 5 orders more.
     expected = apply(make((1.0, 0.1)), (0.0, 0.3)).compute()
     np.testing.assert_allclose(
         asnumpy(result.array), asnumpy(expected.array), rtol=0, atol=1e-6
