@@ -99,62 +99,69 @@ def test_detector_matches_the_exit_wave_route(scan, lazy, device):
     )
     assert result.metadata["frozen_phonon_component"] == list(COMPONENTS)
     assert result.metadata["num_configurations"] == N_CONFIGS
-    assert "frozen_phonon_moments" not in result.metadata
     assert result.dtype == reference.dtype
     # The scan positions and the base axes are those of the reference.
     assert result.axes_metadata[1:] == reference.axes_metadata[1:]
     _assert_close(result, reference, rtol=2e-4)
 
 
-@pytest.mark.parametrize("scan", [False, True])
-@pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("unbiased", [False, True])
-@pytest.mark.parametrize("reduction_dtype", [None, "float64"])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_unbiased_and_float64_accumulation_match(
-    scan, lazy, unbiased, reduction_dtype, device
-):
-    detector = PixelatedDetector(
-        MAX_ANGLE,
-        components="all",
-        unbiased=unbiased,
-        reduction_dtype=reduction_dtype,
-    )
-    result = _detected(scan, device, lazy, detector)
-    reference = _reference(
-        scan, device, lazy, unbiased=unbiased, reduction_dtype=reduction_dtype
-    )
-
-    assert result.metadata["unbiased"] is unbiased
-    assert result.dtype == reference.dtype
-    if reduction_dtype is None:
-        _assert_close(result, reference, rtol=2e-4)
-    else:
-        # The exit waves are cast to complex128 in either route, so the two
-        # differ by the roundoff of float64 sums alone.
-        assert result.dtype == np.float64
-        _assert_close(result, reference, rtol=1e-9)
-
-
+# Double precision: the collection hook of conftest.py skips it on Metal. The float32
+# accumulation is the case of the test above.
+@pytest.mark.float64
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_unbiased_scales_the_diffuse_part_by_n_over_n_minus_one(lazy, device):
-    biased = _detected(
-        True, device, lazy, PixelatedDetector(MAX_ANGLE, components="diffuse")
+def test_float64_accumulation_matches_the_exit_wave_route(lazy, device):
+    detector = PixelatedDetector(MAX_ANGLE, components="all", reduction_dtype="float64")
+    result = _detected(True, device, lazy, detector)
+    reference = _reference(True, device, lazy, reduction_dtype="float64")
+
+    # The exit waves are cast to complex128 in either route, so the two differ by the
+    # roundoff of float64 sums alone (1e-16 relative; the float32 routes differ by
+    # 1e-5, so 1e-9 cannot hold if the sums were still accumulated in float32).
+    assert result.dtype == reference.dtype == np.float64
+    _assert_close(result, reference, rtol=1e-9)
+
+
+def _sample_variance_components(exit_waves):
+    """total, unbiased elastic and unbiased diffuse intensity by hand, from the
+    complex amplitudes of every configuration: the diffuse intensity is the sample
+    variance (ddof=1) of the real and imaginary part, the total the mean intensity, and
+    the elastic intensity what remains of the total. It shares no code with the
+    N / (N - 1) of the detector."""
+    fp_axis = [
+        isinstance(ax, FrozenPhononsAxis) for ax in exit_waves.ensemble_axes_metadata
+    ].index(True)
+    amplitude = _array(
+        exit_waves.diffraction_patterns(
+            max_angle=MAX_ANGLE, parity="same", return_complex=True, fftshift=True
+        )
     )
-    unbiased = _detected(
-        True,
-        device,
-        lazy,
-        PixelatedDetector(MAX_ANGLE, components="diffuse", unbiased=True),
+    total = np.mean(np.abs(amplitude) ** 2, axis=fp_axis)
+    diffuse = np.var(amplitude.real, axis=fp_axis, ddof=1) + np.var(
+        amplitude.imag, axis=fp_axis, ddof=1
     )
-    biased = _array(biased)
+    return np.stack([total, total - diffuse, diffuse])
+
+
+def _assert_unbiased_components(result, exit_waves):
+    expected = _sample_variance_components(exit_waves)
+    assert result.metadata["unbiased"] is True
+    assert result.shape == expected.shape
+    # Margin: the unbiased diffuse part is N / (N - 1) = 1.5 times the biased one, so
+    # a factor missing or inverted (1 or 2/3) is off by 30-50 % of the maximum, against
+    # the 2e-4 of the float32 routes.
     np.testing.assert_allclose(
-        _array(unbiased),
-        biased * N_CONFIGS / (N_CONFIGS - 1),
-        rtol=0,
-        atol=1e-5 * np.abs(biased).max(),
+        _array(result), expected, rtol=0, atol=2e-4 * np.abs(expected).max()
     )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_unbiased_components_are_the_sample_variance_of_the_amplitudes(lazy, device):
+    detector = PixelatedDetector(MAX_ANGLE, components="all", unbiased=True)
+    result = _detected(True, device, lazy, detector)
+    exit_waves = _run(True, device, False, _potential(False), WavesDetector())
+    _assert_unbiased_components(result, exit_waves)
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -318,13 +325,11 @@ def _exit_waves(lazy, ensemble_mean=True, seed=3, mean=2.0, device="cpu"):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-@pytest.mark.parametrize("unbiased", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_detecting_waves_directly_and_reducing(lazy, unbiased, device):
+def test_detecting_waves_directly_and_reducing(lazy, device):
     """One chunk per configuration and member when lazy, a tree reduction."""
-    detector = PixelatedDetector("cutoff", components="all", unbiased=unbiased)
+    detector = PixelatedDetector("cutoff", components="all")
     raw = detector.detect(_exit_waves(lazy, device=device))
-    assert "frozen_phonon_moments" in raw.metadata
 
     result = reduce_ensemble(raw)
     assert result.is_lazy == lazy
@@ -332,7 +337,6 @@ def test_detecting_waves_directly_and_reducing(lazy, unbiased, device):
         _exit_waves(False, ensemble_mean=False),
         max_angle="cutoff",
         parity="same",
-        unbiased=unbiased,
     )
     # the members of the second axis keep their own components
     assert result.shape == (3, 2) + reference.base_shape
@@ -369,12 +373,12 @@ def test_a_weak_diffuse_signal_needs_the_float64_reduction(lazy, device):
         assert diffuse.shape[-2:] == reference.shape[-2:]
         errors[reduction_dtype] = np.abs(diffuse - reference).max() / scale
 
-    # float64 rounds at 1e-16 of the 1e10 central pixel
+    # Measured 9e-10 against 0.67 for the single-precision reduction: float64 rounds at
+    # 1e-16 of the 1e10 central pixel, and the bound leaves a margin of 10.
     assert errors["float64"] < 1e-8
-    # Not a tolerance to hold but the caveat the docstring documents: the default
-    # precision is off by a sizeable fraction of the diffuse maximum, so a weak
-    # diffuse signal needs reduction_dtype="float64".
-    assert errors[None] > 1e-2
+    # The option is of use: the default precision is no better. (How much worse it is
+    # is not pinned; a better float32 reduction should not fail this test.)
+    assert errors["float64"] < errors[None]
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -455,7 +459,6 @@ def test_averaged_waves_detector_matches_the_mean_of_the_exit_waves(scan, lazy, 
     assert result.shape == exit_waves.shape[1:]
     assert result.dtype == exit_waves.dtype
     assert result.metadata["num_configurations"] == N_CONFIGS
-    assert "frozen_phonon_average" not in result.metadata
     assert result.axes_metadata == exit_waves.axes_metadata[1:]
     np.testing.assert_allclose(
         _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
@@ -486,7 +489,6 @@ def test_the_default_waves_detector_keeps_every_configuration(lazy, device):
     result = _detected(True, device, lazy, detector)
     assert result.shape[0] == N_CONFIGS
     assert isinstance(result.ensemble_axes_metadata[0], FrozenPhononsAxis)
-    assert "frozen_phonon_average" not in result.metadata
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -597,15 +599,14 @@ def _prism_reference(device, lazy, ctf=None, **kwargs):
     "lazy, disable_s_matrix_chunks",
     [(False, "auto"), (True, False), (True, True)],
 )
-@pytest.mark.parametrize("unbiased", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_components_match_the_exit_wave_route(
-    lazy, disable_s_matrix_chunks, unbiased, device
+    lazy, disable_s_matrix_chunks, device
 ):
-    detector = PixelatedDetector(MAX_ANGLE, components="all", unbiased=unbiased)
+    detector = PixelatedDetector(MAX_ANGLE, components="all")
     kwargs = {} if not lazy else dict(disable_s_matrix_chunks=disable_s_matrix_chunks)
     result = _prism_scan(device, lazy, detector, **kwargs)
-    _, reference = _prism_reference(device, lazy, unbiased=unbiased)
+    _, reference = _prism_reference(device, lazy)
 
     assert result.is_lazy == lazy
     assert result.ensemble_axes_metadata[0].values == COMPONENTS
@@ -613,8 +614,20 @@ def test_prism_components_match_the_exit_wave_route(
         isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
     )
     assert result.metadata["num_configurations"] == N_CONFIGS
-    assert "frozen_phonon_moments" not in result.metadata
     _assert_close(result, reference, rtol=2e-4)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_unbiased_components_are_the_sample_variance_of_the_amplitudes(
+    lazy, device
+):
+    # The eager scan accumulates the members one by one, and N is the number of
+    # members, not the length of an axis: its own route to the factor.
+    detector = PixelatedDetector(MAX_ANGLE, components="all", unbiased=True)
+    result = _prism_scan(device, lazy, detector)
+    exit_waves = _prism_scan(device, False, WavesDetector(), ensemble_mean=False)
+    _assert_unbiased_components(result, exit_waves)
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -693,8 +706,6 @@ def test_prism_averaged_waves_match_the_mean_of_the_exit_waves(lazy, device):
     )
     assert result.shape == expected.shape == exit_waves.shape[1:]
     assert result.metadata["num_configurations"] == N_CONFIGS
-    # the flag is consumed, not left on the averaged waves
-    assert "frozen_phonon_average" not in result.metadata
     np.testing.assert_allclose(
         _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
@@ -705,7 +716,6 @@ def test_prism_averaged_waves_match_the_mean_of_the_exit_waves(lazy, device):
 def test_prism_averaged_waves_without_the_option_keep_every_configuration(lazy, device):
     result = _prism_scan(device, lazy, WavesDetector())
     assert result.shape[0] == N_CONFIGS
-    assert "frozen_phonon_average" not in result.metadata
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -716,7 +726,8 @@ def test_prism_averaged_waves_guards(lazy):
         )
 
 
-def test_prism_upsample_refuses_components_but_averages_waves():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_upsample_refuses_components_but_averages_waves(device):
     # The compressed S-matrix stitches patterns by angle, which the components do
     # not survive: refused at the call, not left to fail in the reduction.
     s_matrix = abtem.SMatrix(
@@ -725,6 +736,7 @@ def test_prism_upsample_refuses_components_but_averages_waves():
         potential=_potential(True),
         interpolation=2,
         upsample=True,
+        device=device,
     )
     scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
     with pytest.raises(NotImplementedError, match="upsample"):
@@ -741,10 +753,10 @@ def test_prism_upsample_refuses_components_but_averages_waves():
         potential=_potential(False),
         interpolation=2,
         upsample=True,
+        device=device,
     ).scan(scan=scan, detectors=WavesDetector())
     expected = np.mean(_array(every), axis=0, dtype=np.complex128)
     assert result.shape == expected.shape
-    assert "frozen_phonon_average" not in result.metadata
     np.testing.assert_allclose(
         _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
@@ -804,7 +816,6 @@ def test_prism_components_of_several_energies(lazy, device):
         isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
     )
     assert result.metadata["num_configurations"] == N_CONFIGS
-    assert "frozen_phonon_moments" not in result.metadata
     assert result.shape[2:] == reference.shape[1:]
     # the highest energy is the exit-wave route, every energy has the mean intensity
     # of the plain detector as its total
@@ -828,7 +839,6 @@ def test_prism_averaged_waves_of_several_energies(lazy, device):
         isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
     )
     assert result.metadata["num_configurations"] == N_CONFIGS
-    assert "frozen_phonon_average" not in result.metadata
     for i, energy in enumerate(ENERGIES):
         exit_waves, _ = _prism_energy_reference(device, lazy, energy)
         expected = np.mean(_array(exit_waves), axis=0, dtype=np.complex128)
@@ -838,9 +848,40 @@ def test_prism_averaged_waves_of_several_energies(lazy, device):
         )
 
 
-def _deferred_members(device, detector):
-    """The frozen-phonon members of a multi-energy S-matrix, each reduced with the
-    frozen-phonon reduction deferred, as the eager PRISM scan reduces its members."""
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_result_of_a_scan_is_not_averaged_again(device, lazy):
+    """The detector marks its raw output as still to be averaged over the frozen
+    phonons (metadata read by reduce_ensemble). The scans return it averaged, and a
+    mark left on the result would make a further reduce_ensemble fail or split the
+    components twice: it must leave the result unchanged."""
+    components = PixelatedDetector(MAX_ANGLE, components="all")
+    waves = WavesDetector(average_frozen_phonons=True)
+    results = {
+        "multislice components": _detected(True, device, lazy, components),
+        "multislice waves": _detected(True, device, lazy, waves),
+        "PRISM components": _prism_scan(device, lazy, components),
+        "PRISM waves": _prism_scan(device, lazy, waves),
+        "PRISM components of several energies": _prism_scan_energies(
+            device, lazy, components
+        ),
+        "PRISM waves of several energies": _prism_scan_energies(device, lazy, waves),
+    }
+    for name, result in results.items():
+        again = reduce_ensemble(result)
+        assert again.shape == result.shape, name
+        np.testing.assert_array_equal(_array(again), _array(result), err_msg=name)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_reduction_of_a_multi_energy_member_defers_the_averaged_waves(device):
+    """The one test of private API: no public route reaches it. SMatrix.scan splits
+    the energies before the frozen-phonon members (a spy on
+    SMatrixArray._reduce_per_energy sees no call from it, eager or lazy), and the
+    public reduce of a member has no frozen-phonon reduction to defer. Only the
+    eager PRISM scan reduces a built multi-energy member with
+    ``_defer_frozen_phonon_reduction``, so that the member keeps its frozen-phonon
+    axis (of length 1) behind the energy axis for the mean over the members."""
     potential = _potential(True)
     scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
     members = []
@@ -854,56 +895,20 @@ def _deferred_members(device, detector):
         ).build(lazy=False)
         members.append(
             s_matrix._reduce(
-                scan=scan, detectors=detector, _defer_frozen_phonon_reduction=True
+                scan=scan,
+                detectors=WavesDetector(average_frozen_phonons=True),
+                _defer_frozen_phonon_reduction=True,
             )
         )
-    return members
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_the_reduction_of_a_multi_energy_member_defers_the_frozen_phonons(device):
-    """Reducing a member of the frozen-phonon ensemble at several energies leaves
-    the moments of every energy for the components (N = 1 of the member would
-    raise), and the mean over the members gives those of the scan."""
-    from abtem.measurements import _frozen_phonon_components_from_moments
-
-    members = _deferred_members(device, PixelatedDetector(MAX_ANGLE, components="all"))
     assert len(members) == N_CONFIGS
-    mean = members[0]
-    assert "frozen_phonon_moments" in mean.metadata
-    assert mean.ensemble_axes_metadata[0].values == tuple(ENERGIES)
-    for member in members[1:]:
-        mean.array[:] += member.array
-    mean.array[:] /= N_CONFIGS
-    result = _frozen_phonon_components_from_moments(mean, num_configurations=N_CONFIGS)
-
-    expected = _prism_scan_energies(
-        device, False, PixelatedDetector(MAX_ANGLE, components="all")
-    )
-    # the components lead the axes of a reduction of the moments, the energies
-    # those of the scan
-    assert result.ensemble_axes_metadata[0].values == COMPONENTS
-    assert result.ensemble_axes_metadata[1].values == tuple(ENERGIES)
-    assert result.shape == np.swapaxes(_array(expected), 0, 1).shape
-    np.testing.assert_allclose(
-        _array(result),
-        np.swapaxes(_array(expected), 0, 1),
-        rtol=0,
-        atol=2e-4 * np.abs(_array(expected)).max(),
-    )
-
-
-@pytest.mark.parametrize("device", ["cpu", gpu])
-def test_the_reduction_of_a_multi_energy_member_defers_the_averaged_waves(device):
-    members = _deferred_members(device, WavesDetector(average_frozen_phonons=True))
-    assert all("frozen_phonon_average" in member.metadata for member in members)
     assert members[0].ensemble_axes_metadata[0].values == tuple(ENERGIES)
 
     expected = _prism_scan_energies(
         device, False, WavesDetector(average_frozen_phonons=True)
     )
     mean = np.mean([_array(member) for member in members], axis=0)
-    # the member keeps its frozen-phonon axis, of length 1, behind the energy axis
+    # without the deferral each energy is reduced early, over a frozen-phonon axis
+    # of length 1, and the member has no such axis for the mean over the members
     mean = mean[:, 0]
     assert mean.shape == expected.shape
     np.testing.assert_allclose(
