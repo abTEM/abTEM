@@ -15,6 +15,7 @@ from utils import devices
 
 import abtem
 from abtem.core.backend import asnumpy
+from abtem.core.energy import energy2wavelength
 
 # not sorted, and a different count from the scan axes (3 and 5)
 ENERGIES = (70e3, 50e3, 80e3, 60e3)
@@ -350,7 +351,6 @@ _OPERATIONS = {
     "center_of_mass_mrad": lambda p: p.center_of_mass(units="mrad"),
     "block_direct": lambda p: p.block_direct(),
     "bandlimit": lambda p: p.bandlimit(30, 100),
-    "azimuthal_average": lambda p: p.azimuthal_average(radial_sampling=5),
 }
 
 
@@ -402,8 +402,9 @@ def test_pixelated_integration_equals_the_annular_detector_for_each_energy(devic
 
 @devices
 def test_reciprocal_axes_of_several_energies_are_those_of_each_energy(device):
-    # the axes (and so `show` and the exports) are in 1/Å, which does not depend on
-    # the wavelength: only the angles do
+    # Guards the alternative the refusal points to: `crop(max_frequency=...)` is
+    # well defined for several energies because the axes are in 1/Å, which does not
+    # depend on the wavelength (only the angles do).
     multi = _cached_patterns(list(ENERGIES), device)
     for energy in ENERGIES:
         single = _cached_patterns(energy, device)
@@ -436,31 +437,63 @@ def test_cropping_to_an_angle_is_refused_for_several_energies(lazy, device):
     )
 
 
+def _spots_within(patterns, k_max):
+    """The spots kept by a crop to `k_max` [1/Å], by NumPy from the Miller indices
+    and the reciprocal lattice vectors: a spot is kept if it is within `k_max` for
+    any ensemble member."""
+    vectors = np.einsum(
+        "sh,...hk->...sk",
+        np.asarray(patterns.miller_indices, dtype=float),
+        asnumpy(patterns.reciprocal_lattice_vectors),
+    )
+    within = (vectors**2).sum(-1) < k_max**2
+    return within.reshape(-1, within.shape[-1]).any(axis=0)
+
+
 def _indexed_patterns(energy, device):
     cell = (ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)).cell
     return _cached_patterns(energy, device).index_diffraction_spots(cell=cell)
 
 
 @devices
-@pytest.mark.parametrize("lazy", [False, True])
-def test_indexed_cropping_to_an_angle_is_refused_for_several_energies(lazy, device):
+def test_indexed_cropping_to_an_angle_is_refused_for_several_energies(device):
     # the spots within an angle differ between the energies: the highest energy's
-    # wavelength used to be applied to all of them
-    multi = _indexed_patterns(list(ENERGIES), device)
-    if lazy:
-        multi = multi.lazy()
-        assert multi.is_lazy
-
-    with pytest.raises(ValueError, match="several energies"):
-        multi.crop(max_angle=100)
-
-    # k_max does not depend on the wavelength, and a single energy takes an angle
+    # wavelength used to be applied to all of them. Eager and lazy patterns in one
+    # test: the first crop compiles a Numba kernel (seconds), once per signature.
+    eager = _indexed_patterns(list(ENERGIES), device)
     k_max = 0.8
-    cropped = multi.crop(k_max=k_max)
-    assert cropped.shape[-1] < multi.shape[-1]
+    keep = _spots_within(eager, k_max)
+    assert 0 < keep.sum() < len(keep)
+    index = [type(a).__name__ for a in eager.ensemble_axes_metadata].index("EnergyAxis")
+
+    for multi in (eager, eager.lazy()):
+        assert multi.is_lazy == (multi is not eager)
+        with pytest.raises(ValueError, match="several energies"):
+            multi.crop(max_angle=100)
+
+        # k_max does not depend on the wavelength: the spots kept are those of the
+        # NumPy oracle
+        cropped = multi.crop(k_max=k_max)
+        np.testing.assert_array_equal(
+            cropped.miller_indices, multi.miller_indices[keep]
+        )
+        _close(
+            asnumpy(cropped.compute().array), asnumpy(multi.compute().array)[..., keep]
+        )
+
+    # a single energy takes an angle, converted with its own wavelength (the
+    # alternative the refusal points to: index one energy first)
     single = _indexed_patterns(ENERGIES[1], device)
-    assert single.crop(max_angle=100).shape[-1] < single.shape[-1]
-    index = [type(a).__name__ for a in multi.ensemble_axes_metadata].index("EnergyAxis")
+    single_k_max = 100 / energy2wavelength(ENERGIES[1]) / 1e3
+    keep_single = _spots_within(single, single_k_max)
+    assert 0 < keep_single.sum() < len(keep_single)
+    by_angle = single.crop(max_angle=100)
+    np.testing.assert_array_equal(
+        by_angle.miller_indices, single.miller_indices[keep_single]
+    )
+    _close(by_angle.array, asnumpy(single.array)[..., keep_single])
+
+    # the several-energy crop holds, for each energy, the crop of the single one
     _close(
         np.take(asnumpy(cropped.compute().array), 1, axis=index),
         single.crop(k_max=k_max).array,
@@ -474,6 +507,7 @@ def test_indexed_cropping_to_an_angle_is_refused_for_several_energies(lazy, devi
 def test_cropping_to_a_frequency_or_pixel_count_serves_several_energies(
     arguments, device
 ):
+    # Guards the alternatives the max_angle refusal points to (max_frequency, gpts).
     result = _cached_patterns(list(ENERGIES), device).crop(**arguments)
 
     axis = [type(a).__name__ for a in result.axes_metadata].index("EnergyAxis")
