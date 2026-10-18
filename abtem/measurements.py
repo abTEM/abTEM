@@ -2833,7 +2833,10 @@ class _BaseMeasurement1D(BaseMeasurements):
         # ("output must have complex dtype").
         new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=array.dtype)
         for i in range(len(array)):
-            map_coordinates(array[i], new_points, new_array[i], order=order)
+            # By keyword: Metal's map_coordinates is SciPy's run on the host, and
+            # takes `output` only as a keyword. Passed positionally it is copied
+            # to the host like any other argument, written there and discarded.
+            map_coordinates(array[i], new_points, output=new_array[i], order=order)
 
         return new_array.reshape(old_shape[:-1] + (gpts,))
 
