@@ -21,6 +21,7 @@ from utils import (
     assert_array_matches_device,
     devices,
     ensure_is_tuple,
+    float64_devices,
     gpu,
     lazy_params,
     requires_gpu,
@@ -1138,28 +1139,42 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
-
-@devices
-@lazy_params
-@pytest.mark.parametrize(
-    "radial_sampling, width, complex_",
-    [(1.0, 1.0, False), (0.7, 2.5, False), (3.0, 1.0, False), (1.0, 1.0, True)],
+_SINGLE_PASS_CASES = pytest.mark.parametrize(
+    "radial_sampling, width, complex_, sampling, max_angle, has_empty_bins",
+    [
+        (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
+        (0.7, 2.5, False, (1 / 20.0, 1 / 20.0), None, False),
+        (3.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
+        (1.0, 1.0, True, (1 / 20.0, 1 / 20.0), None, False),
+        # gaps between narrow bins, and bins beyond the corner of the pattern:
+        # bins with no pixels at all, which average to 0
+        (0.4, 0.2, False, (1 / 20.0, 1 / 20.0), None, True),
+        (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), 60.0, True),
+        # unequal x and y sampling, with non-integer radii
+        (1.0, 1.0, False, (1 / 20.0, 1 / 30.0), None, False),
+        (0.7, 2.5, True, (1 / 24.0, 1 / 20.0), None, False),
+        (0.4, 0.2, False, (1 / 20.0, 1 / 30.0), None, True),
+        (0.7, 2.5, False, (1 / 20.0, 1 / 30.0), 60.0, True),
+    ],
 )
-def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
-    radial_sampling, width, complex_, lazy, device, monkeypatch
+
+
+def _assert_single_pass_equals_the_bin_by_bin_average(
+    case, lazy, device, dtype, rtol, monkeypatch
 ):
     # One gather and one summing pass over the pixels of every step bin, against
     # a mask per bin: the default bins, overlapping ones (a pixel in several
-    # bins), gaps between bins, and complex patterns.
+    # bins), empty ones, complex patterns and unequal x and y sampling.
     import abtem.measurements
 
+    radial_sampling, width, complex_, sampling, max_angle, has_empty_bins = case
     rng = np.random.default_rng(2)
     data = rng.random((3, 33, 40))
     if complex_:
         data = data + 1j * rng.random((3, 33, 40))
     patterns = DiffractionPatterns(
-        data.astype(np.complex64 if complex_ else np.float32),
-        sampling=1 / 20.0,
+        data.astype(dtype),
+        sampling=sampling,
         fftshift=True,
         metadata={"energy": 200e3},
         ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
@@ -1169,7 +1184,7 @@ def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
 
     def average():
         result = patterns.azimuthal_average(
-            radial_sampling=radial_sampling, width=width
+            max_angle=max_angle, radial_sampling=radial_sampling, width=width
         )
         return result.compute()
 
@@ -1179,10 +1194,57 @@ def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
     result = average()
 
     assert_array_matches_device(result.array, device)
-    assert result.array.dtype == expected.array.dtype
+    assert result.array.dtype == expected.array.dtype == dtype
     assert result.shape == expected.shape
+    # an empty bin is 0 for every member, and is not the NaN of a mean of nothing
+    empty_bins = (asnumpy(expected.array) == 0).all(axis=0)
+    assert empty_bins.any() == has_empty_bins
+    assert np.isfinite(asnumpy(result.array)).all()
     np.testing.assert_allclose(
-        asnumpy(result.array), asnumpy(expected.array), rtol=1e-6, atol=1e-7
+        asnumpy(result.array), asnumpy(expected.array), rtol=rtol, atol=1e-7 * rtol
+    )
+
+
+@devices
+@lazy_params
+@_SINGLE_PASS_CASES
+def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
+    radial_sampling,
+    width,
+    complex_,
+    sampling,
+    max_angle,
+    has_empty_bins,
+    lazy,
+    device,
+    monkeypatch,
+):
+    case = radial_sampling, width, complex_, sampling, max_angle, has_empty_bins
+    dtype = np.complex64 if complex_ else np.float32
+    _assert_single_pass_equals_the_bin_by_bin_average(
+        case, lazy, device, dtype, 1e-6, monkeypatch
+    )
+
+
+@float64_devices
+@lazy_params
+@_SINGLE_PASS_CASES
+def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average_in_float64(
+    radial_sampling,
+    width,
+    complex_,
+    sampling,
+    max_angle,
+    has_empty_bins,
+    lazy,
+    device,
+    monkeypatch,
+):
+    # the double-precision summing kernel of CuPy
+    case = radial_sampling, width, complex_, sampling, max_angle, has_empty_bins
+    dtype = np.complex128 if complex_ else np.float64
+    _assert_single_pass_equals_the_bin_by_bin_average(
+        case, lazy, device, dtype, 1e-12, monkeypatch
     )
 
 
