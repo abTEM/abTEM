@@ -94,6 +94,7 @@ def _host_peak(build, n):
 
 
 def _run(single_pass, patterns, device, reps):
+    previous = abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS
     abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS = single_pass
     try:
         times, result = [], None
@@ -114,7 +115,7 @@ def _run(single_pass, patterns, device, reps):
             pool_peak = cp.get_default_memory_pool().total_bytes()
         return min(times), pool_peak, result
     finally:
-        abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS = True
+        abtem.measurements.AZIMUTHAL_STEP_SINGLE_PASS = previous
 
 
 def main():
