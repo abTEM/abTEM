@@ -6312,7 +6312,9 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-@jit(nopython=True, nogil=True)
+# cache=True keeps the compiled kernel on disk: compiling it took seconds on the
+# first call in every process and pytest-xdist worker.
+@jit(nopython=True, nogil=True, cache=True)
 def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
     for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
