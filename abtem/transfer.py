@@ -809,7 +809,7 @@ class Bullseye(BaseAperture):
         edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
         k_corner = float(self._corner_radius) / 1e3
 
-        aperture = xp.zeros(self.gpts, dtype=float)
+        aperture = xp.zeros(self.gpts, dtype=get_dtype(complex=False))
 
         for a0 in range(self.num_rings):
             k_inner = a0 * (ds + d0)
@@ -827,8 +827,8 @@ class Bullseye(BaseAperture):
                             t_deg += 360.0 / self._spoke_num / 2.0
 
                         t = np.deg2rad(t_deg)
-                        ct = np.cos(t)
-                        st = np.sin(t)
+                        ct = float(np.cos(t))
+                        st = float(np.sin(t))
 
                         u = kx * ct + ky * st
                         v = ky * ct - kx * st
@@ -852,8 +852,8 @@ class Bullseye(BaseAperture):
                         t_deg += 360.0 / self._spoke_num / 2.0
 
                     t = np.deg2rad(t_deg)
-                    ct = np.cos(t)
-                    st = np.sin(t)
+                    ct = float(np.cos(t))
+                    st = float(np.sin(t))
 
                     u = kx * ct + ky * st
                     v = ky * ct - kx * st
@@ -866,7 +866,7 @@ class Bullseye(BaseAperture):
             aper = _ramp01((-d_keep) / edge_w)
             aperture += aper
         aperture = xp.clip(aperture, 0, 1)
-        return aperture
+        return aperture.astype(get_dtype(complex=False))
 
 
 class Vortex(BaseAperture):
@@ -1212,10 +1212,18 @@ class RadialPhasePlate(BaseAperture):
         else:
             alpha_normed = (alpha_normed - alpha_normed.min()) / ptp
 
-        phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
-        phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
+        # The sign of sin(pi * k) at the integer k reached outside the cutoff is set
+        # by rounding, so this is deliberately evaluated in float64 whatever the
+        # configured precision: in float32 it flips the phase of most of the grid.
+        flipped = (
+            xp.sin(alpha_normed.astype(xp.float64) * np.pi * (self.num_flips + 1))
+            < 0.0
+        )
+        # The exponent is 0 or phase_shift: built in the dtype of the grid, so that
+        # the complex result is in the configured precision without a cast.
+        flipped = flipped.astype(alpha.dtype) * self.phase_shift
 
-        return phase_shift
+        return xp.exp(1.0j * flipped)
 
 
 class TemporalEnvelope(BaseTransferFunction):
@@ -1622,7 +1630,9 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
 
         unpacked = _unpack_distributions(*args, shape=alpha.shape, xp=xp)
-        angular_spread = unpacked[-1] / 1e3
+        # An array, so that its sign (a float64 NumPy scalar for a plain float)
+        # does not widen the single-precision envelope.
+        angular_spread = xp.asarray(unpacked[-1] / 1e3, dtype=get_dtype(complex=False))
         parameters = dict(zip(polar_symbols, unpacked[:-1]))
 
         alpha = xp.array(alpha)
