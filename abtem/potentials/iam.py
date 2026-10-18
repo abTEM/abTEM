@@ -1012,7 +1012,8 @@ def _fold_far_outside_faces(atoms: Atoms) -> None:
 def _given_configurations(frozen_phonons: BaseFrozenPhonons) -> list[Atoms]:
     """The atoms an ensemble is given, as far as they are known without
     computing anything: every member of an AtomsEnsemble whose trajectory is in
-    memory, otherwise the atoms the ensemble displaces."""
+    memory, none of a lazily read one, otherwise the atoms the ensemble
+    displaces."""
     trajectory = getattr(frozen_phonons, "trajectory", None)
     if trajectory is None:
         return [frozen_phonons.atoms]
@@ -1021,17 +1022,30 @@ def _given_configurations(frozen_phonons: BaseFrozenPhonons) -> list[Atoms]:
     return []
 
 
+def _heights_along_plane_normal(atoms: Atoms, plane) -> tuple[np.ndarray, float]:
+    """The heights of the atoms of an orthogonal cell along the axis that
+    `rotate_atoms_to_plane` turns along z, and the cell's height along it, as
+    they are given: the rotation wraps every atom into the cell. Reversing the
+    axis (z to height - z) does not change how far outside the cell an atom is."""
+    if plane == "xy":
+        return atoms.positions[:, 2], float(np.array(atoms.cell)[2, 2])
+    frame = _rotate_atoms_to_plane(Atoms(cell=atoms.cell), plane)[1]
+    axis = int(np.argmax(np.abs(frame[:, 2])))
+    return atoms.positions[:, axis], float(np.array(atoms.cell)[axis, axis])
+
+
 def _warn_if_given_atoms_far_outside_along_z(
-    frozen_phonons: BaseFrozenPhonons,
+    configurations: Sequence[Atoms], plane="xy"
 ) -> None:
     """Warn about the atoms given more than `FACE_SLICE_WARNING_DISTANCE`
     outside the cell along z of a non-periodic potential that does not
-    transform its cell. They are folded into the cell as images of the repeated
-    structure, which is unlikely to be meant if the cell should enclose them."""
+    transform its cell, or only rotates it to `plane`. They are folded into the
+    cell as images of the repeated structure, which is unlikely to be meant if
+    the cell should enclose them."""
     counts = []
-    for atoms in _given_configurations(frozen_phonons):
-        height = float(np.array(atoms.cell)[2, 2])
-        counts.append(int(_far_outside_faces(atoms.positions[:, 2], height).sum()))
+    for atoms in configurations:
+        heights, height = _heights_along_plane_normal(atoms, plane)
+        counts.append(int(_far_outside_faces(heights, height).sum()))
     if not any(counts):
         return
 
@@ -1113,18 +1127,31 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         # Every build folds atoms given far outside along z into the cell; this
         # says so where the potential is made, which names the caller's line for
         # a lazy build too. A builder rebuilt from this one (a lazy block) does
-        # not repeat it.
-        if (
-            not periodic
-            and not _box_strain_warning_suppressed.get()
-            and not _require_cell_transform(
-                self._frozen_phonons.cell,
-                box=self.box,
-                plane=self.plane,
-                origin=self.origin,
+        # not repeat it. The members of a lazily read trajectory are not known
+        # here; each block checks its own as it is made (_from_partitioned_args).
+        if not _box_strain_warning_suppressed.get() and self._reports_given_atoms():
+            _warn_if_given_atoms_far_outside_along_z(
+                _given_configurations(self._frozen_phonons), self.plane
             )
+
+    def _reports_given_atoms(self) -> bool:
+        """Whether atoms given far outside the cell along z are reported: for a
+        non-periodic potential that uses its cell as it is or only rotates it to
+        the plane. A cut cell (`cut_cell`) folds them silently."""
+        if self.periodic:
+            return False
+        if not self._requires_cell_transform():
+            return True
+        # The rotate-only path of _transform_atoms.
+        cell = self._frozen_phonons.cell
+        if not (
+            is_cell_orthogonal(cell)
+            and self.plane != "xy"
+            and tuple(self.origin) == (0.0, 0.0, 0.0)
         ):
-            _warn_if_given_atoms_far_outside_along_z(self._frozen_phonons)
+            return False
+        rotated = _rotate_atoms_to_plane(Atoms(cell=cell), self.plane)[0]
+        return tuple(np.diag(rotated.cell)) == self.box
 
     @property
     def frozen_phonons(self) -> BaseFrozenPhonons:
@@ -1141,6 +1168,25 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         """The integrator determining how the projection integrals for each slice is
         calculated."""
         return self._integrator
+
+    def _requires_cell_transform(self) -> bool:
+        """Whether the atoms are transformed (rotated, translated, repeated or
+        strained) to fill the potential."""
+        return _require_cell_transform(
+            self._frozen_phonons.cell,
+            box=self.box,
+            plane=self.plane,
+            origin=self.origin,
+        )
+
+    def _folds_atoms_far_outside_along_z(self) -> bool:
+        """Whether atoms given in the potential's own cell, more than
+        `FACE_SLICE_WARNING_DISTANCE` outside it along z, are folded into the cell
+        (`_fold_far_outside_faces`) when the slices are built: for a non-periodic
+        potential that is not cut from a transformed cell
+        (`_reports_given_atoms`) and whose integrator is infinite. A finite one
+        wraps them by its margins."""
+        return self._reports_given_atoms() and not self.integrator.finite
 
     def _cutoffs(self):
         atoms = self.frozen_phonons.atoms
@@ -1602,7 +1648,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return self.frozen_phonons.ensemble_shape
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, frozen_phonons_partial, **kwargs):
+    def _from_partitioned_args_func(
+        cls, *args, frozen_phonons_partial, check_given_atoms=False, **kwargs
+    ):
         args = unpack_blockwise_args(args)
 
         frozen_phonons = frozen_phonons_partial(*args)
@@ -1611,6 +1659,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         # The box was reported when the potential was constructed.
         with _box_strain_warning_silenced():
             new_potential = cls(frozen_phonons, **kwargs)
+
+        # The members of a lazily read trajectory, which the construction could
+        # not check, are known now: once per block, not per slice.
+        if check_given_atoms:
+            _warn_if_given_atoms_far_outside_along_z(
+                _given_configurations(frozen_phonons), new_potential.plane
+            )
 
         ndims = max(len(new_potential.ensemble_shape), 1)
         new_potential = _wrap_with_array(new_potential, ndims)
@@ -1635,6 +1690,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return partial(
             self._from_partitioned_args_func,
             frozen_phonons_partial=frozen_phonons_partial,
+            check_given_atoms=isinstance(
+                getattr(self.frozen_phonons, "trajectory", None), da.Array
+            )
+            and self._reports_given_atoms(),
             **kwargs,
         )
 
@@ -1860,7 +1919,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         # skewed cell: without it, the target grid would be computed for
         # an orthogonalised auxiliary supercell and then silently reused
         # as the gpts of an entirely different (skewed) grid.
-        cell = np.array(atoms_obj.cell, dtype=float)
+        # the cell of the ensemble, as the builder reads it: the atoms of a lazily
+        # read trajectory are not known until its blocks are computed
+        cell = np.array(frozen_phonons.cell, dtype=float)
         if non_orthogonal is None:
             use_skew = (
                 not is_cell_orthogonal(cell)

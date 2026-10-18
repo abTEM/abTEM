@@ -396,18 +396,21 @@ def _apply_displacement_field(
         Displacement field along the y-axis.
     """
 
-    x = np.arange(0, image.shape[0])
-    y = np.arange(0, image.shape[1])
+    # The image is periodic with period n along each axis: positions wrap
+    # modulo n, and the grid carries one wrapped row and column (nodes 0 ... n)
+    # so that a position in [n - 1, n) interpolates between the last and the
+    # first pixel.
+    n_x, n_y = image.shape
+    nodes = [np.arange(n_x + 1), np.arange(n_y + 1)]
+    padded = np.pad(image, ((0, 1), (0, 1)), mode="wrap")
 
-    interpolating_function = RegularGridInterpolator([x, y], image, fill_value=None)
+    interpolating_function = RegularGridInterpolator(nodes, padded)
 
-    y, x = np.meshgrid(y, x)
+    y, x = np.meshgrid(np.arange(n_y), np.arange(n_x))
     p = np.array([(x + distortion_x).ravel(), (y + distortion_y).ravel()]).T
 
-    # p[:, 0] = np.clip(p[:, 0], 0, x.max())
-    p[:, 0] = p[:, 0] % x.max()
-    # p[:, 1] = np.clip(p[:, 1], 0, y.max())
-    p[:, 1] = p[:, 1] % y.max()
+    p[:, 0] = p[:, 0] % n_x
+    p[:, 1] = p[:, 1] % n_y
 
     warped = interpolating_function(p)
     return warped.reshape(image.shape)

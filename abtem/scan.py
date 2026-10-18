@@ -499,9 +499,15 @@ class LineScan(BaseScan):
 
     @property
     def direction(self):
-        """Normal vector pointing from `start` to `end`."""
-        direction = np.array(self.end) - np.array(self.start)
-        return direction / np.linalg.norm(direction)
+        """Normal vector pointing from `start` to `end`. A line of zero length has
+        no direction of its own and points along `x`, the default angle of
+        `at_position`, so that `angle` is 0 and `add_margin` extends it along
+        `x`."""
+        direction = np.array(self.end, dtype=float) - np.array(self.start, dtype=float)
+        length = np.linalg.norm(direction)
+        if length == 0.0:
+            return np.array([1.0, 0.0])
+        return direction / length
 
     @property
     def angle(self):
@@ -619,6 +625,13 @@ class LineScan(BaseScan):
         if self.extent is None or self.sampling is None:
             return
 
+        if self.sampling == 0.0:
+            # A zero-length line given only `gpts` has the sampling 0, which
+            # cannot give a number of positions once the line is lengthened: keep
+            # `gpts` and derive the sampling from the new extent instead.
+            self._adjust_sampling()
+            return
+
         self._gpts = max(
             safe_ceiling_int(self.extent / self.sampling) + int(self.endpoint), 1
         )
@@ -627,6 +640,15 @@ class LineScan(BaseScan):
 
     def _adjust_sampling(self):
         if self.extent is None or self.gpts is None:
+            return
+
+        if self.extent == 0.0:
+            # The positions of a zero-length line coincide, so they have no
+            # spacing of their own: a requested sampling is kept, which also lets
+            # `add_margin` or a new `start` or `end` lengthen the line at that
+            # sampling. With only `gpts` given it is 0.
+            if not self._sampling:
+                self._sampling = 0.0
             return
 
         if self.endpoint and self.gpts > 1:
@@ -870,6 +892,10 @@ class GridScan(HasGrid2DMixin, BaseScan):
         End corner of the scan [Å]. May be given as fractional coordinate
         if `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
+        An `end` equal to `start` is a scan of one position, a single point. Its
+        `gpts` stay undefined, as for any scan without `gpts` or `sampling`, until
+        a probe is matched (as when scanning), which gives (1, 1); more than one
+        position along an axis is refused.
     gpts : two int, optional
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one
         of gpts or sampling.
@@ -918,7 +944,10 @@ class GridScan(HasGrid2DMixin, BaseScan):
             # is zero, but the position is still well defined. This occurs both for a
             # user-defined one-point scan and when such a scan is partitioned into
             # blocks for lazy evaluation.
-            single_point = gpts is not None and bool(np.all(np.array(gpts) == 1))
+            # Without gpts a zero extent gives one position along every axis, as
+            # for `LineScan` and `Grid`; `gpts` itself stays undefined until the
+            # sampling is, as for any other scan without gpts or sampling.
+            single_point = gpts is None or bool(np.all(np.array(gpts) == 1))
             degenerate = all(d == 0.0 for d in extent)
 
             if all(d <= 0.0 for d in extent) and not (degenerate and single_point):

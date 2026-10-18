@@ -101,6 +101,58 @@ def test_slit_q_min_nonzero_excludes_origin():
     assert spec._q_values[-1] == pytest.approx(20.0, abs=1e-6)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("extent", [(20.0, 20.0), (20.0, 17.32)])
+def test_slit_spectrum_sums_the_pixels_of_two_gaussian_peaks(extent, device):
+    """Two normalised Gaussian densities of weights 1 and 2 at q = 20 and
+    45 mrad along 20 deg (sigma = 2.5 mrad), with each pixel holding the
+    density times the pixel area, so the pixels of each peak sum to its
+    weight. The slit spectrum is a sum over pixels, so its sum over q below
+    and above 32.5 mrad must give 1 and 2, for square and rectangular pixels.
+
+    It used to scale the across-slit average by the number of samples alone,
+    ignoring the sample spacing (n / (n - 1) pixels across, 1.03 pixels along)
+    and the pixel shape: 0.922 / 1.845 for square pixels and 1.066 / 2.132
+    for rectangular ones. Now within 1.1e-3 (limit 3e-3)."""
+    from abtem.core.axes import EnergyLossAxis
+    from abtem.core.energy import energy2wavelength
+    from abtem.core.utils import get_dtype
+
+    energy, gpts, angle = 100e3, 80, 20.0
+    inv_ang_per_mrad = 1e-3 / energy2wavelength(energy)
+    sampling = tuple(1 / e for e in extent)
+    kx, ky = (
+        (np.arange(gpts) - gpts // 2) * d / inv_ang_per_mrad for d in sampling
+    )
+    kx, ky = np.meshgrid(kx, ky, indexing="ij")  # mrad
+
+    sigma = 2.5  # mrad
+    pixel_area = np.prod(sampling) / inv_ang_per_mrad**2  # mrad^2
+    cos_a, sin_a = np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))
+    array = np.zeros((1, gpts, gpts))
+    for weight, q in ((1.0, 20.0), (2.0, 45.0)):
+        r2 = (kx - q * cos_a) ** 2 + (ky - q * sin_a) ** 2
+        density = weight * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2)
+        array[0] += density * pixel_area
+
+    dp = DiffractionPatterns(
+        array.astype(get_dtype()),
+        sampling=sampling,
+        fftshift=True,
+        ensemble_axes_metadata=[EnergyLossAxis(values=(0.05,), units="eV")],
+        metadata={"energy": energy},
+    )
+    dp = dp.copy_to_device(device)
+
+    detector = SpectralSlitDetector(width=25.0, q_min=7.5, q_max=57.5, angle=angle)
+    spectrum = momentum_resolved_spectrum(dp, detector)
+    values = np.asarray(asnumpy(spectrum.array), dtype=np.float64)[:, 0]
+    q = np.asarray(spectrum._q_values)
+
+    sums = (values[q < 32.5].sum(), values[q >= 32.5].sum())
+    np.testing.assert_allclose(sums, (1.0, 2.0), rtol=3e-3)
+
+
 # ---- SpectralAnnularDetector ------------------------------------------------
 
 
@@ -770,9 +822,9 @@ def test_offset_detector_regions_cover_the_density_on_any_grid(cell_name, name):
 
 
 # The slit spectrum converts the interpolated average across the slit to a sum by
-# counting one sample per square pixel of the smaller sampling, so on a skewed
-# grid it must give what a square grid of the same pixel spacing gives (both
-# 0.92 of the weights under that convention). Measured: 1.0 off
+# the area each sample stands for over the area of a pixel (the true one on a
+# skewed grid), so on a skewed grid it must give what a square grid of the same
+# pixel spacing gives. Measured: 1.0 off
 # before the fix (the line was mapped through the real-space cell, landing off
 # the Gaussians), 7.4e-4 after, against rtol 3e-3; the remaining difference is the
 # linear interpolation on the two grids.
