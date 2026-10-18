@@ -2667,7 +2667,7 @@ class PixelatedDetector(BaseDetector):
             # intensity |ψ(k)|², and the elastic intensity |<ψ>|² formed from it,
             # carry the gain itself, as in the detection of the intensity.
             renorm = _window_power_gain(self.window_func, waves.base_shape) ** 0.5
-            amplitude = amplitude * amplitude.real.dtype.type(renorm)
+            amplitude = amplitude * renorm
         xp = get_array_module(amplitude)
         quantities = {
             "real": amplitude.real,
@@ -2723,7 +2723,7 @@ class PixelatedDetector(BaseDetector):
 
         if self.window_func is not None:
             renorm = _window_power_gain(self.window_func, waves.base_shape)
-            array = array * array.dtype.type(renorm)
+            array = array * renorm  # a Python float keeps the dtype (NEP 50)
 
         return array
 
@@ -2927,7 +2927,7 @@ class WavesDetector(BaseDetector):
 
         if self.window_func is not None:
             renorm = _window_power_gain(self.window_func, waves.base_shape) ** 0.5
-            array = array * array.dtype.type(renorm)
+            array = array * renorm  # a Python float keeps the dtype (NEP 50)
 
         return array
 
