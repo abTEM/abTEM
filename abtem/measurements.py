@@ -5294,8 +5294,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         A pixel is in the bins `first..last` of `_azimuthal_step_bounds`, which
         is one bin with the default `width == radial_sampling` and several for
-        overlapping bins; it then appears once in the run of each. Within a bin
-        the pixels keep their order in the pattern.
+        overlapping bins; it then appears once in the run of each. With
+        overlapping bins (`width > radial_sampling`) the runs, and the gather of
+        the pixels they index, are larger than the pattern by a factor of about
+        `width / radial_sampling`. Within a bin the pixels keep their order in the
+        pattern.
 
         The runs are sorted a block of rows at a time, in two passes over the
         blocks of `_azimuthal_step_row_blocks`: the first counts the pixels of
@@ -5452,7 +5455,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             For the 'step' weighting function, this is the full width of the ring: bin
             `k` holds the pixels with
             `k * radial_sampling - width / 2 <= r < k * radial_sampling + width / 2`,
-            so the default bins do not overlap.
+            so the default bins do not overlap. With overlapping bins
+            (`width > radial_sampling`) the pixel runs gathered and summed, and
+            their memory, grow in proportion to `width / radial_sampling`.
             For the 'gaussian' weighting function, the weight is
             `exp(-(r - c)**2 / (width**2 / 2))`, a Gaussian with a standard deviation
             of `width / 2`.
@@ -5489,7 +5494,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             #
             # By default the node holds the bins as runs instead (#602): the
             # binned pixel indices (int32, 4 * n_pixels bytes with the default
-            # non-overlapping bins), averaged in one pass.
+            # non-overlapping bins), averaged in one pass. With overlapping bins
+            # (width > radial_sampling) the runs and the gather of the pixels they
+            # index scale as width / radial_sampling.
             if AZIMUTHAL_STEP_SINGLE_PASS:
                 step_runs = self._azimuthal_step_runs
                 if self.is_lazy:
