@@ -1550,8 +1550,12 @@ def test_azimuthal_step_runs_hold_the_pixels_of_every_bin_in_pattern_order(
         DiffractionPatterns,
         "_azimuthal_step_row_blocks",
         staticmethod(
-            lambda coordinates, radial_sampling, width: row_blocks(
-                coordinates, radial_sampling, width, block_pixels=block_pixels
+            lambda coordinates, radial_sampling, width, radii=None: row_blocks(
+                coordinates,
+                radial_sampling,
+                width,
+                block_pixels=block_pixels,
+                radii=radii,
             )
         ),
     )
@@ -2911,6 +2915,181 @@ def test_integrate_disc(position, radius):
 #     image1 = diffraction_patterns.gaussian_source_size(sigma).integrate_radial(0, outer)
 #     image2 = diffraction_patterns.integrate_radial(0, outer).gaussian_filter(sigma)
 #     assert np.allclose(image1.array, image2.array)
+
+
+def test_diffraction_patterns_metric_detector_binning():
+    """Annular binning of a DiffractionPatterns uses the reciprocal metric when a
+    non-orthogonal cell is present, and is unchanged (bit-exact) otherwise."""
+    rng = np.random.default_rng(0)
+    arr = rng.random((64, 64)).astype(np.float32)
+    a = 20.0
+    cell = (
+        (a, 0.0),
+        (a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))),
+    )
+    sampling = (1 / a, 1 / a)  # reciprocal sampling = 1 / extent
+
+    skew = DiffractionPatterns(
+        arr, sampling=sampling, metadata={"energy": 100e3, "cell": cell}
+    )
+    ortho = DiffractionPatterns(arr, sampling=sampling, metadata={"energy": 100e3})
+
+    # a mid-range annulus selects different pixels under the metric vs the oblique angle
+    s = float(np.array(skew.integrate_radial(20.0, 50.0).array))
+    o = float(np.array(ortho.integrate_radial(20.0, 50.0).array))
+    assert np.isfinite(s) and np.isfinite(o)
+    assert not np.isclose(s, o)
+
+    # flexible + segmented binning also run on a skewed pattern
+    assert skew.radial_binning(step_size=10.0, inner=0.0, outer=50.0).array.shape == (5, 1)
+    assert skew.polar_binning(3, 4, inner=0.0, outer=50.0).array.shape == (3, 4)
+
+
+def test_diffraction_patterns_to_cartesian():
+    """A skewed diffraction pattern resamples onto a regular Cartesian grid with the
+    central beam centred; an orthogonal pattern is returned unchanged."""
+    a = 12.0
+    cell = (
+        (a, 0.0),
+        (a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60))),
+    )
+    sampling = (1 / a, 1 / a)
+    # a single bright pixel away from the corner, on a skewed grid
+    arr = np.zeros((48, 48), dtype=np.float32)
+    arr[0, 0] = 1.0  # the direct (zero-frequency) beam in fft order
+    dp = DiffractionPatterns(
+        arr, sampling=sampling, fftshift=False, metadata={"energy": 100e3, "cell": cell}
+    )
+
+    cart = dp.to_cartesian()
+    assert "cell" not in cart.metadata
+    cart_arr = np.asarray(cart.array)
+    # the direct beam must sit at the centre of the Cartesian (fftshifted) pattern
+    center = (cart_arr.shape[0] // 2, cart_arr.shape[1] // 2)
+    assert np.unravel_index(np.argmax(cart_arr), cart_arr.shape) == center
+
+    # orthogonal pattern -> identity
+    ortho = DiffractionPatterns(arr, sampling=sampling, metadata={"energy": 100e3})
+    assert ortho.to_cartesian() is ortho
+
+
+@pytest.mark.parametrize("width", [0.0, 1.5])
+def test_skew_image_interpolate_line_follows_the_physical_positions(width):
+    """On a skewed cell pixel (i, j) sits at i a1 / n1 + j a2 / n2. A cell-periodic
+    wave along b1, interpolated along b1, is constant across the line, so averaging
+    over a width leaves it unchanged. Measured before the fix (fractional
+    coordinates through the transposed inverse cell, perpendicular samples in
+    unskewed pixel steps): off by up to 1.8 on values of magnitude 1, with and
+    without a width, against 1e-4 (cubic interpolation of 32 pixels per period)."""
+    a = 8.0
+    cell = np.array([[a, 0.0], [-a / 2, a * 3**0.5 / 2]])
+    b1 = np.linalg.inv(cell).T[0]
+    n = 64
+    i, j = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+    r = (i / n)[..., None] * cell[0] + (j / n)[..., None] * cell[1]
+    image = Images(
+        np.cos(2 * np.pi * r @ b1), sampling=(a / n, a / n), metadata={"cell": cell}
+    )
+
+    start = np.array([1.0, 2.0])
+    end = start + 1.7 * b1 / np.sum(b1**2)  # 1.7 periods along b1
+    line = image.interpolate_line(start, end, gpts=9, endpoint=True, width=width)
+
+    points = np.linspace(start, end, 9)
+    np.testing.assert_allclose(
+        np.asarray(line.array), np.cos(2 * np.pi * points @ b1), atol=1e-4
+    )
+
+
+def test_skew_diffraction_to_cartesian_and_indexing():
+    """to_cartesian resamples a skew pattern onto an orthogonal grid, and
+    index_diffraction_spots reads symmetry-equivalent reflections equally."""
+    from ase import Atoms
+    from ase.cell import Cell
+
+    import abtem
+
+    a, cz, nz = 3.0, 2.0, 8
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (1, 1, nz)
+    dp = (
+        abtem.PlaneWave(energy=100e3)
+        .multislice(abtem.Potential(atoms, gpts=(120, 120), slice_thickness=cz))
+        .compute()
+        .diffraction_patterns(max_angle="full", fftshift=True)
+    )
+    assert "cell" in dp.metadata
+
+    # to_cartesian returns an orthogonal pattern (no cell) of the requested shape
+    cart = dp.to_cartesian()
+    assert "cell" not in cart.metadata
+    assert cart.array.shape == dp.array.shape
+
+    # the six first-order hexagonal reflections must be indexed with equal intensity
+    idx = dp.index_diffraction_spots(cell=Cell(cell))
+    hkl = np.asarray(idx.miller_indices)
+    inten = np.asarray(idx.array).ravel()
+
+    def intensity(h):
+        m = np.all(hkl == np.array(h), axis=1)
+        return float(inten[m][0])
+
+    six = [intensity(h) for h in [(1, 0, 0), (0, 1, 0), (1, 1, 0), (-1, 0, 0), (0, -1, 0), (-1, -1, 0)]]
+    # equal to the skew multislice numerical floor (~1e-5); the broken
+    # (non-metric) mapping gave a spread of order 1.
+    assert (max(six) - min(six)) / np.mean(six) < 1e-3
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
+@pytest.mark.parametrize("single_pass", [True, False])
+def test_azimuthal_average_of_a_skew_pattern_uses_the_reciprocal_metric(
+    single_pass, weighting_function, lazy, device, monkeypatch
+):
+    """On a skewed cell the radius of pixel (h1, h2) is |h1 b1 + h2 b2|, not
+    sqrt(h1^2 + h2^2) in pixel units. The expectation is a NumPy average over that
+    radius; it differs from the average of the same data on a square grid, so a
+    single-pass or bin-by-bin average that falls back to the pixel-unit radii fails."""
+    monkeypatch.setattr(abtem.measurements, "AZIMUTHAL_STEP_SINGLE_PASS", single_pass)
+    a, n = 8.0, 32
+    cell = np.array([[a, 0.0], [-a / 2, a * 3**0.5 / 2]])
+    b = np.linalg.inv(cell).T
+    data = np.random.default_rng(3).random((2, n, n))
+    sampling = tuple(np.linalg.norm(b, axis=1))
+    energy = 200e3
+
+    def average(metadata):
+        patterns = DiffractionPatterns(
+            data,
+            sampling=sampling,
+            fftshift=False,
+            metadata={"energy": energy, **metadata},
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        ).copy_to_device(device)
+        if lazy:
+            patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
+        result = patterns.azimuthal_average(weighting_function=weighting_function)
+        return asnumpy(result.compute().array), patterns.angular_sampling
+
+    skewed, angular_sampling = average({"cell": cell})
+    square, _ = average({})
+
+    h = np.fft.fftfreq(n, 1 / n)
+    k = h[:, None, None] * b[0] + h[None, :, None] * b[1]
+    radius = np.linalg.norm(k, axis=-1) / min(sampling)
+    expected = np.zeros_like(skewed)
+    for i, center in enumerate(np.arange(skewed.shape[-1])):
+        if weighting_function == "step":
+            mask = np.abs(radius - center) < 0.5
+        else:
+            mask = np.exp(-((radius - center) ** 2) / 0.5)
+        expected[..., i] = (data * mask).sum(axis=(-2, -1)) / mask.sum()
+
+    np.testing.assert_allclose(skewed, expected, rtol=1e-6)
+    assert not np.allclose(skewed, square, rtol=1e-2)
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from numbers import Number
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import dask
 import dask.array as da
@@ -351,6 +351,8 @@ def _generate_slices(
     last_slice=None,
     device=None,
     repetitions=(1, 1, 1),
+    box=None,
+    origin=(0.0, 0.0, 0.0),
 ):
     # `atoms` is the calculator's atoms or whole copies of them one after another
     # (`atoms * repetitions`), so atom i of every copy, atoms[i::n], takes the core
@@ -369,6 +371,8 @@ def _generate_slices(
                 slice_thickness=slice_thickness,
                 projection="finite",
                 plane=plane,
+                box=box,
+                origin=origin,
                 device=device,
             )
         potentials.append(potential)
@@ -383,7 +387,11 @@ def _generate_slices(
     transform_valence_potential = None
     if potential.plane != "xy":
         if not is_cell_orthogonal(atoms.cell):
-            raise NotImplementedError
+            raise NotImplementedError(
+                "GPAW valence-potential projection along a non-xy plane is not "
+                "supported on non-orthogonal cells; use plane='xy' (matching the "
+                "general non-orthogonal Potential support, which is also xy-only)."
+            )
 
         # The valence potential is rotated with the atoms, including the reversal
         # of the axis that `_plane_rotation` reverses for the planes that need it.
@@ -417,8 +425,16 @@ def _generate_slices(
         # The valence potential is on the host; its slice is moved to the device
         # of the slice array.
         if transform_valence_potential:
+            # The slice spans the box of the potential, not the cell of `atoms`.
             valence_slice = _interpolate_slice(
-                valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
+                valence_potential,
+                atoms.cell,
+                potential.gpts,
+                potential.sampling,
+                a,
+                b,
+                slice_cell=transformed_atoms.cell,
+                origin=origin,
             )
         else:
             valence_slice = integrate_slice(
@@ -522,6 +538,11 @@ class GPAWPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
+    non_orthogonal : bool, optional
+        Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
+        or on an orthogonal box (False). The default, None, uses the skewed grid
+        when the cell is non-orthogonal with a and b in the xy-plane, `plane` is
+        "xy" and no `box` is given, as `Potential` does.
     """
 
     _supports_box_and_origin = False
@@ -541,6 +562,7 @@ class GPAWPotential(_PotentialBuilder):
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         gridrefinement: int = 4,
         device: str = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         if GPAW is None:
             raise RuntimeError(
@@ -607,6 +629,7 @@ class GPAWPotential(_PotentialBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            non_orthogonal=non_orthogonal,
         )
 
     @property
@@ -715,6 +738,13 @@ class GPAWPotential(_PotentialBuilder):
             last_slice=last_slice,
             device=self.device,
             repetitions=self.repetitions,
+            # The core corrections are laid out in this potential's box. Left to
+            # detect it, a hexagonal cell would give them a skewed grid even when
+            # this potential was asked for an orthogonal one (non_orthogonal=False),
+            # as gpaw_magnetic_fields does; as in ChargeDensityPotential, the box
+            # is forwarded only when this potential is not skewed itself.
+            box=None if self._non_orthogonal else self.box,
+            origin=self.origin,
         ):
             yield slic
         # for slic in _generate_slices(
@@ -758,6 +788,14 @@ class GPAWPotential(_PotentialBuilder):
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("calculators", "frozen_phonons"))
+        # self.box has already been resolved from None to a concrete tuple (see
+        # _FieldBuilder.__init__): non-orthogonal auto-detection only triggers when
+        # box is None, so feeding the resolved box back into a fresh GPAWPotential
+        # (as happens on every lazy/dask block reconstruction) would silently skip
+        # skew detection and orthogonalise the cell. Reset it to None here so the
+        # reconstructed instance re-detects the skew from the atoms.
+        if self._non_orthogonal:
+            kwargs["box"] = None
 
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
 

@@ -121,7 +121,9 @@ def test_frame_is_the_map_the_transform_applies_to_positions(name):
 def test_frame_of_a_rotated_cell_is_not_a_permutation():
     """The 17 degree case exercises a frame that orthogonalize_cell computes."""
     atoms, kwargs = TRANSFORMS["hexagonal_rotated_17"]
-    frame = abtem.Potential(atoms, sampling=0.1, **kwargs)._transform_atoms()[2]
+    frame = abtem.Potential(
+        atoms, sampling=0.1, non_orthogonal=False, **kwargs
+    )._transform_atoms()[2]
     assert np.abs(frame[0, 1]) > 1e-3
 
 
@@ -288,7 +290,9 @@ def test_a_frame_off_the_identity_by_rounding_is_the_identity():
         sigmas={"W": (0.05, 0.1, 0.2), "Se": (0.1, 0.07, 0.03)},
         seed=3,
     )
-    transformed, _, frame = abtem.Potential(fp, sampling=0.1)._transform_atoms()
+    transformed, _, frame = abtem.Potential(
+        fp, sampling=0.1, non_orthogonal=False
+    )._transform_atoms()
     assert not np.array_equal(frame, np.eye(3))
     np.testing.assert_allclose(frame, np.eye(3), rtol=0, atol=1e-12)
 
@@ -314,15 +318,16 @@ def test_anisotropic_sigmas_follow_the_strain_of_an_orthogonalization():
     )
     sigmas = (0.05, 0.10, 0.20)
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=11)
-    frame = abtem.Potential(fp, sampling=0.05)._transform_atoms()[2]
+    kwargs = dict(sampling=0.05, non_orthogonal=False)
+    frame = abtem.Potential(fp, **kwargs)._transform_atoms()[2]
     assert np.abs(frame[1, 0]) > 0.05
 
     r = np.random.default_rng(fp.seed[0]).normal(size=(1, 3))
     displaced = atoms.copy()
     displaced.positions += np.array(sigmas, dtype=np.float32) * r
 
-    actual = abtem.Potential(fp, sampling=0.05).build().compute().array[0]
-    expected = abtem.Potential(displaced, sampling=0.05).build().compute().array
+    actual = abtem.Potential(fp, **kwargs).build().compute().array[0]
+    expected = abtem.Potential(displaced, **kwargs).build().compute().array
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-5 * expected.max())
 
 
@@ -332,7 +337,7 @@ def test_per_atom_sigmas_follow_their_atoms_into_a_transformed_cell():
     atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
     sigmas = np.linspace(0.05, 0.10, len(atoms))
     fp = abtem.FrozenPhonons(atoms, num_configs=1, sigmas=sigmas, seed=2)
-    potential = abtem.Potential(fp, sampling=0.1)
+    potential = abtem.Potential(fp, sampling=0.1, non_orthogonal=False)
 
     transformed, _, frame = potential._transform_atoms()
     assert len(transformed) != len(atoms)

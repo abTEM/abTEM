@@ -493,6 +493,10 @@ class _GPAWMagnetics(_FieldBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            # `generate_slices` puts the field of a skewed cell on the grid of
+            # its default box (`_box_vectors`), so the builder must not take the
+            # skewed grid it would otherwise choose for such a cell.
+            non_orthogonal=False,
         )
 
     @property
@@ -969,6 +973,9 @@ def gpaw_magnetic_fields(
         device=device,
     )
 
+    # The vector potential and magnetic field are on the default box of a skewed
+    # cell, so the potential they are combined with must be as well.
+    potential_kwargs.setdefault("non_orthogonal", False)
     potential = GPAWPotential(
         calculators,
         frozen_phonons=frozen_phonons,

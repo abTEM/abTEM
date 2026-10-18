@@ -567,6 +567,582 @@ def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
         cryst.get_sliced_atoms()
 
 
+def test_skew_potential_reduces_to_orthogonal():
+    """A non_orthogonal=True potential on an orthogonal crystal must match the
+    standard orthogonal potential."""
+    import numpy as np
+    from ase import Atoms
+
+    atoms = Atoms(
+        "C2", cell=(4.0, 5.0, 6.0), pbc=True,
+        positions=[(1.0, 1.0, 3.0), (3.0, 4.0, 3.0)],
+    )
+    ortho = Potential(atoms, gpts=(80, 100), slice_thickness=6.0).build(lazy=False).compute()
+    skew = Potential(
+        atoms, gpts=(80, 100), slice_thickness=6.0, non_orthogonal=True
+    ).build(lazy=False).compute()
+    assert skew.grid.is_orthogonal  # a diagonal cell is still orthogonal
+    assert np.allclose(ortho.array, skew.array, atol=1e-4)
+
+
+def test_skew_potential_non_orthogonal_cell():
+    """A genuinely non-orthogonal (hexagonal) cell builds a skewed-grid potential."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 2.46, 4.0
+    b = a / (2 * np.sqrt(3))
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C2", cell=cell, pbc=True, positions=[(0, 0, c / 2), (a / 2, b, c / 2)])
+
+    pot = Potential(atoms, gpts=(60, 60), slice_thickness=c, non_orthogonal=True)
+    assert not pot.grid.is_orthogonal
+    assert pot.cell is not None
+    parr = pot.build(lazy=False).compute()
+    assert parr.array.shape == (1, 60, 60)
+    assert np.all(np.isfinite(parr.array))
+
+
+def test_non_orthogonal_requires_ab_in_plane():
+    """A tilted c-axis (with a, b in the xy-plane) is supported; an a- or b-axis with a
+    z-component is rejected."""
+    import numpy as np
+    from ase import Atoms
+
+    # a, b in-plane (b skewed), c tilted out of z -> supported (full triclinic)
+    cell = np.array([[4.0, 0, 0], [1.0, 4.0, 0], [0.5, 0.0, 6.0]])
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+    pot = Potential(atoms, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
+    assert not pot.grid.is_orthogonal
+    assert np.all(np.isfinite(pot.build(lazy=False).compute().array))
+
+    # a-axis has a z-component -> not sliceable along the beam -> rejected
+    bad = np.array([[4.0, 0, 0.5], [0.0, 4.0, 0], [0.0, 0.0, 6.0]])
+    atoms_bad = Atoms("C", cell=bad, pbc=True, positions=[(0, 0, 0)])
+    with pytest.raises(NotImplementedError):
+        Potential(atoms_bad, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
+
+
+def test_potential_auto_detects_non_orthogonal():
+    """A non-orthogonal (z-separable) cell builds a skew potential with no flag."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+
+    auto = Potential(atoms, gpts=(60, 60), slice_thickness=c)
+    assert not auto.grid.is_orthogonal  # auto-detected
+    # explicit opt-out restores the legacy orthogonalising behaviour
+    forced_ortho = Potential(atoms, gpts=(60, 60), slice_thickness=c, non_orthogonal=False)
+    assert forced_ortho.grid.is_orthogonal
+
+    # an orthogonal cell is never switched to skew
+    ortho_atoms = Atoms("C", cell=(4, 5, 6), pbc=True, positions=[(0, 0, 0)])
+    assert Potential(ortho_atoms, gpts=(40, 40), slice_thickness=6).grid.is_orthogonal
+
+
+@devices
+@pytest.mark.parametrize("lazy", [False, True])
+def test_skew_finite_potential_built_on_a_device_matches_the_cpu_build(lazy, device):
+    # The skewed finite projection is stamped on the host and copied to the
+    # device, so the device build is the CPU build to rounding. B and N carry
+    # two integral tables; the repetitions put several atoms of each in a slice.
+    atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (2, 1, 1)
+    atoms.pbc = True
+    kwargs = dict(gpts=(50, 25), slice_thickness=1.0, projection="finite")
+    expected = Potential(atoms, device="cpu", **kwargs).build(lazy=False).array
+    potential = Potential(atoms, device=device, **kwargs)
+    assert potential.non_orthogonal
+    built = potential.build(lazy=lazy).compute()
+    assert_array_matches_device(built.array, device)
+    scale = np.abs(expected).max()
+    np.testing.assert_allclose(
+        asnumpy(built.array), expected, rtol=0, atol=1e-6 * scale
+    )
+
+
+def test_tilted_c_axis_matches_orthogonal_supercell():
+    """A crystal with a tilted c-axis (a, b orthogonal in-plane) is handled by placing
+    the atoms at their true positions and propagating straight -- no tilt ramp -- so it
+    reproduces the orthogonalised supercell of the same crystal exactly (this is ordinary
+    multislice on the true atomic positions, hence exact at any tilt angle)."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    L, cz = 4.0, 4.0
+    basis = [(0.1, 0.15, 0.05), (0.6, 0.55, 0.45)]
+    # c tilted in x by L/2 (a 26.6 deg tilt); wraps to an orthogonal cell after 2 layers
+    prim = Atoms(
+        "SiO", cell=[[L, 0, 0], [0, L, 0], [L / 2, 0, cz]], pbc=True,
+        scaled_positions=basis,
+    )
+
+    tilted = prim * (1, 1, 2)
+    pot_tilted = abtem.Potential(tilted, gpts=(128, 128), slice_thickness=0.5)
+    assert pot_tilted.grid.is_orthogonal  # a, b orthogonal -> plain orthogonal grid
+    assert pot_tilted.cell is None  # no spurious skew cell carried in the metadata
+    w_tilted = abtem.PlaneWave(energy=100e3).multislice(pot_tilted).compute().array
+
+    ortho = prim * (1, 1, 2)
+    ortho.set_cell([[L, 0, 0], [0, L, 0], [0, 0, 2 * cz]])
+    ortho.wrap()
+    w_ortho = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(ortho, gpts=(128, 128), slice_thickness=0.5)
+    ).compute().array
+
+    rel = np.max(np.abs(np.asarray(w_tilted) - np.asarray(w_ortho))) / np.max(
+        np.abs(np.asarray(w_ortho))
+    )
+    # identical up to float32 rounding (the two paths build the same potential); in
+    # float64 this drops to ~1e-15
+    assert rel < 1e-5
+
+
+def test_finite_projection_supports_skew_grid():
+    """``projection='finite'`` integrates the radial potential per atom on a
+    metric-aware (Cartesian) pixel grid for non-orthogonal cells. Two checks:
+    (i) the build succeeds and conserves atoms (the in-plane-integrated potential
+    matches the infinite-projection result up to the projection-method difference,
+    same level as on an orthogonal grid); (ii) hexagonal symmetry: the structure
+    factors of symmetry-equivalent reflections agree to numerical precision."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a = 2.46  # graphene-like in-plane spacing
+    hexcell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, 3.35],
+    ]
+    atoms = Atoms(
+        "C2", cell=hexcell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+    fin = np.asarray(
+        abtem.Potential(atoms, gpts=(80, 80), slice_thickness=3.35,
+                        projection="finite").build(lazy=False).compute().array
+    )[0]
+    inf = np.asarray(
+        abtem.Potential(atoms, gpts=(80, 80), slice_thickness=3.35,
+                        projection="infinite").build(lazy=False).compute().array
+    )[0]
+
+    assert np.all(np.isfinite(fin))
+
+    # atom conservation: the integrated potential agrees with the infinite-projection
+    # result (which uses the analytic structure factor) -- to the same ~1e-3 level seen
+    # on an orthogonal grid (the residual is the projection-method difference, not skew)
+    sv = np.stack([np.array(hexcell)[0, :2] / 80, np.array(hexcell)[1, :2] / 80])
+    pix_area = abs(np.linalg.det(sv))
+    assert abs(fin.sum() - inf.sum()) / inf.sum() < 5e-3
+
+    # hexagonal symmetry of the structure factor: F(1, 0) == F(0, 1) == F(-1, -1)
+    F = np.fft.fft2(fin)
+    f10 = np.abs(F[1, 0])
+    f01 = np.abs(F[0, 1])
+    f_11 = np.abs(F[-1, -1])
+    # hexagonal symmetry holds to float32 rounding (~1e-7); float64 would give ~1e-15
+    assert abs(f10 - f01) / f10 < 1e-5
+    assert abs(f10 - f_11) / f10 < 1e-5
+
+
+def test_finite_projection_tilted_c_axis():
+    """``projection='finite'`` on a crystal with a tilted c-axis runs end-to-end and
+    matches an orthogonalised supercell of the same crystal."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    L, cz = 4.0, 4.0
+    basis = [(0.1, 0.15, 0.05), (0.6, 0.55, 0.45)]
+    # c tilted in x by L/2 (26.6 deg); wraps to an orthogonal cell after 2 layers
+    prim = Atoms(
+        "SiO", cell=[[L, 0, 0], [0, L, 0], [L / 2, 0, cz]], pbc=True,
+        scaled_positions=basis,
+    )
+    tilted = prim * (1, 1, 2)
+    w_tilted = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(tilted, gpts=(128, 128), slice_thickness=0.25,
+                        projection="finite")
+    ).compute().array
+
+    ortho = prim * (1, 1, 2)
+    ortho.set_cell([[L, 0, 0], [0, L, 0], [0, 0, 2 * cz]])
+    ortho.wrap()
+    w_ortho = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(ortho, gpts=(128, 128), slice_thickness=0.25,
+                        projection="finite")
+    ).compute().array
+
+    rel = np.max(np.abs(np.asarray(w_tilted) - np.asarray(w_ortho))) / np.max(
+        np.abs(np.asarray(w_ortho))
+    )
+    # the two paths build the same potential up to float32 rounding
+    assert rel < 1e-5
+
+
+def test_all_modes_agree_on_skew_grid_bragg_intensities():
+    """Cross-algorithm consistency check: on a non-orthogonal (hex) cell, the four
+    multislice/dynamical engines must agree on the plane-wave Bragg intensities to
+    their respective convergence levels: Bloch (reference), Fourier multislice,
+    real-space finite-difference multislice, and the (0, 0) plane-wave column of the
+    PRISM S-matrix.
+
+    The check sweeps *every* Bloch reflection with l = 0 and intensity above a
+    threshold (~20 reflections), not a hand-picked few. With c perpendicular to ab,
+    the Bloch reciprocal basis vectors b_i_3D have zero z-components, so
+    Bloch hkl = (h, k, 0) corresponds one-to-one to the multislice FFT pixel
+    (h, k) -- a clean per-reflection comparison."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.multislice import FourierMultislice, RealSpaceMultislice
+    from abtem.parametrizations import LobatoParametrization
+
+    a, c = 2.46, 3.35
+    hexcell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, c],
+    ]
+    hexC = Atoms(
+        "C2", cell=hexcell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+    # Sized for speed: 8 cells, 0.04 A sampling, 0.2 A slices and g_max = 8 / A
+    # (~1000 Bloch beams; 2356 at g_max = 12). Measured Bloch-vs-multislice max/mean
+    # relative errors 1.1e-2/6.8e-3 (bounds 5e-2/2e-2), real-space vs Fourier
+    # 2.5e-3 (bound 2e-2), hex mirror 4e-5 (bound 5e-4): no closer to the bounds
+    # than the 12-cell, 0.03 A, 0.1 A, g_max = 12 problem this replaces.
+    energy, nc = 100e3, 8
+
+    # Bloch reference (matched parametrization, no DW)
+    sf = abtem.StructureFactor(
+        hexC, g_max=8.0, parametrization="lobato", centering="auto",
+        thermal_sigma=0.0,
+    )
+    bw = abtem.BlochWaves(sf, energy=energy, sg_max=0.6)
+    hkl = np.asarray(bw.hkl)
+    Ib = np.asarray(
+        bw.calculate_diffraction_patterns(nc * c, lazy=False).array
+    ).ravel()
+
+    # multislice potential matched to the Bloch structure factor
+    param = LobatoParametrization(sigmas={"C": 0.0})
+    atoms = hexC * (1, 1, nc)
+    pot = abtem.Potential(
+        atoms, sampling=0.04, slice_thickness=0.2,
+        projection="finite", parametrization=param,
+    )
+    N0, N1 = pot.gpts
+    assert not pot.grid.is_orthogonal
+    # built once and shared by the three engines below, which would otherwise each
+    # rebuild it
+    pot = pot.build(lazy=False)
+
+    def bragg(w):
+        I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
+        return I / I.sum()
+
+    wF = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=FourierMultislice()
+    ).compute().array
+    IF = bragg(wF)
+    wR = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=RealSpaceMultislice()
+    ).compute().array
+    IR = bragg(wR)
+    sm = abtem.SMatrix(
+        potential=pot, energy=energy, semiangle_cutoff=1.0,
+        interpolation=1, downsample=False,
+    ).build(lazy=False)
+    wv = np.asarray(sm.wave_vectors)
+    idx0 = int(np.argmin(np.linalg.norm(wv, axis=1)))
+    wP = np.asarray(sm.array)[idx0] * (np.prod(pot.gpts) / np.prod(sm.interpolation))
+    IP = bragg(wP)
+
+    # comprehensive sweep: take every Bloch reflection with l = 0 and intensity
+    # above a threshold (so we ignore noise-level reflections where any relative
+    # error is dominated by discretisation noise). For each, look up the MS
+    # intensity at FFT pixel (h, k).
+    threshold = 1e-4
+    in_plane = (hkl[:, 2] == 0) & (Ib > threshold) & (np.abs(hkl[:, 0]) < N0 // 2) & (
+        np.abs(hkl[:, 1]) < N1 // 2
+    )
+    sel_hkl = hkl[in_plane]
+    sel_I = Ib[in_plane]
+    assert len(sel_hkl) >= 15, (
+        f"want at least 15 in-plane reflections for a comprehensive sweep; "
+        f"got {len(sel_hkl)}"
+    )
+
+    # Bloch vs each multislice variant: per-reflection rel errors. Bounds reflect
+    # the fact that weak / high-g reflections naturally pick up more
+    # discretisation error than strong / low-g ones (relative error inflates as
+    # the absolute intensity shrinks).
+    for I, name in [
+        (IF, "Fourier MS"),
+        (IR, "Real-space FD"),
+        (IP, "PRISM S(0,0)"),
+    ]:
+        rels = []
+        for h, k, _ in sel_hkl:
+            ms_val = float(I[int(h) % N0, int(k) % N1])
+            bloch_val = float(sel_I[np.all(sel_hkl == [h, k, 0], axis=1)][0])
+            rels.append(abs(ms_val - bloch_val) / bloch_val)
+        rels = np.array(rels)
+        worst_idx = int(np.argmax(rels))
+        worst_hkl = sel_hkl[worst_idx]
+        # every reflection agrees to a few percent; the mean and median are much
+        # smaller (only the high-g tail pushes the worst case up)
+        assert rels.max() < 5e-2, (
+            f"{name} disagrees with Bloch on {tuple(worst_hkl)}: "
+            f"rel={rels.max():.2e} (worst of {len(rels)} reflections)"
+        )
+        assert rels.mean() < 2e-2, (
+            f"{name} mean rel error {rels.mean():.2e} on {len(rels)} reflections"
+        )
+
+    # inter-MS-variant consistency on the full FFT pattern (every pixel with
+    # intensity above the physical-reflection threshold; very weak pixels near
+    # the float32 noise floor are excluded). Fourier MS == PRISM(0,0)-column to
+    # float precision (same path); real-space FD agrees within its FD
+    # discretisation.
+    inter_threshold = 3e-4
+    mask = IF > inter_threshold
+    rel_FP = np.abs(IF[mask] - IP[mask]) / IF[mask]
+    rel_FR = np.abs(IF[mask] - IR[mask]) / IF[mask]
+    assert mask.sum() >= 15, f"want at least 15 above-threshold pixels; got {mask.sum()}"
+    # bit-identical in float64 (~1e-15); float32 precision floor sets the bound
+    assert rel_FP.max() < 1e-3, (
+        f"Fourier MS vs PRISM disagrees on {int(mask.sum())} pixels: "
+        f"max rel={rel_FP.max():.2e}"
+    )
+    # real-space FD discretisation level on physical reflections
+    assert rel_FR.max() < 2e-2, (
+        f"Real-space FD vs Fourier MS disagrees on {int(mask.sum())} pixels: "
+        f"max rel={rel_FR.max():.2e}, mean={rel_FR.mean():.2e}"
+    )
+    assert rel_FR.mean() < 1e-2, (
+        f"Real-space FD vs Fourier MS mean rel error {rel_FR.mean():.2e}"
+    )
+
+    # hexagonal-grid reflection symmetry preserved across modes: (h, k) <-> (k, h)
+    # (mirror across the a/b bisector). Inversion (Friedel) symmetry is implicit
+    # in the real potential.
+    for I_mode in (IF, IR, IP):
+        for h, k in [(1, 0), (2, 0), (2, 1), (3, 0), (3, 1), (3, 2)]:
+            I1 = float(I_mode[h % N0, k % N1])
+            I2 = float(I_mode[k % N0, h % N1])
+            if I1 < threshold:
+                continue
+            assert abs(I1 - I2) / I1 < 5e-4, (
+                f"hex mirror (h,k)<->(k,h) breaks at ({h},{k}): {I1:.5f} vs {I2:.5f}"
+            )
+
+
+def test_all_modes_agree_on_fully_triclinic_cell():
+    """A fully triclinic cell -- all three lattice vectors mutually non-orthogonal:
+    a, b non-orthogonal in the xy-plane AND c with non-zero in-plane components in
+    BOTH x and y -- runs end-to-end through every engine and the three multislice
+    variants agree. This exercises every skew code path at once: the metric-aware
+    propagator/integrator on the in-plane (a, b) parallelogram, the tilted-c atom
+    wrap, the finite projection on a non-orthogonal grid, and the PRISM S-matrix
+    construction on a fully triclinic supercell.
+
+    The Bloch engine is NOT compared here -- and not because it's wrong, but because
+    for a fully triclinic crystal viewed along Cartesian +z the 3D reciprocal basis
+    vectors ``b_i`` have non-zero z-components (b1_3D has z = -a3_xy/V etc.), so
+    Bloch ``hkl = (h, k, 0)`` is in general off the Ewald sphere and does NOT
+    correspond to the multislice in-plane pixel ``(h, k)`` (which is at g_xy =
+    h*b1_2D + k*b2_2D, the *xy parts* of b1_3D, b2_3D). For each in-plane g_xy the
+    multislice intensity is physically a sum over the entire tower ``(h, k, l)`` of
+    3D reflections projecting onto that g_xy, not a single Bloch reflection. A fair
+    Bloch comparison would require summing over l. The in-plane-skew and orthogonal
+    tests (where c is perpendicular to ab so b_i = (b_i_2D, 0) and the indexing is
+    one-to-one) cover the Bloch cross-check."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.multislice import FourierMultislice, RealSpaceMultislice
+    from abtem.parametrizations import LobatoParametrization
+
+    # hex a, b at 60 deg; c tilted with non-zero cx AND cy -- mutually non-orthogonal
+    a, cz = 2.5, 3.35
+    cell = [
+        [a, 0.0, 0.0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0.0],
+        [0.7, 0.4, cz],
+    ]
+    # confirm no pair is orthogonal
+    c0, c1, c2 = (np.asarray(v) for v in cell)
+    assert abs(c0 @ c1) > 1e-3 and abs(c0 @ c2) > 1e-3 and abs(c1 @ c2) > 1e-3
+
+    triC = Atoms(
+        "C2", cell=cell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+    energy, nc = 100e3, 8
+
+    param = LobatoParametrization(sigmas={"C": 0.0})
+    atoms = triC * (1, 1, nc)
+    # 0.04 A sampling and 0.2 A slices (63 x 63 x 134, was 84 x 84 x 268 at 0.03 A
+    # and 0.1 A): measured 61 above-threshold pixels, Fourier vs PRISM 7.5e-5 (bound
+    # 5e-4), real-space vs Fourier max/mean 8.2e-2/1.2e-2 (bounds 0.10/0.02) -- the
+    # same margins as the larger problem (8.5e-2/1.4e-2).
+    pot = abtem.Potential(
+        atoms, sampling=0.04, slice_thickness=0.2,
+        projection="finite", parametrization=param,
+    )
+    N0, N1 = pot.gpts
+    assert not pot.grid.is_orthogonal, "in-plane grid should be skewed"
+    # built once and shared by the three engines below
+    pot = pot.build(lazy=False)
+
+    def bragg(w):
+        I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
+        return I / I.sum()
+
+    wF = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=FourierMultislice()
+    ).compute().array
+    IF = bragg(wF)
+
+    # the calculation should actually scatter (no silently-dropped atoms)
+    assert IF[0, 0] < 0.999, "no scattering -- atoms may have been silently dropped"
+    assert IF[0, 0] > 0.5, "unexpectedly thick / strong scattering"
+
+    wR = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=RealSpaceMultislice()
+    ).compute().array
+    IR = bragg(wR)
+
+    sm = abtem.SMatrix(
+        potential=pot, energy=energy, semiangle_cutoff=1.0,
+        interpolation=1, downsample=False,
+    ).build(lazy=False)
+    wv = np.asarray(sm.wave_vectors)
+    idx0 = int(np.argmin(np.linalg.norm(wv, axis=1)))
+    wP = np.asarray(sm.array)[idx0] * (np.prod(pot.gpts) / np.prod(sm.interpolation))
+    IP = bragg(wP)
+
+    # comprehensive sweep: compare the full FFT pattern across every pixel with
+    # intensity above a threshold (not a hand-picked few). This stresses every
+    # spatial frequency the multislice produces.
+    threshold = 1e-5
+    mask = IF > threshold
+    n = int(mask.sum())
+    assert n >= 50, f"want at least 50 above-threshold pixels; got {n}"
+
+    # Fourier MS and PRISM (0, 0) column take the same multislice path -> agreement
+    # at the float precision floor (max over all above-threshold pixels).
+    # 5e-4 (not tighter): the weakest above-threshold pixels sit at the float32
+    # rounding floor, and run-to-run variation (threaded potential-build
+    # summation order, FFTW plan selection) moves them by ~1e-4 relative.
+    rel_FP = np.abs(IF[mask] - IP[mask]) / IF[mask]
+    assert rel_FP.max() < 5e-4, (
+        f"Fourier MS vs PRISM disagrees on {n} pixels: max rel={rel_FP.max():.2e}, "
+        f"mean rel={rel_FP.mean():.2e}"
+    )
+
+    # real-space FD agrees with Fourier MS within its FD discretisation -- the
+    # tilted-c potential adds an in-plane drift between slices that the metric
+    # Laplacian must capture. Fourier MS now uses the true (metric-aware) exact
+    # propagator on a skewed grid rather than silently falling back to the order-1
+    # approximation (see _fresnel_propagator_array), so it is a more accurate
+    # reference than before; the gap below is real-space FD's own discretisation
+    # error on this triclinic cell, no longer partly masked by a correlated error
+    # in the Fourier reference.
+    rel_FR = np.abs(IF[mask] - IR[mask]) / IF[mask]
+    assert rel_FR.max() < 0.10, (
+        f"Real-space FD vs Fourier MS disagrees on {n} pixels: max rel={rel_FR.max():.2e}, "
+        f"mean rel={rel_FR.mean():.2e}"
+    )
+    assert rel_FR.mean() < 0.02, (
+        f"Real-space FD vs Fourier MS mean rel error {rel_FR.mean():.2e} too large"
+    )
+
+
+def test_skew_cell_metadata_survives_reconstruction():
+    """The non-orthogonal cell is stored in metadata and survives reconstruction."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, c = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (1, 1, 3)
+    pot = abtem.Potential(atoms, gpts=(60, 60), slice_thickness=c)
+    exit_waves = abtem.PlaneWave(energy=100e3).multislice(pot).compute()
+
+    assert exit_waves.cell is not None
+    assert "cell" in exit_waves.metadata
+    rebuilt = abtem.Waves.from_array_and_metadata(
+        exit_waves.array,
+        exit_waves.ensemble_axes_metadata + exit_waves.base_axes_metadata,
+        exit_waves.metadata,
+    )
+    assert rebuilt.cell is not None
+    assert np.allclose(rebuilt.cell, exit_waves.cell)
+
+
+def test_skew_supercell_potential_is_periodic():
+    """A skew supercell must keep all atoms (no boundary atom dropped by wrap) and the
+    projected potential must be primitive-periodic."""
+    import numpy as np
+    from ase import Atoms
+
+    a, cz, rep = 3.0, 2.0, 6
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (rep, rep, 1)
+    pot = Potential(atoms, gpts=(240, 240), slice_thickness=cz)
+
+    assert len(pot.get_sliced_atoms().atoms) == rep * rep  # no atom dropped
+    V = np.asarray(pot.build(lazy=False).compute().array[0])
+    n = 240 // rep  # one primitive period in pixels
+    assert np.allclose(V, np.roll(V, n, axis=0), atol=1e-6 * np.abs(V).max())
+    assert np.allclose(V, np.roll(V, n, axis=1), atol=1e-6 * np.abs(V).max())
+
+
+def test_frozen_phonons_skew():
+    """Frozen phonons work on a non-orthogonal cell and the configurations differ."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, 4)
+    fp = abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=0)
+    pot = abtem.Potential(fp, gpts=(96, 96), slice_thickness=cz)
+    assert not pot.grid.is_orthogonal
+    V = np.asarray(pot.build(lazy=False).compute().array)
+    assert V.shape[0] == 3 and np.all(np.isfinite(V))
+    assert not np.allclose(V[0], V[1])  # thermal disorder breaks periodicity
+
 # --- depth_profile tests ---
 
 
@@ -1907,6 +2483,7 @@ class TestSliceIndexedAtomsWrapping:
                     slice_thickness=0.5,
                     periodic=False,
                     device=device,
+                    non_orthogonal=False,
                     **integrator,
                 )
                 .build(lazy=False)
@@ -1993,6 +2570,7 @@ class TestSliceIndexedAtomsWrapping:
                     slice_thickness=0.5,
                     periodic=periodic,
                     integrator=integrators[integrator](),
+                    non_orthogonal=False,
                 )
                 .build()
                 .compute()
@@ -2016,16 +2594,22 @@ class TestSliceIndexedAtomsWrapping:
                 err_msg=str(hexagonal.symbols),
             )
 
-    def test_non_orthogonal_cell_raises_before_any_wrapping(self):
+    def test_cell_with_ab_out_of_plane_raises_before_any_wrapping(self):
+        """An in-plane-skewed (but still ab-in-plane) cell is valid input --
+        see test_skew_potential_non_orthogonal_cell, which builds an
+        "infinite" projection Potential (i.e. through this class) on exactly
+        that kind of cell. What must still be rejected is an a- or b-axis
+        with a z-component, which wrap_and_snap_atoms' np.diag(atoms.cell)
+        would otherwise silently ignore rather than raise for."""
         import ase
 
         from abtem.slicing import SliceIndexedAtoms
 
         atoms = ase.Atoms(
-            "B", positions=[[1.0, 1.0, 1.0]], cell=[[4, 0, 0], [1, 4, 0], [0, 0, 4]],
+            "B", positions=[[1.0, 1.0, 1.0]], cell=[[4, 0, 0.5], [0, 4, 0], [0, 0, 4]],
             pbc=True,
         )
-        with pytest.raises(RuntimeError, match="orthogonal"):
+        with pytest.raises(RuntimeError, match="xy-plane"):
             SliceIndexedAtoms(atoms, slice_thickness=1.0)
 
 
@@ -2191,7 +2775,9 @@ def test_charge_density_potential_default_box_follows_the_plane_and_cell():
     # A non-orthogonal cell: the default box is its best orthogonal cell.
     skewed = graphene(vacuum=2.0)
     default = tuple(best_orthogonal_cell(skewed.cell))
-    assert ChargeDensityPotential(skewed, rho, **GRID).box == pytest.approx(default)
+    assert ChargeDensityPotential(
+        skewed, rho, non_orthogonal=False, **GRID
+    ).box == pytest.approx(default)
     assert ChargeDensityPotential(skewed, rho, box=default, **GRID).box == (
         pytest.approx(default)
     )
@@ -2544,7 +3130,12 @@ def test_non_periodic_auto_grid_follows_the_atoms_cut_out_of_the_default_box(
     # With no box, a non-periodic potential cuts its default box out of the
     # repeated structure, as it cuts a box it is given.
     potential = abtem.Potential(
-        atoms, periodic=False, origin=origin, sampling="auto", slice_thickness="auto"
+        atoms,
+        periodic=False,
+        origin=origin,
+        sampling="auto",
+        slice_thickness="auto",
+        non_orthogonal=False,
     )
     reference = abtem.Potential(
         cut_cell(atoms, cell=potential.box, origin=origin),
@@ -2780,7 +3371,7 @@ def test_default_box_given_explicitly_is_not_checked():
     # The default box of this supercell is itself reached by a strain of 1.4 %,
     # 0.7 % and a shear of 0.11; it is the default, however it is spelled.
     atoms = graphene(formula="BN", a=2.5, vacuum=2.0) * (3, 1, 1)
-    default = abtem.Potential(atoms, sampling=0.2).box
+    default = abtem.Potential(atoms, sampling=0.2, non_orthogonal=False).box
     assert abs(100 * (default[0] / 7.5 - 1)) > 0.5
 
     _, records = _construct(atoms, box=default, sampling=0.2)
@@ -2880,6 +3471,7 @@ def test_charge_density_potential_reports_its_default_box_once():
                 sampling=0.2,
                 slice_thickness=1.0,
                 repetitions=repetitions,
+                non_orthogonal=False,
             )
             potential.build(lazy=False)
             potential.build(lazy=True).compute()
@@ -2890,6 +3482,10 @@ def test_charge_density_potential_reports_its_default_box_once():
 
 
 STRAIN_GRID = dict(sampling=0.2, slice_thickness=1.0)
+
+# The default box of a hexagonal cell, which a potential otherwise builds on the
+# skewed grid of the cell itself.
+ORTHOGONAL = dict(non_orthogonal=False)
 
 
 # Hexagonal BN repeated along x, as (nx, ny, 1), with the default box its
@@ -2921,7 +3517,9 @@ def _construct_chosen(builder, *args, **kwargs):
 
 def test_default_box_of_bn_repeated_three_times_warns_with_the_numbers():
     atoms = _bn((3, 1, 1))
-    potential, records = _construct_chosen(abtem.Potential, atoms, **STRAIN_GRID)
+    potential, records = _construct_chosen(
+        abtem.Potential, atoms, **STRAIN_GRID, **ORTHOGONAL
+    )
 
     assert len(records) == 1
     assert issubclass(records[0].category, UserWarning)
@@ -2950,10 +3548,14 @@ def test_default_box_warns_once_when_it_strains_the_atoms():
     # repeat along x and y differently and still make an exact orthogonal
     # supercell.
     for repetitions in STRAINED:
-        _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
+        _, records = _construct_chosen(
+            abtem.Potential, _bn(repetitions), **STRAIN_GRID, **ORTHOGONAL
+        )
         assert len(records) == 1, repetitions
     for repetitions in EXACT:
-        _, records = _construct_chosen(abtem.Potential, _bn(repetitions), **STRAIN_GRID)
+        _, records = _construct_chosen(
+            abtem.Potential, _bn(repetitions), **STRAIN_GRID, **ORTHOGONAL
+        )
         assert records == [], repetitions
 
 
@@ -2969,7 +3571,7 @@ def test_non_periodic_default_box_is_silent():
 @ignore_strain_warning
 def test_box_given_by_the_user_is_not_reported_as_chosen_by_abtem():
     atoms = _bn((3, 1, 1))
-    default = abtem.Potential(atoms, **STRAIN_GRID).box
+    default = abtem.Potential(atoms, **STRAIN_GRID, **ORTHOGONAL).box
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
         abtem.Potential(atoms, box=(default[0] * 1.01, default[1], 4.0), **STRAIN_GRID)
@@ -2989,7 +3591,11 @@ def test_orthogonalize_cell_without_a_box_does_not_warn():
 _GPAW_FAMILY = [
     pytest.param(
         lambda atoms: ChargeDensityPotential(
-            atoms, _charge_density(), sampling=0.2, slice_thickness=1.0
+            atoms,
+            _charge_density(),
+            sampling=0.2,
+            slice_thickness=1.0,
+            non_orthogonal=False,
         ),
         id="charge-density",
     ),
@@ -3027,6 +3633,7 @@ def test_charge_density_repetitions_are_judged_by_the_repeated_cell():
             sampling=0.2,
             slice_thickness=1.0,
             repetitions=repetitions,
+            non_orthogonal=False,
         )
         assert len(records) == 1, repetitions
         assert "[[1, 0, 0], [1, " in str(records[0].message), repetitions
@@ -3083,7 +3690,7 @@ def test_orthogonalized_cell_can_be_rotated_to_the_plane(plane):
 )
 def test_gpaw_family_does_not_report_its_default_box_when_it_is_given(build):
     atoms = _bn((3, 1, 1))
-    default = abtem.Potential(atoms, **STRAIN_GRID).box
+    default = abtem.Potential(atoms, **STRAIN_GRID, **ORTHOGONAL).box
     _, records = _construct_chosen(build, atoms, default)
     assert records == []
 
@@ -3216,3 +3823,122 @@ def test_repeated_atoms_and_crystal_potential_have_the_same_slice_count():
     crystal = CrystalPotential(unit, repetitions=(1, 1, 3))
     assert unit.num_slices == 12
     assert repeated.num_slices == crystal.num_slices == 36
+
+
+def _hexagonal_graphene(a=2.46, c=6.0):
+    import numpy as np
+    from ase import Atoms
+
+    return Atoms(
+        "C2",
+        cell=[
+            [a, 0, 0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+            [0, 0, c],
+        ],
+        pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+@pytest.mark.parametrize("order", [1, 2, "exact"])
+def test_fresnel_propagator_orders_work_on_a_skewed_grid(order):
+    """Every Fourier propagator order depends only on `k2`, never on `kx` and `ky`
+    separately -- the order-2 term has been `|k|^4` since the cross-term fix in #302,
+    not the separable `kx^4 + ky^4` it once was. They therefore all generalise to a
+    skewed grid unchanged once `k2` carries the reciprocal metric, and order 2 in
+    particular must not be rejected there.
+    """
+    import numpy as np
+
+    import abtem
+    from abtem.core.energy import energy2wavelength
+    from abtem.multislice import _fresnel_propagator_array
+
+    energy = 100e3
+    grid = abtem.Potential(
+        _hexagonal_graphene(), gpts=(128, 128), slice_thickness=0.5
+    ).grid
+    assert not grid.is_orthogonal
+
+    array = _fresnel_propagator_array(0.5, grid, energy, "cpu", order=order)
+    assert np.all(np.isfinite(array))
+
+    # Free-space propagation is unitary for propagating components. Only `exact`
+    # models evanescent ones, where |f| < 1 on purpose, so restrict the check.
+    propagating = energy2wavelength(energy) ** 2 * grid.k_squared(np) <= 1.0
+    assert np.abs(np.abs(array[propagating]) - 1.0).max() < 1e-5
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+@pytest.mark.parametrize("orthogonal", [True, False], ids=["orthogonal", "skewed"])
+def test_order_2_propagator_beats_order_1_on_either_grid(orthogonal):
+    """Order 2 exists to be a better truncation than order 1, and must earn that on a
+    skewed grid too. Were the reciprocal metric not threaded through, the extra `|k|^4`
+    term would be evaluated against the wrong `k2` and could make things worse.
+    """
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.antialias import antialias_aperture
+    from abtem.multislice import _fresnel_propagator_array
+
+    a, c = 2.46, 6.0
+    atoms = (
+        Atoms("C", cell=(a, a, c), pbc=True, scaled_positions=[(0, 0, 0)])
+        if orthogonal
+        else _hexagonal_graphene(a, c)
+    )
+    grid = abtem.Potential(atoms, gpts=(128, 128), slice_thickness=0.5).grid
+    assert grid.is_orthogonal is orthogonal
+
+    arrays = {
+        order: _fresnel_propagator_array(0.5, grid, 100e3, "cpu", order=order)
+        for order in ("exact", 1, 2)
+    }
+    # Compare only where the antialias aperture passes. Beyond it the truncations are
+    # meaningless and both saturate at |exp(ia) - exp(ib)| = 2.
+    aperture = (
+        antialias_aperture(grid._valid_gpts, grid._valid_sampling, np, cell=grid.cell)
+        > 0
+    )
+    error_1 = np.abs(arrays[1][aperture] - arrays["exact"][aperture]).max()
+    error_2 = np.abs(arrays[2][aperture] - arrays["exact"][aperture]).max()
+
+    assert error_2 < error_1
+
+
+@pytest.mark.filterwarnings("ignore:Maximum propagator phase error")
+def test_order_2_multislice_runs_on_a_skewed_cell():
+    """End to end, not just the propagator array: a skewed-cell multislice at order 2
+    must run, and land closer to the exact propagator than order 1 does."""
+    import numpy as np
+
+    import abtem
+    from abtem.multislice import FourierMultislice, multislice_and_detect
+
+    potential = abtem.Potential(
+        _hexagonal_graphene(), gpts=(128, 128), slice_thickness=0.5
+    ).build(lazy=False)
+    assert not potential.grid.is_orthogonal
+
+    exit_waves = {}
+    for order in ("exact", 1, 2):
+        plane_wave = abtem.PlaneWave(energy=100e3)
+        plane_wave.grid.match(potential)
+        result = multislice_and_detect(
+            plane_wave.build(lazy=False),
+            potential,
+            algorithm=FourierMultislice(order=order),
+        )
+        if isinstance(result, list):
+            result = result[0]
+        exit_waves[order] = np.asarray(result.array)
+
+    error_1 = np.abs(exit_waves[1] - exit_waves["exact"]).max()
+    error_2 = np.abs(exit_waves[2] - exit_waves["exact"]).max()
+
+    assert np.all(np.isfinite(exit_waves[2]))
+    assert error_2 < error_1
