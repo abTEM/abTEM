@@ -33,7 +33,7 @@ from abtem.core.grid import (
     spatial_frequencies,
 )
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
-from abtem.parametrizations import validate_parametrization
+from abtem.parametrizations import PengParametrization, validate_parametrization
 
 if cp is not None:
     from abtem.core._cuda import (
@@ -368,99 +368,43 @@ def _sinc_on_device(gpts, sampling, device, device_key):
         return sinc(gpts, sampling, "gpu")
 
 
-# The largest scale-relative deviation a Gaussian-form parametrization may show
-# when rebuilt from its own parameters. Peng, the only one abTEM ships, reaches
-# 1.8e-07 at float32 and 1.8e-16 at float64 over all 98 elements it covers on a
-# 128^2 grid; the nearest rejection, Kirkland, is 0.275, and Lobato is 2.3-3.8.
-# Three decades of headroom above the former and three below the latter.
+# Largest scale-relative deviation between a Gaussian-form parametrization and
+# the Gaussian sum rebuilt from its own parameters. Peng reaches 1.8e-07 at
+# float32; Kirkland and Lobato are 0.275 and 2.3-3.8.
 _GAUSSIAN_FORM_TOLERANCE = 1e-4
 
 
-def _validate_gaussian_form(parametrization, symbol: str, gpts, sampling):
-    """Reject a parametrization that is not a superposition of Gaussians.
+def _check_gaussian_form(parametrization, symbol: str, gpts, sampling):
+    """Raise if the parametrization's own projected scattering factor is not the
+    Gaussian sum of its ``scaled_parameters`` on the grid about to be used.
 
-    ``gaussian_parametrization`` is documented as requiring that form and
-    nothing checked it: ``gaussian_projected_scattering_factors`` evaluates
-    ``a exp(-b k^2)`` on whatever ``(2, n)`` array it is handed, so Lobato --
-    same shape, different functional form -- produced a potential whose plane
-    integral is 3.3x too large for carbon and 4.8x for silicon, finite
-    everywhere.
-
-    The test is functional rather than a name check: rebuild the scattering
-    factor from the parameters as a Gaussian sum and compare with the
-    parametrization's own.
-
-    **On the grid the call is about to use**, not on a fixed window. An earlier
-    version sampled ``linspace(0.01, 4.0, 32)``, which covers 2.3 % of the k^2
-    a 128^2 build evaluates and 0.1 % of a 512^2 one -- and 32 points across
-    that window sit 0.13 apart, so a feature narrower than that fell between
-    them as well. Both holes were reachable: a Peng subclass carrying a bump at
-    k^2 = 20, or one between two sample points, passed the check and built a
-    potential several per cent to tens of per cent wrong. Using the real grid
-    costs nothing, since ``gaussian_projected_scattering_factors`` computes it
-    one call later.
-
-    Both sides are evaluated at the configured precision. Mixing them made the
-    verdict depend on ``abtem.config``: ``scaled_parameters`` is float64 while
-    ``Parametrization._get_function`` casts to ``get_dtype``, so the same
-    parametrization could be accepted at float64 and rejected at float32.
-
-    Checked **per element, for the element actually being used**, not once at
-    construction for a fixed one. A first version validated only carbon, which
-    rejected the shipped ``peng_ionic.json`` (all ions, no carbon) and let a
-    parametrization whose carbon entry is sound but whose silicon entry is not
-    through silently.
-
-    This also rejects a parametrization whose ``scaled_parameters`` and whose
-    own scattering-factor function disagree about the number of terms -- which
-    is what Peng does if its parameter table is extended past five, because
-    ``scattering_factor_k2`` is hardcoded to five. That rejection is wanted:
-    the extra Gaussians would be added to the field while ``get_corrections``
-    and ``cutoff`` still saw five.
+    The class check in ``GaussianProjectionIntegrals`` admits any Peng subclass,
+    including one whose function is not Gaussian-form or whose table has a
+    different number of terms from the function. Both sides are evaluated at the
+    configured precision, so the verdict does not depend on it.
     """
     fp_dtype = get_dtype(complex=False)
-    try:
-        parameters = parametrization.scaled_parameters(
-            symbol, "projected_scattering_factor"
-        )
-        own_function = parametrization.projected_scattering_factor(symbol)
-    except Exception as exc:  # noqa: BLE001 -- re-raised with context
-        raise ValueError(
-            f"{type(parametrization).__name__} cannot provide a projected "
-            f"scattering factor for {symbol!r}, so it cannot be used as "
-            "gaussian_parametrization"
-        ) from exc
-
-    parameters = np.asarray(parameters, dtype=fp_dtype)
-    if parameters.ndim != 2 or parameters.shape[0] != 2:
-        raise ValueError(
-            f"{type(parametrization).__name__} is not a superposition of "
-            f"Gaussians for {symbol!r}: expected (2, n) amplitude/width "
-            f"parameters, got {parameters.shape}"
-        )
-
+    parameters = np.asarray(
+        parametrization.scaled_parameters(symbol, "projected_scattering_factor"),
+        dtype=fp_dtype,
+    )
     k, _ = polar_spatial_frequencies(gpts, sampling)
     k2 = np.asarray(k, dtype=fp_dtype) ** 2.0
-    own = np.asarray(own_function(k2), dtype=fp_dtype)
-    reconstructed = (
-        parameters[0][:, None, None] * np.exp(-parameters[1][:, None, None] * k2[None])
-    ).sum(0)
-
-    # Scale-relative, not np.allclose: these span many orders of magnitude
-    # across the grid, and at large k^2 both sides are ~0, where a per-element
-    # relative tolerance compares noise with noise.
-    deviation = float(np.abs(reconstructed - own).max() / np.abs(own).max())
+    own = np.asarray(
+        parametrization.projected_scattering_factor(symbol)(k2), dtype=fp_dtype
+    )
+    gaussians = parameters[0][:, None, None] * np.exp(
+        -parameters[1][:, None, None] * k2
+    )
+    # Scale-relative: at large k^2 both sides are ~0 and a per-element relative
+    # tolerance compares noise with noise.
+    deviation = float(np.abs(gaussians.sum(0) - own).max() / np.abs(own).max())
     if not deviation <= _GAUSSIAN_FORM_TOLERANCE:
         raise ValueError(
-            f"{type(parametrization).__name__} is not a superposition of "
-            f"Gaussians for {symbol!r}: rebuilding its projected scattering "
-            "factor from its own parameters as a sum of Gaussians does not "
-            f"reproduce it on a {tuple(gpts)} grid (max deviation "
-            f"{deviation:.3g} of peak, tolerance "
-            f"{_GAUSSIAN_FORM_TOLERANCE:g}). gaussian_parametrization requires "
-            "a Gaussian-form parametrization such as Peng, and its parameter "
-            "table must have the same number of terms its own "
-            "scattering-factor function uses."
+            f"{type(parametrization).__name__} is not a superposition of Gaussians "
+            f"for {symbol!r}: its projected scattering factor differs from the "
+            f"Gaussian sum of its parameters by {deviation:.3g} of the peak "
+            f"(tolerance {_GAUSSIAN_FORM_TOLERANCE:g})"
         )
 
 
@@ -473,9 +417,11 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         correcting the dependence of the potential close to the nuclear core.
         Default is the Lobato parametrization.
     gaussian_parametrization : str or Parametrization, optional
-        The Gaussian radial potential parametrization to integrate. Must be
-        parametrization described by a superposition of Gaussians. Default is the Peng
-        parametrization.
+        The Gaussian radial potential parametrization to integrate. Must be a
+        :class:`~abtem.parametrizations.PengParametrization` (or a subclass of it)
+        whose projected scattering factor is a superposition of Gaussians, as
+        built from its ``scaled_parameters``; other parametrizations raise a
+        ValueError. Default is the Peng parametrization.
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the
         potential [eV / e]. Default is 1e-3.
@@ -489,18 +435,10 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     added to the one slice the atom's centre falls in.
 
     Summed over slices the two terms recover the full projection of
-    ``parametrization`` -- exact up to ``_GAUSSIAN_FORM_TOLERANCE``, not
-    unconditionally. The identity holds only where the Gaussian sum built from
+    ``parametrization``. The identity holds where the Gaussian sum built from
     ``scaled_parameters`` equals the parametrization's own
-    ``projected_scattering_factor``, and the form check bounds their
-    disagreement globally, as ``max|difference| / max|own|``. A discrepancy
-    parked where ``own`` is small relative to the grid's peak therefore costs
-    almost nothing globally while being large locally: a Peng subclass with a
-    bump at k^2 = 150 on a 128^2 grid is accepted at a global deviation of
-    5.5e-05 while differing by 4.8 % locally, leaving the total off by 3.2e-04.
-    For the shipped Peng/Lobato default the disagreement is ~1.8e-07 and the
-    total is exact to that, but a custom ``gaussian_parametrization`` should not
-    read this as an unconditional guarantee.
+    ``projected_scattering_factor``; for Peng they differ by ~1.8e-07 of the
+    peak, and the total is exact to that.
 
     Distribution between slices is a separate matter, and a worse one: it is a
     good approximation only if the difference between the two parametrizations
@@ -538,6 +476,15 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         self._gaussian_parametrization = validate_parametrization(
             gaussian_parametrization
         )
+        # The Gaussians are built from the (2, n) amplitude/width table of
+        # scaled_parameters, which other parametrizations (Lobato) also have
+        # but which they do not evaluate as a Gaussian sum.
+        if not isinstance(self._gaussian_parametrization, PengParametrization):
+            raise ValueError(
+                "gaussian_parametrization must be a superposition of Gaussians, "
+                "such as Peng, got "
+                f"{type(self._gaussian_parametrization).__name__}"
+            )
 
         self._correction_parametrization = validate_parametrization(parametrization)
 
@@ -565,7 +512,8 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
     @property
     def gaussian_parametrization(self):
         """The Gaussian radial potential parametrization that is superposed to build
-        the projected field. Must be a superposition of Gaussians."""
+        the projected field: a :class:`~abtem.parametrizations.PengParametrization`
+        whose projected scattering factor is a superposition of Gaussians."""
         return self._gaussian_parametrization
 
     @property
@@ -593,7 +541,7 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if cached is not None:
             return cached
 
-        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+        _check_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
 
         return self._gaussians.put(
             key,
@@ -608,14 +556,7 @@ class GaussianProjectionIntegrals(_CacheStateMixin, FieldIntegrator):
         if cached is not None:
             return cached
 
-        # Validated here too, not only in get_gaussians. The correction is
-        # short_range - long_range with long_range = gaussian_parametrization,
-        # so a non-Gaussian one yields a plausible-looking array rather than an
-        # error. integrate_on_grid happens to call get_gaussians first, which
-        # would raise before this is reached -- but that is an ordering
-        # accident, and get_corrections is public. Validating both makes the
-        # guarantee a property of the methods rather than of their call order.
-        _validate_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
+        _check_gaussian_form(self._gaussian_parametrization, symbol, gpts, sampling)
 
         return self._corrections.put(
             key,

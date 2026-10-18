@@ -1211,17 +1211,15 @@ class SpectralSlitDetector(BaseDetector):
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The constructor takes the geometry either as corners or as the slit
         # parameters, not both, so a copy (and every lazy block) is rebuilt from
-        # the form it was given in. A detector that did not record its form
-        # (one pickled by an earlier version) is rebuilt from the slit parameters,
-        # which describe the same rectangle in both forms.
-        if getattr(self, "_from_corners", False):
+        # the form it was given in.
+        if self._from_corners:
             exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
         else:
             exclude = exclude + ("corners",)
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
         if "q_max" in kwargs:
             # as given, not q_min + extent, which can differ in the last bit
-            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+            kwargs["q_max"] = self._q_max
         return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
@@ -1298,7 +1296,7 @@ class SpectralSlitDetector(BaseDetector):
             angle=self._angle,
             q_min=self.q_min,
             # as given, like _copy_kwargs: q_min + extent can differ in the last bit
-            q_max=getattr(self, "_q_max", self.q_max),
+            q_max=self._q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
@@ -1890,10 +1888,6 @@ class PixelatedDetector(BaseDetector):
     # once the crop is fixed for the whole ensemble (see _match_ensemble), so a
     # multi-energy ensemble is detected at once.
     _splits_energy_ensembles = False
-
-    # A detector without a recorded ensemble crop, such as one pickled by an
-    # earlier version, has none.
-    _ensemble_gpts: Optional[tuple[int, int]] = None
 
     def __init__(
         self,
