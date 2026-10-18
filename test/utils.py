@@ -1,11 +1,13 @@
+from fractions import Fraction
 from typing import Iterable
 
+import ase.build
 import dask.array as da
 import numpy as np
 import pytest
 from hypothesis import assume
 
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import asnumpy, cp, get_array_module
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.potentials.iam import Potential
 from abtem.waves import Waves
@@ -38,12 +40,26 @@ def ensure_is_tuple(x, length: int = 1):
 def array_is_close(
     a1,
     a2,
-    rel_tol=np.inf,
-    abs_tol=np.inf,
+    rel_tol=None,
+    abs_tol=None,
     check_above_abs=0.0,
     check_above_rel=0.0,
     mask=None,
 ):
+    """Whether ``a1`` is within ``rel_tol`` (relative to ``a2``) and/or
+    ``abs_tol`` of ``a2``. The caller must assert the result.
+
+    At least one tolerance is required. Both used to default to ``inf``,
+    which disables the check it controls, so a call with neither returned
+    True whatever the arrays held.
+    """
+    if rel_tol is None and abs_tol is None:
+        raise TypeError("array_is_close requires rel_tol and/or abs_tol")
+    if rel_tol is None:
+        rel_tol = np.inf
+    if abs_tol is None:
+        abs_tol = np.inf
+
     if mask is not None:
         a1 = a1[mask]
         a2 = a2[mask]
@@ -114,8 +130,8 @@ def assert_scanned_measurement_as_expected(
 
         if detector.to_cpu:
             assert isinstance(measurement.array, np.ndarray)
-        elif waves.device == "gpu":
-            assert isinstance(measurement.array, cp.ndarray)
+        elif waves.device != "cpu":
+            assert_array_matches_device(measurement.array, waves.device)
 
 
 def _gpu_count() -> int:
@@ -134,15 +150,158 @@ def _gpu_count() -> int:
 # turns "hide the GPU" from a way to isolate GPU-specific behaviour into a way
 # to break the suite. `requires_multigpu` below already used _gpu_count(); only
 # this single-GPU gate was left keyed on the import.
+def _mps_is_usable() -> bool:
+    """Whether the Metal (MPS) backend is usable in this process.
+
+    Asking loads it -- PyTorch is imported on the first request for the 'mps'
+    device -- which is what any Metal test is about to do anyway.
+    """
+    from abtem.core import backend
+
+    try:
+        backend.check_mps_is_available()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _accelerator_device():
+    """The non-CPU device this machine actually has, or None.
+
+    CUDA wins where both are present. Its test is _gpu_count() rather than the
+    cupy import, for the reason given just above.
+    """
+    if _gpu_count() >= 1:
+        return "gpu"
+    if _mps_is_usable():
+        return "mps"
+    return None
+
+
+_ACCELERATOR = _accelerator_device()
+
+# The accelerator half of every ["cpu", gpu] device parametrization. It used to
+# be the literal "gpu" (CuPy/CUDA); it now resolves to whichever accelerator the
+# machine actually has, so the same tests exercise Metal on Apple silicon and
+# CUDA elsewhere. A test that needs the device string must compare against
+# `gpu.values[0]`, never the literal "gpu" -- or better, derive the array module
+# from `device` with `get_array_module`.
+#
+# It carries the `gpu` marker, like requires_gpu, so `pytest -m "not gpu"`
+# deselects the accelerator half of these tests on a machine that has one.
+#
+# The torch backend's case is shown as `[torch]`, and carries the markers `torch`,
+# `mps` and `metal`, aliases of each other: the value passed to the test stays
+# "mps", and `-k` matches marker names, so `-k` and `-m` with any of the three
+# select it, and `not` deselects it.
+_TORCH_MARKS = (pytest.mark.torch, pytest.mark.mps, pytest.mark.metal)
+
 gpu = pytest.param(
-    "gpu", marks=pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+    _ACCELERATOR or "gpu",
+    id="torch" if _ACCELERATOR == "mps" else None,
+    marks=(
+        pytest.mark.gpu,
+        pytest.mark.skipif(_ACCELERATOR is None, reason="no gpu or mps"),
+        *(_TORCH_MARKS if _ACCELERATOR == "mps" else ()),
+    ),
 )
+
+
+class _GpuRequirement:
+    """A composite decorator: applies both the wrapped ``skipif`` and a
+    dedicated, condition-free ``pytest.mark.gpu`` alongside it.
+
+    ``conftest.py``'s GPU-worker-grouping hook prefers that marker's mere
+    presence over matching the skipif's ``reason=`` text, since the marker
+    survives a reword of that text where a string match would not. A
+    class (rather than a plain function with attributes bolted on) so
+    ``.marks``/``.mark`` below are properly typed, not dynamic attributes
+    mypy can't see.
+
+    Usable as a bare decorator (``@requires_gpu``) directly; ``.marks``
+    exists for the one place that needs actual ``Mark``-compatible objects
+    instead of a decorator -- ``pytest.param(..., marks=requires_gpu.marks)``
+    -- and ``.mark`` exposes the skipif's own ``Mark`` (reason text
+    included) for ``conftest.py``'s fallback check.
+    """
+
+    def __init__(self, skipif: "pytest.MarkDecorator"):
+        self._skipif = skipif
+        self.marks: tuple["pytest.MarkDecorator", "pytest.MarkDecorator"] = (
+            pytest.mark.gpu,
+            skipif,
+        )
+        self.mark = skipif.mark
+
+    def __call__(self, func):
+        func = self._skipif(func)
+        return pytest.mark.gpu(func)
+
 
 # The same gate as a standalone marker, for tests that are GPU-only rather than
 # parametrized over devices. Several files had hand-rolled `skipif(cp is None)`
 # or a bare `importorskip("cupy")`, both of which ask whether cupy is installed
 # rather than whether a device exists.
-requires_gpu = pytest.mark.skipif(_gpu_count() < 1, reason="no gpu")
+requires_gpu = _GpuRequirement(pytest.mark.skipif(_gpu_count() < 1, reason="no gpu"))
+
+
+# Shared `device`/`lazy` parametrize decorators. Every test file used to
+# spell `@pytest.mark.parametrize("device", ["cpu", gpu])` (or the
+# argument-order-flipped `[gpu, "cpu"]`) inline; that copy-paste had drifted
+# into two orderings with no functional difference. Use these two decorators
+# instead so the order/spelling is uniform everywhere.
+devices = pytest.mark.parametrize("device", [gpu, "cpu"])
+lazy_params = pytest.mark.parametrize("lazy", [True, False])
+
+
+def float64_devices(function):
+    """Parametrize a test over `device` and run it in double precision with the
+    numpy FFT, which the comparisons at 1e-10 of the maximum need (the
+    `float64_config` fixture of conftest.py). The `float64` marker makes the
+    collection hook of conftest.py skip the Metal case."""
+    function = pytest.mark.usefixtures("float64_config")(function)
+    return devices(pytest.mark.float64(function))
+
+
+# A box that strains the atoms is reported by a warning, which only the tests of
+# the warning look at.
+ignore_strain_warning = pytest.mark.filterwarnings(
+    "ignore:The box .* is not a whole supercell:UserWarning"
+)
+
+
+def plane_rotation_by_hand(plane):
+    """The rotation of the atoms to a plane given as a string, written out by hand
+    as a matrix acting on row vectors whose columns are the new axes: the first
+    named axis becomes x, the second y and the remaining axis z. Where that is a
+    reflection ("xz", "yx" and "zy") the axis `_ODD_PLANE_REVERSED_AXIS` of abtem
+    is reversed, so that it is a rotation; the tests follow that one choice."""
+    from abtem.atoms import _ODD_PLANE_REVERSED_AXIS
+
+    unit = {"x": np.eye(3)[0], "y": np.eye(3)[1], "z": np.eye(3)[2]}
+    (remaining,) = set("xyz") - set(plane)
+    rotation = np.stack([unit[plane[0]], unit[plane[1]], unit[remaining]], axis=1)
+    if np.linalg.det(rotation) < 0:
+        rotation[:, _ODD_PLANE_REVERSED_AXIS] *= -1
+    return rotation
+
+
+def rotated_by_hand(atoms, plane):
+    """The atoms of an orthogonal cell as `plane` sees them, rotated by hand with
+    `plane_rotation_by_hand` and wrapped into the rotated cell. Magnetic moments
+    turn with the atoms: the rotation is proper, so these pseudovectors turn as
+    vectors do."""
+    rotation = plane_rotation_by_hand(plane)
+    lengths = np.abs(np.diag(atoms.cell) @ rotation)
+    rotated = ase.Atoms(
+        atoms.numbers, positions=atoms.positions @ rotation, cell=lengths, pbc=True
+    )
+    if atoms.has("magnetic_moments"):
+        rotated.set_array(
+            "magnetic_moments", atoms.get_array("magnetic_moments") @ rotation
+        )
+    rotated.wrap()
+    return rotated
 
 
 try:
@@ -156,10 +315,36 @@ except ImportError:
 # Skip marker for tests that genuinely need to distribute across GPUs: they
 # require both >=2 GPUs and dask-cuda (one worker process per GPU). Use together
 # with `pytest.mark.multigpu` so the suite can be selected with `-m multigpu`.
-requires_multigpu = pytest.mark.skipif(
-    _gpu_count() < 2 or not _HAS_DASK_CUDA,
-    reason="requires >=2 GPUs and dask-cuda",
+#
+# Also applies pytest.mark.gpu via the same _GpuRequirement as requires_gpu
+# above -- requires_multigpu tests already carry the separate `multigpu`
+# marker too (applied explicitly alongside this one wherever it's used),
+# which conftest.py's grouping hook already checks independently of
+# anything here; this is for symmetry with requires_gpu, so a
+# requires_multigpu-only test (if one is ever written without the
+# `multigpu` marker) is still caught.
+requires_multigpu = _GpuRequirement(
+    pytest.mark.skipif(
+        _gpu_count() < 2 or not _HAS_DASK_CUDA,
+        reason="requires >=2 GPUs and dask-cuda",
+    )
 )
+
+
+# Marks for the torch backend, which -- like CUDA -- is exercised whenever the
+# machine has it: Metal on macOS, or torch's CPU device with
+# ABTEM_TORCH__DEVICE=cpu. A list, for `pytestmark = requires_mps`, with the
+# same markers as the `gpu` parameter above.
+requires_mps = [
+    pytest.mark.skipif(
+        not _mps_is_usable(),
+        reason=(
+            "requires the torch backend: Metal on macOS, or "
+            "ABTEM_TORCH__DEVICE=cpu, with PyTorch installed"
+        ),
+    ),
+    *_TORCH_MARKS,
+]
 
 
 def synthetic_transition_potential(
@@ -169,6 +354,7 @@ def synthetic_transition_potential(
     energy: float | None = 100e3,
     n_transitions: int = 2,
     seed: int = 0,
+    device: str = "cpu",
 ):
     """A seeded ``TransitionPotentialArray`` with a synthetic payload.
 
@@ -180,11 +366,14 @@ def synthetic_transition_potential(
     from abtem.core.axes import OrdinalAxis
     from abtem.inelastic.core_loss import TransitionPotentialArray
 
+    xp = get_array_module(device)
     rng = np.random.default_rng(seed)
-    array = (
-        rng.standard_normal((n_transitions, *gpts))
-        + 1j * rng.standard_normal((n_transitions, *gpts))
-    ).astype(np.complex64)
+    array = xp.asarray(
+        (
+            rng.standard_normal((n_transitions, *gpts))
+            + 1j * rng.standard_normal((n_transitions, *gpts))
+        ).astype(np.complex64)
+    )
     return TransitionPotentialArray(
         Z=Z,
         array=array,
@@ -193,3 +382,149 @@ def synthetic_transition_potential(
         ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
         metadata={"Z": Z, "n": 1, "l": 0},
     )
+
+
+def to_host_array(measurement):
+    """The array of a measurement, wave function, or bare array, on the host.
+
+    Detectors return host arrays by default, but reductions to wave functions
+    and their derived measurements may stay on the device (and can be dask-
+    or cupy-backed), so cross-device/laziness comparisons should go through
+    this rather than each test reimplementing the unwrap-then-convert dance.
+    """
+    array = measurement.array if hasattr(measurement, "array") else measurement
+    if isinstance(array, da.core.Array):
+        array = array.compute()
+    return asnumpy(array)
+
+
+def _to_host_array_object(obj):
+    """A computed host-memory copy of ``obj``.
+
+    ``to_cpu`` first, since it returns a new object: ``compute`` works in
+    place and would otherwise turn the caller's lazy object eager.
+    """
+    obj = obj.to_cpu()
+    if obj.is_lazy:
+        obj.compute()
+    return obj
+
+
+def assert_array_objects_equal(
+    a,
+    b,
+    rtol: float = 0.0,
+    atol: float = 0.0,
+    check_dtype: bool = True,
+):
+    """Assert two ArrayObjects (Waves, measurements, ...) are equal in value.
+
+    ``a == b`` cannot be used for this: ``safe_equality`` skips any attribute
+    whose comparison is a dask value, so for lazy objects only the metadata
+    is ever compared and e.g. ``Images(da.zeros(...)) == Images(da.ones(...))``
+    is True (abTEM issue #413). This computes both sides, moves them to the
+    host and checks, in turn: type, shape, dtype, base and ensemble axes
+    metadata, the ``metadata`` dict, every other constructor attribute
+    (sampling, energy, ...) and finally the array values.
+
+    The default tolerance is exact, for comparing two objects that went
+    through the same code path (a round trip, a copy, a stack slice). For a
+    comparison across genuinely different paths (PRISM vs. multislice, lazy
+    vs. eager reductions) the caller must pass ``rtol``/``atol`` chosen for
+    the quantity being compared.
+
+    Lists/tuples of ArrayObjects (multi-detector output) are compared
+    element-wise.
+    """
+    from abtem.core.utils import safe_equality
+
+    if isinstance(a, (list, tuple)):
+        assert isinstance(b, (list, tuple)), f"{type(a)} vs {type(b)}"
+        assert len(a) == len(b), f"{len(a)} vs {len(b)} array objects"
+        for a_i, b_i in zip(a, b):
+            assert_array_objects_equal(
+                a_i, b_i, rtol=rtol, atol=atol, check_dtype=check_dtype
+            )
+        return
+
+    assert type(a) is type(b), f"{type(a).__name__} vs {type(b).__name__}"
+
+    a = _to_host_array_object(a)
+    b = _to_host_array_object(b)
+
+    assert a.shape == b.shape, f"shape {a.shape} vs {b.shape}"
+    if check_dtype:
+        assert a.dtype == b.dtype, f"dtype {a.dtype} vs {b.dtype}"
+
+    assert len(a.ensemble_axes_metadata) == len(b.ensemble_axes_metadata)
+    for i, (axis_a, axis_b) in enumerate(
+        zip(a.ensemble_axes_metadata, b.ensemble_axes_metadata)
+    ):
+        assert axis_a == axis_b, f"ensemble axis {i}: {axis_a!r} != {axis_b!r}"
+
+    assert len(a.base_axes_metadata) == len(b.base_axes_metadata)
+    for i, (axis_a, axis_b) in enumerate(
+        zip(a.base_axes_metadata, b.base_axes_metadata)
+    ):
+        assert axis_a == axis_b, f"base axis {i}: {axis_a!r} != {axis_b!r}"
+
+    assert set(a.metadata) == set(b.metadata), (
+        f"metadata keys differ: {sorted(set(a.metadata) ^ set(b.metadata))}"
+    )
+    np.testing.assert_equal(a.metadata, b.metadata, err_msg="metadata differs")
+
+    # Everything else the object carries (sampling, energy, extent, ...),
+    # with the array itself excluded: it is compared below, with tolerances.
+    exclude = ("_array", "_metadata", "_ensemble_axes_metadata")
+    exclude += tuple(getattr(a, "_eq_exclude", ()))
+    differing = [
+        key
+        for key in a.__dict__
+        if key not in exclude
+        and not safe_equality(
+            _AttributeHolder(a.__dict__[key]), _AttributeHolder(b.__dict__.get(key))
+        )
+    ]
+    assert not differing, f"attributes differ: {differing}"
+
+    np.testing.assert_allclose(
+        asnumpy(a.array), asnumpy(b.array), rtol=rtol, atol=atol
+    )
+
+
+class _AttributeHolder:
+    """Wraps one attribute so ``safe_equality`` compares just that value."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+def si_cubic_atoms():
+    """A cubic-conventional-cell Si ``Atoms`` (diamond structure)."""
+    return ase.build.bulk("Si", cubic=True)
+
+
+def si_diamond_atoms():
+    """The same cubic-conventional-cell diamond Si, built explicitly.
+
+    Equivalent to :func:`si_cubic_atoms`; kept as a separate name for tests
+    that spell out ``crystalstructure="diamond", a=5.43`` explicitly rather
+    than relying on ASE's default lattice constant for Si.
+    """
+    return ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+
+
+def exactly_dividing_lengths():
+    """Pairs ``(length, step, count)`` of floats, with ``length / step == count``
+    exactly as decimal numbers: every length from 1 to 40 in steps of 0.1, and
+    each common step that divides it a whole number of times. The division is
+    decided on the decimal strings, so no float rounding enters the oracle."""
+    steps = "0.05 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1 1.2 1.5 2".split()
+    pairs = []
+    for tenths in range(10, 401):
+        length = Fraction(tenths, 10)
+        for step in steps:
+            quotient = length / Fraction(step)
+            if quotient.denominator == 1:
+                pairs.append((float(length), float(step), int(quotient)))
+    return pairs

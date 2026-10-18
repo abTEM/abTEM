@@ -15,7 +15,7 @@ into real, parametrized pytest coverage. Combined they span:
   hexagonal; FCC/BCC/rock-salt/fluorite/zinc-blende/diamond/wurtzite/
   perovskite/rutile/brookite), including non-orthogonal input cells that
   exercise the orthogonalize_cell transform path
-- translation invariance (centering, arbitrary shifts)
+- translation invariance of the grid (centering, arbitrary shifts)
 - slab geometry with vacuum (non-periodic z)
 - varying input supercell size
 - infinite and finite projection
@@ -293,8 +293,40 @@ def _max_relative_spread(
 
 
 # ── lattice-type sweep ───────────────────────────────────────────────────────
-@pytest.mark.parametrize("name", list(LATTICE_STRUCTURES))
-@pytest.mark.parametrize("device", ["cpu", gpu])
+# One structure per branch of commensurate_gpts/commensurate_slice_thickness:
+# rational planes at quarters (diamond Si) and halves (perovskite), irrational
+# internal parameters that take the fast-FFT fallback (rutile, brookite), a
+# hexagonal input cell that is orthogonalized first (wurtzite, MoS2), and
+# off-centre z planes (tetragonal BaTiO3). The other cubic lattices of
+# LATTICE_STRUCTURES differ from these only in lattice constant and basis,
+# which change the numbers but not the branch; all 19 still go through the
+# gpts invariance test below. The device only matters for the build, so the
+# accelerator runs one structure per kind of grid search.
+_SPREAD_SWEEP = {
+    "Si cubic": True,
+    "SrTiO3 perovskite": False,
+    "TiO2 rutile": True,
+    "GaN wurtzite": True,
+    "MoS2": False,
+    "BaTiO3 tetragonal": False,
+    "TiO2 brookite": False,
+}
+
+
+@pytest.mark.parametrize(
+    "name, device",
+    [pytest.param(name, "cpu", id=f"{name}-cpu") for name in _SPREAD_SWEEP]
+    + [
+        pytest.param(
+            name,
+            gpu.values[0],
+            marks=gpu.marks,
+            id=f"{name}-{gpu.id or gpu.values[0]}",
+        )
+        for name, on_accelerator in _SPREAD_SWEEP.items()
+        if on_accelerator
+    ],
+)
 def test_symmetry_equivalent_atoms_get_identical_potential(name, device):
     atoms = LATTICE_STRUCTURES[name]()
     spread, _ = _max_relative_spread(atoms, device=device)
@@ -309,45 +341,42 @@ def test_symmetry_equivalent_atoms_get_identical_potential_finite_projection(nam
 
 
 # ── translation invariance (centering / arbitrary shift) ────────────────────
-@pytest.mark.parametrize(
-    "name", ["Si cubic", "SrTiO3 perovskite", "TiO2 rutile", "Fe BCC", "GaN wurtzite"]
-)
-@pytest.mark.parametrize("transform", ["standard", "centered", "shifted"])
-def test_translation_invariance(name, transform):
-    atoms = LATTICE_STRUCTURES[name]()
-    if transform == "centered":
-        atoms = _centered(atoms)
-    elif transform == "shifted":
-        atoms = _shifted(atoms)
-    spread, _ = _max_relative_spread(atoms)
-    assert spread < THRESHOLD
-
-
-@pytest.mark.parametrize("name", list(LATTICE_STRUCTURES))
-def test_gpts_is_translation_invariant(name):
+def test_gpts_is_translation_invariant():
     """commensurate_gpts must give the same grid regardless of how the
     structure is centered or shifted within the cell -- this is the property
     the GCD-based (as opposed to absolute-position-based) algorithm exists
     to guarantee, and is cheap to check for every lattice type since it
-    doesn't require building the potential."""
-    atoms = LATTICE_STRUCTURES[name]()
+    doesn't require building the potential. The slabs are included: a
+    centred slab is their shifted case.
+
+    It is also what makes the symmetry spread translation invariant, so the
+    spread is not measured again on centred or shifted structures: the spread
+    compares atoms related by a lattice translation, and on a grid commensurate
+    with the lattice those sit at the same sub-pixel offset however the whole
+    structure is shifted."""
 
     def gpts_for(a):
         return abtem.Potential(a, sampling="auto", slice_thickness="auto").gpts
 
-    g_standard = gpts_for(atoms)
-    g_centered = gpts_for(_centered(atoms))
-    g_shifted = gpts_for(_shifted(atoms))
-    assert g_standard == g_centered == g_shifted
+    for name, build in {**LATTICE_STRUCTURES, **SLAB_STRUCTURES}.items():
+        atoms = build()
+        g_standard = gpts_for(atoms)
+        g_centered = gpts_for(_centered(atoms))
+        g_shifted = gpts_for(_shifted(atoms))
+        assert g_standard == g_centered == g_shifted, (
+            name,
+            g_standard,
+            g_centered,
+            g_shifted,
+        )
 
 
 # ── slab geometry with vacuum (non-periodic z) ───────────────────────────────
 @pytest.mark.parametrize("name", list(SLAB_STRUCTURES))
-@pytest.mark.parametrize("transform", ["standard", "centered"])
-def test_slab_with_vacuum(name, transform):
+def test_slab_with_vacuum(name):
+    # Not repeated for a centred slab: centring is a rigid shift, which leaves
+    # the spread unchanged (see test_gpts_is_translation_invariant).
     atoms = SLAB_STRUCTURES[name]()
-    if transform == "centered":
-        atoms = _centered(atoms)
     spread, _ = _max_relative_spread(atoms)
     assert spread < THRESHOLD
 
@@ -360,31 +389,30 @@ def test_slab_with_vacuum_finite_projection(name):
 
 
 # ── varying input supercell size ─────────────────────────────────────────────
+# A centred supercell is a rigid shift (see test_gpts_is_translation_invariant),
+# and a (4, 4, 1) Si supercell takes the same GCD search as (2, 2, 2) on a
+# grid four times larger, so neither is repeated here.
 @pytest.mark.parametrize(
     "name, tile",
     [
         ("Si cubic", (2, 2, 2)),
-        ("Si cubic", (4, 4, 1)),
         ("Al FCC", (2, 2, 2)),
         ("SrTiO3 perovskite", (2, 2, 1)),
         ("TiO2 rutile", (2, 2, 1)),
     ],
 )
-@pytest.mark.parametrize("transform", ["standard", "centered"])
-def test_input_supercell_size_invariance(name, tile, transform):
+def test_input_supercell_size_invariance(name, tile):
     atoms = LATTICE_STRUCTURES[name]().repeat(tile)
-    if transform == "centered":
-        atoms = _centered(atoms)
     spread, _ = _max_relative_spread(atoms)
     assert spread < THRESHOLD
 
 
 # ── parametrization consistency ──────────────────────────────────────────────
-@pytest.mark.parametrize("name", ["Si cubic", "Al FCC", "Au FCC", "MgO rock-salt"])
-def test_parametrization_consistency(name):
+def test_parametrization_consistency():
     """gpts is purely geometric and must not depend on which scattering-
-    factor parametrization is used."""
-    atoms = LATTICE_STRUCTURES[name]()
+    factor parametrization is used. One structure proves it; two elements make
+    each parametrization's values differ between the atoms."""
+    atoms = LATTICE_STRUCTURES["MgO rock-salt"]()
     gpts_by_parametrization = {}
     for parametrization in ("kirkland", "peng", "lobato"):
         spread, pot = _max_relative_spread(atoms, parametrization=parametrization)

@@ -2,56 +2,84 @@ import os
 from numbers import Number
 
 import hypothesis.extra.numpy as numpy_st
+import numpy as np
 import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
-                   gpu, remove_dummy_dimensions, requires_gpu)
+                   assert_array_objects_equal, devices, gpu, lazy_params,
+                   remove_dummy_dimensions, si_cubic_atoms)
 
 from abtem.array import concatenate  # , concat_array_object_ensemble_blocks
 from abtem.array import stack
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import asnumpy
+
+# The full set of `has_array` strategies exercised by most array-object tests.
+ALL_HAS_ARRAY = [
+    abtem_st.images,
+    abtem_st.diffraction_patterns,
+    abtem_st.line_profiles,
+    abtem_st.polar_measurements,
+    abtem_st.waves,
+    abtem_st.potential_array,
+    abtem_st.s_matrix_array,
+]
+
+# The subset used by tests that don't support potential arrays or S-matrix
+# arrays (e.g. from_array_and_metadata, concatenation).
+HAS_ARRAY_NO_POTENTIAL = [
+    abtem_st.images,
+    abtem_st.diffraction_patterns,
+    abtem_st.line_profiles,
+    abtem_st.polar_measurements,
+    abtem_st.waves,
+]
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL + [abtem_st.s_matrix_array])
 def test_indexing(data, has_array, lazy, device):
+    """Only ensemble axes can be indexed: an index over the base axes raises.
+
+    The index is drawn over the whole shape, so it covers both cases; an index one
+    longer than the ensemble shape is also checked on every draw, so the raise is
+    asserted even when the draw stays within the ensemble axes. PotentialArray
+    indexes its slices as well and has its own test below."""
     has_array = data.draw(has_array(lazy=lazy, device=device))
+    ensemble_ndim = len(has_array.ensemble_shape)
+
+    with pytest.raises(RuntimeError, match="too many indices"):
+        has_array[(0,) * (ensemble_ndim + 1)]
 
     indices = data.draw(
         numpy_st.basic_indices(
-            has_array.ensemble_shape, allow_newaxis=False, allow_ellipsis=False
+            has_array.shape, allow_newaxis=False, allow_ellipsis=False
         )
     )
 
     if isinstance(indices, Number):
-        num_lost_axes = 1
+        num_indices, num_lost_axes = 1, 1
     elif isinstance(indices, slice):
-        num_lost_axes = 0
+        num_indices, num_lost_axes = 1, 0
     else:
+        num_indices = len(indices)
         num_lost_axes = sum(1 for i in indices if isinstance(i, Number))
 
-    assert len(has_array[indices].shape) == len(has_array.shape) - num_lost_axes
+    if num_indices > ensemble_ndim:
+        with pytest.raises(RuntimeError, match="too many indices"):
+            has_array[indices]
+    else:
+        assert len(has_array[indices].shape) == len(has_array.shape) - num_lost_axes
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("has_array", [abtem_st.potential_array])
 def test_indexing_potential(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
@@ -73,173 +101,52 @@ def test_indexing_potential(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_indexing_raises(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    indices = data.draw(
-        numpy_st.basic_indices(
-            has_array.shape, allow_newaxis=False, allow_ellipsis=False
-        )
-    )
-
-    if (
-        isinstance(indices, tuple) and len(indices) > len(has_array.ensemble_shape)
-    ) or (isinstance(indices, int) and len(has_array.ensemble_shape) == 0):
-        with pytest.raises(RuntimeError):
-            has_array[indices]
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_shape(data, has_array, lazy, device):
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
+def test_shape_bookkeeping(data, has_array, lazy, device):
+    """The shape is the ensemble shape followed by the base shape, with one axis
+    metadata each, and expand_dims, squeeze and ensure_lazy keep that."""
     has_array = data.draw(has_array(lazy=lazy, device=device))
     assert len(has_array.base_shape) == has_array._base_dims
     assert has_array.shape == has_array.ensemble_shape + has_array.base_shape
     assert len(has_array.base_axes_metadata) == len(has_array.base_shape)
     assert len(has_array.ensemble_axes_metadata) == len(has_array.ensemble_shape)
 
+    expanded = has_array.expand_dims((0,))
+    assert expanded.shape == (1,) + has_array.shape
+    expanded = expanded.expand_dims((1,))
+    assert expanded.shape == (1, 1) + has_array.shape
 
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_ensure_lazy(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    has_array = has_array.ensure_lazy()
-    assert has_array.is_lazy
-    assert_array_matches_laziness(has_array.array, True)
+    squeezed = has_array.squeeze()
+    assert (
+        remove_dummy_dimensions(has_array.ensemble_shape) + has_array.base_shape
+        == squeezed.shape
+    )
+
+    made_lazy = has_array.ensure_lazy()
+    assert made_lazy.is_lazy
+    assert_array_matches_laziness(made_lazy.array, True)
 
 
 @settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
+@given(
+    data=st.data(),
+    # A directory store or, for a .zip suffix, a Zarr 3 zip store.
+    url=st.one_of(
+        abtem_st.temporary_path(allow_none=False),
+        abtem_st.temporary_path_zip(allow_none=False),
+    ),
 )
-def test_to_zarr(data, has_array, url, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    waves.to_zarr(url)
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_to_zarr_zip(data, has_array, url, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    waves.to_zarr(url)
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
 def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
-    has_array_from_zarr = (
-        has_array.from_zarr(url).copy_to_device(has_array.device).compute()
-    )
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
-    has_array_from_zarr.compute()
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
-
-
-@settings(max_examples=5)
-@given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_to_zarr_from_zarr_zip(data, has_array, url, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    has_array.to_zarr(url)
-    has_array_from_zarr = (
-        has_array.from_zarr(url).copy_to_device(has_array.device).compute()
-    )
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
-    has_array_from_zarr.compute()
-    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
+    has_array_from_zarr = has_array.from_zarr(url)
+    assert has_array_from_zarr.is_lazy
+    assert_array_objects_equal(has_array_from_zarr, has_array)
 
 
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
@@ -270,7 +177,7 @@ def test_from_zarr_legacy_format(data, has_array, url):
     root.attrs["type0"] = has_array.__class__.__name__
 
     has_array_from_zarr = from_zarr(url).compute()
-    assert has_array_from_zarr == has_array
+    assert_array_objects_equal(has_array_from_zarr, has_array)
 
 
 # ---- large-array zarr chunking (regression: whole-array single chunk hit a
@@ -376,13 +283,16 @@ def test_from_zarr_auto_chunks_never_splits_base_axes(tmp_path):
     assert loaded.array.chunks[-2:] == ((64,), (64,))
 
 
-@pytest.mark.parametrize("suffix", ["", ".zip"])
-def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
+def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch):
     """Regression: the spatial (base) axes of a DiffractionPatterns are much
     larger than its ensemble (energy) axis here, so a naive "always shrink
     the largest axis" policy would chunk the spatial plane first -- which
     several lazy dask operations (e.g. interpolate_line) silently compute
-    wrong results against. to_zarr must chunk only the ensemble axis."""
+    wrong results against. to_zarr must chunk only the ensemble axis.
+
+    The directory and zip writers take their chunks from the same
+    _safe_zarr_chunks call, so one store type is enough here; the test below
+    writes several chunks to both."""
     import zarr
 
     import abtem.array as abtem_array_module
@@ -390,21 +300,12 @@ def test_to_zarr_never_chunks_base_axes(tmp_path, monkeypatch, suffix):
     monkeypatch.setattr(abtem_array_module, "_MAX_ZARR_CHUNK_BYTES", 1_000_000)
 
     dp, _ = _make_dp(n_energy=8, gpts=256)
-    url = str(tmp_path / f"dp_base{suffix}")
+    url = str(tmp_path / "dp_base")
     dp.to_zarr(url)
 
-    if suffix == ".zip":
-        store = zarr.storage.ZipStore(url, mode="r")
-        root = zarr.open(store=store, mode="r")
-    else:
-        root = zarr.open(url, mode="r")
-
-    zarr_array = root["array0"]
+    zarr_array = zarr.open(url, mode="r")["array0"]
     assert zarr_array.chunks[-2:] == zarr_array.shape[-2:]
     assert zarr_array.chunks[0] < zarr_array.shape[0]
-
-    if suffix == ".zip":
-        store.close()
 
 
 @pytest.mark.parametrize("suffix", ["", ".zip"])
@@ -463,68 +364,12 @@ def test_to_zarr_cleans_up_on_failed_write(tmp_path, monkeypatch, suffix):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_expand_dims(data, has_array, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    expanded = waves.expand_dims((0,))
-    assert expanded.shape[0] == 1
-    expanded = expanded.expand_dims((1,))
-    assert expanded.shape[1] == 1
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_squeeze(data, has_array, lazy, device):
-    waves = data.draw(has_array(lazy=lazy, device=device))
-    squeezed = waves.squeeze()
-    assert (
-        remove_dummy_dimensions(waves.ensemble_shape) + waves.base_shape
-        == squeezed.shape
-    )
-
-
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 @pytest.mark.parametrize("destination", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
+# copy_to_device is ArrayObject's own for every class but SMatrixArray, which also
+# moves its wave vectors.
+@pytest.mark.parametrize("has_array", [abtem_st.images, abtem_st.s_matrix_array])
 def test_to_cpu(data, has_array, lazy, device, destination):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array = has_array.copy_to_device(device=destination)
@@ -533,79 +378,101 @@ def test_to_cpu(data, has_array, lazy, device, destination):
     assert_array_matches_device(has_array.array, destination)
 
 
-@given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        abtem_st.potential_array,
-        abtem_st.s_matrix_array,
-    ],
-)
-def test_stacks_with_self(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
-    stacked = stack(
-        (has_array, has_array), axis_metadata=OrdinalAxis(values=(1, 1)), axis=0
-    )
-    stacked.compute()
-    has_array._metadata = stacked[1].metadata
-    assert stacked[0].to_cpu() == stacked[1].to_cpu() == has_array.to_cpu()
+def _with_array(array_object, array):
+    """A copy of ``array_object`` with every attribute but the array kept."""
+    kwargs = array_object._copy_kwargs(exclude=("array",))
+    kwargs["array"] = array
+    return array_object.__class__(**kwargs)
+
+
+def _distinct_twin(array_object):
+    """Same type, shape, axes and metadata as ``array_object``, but different
+    values everywhere -- so a stack or concatenation that drops, duplicates
+    or reorders an operand cannot go unnoticed."""
+    return _with_array(array_object, array_object.array * 2 + 1)
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        # abtem_st.potential_array
-    ],
-)
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", ALL_HAS_ARRAY)
+def test_stacks_two_objects(data, has_array, lazy, device):
+    first = data.draw(has_array(lazy=lazy, device=device))
+    second = _distinct_twin(first)
+
+    stack_axis = OrdinalAxis(label="_test_stack", values=(10, 20))
+    stacked = stack((first, second), axis_metadata=stack_axis, axis=0)
+
+    assert stacked.is_lazy == lazy
+    assert stacked.shape == (2,) + first.shape
+    # stack() keeps the operands' metadata and prepends the new axis.
+    assert stacked.metadata == first.metadata
+    assert stacked.ensemble_axes_metadata[0] == stack_axis
+    assert stacked.ensemble_axes_metadata[1:] == first.ensemble_axes_metadata
+
+    # Indexing an OrdinalAxis adds {label: value} to the metadata.
+    for i, original in enumerate((first, second)):
+        expected = _with_array(original, original.array)
+        expected._metadata = {
+            **original.metadata,
+            "_test_stack": stack_axis.values[i],
+        }
+        assert_array_objects_equal(stacked[i], expected)
+
+
+@given(data=st.data())
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL)
 def test_from_array_and_metadata(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     new = has_array.__class__.from_array_and_metadata(
         has_array.array, has_array.axes_metadata, has_array.metadata
     )
-    assert new.to_cpu() == has_array.to_cpu()
+    assert_array_objects_equal(new, has_array)
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True])
-@pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize(
-    "has_array",
-    [
-        abtem_st.images,
-        abtem_st.diffraction_patterns,
-        abtem_st.line_profiles,
-        abtem_st.polar_measurements,
-        abtem_st.waves,
-        # abtem_st.potential_array
-    ],
-)
-def test_concatenates_with_self(data, has_array, lazy, device):
-    has_array = data.draw(has_array(lazy=lazy, device=device))
+@lazy_params
+@devices
+@pytest.mark.parametrize("has_array", HAS_ARRAY_NO_POTENTIAL)
+def test_concatenate_matches_its_parts(data, has_array, lazy, device):
+    first = data.draw(has_array(lazy=lazy, device=device))
 
-    axis = data.draw(st.integers(min_value=0, max_value=len(has_array.ensemble_shape)))
-    assume(has_array.axes_metadata[axis]._concatenate)
+    # Draw only among the axes that can be concatenated, instead of drawing
+    # any axis and rejecting with assume() (which threw away most draws).
+    # An object without one gets a concatenable length-1 ensemble axis.
+    concatenable = [
+        i
+        for i, axis_metadata in enumerate(first.ensemble_axes_metadata)
+        if axis_metadata._concatenate
+    ]
+    if not concatenable:
+        first = first.expand_dims((0,), axis_metadata=[OrdinalAxis(values=(0,))])
+        concatenable = [0]
+    axis = data.draw(st.sampled_from(concatenable))
 
-    concatenated = concatenate((has_array, has_array), axis=axis)
-    concatenated.compute()
+    second = _distinct_twin(first)
+    concatenated = concatenate((first, second), axis=axis)
 
-    assume(axis < len(has_array.ensemble_shape))
-    indices = (slice(None),) * axis + (slice(0, has_array.shape[axis]),)
-    assert concatenated[indices].to_cpu() == has_array.to_cpu()
+    assert concatenated.is_lazy == lazy
+    n = first.shape[axis]
+    expected_shape = list(first.shape)
+    expected_shape[axis] = 2 * n
+    assert concatenated.shape == tuple(expected_shape)
+
+    head = (slice(None),) * axis + (slice(0, n),)
+    tail = (slice(None),) * axis + (slice(n, 2 * n),)
+    assert_array_objects_equal(concatenated[head], first)
+
+    # The tail's axis metadata legitimately differs from `second`'s (a
+    # concatenated LinearAxis continues its offset), so only the values and
+    # the metadata dict are compared for it.
+    tail = concatenated[tail].compute().to_cpu()
+    assert tail.metadata == second.metadata
+    np.testing.assert_array_equal(
+        asnumpy(tail.array), asnumpy(second.compute().to_cpu().array)
+    )
 
 
 # @given(data=st.data())
@@ -646,7 +513,7 @@ class TestStackAndHyperspyTrustTheRealArrayType:
     """
 
     @staticmethod
-    def _stale_label_measurement():
+    def _stale_label_measurement(device):
         import ase
 
         import abtem
@@ -655,9 +522,9 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             "BN", positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)], cell=(8, 8, 4),
             pbc=True,
         )
-        with abtem.config.set({"device": "gpu"}):
+        with abtem.config.set({"device": device}):
             pot = abtem.Potential(
-                atoms, gpts=(32, 32), slice_thickness=2.0, device="gpu"
+                atoms, gpts=(32, 32), slice_thickness=2.0, device=device
             )
             probe = abtem.Probe(
                 semiangle_cutoff=20, energy=60e3, extent=(8.0, 8.0), gpts=(32, 32)
@@ -674,22 +541,25 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 lazy=False,
             )
 
-    @requires_gpu
-    def test_precondition_device_label_disagrees_with_array_type(self):
+    # Parametrized over the accelerator rather than gated on CUDA: Metal
+    # results carry the same stale label, for the same reason, and the
+    # consumers below must not trust it there either.
+    @pytest.mark.parametrize("device", [gpu])
+    def test_precondition_device_label_disagrees_with_array_type(self, device):
         """Pins down the setup every test below depends on, so a future fix
         to the underlying label inconsistency (out of scope here) doesn't
         silently turn these into tests of nothing."""
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         assert isinstance(m.array, np.ndarray)
-        assert m.device == "gpu"
+        assert m.device == device
 
-    @requires_gpu
-    def test_stack_does_not_crash_on_a_stale_device_label(self):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_stack_does_not_crash_on_a_stale_device_label(self, device):
         import numpy as np
 
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         stacked = stack(
             (m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0
         )
@@ -697,8 +567,10 @@ class TestStackAndHyperspyTrustTheRealArrayType:
             np.asarray(stacked.array), np.stack([np.asarray(m.array)] * 2, axis=0)
         )
 
-    @requires_gpu
-    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(self, monkeypatch):
+    @pytest.mark.parametrize("device", [gpu])
+    def test_to_hyperspy_does_not_crash_on_a_stale_device_label(
+        self, monkeypatch, device
+    ):
         """hyperspy isn't installed in every environment this suite runs
         in; stubbing its two signal classes lets this test exercise the
         real to_hyperspy code path -- including the line that crashed --
@@ -728,80 +600,12 @@ class TestStackAndHyperspyTrustTheRealArrayType:
                 )
             ),
         )
-        m = self._stale_label_measurement()
+        m = self._stale_label_measurement(device)
         sig = m.to_hyperspy()
         # transpose=True (the default) is what exercises the crashing line
         # (xp.moveaxis); for this measurement -- base_dims=2, no ensemble
         # axes -- that reverses the two base axes, i.e. a plain transpose.
         assert np.array_equal(np.asarray(sig.data), np.asarray(m.array).T)
-
-    def test_get_array_module_receives_the_array_not_the_device_label(
-        self, monkeypatch
-    ):
-        """CPU-runnable complement to the two GPU-only tests above. Those
-        need get_array_module("gpu") to actually resolve to cupy to
-        reproduce the crash, so (like every @requires_gpu test) they never
-        run in CI -- no GPU runner is configured -- and only ever execute
-        on a workstation with cupy. This doesn't reproduce the crash, but
-        it runs everywhere and directly asserts the fix's actual invariant
-        -- _stack and to_hyperspy call get_array_module with the real
-        array, never with .device -- independent of cupy or a GPU being
-        present at all.
-
-        Deliberately does not use _stale_label_measurement: that needs a
-        real GPU to produce a genuine numpy/cupy mismatch, but the
-        invariant under test here (which argument gets passed) doesn't
-        care what .device or .array actually contain, only that they
-        disagree -- so an arbitrary marker string standing in for .device
-        is enough, and keeps this test runnable without a GPU.
-        """
-        import types
-
-        import numpy as np
-
-        import abtem.array as abtem_array_module
-        from abtem.measurements import Images
-
-        array = np.random.default_rng(0).random((4, 4)).astype(np.float32)
-        m = Images(array=array, sampling=(0.1, 0.1))
-        m._device = "not-a-real-device"  # disagrees with .array on purpose
-
-        real_get_array_module = abtem_array_module.get_array_module
-        calls = []
-
-        def recording_get_array_module(x):
-            calls.append(x)
-            return real_get_array_module("cpu" if isinstance(x, str) else x)
-
-        monkeypatch.setattr(
-            abtem_array_module, "get_array_module", recording_get_array_module
-        )
-
-        stack((m, m), axis_metadata=OrdinalAxis(values=(0, 1)), axis=0)
-        assert any(c is m.array for c in calls)
-        assert not any(isinstance(c, str) for c in calls)
-
-        calls.clear()
-
-        class _FakeSignal:
-            def __init__(self, data, axes=None):
-                self.data = data
-
-            def as_lazy(self):
-                return self
-
-        monkeypatch.setattr(
-            abtem_array_module,
-            "hs",
-            types.SimpleNamespace(
-                signals=types.SimpleNamespace(
-                    Signal1D=_FakeSignal, Signal2D=_FakeSignal
-                )
-            ),
-        )
-        m.to_hyperspy()
-        assert any(c is m.array for c in calls)
-        assert not any(isinstance(c, str) for c in calls)
 
 
 class TestBaseLessArrayObject:
@@ -815,11 +619,9 @@ class TestBaseLessArrayObject:
 
     @staticmethod
     def _ensemble(chunks=None):
-        import ase.build
-
         import abtem
 
-        atoms = ase.build.bulk("Si", cubic=True)
+        atoms = si_cubic_atoms()
         potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
         probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
         scan = abtem.GridScan(start=(0, 0), end=(2, 2), sampling=1.0)
@@ -853,21 +655,6 @@ class TestBaseLessArrayObject:
         after = m.no_base_chunks().array.chunks
         assert after == before
 
-    def test_no_base_chunks_own_arithmetic_is_correct_even_if_reached(
-        self, monkeypatch
-    ):
-        """`no_base_chunks()`'s early return on a correct `_has_base_chunks`
-        already keeps the buggy line from firing for a base-less object --
-        the test above pins that. This pins the line itself: forcing the
-        guard open (as a stale or differently-computed `_has_base_chunks`
-        might) must not resurrect the -0 collapse into one block."""
-        m = self._ensemble(chunks=(1, 1))
-        monkeypatch.setattr(
-            type(m), "_has_base_chunks", property(lambda self: True)
-        )
-        after = m.no_base_chunks().array.chunks
-        assert after == ((1, 1), (1, 1))
-
     def test_partition_args_does_not_raise(self):
         m = self._ensemble()
         m._partition_args()  # used to raise ValueError
@@ -894,3 +681,85 @@ class TestBaseLessArrayObject:
             np.asarray(transformed.compute().array),
             np.asarray(m.compute().array) * 2,
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_arithmetic_with_array_of_own_device(device):
+    # A measurement on the GPU combined with a CuPy array (and on the CPU with a
+    # NumPy array) used to raise NotImplementedError for the CuPy case.
+    import numpy as np
+
+    import abtem
+    from abtem.core.backend import get_array_module
+
+    xp = get_array_module(device)
+    host = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    images = abtem.Images(
+        xp.asarray(host),
+        sampling=0.1,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+    )
+    factor = np.array([2.0, 3.0], dtype=np.float32)[:, None, None]
+
+    for result, expected in (
+        (images * xp.asarray(factor), host * factor),
+        (images - xp.asarray(factor), host - factor),
+        (images / xp.asarray(factor), host / factor),
+        (xp.asarray(factor) * images, factor * host),
+        (xp.asarray(factor) - images, factor - host),
+    ):
+        assert_array_matches_device(result.array, device)
+        np.testing.assert_allclose(result.to_cpu().array, expected)
+
+
+def test_to_data_array_without_a_label_leaves_the_metadata_alone():
+    xr = pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64), energy=100e3, sampling=0.1
+    )
+    assert "label" not in waves.metadata
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert isinstance(data_array, xr.DataArray)
+    assert "long_name" not in data_array.attrs
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_with_a_label_sets_long_name_on_the_copy_only():
+    pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"label": "psi"},
+    )
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert data_array.attrs["long_name"] == "psi"
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_does_not_share_nested_metadata_values():
+    # elastic_diffuse_diffraction_patterns records its component names as a list
+    # in the metadata.
+    pytest.importorskip("xarray")
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"components": ["total", "elastic"]},
+    )
+
+    waves.to_data_array().attrs["components"].append("diffuse")
+
+    assert waves.metadata["components"] == ["total", "elastic"]

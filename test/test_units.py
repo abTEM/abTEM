@@ -1,12 +1,21 @@
 """Tests for abtem/core/units.py"""
 
+import numpy as np
 import pytest
+import scipy.constants as const
 
+from abtem.core.axes import ReciprocalSpaceAxis
 from abtem.core.units import (
     format_units,
     get_conversion_factor,
     validate_units,
 )
+
+
+def _relativistic_wavelength(energy):
+    # Independent oracle: lambda = h c / sqrt(E (E + 2 m_e c^2)), E = e * V, in Å.
+    E = energy * const.e
+    return const.h * const.c / np.sqrt(E * (E + 2 * const.m_e * const.c**2)) * 1e10
 
 
 class TestFormatUnits:
@@ -30,7 +39,12 @@ class TestFormatUnits:
     def test_tex_reciprocal_unit(self):
         result = format_units("1/Å", use_tex=True)
         assert result.startswith("$") and result.endswith("$")
-        assert "AA" in result or "mathrm" in result
+        # 1/Å is Å to the power -1
+        assert result == r"$\mathrm{\AA}^{-1}$"
+
+    def test_tex_metre(self):
+        # SI symbol for metre is "m", not "mm"
+        assert format_units("m", use_tex=True) == r"$\mathrm{m}$"
 
     def test_tex_percent(self):
         result = format_units("%", use_tex=True)
@@ -65,10 +79,8 @@ class TestValidateUnits:
         assert validate_units("Angstrom") == "Å"
 
     def test_angstrom_alias_reciprocal(self):
-        # "1/Angstrom" is not in the mapping, so it passes through unchanged
-        result = validate_units("1/Angstrom")
-        # Not in units_type dict — returned as-is
-        assert result == "1/Angstrom"
+        # "1/Angstrom" is listed as a reciprocal-space unit and is an alias of 1/Å
+        assert validate_units("1/Angstrom") == "1/Å"
 
     def test_reciprocal_space_unit(self):
         assert validate_units("1/nm") == "1/nm"
@@ -101,19 +113,72 @@ class TestGetConversionFactor:
         assert abs(factor - 10) < 1e-10
 
     def test_mrad_to_rad(self):
+        # 1 mrad = 1e-3 rad
         factor = get_conversion_factor("rad", "mrad")
-        assert abs(factor - 1e3) < 1e-10
+        assert factor == pytest.approx(1e-3, rel=1e-12)
+
+    def test_mrad_to_deg(self):
+        # 1 mrad = 1e-3 rad = 1e-3 * 180 / pi deg
+        factor = get_conversion_factor("deg", "mrad")
+        assert factor == pytest.approx(1e-3 * 180 / np.pi, rel=1e-12)
+
+    def test_rad_to_deg(self):
+        # 1 rad = 180 / pi deg
+        factor = get_conversion_factor("deg", "rad")
+        assert factor == pytest.approx(180 / np.pi, rel=1e-12)
+
+    def test_nm_to_angstrom(self):
+        # 1 nm = 10 Å
+        factor = get_conversion_factor("Å", "nm")
+        assert factor == pytest.approx(10, rel=1e-12)
+
+    def test_angular_round_trip(self):
+        # mrad -> rad -> deg -> mrad composes to the identity
+        factor = (
+            get_conversion_factor("rad", "mrad")
+            * get_conversion_factor("deg", "rad")
+            * get_conversion_factor("mrad", "deg")
+        )
+        assert factor == pytest.approx(1.0, rel=1e-12)
+
+    def test_reciprocal_angstrom_alias(self):
+        # "1/Angstrom" and "1/Å" are the same unit
+        assert get_conversion_factor("1/Å", "1/Angstrom") == pytest.approx(1.0)
+        assert get_conversion_factor("1/Angstrom", "1/Å") == pytest.approx(1.0)
 
     def test_reciprocal_to_angular_requires_energy(self):
         with pytest.raises(RuntimeError, match="energy must be provided"):
             get_conversion_factor("mrad", "1/Å")
 
-    def test_reciprocal_to_angular_with_energy(self):
-        factor = get_conversion_factor("mrad", "1/Å", energy=100e3)
-        assert factor > 0
+    @pytest.mark.parametrize(
+        "units, expected_per_wavelength",
+        [
+            # abTEM uses the linear (small-angle) relation alpha = lambda * k [rad]
+            ("rad", 1.0),
+            ("mrad", 1e3),
+            ("deg", 180 / np.pi),
+        ],
+    )
+    @pytest.mark.parametrize("energy", [80e3, 100e3, 300e3])
+    def test_reciprocal_to_angular_with_energy(
+        self, units, expected_per_wavelength, energy
+    ):
+        factor = get_conversion_factor(units, "1/Å", energy=energy)
+        expected = _relativistic_wavelength(energy) * expected_per_wavelength
+        # CODATA constants in scipy vs. ase differ at the ~5e-9 level
+        assert factor == pytest.approx(expected, rel=1e-6)
 
-    def test_reciprocal_to_angular_deg_with_energy(self):
-        factor_mrad = get_conversion_factor("mrad", "1/Å", energy=100e3)
-        factor_deg = get_conversion_factor("deg", "1/Å", energy=100e3)
-        # deg factor should be larger than mrad factor
-        assert factor_deg > factor_mrad
+    def test_reciprocal_nm_to_mrad(self):
+        # k [1/Å] = k [1/nm] / 10, so alpha [mrad] = 1e3 * lambda * k [1/nm] / 10
+        factor = get_conversion_factor("mrad", "1/nm", energy=100e3)
+        expected = 1e3 * _relativistic_wavelength(100e3) / 10
+        assert factor == pytest.approx(expected, rel=1e-6)
+
+    def test_reciprocal_axis_convert_units_to_rad(self):
+        # sampling 0.1 1/Å at 100 keV corresponds to lambda * 0.1 rad
+        axis = ReciprocalSpaceAxis(label="k", sampling=0.1, units="1/Å")
+        converted = axis.convert_units("rad", energy=100e3)
+        assert converted.units == "rad"
+        assert converted.sampling == pytest.approx(
+            0.1 * _relativistic_wavelength(100e3), rel=1e-6
+        )

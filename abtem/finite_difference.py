@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import njit  # type: ignore
+from numba import njit, prange  # type: ignore
 
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import check_cupy_is_installed, cp, get_array_module
@@ -261,6 +261,30 @@ def _init_laplace_stencil_kernels():
         _laplace_stencil_c64 = mod.get_function("laplace_stencil_c64")
 
 
+@njit(parallel=True, fastmath=True)
+def _laplace_stencil_cpu_kernel(a, c, n):
+    """The 5-point-per-axis Laplacian stencil of `_laplace_operator_stencil` on
+    the CPU, for a stack of 2D arrays. `c` holds the coefficients rolled so that
+    c[k] is that of offset k, and only the interior (n from each edge) is written.
+
+    Module level, with the coefficients as arguments, so that Numba compiles it
+    once per array type: as a closure over them it was compiled anew -- ~1 s
+    with parallel=True -- every time an operator was made, once per dask task
+    of a lazy real-space multislice.
+    """
+    M, H, W = a.shape
+    out = a.copy()
+    out[:] = 0
+    for m in prange(M):
+        for i in range(n, H - n):
+            for j in range(n, W - n):
+                cumul = c[0] * 0
+                for k in range(-n, n + 1):
+                    cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+                out[m, i, j] = cumul
+    return out
+
+
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
@@ -273,21 +297,8 @@ def _laplace_operator_stencil(
     n = len(c) // 2
     padding = n + 1
 
-    from numba import prange  # type: ignore
-
-    @njit(parallel=True, fastmath=True)
     def _laplace_stencil_cpu_batch(a):
-        M, H, W = a.shape
-        out = a.copy()
-        out[:] = 0
-        for m in prange(M):
-            for i in range(n, H - n):
-                for j in range(n, W - n):
-                    cumul = dtype(0.0)
-                    for k in range(-n, n + 1):
-                        cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
-                    out[m, i, j] = cumul
-        return out
+        return _laplace_stencil_cpu_kernel(a, c, n)
 
     if device == "gpu":
         check_cupy_is_installed()
@@ -337,6 +348,46 @@ def _laplace_operator_stencil(
 
         return out
 
+    def _laplace_stencil_mps(a):
+        """The same stencil on Metal, as shifted slices rather than a kernel.
+
+        The sum is separable -- each output is the coefficients applied along
+        the row and along the column -- so the whole of it is 2 * (2n + 1)
+        strided adds over the interior, which Metal runs as well as a bespoke
+        kernel would. That avoids writing and compiling Metal Shading Language
+        for an operation torch already expresses.
+
+        Only the interior is written, exactly as the CPU and CUDA stencils do:
+        the caller pads by n + 1 beforehand and crops afterwards, so the band
+        left at zero here never survives into the result.
+        """
+        xp = get_array_module(a)
+
+        if a.dtype not in (np.complex64, np.complex128):
+            raise TypeError(
+                "the GPU Laplacian stencil requires a complex64 or complex128 "
+                f"array, got {a.dtype}"
+            )
+
+        _, height, width = a.shape
+        out = xp.zeros_like(a)
+
+        if height <= 2 * n or width <= 2 * n:
+            return out
+
+        rows = slice(n, height - n)
+        columns = slice(n, width - n)
+
+        total = out[:, rows, columns]
+        for k in range(-n, n + 1):
+            # c is rolled for the CPU stencil's negative indexing; keep it
+            coefficient = complex(c[k])
+            total = total + coefficient * a[:, n + k : height - n + k, columns]
+            total = total + coefficient * a[:, rows, n + k : width - n + k]
+
+        out[:, rows, columns] = total
+        return out
+
     def _laplace_stencil(a):
         # Store original shape and reshape to 3D
         original_shape = a.shape
@@ -352,6 +403,8 @@ def _laplace_operator_stencil(
             result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
             result = _laplace_stencil_gpu(a)
+        elif device == "mps":
+            result = _laplace_stencil_mps(a)
         else:
             raise ValueError(f"Unsupported device: {device}")
 
@@ -481,6 +534,11 @@ def _multislice_exponential_series(
 ):
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
+
+    if initial_amplitude == 0:
+        # Every term of the series is linear in the wave, so a zero wave is
+        # returned unchanged; the convergence ratio below would be 0 / 0.
+        return waves
 
     if fully_corrected:
         temp = full_series(
