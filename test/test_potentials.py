@@ -1257,6 +1257,69 @@ def test_potential_interpolate_line_3d_lazy_matches_eager(device):
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_potential_interpolate_line_default_end_runs_along_y(device):
+    # The default line runs along y over the whole extent, for the projected and
+    # the volumetric line alike (the latter used the x extent, the former is
+    # Images.interpolate_line's default).
+    atoms = Atoms("C", cell=[5.0, 9.0, 3.0], pbc=True, positions=[(1.0, 1.0, 1.0)])
+    potential = Potential(
+        atoms, gpts=(20, 36), slice_thickness=1.0, device=device
+    ).build(lazy=False)
+
+    projected = potential.interpolate_line(gpts=10)
+    volumetric = potential.interpolate_line(gpts=10, projected=False)
+
+    np.testing.assert_allclose(projected.metadata["end"], (0.0, 9.0))
+    np.testing.assert_allclose(volumetric.metadata["end"], (0.0, 9.0, 0.0))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("projected", [True, False])
+def test_potential_interpolate_line_on_skew_cell_hits_the_pixel_nodes(
+    projected, device
+):
+    # Pixel (i, j) of a skewed grid sits at i a1 / n1 + j a2 / n2; a first-order
+    # line through those positions returns the stored values.
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [
+            [a, 0.0, 0.0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0.0],
+            [0.0, 0.0, 3 * cz],
+        ]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0.3, 0.2, 3.0)])
+    potential = Potential(
+        atoms, gpts=(24, 32), slice_thickness=cz, device=device
+    ).build(lazy=False)
+    array = asnumpy(potential.array)  # slice 1 holds the atom
+
+    gpts = np.array(potential.gpts)
+    cell_2d = cell[:2, :2]
+    first, last = (2, 3), (2, 15)
+    start, end = (np.array(p) / gpts @ cell_2d for p in (first, last))
+    n = last[1] - first[1] + 1
+    expected = array[1, first[0], first[1] : last[1] + 1]
+    assert np.abs(expected).max() > 0
+
+    if projected:
+        line = potential.interpolate_line(
+            start=tuple(start), end=tuple(end), gpts=n, endpoint=True, order=1
+        )
+        expected = array.sum(0)[first[0], first[1] : last[1] + 1]
+    else:
+        z = cz + cz / 2  # the centre of slice 1
+        line = potential.interpolate_line(
+            start=(*start, z), end=(*end, z), gpts=n, endpoint=True, order=1,
+            projected=False,
+        )
+
+    np.testing.assert_allclose(
+        asnumpy(line.array), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
 def test_potential_interpolate_line_3d_frozen_phonon_ensemble_shape():
     import abtem
 

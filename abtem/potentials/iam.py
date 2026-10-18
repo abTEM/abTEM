@@ -2672,7 +2672,8 @@ class FieldArray(BaseField, ArrayObject):
         start = _validate_3d_position(start)
 
         if end is None:
-            end = (0.0, 1.0, 0.0) if fractional else (0.0, self.extent[0], 0.0)
+            # runs along y over the whole image, like Images.interpolate_line
+            end = (0.0, 1.0, 0.0) if fractional else (0.0, self.extent[1], 0.0)
         end = _validate_3d_position(end)
 
         # The in-plane grid may be non-orthogonal (skewed); `effective_cell` is the
