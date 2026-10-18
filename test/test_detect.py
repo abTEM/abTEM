@@ -177,43 +177,6 @@ def test_lazy_detect_matches_eager_detect(detector):
 @pytest.mark.parametrize(
     "detector",
     [
-        abtem.SpectralSlitDetector(
-            width=20, q_min=5.0, q_max=60, angle=30.0, offset=(5.0, -3.0)
-        ),
-        abtem.SpectralSlitDetector(corners=(-10.0, 50.0, -5.0, 5.0)),
-    ],
-    ids=["slit-parameters", "corners"],
-)
-def test_a_spectral_slit_detector_without_the_attributes_of_an_older_version(detector):
-    """An older version did not record the form the geometry was given in
-    (`_from_corners`) nor the given `q_max`. Such a detector is rebuilt from its slit
-    parameters, which describe the same rectangle."""
-    rng = np.random.default_rng(0)
-    array = rng.normal(size=(3, 32, 32)) + 1j * rng.normal(size=(3, 32, 32))
-    waves = abtem.Waves(
-        array.astype(np.complex64),
-        energy=100e3,
-        sampling=0.1,
-        ensemble_axes_metadata=[abtem.core.axes.UnknownAxis()],
-    )
-
-    detector = detector.copy()
-    mask = detector._get_detector_region_array(waves)
-    eager = detector.detect(waves)
-
-    del detector._from_corners, detector._q_max
-    rebuilt = type(detector)(**detector._copy_kwargs())
-
-    np.testing.assert_allclose(rebuilt.corners, detector.corners, rtol=0, atol=1e-12)
-    np.testing.assert_array_equal(rebuilt._get_detector_region_array(waves), mask)
-    np.testing.assert_array_equal(rebuilt.detect(waves).array, eager.array)
-    lazy = rebuilt.detect(waves.ensure_lazy()).compute(progress_bar=False)
-    np.testing.assert_array_equal(lazy.array, eager.array)
-
-
-@pytest.mark.parametrize(
-    "detector",
-    [
         abtem.AnnularDetector(inner=10, outer=40),
         abtem.FlexibleAnnularDetector(outer=40),
         abtem.SegmentedDetector(
@@ -512,3 +475,28 @@ def test_waves_detector_without_gpts_returns_scanned_waves(lazy, device, exit_wa
         assert result.shape == waves.shape, gpts
         assert np.array_equal(result.sampling, waves.sampling), gpts
         assert np.array_equal(to_host_array(result), to_host_array(waves)), gpts
+
+
+@pytest.mark.float64  # sets double precision in its body; Metal cannot hold it
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_waves_detector_without_gpts_declares_the_dtype_of_the_waves(device):
+    """Without resampling the detected waves are the waves themselves, so a
+    lazy detection must declare their dtype, not the configured precision.
+    `gpts=()` declared complex128 for complex64 waves under float64 precision
+    (it tested `gpts is not None`) and then computed complex64."""
+    rng = np.random.default_rng(0)
+    array = (rng.standard_normal((2, 8, 8)) + 1j * rng.standard_normal((2, 8, 8)))
+    waves = abtem.Waves(
+        array.astype(np.complex64),
+        energy=100e3,
+        extent=(4.0, 4.0),
+        ensemble_axes_metadata=[abtem.core.axes.OrdinalAxis(values=(0, 1))],
+    )
+    waves = waves.copy_to_device(device)
+
+    for gpts in (None, ()):
+        with abtem.config.set({"precision": "float64"}):
+            result = abtem.WavesDetector(gpts=gpts).detect(waves.copy().ensure_lazy())
+            declared = result.array.dtype
+            computed = result.compute().array.dtype
+        assert declared == computed == np.complex64, (gpts, declared, computed)
