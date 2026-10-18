@@ -6,6 +6,7 @@ import pytest
 
 import abtem
 import abtem.ebsd.reciprocity as reciprocity
+import abtem.ebsd.reference as reference_module
 from abtem.core.axes import EnergyAxis, OrdinalAxis
 from abtem.core.energy import energy2wavelength
 from abtem.ebsd import (
@@ -1714,6 +1715,35 @@ class TestHemispheres:
         assert (
             np.sqrt(np.mean((north / north.mean() - south / south.mean()) ** 2)) > 1e-3
         )
+
+    @pytest.mark.parametrize("given", [True, False])
+    def test_a_given_symmetry_skips_the_search(self, monkeypatch, given):
+        def search(atoms):
+            raise AssertionError("the symmetry was searched for")
+
+        monkeypatch.setattr(reference_module, "is_centrosymmetric", search)
+        reference = self.reference(self.GAN, "north", centrosymmetric=given)
+        assert reference.centrosymmetric is given
+        pattern = reference.build(pbar=False, lazy=False)
+        assert pattern.metadata["centrosymmetric"] is given
+
+    def test_without_a_given_symmetry_it_is_searched_for(self, monkeypatch):
+        calls = []
+
+        def search(atoms):
+            calls.append(atoms)
+            return False
+
+        monkeypatch.setattr(reference_module, "is_centrosymmetric", search)
+        reference = self.reference(self.SILICON, "north")
+        assert not calls  # only when first needed
+        assert reference.centrosymmetric is False
+        assert reference.centrosymmetric is False
+        assert len(calls) == 1  # and once
+
+    def test_rejects_a_symmetry_that_is_not_a_bool(self):
+        with pytest.raises(ValueError, match="centrosymmetric must be"):
+            self.reference(self.SILICON, "north", centrosymmetric="yes")
 
     def test_both_is_north_and_south(self):
         both = self.reference(self.SILICON, "both")

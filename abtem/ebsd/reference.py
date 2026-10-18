@@ -250,6 +250,14 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         what an EBSD polarity measurement reads; calculate 'both' for it, at
         twice the cost. The southern directions are laid out as EMsoft lays
         them out, ``(x, y, -z)`` below each northern one.
+    centrosymmetric : bool, optional
+        Whether the crystal has an inversion centre. The pattern records it, and
+        it decides whether the hemisphere that was not calculated stands in as
+        the inversion image silently or with a warning. If not given, it is
+        determined with spglib (:func:`is_centrosymmetric`) when first needed,
+        which can be slow, or fail, for a large cell without lattice symmetry --
+        an amorphous or molecular-dynamics model; give True or False to skip
+        the search.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
         energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
@@ -296,6 +304,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         repetitions: Optional[tuple[int, int, int]] = None,
         origin: Optional[np.ndarray] = None,
         hemisphere: str = "north",
+        centrosymmetric: Optional[bool] = None,
         backscatter_energy=None,
         depth_weight: Optional[DepthWeight] = None,
         device: Optional[str] = None,
@@ -303,6 +312,11 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         if hemisphere not in ("north", "south", "both"):
             raise ValueError(
                 f"hemisphere must be 'north', 'south' or 'both', got {hemisphere!r}"
+            )
+
+        if centrosymmetric not in (None, True, False):
+            raise ValueError(
+                f"centrosymmetric must be None, True or False, got {centrosymmetric!r}"
             )
 
         slab_cell = tuple(float(x) for x in slab_cell)
@@ -323,7 +337,9 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
 
         self._hemisphere = hemisphere
         self._backscatter_energy = backscatter_energy
-        self._centrosymmetric: Optional[bool] = None
+        self._centrosymmetric = (
+            None if centrosymmetric is None else bool(centrosymmetric)
+        )
         self._depth_weight = depth_weight
         self._device = device
 
@@ -385,7 +401,10 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
 
     @property
     def centrosymmetric(self) -> bool:
-        """Whether the crystal has an inversion centre, so ``I(-k) = I(k)``."""
+        """Whether the crystal has an inversion centre, so ``I(-k) = I(k)``.
+
+        As given, or else determined with spglib on first use.
+        """
         if self._centrosymmetric is None:
             self._centrosymmetric = is_centrosymmetric(self._atoms)
         return self._centrosymmetric
