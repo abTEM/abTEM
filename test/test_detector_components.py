@@ -748,3 +748,167 @@ def test_prism_upsample_refuses_components_but_averages_waves():
     np.testing.assert_allclose(
         _array(result), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
     )
+
+
+# ---------------------------------------------------------------------------------
+# The same options through the PRISM scan of several energies
+# ---------------------------------------------------------------------------------
+
+ENERGIES = [100e3, 200e3]
+
+
+def _prism_scan_energies(device, lazy, detector, ensemble_mean=True):
+    s_matrix = abtem.SMatrix(
+        energy=ENERGIES,
+        semiangle_cutoff=20,
+        potential=_potential(ensemble_mean),
+        interpolation=1,
+        device=device,
+    )
+    grid_scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+    return s_matrix.scan(scan=grid_scan, detectors=detector, lazy=lazy)
+
+
+def _prism_energy_reference(device, lazy, energy, **kwargs):
+    """The exit waves of every configuration of the PRISM scan at one energy."""
+    s_matrix = abtem.SMatrix(
+        energy=energy,
+        semiangle_cutoff=20,
+        potential=_potential(False),
+        interpolation=1,
+        device=device,
+    )
+    grid_scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+    exit_waves = s_matrix.scan(scan=grid_scan, detectors=WavesDetector(), lazy=lazy)
+    exit_waves = exit_waves.compute() if lazy else exit_waves
+    return exit_waves, elastic_diffuse_diffraction_patterns(
+        exit_waves, max_angle=MAX_ANGLE, parity="same", **kwargs
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_components_of_several_energies(lazy, device):
+    """Each energy has the true number of configurations, and the energies are
+    cropped to the pixels of the highest, as for multislice (#503)."""
+    result = _prism_scan_energies(
+        device, lazy, PixelatedDetector(MAX_ANGLE, components="all")
+    )
+    plain = _prism_scan_energies(device, lazy, PixelatedDetector(MAX_ANGLE))
+    _, reference = _prism_energy_reference(device, lazy, ENERGIES[-1])
+
+    assert result.is_lazy == lazy
+    assert result.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+    assert result.ensemble_axes_metadata[1].values == COMPONENTS
+    assert not any(
+        isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
+    )
+    assert result.metadata["num_configurations"] == N_CONFIGS
+    assert "frozen_phonon_moments" not in result.metadata
+    assert result.shape[2:] == reference.shape[1:]
+    # the highest energy is the exit-wave route, every energy has the mean intensity
+    # of the plain detector as its total
+    _assert_close(result[-1], reference, rtol=2e-4)
+    total = _array(result)[:, 0]
+    np.testing.assert_allclose(
+        total, _array(plain), rtol=0, atol=2e-4 * np.abs(_array(plain)).max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_averaged_waves_of_several_energies(lazy, device):
+    result = _prism_scan_energies(
+        device, lazy, WavesDetector(average_frozen_phonons=True)
+    )
+
+    assert isinstance(result, Waves)
+    assert result.is_lazy == lazy
+    assert not any(
+        isinstance(ax, FrozenPhononsAxis) for ax in result.ensemble_axes_metadata
+    )
+    assert result.metadata["num_configurations"] == N_CONFIGS
+    assert "frozen_phonon_average" not in result.metadata
+    for i, energy in enumerate(ENERGIES):
+        exit_waves, _ = _prism_energy_reference(device, lazy, energy)
+        expected = np.mean(_array(exit_waves), axis=0, dtype=np.complex128)
+        assert result.shape[1:] == expected.shape
+        np.testing.assert_allclose(
+            _array(result)[i], expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+        )
+
+
+def _deferred_members(device, detector):
+    """The frozen-phonon members of a multi-energy S-matrix, each reduced with the
+    frozen-phonon reduction deferred, as the eager PRISM scan reduces its members."""
+    potential = _potential(True)
+    scan = abtem.GridScan((1, 1), (3, 4), gpts=(2, 3))
+    members = []
+    for _, _, member in potential.generate_blocks(1):
+        s_matrix = abtem.SMatrix(
+            energy=ENERGIES,
+            semiangle_cutoff=20,
+            potential=member.item(),
+            interpolation=1,
+            device=device,
+        ).build(lazy=False)
+        members.append(
+            s_matrix._reduce(
+                scan=scan, detectors=detector, _defer_frozen_phonon_reduction=True
+            )
+        )
+    return members
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_reduction_of_a_multi_energy_member_defers_the_frozen_phonons(device):
+    """Reducing a member of the frozen-phonon ensemble at several energies leaves
+    the moments of every energy for the components (N = 1 of the member would
+    raise), and the mean over the members gives those of the scan."""
+    from abtem.measurements import _frozen_phonon_components_from_moments
+
+    members = _deferred_members(device, PixelatedDetector(MAX_ANGLE, components="all"))
+    assert len(members) == N_CONFIGS
+    mean = members[0]
+    assert "frozen_phonon_moments" in mean.metadata
+    assert mean.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+    for member in members[1:]:
+        mean.array[:] += member.array
+    mean.array[:] /= N_CONFIGS
+    result = _frozen_phonon_components_from_moments(mean, num_configurations=N_CONFIGS)
+
+    expected = _prism_scan_energies(
+        device, False, PixelatedDetector(MAX_ANGLE, components="all")
+    )
+    # the components lead the axes of a reduction of the moments, the energies
+    # those of the scan
+    assert result.ensemble_axes_metadata[0].values == COMPONENTS
+    assert result.ensemble_axes_metadata[1].values == tuple(ENERGIES)
+    assert result.shape == np.swapaxes(_array(expected), 0, 1).shape
+    np.testing.assert_allclose(
+        _array(result),
+        np.swapaxes(_array(expected), 0, 1),
+        rtol=0,
+        atol=2e-4 * np.abs(_array(expected)).max(),
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_the_reduction_of_a_multi_energy_member_defers_the_averaged_waves(device):
+    members = _deferred_members(device, WavesDetector(average_frozen_phonons=True))
+    assert all("frozen_phonon_average" in member.metadata for member in members)
+    assert members[0].ensemble_axes_metadata[0].values == tuple(ENERGIES)
+
+    expected = _prism_scan_energies(
+        device, False, WavesDetector(average_frozen_phonons=True)
+    )
+    mean = np.mean([_array(member) for member in members], axis=0)
+    # the member keeps its frozen-phonon axis, of length 1, behind the energy axis
+    mean = mean[:, 0]
+    assert mean.shape == expected.shape
+    np.testing.assert_allclose(
+        mean,
+        _array(expected),
+        rtol=0,
+        atol=1e-5 * np.abs(_array(expected)).max(),
+    )

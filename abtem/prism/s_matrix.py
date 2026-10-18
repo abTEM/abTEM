@@ -1509,9 +1509,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         detectors: list[BaseDetector],
         max_batch_reduction: int | str,
         reduction_scheme: str,
+        _defer_frozen_phonon_reduction: bool = False,
     ):
         """Reduce each energy of a multi-energy build separately and stack the
-        measurements along its EnergyAxis, as :meth:`SMatrix.reduce` does."""
+        measurements along its EnergyAxis, as :meth:`SMatrix.reduce` does. A
+        frozen-phonon reduction the caller defers (see :meth:`_reduce`) is deferred
+        for every energy, so that the stacked measurements still await it."""
         energies = tuple(float(e) for e in self.ensemble_axes_metadata[axis].values)
 
         # Resolve the scan and the detectors once against the whole ensemble, so
@@ -1540,6 +1543,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 detectors=detectors,
                 max_batch_reduction=max_batch_reduction,
                 reduction_scheme=reduction_scheme,
+                _defer_frozen_phonon_reduction=_defer_frozen_phonon_reduction,
             )
             for i, energy in enumerate(energies)
         ]
@@ -1604,6 +1608,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 detectors=detectors,
                 max_batch_reduction=max_batch_reduction,
                 reduction_scheme=reduction_scheme,
+                _defer_frozen_phonon_reduction=_defer_frozen_phonon_reduction,
             )
 
         self.accelerator.check_is_defined()
