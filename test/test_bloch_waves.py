@@ -182,6 +182,49 @@ def test_structure_factor_auto_centering_keeps_allowed_reflections():
     assert [1, 0, 0] in structure_factor.hkl.tolist()
 
 
+def test_auto_detect_centering_counts_coincident_atoms_as_one_site():
+    # Regression: two H atoms on the same site were detected as "IABC", because
+    # the centering check counted matches and the two coincident atoms matched
+    # each other in place of the missing translates; StructureFactor then kept
+    # 31 of the 293 reflections. Coincident atoms are one site with a doubled
+    # occupancy, which a centering translation must map onto an equal site.
+    hkl = _hkl_cube()
+    for scaled_positions, cell, expected in (
+        ([(0, 0, 0)] * 2, (3, 3, 1), "P"),
+        ([(0, 0, 0)] * 2 + [(0.5, 0.5, 0.5)], (3, 3, 3), "P"),
+        ([(0, 0, 0)] * 2 + [(0.5, 0.5, 0.5)] * 2, (3, 3, 3), "I"),
+    ):
+        atoms = Atoms(
+            ["H"] * len(scaled_positions),
+            scaled_positions=scaled_positions,
+            cell=cell,
+            pbc=True,
+        )
+        assert auto_detect_centering(atoms) == expected, scaled_positions
+
+        # The structure factors of the atoms as given: exactly the reflections
+        # that vanish are removed by the detected centering.
+        F = calculate_structure_factors(
+            hkl,
+            atoms,
+            parametrization="lobato",
+            g_max=10.0,
+            thermal_sigma=0.0,
+            occupancy=1.0,
+            device="cpu",
+        )
+        allowed = get_reflection_condition(hkl, expected)
+        assert np.abs(F[~allowed]).max(initial=0.0) < 1e-6 * np.abs(F).max()
+        assert (np.abs(F[allowed]) > 1e-4 * np.abs(F).max()).all()
+
+    structure_factor = StructureFactor(atoms, g_max=2.0)
+    structure_factor_p = StructureFactor(atoms, g_max=2.0, centering="P")
+    np.testing.assert_array_equal(
+        structure_factor.hkl,
+        structure_factor_p.hkl[get_reflection_condition(structure_factor_p.hkl, "I")],
+    )
+
+
 @pytest.mark.parametrize(
     "atoms, expected_centering",
     [

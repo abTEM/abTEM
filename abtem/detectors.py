@@ -6,7 +6,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from copy import copy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Type, TypeVar
 
 import numpy as np
 
@@ -17,8 +17,9 @@ from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
 )
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.chunks import Chunks
+from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
@@ -33,10 +34,13 @@ from abtem.measurements import (
     _diffraction_pattern_resampling_gpts,
     _image_resampling_gpts,
     _metric_k_components,
+    _needs_the_diffuse_part,
     _polar_detector_bins,
     _scan_axes,
     _scan_shape,
     _scanned_measurement_type,
+    _validate_frozen_phonon_components,
+    _validate_reduction_dtype,
 )
 from abtem.transform import ArrayObjectTransform, WavesType
 from abtem.visualize.visualizations import discrete_cmap
@@ -76,7 +80,10 @@ def _gpts_and_sampling_from_obj(obj):
         gpts = obj.shape[-2:]
         angular_sampling = obj.angular_sampling
         reciprocal_space_sampling = obj.sampling
-        energy = obj.metadata.get("energy")
+        # as `DiffractionPatterns._get_energy`, but None when it cannot be resolved
+        from abtem.core.energy import resolve_energy
+
+        energy = resolve_energy(None, obj.metadata, obj.ensemble_axes_metadata)
     else:
         # BaseWaves
         gpts = obj._gpts_within_angle("cutoff")
@@ -1254,17 +1261,15 @@ class SpectralSlitDetector(BaseDetector):
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The constructor takes the geometry either as corners or as the slit
         # parameters, not both, so a copy (and every lazy block) is rebuilt from
-        # the form it was given in. A detector that did not record its form
-        # (one pickled by an earlier version) is rebuilt from the slit parameters,
-        # which describe the same rectangle in both forms.
-        if getattr(self, "_from_corners", False):
+        # the form it was given in.
+        if self._from_corners:
             exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
         else:
             exclude = exclude + ("corners",)
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
         if "q_max" in kwargs:
             # as given, not q_min + extent, which can differ in the last bit
-            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+            kwargs["q_max"] = self._q_max
         return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
@@ -1343,7 +1348,7 @@ class SpectralSlitDetector(BaseDetector):
             angle=self._angle,
             q_min=self.q_min,
             # as given, like _copy_kwargs: q_min + extent can differ in the last bit
-            q_max=getattr(self, "_q_max", self.q_max),
+            q_max=self._q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
@@ -1945,16 +1950,50 @@ class PixelatedDetector(BaseDetector):
         location, typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    components : {'all', 'total', 'elastic', 'diffuse'} or sequence of str, optional
+        Detect the elastic, diffuse and total intensity of a frozen-phonon ensemble
+        instead of the intensity of each configuration, as
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns` forms them
+        from the exit waves of every configuration. Each multislice task keeps the
+        diffracted amplitude ψ(k) and its intensity |ψ(k)|² cropped to `max_angle`;
+        the ensemble mean over the frozen-phonon axis averages both as the tasks
+        finish, so the exit waves of the configurations are never kept. The
+        elastic intensity |<ψ>|² and the diffuse intensity <|ψ|²> - |<ψ>|² are
+        formed after that mean, and any other ensemble-mean axis is averaged
+        after the split, i.e. incoherently. A single name returns that component,
+        ``'all'`` or a sequence stack them in the order given along a leading
+        ``OrdinalAxis(label='component')`` (``'all'`` is
+        ``('total', 'elastic', 'diffuse')``). Requires a ``FrozenPhononsAxis``
+        with ``ensemble_mean=True`` among the ensemble axes, ``reciprocal_space``
+        and no `resample`. The components are formed when the ensemble is reduced,
+        as in the result of a multislice simulation; a detector applied to waves
+        directly returns the unreduced amplitudes and intensities, to be reduced
+        with :func:`abtem.waves.reduce_ensemble`. Supported by multislice and by
+        the PRISM scan (:meth:`abtem.prism.SMatrix.scan`), except with
+        ``upsample=True``, which raises ``NotImplementedError``. With several
+        energies, every energy's components are cropped to the pixel count of the
+        highest energy, as for `max_angle` in mrad, so they stack along the energy
+        axis. Default is None, which detects the intensity of every configuration.
+    unbiased : bool, optional
+        Correct the (N - 1)/N bias of the diffuse intensity, see
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
+        `components`. Default is False.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+        Precision of the amplitudes and intensities that are averaged, see
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
+        `components`. Default is None, the precision of the exit waves. The diffuse
+        intensity is the difference of the total and the elastic intensity, so
+        where it is far below the Bragg peaks (weak thermal displacements, a plane
+        wave or a large probe) it is limited by the rounding of the large
+        intensities: in single precision it can be off by as much as the diffuse
+        intensity itself, and even negative. Use ``reduction_dtype='float64'`` for
+        a weak diffuse signal.
     """
 
     # Cropping and resampling work on pixels and 1/Å, the same for every energy
     # once the crop is fixed for the whole ensemble (see _match_ensemble), so a
     # multi-energy ensemble is detected at once.
     _splits_energy_ensembles = False
-
-    # A detector without a recorded ensemble crop, such as one pickled by an
-    # earlier version, has none.
-    _ensemble_gpts: Optional[tuple[int, int]] = None
 
     def __init__(
         self,
@@ -1963,6 +2002,9 @@ class PixelatedDetector(BaseDetector):
         reciprocal_space: bool = True,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        components: Optional[str | Sequence[str]] = None,
+        unbiased: bool = False,
+        reduction_dtype: Optional[str | np.dtype] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
         if not reciprocal_space and isinstance(resample, str):
@@ -1970,6 +2012,28 @@ class PixelatedDetector(BaseDetector):
                 f"resample={resample!r} applies to diffraction patterns only; "
                 "in real space give the sampling of the images [Å]."
             )
+        if not isinstance(unbiased, (bool, np.bool_)):
+            raise TypeError(f"unbiased must be a bool, got {type(unbiased).__name__}")
+        reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+        if components is None:
+            if unbiased or reduction_dtype is not None:
+                raise ValueError("unbiased and reduction_dtype apply to components")
+            self._component_names = ()
+            self._components_stacked = False
+        else:
+            if not reciprocal_space or resample:
+                # The amplitude and the intensity of a pattern do not resample
+                # alike, and the intensity of a real-space image has no amplitude.
+                raise ValueError(
+                    "components needs diffraction patterns without resampling: "
+                    "reciprocal_space=True and resample=False."
+                )
+            self._component_names, self._components_stacked = (
+                _validate_frozen_phonon_components(components)
+            )
+        self._components = components
+        self._unbiased = bool(unbiased)
+        self._reduction_dtype = reduction_dtype
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
@@ -1988,7 +2052,7 @@ class PixelatedDetector(BaseDetector):
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
-        from abtem.array import _multi_energy_axis, _without_scalar_energy
+        from abtem.array import _multi_energy_axis
 
         # A string max_angle crops every energy to the same pixels already.
         if (
@@ -1999,10 +2063,9 @@ class PixelatedDetector(BaseDetector):
         ):
             return self
 
-        # The highest energy of the axis decides, not a scalar energy that may
-        # have been left on the waves.
+        # The highest energy of the axis decides.
         matched = self.copy()
-        matched._ensemble_gpts = self._crop_gpts(_without_scalar_energy(waves))
+        matched._ensemble_gpts = self._crop_gpts(waves)
         return matched
 
     def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:
@@ -2029,6 +2092,37 @@ class PixelatedDetector(BaseDetector):
     def resample(self) -> str | bool | tuple[float, float]:
         """How to resample the detected diffraction patterns."""
         return self._resample
+
+    @property
+    def components(self) -> Optional[str | Sequence[str]]:
+        """The frozen-phonon components detected, None for the intensities of the
+        configurations."""
+        return self._components
+
+    @property
+    def unbiased(self) -> bool:
+        """Correct the bias of the diffuse intensity of a frozen-phonon ensemble."""
+        return self._unbiased
+
+    @property
+    def reduction_dtype(self) -> Optional[np.dtype]:
+        """Precision of the amplitudes and intensities averaged over the frozen
+        phonons."""
+        return self._reduction_dtype
+
+    @property
+    def _moment_channels(self) -> tuple[str, ...]:
+        """The real quantities detected for `components`, stacked along the first
+        base axis, from which the components are formed after the ensemble mean:
+        the real and imaginary part of the amplitude ψ(k) for the elastic
+        intensity |<ψ>|² and the intensity |ψ(k)|² for the total <|ψ|²>; the
+        diffuse intensity (and the unbiased elastic one) needs both."""
+        names = self._component_names
+        both = _needs_the_diffuse_part(names, self.unbiased)
+        return (
+            *(("real", "imag") if both or "elastic" in names else ()),
+            *(("intensity",) if both or "total" in names else ()),
+        )
 
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
         if isinstance(self.max_angle, str):
@@ -2100,11 +2194,20 @@ class PixelatedDetector(BaseDetector):
         return sampling, gpts
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
+        if self.components is not None:
+            # The quantities of `_moment_channels` side by side along the first
+            # base axis, until the ensemble is reduced.
+            gpts = self._new_sampling_and_gpts(waves)[1]
+            return ((len(self._moment_channels) * gpts[0], gpts[1]),)
         if self.reciprocal_space:
             return (self._new_sampling_and_gpts(waves)[1],)
         return (self._real_space_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
+        if self.reduction_dtype is not None:
+            return (
+                np.finfo(np.result_type(self.reduction_dtype, np.complex64)).dtype,
+            )
         if self.resample and not self.reciprocal_space:
             # Images.interpolate resamples in the configured precision
             return (get_dtype(complex=False),)
@@ -2153,7 +2256,51 @@ class PixelatedDetector(BaseDetector):
         metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
+        if self.components is not None:
+            # Read by `BaseMeasurements.reduce_ensemble`, which forms the components
+            # from the averaged quantities.
+            metadata["frozen_phonon_moments"] = {
+                "channels": list(self._moment_channels),
+                "components": list(self._component_names),
+                "stacked": self._components_stacked,
+                "unbiased": self.unbiased,
+            }
         return (metadata,)
+
+    def _calculate_moments(self, waves: WavesType) -> np.ndarray:
+        """The quantities of `_moment_channels` of the diffraction patterns of the
+        given waves, stacked along the first base axis."""
+        if self.reduction_dtype is not None:
+            dtype = np.result_type(self.reduction_dtype, np.complex64)
+            if waves.dtype != dtype:
+                kwargs = waves._copy_kwargs(exclude=("array",))
+                kwargs["array"] = waves.array.astype(dtype)
+                waves = waves.__class__(**kwargs)
+
+        if self._ensemble_gpts is not None:
+            patterns = waves._diffraction_patterns(
+                self._ensemble_gpts, return_complex=True
+            )
+        else:
+            patterns = waves.diffraction_patterns(
+                max_angle=self.max_angle, parity="same", return_complex=True
+            )
+
+        amplitude = patterns.array
+        xp = get_array_module(amplitude)
+        quantities = {
+            "real": amplitude.real,
+            "imag": amplitude.imag,
+            "intensity": abs2(amplitude),
+        }
+        array = xp.concatenate(
+            [quantities[name] for name in self._moment_channels], axis=-2
+        )
+
+        if self.to_cpu:
+            array = asnumpy(array)
+
+        return array
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         """
@@ -2169,6 +2316,9 @@ class PixelatedDetector(BaseDetector):
         measurement : DiffractionPatterns
         """
         measurements: Images | DiffractionPatterns
+
+        if self.components is not None:
+            return self._calculate_moments(waves)
 
         if self.reciprocal_space and self._ensemble_gpts is not None:
             measurements = waves._diffraction_patterns(self._ensemble_gpts)
@@ -2228,6 +2378,23 @@ class WavesDetector(BaseDetector):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    average_frozen_phonons : bool, optional
+       If True, return the configuration-averaged wave function <ψ> of a
+       frozen-phonon ensemble, the coherent (elastic) wave, instead of the wave
+       function of every configuration: the ``FrozenPhononsAxis`` is averaged when
+       the ensemble is reduced, as the multislice tasks finish, so the exit waves
+       of the configurations are not all kept. Other ensemble axes are kept as
+       they are. Requires a ``FrozenPhononsAxis`` with ``ensemble_mean=True``
+       among the ensemble axes; the average is formed when the ensemble is reduced,
+       as in the result of a multislice simulation, and a detector applied to
+       waves directly returns the waves of every configuration, to be reduced with
+       :func:`abtem.waves.reduce_ensemble`. For the elastic and diffuse
+       intensities in reciprocal space, use ``PixelatedDetector(components=...)``.
+       Default is False, which detects the wave function of every configuration.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+       Precision of the wave functions that are averaged: with ``'float64'`` the
+       detected waves are complex128 and so is their average. Only with
+       `average_frozen_phonons`. Default is None, the precision of the waves.
     """
 
     # The wave functions do not depend on the wavelength once computed, so a
@@ -2239,9 +2406,31 @@ class WavesDetector(BaseDetector):
         gpts: Optional[tuple[int, int]] = None,
         to_cpu: bool = False,
         url: Optional[str] = None,
+        average_frozen_phonons: bool = False,
+        reduction_dtype: Optional[str | np.dtype] = None,
     ):
+        if not isinstance(average_frozen_phonons, (bool, np.bool_)):
+            raise TypeError(
+                "average_frozen_phonons must be a bool, got "
+                f"{type(average_frozen_phonons).__name__}"
+            )
+        reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+        if reduction_dtype is not None and not average_frozen_phonons:
+            raise ValueError("reduction_dtype applies to average_frozen_phonons")
         self._gpts = gpts
+        self._average_frozen_phonons = bool(average_frozen_phonons)
+        self._reduction_dtype = reduction_dtype
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def average_frozen_phonons(self) -> bool:
+        """The wave function is averaged over the frozen phonons."""
+        return self._average_frozen_phonons
+
+    @property
+    def reduction_dtype(self) -> Optional[np.dtype]:
+        """Precision of the wave functions averaged over the frozen phonons."""
+        return self._reduction_dtype
 
     @property
     def gpts(self) -> Optional[tuple[int, int]]:
@@ -2249,7 +2438,11 @@ class WavesDetector(BaseDetector):
         return self._gpts
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
-        if self._gpts is not None:
+        if self.reduction_dtype is not None:
+            return (np.result_type(self.reduction_dtype, np.complex64),)
+        # An empty gpts asks for no resampling, as None does (the other _out_*
+        # methods and _calculate_new_array test it the same way).
+        if self._gpts:
             # fft_interpolate works in the configured precision
             return (get_dtype(complex=True),)
         return (waves.dtype,)
@@ -2262,6 +2455,9 @@ class WavesDetector(BaseDetector):
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
+        if self.average_frozen_phonons:
+            # Read by `reduce_ensemble`, which averages the frozen phonons.
+            metadata["frozen_phonon_average"] = True
         if self._gpts:
             # as `Waves.downsample` records it: the resampled waves keep the
             # band limit of the waves they were resampled from
@@ -2301,6 +2497,9 @@ class WavesDetector(BaseDetector):
             array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
         else:
             array = waves.array
+
+        if self.reduction_dtype is not None:
+            array = array.astype(self._out_dtype(waves)[0])
 
         return array
 
