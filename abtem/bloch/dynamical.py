@@ -2129,7 +2129,7 @@ class BlochWaves:
                 energy=None,
                 ensemble_axes_metadata=[energy_ax]
                 + results[0].ensemble_axes_metadata,
-                metadata=results[0].metadata,
+                metadata={**results[0].metadata, "energy": None},
             )
 
         # --- Single-energy path (unchanged) ---

@@ -11,6 +11,9 @@ from abtem.magnetism.gpaw import (
     GPAWMagneticField,
     GPAWMagneticFields,
     GPAWVectorPotential,
+    _ROTATION_X_INTO_Z,
+    _ROTATION_Y_INTO_Z,
+    _auto_rotation_matrix_for_vector_field,
     _fourier_slice_integrals,
     _supercell_of_box,
     get_magnetic_field_from_gpaw,
@@ -664,3 +667,25 @@ def test_box_of_a_rotated_cell_turns_the_field_back():
     vectors, turn = _supercell_of_box(_HEXAGONAL, np.diag(_ORTHOGONAL))
     np.testing.assert_array_equal(vectors, [[1, 0, 0], [1, 2, 0], [0, 0, 1]])
     np.testing.assert_allclose(turn, np.eye(3), rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "y_over_x, expected",
+    [
+        # equal up to round-off, either way: a tie, which picks x
+        (1 + 1e-5, _ROTATION_X_INTO_Z),
+        (1 - 1e-5, _ROTATION_X_INTO_Z),
+        # a real difference picks the larger component
+        (1.01, _ROTATION_Y_INTO_Z),
+        (0.99, _ROTATION_X_INTO_Z),
+    ],
+)
+def test_auto_rotation_breaks_a_round_off_tie_by_a_fixed_rule(y_over_x, expected):
+    # the aggregate magnitudes of a hexagonal crystal's field differ by round-off
+    # (hcp Co: 2e-6 to 9e-6 relative), which must not decide the component
+    field = np.zeros((3, 4, 4, 4))
+    field[0] = 1.0
+    field[1] = np.sqrt(y_over_x)
+    np.testing.assert_array_equal(
+        _auto_rotation_matrix_for_vector_field(field), expected
+    )
