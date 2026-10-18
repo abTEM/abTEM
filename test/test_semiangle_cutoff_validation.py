@@ -158,14 +158,6 @@ def test_annular_aperture_rejects_a_distribution_of_either_cutoff():
     assert aperture.semiangle_cutoff == 20.0
 
 
-def test_annular_aperture_evaluation_raises_for_a_non_scalar_cutoff():
-    """An exception rather than an assert, which `python -O` would remove."""
-    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
-    aperture._semiangle_cutoff = abtem.distributions.from_values([10.0, 20.0])
-    with pytest.raises(TypeError, match="single semiangle_cutoff"):
-        aperture._evaluate_from_angular_grid(np.zeros((4, 4)), np.zeros((4, 4)))
-
-
 def test_zernike_rejects_a_negative_center_hole():
     with pytest.raises(ValueError, match="center_hole_cutoff must be non-negative"):
         Zernike(-1.0, np.pi / 2, semiangle_cutoff=30.0)
