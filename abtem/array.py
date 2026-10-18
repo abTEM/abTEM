@@ -2657,6 +2657,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Convert ArrayObject to quantem Dataset object. For an axis with an offset, the
         origin is the coordinate of its first sample, in the units of the sampling; other
         axes get origin 0 and sampling 1.
+
+        The units of the axes are converted to quantem's spelling (for example "A" and
+        "A^-1"), and an axis without units gets "pixels". The signal units are the
+        "units" entry of the metadata, passed on unchanged; if there is none they are
+        "arb. unit". The metadata is deep-copied into the metadata of the Dataset, so
+        changing one does not change the other.
+
+        A quantem Dataset holds NumPy arrays only: a lazy object is computed (the
+        object itself stays lazy) and an array on a GPU is copied to the host.
+
+        Returns
+        -------
+        dataset : quantem.core.datastructures.Dataset
         """
 
         em = _optional_module(
@@ -2689,21 +2702,32 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             units.append(_normalize_unit(getattr(axis, "units", None)))
             origin.append(getattr(axis, "offset", 0.0))
 
-        if self.is_lazy:
-            self.compute()
+        # The signal units are the metadata units, as abTEM's own measurements set them
+        # ("arb. unit" by default). quantem only displays them, and reads the same
+        # symbols as abTEM ("Å", "%", "electrons"), so they are not normalized like
+        # the axis units. An empty string is a dimensionless signal and stays empty.
+        signal_units = self.metadata.get("units")
+        if signal_units is None:
+            signal_units = "arb. unit"
 
+        # compute() replaces the array of the object it is called on; computing a
+        # shallow copy leaves the caller lazy.
+        exported = copy.copy(self).compute() if self.is_lazy else self
+
+        # A quantem Dataset holds NumPy arrays only: it rejects CuPy arrays.
         dataset = em.core.datastructures.Dataset.from_array(
-            array=self.array,
+            array=asnumpy(exported.array),
             name=type(self).__name__,
             origin=tuple(origin),
             sampling=tuple(sampling),
             units=tuple(units),
-            signal_units=getattr(self, "units", "arb. units"),
+            signal_units=signal_units,
         )
 
-        # preserve abTEM metadata if present
-        if hasattr(self, "metadata"):
-            dataset._metadata = dict(self.metadata)
+        # Dataset.from_array takes no metadata; Dataset.metadata is the dict it
+        # holds, empty for a new dataset. Deep-copied, as in to_data_array, so that
+        # nested values are not shared with this object.
+        dataset.metadata.update(copy.deepcopy(self.metadata))
 
         return dataset
 
