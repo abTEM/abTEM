@@ -203,10 +203,10 @@ class TestEstimateScanBatchSize:
             pool_used=1_000_000_000,
             pool_free=28_000_000_000,
         )
-        # Without pool_free: effective_free=1 GB -> tiny batch.
+        # Without pool_free: effective_free=1 GB -> a batch of 1.
         # With pool_free:    effective_free=29 GB -> budget 14.5 GB -> big batch.
-        without = estimate_scan_batch_size((2048, 2048), np.complex128, "gpu")
-        assert without >= 32
+        batch_size = estimate_scan_batch_size((2048, 2048), np.complex128, "gpu")
+        assert batch_size >= 32
 
     def test_cpu_falls_back_to_chunk_size(self):
         assert estimate_scan_batch_size((2048, 2048), np.complex128, "cpu") >= 1

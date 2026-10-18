@@ -6,7 +6,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from copy import copy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Type, TypeVar
 
 import numpy as np
 
@@ -17,8 +17,9 @@ from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
 )
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.chunks import Chunks
+from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_interpolate
@@ -32,10 +33,14 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
     _image_resampling_gpts,
+    _needs_the_diffuse_part,
     _polar_detector_bins,
+    _radial_weight_map,
     _scan_axes,
     _scan_shape,
     _scanned_measurement_type,
+    _validate_frozen_phonon_components,
+    _validate_reduction_dtype,
 )
 from abtem.transform import ArrayObjectTransform, WavesType
 from abtem.visualize.visualizations import discrete_cmap
@@ -83,6 +88,216 @@ def _gpts_and_sampling_from_obj(obj):
         reciprocal_space_sampling = obj.reciprocal_space_sampling
         energy = _energy_from_waves(obj)
     return gpts, angular_sampling, reciprocal_space_sampling, energy
+
+
+class RadialSensitivity:
+    """
+    A radially varying detector sensitivity (gain) as a function of the radial
+    scattering angle.
+
+    This describes how the recorded signal of an annular detector is weighted as a
+    function of scattering angle, replacing the idealized assumption of a detector that
+    is uniformly sensitive between its inner and outer integration limits. Real annular
+    detectors typically have a non-uniform angular response, e.g. a gradual roll-off
+    towards the edges or a measured gain curve.
+
+    The angle is measured from the detector centre, i.e. from the optical axis displaced
+    by the detector's ``offset``, so that the sensitivity moves with an offset detector
+    and ``inner``/``outer`` refer to the same radii as the sensitivity.
+
+    The sensitivity is a weight in the range ``[0, 1]``, where 1 is full sensitivity;
+    weights greater than 1 are unphysical and rejected. It may be specified in two ways:
+
+    1. As a callable mapping the radial scattering angle [mrad] to a sensitivity weight.
+       The callable must accept and return array-like input (it is evaluated on a grid of
+       angles), e.g. ``lambda alpha: alpha / 100.0``. It is sampled across the detector's
+       integration range and must return finite weights within ``[0, 1]``.
+    2. As a tuple ``(angles, values)`` of one-dimensional array-likes giving a measured
+       sensitivity curve. The angles [mrad] must be strictly increasing and the values
+       must lie within ``[0, 1]``. The values are linearly interpolated onto the detector
+       grid; angles outside the measured range are clamped to the first and last value.
+
+    Parameters
+    ----------
+    sensitivity : callable or tuple of array-like
+        The radial sensitivity, given either as a callable ``w(alpha)`` or as a tuple
+        ``(angles, values)`` describing a measured sensitivity curve. If an existing
+        ``RadialSensitivity`` is given, it is returned unchanged by
+        :func:`validate_radial_sensitivity`.
+
+    Examples
+    --------
+    >>> # Linearly increasing sensitivity towards higher angles.
+    >>> sens = RadialSensitivity(lambda alpha: alpha / 80.0)
+    >>> # A measured response curve.
+    >>> sens = RadialSensitivity(([0, 40, 80, 120], [0.0, 1.0, 0.9, 0.2]))
+    """
+
+    def __init__(
+        self,
+        sensitivity: Callable | tuple[Any, Any],
+    ):
+        if callable(sensitivity):
+            self._func: Optional[Callable] = sensitivity
+            self._angles: Optional[np.ndarray] = None
+            self._values: Optional[np.ndarray] = None
+        else:
+            try:
+                angles, values = sensitivity
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "'sensitivity' must be a callable or a tuple (angles, values)"
+                )
+
+            angles = np.asarray(angles, dtype=float)
+            values = np.asarray(values, dtype=float)
+
+            if angles.ndim != 1 or angles.shape != values.shape:
+                raise ValueError(
+                    "'angles' and 'values' must be one-dimensional arrays of equal length"
+                )
+
+            if angles.size < 2:
+                raise ValueError("'angles' must contain at least two points")
+
+            if np.any(np.diff(angles) <= 0):
+                raise ValueError("'angles' must be strictly increasing")
+
+            if np.any(values < 0) or np.any(values > 1):
+                raise ValueError(
+                    "sensitivity 'values' must lie within [0, 1] (a value of 1 is full "
+                    "sensitivity); values greater than 1 are unphysical"
+                )
+
+            self._func = None
+            self._angles = angles
+            self._values = values
+
+    @property
+    def angles(self) -> Optional[np.ndarray]:
+        """The angles of the measured sensitivity curve [mrad], or None if callable."""
+        return self._angles
+
+    @property
+    def values(self) -> Optional[np.ndarray]:
+        """The values of the measured sensitivity curve, or None if callable."""
+        return self._values
+
+    @property
+    def func(self) -> Optional[Callable]:
+        """The sensitivity callable, or None if a measured curve was given."""
+        return self._func
+
+    def __call__(self, alpha):
+        """
+        Evaluate the sensitivity at the given radial scattering angles.
+
+        Parameters
+        ----------
+        alpha : array-like
+            Radial scattering angles [mrad].
+
+        Returns
+        -------
+        weights : array-like
+            The sensitivity weights, with the same shape as ``alpha``.
+        """
+        if self._func is not None:
+            return self._func(alpha)
+
+        xp = get_array_module(alpha)
+        weights = np.interp(asnumpy(alpha), self._angles, self._values)
+        return xp.asarray(weights)
+
+    def _check_range(self, inner: float, outer: float) -> None:
+        """
+        Validate the sensitivity against a detector's integration range [inner, outer].
+
+        For a measured ``(angles, values)`` curve, all provided angles must lie within
+        ``[inner, outer]`` so that no detector angle relies on extrapolation (the values
+        are already validated to lie within ``[0, 1]`` at construction). For a callable,
+        the domain cannot be introspected, so instead the function is sampled across
+        ``[inner, outer]`` and checked to return finite weights within ``[0, 1]``.
+
+        Parameters
+        ----------
+        inner : float
+            Inner integration limit of the detector [mrad].
+        outer : float
+            Outer integration limit of the detector [mrad].
+
+        Raises
+        ------
+        ValueError
+            If the measured angles fall outside ``[inner, outer]``, or if a callable
+            produces non-finite weights or weights outside ``[0, 1]`` over that range.
+        """
+        tol = 1e-6
+
+        if self._angles is not None:
+            low, high = float(self._angles[0]), float(self._angles[-1])
+            if low < inner - tol or high > outer + tol:
+                raise ValueError(
+                    f"RadialSensitivity angles span [{low:.3g}, {high:.3g}] mrad, which "
+                    f"lies outside the detector integration range "
+                    f"[{inner:.3g}, {outer:.3g}] mrad. Provide sensitivity angles within "
+                    f"the detector's inner and outer limits."
+                )
+        else:
+            sample = np.linspace(inner, outer, 128)
+            weights = np.asarray(self._func(sample), dtype=float)
+            if not np.all(np.isfinite(weights)):
+                raise ValueError(
+                    f"RadialSensitivity callable produced non-finite weights over the "
+                    f"detector range [{inner:.3g}, {outer:.3g}] mrad."
+                )
+            if np.any(weights < -tol):
+                raise ValueError(
+                    f"RadialSensitivity callable produced negative weights over the "
+                    f"detector range [{inner:.3g}, {outer:.3g}] mrad; sensitivity "
+                    f"weights must be non-negative."
+                )
+            if np.any(weights > 1 + tol):
+                raise ValueError(
+                    f"RadialSensitivity callable produced weights greater than 1 over "
+                    f"the detector range [{inner:.3g}, {outer:.3g}] mrad; sensitivity "
+                    f"weights must lie within [0, 1] (a weight of 1 is full sensitivity)."
+                )
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, RadialSensitivity):
+            return False
+        if self._func is not None or other._func is not None:
+            return self._func is other._func
+        return bool(
+            np.array_equal(self._angles, other._angles)
+            and np.array_equal(self._values, other._values)
+        )
+
+    def __hash__(self) -> int:
+        if self._func is not None:
+            return hash(self._func)
+        return hash((tuple(self._angles.tolist()), tuple(self._values.tolist())))
+
+
+def validate_radial_sensitivity(
+    sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]],
+) -> Optional[RadialSensitivity]:
+    """
+    Normalize a radial sensitivity specification to a ``RadialSensitivity`` or None.
+
+    Parameters
+    ----------
+    sensitivity : RadialSensitivity, callable, tuple of array-like or None
+        The radial sensitivity specification. If None, None is returned.
+
+    Returns
+    -------
+    sensitivity : RadialSensitivity or None
+    """
+    if sensitivity is None or isinstance(sensitivity, RadialSensitivity):
+        return sensitivity
+    return RadialSensitivity(sensitivity)
 
 
 def validate_detectors(
@@ -241,9 +456,15 @@ class _AbstractRadialDetector(BaseDetector):
         outer: Optional[float] = None,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
+        if inner < 0.0:
+            raise ValueError(f"'inner' must be non-negative, got {inner}")
+        if outer is not None and outer < 0.0:
+            raise ValueError(f"'outer' must be non-negative, got {outer}")
+
         self._inner = inner
         self._outer = outer
         # Whether `outer` was given explicitly (constructor or the setter
@@ -254,6 +475,14 @@ class _AbstractRadialDetector(BaseDetector):
         self._outer_is_explicit = outer is not None
         self._rotation = rotation
         self._offset = offset
+        self._sensitivity = validate_radial_sensitivity(sensitivity)
+
+        # Validate the sensitivity against the integration range as soon as it is known.
+        # If 'outer' is None it is resolved from the waves at detection time, where the
+        # check is repeated.
+        if self._sensitivity is not None and outer is not None:
+            self._sensitivity._check_range(inner, outer)
+
         super().__init__(to_cpu=to_cpu, url=url)
 
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
@@ -263,6 +492,11 @@ class _AbstractRadialDetector(BaseDetector):
         if not self._outer_is_explicit:
             kwargs["outer"] = None
         return kwargs
+
+    @property
+    def sensitivity(self) -> Optional[RadialSensitivity]:
+        """The radially varying detector sensitivity, or None if uniform."""
+        return self._sensitivity
 
     @property
     def inner(self) -> float:
@@ -351,7 +585,14 @@ class _AbstractRadialDetector(BaseDetector):
         )
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
-        return self.inner, self._binned_outer(self._outer_for(waves))
+        outer = self._outer_for(waves)
+
+        # The sensitivity is checked against the requested outer angle, as in the
+        # constructor, not the outer edge of the outermost bin.
+        if self.sensitivity is not None:
+            self.sensitivity._check_range(self.inner, outer)
+
+        return self.inner, self._binned_outer(outer)
 
     def _binned_outer(self, outer: float) -> float:
         """Outer edge of the outermost bin for a requested ``outer`` [mrad]."""
@@ -421,6 +662,7 @@ class _AbstractRadialDetector(BaseDetector):
             outer=outer,
             rotation=self._rotation,
             offset=self._offset,
+            sensitivity=self.sensitivity,
         )
 
         if self.to_cpu:
@@ -457,6 +699,8 @@ class _AbstractRadialDetector(BaseDetector):
 
         matched = self.copy()
         matched._outer = self._outer_for(waves)
+        if matched.sensitivity is not None:
+            matched.sensitivity._check_range(matched.inner, matched._outer)
         return matched
 
     def detect(self, waves: WavesType) -> PolarMeasurements:
@@ -491,6 +735,11 @@ class _AbstractRadialDetector(BaseDetector):
         """
         Get the polar detector regions as a polar measurement.
 
+        By default each region is labelled by its integer index. If the detector has a
+        radial sensitivity, the regions are instead filled with the detector efficiency
+        [%] at the center of each radial bin, so that the sensitivity profile is
+        reflected when the regions are shown.
+
         The regions are labelled on polar axes about the detector centre; a
         detector ``offset`` is not represented (``show`` draws it).
 
@@ -505,15 +754,25 @@ class _AbstractRadialDetector(BaseDetector):
         """
         inner, outer, nbins_radial = self._region_limits(waves)
 
-        bins = np.arange(0, nbins_radial * self.nbins_azimuthal)
-        bins = bins.reshape((nbins_radial, self.nbins_azimuthal))
-
         if waves is not None:
             metadata = copy(waves.metadata)
         else:
             metadata = {}
 
-        metadata.update({"label": "detector regions", "units": ""})
+        if self.sensitivity is not None:
+            radial_sampling = (outer - inner) / nbins_radial
+            radial_centers = inner + (np.arange(nbins_radial) + 0.5) * radial_sampling
+            weights = np.asarray(self.sensitivity(radial_centers), dtype=float)
+            # A sensitivity callable is not required to preserve the input shape (e.g. a
+            # constant weight returns a scalar); broadcast explicitly so a scalar result
+            # doesn't crash the [:, None] indexing below.
+            weights = np.broadcast_to(weights, radial_centers.shape) * 100.0
+            bins = np.repeat(weights[:, None], self.nbins_azimuthal, axis=1)
+            metadata.update({"label": "Detector efficiency", "units": "%"})
+        else:
+            bins = np.arange(0, nbins_radial * self.nbins_azimuthal)
+            bins = bins.reshape((nbins_radial, self.nbins_azimuthal))
+            metadata.update({"label": "detector regions", "units": ""})
 
         polar_measurements = PolarMeasurements(
             bins,
@@ -526,6 +785,29 @@ class _AbstractRadialDetector(BaseDetector):
 
         return polar_measurements
 
+    def _raise_region_arity_error(self, has: str, use: str, use_is_for: str) -> None:
+        raise NotImplementedError(
+            f"'{type(self).__name__}' {has}; use '{use}' to obtain {use_is_for}."
+        )
+
+    def get_detector_region(
+        self, waves: Optional[BaseWaves] = None, fftshift: bool = True
+    ):
+        """
+        Not available for multi-region detectors.
+
+        Use :meth:`get_detector_regions` (plural) to obtain the polar regions of a
+        ``FlexibleAnnularDetector`` or ``SegmentedDetector``. The singular
+        ``get_detector_region`` is only defined for the single-region
+        ``AnnularDetector``, which overrides this method.
+        """
+        self._raise_region_arity_error(
+            has="has multiple regions",
+            use="get_detector_regions",
+            use_is_for="its polar regions (plural); the singular 'get_detector_region' "
+            "is only for the single-region AnnularDetector",
+        )
+
     def show(
         self,
         waves: Optional[BaseWaves] = None,
@@ -535,7 +817,11 @@ class _AbstractRadialDetector(BaseDetector):
         **kwargs,
     ):
         """
-        Show the segmented detector regions as a polar plot.
+        Show the detector regions as a polar plot.
+
+        The discrete detector regions are shown with a categorical colormap. If the
+        detector has a radial sensitivity, the per-pixel detector efficiency [%] is shown
+        instead with a continuous colormap, so the sensitivity profile is visible.
 
         The regions are drawn about the detector centre, including any
         ``offset``, out to the bins that detecting the waves would use.
@@ -543,7 +829,7 @@ class _AbstractRadialDetector(BaseDetector):
         Parameters
         ----------
         waves : BaseWaves
-            The waves to derive the segmented detector regions from.
+            The waves to derive the detector regions from.
         gpts : two int, optional
             Number of grid points describing the wave functions to be detected.
         sampling : two float, optional
@@ -618,34 +904,64 @@ class _AbstractRadialDetector(BaseDetector):
             return_indices=False,
         )
         assert isinstance(regions, np.ndarray)
+        inside = regions >= 0
 
-        regions = regions.astype(get_dtype(complex=False))
-        regions[..., regions < 0] = np.nan
+        num_colors = nbins_radial * self.nbins_azimuthal
 
-        diffraction_patterns = DiffractionPatterns(
-            regions,
-            sampling=reciprocal_space_sampling,
-            fftshift=True,
-            metadata={"energy": energy},
-        )
+        if self.sensitivity is not None:
+            # Show the continuous per-pixel efficiency [%] so the radial sensitivity is
+            # visible, rather than the (here uninformative) discrete region labels.
+            # The weights are a function of the angle from the detector centre
+            # (including any offset), as in `polar_binning`.
+            weights = _radial_weight_map(
+                gpts=tuple(gpts),
+                sampling=angular_sampling,
+                sensitivity=self.sensitivity,
+                fftshift=True,
+                offset=offset,
+            )
+            array = np.where(inside, weights * 100.0, np.nan).astype(
+                get_dtype(complex=False)
+            )
+            metadata = {
+                "energy": energy,
+                "label": "Detector efficiency",
+                "units": "%",
+            }
+            diffraction_patterns = DiffractionPatterns(
+                array,
+                sampling=reciprocal_space_sampling,
+                fftshift=True,
+                metadata=metadata,
+            )
+            # Scale the colormap to the actual efficiency range within the detector so
+            # the radial sensitivity gradient is visible (rather than washed out over a
+            # fixed 0-100 % range).
+            finite = array[np.isfinite(array)]
+            low = float(finite.min()) if finite.size else 0.0
+            high = float(finite.max()) if finite.size else 100.0
+            if high <= low:
+                low, high = 0.0, max(high, 1e-6)
+            kwargs.setdefault("cmap", "viridis")
+            kwargs.setdefault("vmin", low)
+            kwargs.setdefault("vmax", high)
+        else:
+            array = regions.astype(get_dtype(complex=False))
+            array[..., ~inside] = np.nan
+            diffraction_patterns = DiffractionPatterns(
+                array,
+                sampling=reciprocal_space_sampling,
+                fftshift=True,
+                metadata={"energy": energy},
+            )
 
-        n_bins_radial = nbins_radial
-        n_bins_azimuthal = self.nbins_azimuthal
-        num_colors = n_bins_radial * n_bins_azimuthal
-
-        if "cmap" not in kwargs:
-            if num_colors <= 10:
-                kwargs["cmap"] = "tab10"
-            else:
-                kwargs["cmap"] = "tab20"
-
-        kwargs["cmap"] = discrete_cmap(num_colors=num_colors, base_cmap=kwargs["cmap"])
-
-        if "vmin" not in kwargs:
-            kwargs["vmin"] = -0.5
-
-        if "vmax" not in kwargs:
-            kwargs["vmax"] = num_colors - 0.5
+            if "cmap" not in kwargs:
+                kwargs["cmap"] = "tab10" if num_colors <= 10 else "tab20"
+            kwargs["cmap"] = discrete_cmap(
+                num_colors=num_colors, base_cmap=kwargs["cmap"]
+            )
+            kwargs.setdefault("vmin", -0.5)
+            kwargs.setdefault("vmax", num_colors - 0.5)
 
         if "units" not in kwargs:
             kwargs["units"] = "mrad"
@@ -669,6 +985,13 @@ class AnnularDetector(_AbstractRadialDetector):
         detected waves.
     offset: two float, optional
         Center offset of the annular integration region [mrad].
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before integration, simulating a detector that is not uniformly sensitive within
+        its integration limits. May be given as a :class:`RadialSensitivity`, a callable
+        ``w(alpha)``, or a tuple ``(angles, values)`` describing a measured sensitivity
+        curve. By default the detector is uniformly sensitive.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective devices.
@@ -685,6 +1008,7 @@ class AnnularDetector(_AbstractRadialDetector):
         inner: float = 0.0,
         outer: Optional[float] = None,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -697,6 +1021,7 @@ class AnnularDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=0.0,  # Rotation is meaningless for standard annular detector
             offset=offset,
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
@@ -810,12 +1135,12 @@ class AnnularDetector(_AbstractRadialDetector):
         -------
         measurement : DiffractionPatterns
         """
-        outer = self._outer_for(waves)
+        inner, outer = self.angular_limits(waves)
 
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
-        diffraction_patterns._check_integration_limits(self.inner, outer)
+        diffraction_patterns._check_integration_limits(inner, outer)
         offset = self.offset if self.offset is not None else (0.0, 0.0)
 
         # Integrated over the pattern axes only, so the result keeps the waves'
@@ -825,10 +1150,11 @@ class AnnularDetector(_AbstractRadialDetector):
         intensity = DiffractionPatterns._integrate_fourier_space(
             diffraction_patterns._eager_array,
             sampling=diffraction_patterns.angular_sampling,
-            inner=self.inner,
+            inner=inner,
             outer=outer,
             fftshift=False,
             offset=offset,
+            sensitivity=self.sensitivity,
         )
 
         if self.to_cpu and hasattr(intensity, "get"):
@@ -876,29 +1202,53 @@ class AnnularDetector(_AbstractRadialDetector):
             return_indices=False,
         )
         assert isinstance(array, np.ndarray)
-        return array >= 0
+        inside = array >= 0
 
-    def get_detector_region(self, waves, fftshift: bool = True):
+        if self.sensitivity is not None:
+            weights = _radial_weight_map(
+                gpts=inside.shape,
+                sampling=angular_sampling,
+                sensitivity=self.sensitivity,
+                fftshift=fftshift,
+                offset=self.offset,
+            )
+            # Select (rather than multiply) by the weight: a sensitivity callable that is
+            # undefined (e.g. NaN) outside [inner, outer] must not corrupt pixels that are
+            # already excluded by `inside`.
+            region = np.where(inside, weights, 0.0).astype(get_dtype(complex=False))
+        else:
+            region = inside.astype(get_dtype(complex=False))
+
+        return region * 100.0
+
+    def get_detector_region(
+        self, waves, fftshift: bool = True
+    ) -> DiffractionPatterns:
         """
         Get the annular detector region as a diffraction pattern.
+
+        The region is the detector efficiency [%] as a function of scattering angle: a
+        binary mask (0 or 100 %) for a uniform detector, or the sensitivity-weighted
+        efficiency if a radial sensitivity is set.
 
         Parameters
         ----------
         waves : BaseWaves or DiffractionPatterns
             The waves or diffraction patterns used to derive grid calibration.
         fftshift : bool, optional
-            If True, the zero-frequency of the detector region is shifted to the
-            centre of the array, otherwise the centre is at (0, 0).
+            If True, the zero-frequency of the detector region is shifted to the center
+            of the array, otherwise the center is at (0, 0).
 
         Returns
         -------
         detector_region : DiffractionPatterns
         """
+
         array = self._get_detector_region_array(waves, fftshift=fftshift)
         _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
         metadata = {
             "energy": energy,
-            "label": "detector efficiency",
+            "label": "Detector efficiency",
             "units": "%",
         }
         diffraction_patterns = DiffractionPatterns(
@@ -1211,17 +1561,15 @@ class SpectralSlitDetector(BaseDetector):
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The constructor takes the geometry either as corners or as the slit
         # parameters, not both, so a copy (and every lazy block) is rebuilt from
-        # the form it was given in. A detector that did not record its form
-        # (one pickled by an earlier version) is rebuilt from the slit parameters,
-        # which describe the same rectangle in both forms.
-        if getattr(self, "_from_corners", False):
+        # the form it was given in.
+        if self._from_corners:
             exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
         else:
             exclude = exclude + ("corners",)
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
         if "q_max" in kwargs:
             # as given, not q_min + extent, which can differ in the last bit
-            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+            kwargs["q_max"] = self._q_max
         return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
@@ -1298,7 +1646,7 @@ class SpectralSlitDetector(BaseDetector):
             angle=self._angle,
             q_min=self.q_min,
             # as given, like _copy_kwargs: q_min + extent can differ in the last bit
-            q_max=getattr(self, "_q_max", self.q_max),
+            q_max=self._q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
@@ -1695,6 +2043,14 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         trailing partial step is dropped and the last bin ends at
         ``inner + n * step_size``. If not given, the antialias cutoff angle of
         the detected waves is used.
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before binning, simulating a detector that is not uniformly sensitive across the
+        bins. May be given as a :class:`RadialSensitivity`, a callable ``w(alpha)``, or a
+        tuple ``(angles, values)`` describing a measured sensitivity curve. By default
+        the bins are uniformly sensitive. Note that integrating the resulting polar
+        measurement reproduces the signal of a sensitivity-weighted annular detector.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective
@@ -1711,6 +2067,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         step_size: float = 1.0,
         inner: float = 0.0,
         outer: Optional[float] = None,
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -1720,6 +2077,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=0.0,
             offset=(0.0, 0.0),
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
@@ -1780,6 +2138,12 @@ class SegmentedDetector(_AbstractRadialDetector):
         Rotation of the bins around the origin [rad].
     offset : two float
         Offset of the bins from the origin in `x` and `y` [mrad].
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before binning. May be given as a :class:`RadialSensitivity`, a callable
+        ``w(alpha)``, or a tuple ``(angles, values)`` describing a measured sensitivity
+        curve. By default the bins are uniformly sensitive.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective devices.
@@ -1799,6 +2163,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         outer: Optional[float],
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -1809,6 +2174,7 @@ class SegmentedDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=rotation,
             offset=offset,
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
@@ -1919,13 +2285,51 @@ class PixelatedDetector(BaseDetector):
         location, typically a path to a local file. A URL can also include a protocol
         specifier like s3:// for remote data. If not set (default) the data stays in
         memory.
+    components : {'all', 'total', 'elastic', 'diffuse'} or sequence of str, optional
+        Detect the elastic, diffuse and total intensity of a frozen-phonon ensemble
+        instead of the intensity of each configuration, as
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns` forms them
+        from the exit waves of every configuration. Each multislice task keeps the
+        diffracted amplitude ψ(k) and its intensity |ψ(k)|² cropped to `max_angle`;
+        the ensemble mean over the frozen-phonon axis averages both as the tasks
+        finish, so the exit waves of the configurations are never kept. The
+        elastic intensity |<ψ>|² and the diffuse intensity <|ψ|²> - |<ψ>|² are
+        formed after that mean, and any other ensemble-mean axis is averaged
+        after the split, i.e. incoherently. A single name returns that component,
+        ``'all'`` or a sequence stack them in the order given along a leading
+        ``OrdinalAxis(label='component')`` (``'all'`` is
+        ``('total', 'elastic', 'diffuse')``). Requires a ``FrozenPhononsAxis``
+        with ``ensemble_mean=True`` among the ensemble axes, ``reciprocal_space``
+        and no `resample`. The components are formed when the ensemble is reduced,
+        as in the result of a multislice simulation; a detector applied to waves
+        directly returns the unreduced amplitudes and intensities, to be reduced
+        with :func:`abtem.waves.reduce_ensemble`. Supported by multislice and by
+        the PRISM scan (:meth:`abtem.prism.SMatrix.scan`), except with
+        ``upsample=True``, which raises ``NotImplementedError``. With several
+        energies, every energy's components are cropped to the pixel count of the
+        highest energy, as for `max_angle` in mrad, so they stack along the energy
+        axis. Default is None, which detects the intensity of every configuration.
+    unbiased : bool, optional
+        Correct the (N - 1)/N bias of the diffuse intensity, see
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
+        `components`. Default is False.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+        Precision of the amplitudes and intensities that are averaged, see
+        :func:`abtem.measurements.elastic_diffuse_diffraction_patterns`. Only with
+        `components`. Default is None, the precision of the exit waves. The diffuse
+        intensity is the difference of the total and the elastic intensity, so
+        where it is far below the Bragg peaks (weak thermal displacements, a plane
+        wave or a large probe) it is limited by the rounding of the large
+        intensities: in single precision it can be off by as much as the diffuse
+        intensity itself, and even negative. Use ``reduction_dtype='float64'`` for
+        a weak diffuse signal.
     margin : float or tuple of float, optional
         Margin cropped from each side of the exit wave [Å] before detecting, and
         before applying `window_func` (default is 0.0, i.e. no cropping). Useful
         for a finite, non-periodic structure (e.g. from :func:`abtem.atoms.cut_disk`
         or :func:`abtem.atoms.cut_ball`), where the simulation cell is padded
         beyond the structure itself. See :meth:`abtem.waves.Waves.crop`.
-    window_func : str, optional
+    window_func : str or tuple, optional
         Real-space window function applied before detecting, as accepted by
         :func:`scipy.signal.windows.get_window` (default is `None`, i.e. no
         windowing). Tapers the (optionally margin-cropped) exit wave to
@@ -1942,10 +2346,6 @@ class PixelatedDetector(BaseDetector):
     # multi-energy ensemble is detected at once.
     _splits_energy_ensembles = False
 
-    # A detector without a recorded ensemble crop, such as one pickled by an
-    # earlier version, has none.
-    _ensemble_gpts: Optional[tuple[int, int]] = None
-
     def __init__(
         self,
         max_angle: str | float = "valid",
@@ -1953,8 +2353,11 @@ class PixelatedDetector(BaseDetector):
         reciprocal_space: bool = True,
         to_cpu: bool = True,
         url: Optional[str] = None,
+        components: Optional[str | Sequence[str]] = None,
+        unbiased: bool = False,
+        reduction_dtype: Optional[str | np.dtype] = None,
         margin: float | tuple[float, float] = 0.0,
-        window_func: Optional[str] = None,
+        window_func: Optional[str | tuple] = None,
         _ensemble_gpts: Optional[tuple[int, int]] = None,
     ):
         if not reciprocal_space and isinstance(resample, str):
@@ -1962,6 +2365,28 @@ class PixelatedDetector(BaseDetector):
                 f"resample={resample!r} applies to diffraction patterns only; "
                 "in real space give the sampling of the images [Å]."
             )
+        if not isinstance(unbiased, (bool, np.bool_)):
+            raise TypeError(f"unbiased must be a bool, got {type(unbiased).__name__}")
+        reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+        if components is None:
+            if unbiased or reduction_dtype is not None:
+                raise ValueError("unbiased and reduction_dtype apply to components")
+            self._component_names = ()
+            self._components_stacked = False
+        else:
+            if not reciprocal_space or resample:
+                # The amplitude and the intensity of a pattern do not resample
+                # alike, and the intensity of a real-space image has no amplitude.
+                raise ValueError(
+                    "components needs diffraction patterns without resampling: "
+                    "reciprocal_space=True and resample=False."
+                )
+            self._component_names, self._components_stacked = (
+                _validate_frozen_phonon_components(components)
+            )
+        self._components = components
+        self._unbiased = bool(unbiased)
+        self._reduction_dtype = reduction_dtype
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
@@ -1982,7 +2407,7 @@ class PixelatedDetector(BaseDetector):
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
-        from abtem.array import _multi_energy_axis, _without_scalar_energy
+        from abtem.array import _multi_energy_axis
 
         # A string max_angle crops every energy to the same pixels already.
         if (
@@ -1993,14 +2418,11 @@ class PixelatedDetector(BaseDetector):
         ):
             return self
 
-        # The highest energy of the axis decides, not a scalar energy that may
-        # have been left on the waves.
-        # In pixels of the waves actually detected, i.e. after the margin crop,
-        # which changes the reciprocal sampling.
+        # The highest energy of the axis decides. It is counted in pixels of the
+        # waves actually detected, i.e. after the margin crop, which changes the
+        # reciprocal sampling.
         matched = self.copy()
-        matched._ensemble_gpts = self._crop_gpts(
-            _crop_margin(_without_scalar_energy(waves), self.margin)
-        )
+        matched._ensemble_gpts = self._crop_gpts(_crop_margin(waves, self.margin))
         return matched
 
     def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:
@@ -2029,12 +2451,43 @@ class PixelatedDetector(BaseDetector):
         return self._resample
 
     @property
+    def components(self) -> Optional[str | Sequence[str]]:
+        """The frozen-phonon components detected, None for the intensities of the
+        configurations."""
+        return self._components
+
+    @property
+    def unbiased(self) -> bool:
+        """Correct the bias of the diffuse intensity of a frozen-phonon ensemble."""
+        return self._unbiased
+
+    @property
+    def reduction_dtype(self) -> Optional[np.dtype]:
+        """Precision of the amplitudes and intensities averaged over the frozen
+        phonons."""
+        return self._reduction_dtype
+
+    @property
+    def _moment_channels(self) -> tuple[str, ...]:
+        """The real quantities detected for `components`, stacked along the first
+        base axis, from which the components are formed after the ensemble mean:
+        the real and imaginary part of the amplitude ψ(k) for the elastic
+        intensity |<ψ>|² and the intensity |ψ(k)|² for the total <|ψ|²>; the
+        diffuse intensity (and the unbiased elastic one) needs both."""
+        names = self._component_names
+        both = _needs_the_diffuse_part(names, self.unbiased)
+        return (
+            *(("real", "imag") if both or "elastic" in names else ()),
+            *(("intensity",) if both or "total" in names else ()),
+        )
+
+    @property
     def margin(self) -> float | tuple[float, float]:
         """Margin cropped from each side of the exit wave [Å] before detecting."""
         return self._margin
 
     @property
-    def window_func(self) -> Optional[str]:
+    def window_func(self) -> Optional[str | tuple]:
         """Real-space window function applied before detecting."""
         return self._window_func
 
@@ -2113,11 +2566,20 @@ class PixelatedDetector(BaseDetector):
         return sampling, gpts
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
+        if self.components is not None:
+            # The quantities of `_moment_channels` side by side along the first
+            # base axis, until the ensemble is reduced.
+            gpts = self._new_sampling_and_gpts(waves)[1]
+            return ((len(self._moment_channels) * gpts[0], gpts[1]),)
         if self.reciprocal_space:
             return (self._new_sampling_and_gpts(waves)[1],)
         return (self._real_space_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
+        if self.reduction_dtype is not None:
+            return (
+                np.finfo(np.result_type(self.reduction_dtype, np.complex64)).dtype,
+            )
         if self.resample and not self.reciprocal_space:
             # Images.interpolate resamples in the configured precision
             return (get_dtype(complex=False),)
@@ -2166,7 +2628,60 @@ class PixelatedDetector(BaseDetector):
         metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
+        if self.components is not None:
+            # Read by `BaseMeasurements.reduce_ensemble`, which forms the components
+            # from the averaged quantities.
+            metadata["frozen_phonon_moments"] = {
+                "channels": list(self._moment_channels),
+                "components": list(self._component_names),
+                "stacked": self._components_stacked,
+                "unbiased": self.unbiased,
+            }
         return (metadata,)
+
+    def _calculate_moments(self, waves: WavesType) -> np.ndarray:
+        """The quantities of `_moment_channels` of the diffraction patterns of the
+        given waves, stacked along the first base axis."""
+        if self.reduction_dtype is not None:
+            dtype = np.result_type(self.reduction_dtype, np.complex64)
+            if waves.dtype != dtype:
+                kwargs = waves._copy_kwargs(exclude=("array",))
+                kwargs["array"] = waves.array.astype(dtype)
+                waves = waves.__class__(**kwargs)
+
+        # After the cast, so a wider reduction_dtype windows in that precision.
+        waves = waves.window(window=self.window_func, margin=self.margin)
+
+        if self._ensemble_gpts is not None:
+            patterns = waves._diffraction_patterns(
+                self._ensemble_gpts, return_complex=True
+            )
+        else:
+            patterns = waves.diffraction_patterns(
+                max_angle=self.max_angle, parity="same", return_complex=True
+            )
+
+        amplitude = patterns.array
+        if self.window_func is not None:
+            # The amplitude carries the square root of the power gain, so that the
+            # intensity |ψ(k)|², and the elastic intensity |<ψ>|² formed from it,
+            # carry the gain itself, as in the detection of the intensity.
+            renorm = _window_power_gain(self.window_func, waves.base_shape) ** 0.5
+            amplitude = amplitude * amplitude.real.dtype.type(renorm)
+        xp = get_array_module(amplitude)
+        quantities = {
+            "real": amplitude.real,
+            "imag": amplitude.imag,
+            "intensity": abs2(amplitude),
+        }
+        array = xp.concatenate(
+            [quantities[name] for name in self._moment_channels], axis=-2
+        )
+
+        if self.to_cpu:
+            array = asnumpy(array)
+
+        return array
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         """
@@ -2182,6 +2697,9 @@ class PixelatedDetector(BaseDetector):
         measurement : DiffractionPatterns
         """
         measurements: Images | DiffractionPatterns
+
+        if self.components is not None:
+            return self._calculate_moments(waves)
 
         waves = waves.window(window=self.window_func, margin=self.margin)
 
@@ -2256,11 +2774,28 @@ class WavesDetector(BaseDetector):
        If this parameter is set the measurement data is saved at the specified location,
        typically a path to a local file. A URL can also include a protocol specifier
        like s3:// for remote data. If not set (default) the data stays in memory.
+    average_frozen_phonons : bool, optional
+       If True, return the configuration-averaged wave function <ψ> of a
+       frozen-phonon ensemble, the coherent (elastic) wave, instead of the wave
+       function of every configuration: the ``FrozenPhononsAxis`` is averaged when
+       the ensemble is reduced, as the multislice tasks finish, so the exit waves
+       of the configurations are not all kept. Other ensemble axes are kept as
+       they are. Requires a ``FrozenPhononsAxis`` with ``ensemble_mean=True``
+       among the ensemble axes; the average is formed when the ensemble is reduced,
+       as in the result of a multislice simulation, and a detector applied to
+       waves directly returns the waves of every configuration, to be reduced with
+       :func:`abtem.waves.reduce_ensemble`. For the elastic and diffuse
+       intensities in reciprocal space, use ``PixelatedDetector(components=...)``.
+       Default is False, which detects the wave function of every configuration.
+    reduction_dtype : {None, 'float32', 'float64'}, optional
+       Precision of the wave functions that are averaged: with ``'float64'`` the
+       detected waves are complex128 and so is their average. Only with
+       `average_frozen_phonons`. Default is None, the precision of the waves.
     margin : float or tuple of float, optional
         Margin cropped from each side of the exit wave [Å] before detecting, and
         before applying `window_func` (default is 0.0, i.e. no cropping). See
         :meth:`abtem.waves.Waves.crop`.
-    window_func : str, optional
+    window_func : str or tuple, optional
         Real-space window function applied before detecting, as accepted by
         :func:`scipy.signal.windows.get_window` (default is `None`, i.e. no
         windowing). See :meth:`abtem.waves.Waves.window` and
@@ -2279,13 +2814,35 @@ class WavesDetector(BaseDetector):
         gpts: Optional[tuple[int, int]] = None,
         to_cpu: bool = False,
         url: Optional[str] = None,
+        average_frozen_phonons: bool = False,
+        reduction_dtype: Optional[str | np.dtype] = None,
         margin: float | tuple[float, float] = 0.0,
-        window_func: Optional[str] = None,
+        window_func: Optional[str | tuple] = None,
     ):
+        if not isinstance(average_frozen_phonons, (bool, np.bool_)):
+            raise TypeError(
+                "average_frozen_phonons must be a bool, got "
+                f"{type(average_frozen_phonons).__name__}"
+            )
+        reduction_dtype = _validate_reduction_dtype(reduction_dtype)
+        if reduction_dtype is not None and not average_frozen_phonons:
+            raise ValueError("reduction_dtype applies to average_frozen_phonons")
         self._gpts = gpts
+        self._average_frozen_phonons = bool(average_frozen_phonons)
+        self._reduction_dtype = reduction_dtype
         self._margin = margin
         self._window_func = window_func
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def average_frozen_phonons(self) -> bool:
+        """The wave function is averaged over the frozen phonons."""
+        return self._average_frozen_phonons
+
+    @property
+    def reduction_dtype(self) -> Optional[np.dtype]:
+        """Precision of the wave functions averaged over the frozen phonons."""
+        return self._reduction_dtype
 
     @property
     def gpts(self) -> Optional[tuple[int, int]]:
@@ -2298,12 +2855,16 @@ class WavesDetector(BaseDetector):
         return self._margin
 
     @property
-    def window_func(self) -> Optional[str]:
+    def window_func(self) -> Optional[str | tuple]:
         """Real-space window function applied before detecting."""
         return self._window_func
 
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
-        if self._gpts is not None:
+        if self.reduction_dtype is not None:
+            return (np.result_type(self.reduction_dtype, np.complex64),)
+        # An empty gpts asks for no resampling, as None does (the other _out_*
+        # methods and _calculate_new_array test it the same way).
+        if self._gpts:
             # fft_interpolate works in the configured precision
             return (get_dtype(complex=True),)
         return (waves.dtype,)
@@ -2316,6 +2877,9 @@ class WavesDetector(BaseDetector):
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
+        if self.average_frozen_phonons:
+            # Read by `reduce_ensemble`, which averages the frozen phonons.
+            metadata["frozen_phonon_average"] = True
         if self._gpts:
             # as `Waves.downsample` records it: the resampled waves keep the
             # band limit of the waves they were resampled from
@@ -2357,6 +2921,9 @@ class WavesDetector(BaseDetector):
             array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
         else:
             array = waves.array
+
+        if self.reduction_dtype is not None:
+            array = array.astype(self._out_dtype(waves)[0])
 
         if self.window_func is not None:
             renorm = _window_power_gain(self.window_func, waves.base_shape) ** 0.5

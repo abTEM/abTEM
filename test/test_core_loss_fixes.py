@@ -34,7 +34,7 @@ try:
 except ImportError:
     pass
 
-from utils import devices, synthetic_transition_potential  # noqa: E402
+from utils import devices, synthetic_transition_potential, to_host_array  # noqa: E402
 
 requires_gpaw = pytest.mark.skipif(
     "gpaw" not in sys.modules, reason="requires gpaw"
@@ -1306,50 +1306,60 @@ class TestPrismPotentialEnsembleAccumulation:
                 reference[plane].sum(), rel=1e-3
             )
 
-def test_ensemble_indices_handle_a_multi_axis_potential_ensemble():
-    """A potential with two ensemble axes is not constructible through the
-    public API today, so exercise the index builder directly."""
-    from abtem.multislice import _validate_potential_ensemble_indices
+@devices
+def test_ensemble_indices_handle_a_multi_axis_potential_ensemble(device):
+    """A potential over an ``EnergyResolvedAtomsEnsemble`` has two ensemble
+    axes, (energy, configuration), and multislice with exit planes indexes
+    them through ``_validate_potential_ensemble_indices`` with 2-tuples.
 
-    class _FakePotential:
-        ensemble_shape = (2, 3)
-        exit_planes = (-1, 0, 1)
-
-    potential = _FakePotential()
-    indices = _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential)
-    assert indices == (1, 2, slice(1, 3))
-    assert sum(isinstance(i, slice) for i in indices) == 1
-
-    class _SinglePlane(_FakePotential):
-        exit_planes = (-1,)
-
-    assert _validate_potential_ensemble_indices((1, 2), slice(0, 1), _SinglePlane()) == (
-        1,
-        2,
-    )
-
-
-def test_ensemble_index_length_is_enforced():
-    """Every defect in this family was a caller passing too few indices.
-
-    The helper used to accept a short tuple silently, which let the exit-plane
-    part land on an ensemble axis.
+    Every member must land in its own (energy, configuration, plane) cell, so
+    each is compared against that configuration run as a plain potential.
     """
-    from abtem.multislice import _validate_potential_ensemble_indices
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, ThicknessAxis
 
-    class _Potential:
-        ensemble_shape = (2, 3)
-        exit_planes = (-1, 0, 1)
+    def snapshot(energy_index, config_index):
+        # A distinct atom position per member, so a mis-addressed member
+        # differs from its reference.
+        x = 1.0 + 0.4 * energy_index + 0.15 * config_index
+        return ase.Atoms(
+            "Si2",
+            positions=[(x, 2.0, 1.0), (3.0, 3.0, 3.0)],
+            cell=(5, 5, 4),
+            pbc=True,
+        )
 
-    potential = _Potential()
-    assert _validate_potential_ensemble_indices((1, 2), slice(1, 3), potential) == (
-        1,
-        2,
-        slice(1, 3),
+    num_energies, num_configs = 2, 2
+    snapshots = [
+        [snapshot(e, c) for c in range(num_configs)] for e in range(num_energies)
+    ]
+    potential_kwargs = dict(gpts=32, slice_thickness=1.0, exit_planes=2, device=device)
+    potential = abtem.Potential(
+        abtem.EnergyResolvedAtomsEnsemble(snapshots, energies=[0.0, 0.05]),
+        **potential_kwargs,
     )
-    for short in ((1,), ()):
-        with pytest.raises(ValueError, match="entries for an ensemble"):
-            _validate_potential_ensemble_indices(short, slice(1, 3), potential)
+    assert potential.ensemble_shape == (num_energies, num_configs)
+    plane_wave = abtem.PlaneWave(energy=100e3, device=device)
+
+    waves = plane_wave.multislice(potential, lazy=False)
+
+    num_planes = len(potential.exit_planes)
+    assert num_planes > 1
+    assert waves.shape == (num_energies, num_configs, num_planes, 32, 32)
+    assert [type(axis) for axis in waves.ensemble_axes_metadata] == [
+        EnergyLossAxis,
+        FrozenPhononsAxis,
+        ThicknessAxis,
+    ]
+
+    got = to_host_array(waves)
+    for e, c in itertools.product(range(num_energies), range(num_configs)):
+        reference = plane_wave.multislice(
+            abtem.Potential(snapshots[e][c], **potential_kwargs), lazy=False
+        )
+        # Same slices through the same code, so agreement is to rounding.
+        np.testing.assert_allclose(
+            got[e, c], to_host_array(reference), rtol=1e-5, atol=1e-6
+        )
 
 
 def test_prism_driver_refuses_a_multi_configuration_potential():

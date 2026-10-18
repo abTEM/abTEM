@@ -2133,8 +2133,6 @@ class BlochWaves:
                 energy=None,
                 ensemble_axes_metadata=[energy_ax]
                 + results[0].ensemble_axes_metadata,
-                # the first energy's metadata, without its energy: the
-                # EnergyAxis carries the energy of each member
                 metadata={**results[0].metadata, "energy": None},
             )
 

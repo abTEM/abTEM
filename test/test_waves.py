@@ -12,6 +12,7 @@ from utils import (
     assert_array_matches_laziness,
     devices,
     gpu,
+    lazy_params,
 )
 
 import abtem
@@ -571,8 +572,8 @@ def test_tile(data, repetitions, renormalize, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_crop(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
@@ -627,8 +628,8 @@ def test_crop_centered_rejects_explicit_offset():
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_window_boxcar_is_a_no_op(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     windowed = waves.window("boxcar")
@@ -638,8 +639,8 @@ def test_window_boxcar_is_a_no_op(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@lazy_params
+@devices
 def test_window_hann_tapers_to_the_edges(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_base_side=16))
     windowed = waves.window("hann")
@@ -653,7 +654,7 @@ def test_window_hann_tapers_to_the_edges(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
+@lazy_params
 def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
     waves = data.draw(abtem_st.waves(lazy=lazy, device="cpu"))
     margin = (waves.extent[0] / 4, waves.extent[1] / 4)
@@ -667,6 +668,53 @@ def test_window_with_margin_matches_explicit_crop_then_window(data, lazy):
     np.testing.assert_allclose(
         asnumpy(combined.compute().array), asnumpy(separate.compute().array)
     )
+
+
+def test_window_raises_in_reciprocal_space():
+    """A real-space taper multiplied into reciprocal-space waves would be wrong
+    without notice, so window refuses them, as crop does; a no-op window does not."""
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    ).ensure_reciprocal_space()
+    with pytest.raises(NotImplementedError):
+        waves.window("hann")
+    with pytest.raises(NotImplementedError):
+        waves.window("hann", margin=0.2)
+    assert waves.window(None) is waves
+
+
+def test_crop_raises_for_a_region_without_pixels_or_outside_the_waves():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    with pytest.raises(ValueError, match="smaller than one grid point"):
+        waves.crop((0.01, 0.01))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(-0.5, 0.0))
+    with pytest.raises(ValueError, match="not within the waves"):
+        waves.crop((1.0, 1.0), offset=(0.8, 0.0))
+
+
+def test_window_raises_for_a_margin_that_leaves_nothing():
+    waves = abtem.Waves(
+        np.ones((16, 16), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    for margin in (0.8, 1.0, -0.1):
+        with pytest.raises(ValueError):
+            waves.window("hann", margin=margin)
+
+
+@pytest.mark.parametrize("window", ["hann", ("tukey", 0.3), ("kaiser", 8.0)])
+def test_window_accepts_a_tuple_with_parameters(window):
+    from scipy.signal import windows
+
+    waves = abtem.Waves(
+        np.ones((16, 12), dtype=np.complex64), energy=200e3, sampling=(0.1, 0.1)
+    )
+    expected = np.outer(
+        windows.get_window(window, 16), windows.get_window(window, 12)
+    )
+    np.testing.assert_allclose(waves.window(window).array.real, expected, rtol=1e-6)
 
 
 def test_window_none_only_crops():
