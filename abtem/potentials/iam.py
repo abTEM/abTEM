@@ -1074,12 +1074,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         the plane. A cut cell (`cut_cell`) folds them silently."""
         if self.periodic:
             return False
-        cell = self._frozen_phonons.cell
-        if not _require_cell_transform(
-            cell, box=self.box, plane=self.plane, origin=self.origin
-        ):
+        if not self._requires_cell_transform():
             return True
         # The rotate-only path of _transform_atoms.
+        cell = self._frozen_phonons.cell
         if not (
             is_cell_orthogonal(cell)
             and self.plane != "xy"
@@ -1104,6 +1102,25 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         """The integrator determining how the projection integrals for each slice is
         calculated."""
         return self._integrator
+
+    def _requires_cell_transform(self) -> bool:
+        """Whether the atoms are transformed (rotated, translated, repeated or
+        strained) to fill the potential."""
+        return _require_cell_transform(
+            self._frozen_phonons.cell,
+            box=self.box,
+            plane=self.plane,
+            origin=self.origin,
+        )
+
+    def _folds_atoms_far_outside_along_z(self) -> bool:
+        """Whether atoms given in the potential's own cell, more than
+        `FACE_SLICE_WARNING_DISTANCE` outside it along z, are folded into the cell
+        (`_fold_far_outside_faces`) when the slices are built: for a non-periodic
+        potential that is not cut from a transformed cell
+        (`_reports_given_atoms`) and whose integrator is infinite. A finite one
+        wraps them by its margins."""
+        return self._reports_given_atoms() and not self.integrator.finite
 
     def _cutoffs(self):
         atoms = self.frozen_phonons.atoms

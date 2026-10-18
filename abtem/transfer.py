@@ -283,7 +283,8 @@ class BaseTransferFunction(
             `RuntimeError` will be raised.
         gpts : int | tuple[int, int], optional
             The number of grid points in reciprocal space for performing Fourier
-            Transform. If not provided, a default value of 128 will be used.
+            Transform. If not provided, the gpts of the instance are used, or 128 if
+            it has none.
 
         Returns
         -------
@@ -312,14 +313,19 @@ class BaseTransferFunction(
         else:
             sampling = self.sampling
 
-        if self.gpts is None and gpts is None:
-            gpts = 128
-        else:
-            gpts = self.gpts
+        if gpts is None:
+            gpts = self.gpts if self.gpts is not None else 128
 
+        gpts = tuple(int(n) for n in np.broadcast_to(gpts, (2,)))
+        sampling = tuple(float(d) for d in np.broadcast_to(sampling, (2,)))
+
+        # The sampling sets the maximum angle and gpts the number of pixels, so
+        # both are kept and the extent follows. Setting them one at a time on a
+        # grid that already has an extent would keep that extent instead and
+        # change the other one.
         ctf = self.copy()
         ctf.gpts = gpts
-        ctf.sampling = sampling
+        ctf.extent = tuple(n * d for n, d in zip(gpts, sampling))
 
         array = ctf._evaluate_kernel()
         xp = get_array_module(array)

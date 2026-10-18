@@ -1283,6 +1283,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         The offset of the origin of the measurement coordinates [Å] or [1/Å].
         """
 
+    @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        """The coordinates of the array's first pixel [Å] or [1/Å]; positions are
+        converted to pixel indices relative to it (periodically)."""
+        return self.offset
+
     def interpolate_line(
         self,
         start: tuple[float, float] | Atom | None = None,
@@ -1303,9 +1309,11 @@ class _BaseMeasurement2D(BaseMeasurements):
         ----------
         start : two float, Atom, optional
             Starting position of the line [Å] (alternatively taken from a selected
-            atom).
+            atom). Default is (0, 0).
         end : two float, Atom, optional
             Ending position of the line [Å] (alternatively taken from a selected atom).
+            Default is (0, y extent): the default line runs along y across the
+            whole image.
         sampling : float
             Sampling of grid points along the line [1 / Å].
         gpts : int
@@ -1344,7 +1352,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         if end is None and fractional:
             end = (0.0, 1.0)
         elif end is None:
-            end = (0.0, self.extent[0])
+            end = (0.0, self.extent[1])
 
         if fractional:
             extent = self.extent
@@ -1365,7 +1373,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             scan.add_margin(margin)
 
         positions = xp.asarray(
-            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+            (scan.get_positions(lazy=False) - self._first_pixel_coordinates)
+            / self.sampling
         )
 
         if width:
@@ -1377,14 +1386,16 @@ class _BaseMeasurement2D(BaseMeasurements):
                 )
             direction = direction / length
             perpendicular_direction = xp.array([-direction[1], direction[0]])
-            n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            n = int(xp.floor(width / min(self.sampling) / 2) * 2 + 1)
             # The offsets are spaced by min(sampling) along the perpendicular
             # direction in physical units (Å) and only then converted to
             # pixels (`positions` is in pixels): applying the physical unit
             # vector directly in pixel space tilts and stretches the offsets
             # whenever the sampling is anisotropic.
+            # A single sample is on the line itself.
+            offsets = xp.linspace(-n / 2, n / 2, n) if n > 1 else xp.zeros(1)
             perpendicular_positions = (
-                xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                offsets[:, None]
                 * min(self.sampling)
                 * perpendicular_direction[None]
                 / xp.asarray(self.sampling)
@@ -1518,7 +1529,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             sigma = (sigma,) * 2
 
         sigma = (0,) * (len(self.shape) - 2) + tuple(
-            s / d for s, d in zip(sigma, self.sampling)
+            _width_in_pixels(s, d) for s, d in zip(sigma, self.sampling)
         )
 
         if xp is np:
@@ -1631,7 +1642,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Lorentzian has heavier tails than the Gaussian, so a larger truncation
             is recommended.
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1652,10 +1665,16 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         xp = get_array_module(self.array)
 
+        # 'reflect' is about the edge of the last pixel, the edge sample being
+        # repeated, as in gaussian_filter (scipy.ndimage's 'reflect'). That is
+        # numpy.pad's 'symmetric' and dask's map_overlap 'reflect'; numpy.pad's
+        # own 'reflect' mirrors about the last pixel centre (scipy's 'mirror').
         if boundary == "periodic":
             mode = "wrap"
-        elif boundary in ("reflect", "constant"):
-            mode = boundary
+        elif boundary == "reflect":
+            mode = "symmetric"
+        elif boundary == "constant":
+            mode = "constant"
         else:
             raise ValueError(
                 f"boundary must be 'periodic', 'reflect', or 'constant', got {boundary!r}"
@@ -1664,7 +1683,9 @@ class _BaseMeasurement2D(BaseMeasurements):
         if np.isscalar(half_width):
             half_width = (half_width,) * 2
 
-        hw_pixels = tuple(hw / d for hw, d in zip(half_width, self.sampling))
+        hw_pixels = tuple(
+            _width_in_pixels(hw, d) for hw, d in zip(half_width, self.sampling)
+        )
 
         # Two spatial axes are the trailing dims; build a true 2-D kernel.
         axes = (self.array.ndim - 2, self.array.ndim - 1)
@@ -1740,7 +1761,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             (default is 10.0). The Gaussian component uses the SciPy default
             (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -1805,7 +1828,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Truncate the Lorentzian component at this many half-widths
             (default 10.0). The Gaussian component uses the SciPy default (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
-            How the image is extended beyond its boundary (default is 'periodic').
+            How the image is extended beyond its boundary (default is 'periodic'),
+            as in :meth:`gaussian_filter`: 'reflect' reflects about the edge of the
+            last pixel.
         cval : float, optional
             Constant value used when ``boundary`` is ``'constant'`` (default 0.0).
 
@@ -3060,6 +3085,15 @@ def _gaussian_kernel_2d(
 _LORENTZIAN_SAFE_HW = 1.0 / np.sqrt(np.finfo(np.float64).max)  # ≈ 7.5e-155
 
 
+def _width_in_pixels(width: float, sampling: float) -> float:
+    """A filter width [Å] in pixels of `sampling` [Å]. An axis sampled at 0 Å,
+    such as that of a scan whose positions coincide (a zero-length line scan), is
+    constant along it, so a filter does nothing there: 0 pixels."""
+    if sampling == 0.0:
+        return 0.0
+    return width / sampling
+
+
 def _lorentzian_kernel_2d(
     hw_pixels: tuple[float, float],
     truncate: float = 10.0,
@@ -3443,8 +3477,8 @@ def _lorentzian_source_size(
 
     scan_sampling = _scan_sampling(measurements)
     hw_pixels = (
-        half_width[0] / scan_sampling[0],
-        half_width[1] / scan_sampling[1],
+        _width_in_pixels(half_width[0], scan_sampling[0]),
+        _width_in_pixels(half_width[1], scan_sampling[1]),
     )
     kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
@@ -3548,8 +3582,9 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
     for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
         if axis in _scan_axes(measurements):
             scan_sampling = _scan_sampling(measurements)[i]
-            padded_sigma += (sigma[i] / scan_sampling,)
-            depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+            sigma_pixels = _width_in_pixels(sigma[i], scan_sampling)
+            padded_sigma += (sigma_pixels,)
+            depth += (min(int(np.ceil(4.0 * sigma_pixels)), n),)
             i += 1
         else:
             padded_sigma += (0.0,)
@@ -4327,6 +4362,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def offset(self) -> tuple[float, float]:
         limits = self.limits
         return limits[0][0], limits[1][0]
+
+    @property
+    def _first_pixel_coordinates(self) -> tuple[float, float]:
+        # Unshifted patterns store the zero frequency first; the negative
+        # frequencies follow the positive ones and are reached periodically.
+        if self.fftshift:
+            return self.offset
+        return 0.0, 0.0
 
     @property
     def extent(self) -> tuple[float, float]:
@@ -8058,16 +8101,27 @@ def momentum_resolved_spectrum(
         )
 
         # interpolate_line with width>0 returns the AVERAGE across the
-        # perpendicular direction.  Convert to a SUM to be consistent with the
-        # annular detector path (which sums all pixels inside the mask).
-        # n_perp is the number of perpendicular samples used internally.
+        # perpendicular direction.  Convert to a SUM over pixels to be
+        # consistent with the annular detector path (which sums all pixels
+        # inside the mask): each sample stands for the area between its
+        # neighbours along and across the slit, divided by the pixel area.
+        # interpolate_line places its n_perp perpendicular samples at
+        # linspace(-n_perp / 2, n_perp / 2, n_perp) * sampling_inv, i.e.
+        # n_perp / (n_perp - 1) * sampling_inv apart, and the N line samples
+        # (endpoint included) (q_max_inv - q_min_inv) / (N - 1) apart.
         n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+        perpendicular_step = sampling_inv * (
+            n_perp / (n_perp - 1) if n_perp > 1 else 1.0
+        )
+        line_step = (q_max_inv - q_min_inv) / (N - 1)
+        pixel_area = dp.sampling[0] * dp.sampling[1]
+        samples_to_sum = n_perp * line_step * perpendicular_step / pixel_area
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
         moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
         spectrum_array = moveaxis(
-            line_profiles.array * n_perp, energy_axis_idx, -1
+            line_profiles.array * samples_to_sum, energy_axis_idx, -1
         )
         q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 
