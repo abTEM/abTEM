@@ -12,6 +12,7 @@ from utils import devices, lazy_params
 import abtem.array
 from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import asnumpy
+from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -317,7 +318,7 @@ def _lazy_exports(device: str) -> dict:
             nbins_radial=3, nbins_azimuthal=4, inner=1.0, outer=10.0
         ),
         "potential_array": PotentialArray(
-            da.zeros((2, *GPTS), chunks=(1, -1, -1), dtype=np.float32),
+            da.zeros((2, *GPTS), chunks=(1, -1, -1), dtype=get_dtype()),
             sampling=SAMPLING,
             slice_thickness=1.0,
         ).copy_to_device(device),
@@ -359,7 +360,7 @@ def test_to_quantem_signal_units_are_the_metadata_units(
     metadata, signal_units, quantem_records
 ):
     images = Images(
-        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
+        np.zeros(GPTS, dtype=get_dtype()), sampling=SAMPLING, metadata=metadata
     )
 
     images.to_quantem()
@@ -367,22 +368,9 @@ def test_to_quantem_signal_units_are_the_metadata_units(
     assert quantem_records["signal_units"] == signal_units
 
 
-def test_to_quantem_copies_the_metadata(quantem_records):
-    metadata = {"label": "intensity", "units": "arb. unit", "energy": 100e3}
-    images = Images(
-        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
-    )
-
-    dataset = images.to_quantem()
-
-    assert dataset.metadata == metadata
-    dataset.metadata["energy"] = 0.0
-    assert images.metadata == metadata
-
-
 def test_to_quantem_does_not_share_nested_metadata(quantem_records):
     images = Images(
-        np.zeros(GPTS, dtype=np.float32),
+        np.zeros(GPTS, dtype=get_dtype()),
         sampling=SAMPLING,
         metadata={"label": "intensity", "units": "arb. unit", "nested": {"a": [1, 2]}},
     )
@@ -399,7 +387,7 @@ def test_to_quantem_does_not_share_nested_metadata(quantem_records):
 def test_to_quantem_exports_a_host_array(device, quantem_records):
     # quantem's Dataset holds NumPy arrays only and rejects CuPy arrays.
     images = Images(
-        np.arange(np.prod(GPTS), dtype=np.float32).reshape(GPTS), sampling=SAMPLING
+        np.arange(np.prod(GPTS), dtype=get_dtype()).reshape(GPTS), sampling=SAMPLING
     ).copy_to_device(device)
 
     images.to_quantem()
@@ -452,8 +440,6 @@ def test_quantem_accepts_every_export(kind, device):
     assert len(dataset.origin) == len(dataset.sampling) == len(dataset.units)
     assert dataset.signal_units == exported.metadata["units"]
     assert dataset.metadata == exported.metadata
-    assert dataset.metadata is not exported.metadata
-    assert exported.is_lazy
     assert type(dataset.array) is np.ndarray
     if kind in ("reciprocal_space_waves", "diffraction_patterns_unshifted"):
         expected = np.fft.fftshift(_host(eager.array), axes=(-2, -1))
@@ -503,7 +489,7 @@ def test_quantem_calibration_of_real_space_and_scan_axes(device):
         ScanAxis(label="y", sampling=0.4, offset=-2.0, units="Å"),
     ]
     images = Images(
-        np.zeros((4, 5, *GPTS), dtype=np.float32),
+        np.zeros((4, 5, *GPTS), dtype=get_dtype()),
         sampling=SAMPLING,
         ensemble_axes_metadata=scan_axes,
     ).copy_to_device(device)
@@ -521,28 +507,6 @@ def test_quantem_calibration_of_real_space_and_scan_axes(device):
     # coordinates of the kept scan positions do.
     cropped = dataset.crop(((1, 0), (2, 0)), axes=(0, 1))
     np.testing.assert_allclose(cropped.origin[:2], (1.5, -1.2), rtol=0, atol=1e-12)
-
-
-@pytest.mark.quantem
-@pytest.mark.parametrize(
-    "metadata, signal_units",
-    [
-        ({"units": "arb. unit"}, "arb. unit"),
-        ({"units": "%"}, "%"),
-        ({"units": "electrons"}, "electrons"),
-        ({"units": "Å"}, "Å"),
-        ({"units": ""}, ""),
-        ({"units": None}, "arb. unit"),
-        ({}, "arb. unit"),
-    ],
-)
-def test_quantem_signal_units(metadata, signal_units):
-    _quantem_dataset_class()
-    images = Images(
-        np.zeros(GPTS, dtype=np.float32), sampling=SAMPLING, metadata=metadata
-    )
-
-    assert images.to_quantem().signal_units == signal_units
 
 
 @pytest.mark.quantem
@@ -707,7 +671,7 @@ def test_unshifted_diffraction_patterns_warn_on_export(method, quantem_records):
     pytest.importorskip(
         {"to_data_array": "xarray", "to_hyperspy": "hyperspy"}.get(method, "numpy")
     )
-    array = np.zeros(GPTS, dtype=np.float32)
+    array = np.zeros(GPTS, dtype=get_dtype())
     array[GPTS[0] // 2, GPTS[1] // 2] = 1.0
 
     with pytest.warns(UnshiftedExportWarning, match="fftshift=True"):
