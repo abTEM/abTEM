@@ -530,7 +530,7 @@ _LORENTZIAN_SAMPLING = (0.125, 0.0625)
 _lorentzian_hw_pixels = st.sampled_from([0.0, 0.5, 1.5, 2.5])
 
 # How each filter's documented `boundary` maps onto scipy.ndimage's `mode`
-# ('periodic' wraps around; the Gaussian's 'reflect' reflects about the edge
+# ('periodic' wraps around; every filter's 'reflect' reflects about the edge
 # of the last pixel, which is scipy's 'reflect').
 _BOUNDARY_TO_SCIPY = {"periodic": "wrap", "reflect": "reflect", "constant": "constant"}
 
@@ -587,9 +587,18 @@ def _scipy_gaussian_kernel(sigma_pixels):
 
 
 def _convolve_base_axes(array, kernel_2d, mode):
-    """Reference convolution over the two trailing (image) axes."""
+    """Reference convolution over the two trailing (image) axes, with ``mode``
+    named as in scipy.ndimage: the image is extended by the kernel radius with
+    numpy.pad and convolved directly. (scipy.ndimage.convolve itself reads
+    past its buffer with mode='reflect' once the kernel is several times
+    larger than an image axis: 9.6e-315 for a 17-tap kernel on 2 pixels.)"""
+    pad_mode = {"wrap": "wrap", "reflect": "symmetric", "constant": "constant"}[mode]
+    radii = [n // 2 for n in kernel_2d.shape]
+    padded = np.pad(
+        array, [(0, 0)] * (array.ndim - 2) + [(r, r) for r in radii], mode=pad_mode
+    )
     kernel = kernel_2d.reshape((1,) * (array.ndim - 2) + kernel_2d.shape)
-    return scipy.ndimage.convolve(array, kernel, mode=mode, cval=0.0)
+    return scipy.signal.convolve(padded, kernel, mode="valid", method="direct")
 
 
 @given(
@@ -629,7 +638,7 @@ def test_gaussian_filter_images(data, sigma, sampling, boundary, lazy, device):
 @given(
     data=st.data(),
     hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
-    boundary=st.sampled_from(["periodic", "constant"]),
+    boundary=st.sampled_from(["periodic", "reflect", "constant"]),
 )
 @lazy_params
 @devices
@@ -663,30 +672,84 @@ def test_lorentzian_filter_images(data, hw_pixels, boundary, lazy, device):
         st.floats(min_value=0.0, max_value=3.0), st.floats(min_value=0.0, max_value=3.0)
     ),
     hw_pixels=st.tuples(_lorentzian_hw_pixels, _lorentzian_hw_pixels),
+    boundary=st.sampled_from(["periodic", "reflect"]),
 )
 @lazy_params
 @devices
-def test_voigtian_filter_images(data, sigma_pixels, hw_pixels, lazy, device):
+def test_voigtian_filter_images(data, sigma_pixels, hw_pixels, boundary, lazy, device):
     measurement = _with_sampling(
         data.draw(abtem_st.images(lazy=lazy, device=device)), _LORENTZIAN_SAMPLING
     )
     sigma = tuple(s * d for s, d in zip(sigma_pixels, _LORENTZIAN_SAMPLING))
     half_width = tuple(h * d for h, d in zip(hw_pixels, _LORENTZIAN_SAMPLING))
     try:
-        filtered = measurement.voigtian_filter(sigma, half_width).compute()
+        filtered = measurement.voigtian_filter(
+            sigma, half_width, boundary=boundary
+        ).compute()
     except OSError:
         pytest.skip(
             "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
         )
     original = _as_float64(measurement)
 
-    # Oracle: a single periodic convolution with the Voigt kernel, built as
-    # the full linear convolution of the Gaussian and Lorentzian kernels.
+    # Oracle: a single convolution with the Voigt kernel, built as the full
+    # linear convolution of the Gaussian and Lorentzian kernels. Both kernels
+    # are symmetric, so a periodic or mirrored extension of the image stays
+    # periodic or mirrored after the first filter, and the two filters in turn
+    # equal the one convolution. (Not so for a constant boundary.)
     voigt_kernel = scipy.signal.convolve2d(
         _scipy_gaussian_kernel(sigma_pixels), _analytic_lorentzian_kernel(hw_pixels)
     )
-    expected = _convolve_base_axes(original, voigt_kernel, mode="wrap")
+    expected = _convolve_base_axes(
+        original, voigt_kernel, mode=_BOUNDARY_TO_SCIPY[boundary]
+    )
     _assert_matches_reference(filtered.array, expected)
+
+
+@devices
+def test_lorentzian_family_reflect_with_a_kernel_larger_than_the_chunked_image(
+    device,
+):
+    # Regression: eager 'reflect' padded with numpy's 'reflect' (about the last
+    # pixel centre, scipy's 'mirror') while the lazy halo used dask's 'reflect'
+    # (about the pixel edge). The kernel radius (25 px)
+    # exceeds the 16 x 20 image and the halo exceeds the 8 x 10 chunks, so the
+    # mirrored extension has to continue past one reflection. Oracle: direct
+    # convolution of the image mirrored about its edges (_convolve_base_axes).
+    sampling, hw_pixels, sigma_pixels = _LORENTZIAN_SAMPLING, (2.5, 2.5), (1.0, 2.0)
+    half_width = tuple(h * d for h, d in zip(hw_pixels, sampling))
+    sigma = tuple(s * d for s, d in zip(sigma_pixels, sampling))
+    array = np.random.default_rng(1).random((16, 20))
+    # the configured precision (float32 on Metal), the oracle stays in float64
+    image = array.astype(get_dtype(complex=False))
+
+    lorentzian = _analytic_lorentzian_kernel(hw_pixels)
+    voigt = scipy.signal.convolve2d(_scipy_gaussian_kernel(sigma_pixels), lorentzian)
+    expected = {
+        "lorentzian": _convolve_base_axes(array, lorentzian, mode="reflect"),
+        "voigtian": _convolve_base_axes(array, voigt, mode="reflect"),
+    }
+    expected["pseudo_voigtian"] = 0.5 * expected["lorentzian"] + 0.5 * (
+        scipy.ndimage.gaussian_filter(array, sigma_pixels, mode="reflect")
+    )
+
+    for lazy in (False, True):
+        images = Images(
+            da.from_array(image, chunks=(8, 10)) if lazy else image, sampling=sampling
+        )
+        images = images.copy_to_device(device)
+        filtered = {
+            "lorentzian": images.lorentzian_filter(half_width, boundary="reflect"),
+            "voigtian": images.voigtian_filter(sigma, half_width, boundary="reflect"),
+            "pseudo_voigtian": images.pseudo_voigtian_filter(
+                sigma, half_width, eta=0.5, boundary="reflect"
+            ),
+        }
+        for name, result in filtered.items():
+            # Measured: 2e-8 of the peak; before the fix 4e-2 eager, 3e-3 lazy.
+            _assert_matches_reference(
+                result.compute().array, expected[name], rel=1e-5
+            )
 
 
 def test_images_coordinates_spaced_by_sampling():
@@ -1427,8 +1490,7 @@ def _make_images(array, sampling, lazy, device):
     array = array.astype(get_dtype(complex=False))
     if lazy:
         array = da.from_array(array, chunks=(array.shape[0] // 2, -1))
-    images = Images(array, sampling=sampling)
-    return images.to_gpu() if device == "gpu" else images
+    return Images(array, sampling=sampling).copy_to_device(device)
 
 
 def _line_values(line):
@@ -1458,6 +1520,49 @@ def test_images_interpolate_line_through_grid_nodes(lazy, device):
         start=(0, j * sampling[1]), end=(extent[0], j * sampling[1]), gpts=gpts[0]
     )
     _assert_matches_reference(_line_values(line), array[:, j])
+
+
+@lazy_params
+@devices
+def test_images_interpolate_line_of_a_width_below_two_pixels_is_on_the_line(
+    lazy, device
+):
+    """A width under two pixels has one perpendicular sample, which belongs on
+    the line: through grid nodes it equals the line of no width. It was placed
+    half a pixel off (linspace(-0.5, 0.5, 1) is -0.5), averaging in effect the
+    node with its neighbour."""
+    rng = np.random.default_rng(11)
+    gpts, sampling = (24, 32), (0.2, 0.15)
+    array = rng.random(gpts)
+    images = _make_images(array, sampling, lazy, device)
+    extent = images.extent
+
+    for width in (0.0, 0.1, 0.25):  # one sample, below 2 * min(sampling) = 0.3
+        line = images.interpolate_line(
+            start=(7 * sampling[0], 0),
+            end=(7 * sampling[0], extent[1]),
+            gpts=gpts[1],
+            width=width,
+            order=1,
+        )
+        _assert_matches_reference(_line_values(line), array[7])
+
+
+@lazy_params
+@devices
+def test_images_default_interpolate_line_spans_the_y_extent(lazy, device):
+    """The default line runs from (0, 0) along y. On a non-square image
+    (extent 1.6 x 4.0 Å) it must span the y extent, so at the default sampling
+    (the grid spacing) it samples exactly the first row of the array, 40
+    points. Taking its length from the x extent gave 16 points."""
+    rng = np.random.default_rng(3)
+    array = rng.random((16, 40))
+    images = _make_images(array, 0.1, lazy, device)
+
+    for fractional in (False, True):
+        line = images.interpolate_line(fractional=fractional)
+        assert line.shape == (40,), fractional
+        _assert_matches_reference(_line_values(line), array[0])
 
 
 @settings(max_examples=10, deadline=None)
@@ -1581,6 +1686,44 @@ def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
         ).compute()
         assert line.array.shape == truth.shape, name
         np.testing.assert_allclose(line.array, truth, err_msg=name)
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+@lazy_params
+@devices
+def test_diffraction_patterns_interpolate_line_at_frequencies(fftshift, lazy, device):
+    """Lines through grid nodes of a pattern, given in spatial frequencies,
+    sample its values at those frequencies, whether the pattern is stored
+    fftshifted or not. The values are defined on the centred frequency grid
+    (kx_i = i * dkx, i = -n/2 ... n/2 - 1). An unshifted pattern was indexed
+    as if it were shifted, half a grid away (a delta at k0 read as zero)."""
+    rng = np.random.default_rng(5)
+    gpts, sampling = (16, 20), (0.1, 0.08)
+    centred = rng.random(gpts)  # index i <-> frequency (i - n // 2) * sampling
+    array = centred if fftshift else np.fft.ifftshift(centred)
+    array = array.astype(get_dtype(complex=False))
+    if lazy:
+        array = da.from_array(array, chunks=(8, 10))
+    dp = DiffractionPatterns(
+        array, sampling=sampling, fftshift=fftshift, metadata={"energy": 100e3}
+    )
+    dp = dp.copy_to_device(device)
+
+    lo = [-(n // 2) * d for n, d in zip(gpts, sampling)]
+    hi = [(n // 2 - 1) * d for n, d in zip(gpts, sampling)]
+    j = -7  # a negative ky: stored last when unshifted
+    line = dp.interpolate_line(
+        start=(lo[0], j * sampling[1]), end=(hi[0], j * sampling[1]), gpts=gpts[0],
+        endpoint=True,
+    )
+    _assert_matches_reference(_line_values(line), centred[:, j + gpts[1] // 2])
+
+    i = 5
+    line = dp.interpolate_line(
+        start=(i * sampling[0], lo[1]), end=(i * sampling[0], hi[1]), gpts=gpts[1],
+        endpoint=True,
+    )
+    _assert_matches_reference(_line_values(line), centred[i + gpts[0] // 2])
 
 
 @given(
@@ -2872,3 +3015,40 @@ def test_lazy_filters_set_the_warning_filters_once(monkeypatch):
     images.lorentzian_filter(0.3).compute(scheduler="threads", num_workers=4)
 
     assert len(entries) == 1
+
+
+@devices
+@pytest.mark.parametrize(
+    "method",
+    ["gaussian_filter", "lorentzian_filter", "source_size", "lorentzian_source_size"],
+)
+def test_filters_do_nothing_along_an_axis_sampled_at_zero(method, device):
+    # the axis of a scan whose positions coincide (a zero-extent GridScan axis)
+    # has sampling 0, so the widths in pixels divided by zero
+    rng = np.random.default_rng(3)
+    array = rng.random((5, 12)).astype(get_dtype(complex=False))
+    if method in ("gaussian_filter", "lorentzian_filter"):
+        def make(sampling):
+            return Images(array, sampling=sampling).copy_to_device(device)
+
+        apply = getattr(Images, method)
+    else:
+        def make(sampling):
+            axes = [ScanAxis(sampling=d, _main=True) for d in sampling]
+            ones = np.ones((1, 1, 4, 4), get_dtype(complex=False))
+            return DiffractionPatterns(
+                array[:, :, None, None] * ones,
+                sampling=0.1,
+                ensemble_axes_metadata=axes,
+                metadata={"energy": 100e3},
+            ).copy_to_device(device)
+
+        name = "gaussian_source_size" if method == "source_size" else method
+        apply = getattr(DiffractionPatterns, name)
+
+    result = apply(make((0.0, 0.1)), 0.3).compute()
+    # equal to no width along that axis
+    expected = apply(make((1.0, 0.1)), (0.0, 0.3)).compute()
+    np.testing.assert_allclose(
+        asnumpy(result.array), asnumpy(expected.array), rtol=0, atol=1e-6
+    )

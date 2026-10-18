@@ -1215,17 +1215,15 @@ class SpectralSlitDetector(BaseDetector):
     def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         # The constructor takes the geometry either as corners or as the slit
         # parameters, not both, so a copy (and every lazy block) is rebuilt from
-        # the form it was given in. A detector that did not record its form
-        # (one pickled by an earlier version) is rebuilt from the slit parameters,
-        # which describe the same rectangle in both forms.
-        if getattr(self, "_from_corners", False):
+        # the form it was given in.
+        if self._from_corners:
             exclude = exclude + ("width", "q_min", "q_max", "angle", "offset")
         else:
             exclude = exclude + ("corners",)
         kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
         if "q_max" in kwargs:
             # as given, not q_min + extent, which can differ in the last bit
-            kwargs["q_max"] = getattr(self, "_q_max", self.q_max)
+            kwargs["q_max"] = self._q_max
         return kwargs
 
     def angular_limits(self, waves: WavesType) -> tuple[float, float]:
@@ -1302,7 +1300,7 @@ class SpectralSlitDetector(BaseDetector):
             angle=self._angle,
             q_min=self.q_min,
             # as given, like _copy_kwargs: q_min + extent can differ in the last bit
-            q_max=getattr(self, "_q_max", self.q_max),
+            q_max=self._q_max,
             width=self._width,
             fftshift=fftshift,
             xp=xp,
@@ -1933,17 +1931,6 @@ class PixelatedDetector(BaseDetector):
     # multi-energy ensemble is detected at once.
     _splits_energy_ensembles = False
 
-    # A detector without a recorded ensemble crop, such as one pickled by an
-    # earlier version, has none.
-    _ensemble_gpts: Optional[tuple[int, int]] = None
-
-    # Likewise a detector pickled before `components` detects intensities.
-    _components: Optional[str | Sequence[str]] = None
-    _component_names: tuple[str, ...] = ()
-    _components_stacked: bool = False
-    _unbiased: bool = False
-    _reduction_dtype: Optional[np.dtype] = None
-
     def __init__(
         self,
         max_angle: str | float = "valid",
@@ -2001,7 +1988,7 @@ class PixelatedDetector(BaseDetector):
         as `Waves.diffraction_patterns` crops an ensemble at once, so the members
         stack, and their axes are labelled with the ensemble's sampling.
         """
-        from abtem.array import _multi_energy_axis, _without_scalar_energy
+        from abtem.array import _multi_energy_axis
 
         # A string max_angle crops every energy to the same pixels already.
         if (
@@ -2012,10 +1999,9 @@ class PixelatedDetector(BaseDetector):
         ):
             return self
 
-        # The highest energy of the axis decides, not a scalar energy that may
-        # have been left on the waves.
+        # The highest energy of the axis decides.
         matched = self.copy()
-        matched._ensemble_gpts = self._crop_gpts(_without_scalar_energy(waves))
+        matched._ensemble_gpts = self._crop_gpts(waves)
         return matched
 
     def _crop_gpts(self, waves: WavesType) -> tuple[int, int]:
@@ -2372,10 +2358,6 @@ class WavesDetector(BaseDetector):
         self._reduction_dtype = reduction_dtype
         super().__init__(to_cpu=to_cpu, url=url)
 
-    # A detector pickled before `average_frozen_phonons` detects every configuration.
-    _average_frozen_phonons: bool = False
-    _reduction_dtype: Optional[np.dtype] = None
-
     @property
     def average_frozen_phonons(self) -> bool:
         """The wave function is averaged over the frozen phonons."""
@@ -2394,7 +2376,9 @@ class WavesDetector(BaseDetector):
     def _out_dtype(self, waves: Waves) -> tuple[np.dtype]:
         if self.reduction_dtype is not None:
             return (np.result_type(self.reduction_dtype, np.complex64),)
-        if self._gpts is not None:
+        # An empty gpts asks for no resampling, as None does (the other _out_*
+        # methods and _calculate_new_array test it the same way).
+        if self._gpts:
             # fft_interpolate works in the configured precision
             return (get_dtype(complex=True),)
         return (waves.dtype,)

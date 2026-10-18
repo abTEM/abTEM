@@ -2,20 +2,15 @@
 
 A negative semiangle cutoff is never meaningful. A zero one is a parallel beam for an
 Aperture or CTF (the zero-angle pixel stays open), but leaves nothing open in a
-Bullseye, Vortex, AnnularAperture or Zernike aperture, whose probe then normalizes to
-NaN, and turns a RadialPhasePlate into a no-op. PRISM's scattering matrices need a
-positive cutoff, and a direct-beam radius read from metadata must not be negative.
+Bullseye, Vortex, AnnularAperture or Zernike aperture, whose probe would then
+normalize to NaN. A direct-beam radius read from metadata must not be negative.
 """
 
-import inspect
-
-import ase.build
 import numpy as np
 import pytest
 
 import abtem
 from abtem.measurements import DiffractionPatterns
-from abtem.prism.s_matrix import CompressedSMatrixArray, SMatrixArray
 from abtem.transfer import (
     CTF,
     AnnularAperture,
@@ -39,13 +34,7 @@ APERTURES = {
     "Zernike": lambda c: Zernike(0.5, np.pi / 2, semiangle_cutoff=c),
     "RadialPhasePlate": lambda c: RadialPhasePlate(2, semiangle_cutoff=c),
 }
-NOTHING_OPEN_AT_ZERO = (
-    "Bullseye",
-    "Vortex",
-    "AnnularAperture",
-    "Zernike",
-    "RadialPhasePlate",
-)
+NOTHING_OPEN_AT_ZERO = ("Bullseye", "Vortex", "AnnularAperture", "Zernike")
 
 
 def _probe_intensity(aperture):
@@ -99,7 +88,7 @@ def test_a_negative_cutoff_is_rejected_by_probe_and_distributions():
 
 
 def test_a_zero_cutoff_is_rejected_where_it_describes_no_aperture():
-    assert _not_rejected(NOTHING_OPEN_AT_ZERO, (0.0,), "semiangle_cutoff=0") == []
+    assert _not_rejected(NOTHING_OPEN_AT_ZERO, (0.0,), "no open area") == []
 
 
 def test_a_zero_cutoff_is_still_a_parallel_beam():
@@ -113,6 +102,11 @@ def test_a_zero_cutoff_is_still_a_parallel_beam():
             not_flat.append(name)
     assert not_flat == []
 
+    # A RadialPhasePlate's cutoff is the radius of its phase pattern: at zero
+    # the plate is a uniform phase, which is accepted and leaves the probe finite.
+    intensity = _probe_intensity(APERTURES["RadialPhasePlate"](0.0))
+    assert np.all(np.isfinite(intensity)) and intensity.sum() > 0
+
 
 def test_a_positive_cutoff_gives_a_normalized_probe():
     """Guards against rejecting valid apertures."""
@@ -124,25 +118,22 @@ def test_a_positive_cutoff_gives_a_normalized_probe():
     assert not_normalized == []
 
 
-@pytest.mark.parametrize(
-    "inner_cutoff, match",
-    [
-        (-1.0, "inner_cutoff must be non-negative"),
-        (30.0, "no open area"),
-        (40.0, "no open area"),
-    ],
-)
-def test_annular_aperture_rejects_an_empty_annulus(inner_cutoff, match):
-    with pytest.raises(ValueError, match=match):
-        AnnularAperture(inner_cutoff, semiangle_cutoff=30.0)
+def test_annular_aperture_rejects_an_empty_annulus():
+    with pytest.raises(ValueError, match="inner_cutoff must be non-negative"):
+        AnnularAperture(-1.0, semiangle_cutoff=30.0)
+
+    # an inner cutoff equal to or beyond the outer one
+    for inner_cutoff in (30.0, 40.0):
+        with pytest.raises(ValueError, match="no open area"):
+            AnnularAperture(inner_cutoff, semiangle_cutoff=30.0)
 
 
-@pytest.mark.parametrize("semiangle_cutoff", [3.0, 5.0])
-def test_annular_aperture_setter_rejects_an_empty_annulus(semiangle_cutoff):
+def test_annular_aperture_setter_rejects_an_empty_annulus():
     aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
 
-    with pytest.raises(ValueError, match="no open area"):
-        aperture.semiangle_cutoff = semiangle_cutoff
+    for semiangle_cutoff in (3.0, 5.0):
+        with pytest.raises(ValueError, match="no open area"):
+            aperture.semiangle_cutoff = semiangle_cutoff
 
     assert aperture.semiangle_cutoff == 20.0
     aperture.semiangle_cutoff = 10.0  # guard: a non-empty annulus is still accepted
@@ -150,55 +141,34 @@ def test_annular_aperture_setter_rejects_an_empty_annulus(semiangle_cutoff):
     assert np.all(np.isfinite(intensity)) and intensity.sum() > 0
 
 
-def test_annular_aperture_compares_a_distribution_by_its_smallest_value():
+def test_annular_aperture_rejects_a_distribution_of_either_cutoff():
+    """The annulus takes single cutoffs: a distribution of the outer cutoff used to
+    pass construction and fail at evaluation, and one of the inner cutoff to
+    fail in a comparison."""
     values = abtem.distributions.from_values
-    AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=values([10.0, 20.0]))
-
-    with pytest.raises(ValueError, match="smallest value 3.0"):
+    with pytest.raises(ValueError, match="distribution of semiangle_cutoff"):
         AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=values([3.0, 20.0]))
+
+    with pytest.raises(ValueError, match="distribution of inner_cutoff"):
+        AnnularAperture(inner_cutoff=values([1.0, 5.0]), semiangle_cutoff=20.0)
+
+    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
+    with pytest.raises(ValueError, match="distribution of semiangle_cutoff"):
+        aperture.semiangle_cutoff = values([10.0, 20.0])
+    assert aperture.semiangle_cutoff == 20.0
+
+
+def test_annular_aperture_evaluation_raises_for_a_non_scalar_cutoff():
+    """An exception rather than an assert, which `python -O` would remove."""
+    aperture = AnnularAperture(inner_cutoff=5.0, semiangle_cutoff=20.0)
+    aperture._semiangle_cutoff = abtem.distributions.from_values([10.0, 20.0])
+    with pytest.raises(TypeError, match="single semiangle_cutoff"):
+        aperture._evaluate_from_angular_grid(np.zeros((4, 4)), np.zeros((4, 4)))
 
 
 def test_zernike_rejects_a_negative_center_hole():
     with pytest.raises(ValueError, match="center_hole_cutoff must be non-negative"):
         Zernike(-1.0, np.pi / 2, semiangle_cutoff=30.0)
-
-
-@pytest.fixture(scope="module")
-def potential():
-    atoms = ase.build.mx2("WSe2", vacuum=2)
-    return abtem.Potential(atoms, sampling=0.1, slice_thickness=2)
-
-
-def _with_cutoff(obj, cls, semiangle_cutoff):
-    """The constructor arguments of `obj`, with another semiangle cutoff."""
-    kwargs = {}
-    for name in inspect.signature(cls).parameters:
-        attribute = name if hasattr(obj, name) else f"_{name}"
-        kwargs[name] = getattr(obj, attribute)
-    kwargs["semiangle_cutoff"] = semiangle_cutoff
-    return kwargs
-
-
-@pytest.mark.parametrize("semiangle_cutoff", [0.0, -5.0])
-def test_s_matrix_arrays_reject_a_non_positive_cutoff(potential, semiangle_cutoff):
-    s_matrix = abtem.SMatrix(potential=potential, energy=ENERGY, semiangle_cutoff=20)
-    array = s_matrix.build(lazy=False)
-    compressed = abtem.SMatrix(
-        potential=potential,
-        energy=ENERGY,
-        semiangle_cutoff=20,
-        interpolation=(2, 2),
-        upsample=True,
-    ).build(lazy=False)
-    assert isinstance(array, SMatrixArray)
-    assert isinstance(compressed, CompressedSMatrixArray)
-
-    for obj, cls in ((array, SMatrixArray), (compressed, CompressedSMatrixArray)):
-        with pytest.raises(ValueError, match="positive 'semiangle_cutoff'"):
-            cls(**_with_cutoff(obj, cls, semiangle_cutoff))
-
-        # the same arguments with a positive cutoff construct
-        cls(**_with_cutoff(obj, cls, 20.0))
 
 
 def test_block_direct_rejects_a_negative_radius():

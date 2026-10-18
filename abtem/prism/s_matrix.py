@@ -9,6 +9,7 @@ import warnings
 from abc import abstractmethod
 from functools import partial, reduce
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -35,7 +36,7 @@ from abtem.core.backend import (
 from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.energy import Accelerator
+from abtem.core.energy import Accelerator, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
@@ -59,6 +60,7 @@ from abtem.detectors import (
     WavesDetector,
     validate_detectors,
 )
+from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.measurements import (
     BaseMeasurements,
     _frozen_phonon_components_from_moments,
@@ -1037,7 +1039,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             metadata=metadata,
         )
 
-        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
@@ -1906,7 +1907,6 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
-        _validate_prism_semiangle_cutoff(semiangle_cutoff)
         self._semiangle_cutoff = semiangle_cutoff
         self._interpolation = interpolation
         self._window_gpts = tuple(window_gpts)
@@ -4162,8 +4162,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._position_quantization = position_quantization
         self._max_batch_expansion = max_batch_expansion
 
-        self._energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
-        self._accelerator = Accelerator(energy=float(self._energies[0]))
+        self._set_energies(energy)
         # self._beam_tilt = BeamTilt(tilt=tilt)
 
         # window_gpts is only used by the compressed (upsampled) reduction; it is
@@ -4258,9 +4257,35 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         the device."""
         return self._store_on_host
 
+    def _set_energies(self, energy):
+        # several energies are carried by the EnergyAxis alone and leave the
+        # accelerator without an energy, as for PlaneWave and Probe
+        if isinstance(energy, BaseDistribution):
+            energy = energy.values
+        energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        if not (np.all(np.isfinite(energies)) and np.all(energies > 0.0)):
+            # None, for one, would give NaN wavelengths and a silently NaN S-matrix
+            raise ValueError(
+                f"energy must be positive and finite [eV], got {energy!r}."
+            )
+        self._energies = energies
+        single = float(self._energies[0]) if len(self._energies) == 1 else None
+        self._accelerator = Accelerator(energy=single)
+
+    @property
+    def energy(self) -> float | BaseDistribution:
+        """Electron energy [eV], or the distribution of several energies."""
+        if len(self._energies) > 1:
+            return validate_distribution(self._energies)
+        return self.accelerator.energy
+
+    @energy.setter
+    def energy(self, energy: float | list | np.ndarray | BaseDistribution):
+        self._set_energies(energy)
+
     @property
     def metadata(self):
-        return {"energy": self.energy}
+        return {"energy": self.accelerator.energy}
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -4307,7 +4332,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """The wave vectors of the plane-wave expansion. When upsampling, the coarse
         expansion spans a disk around the aperture (see :meth:`_coarse_mask`),
         padding it by a support margin so that the interpolation of the compressed
-        modes is supported on all sides."""
+        modes is supported on all sides. Several energies share the expansion of
+        the highest energy, which holds those of the others (see :meth:`build`)."""
+        if len(self._energies) > 1:
+            highest = copy.copy(self)
+            highest._set_energies(max(self._energies))
+            return highest.wave_vectors
+
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
@@ -4520,9 +4551,15 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if alpha <= 0.0 or thickness is None:
             return None
 
+        # the longest wavelength of several energies has the widest probe tails
+        wavelength = (
+            self.wavelength
+            if len(self._energies) == 1
+            else energy2wavelength(min(self._energies))
+        )
         half_extent = (
             self._WINDOW_SPREAD_FACTOR * thickness * alpha
-            + self._WINDOW_TAIL_LOBES * self.wavelength / alpha
+            + self._WINDOW_TAIL_LOBES * wavelength / alpha
         )
 
         window = ()
@@ -5242,7 +5279,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 window_gpts=results[0].window_gpts,
                 device=self.device,
                 ensemble_axes_metadata=[energy_ax] + results[0].ensemble_axes_metadata,
-                metadata=results[0].metadata,
+                metadata={**results[0].metadata, "energy": None},
             )
 
         # --- Single-energy path (unchanged) ---
@@ -5838,15 +5875,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # of a copy embedded per task; map_blocks traverses kwargs for
             # dask collections and materializes it before the call. Same
             # rationale as shared_constant_arg, which the multislice driver
-            # uses through the transform's partitioned args.
-            #
-            # dask.delayed(x, pure=True) tokenizes x via a content hash
-            # (~0.4 ms/MB, dominated by hashing the array's out-of-band
-            # buffers), which a sweep calling this method many times against
-            # the same live transition_potentials object would otherwise pay
-            # on every call. _as_pure_delayed() memoizes it on the object
-            # itself.
-            transition_potentials=transition_potentials._as_pure_delayed(),
+            # uses through the transform's partitioned args. pure=True keys it
+            # by a hash of its content, so a changed transition potential gets
+            # a new key.
+            transition_potentials=dask.delayed(transition_potentials, pure=True),
             sites=sites,
             double_channel=double_channel,
             inelastic_crop=inelastic_crop,

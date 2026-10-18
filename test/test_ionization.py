@@ -12,6 +12,7 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 CuPy isn't present.
 """
 import sys
+import warnings
 
 import ase
 import numpy as np
@@ -264,19 +265,109 @@ def test_transition_potential_scan_auto_sites_survive_potential_prebuild(
         chunked_explicit_sites = chunked_explicit_sites.to_cpu()
         unchunked = unchunked.to_cpu()
 
-    # On the CPU the chunked and unchunked paths issue the same operations in
-    # the same order, so bit-identity is a real guarantee worth asserting. An
-    # accelerator is free to reassociate the accumulation behind a batch, which
-    # moves the last ULP without saying anything about the chunking logic this
-    # test is about -- compare at the precision the device actually offers.
-    if device == "cpu":
-        assert_equal = np.testing.assert_array_equal
-    else:
-        def assert_equal(actual, desired):
-            np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
+    # Not bit-identical: under load the CPU result moved in the last ULP between
+    # the chunked and unchunked scans (threaded accumulation order), as an
+    # accelerator's may. Sites resolved wrongly would move whole peaks.
+    def assert_equal(actual, desired):
+        np.testing.assert_allclose(actual, desired, rtol=1e-6, atol=0.0)
 
     assert_equal(chunked_auto_sites.array, unchunked.array)
     assert_equal(chunked_auto_sites.array, chunked_explicit_sites.array)
+
+
+@devices
+def test_explicit_sites_outside_a_non_periodic_cell_are_folded_as_the_potential_does(
+    device,
+):
+    """A non-periodic potential takes an atom given more than 2 Å outside its
+    cell along z as its image in the cell, and keeps one closer to a face in
+    the face slice. Explicit ``sites=`` of the same atoms must be sliced the
+    same way, so the scan equals ``sites=None`` exactly. They went straight
+    into the face slice unfolded: the atom at z = -3 Å, which the potential
+    puts at z = 5 Å (slice 2), was ionised in slice 0, and every exit plane
+    from slice 0 on differed.
+    """
+    from abtem.inelastic.core_loss import _extract_scattering_sites
+
+    # 4 slices of 2 Å. The first atom is 3 Å below the entrance face (folded
+    # to 5 Å, slice 2), the second 1 Å above the exit face (clamped, slice 3).
+    atoms = ase.Atoms(
+        "AuAu", positions=[(1.0, 1.0, -3.0), (3.0, 3.0, 9.0)], cell=(4, 4, 8)
+    )
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, exit_planes=1,
+            device=device,
+        )
+
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        explicit = _extract_scattering_sites(potential, atoms)
+    slices = [list(indices) for indices in explicit._slice_index]
+    assert slices == [[], [], [0], [1]]
+    assert slices == [list(i) for i in potential.get_sliced_atoms()._slice_index]
+    # The given atoms are not changed.
+    assert atoms.positions[0, 2] == -3.0
+
+    tp = synthetic_transition_potential(
+        Z=79, gpts=potential.gpts, extent=potential.extent,
+        n_transitions=1, energy=100e3, device=device,
+    )
+    probe = _make_probe(potential, device)
+
+    def run(sites):
+        return to_host_array(
+            probe.transition_potential_scan(
+                potential=potential, transition_potentials=tp, scan=(1.0, 1.0),
+                detectors=abtem.AnnularDetector(inner=0, outer=40),
+                sites=sites, lazy=False,
+            )
+        )
+
+    auto = run(None)
+    with pytest.warns(UserWarning, match="given more than 2.0 Å outside"):
+        explicit_result = run(atoms)
+
+    # The same sites in the same slices: the same computation.
+    assert np.abs(auto).max() > 0
+    np.testing.assert_array_equal(explicit_result, auto)
+
+    # A site within 2 Å of a face is not folded; it stays in the face slice.
+    near = atoms[1:]
+    near_sites = _extract_scattering_sites(potential, near)
+    assert [len(i) for i in near_sites._slice_index] == [0, 0, 0, 1]
+    assert near_sites.atoms.positions[0, 2] == 9.0
+
+
+@pytest.mark.parametrize("variant", ["finite_integrator", "cell_transform"])
+def test_explicit_sites_are_folded_only_where_the_potential_folds(variant):
+    """The potential folds atoms far outside its cell along z only for an
+    infinite integrator and atoms it does not transform (a finite integrator
+    wraps by its margins; a transformed cell is not the cell of the given
+    atoms), so explicit sites are neither folded nor warned about by that rule
+    in the others."""
+    from abtem.inelastic.core_loss import _extract_scattering_sites
+    from abtem.integrals import GaussianProjectionIntegrals
+
+    atoms = ase.Atoms("Au", positions=[(1.0, 1.0, -3.0)], cell=(4, 4, 8))
+    kwargs = {
+        "finite_integrator": {"integrator": GaussianProjectionIntegrals()},
+        "cell_transform": {"origin": (0.0, 0.0, 1.0)},
+    }[variant]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the potential's own
+        potential = abtem.Potential(
+            atoms, gpts=16, slice_thickness=2.0, periodic=False, **kwargs
+        )
+    assert not potential._folds_atoms_far_outside_along_z()
+
+    with warnings.catch_warnings():
+        # the fold's warning, not the face-slice one SliceIndexedAtoms raises
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.filterwarnings("error", message=".*given more than")
+        sites = _extract_scattering_sites(potential, atoms)
+
+    # clamped to the entrance face slice, not folded to z = 5 Å (slice 2)
+    assert [len(i) for i in sites._slice_index] == [1, 0, 0, 0]
 
 
 @devices
