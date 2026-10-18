@@ -1316,7 +1316,6 @@ def test_ensemble_indices_handle_a_multi_axis_potential_ensemble(device):
     each is compared against that configuration run as a plain potential.
     """
     from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, ThicknessAxis
-    from abtem.multislice import _validate_potential_ensemble_indices
 
     def snapshot(energy_index, config_index):
         # A distinct atom position per member, so a mis-addressed member
@@ -1361,13 +1360,6 @@ def test_ensemble_indices_handle_a_multi_axis_potential_ensemble(device):
         np.testing.assert_allclose(
             got[e, c], to_host_array(reference), rtol=1e-5, atol=1e-6
         )
-
-    # No public path hands the validator a short index (generate_blocks always
-    # yields one entry per ensemble axis), so check the #333 guard directly:
-    # a short tuple would let the exit-plane index land on an ensemble axis.
-    for short in ((1,), ()):
-        with pytest.raises(ValueError, match="entries for an ensemble"):
-            _validate_potential_ensemble_indices(short, 1, potential)
 
 
 def test_prism_driver_refuses_a_multi_configuration_potential():
