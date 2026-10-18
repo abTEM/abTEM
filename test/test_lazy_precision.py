@@ -24,10 +24,12 @@ from abtem import (
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import asnumpy, copy_to_device
 from abtem.core.fft import fft2, fft2_convolve
+from abtem.core.utils import get_dtype
 from abtem.measurements import DiffractionPatterns, Images
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import PotentialArray
 from abtem.tilt import BeamTilt
+from abtem.transfer import Bullseye, RadialPhasePlate, SpatialEnvelope
 from abtem.waves import Waves
 from utils import requires_gpu, synthetic_transition_potential
 
@@ -512,3 +514,145 @@ def test_lazy_prism_results_declare_their_block_precision(
             expected = np.result_type(expected, np.complex64)
         assert eager.array.dtype == expected
         _check(lazy, eager)
+
+
+SAME_PRECISION_IN_AND_OUT = {
+    "phase_shift": (
+        "waves",
+        lambda m: m.phase_shift(0.5),
+    ),
+    "integrate_gradient": (
+        "complex_images",
+        lambda m: m.integrate_gradient(),
+    ),
+    "center_of_mass": (
+        "patterns",
+        lambda m: m.center_of_mass(),
+    ),
+    "center_of_mass_mrad": (
+        "patterns",
+        lambda m: m.center_of_mass(units="mrad"),
+    ),
+    "ctf_with_angular_spread": (
+        "waves",
+        lambda m: m.apply_ctf(defocus=20, Cs=1e4, angular_spread=2),
+    ),
+    "spatial_envelope": (
+        "waves",
+        lambda m: m.apply_transform(SpatialEnvelope(angular_spread=2, C30=1e4)),
+    ),
+    "bullseye": (
+        "waves",
+        lambda m: m.apply_transform(Bullseye(4, 3.0, 3, 0.5, 20)),
+    ),
+    "radial_phase_plate": (
+        "waves",
+        lambda m: m.apply_transform(RadialPhasePlate(2, 30.0)),
+    ),
+}
+
+
+def _single_precision_input(kind, lazy):
+    """Input data in the dtype of the configured precision."""
+    if kind == "waves":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = dict(energy=100e3)
+        cls = Waves
+    elif kind == "complex_images":
+        array = _complex_data(get_dtype(complex=True))
+        cls_kwargs = {}
+        cls = Images
+    else:
+        array = np.abs(_real_data(get_dtype(complex=False))) + 1
+        cls_kwargs = dict(metadata={"energy": 100e3})
+        cls = DiffractionPatterns
+    if lazy:
+        array = da.from_array(array, chunks=(1,) + GRID)
+    return cls(array, sampling=0.1, ensemble_axes_metadata=_members(), **cls_kwargs)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("name", SAME_PRECISION_IN_AND_OUT)
+def test_methods_and_transforms_keep_the_precision_of_their_input(name, device):
+    """Single-precision data comes out in single precision: a float64 factor, such
+    as a NumPy scalar or a frequency grid, must not widen it. Only float32 is
+    tested: nothing is wider than float64 to promote it to."""
+    kind, method = SAME_PRECISION_IN_AND_OUT[name]
+    with abtem.config.set({"precision": "float32", "fft": "numpy"}):
+        lazy = method(_single_precision_input(kind, True).copy_to_device(device))
+        eager = method(_single_precision_input(kind, False).copy_to_device(device))
+        expected = np.dtype("float32")
+        if np.iscomplexobj(eager.array):
+            expected = np.result_type(expected, np.complex64)
+        assert eager.array.dtype == expected
+        _check(lazy, eager, member_offset_free=name == "integrate_gradient")
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_center_of_mass_of_integer_counts_follows_the_configured_precision(
+    precision, lazy, device
+):
+    counts = np.random.default_rng(3).integers(0, 50, size=(MEMBERS,) + GRID)
+    assert not np.issubdtype(counts.dtype, np.floating)
+    with abtem.config.set({"precision": precision, "fft": "numpy"}):
+        array = da.from_array(counts, chunks=(1,) + GRID) if lazy else counts
+        patterns = DiffractionPatterns(
+            array,
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        com = patterns.center_of_mass()
+        expected = np.result_type(np.dtype(precision), np.complex64)
+        assert com.array.dtype == expected
+        assert com.copy().compute().array.dtype == expected
+
+        reference = DiffractionPatterns(
+            counts.astype(np.float64),
+            sampling=0.1,
+            ensemble_axes_metadata=_members(),
+            metadata={"energy": 100e3},
+        ).copy_to_device(device)
+        with abtem.config.set({"precision": "float64"}):
+            reference = reference.center_of_mass().compute().array
+        rtol = 1e-5 if precision == "float32" else 1e-12
+        computed = asnumpy(com.copy().compute().array)
+        np.testing.assert_allclose(computed, asnumpy(reference), rtol=rtol, atol=1e-6)
+
+
+@cuda_and_cpu
+@pytest.mark.parametrize(
+    "transform",
+    [
+        Bullseye(4, 3.0, 3, 0.5, 20),
+        RadialPhasePlate(2, 30.0),
+        SpatialEnvelope(angular_spread=2, C30=1e4),
+    ],
+    ids=["bullseye", "radial_phase_plate", "spatial_envelope"],
+)
+def test_single_precision_transforms_agree_with_double_precision(transform, device):
+    """Waves transformed in single precision equal those transformed in double
+    precision to rounding: in particular the phase plate's flips must not depend
+    on the precision. Measured on this input, relative to the largest amplitude:
+    3e-8 (bullseye), 1.1e-7 (phase plate), 1.3e-7 (envelope), so the 1e-5
+    tolerance has a margin of about 75; a flipped phase or a misplaced ring
+    changes the waves by order one."""
+    result = {}
+    for precision in ("float32", "float64"):
+        with abtem.config.set({"precision": precision, "fft": "numpy"}):
+            waves = Waves(
+                _complex_data(get_dtype(complex=True)),
+                energy=100e3,
+                sampling=0.1,
+                ensemble_axes_metadata=_members(),
+            ).copy_to_device(device)
+            result[precision] = asnumpy(waves.apply_transform(transform).array)
+    assert result["float32"].dtype == np.complex64
+    np.testing.assert_allclose(
+        result["float32"],
+        result["float64"],
+        rtol=0,
+        atol=1e-5 * np.abs(result["float64"]).max(),
+    )

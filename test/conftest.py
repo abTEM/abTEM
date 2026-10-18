@@ -173,6 +173,11 @@ def pytest_configure(config):
         )
     config.addinivalue_line(
         "markers",
+        "quantem: runs against the real quantem package (which needs torch) and "
+        "is skipped without it; the CI job `quantem` installs it.",
+    )
+    config.addinivalue_line(
+        "markers",
         "float64: the test runs in double precision, set in its body or by a "
         "fixture rather than by a parameter; its 'mps' case is skipped.",
     )

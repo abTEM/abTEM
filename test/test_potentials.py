@@ -1,5 +1,4 @@
 import itertools
-import os
 import pickle
 import warnings
 
@@ -1457,6 +1456,69 @@ def test_potential_interpolate_line_3d_lazy_matches_eager(device):
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_potential_interpolate_line_default_end_runs_along_y(device):
+    # The default line runs along y over the whole extent, for the projected and
+    # the volumetric line alike (the latter used the x extent, the former is
+    # Images.interpolate_line's default).
+    atoms = Atoms("C", cell=[5.0, 9.0, 3.0], pbc=True, positions=[(1.0, 1.0, 1.0)])
+    potential = Potential(
+        atoms, gpts=(20, 36), slice_thickness=1.0, device=device
+    ).build(lazy=False)
+
+    projected = potential.interpolate_line(gpts=10)
+    volumetric = potential.interpolate_line(gpts=10, projected=False)
+
+    np.testing.assert_allclose(projected.metadata["end"], (0.0, 9.0))
+    np.testing.assert_allclose(volumetric.metadata["end"], (0.0, 9.0, 0.0))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("projected", [True, False])
+def test_potential_interpolate_line_on_skew_cell_hits_the_pixel_nodes(
+    projected, device
+):
+    # Pixel (i, j) of a skewed grid sits at i a1 / n1 + j a2 / n2; a first-order
+    # line through those positions returns the stored values.
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [
+            [a, 0.0, 0.0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0.0],
+            [0.0, 0.0, 3 * cz],
+        ]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0.3, 0.2, 3.0)])
+    potential = Potential(
+        atoms, gpts=(24, 32), slice_thickness=cz, device=device
+    ).build(lazy=False)
+    array = asnumpy(potential.array)  # slice 1 holds the atom
+
+    gpts = np.array(potential.gpts)
+    cell_2d = cell[:2, :2]
+    first, last = (2, 3), (2, 15)
+    start, end = (np.array(p) / gpts @ cell_2d for p in (first, last))
+    n = last[1] - first[1] + 1
+    expected = array[1, first[0], first[1] : last[1] + 1]
+    assert np.abs(expected).max() > 0
+
+    if projected:
+        line = potential.interpolate_line(
+            start=tuple(start), end=tuple(end), gpts=n, endpoint=True, order=1
+        )
+        expected = array.sum(0)[first[0], first[1] : last[1] + 1]
+    else:
+        z = cz + cz / 2  # the centre of slice 1
+        line = potential.interpolate_line(
+            start=(*start, z), end=(*end, z), gpts=n, endpoint=True, order=1,
+            projected=False,
+        )
+
+    np.testing.assert_allclose(
+        asnumpy(line.array), expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+    )
+
+
 def test_potential_interpolate_line_3d_frozen_phonon_ensemble_shape():
     import abtem
 
@@ -2404,70 +2466,6 @@ class TestSliceIndexedAtomsWrapping:
         assert self._per_slice(sliced) == [1, 0, 1, 1]
         assert np.array_equal(sliced.atoms.positions, atoms.positions)
 
-    def test_atoms_far_outside_the_faces_warn_but_are_kept(self):
-        """Clamping a misplaced atom into a face slice is a guess at its depth,
-        so it warns; within the threshold (the test above, which runs with
-        warnings as errors) it does not."""
-        import ase
-
-        import numpy as np
-
-        from abtem.slicing import FACE_SLICE_WARNING_DISTANCE, SliceIndexedAtoms
-
-        far = FACE_SLICE_WARNING_DISTANCE + 0.5
-        atoms = ase.Atoms(
-            "B4",
-            positions=[
-                [1.0, 1.0, -far],
-                [1.0, 1.0, 2.0],
-                [1.0, 1.0, 4.0 + far],
-                [1.0, 1.0, 100.0],
-            ],
-            cell=np.diag([4.0, 4.0, 4.0]),
-            pbc=True,
-        )
-        with pytest.warns(UserWarning, match=r"^3 atom\(s\) lie more than"):
-            sliced = SliceIndexedAtoms(atoms, slice_thickness=1.0, wrap=False)
-
-        assert self._per_slice(sliced) == [1, 0, 1, 2]
-
-    @staticmethod
-    def _displaced_far_past_the_exit_face():
-        """Frozen phonons that displace the atom at z = 3.9 more than
-        FACE_SLICE_WARNING_DISTANCE past the exit face of the 4 A cube (by 2.3
-        and 2.5 A in the first configuration, with seed 6); every atom is given
-        inside the cell."""
-        atoms = Atoms(
-            "B2", positions=[(2, 2, 2), (2, 2, 3.9)], cell=[4.0] * 3, pbc=True
-        )
-        return FrozenPhonons(atoms, num_configs=2, sigmas=3.0, seed=6)
-
-    def test_far_outside_face_warning_is_attributed_outside_abtem(self):
-        """The warning about an atom displaced far out of the cell is attributed
-        to the line that builds the potential, not to a frame inside abTEM. A
-        lazy build raises it in a dask worker thread, whose stack holds no frame
-        of the caller: it is attributed to a frame outside abTEM, not to one
-        inside it or to ``<sys>``."""
-        potential = Potential(
-            self._displaced_far_past_the_exit_face(),
-            sampling=0.2,
-            slice_thickness=1.0,
-            periodic=False,
-        )
-        package = os.path.dirname(abtem.__file__) + os.sep
-        for lazy in (False, True):
-            with warnings.catch_warnings(record=True) as records:
-                warnings.simplefilter("always")
-                potential.build(lazy=lazy).compute()
-
-            face = [r for r in records if "lie more than" in str(r.message)]
-            assert face, lazy
-            for record in face:
-                if not lazy:
-                    assert record.filename == __file__
-                assert record.filename != "<sys>", lazy
-                assert not record.filename.startswith(package), lazy
-
     def test_atoms_given_far_outside_along_z_warn_once_where_the_potential_is_made(
         self,
     ):
@@ -2499,7 +2497,60 @@ class TestSliceIndexedAtomsWrapping:
             message = str(far[0].message)
             assert message.startswith("1 atom(s) are given more than 2.0 Å"), case
             assert far[0].filename == __file__, case
-            assert not [r for r in records if "lie more than" in str(r.message)], case
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_lazily_read_members_given_far_outside_along_z_warn_when_computed(
+        self, lazy
+    ):
+        """The members of a lazily read trajectory are not known when the
+        potential is constructed; each is checked when its block is computed,
+        once per block and not once per slice."""
+        import dask
+
+        from abtem.inelastic.phonons import AtomsEnsemble
+
+        atoms = Atoms(
+            "B2", positions=[(2, 2, 2), (2, 2, 14.3)], cell=[4.0] * 3, pbc=True
+        )
+        trajectory = AtomsEnsemble(
+            [dask.delayed(atoms.copy)() for _ in range(2)], cell=atoms.cell
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            potential = Potential(
+                trajectory, gpts=8, slice_thickness=1.0, periodic=False
+            )
+
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter("always")
+            potential.build(lazy=lazy).compute()
+
+        far = [r for r in records if "outside the cell along z" in str(r.message)]
+        assert len(far) == 2
+        assert all(
+            str(r.message).startswith("1 atom(s) are given more than 2.0 Å")
+            for r in far
+        )
+
+    @pytest.mark.parametrize(
+        "plane, height", [("xz", 5.0), ("yz", 4.0)], ids=["xz", "yz"]
+    )
+    def test_atoms_given_far_outside_a_rotated_cell_warn(self, plane, height):
+        """An orthogonal cell rotated to another plane folds the atoms given far
+        outside along its new z, the old y for "xz" and the old x for "yz", and
+        says so; atoms far outside along the other axes are in-plane."""
+        atoms = Atoms(
+            "B4",
+            positions=[(1, 1, 1), (6.5, 1, 1), (1, 7.5, 1), (1, 1, 8.5)],
+            cell=[4.0, 5.0, 6.0],
+            pbc=True,
+        )
+        with pytest.warns(
+            UserWarning,
+            match=rf"^1 atom\(s\) are given more than 2.0 Å outside the cell "
+            rf"along z \(0 to {height:.4g} Å\)",
+        ):
+            Potential(atoms, gpts=8, slice_thickness=1.0, periodic=False, plane=plane)
 
     @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("device", ["cpu", gpu])

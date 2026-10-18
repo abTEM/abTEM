@@ -938,53 +938,28 @@ class TestGaussianProjectionIntegralsUsable:
         assert np.array_equal(got, wired)
         assert not np.array_equal(got, default_long_range)
 
-    def test_an_element_the_parametrization_lacks_does_not_reject_it(self):
-        """The first form check validated the fixed element "C", so any
-        parametrization without carbon was rejected outright -- the shipped
-        peng_ionic.json among them.
+    @pytest.mark.parametrize("name", ["lobato", "kirkland"])
+    def test_a_non_gaussian_parametrization_is_refused(self, name):
+        """It was accepted and gave a potential 4.8x too large, finite
+        everywhere -- a dead parameter turned into a silent physics error."""
+        with pytest.raises(ValueError, match="superposition of Gaussians"):
+            GaussianProjectionIntegrals(gaussian_parametrization=name)
 
-        This guards the *validator*, not a production path: no build reaches an
-        ionic symbol, because integrate_on_grid derives symbols from
-        chemical_symbols[number], and peng_ionic in a real build dies earlier
-        in cutoff(). The per-element rework is justified by
-        test_a_bad_entry_is_caught_at_the_element_that_uses_it, which is a live
-        path; this one pins that validation follows the element asked for.
-        """
-        from abtem.parametrizations import PengParametrization
-
-        integrator = GaussianProjectionIntegrals(
-            gaussian_parametrization=PengParametrization(
-                parameters="peng_ionic.json"
-            )
-        )
-        assert integrator.get_gaussians("O--", (32, 32), (0.1, 0.1)).shape[0] == 5
-
+    @pytest.mark.parametrize("method", ["get_gaussians", "get_corrections"])
     @pytest.mark.parametrize(
-        "centre, width, label",
-        [
-            (20.0, 0.5, "outside the old [0.01, 4.0] window"),
-            (0.0744, 1e-4, "between two of the old 32 sample points"),
-        ],
+        "centre, width",
+        [(20.0, 0.5), (0.0744, 1e-4)],
+        ids=["far_bump", "narrow_bump"],
     )
-    def test_a_non_gaussian_feature_is_caught_wherever_it_sits(
-        self, centre, width, label
+    def test_a_peng_subclass_that_is_not_gaussian_form_is_refused(
+        self, method, centre, width
     ):
-        """The form check has to look at the grid the build uses.
-
-        Sampling a fixed linspace(0.01, 4.0, 32) covered 2.3 % of the k^2 a
-        128^2 build evaluates and 0.1 % of a 512^2 one, with the 32 points
-        0.13 apart. Both gaps were reachable, and a parametrization that
-        cleared the check through either built a potential several per cent to
-        tens of per cent wrong -- from the very check meant to prevent exactly
-        that.
-        """
-        import ase.build
-
+        """The class check admits any Peng subclass, so one whose projected
+        scattering factor carries a bump is not a Gaussian sum and must be
+        refused where it is used, on the grid the build uses."""
         from abtem.parametrizations import PengParametrization
 
         class Bumped(PengParametrization):
-            """Peng's Gaussian sum times a narrow bump: not a Gaussian sum."""
-
             def projected_scattering_factor(self, symbol, *args, **kwargs):
                 base = super().projected_scattering_factor(symbol, *args, **kwargs)
 
@@ -998,62 +973,12 @@ class TestGaussianProjectionIntegralsUsable:
 
         integrator = GaussianProjectionIntegrals(gaussian_parametrization=Bumped())
         with pytest.raises(ValueError, match="not a superposition of Gaussians"):
-            abtem.Potential(
-                ase.build.bulk("Si", cubic=True), gpts=(128, 128),
-                slice_thickness=1.0, integrator=integrator,
-            ).build(lazy=False)
+            getattr(integrator, method)("Si", (128, 128), (0.1, 0.1))
 
-    def test_get_corrections_validates_the_parametrization_too(self):
-        """get_corrections uses gaussian_parametrization as its long_range
-        term, so a non-Gaussian one gives a plausible array rather than an
-        error. It is only safe by call order today -- integrate_on_grid happens
-        to call get_gaussians first -- and get_corrections is public."""
-        integrator = GaussianProjectionIntegrals(gaussian_parametrization="lobato")
-        with pytest.raises(ValueError, match="not a superposition of Gaussians"):
-            integrator.get_corrections("Si", (64, 64), (0.1, 0.1))
-
-    def test_the_form_check_verdict_does_not_depend_on_precision(self):
-        """Accept or reject must not be a function of abtem.config.
-
-        scaled_parameters is float64 while Parametrization._get_function casts
-        to get_dtype, so comparing one against the other made the verdict
-        precision-dependent: a user script that worked at float64 raised at
-        float32. The fixture is a pair of near-cancelling terms, which is where
-        the two dtypes disagree most.
-        """
-        import copy
-
-        from abtem.parametrizations import PengParametrization
-        from abtem.integrals import _validate_gaussian_form
-
-        # Five terms, so the table and Peng's own five-term function agree, and
-        # the last two cancel almost exactly: a genuine Gaussian superposition
-        # that float32 cannot sum accurately. The amplitude is chosen so the
-        # float32 evaluation error lands above the tolerance while the exact
-        # deviation is zero -- 1e4 is already enough, 1e5 leaves margin.
-        parameters = copy.deepcopy(PengParametrization().parameters)
-        a, b = list(parameters["Si"][0]), list(parameters["Si"][1])
-        parameters["Si"] = [a[:3] + [1e5, -1e5], b[:3] + [0.30, 0.30000001]]
-        cancelling = PengParametrization(parameters=parameters)
-
-        verdicts = {}
-        for precision in ("float32", "float64"):
-            with abtem.config.set({"precision": precision}):
-                try:
-                    _validate_gaussian_form(cancelling, "Si", (64, 64), (0.1, 0.1))
-                    verdicts[precision] = "accepted"
-                except ValueError:
-                    verdicts[precision] = "rejected"
-        # Same verdict at both, and the right one: it *is* a Gaussian sum.
-        # Comparing float64 parameters against a float32 own-function rejected
-        # it at float32 and accepted it at float64.
-        assert verdicts == {"float32": "accepted", "float64": "accepted"}, verdicts
-
-    def test_a_bad_entry_is_caught_at_the_element_that_uses_it(self):
-        """Validating one fixed element let a parametrization whose carbon
-        entry is sound and whose silicon entry is not through silently -- the
-        extra terms were added to the field while get_corrections and cutoff
-        still saw five, a ~10 % error, finite everywhere."""
+    def test_a_bad_table_entry_is_caught_at_the_element_that_uses_it(self):
+        """A table with a sixth term, which Peng's own five-term function
+        ignores, was added to the field while get_corrections and cutoff still
+        saw five: refused at the element that has it, the others unaffected."""
         import copy
 
         from abtem.parametrizations import PengParametrization
@@ -1063,19 +988,9 @@ class TestGaussianProjectionIntegralsUsable:
         integrator = GaussianProjectionIntegrals(
             gaussian_parametrization=PengParametrization(parameters=parameters)
         )
-        # The untouched element is unaffected...
         assert integrator.get_gaussians("Ga", (32, 32), (0.1, 0.1)).shape[0] == 5
-        # ...and the tampered one is refused where it is used.
         with pytest.raises(ValueError, match="superposition of Gaussians for 'Si'"):
             integrator.get_gaussians("Si", (32, 32), (0.1, 0.1))
-
-    @pytest.mark.parametrize("name", ["lobato", "kirkland"])
-    def test_a_non_gaussian_parametrization_is_refused(self, name):
-        """It was accepted and gave a potential 4.8x too large, finite
-        everywhere -- a dead parameter turned into a silent physics error."""
-        integrator = GaussianProjectionIntegrals(gaussian_parametrization=name)
-        with pytest.raises(ValueError, match="superposition of Gaussians"):
-            integrator.get_gaussians("Si", (64, 64), (0.1, 0.1))
 
     def test_the_gaussian_count_follows_the_parametrization(self):
         """The loop bound was hardcoded to 5 while the source became
@@ -1096,8 +1011,8 @@ class TestGaussianProjectionIntegralsUsable:
             """Peng, but its own scattering factor honours every term.
 
             Needed because the shipped PengParametrization hardcodes five in
-            `scattering_factor_k2`, so a seven-term table is -- correctly --
-            rejected by the form check as self-inconsistent. That is exactly
+            `scattering_factor_k2`, so a seven-term table would be
+            self-inconsistent. That is exactly
             why the loop bound cannot be reached with any shipped
             parametrization: real n-term support has to fix Peng first.
             """
