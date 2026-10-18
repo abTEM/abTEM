@@ -244,10 +244,11 @@ def write_emsoft_master_pattern(
         )
 
     if energy is None:
-        energy = pattern.metadata.get("energy")
+        # EMsoft's EkeV is the beam energy; older patterns record only "energy"
+        energy = pattern.metadata.get("beam_energy", pattern.metadata.get("energy"))
         if energy is None:
             raise ValueError(
-                "the pattern carries no energy in its metadata; pass energy=..."
+                "the pattern carries no beam energy in its metadata; pass energy=..."
             )
 
     if npx is None:

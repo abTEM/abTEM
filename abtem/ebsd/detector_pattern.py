@@ -27,7 +27,7 @@ from abtem.array import validate_lazy
 from abtem.core.axes import EnergyAxis
 from abtem.core.backend import get_array_module
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.utils import CopyMixin, EqualityMixin
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.ebsd.detectors import BackscatterDetector
 from abtem.ebsd.emission import configuration_atoms
 from abtem.ebsd.geometry import EBSDGeometry, bunge_rotation
@@ -45,6 +45,7 @@ from abtem.ebsd.orientations import (
 from abtem.ebsd.reciprocity import (
     EBSD,
     DepthWeight,
+    _energy_metadata,
     _potential_configurations,
     _validate_backscatter_energy,
 )
@@ -591,7 +592,9 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                     )
                     pieces.append(
                         da.from_delayed(
-                            task, shape=(n_sources, len(indices)), dtype=np.float32
+                            task,
+                            shape=(n_sources, len(indices)),
+                            dtype=get_dtype(complex=False),
                         )
                     )
                 else:
@@ -614,7 +617,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         array = array.reshape(output_shape + (rows, columns))
 
         metadata = {
-            "energy": self._energy,
+            **_energy_metadata(self._energy, energies, energy_weights),
             "label": "backscattered intensity",
             "source": (
                 self._source
@@ -628,14 +631,6 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
             ),
             "max_angle": self.max_angle,
             "sampling": self._sampling,
-            **(
-                {
-                    "backscatter_energies": [float(e) for e in energies],
-                    "energy_weights": [float(w) for w in energy_weights],
-                }
-                if len(energies) > 1
-                else {}
-            ),
         }
 
         return EBSDPatternImages(

@@ -23,7 +23,7 @@ from ase import Atoms
 from abtem.array import validate_lazy
 from abtem.core.axes import EnergyAxis
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.utils import CopyMixin, EqualityMixin
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.ebsd.detectors import BackscatterDetector
 from abtem.ebsd.measurements import SphericalPattern
 from abtem.ebsd.orientations import (
@@ -38,7 +38,12 @@ from abtem.ebsd.orientations import (
     zone_axis_rotation,
 )
 from abtem.ebsd.projections import HemisphereProjection, validate_projection
-from abtem.ebsd.reciprocity import EBSD, DepthWeight, _validate_backscatter_energy
+from abtem.ebsd.reciprocity import (
+    EBSD,
+    DepthWeight,
+    _energy_metadata,
+    _validate_backscatter_energy,
+)
 from abtem.ebsd.sampling import (
     AntialiasLossWarning,
     _warn_if_undersampled,
@@ -597,7 +602,9 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                         self, blocks[south], **arguments
                     )
                     array = da.from_delayed(
-                        task, shape=ensemble_shape + (len(local),), dtype=np.float32
+                        task,
+                        shape=ensemble_shape + (len(local),),
+                        dtype=get_dtype(complex=False),
                     )
                 else:
                     array = _patch_intensities(self, blocks[south], **arguments)
@@ -620,7 +627,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         pattern = SphericalPattern.concatenate(patterns)
         pattern.metadata.update(
             {
-                "energy": self._energy,
+                **_energy_metadata(self._energy, energies, energy_weights),
                 "label": "backscattered intensity",
                 "n_patches": self._n_patches,
                 "max_angle": self._max_angle,
@@ -635,14 +642,6 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                 ),
                 "hemisphere": self._hemisphere,
                 "centrosymmetric": self.centrosymmetric,
-                **(
-                    {
-                        "backscatter_energies": [float(e) for e in energies],
-                        "energy_weights": [float(w) for w in energy_weights],
-                    }
-                    if ensemble_shape
-                    else {}
-                ),
             }
         )
 

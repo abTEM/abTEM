@@ -29,6 +29,7 @@ from abtem.antialias import antialias_aperture
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2, ifft2
+from abtem.core.utils import get_dtype
 from abtem.integrals import sinc, superpose_deltas
 from abtem.parametrizations import validate_parametrization
 from abtem.slicing import SliceIndexedAtoms
@@ -187,12 +188,13 @@ class EmissionSlices:
         positions = atoms.positions[:, :2] / np.array(self._sampling)
         weights = atoms.arrays["emission"].reshape(len(atoms), -1)
 
+        real, complex_ = get_dtype(complex=False), get_dtype(complex=True)
         maps = []
         for source in range(self._n_sources):
-            array = xp.zeros(self._gpts, dtype=np.float32)
+            array = xp.zeros(self._gpts, dtype=real)
             array = superpose_deltas(
-                positions, array, weights=xp.asarray(weights[:, source], np.float32)
+                positions, array, weights=xp.asarray(weights[:, source], real)
             )
-            maps.append(ifft2(fft2(array.astype(np.complex64)) * self._kernel).real)
+            maps.append(ifft2(fft2(array.astype(complex_)) * self._kernel).real)
 
-        return xp.stack(maps).astype(np.float32)
+        return xp.stack(maps).astype(real)

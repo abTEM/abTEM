@@ -198,6 +198,27 @@ def _depth_bins(depth_bins, slice_thickness) -> tuple[np.ndarray, np.ndarray]:
     return edges, index
 
 
+def _energy_metadata(
+    beam_energy: float, backscatter_energies: np.ndarray, energy_weights: np.ndarray
+) -> dict:
+    """The energies a pattern records, the same way for every builder.
+
+    ``beam_energy`` is the incident beam's. ``energy`` is abTEM's: that of the
+    electrons the pattern counts, the backscattered ones. With several of them
+    the pattern's :class:`.EnergyAxis` carries them and ``energy`` is left
+    unset, as abTEM leaves it for every energy ensemble; their weights are
+    recorded rather than applied, since summing the axis is the consumer's
+    business and the weights usually come from a Monte Carlo spectrum.
+    """
+    metadata: dict = {"beam_energy": float(beam_energy)}
+    if len(backscatter_energies) == 1:
+        metadata["energy"] = float(backscatter_energies[0])
+    else:
+        metadata["backscatter_energies"] = [float(e) for e in backscatter_energies]
+        metadata["energy_weights"] = [float(w) for w in energy_weights]
+    return metadata
+
+
 def _validate_backscatter_energy(
     backscatter_energy, beam_energy: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -468,6 +489,14 @@ class EBSD(CopyMixin, EqualityMixin):
         The weights of a distribution are recorded in the metadata rather than
         applied, since summing the energy axis is the consumer's business and
         the weights usually come from a Monte Carlo spectrum.
+
+        ``metadata["energy"]`` is that of the backscattered electrons, unset
+        when there are several, and ``metadata["beam_energy"]`` the beam's. A
+        grid detector's directions are the same at every energy, while abTEM
+        calibrates a :class:`.DiffractionPatterns` of several energies in
+        reciprocal space, by the highest; its angles are then those of the
+        grid, but indexing one lower energy out rescales them by its
+        wavelength.
     depth_tolerance : float, optional
         Stop propagating once the depth weight still to be collected falls
         below this fraction of the total (default 1e-4). Slices past a short
@@ -587,16 +616,16 @@ class EBSD(CopyMixin, EqualityMixin):
         if gpts is None:
             raise RuntimeError("the potential has no grid")
 
+        # Every wave carries a propagator kernel of its own as large as itself,
+        # so each direction holds two complex arrays of the grid's size.
         if isinstance(max_batch, int):
-            max_batch = max_batch * int(np.prod(gpts))
+            max_batch = max_batch * 2 * int(np.prod(gpts))
 
         chunks = validate_chunks(
-            shape=(len(self._detector),) + tuple(gpts),
-            chunks=("auto", -1, -1),
+            shape=(len(self._detector), 2) + tuple(gpts),
+            chunks=("auto", -1, -1, -1),
             max_elements=max_batch,
-            # every wave carries a propagator kernel of its own as large as
-            # itself, so count two complex64 arrays per wave
-            dtype=np.dtype("complex128"),
+            dtype=np.dtype(get_dtype(complex=True)),
             device=self._device,
         )
         blocks = list(chunk_ranges(chunks)[0])
@@ -734,7 +763,7 @@ class EBSD(CopyMixin, EqualityMixin):
 
         intensities = xp.zeros(
             (n_energies,) + depth_shape + output_shape + (len(self._detector),),
-            dtype=xp.float32,
+            dtype=get_dtype(complex=False),
         )
 
         progress = TqdmWrapper(
@@ -766,9 +795,8 @@ class EBSD(CopyMixin, EqualityMixin):
         return self._to_measurement(
             intensities,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            energy=energy,
-            energy_weights=energy_weights,
             backscatter_energies=backscatter_energies,
+            energy_weights=energy_weights,
             extra_metadata=extra_metadata,
         )
 
@@ -851,7 +879,7 @@ class EBSD(CopyMixin, EqualityMixin):
                         da.from_delayed(
                             block,
                             shape=block_shape + (stop - start,),
-                            dtype=np.float32,
+                            dtype=get_dtype(complex=False),
                         )
                     )
                 rows.append(da.concatenate(columns, axis=-1))
@@ -873,9 +901,8 @@ class EBSD(CopyMixin, EqualityMixin):
         return self._to_measurement(
             array,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            energy=energy,
-            energy_weights=energy_weights,
             backscatter_energies=backscatter_energies,
+            energy_weights=energy_weights,
             extra_metadata=extra_metadata,
         )
 
@@ -920,6 +947,8 @@ class EBSD(CopyMixin, EqualityMixin):
 
         n_sources = int(np.prod(output_shape)) if output_shape else 1
         n_bins = depth_shape[0] if depth_shape else 1
+        # Accumulated in double precision whatever the configured one: these
+        # sum the emission of every atom over every slice.
         numerator = xp.zeros((n_bins, n_sources, n_directions), dtype=xp.float64)
         denominator = xp.zeros((n_bins, n_sources), dtype=xp.float64)
 
@@ -976,7 +1005,7 @@ class EBSD(CopyMixin, EqualityMixin):
         safe = xp.where(denominator > 0.0, denominator, 1.0)
         intensities = xp.where(
             denominator[..., None] > 0.0, numerator / safe[..., None], 0.0
-        ).astype(xp.float32)
+        ).astype(get_dtype(complex=False))
 
         return intensities.reshape(depth_shape + output_shape + (n_directions,))
 
@@ -991,7 +1020,7 @@ class EBSD(CopyMixin, EqualityMixin):
         #
         # The squared magnitude of the reciprocity waves is the largest array in
         # the loop, and taking it with abs()**2 costs more than the contraction
-        # it feeds. Viewing the complex array as float32 gives the real and
+        # it feeds. Viewing the complex array as real numbers gives the real and
         # imaginary parts interleaved and contiguous, so squaring every
         # component and contracting against the source with each of its values
         # repeated twice computes the same sum in one pass over contiguous
@@ -1017,9 +1046,8 @@ class EBSD(CopyMixin, EqualityMixin):
         self,
         intensities,
         ensemble_axes_metadata: list[AxisMetadata],
-        energy: float,
-        energy_weights: Optional[np.ndarray] = None,
-        backscatter_energies: Optional[np.ndarray] = None,
+        backscatter_energies: np.ndarray,
+        energy_weights: np.ndarray,
         extra_metadata: Optional[dict] = None,
     ) -> DiffractionPatterns | SphericalPattern:
         """Wrap the collected intensities in the matching measurement type."""
@@ -1031,28 +1059,21 @@ class EBSD(CopyMixin, EqualityMixin):
                 intensities.get() if hasattr(intensities, "get") else intensities
             )
         metadata = {
-            "energy": energy,
+            **_energy_metadata(self._energy, backscatter_energies, energy_weights),
             "label": "backscattered intensity",
             "source": "uniform" if self._illumination is None else "illumination",
             **(extra_metadata or {}),
         }
 
-        if (
-            backscatter_energies is not None
-            and energy_weights is not None
-            and len(backscatter_energies) > 1
-        ):
-            # Kept rather than applied: the weights belong to whoever sums the
-            # energy axis, and a Monte Carlo spectrum is the usual source of
-            # them.
-            metadata["backscatter_energies"] = [float(e) for e in backscatter_energies]
-            metadata["energy_weights"] = [float(w) for w in energy_weights]
-
         if self._detector.is_grid:
+            # Calibrated by the highest energy, as abTEM reads the angles of a
+            # diffraction pattern of several: see `backscatter_energy`.
             gpts = self._detector.gpts
             return DiffractionPatterns(
                 array.reshape(array.shape[:-1] + (gpts, gpts)),
-                sampling=self._detector.reciprocal_sampling(energy),
+                sampling=self._detector.reciprocal_sampling(
+                    float(np.max(backscatter_energies))
+                ),
                 fftshift=True,
                 ensemble_axes_metadata=ensemble_axes_metadata,
                 metadata=metadata,
