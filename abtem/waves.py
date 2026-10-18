@@ -354,11 +354,54 @@ def _squeeze_flagged_axes(ensemble: Waves | BaseMeasurements):
     )
 
 
+def _average_frozen_phonon_waves(waves: Waves) -> Waves:
+    """The configuration-averaged wave function <ψ> of waves from a ``WavesDetector``
+    with ``average_frozen_phonons``: the last ``FrozenPhononsAxis`` is averaged,
+    coherently and over that axis alone, and every other ensemble axis is kept."""
+    axes = waves.ensemble_axes_metadata
+    # With more than one FrozenPhononsAxis, the last one is reduced.
+    fp_axis_idx = next(
+        (
+            i
+            for i, ax in reversed(list(enumerate(axes)))
+            if isinstance(ax, FrozenPhononsAxis)
+        ),
+        None,
+    )
+    if fp_axis_idx is None:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs a FrozenPhononsAxis in "
+            "the ensemble axes, e.g. from FrozenPhonons as the potential of the "
+            "multislice simulation."
+        )
+    if not axes[fp_axis_idx]._ensemble_mean:
+        raise ValueError(
+            "a WavesDetector with average_frozen_phonons needs the frozen phonons "
+            "averaged: build them with ensemble_mean=True."
+        )
+
+    num_configurations = waves.shape[fp_axis_idx]
+    # The mean of the array (a dask tree reduction when lazy).
+    averaged = waves._weighted_ensemble_mean(fp_axis_idx)
+
+    metadata = {
+        key: value
+        for key, value in averaged.metadata.items()
+        if key != "frozen_phonon_average"
+    }
+    metadata["num_configurations"] = num_configurations
+    kwargs = averaged._copy_kwargs(exclude=("metadata",))
+    return averaged.__class__(**kwargs, metadata=metadata)
+
+
 def _average_ensemble_axes(ensemble: Waves | BaseMeasurements):
     """The ensemble with its axes flagged for averaging averaged, without squeezing
-    any axis. Wave functions keep every member of an ensemble."""
+    any axis. Wave functions keep every member of an ensemble, except the frozen
+    phonons of those from a ``WavesDetector`` with ``average_frozen_phonons``."""
     if isinstance(ensemble, BaseMeasurements):
         return ensemble.reduce_ensemble()
+    if ensemble.metadata.get("frozen_phonon_average"):
+        return _average_frozen_phonon_waves(ensemble)
     return ensemble
 
 
@@ -382,7 +425,11 @@ def reduce_ensemble(
     """
     Reduce an ensemble of wave functions or measurements by squeezing or averaging
     ensemble axes tagged for reduction with the "_squeeze" or "_ensemble_mean"
-    attribute of the axis metadata.
+    attribute of the axis metadata. Wave functions are passed through unchanged, except
+    those of a ``WavesDetector`` with ``average_frozen_phonons``, whose frozen-phonon
+    axis is averaged, and the measurements of a ``PixelatedDetector`` with
+    ``components``, which are split into elastic and diffuse intensity after the
+    frozen-phonon average.
 
     Parameters
     ----------
@@ -404,6 +451,11 @@ def reduce_ensemble(
         return outputs
 
     output = _squeeze_flagged_axes(ensemble)
+
+    if not isinstance(output, BaseMeasurements) and output.metadata.get(
+        "frozen_phonon_average"
+    ):
+        return _average_frozen_phonon_waves(output)
 
     if not isinstance(output, BaseMeasurements) and any(
         isinstance(ax, FrozenPhononsAxis)
@@ -678,7 +730,9 @@ class Waves(BaseWaves, ArrayObject):
 
     def _as_diffraction_patterns(self) -> DiffractionPatterns:
         """The Fourier coefficients of reciprocal-space waves, as unshifted
-        diffraction patterns on spatial-frequency axes [1/Å]."""
+        diffraction patterns on spatial-frequency axes [1/Å]. The exports shift
+        them directly: they are unshifted by construction, so the warning of
+        `DiffractionPatterns` about unshifted exports does not apply."""
         return DiffractionPatterns(
             self.array,
             sampling=self.reciprocal_space_sampling,
@@ -694,7 +748,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_hyperspy(transpose)
+            return self._as_diffraction_patterns()._fftshifted().to_hyperspy(transpose)
         return super().to_hyperspy(transpose)
 
     def to_data_array(self):
@@ -704,7 +758,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_data_array()
+            return self._as_diffraction_patterns()._fftshifted().to_data_array()
         return super().to_data_array()
 
     def to_quantem(self):
@@ -714,7 +768,7 @@ class Waves(BaseWaves, ArrayObject):
         `Waves`.
         """
         if self.reciprocal_space:
-            return self._as_diffraction_patterns().to_quantem()
+            return self._as_diffraction_patterns()._fftshifted().to_quantem()
         return super().to_quantem()
 
     def convolve(
