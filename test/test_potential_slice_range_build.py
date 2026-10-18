@@ -1,5 +1,7 @@
 """build(first_slice, last_slice) of every potential builder, lazy and eager."""
 
+import warnings
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -30,6 +32,19 @@ def _potentials(exit_planes=None):
     unit = abtem.Potential(
         ATOMS, gpts=GPTS, slice_thickness=0.4, exit_planes=exit_planes
     )
+    # The zero density has none of the valence electrons, so ChargeDensityPotential
+    # warns that it cannot subtract the core and builds the point charges alone.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", "charge_density integrates to", category=UserWarning
+        )
+        charge_density_potential = ChargeDensityPotential(
+            ATOMS,
+            charge_density=np.zeros((16, 14, 18)),
+            gpts=GPTS,
+            slice_thickness=0.4,
+            exit_planes=exit_planes,
+        )
     return {
         "Potential": unit,
         "FrozenPhonons": abtem.Potential(
@@ -41,13 +56,7 @@ def _potentials(exit_planes=None):
         "CrystalPotential": abtem.CrystalPotential(
             unit, repetitions=(1, 1, 2), exit_planes=exit_planes
         ),
-        "ChargeDensityPotential": ChargeDensityPotential(
-            ATOMS,
-            charge_density=np.zeros((16, 14, 18)),
-            gpts=GPTS,
-            slice_thickness=0.4,
-            exit_planes=exit_planes,
-        ),
+        "ChargeDensityPotential": charge_density_potential,
     }
 
 

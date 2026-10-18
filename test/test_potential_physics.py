@@ -40,6 +40,15 @@ ELEMENTS = (6, 14, 29, 79)
 PRECISIONS = ("float32", "float64")
 
 
+# These densities are not a valence density of their atoms (random values, no
+# electrons, or all of them), so ChargeDensityPotential warns that it cannot
+# subtract the core and builds the potential of the density as given, which is
+# what these tests check.
+ignore_core_count_warning = pytest.mark.filterwarnings(
+    "ignore:charge_density integrates to:UserWarning"
+)
+
+
 def _f0(parametrization, Z) -> float:
     """``projected_scattering_factor(k=0)``.
 
@@ -546,14 +555,21 @@ _CD_CELL = 8.0
 _CD_GRID = 64  # charge-density grid points per axis (0.125 A)
 
 
-def _charge_density_potential(Z, z0, density, slice_thickness, device="cpu"):
+def _charge_density_potential(
+    Z, z0, density, slice_thickness, device="cpu", reference="mean", sampling=0.05
+):
     from abtem.potentials.charge_density import ChargeDensityPotential
 
     atoms = Atoms(
         [Z], positions=[(_CD_CELL / 2, _CD_CELL / 2, z0)], cell=[_CD_CELL] * 3, pbc=True
     )
     return ChargeDensityPotential(
-        atoms, density, sampling=0.05, slice_thickness=slice_thickness, device=device
+        atoms,
+        density,
+        sampling=sampling,
+        slice_thickness=slice_thickness,
+        device=device,
+        reference=reference,
     )
 
 
@@ -569,6 +585,7 @@ def _gaussian_electrons(Z, z0, sigma):
     return Z * np.exp(-r2 / (2 * sigma**2)) / (2 * np.pi * sigma**2) ** 1.5
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 def test_charge_density_point_charges_give_the_ewald_projected_potential(device):
@@ -589,8 +606,8 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential(device)
     grad^2 V_p = -lambda/eps0. The Ewald split parameters differ from the
     code's (3D erf split, width 3 A, quadrature + 3D FFT), so nothing is shared.
 
-    ChargeDensityPotential subtracts each slice's minimum, so the comparison
-    is up to one additive constant (sum of the per-slice minima). Tolerance:
+    The potential is referenced to its cell average, not to the oracle's, so
+    the comparison is up to one additive constant. Tolerance:
     1e-3 of the oracle's range over 0.2 < rho < 3 A -- above the order-2
     spline interpolation of the smooth 3 A-wide long-range part from the
     0.125 A density grid, ~(0.125/3)^3 ~ 7e-5, and excluding the log-singular
@@ -645,6 +662,7 @@ def test_charge_density_point_charges_give_the_ewald_projected_potential(device)
     )
 
 
+@ignore_core_count_warning
 @pytest.mark.float64
 @devices
 @pytest.mark.parametrize("z0", (3.3, 4.0))
@@ -654,9 +672,9 @@ def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0, devi
     positive and decaying to zero far from the atom.
 
     Oracle: that V integrated over each slice along z with scipy.integrate.quad,
-    at in-plane distances 0.2-3 A (plus the +-Lz images). Because V >= 0 and
-    vanishes far away, the code's per-slice minimum subtraction removes ~0, so
-    the comparison is absolute.
+    at in-plane distances 0.2-3 A (plus the +-Lz images). V vanishes far away,
+    and reference="vacuum" sets the potential of the slice farthest from the
+    atom to zero, so the comparison is absolute.
 
     This is a full-electron density, so issue #421 (full Z added against a
     valence-only density) does not arise here; the test does not encode it.
@@ -675,7 +693,7 @@ def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0, devi
     Z, sigma, dz = 6, 0.7, 0.5
     with config.set({"precision": "float64"}):
         potential = _charge_density_potential(
-            Z, z0, _gaussian_electrons(Z, z0, sigma), dz, device
+            Z, z0, _gaussian_electrons(Z, z0, sigma), dz, device, reference="vacuum"
         )
         array = asnumpy(potential.build(lazy=False).array)
 
@@ -703,3 +721,154 @@ def test_charge_density_neutral_atom_matches_screened_coulomb_per_slice(z0, devi
     )
     # Far from the atom a neutral atom's potential is ~0 in every slice.
     assert np.abs(numeric[:, -1]).max() < tolerance
+
+
+# --------------------------------------------------------------------------
+# ChargeDensityPotential's reference: the constant a periodic solve leaves open
+# --------------------------------------------------------------------------
+
+_SIGMA = 0.7  # std of the Gaussian electron cloud of the neutral test atoms [A]
+
+# One carbon atom: isolated in a cube, a monolayer with 16 A along z, and bulk.
+_REFERENCE_STRUCTURES = {
+    "atom": ((8.0, 8.0, 8.0), (4.0, 4.0, 4.0)),
+    "slab": ((2.5, 2.5, 16.0), (1.25, 1.25, 8.0)),
+    "bulk": ((3.0, 3.0, 3.0), (1.5, 1.5, 1.5)),
+}
+
+
+def _neutral_structure(name):
+    """Atoms and their -Z electrons, Gaussians of std _SIGMA summed over the
+    periodic images (the cells are smaller than the Gaussians' reach), on a
+    0.125 A grid."""
+    cell, position = _REFERENCE_STRUCTURES[name]
+    atoms = Atoms([6], positions=[position], cell=cell, pbc=True)
+    density = 6.0 / (2 * np.pi * _SIGMA**2) ** 1.5
+    for length, centre in zip(cell, position):
+        n = int(round(length / 0.125))
+        d = (np.arange(n) * length / n - centre + length / 2) % length - length / 2
+        profile = sum(
+            np.exp(-((d + k * length) ** 2) / (2 * _SIGMA**2)) for k in range(-4, 5)
+        )
+        density = np.multiply.outer(density, profile)
+    return atoms, density
+
+
+def _cell_average_referenced_to_vacuum(atoms):
+    """The cell average [V] of the potential of neutral Gaussian-screened atoms
+    that is zero far from them: each integrates to Z sigma^2 / (2 eps0), the
+    second moment of its charge (point nucleus, Gaussian electrons) over 6 eps0.
+    """
+    from abtem.core.constants import eps0
+
+    return np.sum(atoms.numbers) * _SIGMA**2 / (2 * eps0 * atoms.cell.volume)
+
+
+def _reference_potential(name, reference, sampling, device):
+    from abtem.potentials.charge_density import ChargeDensityPotential
+
+    atoms, density = _neutral_structure(name)
+    potential = ChargeDensityPotential(
+        atoms,
+        density,
+        sampling=sampling,
+        slice_thickness=0.5,
+        device=device,
+        reference=reference,
+    )
+    with config.set({"precision": "float64"}):
+        array = asnumpy(potential.build(lazy=False).array)
+    # [V]: each slice divided by its thickness (all are 0.5 A).
+    return potential, atoms, array / 0.5
+
+
+@ignore_core_count_warning
+@pytest.mark.float64
+@devices
+@pytest.mark.parametrize("sampling, width", [(0.1, 3.0), (0.05, 1.5)])
+@pytest.mark.parametrize("name", list(_REFERENCE_STRUCTURES))
+def test_charge_density_mean_reference_averages_to_zero(name, sampling, width, device):
+    """reference="mean": the potential averages to zero over the cell, whatever
+    the width w of the internal Ewald split -- two samplings that give w = 3 and
+    1.5 A. Before, the short-range part's average sum(Z) w^2 / (2 eps0 V) was
+    left in: 9.5 V for the atom, 39 V for the slab and 181 V for bulk at w = 3 A.
+
+    Oracle: zero; with vacuum (atom, slab), the vacuum slice sits at minus the
+    cell average of the potential that vanishes in vacuum, which is analytic for
+    neutral Gaussian-screened atoms (_cell_average_referenced_to_vacuum).
+
+    Tolerances: the average, 2e-4 of the removed constant; it is analytic, and
+    the code's short-range part integrates to it within 6e-5 here. The vacuum,
+    0.02 V; the slice integral of the long-range part, which curves on the scale
+    of w at the vacuum slice, errs by up to 6 mV at w = 3 A and 0.5 A slices
+    (2 mV at 0.25 A slices, 1 mV at w = 1.5 A).
+    """
+    from abtem.core.constants import eps0
+
+    potential, atoms, array = _reference_potential(name, "mean", sampling, device)
+    assert potential._ewald_width() == width
+
+    removed = np.sum(atoms.numbers) * width**2 / (2 * eps0 * atoms.cell.volume)
+    assert abs(array.mean()) < 2e-4 * removed, (array.mean(), removed)
+
+    if name != "bulk":
+        vacuum = array[0].mean()  # the slice at z = 0, farthest from the atom
+        expected = -_cell_average_referenced_to_vacuum(atoms)
+        assert abs(vacuum - expected) < 0.02, (vacuum, expected)
+
+
+@ignore_core_count_warning
+@pytest.mark.float64
+@devices
+@pytest.mark.parametrize("name", ["atom", "slab"])
+def test_charge_density_vacuum_reference_zeros_the_vacuum(name, device):
+    """reference="vacuum": the planar average of the slice farthest from the atom
+    is zero, and the cell average is then that of the potential that vanishes in
+    vacuum (oracle: _cell_average_referenced_to_vacuum; 0.02 V, as for the
+    vacuum of the "mean" reference, which the two share)."""
+    _, atoms, array = _reference_potential(name, "vacuum", 0.1, device)
+    assert abs(array[0].mean()) < 1e-10
+    expected = _cell_average_referenced_to_vacuum(atoms)
+    assert abs(array.mean() - expected) < 0.02, (array.mean(), expected)
+
+
+@ignore_core_count_warning
+def test_charge_density_vacuum_reference_needs_vacuum():
+    """Bulk has no slice free of electrons; reference="vacuum" says so."""
+    with pytest.raises(ValueError, match="vacuum slice"):
+        _reference_potential("bulk", "vacuum", 0.1, "cpu")
+
+
+@ignore_core_count_warning
+@pytest.mark.float64
+@devices
+def test_charge_density_references_give_the_same_intensities(device):
+    """A constant in a slice is a uniform phase on the whole wave, which commutes
+    with the Fresnel propagator: the references, including slice_min's different
+    constant in every slice, give the same exit-wave intensity and differ in
+    phase by one constant. Slab: the per-slice minima differ by 2 V. Tolerance:
+    1e-10 of the maximum intensity, and 1e-10 rad for the spread of the phase
+    difference (measured 1e-14 and 1e-15)."""
+    import abtem
+
+    waves = {}
+    for reference in ("mean", "vacuum", "slice_min"):
+        potential, _, _ = _reference_potential("slab", reference, 0.1, device)
+        with config.set({"precision": "float64"}):
+            exit_wave = abtem.PlaneWave(energy=200e3, device=device).multislice(
+                potential
+            )
+            waves[reference] = asnumpy(exit_wave.compute().array)
+
+    mean = waves["mean"]
+    for reference in ("vacuum", "slice_min"):
+        other = waves[reference]
+        np.testing.assert_allclose(
+            np.abs(other) ** 2,
+            np.abs(mean) ** 2,
+            rtol=0,
+            atol=1e-10 * (np.abs(mean) ** 2).max(),
+        )
+        phase = np.angle(other * np.conj(mean))
+        phase = np.angle(np.exp(1j * (phase - phase.flat[0])))
+        assert np.abs(phase).max() < 1e-10, reference

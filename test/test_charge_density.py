@@ -16,6 +16,14 @@ from abtem.potentials.charge_density import (
 )
 from abtem.slicing import slice_limits
 
+# These densities are not a valence density of their atoms (random values, no
+# electrons, or all of them), so ChargeDensityPotential warns that it cannot
+# subtract the core and builds the potential of the density as given, which is
+# what these tests check.
+ignore_core_count_warning = pytest.mark.filterwarnings(
+    "ignore:charge_density integrates to:UserWarning"
+)
+
 
 @pytest.fixture
 def carbon_atoms():
@@ -23,8 +31,13 @@ def carbon_atoms():
 
 
 @pytest.fixture
-def charge_density_3d():
-    return np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+def charge_density_3d(carbon_atoms):
+    """Random, but normalised to the valence-electron count a conventional frozen
+    core implies for a single carbon atom (Z=6, Nc=2 -> 4 valence electrons), so the
+    core-subtraction consistency check is satisfied."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    voxel_volume = carbon_atoms.cell.volume / rho.size
+    return (rho * (4.0 / (rho.sum() * voxel_volume))).astype(np.float32)
 
 
 def test_build_paths_and_a_4d_density_give_one_potential(
@@ -167,6 +180,7 @@ def test_interpolation_between_cells_is_invariant_to_tiling(hexagonal_field):
     np.testing.assert_allclose(tiled, original, rtol=0, atol=1e-12 * scale)
 
 
+@ignore_core_count_warning
 @pytest.mark.parametrize("lazy", [False, True], ids=["eager", "lazy"])
 @pytest.mark.parametrize(
     "charge_densities", [1, 3], ids=["shared", "per_configuration"]
@@ -225,6 +239,7 @@ def test_chunks_of_frozen_phonons_hold_every_configuration(
         )
 
 
+@ignore_core_count_warning
 @pytest.mark.parametrize("plane", ["xz", "yz"])
 def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     charge_density_3d, plane
@@ -250,6 +265,7 @@ def test_anisotropic_sigmas_follow_the_axes_of_the_input_atoms(
     )
 
 
+@ignore_core_count_warning
 @pytest.mark.parametrize("num_densities", [2, 4])
 def test_a_charge_density_count_other_than_one_or_the_configurations_raises(
     carbon_atoms, charge_density_3d, num_densities
@@ -262,6 +278,7 @@ def test_a_charge_density_count_other_than_one_or_the_configurations_raises(
         ChargeDensityPotential(frozen_phonons, densities, sampling=0.2)
 
 
+@ignore_core_count_warning
 def test_several_charge_densities_without_frozen_phonons_raise(
     carbon_atoms, charge_density_3d
 ):
@@ -308,6 +325,7 @@ REPETITION_CASES = [
 ]
 
 
+@ignore_core_count_warning
 @float64_devices
 @pytest.mark.parametrize("case", REPETITION_CASES, ids=lambda c: c[0])
 def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
@@ -336,6 +354,7 @@ def test_charge_density_potential_repetitions_tile_the_one_cell_potential(case):
     np.testing.assert_allclose(actual, tiled, rtol=0, atol=1e-4 * np.abs(tiled).max())
 
 
+@ignore_core_count_warning
 @float64_devices
 def test_charge_density_potential_repetitions_lazy_equals_eager_on_bn():
     atoms, rho = _bn(), _charge_density()
@@ -395,6 +414,159 @@ def test_interpolated_slices_of_a_repeated_cell_tile_those_of_the_one_cell():
     np.testing.assert_allclose(repeated, np.tile(one, (3, 1, 1)), rtol=0, atol=1e-9)
 
 
+def test_generate_slices_poisson_solve_matches_requested_gpts(
+    monkeypatch, carbon_atoms, charge_density_3d
+):
+    """The internal reciprocal-space Poisson solve (which places the point-charge
+    correction, and for VASPPotential the core-density correction too) must be
+    built at the requested output `gpts` -- not silently pinned to
+    `charge_density`'s own native resolution via `fft_crop`. Before this was
+    fixed, `fft_crop`'s target used `charge.shape[:2]` (the *input* array's own
+    resolution) instead of `ewald_potential.gpts`, so refining `gpts` never
+    actually increased the resolution at which atomic-scale features were
+    resolved -- it only amplified `_interpolate_slice`'s downstream resampling
+    artifacts (see the VASPPotential vacuum/core-sharpness investigation)."""
+    import abtem.potentials.charge_density as cd_mod
+
+    requested_gpts = (77, 77)  # deliberately different from charge_density_3d's
+    assert charge_density_3d.shape[:2] != requested_gpts  # native resolution (32, 32)
+
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, gpts=requested_gpts)
+
+    seen_shapes = []
+    original_fft_crop = cd_mod.fft_crop
+
+    def spy_fft_crop(array, new_shape, **kwargs):
+        seen_shapes.append(new_shape)
+        return original_fft_crop(array, new_shape, **kwargs)
+
+    monkeypatch.setattr(cd_mod, "fft_crop", spy_fft_crop)
+
+    next(pot.generate_slices())
+
+    assert seen_shapes, "fft_crop was not called"
+    assert seen_shapes[0][:2] == requested_gpts
+
+
+def test_reference_defaults_to_mean_and_rejects_others(carbon_atoms, charge_density_3d):
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert pot.reference == "mean"
+    with pytest.raises(ValueError, match="reference must be one of"):
+        ChargeDensityPotential(
+            carbon_atoms, charge_density_3d, sampling=0.1, reference="minimum"
+        )
+
+
+@float64_devices
+def test_slice_min_reference_subtracts_each_slice_minimum(
+    carbon_atoms, charge_density_3d, device
+):
+    """reference="slice_min" is the per-slice minimum subtraction of v1.0.10 and
+    earlier: each slice of the "mean" potential minus its own minimum, which
+    differs from slice to slice. Up to rounding: 1e-12 of the maximum."""
+    slices = {
+        reference: asnumpy(
+            ChargeDensityPotential(
+                carbon_atoms,
+                charge_density_3d,
+                sampling=0.1,
+                slice_thickness=0.5,
+                device=device,
+                reference=reference,
+            )
+            .build(lazy=False)
+            .array
+        )
+        for reference in ("mean", "slice_min")
+    }
+    minima = slices["mean"].min(axis=(1, 2), keepdims=True)
+    assert np.ptp(minima) > 0.1  # V A: the constants do differ between slices
+    np.testing.assert_allclose(
+        slices["slice_min"],
+        slices["mean"] - minima,
+        rtol=0,
+        atol=1e-12 * np.abs(slices["mean"]).max(),
+    )
+
+
+def _skewed_monolayer():
+    """Graphene with 4 A of vacuum on either side (a skewed in-plane cell) and its
+    -Z electrons, Gaussians of std 0.7 A on a 0.125 A grid."""
+    atoms = graphene(vacuum=4.0)
+    atoms.pbc = True
+    shape = (20, 20, int(round(atoms.cell[2, 2] / 0.125)))
+    fractions = np.stack(
+        np.meshgrid(*(np.arange(n) / n for n in shape), indexing="ij"), axis=-1
+    )
+    density = np.zeros(shape)
+    for position in atoms.get_scaled_positions():
+        for i in (-1, 0, 1):
+            for j in (-1, 0, 1):
+                d = fractions - position - (i, j, 0)
+                d[..., 2] -= np.round(d[..., 2])
+                r2 = ((d @ np.array(atoms.cell)) ** 2).sum(-1)
+                density += 6 * np.exp(-r2 / (2 * 0.49)) / (2 * np.pi * 0.49) ** 1.5
+    return atoms, density
+
+
+@ignore_core_count_warning
+@float64_devices
+@pytest.mark.parametrize("reference", ["mean", "vacuum"])
+def test_reference_constant_holds_across_build_routes(reference, device):
+    """The constant is the same however the potential is built: a skewed cell
+    repeated (2, 1, 1), lazy blocks of frozen phonons against the eager build, and
+    a range of slices against those of the whole. "mean" averages to zero (within
+    2e-4 of the removed constant sum(Z) w^2 / (2 eps0 V), 57 V here, as in
+    test_potential_physics; measured 5e-5), "vacuum" has a planar average of
+    zero in the slice at z = 0, 4 A from the atoms (1e-10 V). Sampling 0.05 A
+    narrows the Ewald width to 1.5 A, which keeps the build cheap."""
+    from abtem.core.constants import eps0
+
+    atoms, density = _skewed_monolayer()
+    potential = ChargeDensityPotential(
+        atoms,
+        density,
+        sampling=0.05,
+        slice_thickness=0.5,
+        repetitions=(2, 1, 1),
+        device=device,
+        reference=reference,
+    )
+    width = potential._ewald_width()
+    removed = np.sum(atoms.numbers) * width**2 / (2 * eps0 * atoms.cell.volume)
+    array = asnumpy(potential.build(lazy=False).array) / 0.5  # V
+    assert array.shape[-2:] == potential.gpts
+    if reference == "mean":
+        assert abs(array.mean()) < 2e-4 * removed, (array.mean(), removed)
+    else:
+        assert abs(array[0].mean()) < 1e-10, array[0].mean()
+
+    part = (
+        np.concatenate([asnumpy(s.array) for s in potential.generate_slices(6, 12)])
+        / 0.5
+    )
+    np.testing.assert_allclose(part, array[6:12], rtol=0, atol=1e-12 * array.max())
+
+    frozen_phonons = FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=3)
+    potential = ChargeDensityPotential(
+        frozen_phonons,
+        density,
+        sampling=0.05,
+        slice_thickness=0.5,
+        device=device,
+        reference=reference,
+    )
+    width = potential._ewald_width()
+    removed = np.sum(atoms.numbers) * width**2 / (2 * eps0 * atoms.cell.volume)
+    eager = asnumpy(potential.build(lazy=False).array) / 0.5
+    lazy = asnumpy(potential.build(lazy=True).compute().array) / 0.5
+    np.testing.assert_allclose(lazy, eager, rtol=0, atol=1e-12 * eager.max())
+    if reference == "mean":
+        assert np.abs(eager.mean(axis=(1, 2, 3))).max() < 2e-4 * removed
+    else:
+        assert np.abs(eager[:, 0].mean(axis=(1, 2))).max() < 1e-10
+
+
 def test_charge_density_potential_on_skew_cell_preserves_cell():
     """ChargeDensityPotential.build on a non-orthogonal in-plane cell must produce a
     PotentialArray on the same skew grid (not silently rectified onto a Cartesian
@@ -415,11 +587,13 @@ def test_charge_density_potential_on_skew_cell_preserves_cell():
         pbc=True,
         scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
     )
-    density = np.random.RandomState(0).rand(16, 16, 16).astype(np.float32) * 0.1
+    # normalised to this cell's own valence count: 2 C atoms, Z - Nc = 4 each
+    density = np.random.RandomState(0).rand(16, 16, 16).astype(np.float64) * 0.1
+    density *= 8.0 / (density.sum() * atoms.cell.volume / density.size)
 
     # sampling=0.2 (13 x 13): the build cost is the skew-grid point-charge
     # correction, which grows with the in-plane pixel count (3.4 s at sampling=0.1)
-    pot = ChargeDensityPotential(atoms, density, sampling=0.2)
+    pot = ChargeDensityPotential(atoms, density.astype(np.float32), sampling=0.2)
     assert not pot.grid.is_orthogonal
     assert pot.cell is not None
 
@@ -470,3 +644,146 @@ def test_point_charges_general_cell_conserves_nuclear_charge():
         f"expected {expected_total_charge:.4f} -- pixel_volume should be |det(cell)|/N, "
         f"not prod(diag(cell))/N"
     )
+
+
+def test_no_warning_for_valence_like_density(carbon_atoms, charge_density_3d):
+    """A smooth, low-amplitude density (as any real valence-only density is) must
+    not trigger the all-electron-density warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+
+
+def test_warns_for_implausibly_peaked_density(carbon_atoms):
+    """A density with an implausibly large peak value (as a genuinely all-electron
+    density, e.g. from summing VASP AECCAR0+AECCAR2, would have near each nucleus)
+    must raise the all-electron-density warning."""
+    charge_density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+    charge_density[16, 16, 16] = 1e5
+
+    # such a density also fails the core-subtraction electron-count check, which
+    # warns separately -- capture everything and assert on the one under test
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+    assert any("all-electron density" in str(w.message) for w in caught)
+
+
+def test_no_warning_for_sharply_peaked_valence_density(carbon_atoms):
+    """A large peak alone must not trigger the warning. VASP's AECCAR2 is
+    valence-only yet keeps the true orbitals' nodal structure near each nucleus, so
+    for a heavy element on a fine grid its peak is genuinely large (SrTiO3 reaches
+    ~900 e/A^3) while its integrated count stays far below the total atomic
+    number."""
+    charge_density = np.random.RandomState(0).rand(64, 64, 64).astype(np.float64) * 1e-3
+    charge_density[32, 32, 32] = 5e3
+    voxel_volume = carbon_atoms.cell.volume / charge_density.size
+    charge_density *= 4.0 / (charge_density.sum() * voxel_volume)  # C: Z - Nc = 4
+    assert charge_density.max() > 1000.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(
+            carbon_atoms, charge_density.astype(np.float32), sampling=0.1
+        )
+
+
+def test_no_warning_for_smooth_density_near_total_atomic_number(carbon_atoms):
+    """A high integrated count alone must not trigger the warning either. Hydrogen
+    has no core electrons to omit, so its legitimate valence-only density integrates
+    to exactly the total atomic number -- the case the two-signal rule protects."""
+    atoms = Atoms("H", positions=[(2.5, 2.5, 2.5)], cell=(5, 5, 5), pbc=True)
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float64)
+    charge_density *= 1.0 / (charge_density.sum() * atoms.cell.volume / charge_density.size)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(
+            atoms, charge_density.astype(np.float32), sampling=0.1
+        )
+
+
+def test_no_warning_for_lazy_charge_density(carbon_atoms):
+    """The all-electron-density check is skipped for a lazy (dask) charge_density,
+    even if its content would otherwise trigger the warning, to avoid forcing an
+    eager computation of a potentially large array just for this check."""
+    da = pytest.importorskip("dask.array")
+    charge_density = np.full((32, 32, 32), 1.0, dtype=np.float32)
+    lazy_charge_density = da.from_array(charge_density, chunks=-1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ChargeDensityPotential(carbon_atoms, lazy_charge_density, sampling=0.1)
+
+
+def _total_charge(potential, atoms, density):
+    """Net charge of the array handed to the Poisson solve, in electrons."""
+    from abtem.potentials.charge_density import (
+        _add_core_density_correction_fourier,
+        add_point_charges_fourier,
+    )
+
+    charge = -np.fft.fftn(density)
+    charge = add_point_charges_fourier(charge, atoms, 0.05)
+    if potential._core_density_correction is not None:
+        charge = _add_core_density_correction_fourier(
+            charge, atoms, potential._core_density_correction
+        )
+    voxel_volume = atoms.cell.volume / np.prod(density.shape)
+    return float(charge[0, 0, 0].real) * voxel_volume
+
+
+def test_core_subtraction_makes_the_cell_neutral(carbon_atoms, charge_density_3d):
+    """The point that motivates the whole correction: adding each atom's full Z to a
+    valence-only density leaves a net +Nc per atom, which the Poisson solve can only
+    absorb into a uniform background. A net charge contributes q / (eps0 k^2), so the
+    error lands at low spatial frequency -- in the low-order structure factors.
+
+    By default the conventional frozen core is subtracted: 2 electrons for carbon."""
+    density = np.asarray(charge_density_3d, dtype=float)
+    potential = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert potential.core_electrons == {"C": 2}
+
+    assert _total_charge(potential, carbon_atoms, density) == pytest.approx(0.0, abs=0.05)
+
+    # constructing the potential tabulates the core form factor (~0.5 s); remove the
+    # correction from the same one instead of building a second
+    potential._core_density_correction = None
+    assert _total_charge(potential, carbon_atoms, density) == pytest.approx(2.0, abs=0.05)
+
+
+def test_explicit_valence_electrons_override_the_table(carbon_atoms):
+    """Semicore pseudopotentials keep shells in the valence that the conventional
+    table assigns to the core, so the caller must be able to say so."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    rho *= 5.0 / (rho.sum() * carbon_atoms.cell.volume / rho.size)
+
+    potential = ChargeDensityPotential(
+        carbon_atoms, rho.astype(np.float32), sampling=0.1, valence_electrons={"C": 5}
+    )
+    assert potential.core_electrons == {"C": 1}
+
+
+def test_inconsistent_electron_count_warns_and_skips_the_correction(carbon_atoms):
+    """Subtracting the wrong core is worse than subtracting none -- on SrTiO3 the
+    conventional table taken on trust scores below making no correction at all. So an
+    inconsistency falls back to the old behaviour rather than guessing."""
+    rho = np.random.RandomState(0).rand(32, 32, 32).astype(np.float64) * 0.1
+    rho *= 5.0 / (rho.sum() * carbon_atoms.cell.volume / rho.size)  # not 4
+
+    with pytest.warns(UserWarning, match="will not be subtracted"):
+        potential = ChargeDensityPotential(
+            carbon_atoms, rho.astype(np.float32), sampling=0.1
+        )
+    assert potential.core_electrons == {"C": 0}
+
+
+def test_lazy_charge_density_skips_the_electron_count_check(carbon_atoms):
+    """The check would force an eager computation of a potentially large array."""
+    import dask.array as da
+
+    rho = da.random.random((32, 32, 32), chunks=(32, 32, 32)) * 0.1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        potential = ChargeDensityPotential(carbon_atoms, rho, sampling=0.1)
+    assert potential.core_electrons == {"C": 2}

@@ -3,7 +3,9 @@ electrostatic potential in multislice simulations."""
 
 from __future__ import annotations
 
-from functools import partial
+import warnings
+from contextlib import contextmanager
+from functools import lru_cache, partial
 from typing import Optional, Tuple, Union
 
 import dask
@@ -11,6 +13,8 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from ase.data import atomic_numbers
+from scipy.interpolate import interp1d
 from scipy.ndimage import map_coordinates
 
 from abtem.atoms import _box_strain_warning_silenced, _grid_to_plane
@@ -21,6 +25,10 @@ from abtem.core.fft import fft_crop
 from abtem.core.utils import get_dtype, itemset, safe_ceiling_int
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
+from abtem.potentials.core_densities import (
+    conventional_core_electrons,
+    slater_core_form_factor,
+)
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 
@@ -188,6 +196,11 @@ def add_point_charges_fourier(
     """
     Add the nuclear point charges in Reciprocal space.
 
+    Each atom's full atomic number is added as a Gaussian-broadened point charge.
+    This assumes `array` represents a valence-only electron density (the charge
+    "missing" for neutrality is exactly the atomic number); if `array` already
+    represents an all-electron density, this double-counts the core electrons.
+
     The per-atom phase factor ``exp(-2pi i k.r)`` is evaluated exactly (as an
     analytic delta function in Fourier space, not a real-space interpolation of a
     singularity), but reorganised for speed: for a plane-wave FFT grid, k is always
@@ -334,9 +347,133 @@ def _interpolate_slice(
     return np.sum(slice_array, axis=-1) * dz
 
 
+@contextmanager
+def _core_count_warning_silenced():
+    """Silence the warning that a charge density does not hold the valence
+    electrons of its atoms. A lazy block rebuilds the potential, which gave that
+    warning when it was constructed."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", "charge_density integrates to", category=UserWarning
+        )
+        yield
+
+
+@lru_cache(maxsize=128)
+def _core_form_factor_interpolator(
+    symbol: str, core_electrons: int, n_G: int, G_max: float
+) -> interp1d:
+    # The transform costs about 0.5 s per species, so every potential built for the
+    # same species and core shares one interpolator. Nothing mutates it.
+    G = np.linspace(0.0, G_max, n_G)
+    f = slater_core_form_factor(symbol, core_electrons, G)
+    return interp1d(G, f, bounds_error=False, fill_value=(f[0], 0.0))
+
+
+def _add_core_density_correction_fourier(charge, atoms, core_density_correction):
+    """
+    Replace each atom's crude Gaussian-broadened point-charge contribution (added
+    by :func:`add_point_charges_fourier`) with an accurate per-species radial core
+    electron density, given in reciprocal space.
+
+    Parameters
+    ----------
+    charge : numpy.ndarray
+        Reciprocal-space charge array, already including the crude point charges
+        added by :func:`add_point_charges_fourier`.
+    atoms : ase.Atoms
+        Atoms from which the atomic positions and chemical symbols are determined.
+    core_density_correction : dict
+        Maps chemical symbol to a callable that, given an array of angular
+        wavenumbers `G` [1 / Å], returns the l=0 spherical Fourier transform of
+        that species' core electron density (in electrons, such that the value at
+        `G=0` equals the species' core electron count).
+
+    Returns
+    -------
+    charge : numpy.ndarray
+        The reciprocal-space charge array with the correction applied.
+    """
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for
+    # an orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(charge.shape)
+
+    kx, ky, kz = _spatial_frequencies(charge.shape, atoms.cell)
+    G = 2 * np.pi * np.sqrt(kx**2 + ky**2 + kz**2)
+
+    for atom in atoms:
+        n_core_hat = core_density_correction[atom.symbol](G)
+        phase = _fourier_space_delta(kx, ky, kz, *atom.position)
+        charge = charge - (n_core_hat / pixel_volume) * phase
+
+    return charge
+
+
+_REFERENCES = ("mean", "vacuum", "slice_min")
+
+# The largest planar-average electron density, relative to the cell average, that
+# the slice chosen as vacuum may contain.
+_VACUUM_DENSITY_TOLERANCE = 1e-3
+
+
+def _validate_reference(reference: str) -> str:
+    if reference not in _REFERENCES:
+        raise ValueError(
+            f"reference must be one of {', '.join(map(repr, _REFERENCES))}, "
+            f"not {reference!r}"
+        )
+    return reference
+
+
+def _vacuum_level(density, potential, atoms, ewald_potential) -> float:
+    """
+    The planar-average potential [V] in the vacuum slice: of the slices of
+    `ewald_potential`, the one whose largest planar-average electron density is
+    the smallest, which must be below `_VACUUM_DENSITY_TOLERANCE` times the cell
+    average.
+
+    `density` is the electron density on its own grid, its last axis along the
+    slices, and `potential` the long-range part on the cropped grid.
+    """
+    profile = np.abs(np.asarray(density, dtype=float).mean(axis=(0, 1)))
+    z = np.arange(len(profile)) * ewald_potential.thickness / len(profile)
+
+    largest = []
+    for a, b in ewald_potential.slice_limits:
+        inside = (z >= a) & (z < b)
+        if not inside.any():
+            # A slice thinner than the density spacing: its nearest plane.
+            inside = np.argmin(np.abs(z - (a + b) / 2))
+        largest.append(profile[inside].max())
+
+    j = int(np.argmin(largest))
+    ratio = largest[j] / profile.mean() if profile.mean() > 0 else np.inf
+    if not ratio <= _VACUUM_DENSITY_TOLERANCE:
+        raise ValueError(
+            'reference="vacuum" needs a vacuum slice, one whose planar-average '
+            f"electron density is below {_VACUUM_DENSITY_TOLERANCE:g} of the cell "
+            f"average; the emptiest slice, {j}, has {ratio:.2g} of it. Use "
+            'reference="mean" for a structure without vacuum along the slices.'
+        )
+
+    a, b = ewald_potential.slice_limits[j]
+    short_range = next(ewald_potential.generate_slices(j, j + 1))
+    long_range = _interpolate_slice(
+        potential, atoms.cell, ewald_potential.gpts, ewald_potential.sampling, a, b
+    )
+    return (float(short_range.array.mean()) + float(long_range.mean())) / (b - a)
+
+
 def _generate_slices(
-    charge, ewald_potential, first_slice: int = 0, last_slice: int = None
+    charge,
+    ewald_potential,
+    first_slice: int = 0,
+    last_slice: int = None,
+    core_density_correction: dict = None,
+    reference: str = "mean",
 ):
+    _validate_reference(reference)
+
     if last_slice is None:
         last_slice = len(ewald_potential)
 
@@ -350,15 +487,22 @@ def _generate_slices(
 
     atoms = ewald_potential.frozen_phonons._randomize_transformed(atoms, frame)
 
+    electron_density = charge
+
     charge = -np.fft.fftn(charge)
 
     charge = fft_crop(
-        charge, charge.shape[:2] + (ewald_potential.num_slices,), normalize=True
+        charge, ewald_potential.gpts + (ewald_potential.num_slices,), normalize=True
     )
 
     charge = add_point_charges_fourier(
         charge, atoms, ewald_potential.integrator.parametrization.width
     )
+
+    if core_density_correction is not None:
+        charge = _add_core_density_correction_fourier(
+            charge, atoms, core_density_correction
+        )
 
     potential = -(
         integrate_gradient_fourier(
@@ -366,6 +510,22 @@ def _generate_slices(
         )
         / eps0
     )
+
+    # The constant [V] subtracted from the potential, times each slice's thickness.
+    if reference == "mean":
+        # The long-range part averages to the G=0 term the Poisson solve leaves
+        # (nonzero for a charged cell, e.g. issue #421); the short-range part, the
+        # potential of a point charge minus a Gaussian one of width w, integrates
+        # to Z w**2 / (2 eps0) per atom. Analytic, so the result neither depends
+        # on the width (chosen from the sampling) nor needs every slice.
+        width = ewald_potential.integrator.parametrization.width
+        volume = abs(np.linalg.det(np.array(atoms.cell)))
+        short_range = float(np.sum(atoms.numbers)) * width**2 / (2 * eps0 * volume)
+        offset = float(potential.mean()) + short_range
+    elif reference == "vacuum":
+        offset = _vacuum_level(electron_density, potential, atoms, ewald_potential)
+    else:
+        offset = None
 
     for i, ((a, b), slic) in enumerate(
         zip(
@@ -379,8 +539,81 @@ def _generate_slices(
 
         slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
 
-        slic._array -= slic._array.min()
+        if reference == "slice_min":
+            # A different constant for each slice; see the docstring of
+            # ChargeDensityPotential.
+            slic._array -= slic._array.min()
+        else:
+            slic._array -= offset * (b - a)
         yield slic
+
+
+def _warn_if_not_valence_only(
+    charge_density: np.ndarray, atoms: Atoms, cls_name: str = "ChargeDensityPotential"
+) -> None:
+    """
+    Warn if `charge_density` looks like an all-electron density covering core *and*
+    valence (e.g. from summing VASP AECCAR0 and AECCAR2, as in
+    ``chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum``) rather than the valence-only density
+    :class:`.ChargeDensityPotential` expects.
+
+    Two independent signals must both hold before warning: the density integrates to
+    close to the atoms' total atomic number (rather than to the smaller valence count),
+    *and* its peak is large. Requiring both matters because either on its own fires on
+    legitimate input -- see the comment at the check itself.
+
+    :class:`.ChargeDensityPotential` adds its own approximate nuclear/core correction
+    (a Gaussian-broadened point charge equal to each atom's full atomic number, see
+    :func:`add_point_charges_fourier`) on top of the given density -- analogous to,
+    but much cruder than, the per-species radial PAW core correction
+    :class:`.GPAWPotential` reconstructs from a GPAW calculation. If the given
+    density already includes an all-electron core contribution, this correction
+    double-counts it, and the genuinely sharp near-nuclear feature of an
+    all-electron density is far too fine to resolve on a typical multislice grid --
+    both effects show up as large, spurious swings right at atomic positions, worst
+    for heavy elements (whose core electron count, and hence the double-counted
+    charge, is largest).
+    """
+    voxel_volume = atoms.cell.volume / np.prod(charge_density.shape[-3:])
+    total_electrons = float(np.sum(charge_density)) * voxel_volume
+    total_atomic_number = float(np.sum(atoms.numbers))
+    max_density = float(np.max(charge_density))
+
+    # Both signals are required. Either alone gives false positives on legitimate
+    # input: a valence-only `AECCAR2` keeps the true orbitals' nodal structure near
+    # each nucleus, so its peak is large for heavy elements on a fine grid (SrTiO3
+    # reaches ~900 e/Å³), while a hydrogen-rich system has almost no core electrons
+    # to omit, so its valence count sits close to the total atomic number. An
+    # all-electron density shows both at once.
+    reasons = []
+    if total_electrons > 0.9 * total_atomic_number:
+        reasons.append(
+            f"it integrates to ~{total_electrons:.1f} electrons, close to the atoms' "
+            f"total atomic number ({total_atomic_number:.0f}) rather than to the "
+            "smaller valence-electron count a valence-only density would have"
+        )
+    if max_density > 1000.0:
+        reasons.append(
+            f"its peak value ({max_density:.3g} e/Å³) is large even for a valence "
+            "density retaining the near-nucleus nodal structure"
+        )
+
+    if len(reasons) == 2:
+        warnings.warn(
+            "charge_density looks like it may be an all-electron density (e.g. "
+            "from summing VASP AECCAR0 and AECCAR2, or a 'CHGCAR_sum' file) rather "
+            f"than the valence-only density {cls_name} expects: "
+            + "; and ".join(reasons)
+            + f". {cls_name} adds its own approximate nuclear/core "
+            "correction on top of the given density equal to each atom's full "
+            "atomic number; if the density already includes the core electrons, "
+            "this double-counts them and can severely distort the potential near "
+            "atoms. Pass a valence-only density instead -- VASP's AECCAR2 (the "
+            "self-consistent valence density, written when LAECHG = .TRUE.), a "
+            "plain CHGCAR, or a GPAW pseudo-density -- not the AECCAR0+AECCAR2 "
+            "sum, which covers the core electrons too.",
+            stacklevel=3,
+        )
 
 
 class ChargeDensityPotential(_PotentialBuilder):
@@ -389,16 +622,37 @@ class ChargeDensityPotential(_PotentialBuilder):
     set of core charges defined by an ASE `Atoms` object and corresponding electron
     charge density defined by a NumPy array.
 
+    `charge_density` must be a **valence-only** electron density -- VASP's
+    `AECCAR2` (the self-consistent valence density, written when the run sets
+    `LAECHG = .TRUE.`), a plain VASP `CHGCAR` (the pseudo charge density), or a
+    GPAW pseudo-density -- not an all-electron density covering core *and* valence,
+    such as the `AECCAR0+AECCAR2` sum some VASP workflows produce for Bader charge
+    analysis (`chgsum.pl AECCAR0 AECCAR2 CHGCAR_sum`).
+    This class adds its own approximate nuclear/core correction on top of the given
+    density -- a Gaussian-broadened point charge equal to each atom's full atomic
+    number, see :func:`add_point_charges_fourier` -- which plays the same role as
+    the per-species radial PAW core correction :class:`.GPAWPotential` reconstructs
+    from a converged GPAW calculation, just with a single, cruder isotropic
+    Gaussian instead of an accurate per-species radial reconstruction. If the given
+    density already includes the (all-electron) core contribution, this correction
+    double-counts it; and the genuinely sharp near-nuclear feature of an
+    all-electron density is far too fine to resolve on a typical multislice grid.
+    Both effects show up as large, spurious swings in the potential right at atomic
+    positions, worst for heavy elements. A warning is raised if `charge_density`
+    looks implausible for a valence-only density (see
+    :func:`_warn_if_not_valence_only`).
+
     Parameters
     ----------
     atoms : Atoms or FrozenPhonons
         Atomic configuration(s) used in the independent atom model for calculating the
         electrostatic potential(s).
     charge_density : numpy.ndarray
-        Charge density as a 3D NumPy array [electrons / Å^3], shared by every
-        configuration. A 4D array stacks charge densities along its first axis: one
-        for each configuration, or a single one (a first axis of length one) shared by
-        all of them. Any other number of charge densities raises a `ValueError`.
+        Valence-only electron density as a 3D NumPy array [electrons / Å^3],
+        shared by every configuration. A 4D array stacks charge densities along its
+        first axis: one for each configuration, or a single one (a first axis of
+        length one) shared by all of them. Any other number of charge densities
+        raises a `ValueError`. See above -- this must not be an all-electron density.
     gpts : one or two int, optional
         Number of grid points in `x` and `y` describing each slice of the potential
         calculated by specifying either `sampling` or `gpts`.
@@ -456,6 +710,53 @@ class ChargeDensityPotential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
+    reference : {"mean", "vacuum", "slice_min"}, optional
+        The constant the potential is referenced to; a periodic Poisson solve fixes
+        it only up to one. A constant in a slice changes only the phase of the
+        whole wave, so the intensities of the default (Fourier) multislice do not
+        depend on it; the phase of the exit wave, comparisons with other
+        potentials, the mean inner potential and the propagator of
+        ``RealSpaceMultislice(expansion_scope="full")`` do.
+
+        - ``"mean"`` (default): the potential averages to zero over the cell, as
+          for a periodic :class:`.GPAWPotential` (plane-wave mode). One constant,
+          the same in every slice, so the profile along z is kept: in a cell with
+          vacuum, the vacuum sits at minus the cell average of the potential
+          referenced to the vacuum.
+        - ``"vacuum"``: the potential is zero in vacuum, as for :class:`.Potential`
+          and a non-periodic :class:`.GPAWPotential`; for slabs and molecules.
+          One constant, the planar-average potential of the vacuum slice: the
+          slice whose largest planar-average electron density is the smallest,
+          which must be below 1e-3 of the cell average, or a `ValueError` is
+          raised (e.g. for a bulk crystal). For a slab with a dipole, the vacuum
+          on either side differs, and this takes the emptiest slice.
+        - ``"slice_min"``: each slice's own minimum is subtracted from it, as
+          abTEM v1.0.10 and earlier always did. A different
+          constant in every slice: the vacuum around a laterally isolated object
+          is close to zero, but the potential between the atoms of a dense slice
+          is removed, and the profile along z (and with it the mean inner
+          potential) is lost. For reproducing earlier results.
+    valence_electrons : dict, optional
+        Valence electrons per chemical symbol, as the pseudopotential that produced
+        `charge_density` defines them. The core electrons this class subtracts are
+        `Z` minus this. If not given, each species' conventional frozen core is
+        assumed (see :func:`.conventional_core_electrons`), which is wrong for
+        pseudopotentials keeping semicore states in the valence -- VASP's `Sr_sv` and
+        `Ti_sv` have 10 valence electrons each, not 2 and 4. The count is checked
+        against `charge_density`'s own integrated electron count either way, and the
+        correction is skipped with a warning if they disagree.
+
+        For heavy elements, prefer a pseudopotential with a **smaller frozen core**.
+        The core is modelled analytically (Slater-screened hydrogenic orbitals), and
+        that model is weakest for the outermost, most diffuse core shells -- which are
+        also the ones reaching furthest into the bonding region. Choosing a setup that
+        keeps those shells in the valence hands them to the DFT calculation instead.
+        For MoS2 against a converged :class:`.GPAWPotential` reference, molybdenum's
+        projected potential is 7.3% high with VASP's default `Mo` (6 valence
+        electrons, so 36 to model) and 2.2% high with 14 valence electrons (28 to
+        model) -- whole-map agreement improves from 1.05% to 0.20% RMS of peak.
+        VASP offers `Mo_pv` and `Mo_sv` for this; GPAW's default Mo setup already
+        uses 14.
     non_orthogonal : bool, optional
         Build on the skewed in-plane (a, b) grid of a non-orthogonal cell (True)
         or on an orthogonal box (False). The default, None, uses the skewed grid
@@ -479,6 +780,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
+        reference: str = "mean",
+        valence_electrons: dict = None,
         non_orthogonal: Optional[bool] = None,
     ):
         if hasattr(atoms, "randomize"):
@@ -490,6 +793,19 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
+        self._reference = _validate_reference(reference)
+        self._valence_electrons = valence_electrons
+        self._core_electrons = self._resolve_core_electrons()
+        self._core_density_correction = self._build_core_density_correction()
+
+        if isinstance(self._charge_density, np.ndarray):
+            # Skipped for a lazy (dask) charge_density to avoid forcing an eager
+            # computation of a potentially large array just for this check.
+            _warn_if_not_valence_only(
+                self._charge_density,
+                self._frozen_phonons.atoms,
+                cls_name=type(self).__name__,
+            )
 
         # A 3D charge density, or a stack of them along a first axis: one for
         # every configuration, or one shared by all of them.
@@ -529,6 +845,85 @@ class ChargeDensityPotential(_PotentialBuilder):
             non_orthogonal=non_orthogonal,
         )
 
+    def _resolve_core_electrons(self) -> dict:
+        """
+        Core-electron count per species, checked against the density actually given.
+
+        The conventional frozen core (:func:`conventional_core_electrons`) is only a
+        default -- pseudopotentials that keep semicore states in the valence use a
+        smaller one. The density settles it: a valence-only density integrates to the
+        sum of `Z - Nc` over the atoms.
+
+        If that check fails, no core is subtracted at all and a warning says so.
+        Subtracting the *wrong* core is worse than subtracting none -- on SrTiO3,
+        whose Sr and Ti both use semicore potentials, taking the conventional core on
+        trust drops the correlation with a reference GPAW potential to 0.40, below
+        the 0.85 of making no correction. Falling back therefore leaves the result no
+        worse than it was before this correction existed, and the warning names the
+        argument that turns it back on.
+        """
+        atoms = self._frozen_phonons.atoms
+        symbols = sorted(set(atoms.get_chemical_symbols()))
+        none = {symbol: 0 for symbol in symbols}
+
+        core_electrons = {}
+        for symbol in symbols:
+            given = self._valence_electrons
+            if given is not None and symbol in given:
+                core_electrons[symbol] = atomic_numbers[symbol] - given[symbol]
+            else:
+                core_electrons[symbol] = conventional_core_electrons(symbol)
+
+        if not isinstance(self._charge_density, np.ndarray):
+            # a lazy (dask) density would have to be computed just for this check
+            return core_electrons
+
+        voxel_volume = atoms.cell.volume / np.prod(self._charge_density.shape[-3:])
+        given_electrons = float(np.sum(self._charge_density)) * voxel_volume
+        expected = float(
+            sum(
+                atomic_numbers[symbol] - core_electrons[symbol]
+                for symbol in atoms.get_chemical_symbols()
+            )
+        )
+
+        if expected > 0 and abs(given_electrons - expected) <= 0.05 * expected:
+            return core_electrons
+
+        source = (
+            "the valence_electrons you gave"
+            if self._valence_electrons is not None
+            else "each species' conventional frozen core (which is wrong for "
+            "pseudopotentials keeping semicore states in the valence)"
+        )
+        warnings.warn(
+            f"charge_density integrates to {given_electrons:.2f} electrons, but "
+            f"{source} implies {expected:.2f} valence electrons for these atoms. The "
+            "core-electron density will not be subtracted, leaving the cell with a "
+            "net positive charge that the Poisson solve can only absorb into a "
+            "uniform background -- which costs accuracy in the low-order structure "
+            "factors. Pass the correct valence-electron count per species to enable "
+            "the correction, e.g. valence_electrons={'Sr': 10, 'Ti': 10, 'O': 6}.",
+            stacklevel=3,
+        )
+        return none
+
+    def _build_core_density_correction(self, n_G: int = 4000, G_max: float = 200.0):
+        """Per-species core form factors, as :func:`_generate_slices` expects them."""
+        return {
+            symbol: _core_form_factor_interpolator(symbol, int(core), n_G, G_max)
+            for symbol, core in self._core_electrons.items()
+        }
+
+    @property
+    def core_electrons(self) -> dict:
+        """Core electrons subtracted per species, as `Z - ZVAL`."""
+        return self._core_electrons
+
+    @property
+    def valence_electrons(self) -> dict:
+        return self._valence_electrons
+
     @property
     def frozen_phonons(self):
         return self._frozen_phonons
@@ -548,6 +943,12 @@ class ChargeDensityPotential(_PotentialBuilder):
     @property
     def repetitions(self):
         return self._repetitions
+
+    @property
+    def reference(self) -> str:
+        """The constant the potential is referenced to: "mean", "vacuum" or
+        "slice_min"."""
+        return self._reference
 
     @property
     def num_frozen_phonons(self):
@@ -639,9 +1040,10 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         return (array,)
 
-    # The box was reported when the user left it to abTEM.
+    # The box and the electron count were reported when the potential was built.
     @staticmethod
     @_box_strain_warning_silenced()
+    @_core_count_warning_silenced()
     def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
@@ -746,24 +1148,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             device=self.device,
         )
 
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-        """
-        Generate the slices for the potential.
-
-        Parameters
-        ----------
-        first_slice : int, optional
-            Index of the first slice of the generated potential.
-        last_slice : int, optional
-            Index of the last slice of the generated potential.
-        Returns
-        -------
-        slices : generator of numpy.ndarray
-            Generator for the array of slices.
-        """
-        if last_slice is None:
-            last_slice = len(self)
-
+    def _prepare_array_and_ewald_potential(self):
         if len(self.charge_density.shape) == 4:
             if self.charge_density.shape[0] > 1:
                 raise RuntimeError()
@@ -798,7 +1183,34 @@ class ChargeDensityPotential(_PotentialBuilder):
         else:
             ewald_potential = self._get_ewald_potential()
 
+        return array, ewald_potential
+
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+        """
+        Generate the slices for the potential.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the generated potential.
+        last_slice : int, optional
+            Index of the last slice of the generated potential.
+        Returns
+        -------
+        slices : generator of numpy.ndarray
+            Generator for the array of slices.
+        """
+        if last_slice is None:
+            last_slice = len(self)
+
+        array, ewald_potential = self._prepare_array_and_ewald_potential()
+
         for slic in _generate_slices(
-            array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+            array,
+            ewald_potential,
+            first_slice=first_slice,
+            last_slice=last_slice,
+            reference=self.reference,
+            core_density_correction=self._core_density_correction,
         ):
             yield slic

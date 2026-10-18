@@ -8,6 +8,8 @@ transformed structure with a different number of atoms, and
 `Potential.to_atoms_ensemble()` returns the configurations as simulated.
 """
 
+from types import SimpleNamespace
+
 import ase
 import ase.build
 import numpy as np
@@ -772,11 +774,13 @@ class _GPAWStub:
             setup_mode=None,
             setup_xc=None,
             nt_sG=None,
-            gd=None,
+            # GPAWPotential sizes its refined grid from gd.N_c and the valence
+            # potential's shape before it generates the (here empty) slices.
+            gd=SimpleNamespace(N_c=(1, 1, 1)),
             D_asp={},
             atoms=atoms,
             Q_aL={},
-            valence_potential=None,
+            valence_potential=np.zeros((2, 2, 2)),
         )
         potential = self.module.GPAWPotential(
             calculator, sampling=0.2, frozen_phonons=frozen_phonons, **kwargs
