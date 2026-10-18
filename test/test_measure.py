@@ -1309,6 +1309,61 @@ def test_azimuthal_step_bounds_are_the_bins_on_the_device(
         np.testing.assert_array_equal(asnumpy(bound), expected.astype(np.int32))
 
 
+@devices
+@pytest.mark.parametrize("block_pixels", [1, 50, 333, 1 << 16])
+@pytest.mark.parametrize(
+    "gpts, scales, radial_sampling, width, num_bins",
+    [
+        ((33, 48), (1.0, 1.0), 1.0, 1.0, 24),
+        # overlapping bins: a pixel is in several runs
+        ((40, 36), (1.0, 1.25), 0.7, 2.5, 26),
+        # gaps between bins, and bins beyond the corner of the pattern
+        ((33, 48), (1.0, 1.5), 3.0, 1.0, 40),
+        ((40, 40), (1.0, 1.0), 1.0, 0.0, 30),
+        # a single row and a single pixel
+        ((1, 7), (1.0, 1.0), 1.0, 1.0, 5),
+        ((1, 1), (1.0, 1.0), 1.0, 1.0, 1),
+    ],
+)
+def test_azimuthal_step_runs_hold_the_pixels_of_every_bin_in_pattern_order(
+    gpts, scales, radial_sampling, width, num_bins, block_pixels, device, monkeypatch
+):
+    # The runs are sorted a block of rows at a time: the pixels of each bin, in
+    # the order of the pattern, whatever the size of the blocks.
+    row_blocks = DiffractionPatterns._azimuthal_step_row_blocks
+    monkeypatch.setattr(
+        DiffractionPatterns,
+        "_azimuthal_step_row_blocks",
+        staticmethod(
+            lambda coordinates, radial_sampling, width: row_blocks(
+                coordinates, radial_sampling, width, block_pixels=block_pixels
+            )
+        ),
+    )
+    coordinates = tuple(
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * scale
+        for n, scale in zip(gpts, scales)
+    )
+    first, last = DiffractionPatterns._azimuthal_step_bounds(
+        coordinates, radial_sampling, width
+    )
+
+    pixels, separators, counts = DiffractionPatterns._azimuthal_step_runs(
+        coordinates, radial_sampling, width, num_bins, device=device
+    )
+
+    for run in (pixels, separators, counts):
+        assert_array_matches_device(run, device)
+    pixels, separators, counts = (asnumpy(run) for run in (pixels, separators, counts))
+    expected = [np.flatnonzero((first <= k) & (k <= last)) for k in range(num_bins)]
+    assert pixels.dtype == np.int32
+    np.testing.assert_array_equal(counts, [len(run) for run in expected])
+    np.testing.assert_array_equal(separators, np.concatenate(([0], np.cumsum(counts))))
+    assert len(pixels) == separators[-1]
+    for k, run in enumerate(expected):
+        np.testing.assert_array_equal(pixels[separators[k] : separators[k + 1]], run)
+
+
 @pytest.mark.parametrize(
     "single_pass, name",
     [(True, "_azimuthal_step_runs"), (False, "_azimuthal_step_bounds")],
