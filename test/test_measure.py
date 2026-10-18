@@ -14,6 +14,7 @@ import pytest
 import scipy.ndimage
 import scipy.signal
 import strategies as abtem_st
+from dask.core import get_deps
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
 from utils import (
@@ -1139,23 +1140,24 @@ def test_lazy_azimuthal_average_graph_does_not_hold_pattern_sized_arrays(
     assert len(pickle.dumps(graph)) < 200_000
 
 
+_SINGLE_PASS_CASE_LIST = [
+    (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
+    (0.7, 2.5, False, (1 / 20.0, 1 / 20.0), None, False),
+    (3.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
+    (1.0, 1.0, True, (1 / 20.0, 1 / 20.0), None, False),
+    # gaps between narrow bins, and bins beyond the corner of the pattern:
+    # bins with no pixels at all, which average to 0
+    (0.4, 0.2, False, (1 / 20.0, 1 / 20.0), None, True),
+    (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), 60.0, True),
+    # unequal x and y sampling, with non-integer radii
+    (1.0, 1.0, False, (1 / 20.0, 1 / 30.0), None, False),
+    (0.7, 2.5, True, (1 / 24.0, 1 / 20.0), None, False),
+    (0.4, 0.2, False, (1 / 20.0, 1 / 30.0), None, True),
+    (0.7, 2.5, False, (1 / 20.0, 1 / 30.0), 60.0, True),
+]
 _SINGLE_PASS_CASES = pytest.mark.parametrize(
     "radial_sampling, width, complex_, sampling, max_angle, has_empty_bins",
-    [
-        (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
-        (0.7, 2.5, False, (1 / 20.0, 1 / 20.0), None, False),
-        (3.0, 1.0, False, (1 / 20.0, 1 / 20.0), None, False),
-        (1.0, 1.0, True, (1 / 20.0, 1 / 20.0), None, False),
-        # gaps between narrow bins, and bins beyond the corner of the pattern:
-        # bins with no pixels at all, which average to 0
-        (0.4, 0.2, False, (1 / 20.0, 1 / 20.0), None, True),
-        (1.0, 1.0, False, (1 / 20.0, 1 / 20.0), 60.0, True),
-        # unequal x and y sampling, with non-integer radii
-        (1.0, 1.0, False, (1 / 20.0, 1 / 30.0), None, False),
-        (0.7, 2.5, True, (1 / 24.0, 1 / 20.0), None, False),
-        (0.4, 0.2, False, (1 / 20.0, 1 / 30.0), None, True),
-        (0.7, 2.5, False, (1 / 20.0, 1 / 30.0), 60.0, True),
-    ],
+    _SINGLE_PASS_CASE_LIST,
 )
 
 
@@ -1201,12 +1203,21 @@ def _assert_single_pass_equals_the_bin_by_bin_average(
     assert empty_bins.any() == has_empty_bins
     assert np.isfinite(asnumpy(result.array)).all()
     np.testing.assert_allclose(
-        asnumpy(result.array), asnumpy(expected.array), rtol=rtol, atol=1e-7 * rtol
+        asnumpy(result.array), asnumpy(expected.array), rtol=rtol, atol=0
     )
 
 
+# The single pass sums a bin in a different order than the mask per bin, which
+# is all that separates them: in float32 the worst relative difference over the
+# cases is 2.9e-7, so 1e-6 leaves a margin of about 3.4; a wrong bin is an O(1)
+# difference. Averages of positive data are positive and an empty bin is exactly 0
+# in both, so no absolute tolerance is needed. In float64 the worst difference is
+# 4.4e-16; 1e-12 is a wide margin.
+_FLOAT32_RTOL = 1e-6
+_FLOAT64_RTOL = 1e-12
+
+
 @devices
-@lazy_params
 @_SINGLE_PASS_CASES
 def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
     radial_sampling,
@@ -1215,19 +1226,32 @@ def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
     sampling,
     max_angle,
     has_empty_bins,
-    lazy,
     device,
     monkeypatch,
 ):
     case = radial_sampling, width, complex_, sampling, max_angle, has_empty_bins
     dtype = np.complex64 if complex_ else np.float32
     _assert_single_pass_equals_the_bin_by_bin_average(
-        case, lazy, device, dtype, 1e-6, monkeypatch
+        case, False, device, dtype, _FLOAT32_RTOL, monkeypatch
     )
 
 
+@devices
+def test_lazy_single_pass_azimuthal_average_equals_the_bin_by_bin_average(
+    device, monkeypatch
+):
+    # The lazy average reads the same runs from a delayed node, block by block;
+    # the kernel is the same for every case, so the default bins and overlapping
+    # bins of a complex pattern with unequal sampling show it.
+    for index in (0, 7):
+        case = _SINGLE_PASS_CASE_LIST[index]
+        dtype = np.complex64 if case[2] else np.float32
+        _assert_single_pass_equals_the_bin_by_bin_average(
+            case, True, device, dtype, _FLOAT32_RTOL, monkeypatch
+        )
+
+
 @float64_devices
-@lazy_params
 @_SINGLE_PASS_CASES
 def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average_in_float64(
     radial_sampling,
@@ -1236,7 +1260,6 @@ def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average_in_float64(
     sampling,
     max_angle,
     has_empty_bins,
-    lazy,
     device,
     monkeypatch,
 ):
@@ -1244,38 +1267,103 @@ def test_single_pass_azimuthal_average_equals_the_bin_by_bin_average_in_float64(
     case = radial_sampling, width, complex_, sampling, max_angle, has_empty_bins
     dtype = np.complex128 if complex_ else np.float64
     _assert_single_pass_equals_the_bin_by_bin_average(
-        case, lazy, device, dtype, 1e-12, monkeypatch
+        case, False, device, dtype, _FLOAT64_RTOL, monkeypatch
     )
+
+
+@float64_devices
+def test_lazy_single_pass_azimuthal_average_equals_the_bin_by_bin_average_in_float64(
+    device, monkeypatch
+):
+    # overlapping bins of a complex pattern with unequal sampling, in blocks
+    _assert_single_pass_equals_the_bin_by_bin_average(
+        _SINGLE_PASS_CASE_LIST[7],
+        True,
+        device,
+        np.complex128,
+        _FLOAT64_RTOL,
+        monkeypatch,
+    )
+
+
+def _azimuthal_average_oracle(
+    data, sampling, radial_sampling, width, weighting_function
+):
+    """The azimuthal average of centred (fftshifted) patterns, bin by bin.
+
+    The radius of a pixel is its integer frequency index times the sampling, in
+    units of the smallest sampling; bin k is centred at k * radial_sampling and
+    runs to the largest of the half-extents of the two axes. A step bin holds
+    the pixels with `c - width / 2 <= r < c + width / 2`; a Gaussian bin weights
+    them by `exp(-(r - c)**2 / (width**2 / 2))`. An average is the weighted sum
+    over the weights."""
+    scales = [s / min(sampling) for s in sampling]
+    frequencies = [
+        np.fft.fftshift(np.fft.fftfreq(n, 1 / n)) * scale
+        for n, scale in zip(data.shape[-2:], scales)
+    ]
+    radii = np.hypot(frequencies[0][:, None], frequencies[1][None, :])
+    max_radius = max(n // 2 * scale for n, scale in zip(data.shape[-2:], scales))
+    # the ratio of the samplings is inexact: 24.000000000000004 is 24 bins' worth
+    num_bins = math.ceil(round(max_radius / radial_sampling, 7))
+    averages = np.zeros(data.shape[:-2] + (num_bins,))
+    for k in range(averages.shape[-1]):
+        center = k * radial_sampling
+        if weighting_function == "step":
+            weights = (
+                (center - width / 2 <= radii) & (radii < center + width / 2)
+            ).astype(float)
+        else:
+            weights = np.exp(-((radii - center) ** 2) / (width**2 / 2))
+        if weights.sum() > 0:
+            averages[..., k] = (data * weights).sum(axis=(-2, -1)) / weights.sum()
+    return averages
 
 
 @devices
 @lazy_params
-@pytest.mark.parametrize("weighting_function", ["step", "gaussian"])
-def test_azimuthal_average_on_a_device_equals_the_cpu_average(
-    weighting_function, lazy, device
+@pytest.mark.parametrize(
+    "weighting_function, sampling, radial_sampling, width",
+    [
+        # no pixel is on the edge of a default step bin with equal sampling
+        ("step", (1 / 20.0, 1 / 20.0), 1.0, 1.0),
+        ("gaussian", (1 / 20.0, 1 / 20.0), 1.0, 1.0),
+        # unequal x and y sampling: a swapped or dropped scale changes every radius
+        ("gaussian", (1 / 20.0, 1 / 30.0), 0.7, 2.5),
+        ("gaussian", (1 / 24.0, 1 / 20.0), 0.5, 1.5),
+    ],
+)
+def test_azimuthal_average_on_a_device_equals_the_numpy_average(
+    weighting_function, sampling, radial_sampling, width, lazy, device
 ):
     # the averages were collected in a host array, so on CuPy every eager or
-    # lazy average failed assigning the device sums into it
+    # lazy average failed assigning the device sums into it. The oracle is NumPy
+    # on the host in float64; the float32 averages of positive data differ from
+    # it by at most 1.6e-7 on the CPU, so 1e-5 leaves a margin of 60 for a device
+    # that rounds differently, where a wrong radius or weight is O(1).
     data = np.random.default_rng(1).random((3, 33, 40)).astype(np.float32)
     patterns = DiffractionPatterns(
         data,
-        sampling=1 / 20.0,
+        sampling=sampling,
         fftshift=True,
         metadata={"energy": 200e3},
         ensemble_axes_metadata=[OrdinalAxis(values=(0, 1, 2))],
-    )
-    expected = patterns.azimuthal_average(weighting_function=weighting_function)
-
-    on_device = patterns.copy_to_device(device)
+    ).copy_to_device(device)
     if lazy:
-        on_device = on_device.ensure_lazy(chunks=(1, -1, -1))
-    result = on_device.azimuthal_average(weighting_function=weighting_function)
-    result = result.compute()
+        patterns = patterns.ensure_lazy(chunks=(1, -1, -1))
+    expected = _azimuthal_average_oracle(
+        data.astype(np.float64), sampling, radial_sampling, width, weighting_function
+    )
+
+    result = patterns.azimuthal_average(
+        radial_sampling=radial_sampling,
+        width=width,
+        weighting_function=weighting_function,
+    ).compute()
 
     assert_array_matches_device(result.array, device)
-    np.testing.assert_allclose(
-        asnumpy(result.array), expected.array, rtol=1e-6, atol=1e-7
-    )
+    assert result.shape == expected.shape
+    np.testing.assert_allclose(asnumpy(result.array), expected, rtol=1e-5)
 
 
 @devices
@@ -1321,6 +1409,8 @@ def test_on_device_of_copies_only_what_is_not_on_the_device(device):
     np.testing.assert_array_equal(asnumpy(copied), host)
 
 
+@pytest.mark.gpu
+@pytest.mark.multigpu
 @pytest.mark.skipif(_gpu_count() < 2, reason="needs two GPUs")
 def test_on_device_of_copies_from_another_gpu():
     # a bounds node computed on one GPU read by a block that lives on another
@@ -1426,40 +1516,36 @@ def test_azimuthal_step_runs_hold_the_pixels_of_every_bin_in_pattern_order(
         np.testing.assert_array_equal(pixels[separators[k] : separators[k + 1]], run)
 
 
-@pytest.mark.parametrize(
-    "single_pass, name",
-    [(True, "_azimuthal_step_runs"), (False, "_azimuthal_step_bounds")],
-)
-def test_lazy_azimuthal_average_computes_the_step_bounds_once_for_all_blocks(
-    single_pass, name, monkeypatch
+@pytest.mark.parametrize("single_pass", [True, False])
+@pytest.mark.parametrize("num_blocks", [2, 8])
+def test_lazy_azimuthal_average_shares_one_step_node_between_all_blocks(
+    single_pass, num_blocks, monkeypatch
 ):
+    # The bins of the pixels are made once, by one delayed node that every block
+    # reads, not once per block (or at the call, with the bins embedded in the
+    # graph). In the graph that is exactly one task, besides the blocks'
+    # inputs, that all the blocks depend on.
     import abtem.measurements
 
     monkeypatch.setattr(abtem.measurements, "AZIMUTHAL_STEP_SINGLE_PASS", single_pass)
-    calls = []
-    build = getattr(DiffractionPatterns, name)
-
-    def counting_build(*args, **kwargs):
-        calls.append(1)
-        return build(*args, **kwargs)
-
-    monkeypatch.setattr(DiffractionPatterns, name, staticmethod(counting_build))
-    data = np.random.default_rng(0).random((4, 32, 32))
+    data = np.random.default_rng(0).random((8, 32, 32))
     patterns = DiffractionPatterns(
         data,
         sampling=1 / 20.0,
         metadata={"energy": 200e3},
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))],
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(8)))],
     )
     eager = patterns.azimuthal_average()
-    del calls[:]
 
-    lazy = patterns.ensure_lazy(chunks=(1, -1, -1)).azimuthal_average()
-    assert len(calls) == 0
-    computed = lazy.array.compute(scheduler="synchronous")
+    lazy = patterns.ensure_lazy(chunks=(8 // num_blocks, -1, -1)).azimuthal_average()
 
-    assert len(calls) == 1
-    np.testing.assert_array_equal(computed, eager.array)
+    assert lazy.array.numblocks[0] == num_blocks
+    _, dependents = get_deps(dict(lazy.array.__dask_graph__()))
+    shared = [key for key, users in dependents.items() if len(users) == num_blocks]
+    assert len(shared) == 1
+    np.testing.assert_array_equal(
+        lazy.array.compute(scheduler="synchronous"), eager.array
+    )
 
 
 @pytest.mark.parametrize("lazy", [False, True])
