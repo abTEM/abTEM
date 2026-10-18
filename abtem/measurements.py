@@ -7445,10 +7445,8 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
 def _validate_temperature(temperature) -> float:
     """The temperature [K] as a Python float, so that k_B T is formed in double
-    precision. A bool, and a negative or non-finite value, raise; a negative
-    temperature would swap the loss and gain weights."""
-    if isinstance(temperature, (bool, np.bool_)):
-        raise TypeError(f"temperature must be a number [K], got {temperature!r}")
+    precision. A negative or non-finite value raises; a negative temperature
+    would swap the loss and gain weights."""
     temperature = float(temperature)
     if not (np.isfinite(temperature) and temperature >= 0.0):
         raise ValueError(
@@ -7545,14 +7543,6 @@ def _thermal_weight_tds(
 
 FROZEN_PHONON_COMPONENTS = ("total", "elastic", "diffuse")
 
-# The names "incoherent", "coherent" and "tds" and the current names they map
-# to. Passed as components they raise a ValueError naming the current name.
-_RENAMED_FROZEN_PHONON_COMPONENTS = {
-    "incoherent": "total",
-    "coherent": "elastic",
-    "tds": "diffuse",
-}
-
 
 def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], bool]:
     """The requested component names, in the order given, and whether they are
@@ -7583,10 +7573,6 @@ def _validate_frozen_phonon_components(components) -> tuple[tuple[str, ...], boo
         if not isinstance(name, str):
             raise TypeError(
                 f"component names must be strings, got {type(name).__name__}"
-            )
-        if name in _RENAMED_FROZEN_PHONON_COMPONENTS:
-            raise ValueError(
-                f"{name!r} is now {_RENAMED_FROZEN_PHONON_COMPONENTS[name]!r}"
             )
         if name == "all":
             raise ValueError("'all' cannot be combined with other component names")
@@ -7900,8 +7886,6 @@ def phonon_loss_diffraction_patterns(
             "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
-    # Validated before the temperature check, so that a renamed component such
-    # as 'tds' gets the error that names its replacement.
     names, stacked = _validate_frozen_phonon_components(components)
     if temperature is not None and (stacked or names != ("diffuse",)):
         raise ValueError(
