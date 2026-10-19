@@ -3,6 +3,7 @@ from numbers import Number
 
 import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
@@ -719,3 +720,71 @@ class TestBaseLessArrayObject:
             np.asarray(transformed.compute().array),
             np.asarray(m.compute().array) * 2,
         )
+
+
+class _FakeDataArray:
+    """Stands in for xarray.DataArray, which is an optional dependency."""
+
+    def __init__(self, array, dims=None, coords=None, attrs=None, **kwargs):
+        self.array, self.dims, self.coords, self.attrs = array, dims, coords, attrs
+
+
+@pytest.fixture
+def fake_xarray(monkeypatch):
+    import types
+
+    import abtem.array
+
+    monkeypatch.setattr(
+        abtem.array, "xr", types.SimpleNamespace(DataArray=_FakeDataArray)
+    )
+
+
+def test_to_data_array_without_a_label_leaves_the_metadata_alone(fake_xarray):
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64), energy=100e3, sampling=0.1
+    )
+    assert "label" not in waves.metadata
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert isinstance(data_array, _FakeDataArray)
+    assert "long_name" not in data_array.attrs
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_with_a_label_sets_long_name_on_the_copy_only(fake_xarray):
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"label": "psi"},
+    )
+    metadata_before = dict(waves.metadata)
+
+    data_array = waves.to_data_array()
+
+    assert data_array.attrs["long_name"] == "psi"
+    assert waves.metadata == metadata_before
+
+
+def test_to_data_array_does_not_share_nested_metadata_values(fake_xarray):
+    # elastic_diffuse_diffraction_patterns records its component names as a list
+    # in the metadata.
+    import abtem
+
+    waves = abtem.Waves(
+        np.ones((16, 20), dtype=np.complex64),
+        energy=100e3,
+        sampling=0.1,
+        metadata={"components": ["total", "elastic"]},
+    )
+
+    waves.to_data_array().attrs["components"].append("diffuse")
+
+    assert waves.metadata["components"] == ["total", "elastic"]

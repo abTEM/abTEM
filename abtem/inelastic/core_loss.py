@@ -1019,7 +1019,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
-        waves = _eager_waves(waves)
+        waves = _eager_waves(waves).ensure_real_space()
 
         local_potential = self.local_potential(space="real").sum(0)
         array = abs2(waves.array)
@@ -1078,7 +1078,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def filter_sites(self, waves, sites, threshold):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
-        waves = _eager_waves(waves)
+        waves = _eager_waves(waves).ensure_real_space()
 
         # The mask below is computed over the validated array, which subsets
         # an Atoms input to this element -- index that same array at the end,
@@ -1170,6 +1170,9 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
     ) -> Waves:
+        """Scatter ``waves`` at ``sites``. Waves in reciprocal space are converted to
+        real space, and the scattered waves are in real space."""
+        waves = waves.ensure_real_space()
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -1224,6 +1227,10 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         max_batch: int = "auto",
         threshold=None,
     ):
+        """Yield ``(sites, scattered_waves)`` for chunks of ``sites``. Waves in
+        reciprocal space are converted to real space once, and the scattered waves
+        are in real space."""
+        waves = waves.ensure_real_space()
         sites = self.validate_sites(sites)
 
         if isinstance(max_batch, int):
