@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+import abtem
 from abtem.potentials.charge_density import ChargeDensityPotential
 
 
@@ -103,3 +104,14 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
         carbon_atoms, charge_density_3d, sampling=0.1, repetitions=reps
     )
     assert pot.repetitions == reps
+
+
+def test_float64_precision_keeps_charge_density(carbon_atoms):
+    """The charge density must not be rounded to float32 when the configured
+    precision is float64."""
+    charge_density = np.random.RandomState(0).rand(32, 32, 32) * 0.1
+
+    with abtem.config.set({"precision": "float64"}):
+        pot = ChargeDensityPotential(carbon_atoms, charge_density, sampling=0.1)
+        np.testing.assert_array_equal(pot._charge_density, charge_density)
+        assert pot.build(lazy=False).array.dtype == np.float64

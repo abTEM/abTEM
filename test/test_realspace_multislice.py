@@ -626,3 +626,29 @@ class TestStencilNumericalAccuracy:
             atol=1e-5,
             err_msg=f"Stencil mismatch at accuracy={accuracy}",
         )
+
+    def test_laplace_operator_follows_float64_precision(self):
+        """LaplaceOperator must build its stencil in the configured precision,
+        not round the coefficients to complex64."""
+        from abtem.finite_difference import (
+            LaplaceOperator,
+            finite_difference_coefficients,
+        )
+
+        accuracy = 4
+        waves = abtem.PlaneWave(energy=100e3, gpts=24, sampling=0.1)
+        rng = np.random.default_rng(42)
+        a = rng.standard_normal((24, 24)) + 1j * rng.standard_normal((24, 24))
+
+        c = finite_difference_coefficients(2, accuracy) / np.prod(waves.sampling)
+        n = len(c) // 2
+        ref = sum(
+            c[k + n] * (np.roll(a, -k, axis=0) + np.roll(a, -k, axis=1))
+            for k in range(-n, n + 1)
+        )
+
+        with abtem.config.set({"precision": "float64"}):
+            result = LaplaceOperator(accuracy).get_stencil(waves)(a)
+
+        assert result.dtype == np.complex128
+        np.testing.assert_allclose(result, ref, rtol=1e-10, atol=1e-8)

@@ -123,6 +123,33 @@ def test_crystal_potential_with_frozen_phonons(
     assert num_frozen_phonons == crystal_potential.num_configurations
 
 
+@pytest.mark.parametrize("first_slice, last_slice", [(2, 5), (0, 3), (4, None), (3, 4)])
+@pytest.mark.parametrize("frozen_phonons", [False, True])
+def test_crystal_potential_build_slice_window(first_slice, last_slice, frozen_phonons):
+    """CrystalPotential.build(first_slice, last_slice) must equal the same
+    window of the full build, also when the window does not start at the first
+    z-repetition or splits a repetition."""
+    import ase
+
+    import abtem
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    seeds = None
+    if frozen_phonons:
+        unit_atoms = abtem.FrozenPhonons(unit_atoms, num_configs=3, sigmas=0.1, seed=7)
+        seeds = (5,)
+    unit_pot = Potential(unit_atoms, sampling=0.2, slice_thickness=2.0)
+    crystal = CrystalPotential(unit_pot, repetitions=(2, 1, 3), seeds=seeds)
+    assert len(crystal) == 3 * len(unit_pot)
+
+    full = crystal.build(lazy=False)
+    window = crystal.build(first_slice=first_slice, last_slice=last_slice, lazy=False)
+
+    expected = full.array[..., first_slice:last_slice, :, :]
+    assert window.array.shape == expected.shape
+    np.testing.assert_allclose(window.array, expected)
+
+
 def test_crystal_potential_get_sliced_atoms_matches_manual_tile():
     """CrystalPotential.get_sliced_atoms tiles the unit's transformed atoms by
     the repetitions, matching a manually-tiled Potential's sliced atoms."""

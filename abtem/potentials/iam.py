@@ -1984,10 +1984,13 @@ class CrystalPotential(_PotentialBuilder):
 
         rng = np.random.default_rng(member_seed)
 
+        if last_slice is None:
+            last_slice = len(self)
+
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
         # Without it each (z-rep, unit-slice) pair re-tiles the same array via
@@ -2098,34 +2101,54 @@ class CrystalPotential(_PotentialBuilder):
             # Draw an independent displaced realisation per unit cell in the x,
             # y and z supercell directions. For a single-config pool this
             # collapses to the cheap cached ``.tile()`` path below.
+            # Always draw (even for z-repetitions skipped below) so the
+            # frozen-phonon sequence and the pool budget accounting stay
+            # consistent regardless of first_slice -- different chunks of the
+            # same crystal must see the same per-layer configuration draws.
             if n_configs > 1:
                 config_tiles = _draw_config_tiles()
             else:
                 config_tiles = None
 
-            for j in range(len(self.potential_unit)):
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # advance the counter and skip.
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
+            for j in range(unit_slices):
+                # Iterate j from 0 even for slices before first_slice in a
+                # partially-overlapping rep, so the unit generator advances in
+                # order (j=0, j=1, ...). The tiling cache ensures each
+                # (config, j) pair is tiled at most once.
                 if config_tiles is None:
                     slic = _tiled_slice(0, j)
                 else:
                     slic = _mosaic_slice(config_tiles, j)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    # Mutating the cached slice is safe in the standard
+                    # sequential consumption pattern (the consumer reads
+                    # ``slic.exit_planes`` immediately upon receiving the yield
+                    # and never holds a back-reference across iterations — see
+                    # multislice.py:672). Reset the value on every yield so
+                    # re-entering the same cached slice on a different z-rep
+                    # still carries the right metadata.
+                    slic._exit_planes = exit_planes
 
-                # Mutating the cached slice is safe in the standard sequential
-                # consumption pattern (the consumer reads ``slic.exit_planes``
-                # immediately upon receiving the yield and never holds a back-
-                # reference across iterations — see multislice.py:672). Reset
-                # the value on every yield so re-entering the same cached
-                # slice on a different z-rep still carries the right metadata.
-                slic._exit_planes = exit_planes
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                start += 1
-                stop += 1
+                global_idx += 1
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
-
-                if j == last_slice:
-                    break
+                if global_idx >= last_slice:
+                    return

@@ -343,6 +343,37 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement.center_of_mass().compute()
 
 
+@pytest.mark.parametrize("lazy", [True, False])
+def test_diffraction_patterns_float64_precision(lazy):
+    """Polar binning, center of mass and differential images must follow the
+    configured precision instead of falling back to float32 / complex64."""
+    array = np.random.default_rng(0).random((3, 3, 32, 32))
+    ensemble_axes_metadata = [ScanAxis(sampling=1.0), ScanAxis(sampling=1.0)]
+
+    with abtem.config.set({"precision": "float64"}):
+        measurement = DiffractionPatterns(
+            array,
+            sampling=0.5,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata={"energy": 100e3},
+        )
+        if lazy:
+            measurement = measurement.lazy()
+
+        polar = measurement.polar_binning(
+            nbins_radial=2, nbins_azimuthal=4, inner=0.0, outer=8.0
+        )
+        assert polar.array.dtype == np.float64
+        assert polar.compute().array.dtype == np.float64
+
+        differentials = polar.compute().differentials((0, 2), (1, 3))
+        assert differentials.array.dtype == np.complex128
+
+        com = measurement.center_of_mass()
+        assert com.array.dtype == np.complex128
+        assert com.compute().array.dtype == np.complex128
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
