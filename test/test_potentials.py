@@ -1533,6 +1533,124 @@ class TestSliceIndexedAtomsWrapping:
             atol=1e-5 * np.abs(reference).max(),
         )
 
+    @staticmethod
+    def _far_in_plane(shifts=((0, 0), (0, 0), (0, 0))):
+        """Three B atoms in a 4 x 5 x 4 A cell (unequal in-plane lengths), moved
+        by whole cell lengths ``shifts`` [(nx, ny) per atom]. The repeated
+        structure is the same for every shift."""
+        atoms = Atoms(
+            "B3",
+            positions=[[2.0, 2.5, 2.0], [1.0, 1.0, 1.2], [1.0, 3.0, 2.7]],
+            cell=np.diag([4.0, 5.0, 4.0]),
+            pbc=True,
+        )
+        atoms.positions[:, :2] += np.array(shifts) * [4.0, 5.0]
+        return atoms
+
+    @staticmethod
+    def _slices(atoms, **kwargs):
+        potential = Potential(atoms, sampling=0.1, slice_thickness=0.5, **kwargs)
+        return asnumpy(potential.build(lazy=False).array)
+
+    # Quadrature pads 4.29 A in-plane, repeating the cell twice to each side
+    # along x (4 A) and once along y (5 A): an atom given further out than that
+    # has an image missing in the cell.
+    FAR_IN_PLANE = {
+        "far_x": ((0, 0), (-2, 0), (0, 0)),  # x = -7
+        "far_y": ((0, 0), (0, 0), (0, 2)),  # y = 13
+        "far_x_and_y": ((0, 0), (2, -2), (-1, 3)),
+    }
+
+    @pytest.mark.parametrize("case", list(FAR_IN_PLANE))
+    def test_quadrature_potential_folds_atoms_far_outside_in_plane(self, case):
+        """The padding repeats the cell a number of times set by the cell, so the
+        images of an atom further outside than that reaches never entered the
+        cell. Moving an atom by whole cell lengths leaves the periodic in-plane
+        build unchanged."""
+        kwargs = dict(projection="finite", periodic=False)
+        moved = self._slices(self._far_in_plane(self.FAR_IN_PLANE[case]), **kwargs)
+        reference = self._slices(self._far_in_plane(), **kwargs)
+        np.testing.assert_allclose(
+            moved, reference, rtol=0, atol=1e-5 * np.abs(reference).max()
+        )
+
+    @pytest.mark.parametrize(
+        "length_x, x, y",
+        [(4.0, -7.0, 1.0), (4.0, 1.0, 13.0), (20.0, -5.0, 1.0), (20.0, 25.0, 1.0)],
+        ids=["far_x", "far_y", "wide_below", "wide_above"],
+    )
+    def test_quadrature_potential_keeps_atoms_given_outside_in_plane(
+        self, length_x, x, y
+    ):
+        """An atom given outside the cell is kept, wherever the padding stops:
+        beyond its reach, or, in a cell wider than twice the cutoff, in the range
+        it reaches but the crop of the padding drops."""
+        atoms = Atoms(
+            "B2",
+            positions=[[2.0, 2.5, 2.0], [x, y, 1.2]],
+            cell=np.diag([length_x, 5.0, 4.0]),
+            pbc=True,
+        )
+        wrapped = atoms.copy()
+        wrapped.wrap()
+        kwargs = dict(projection="finite", periodic=False)
+        reference = self._slices(wrapped, **kwargs)
+        np.testing.assert_allclose(
+            self._slices(atoms, **kwargs),
+            reference,
+            rtol=0,
+            atol=1e-5 * np.abs(reference).max(),
+        )
+
+    def test_quadrature_potential_does_not_rewrite_atoms_given_far_outside(self):
+        atoms = self._far_in_plane(self.FAR_IN_PLANE["far_x_and_y"])
+        before = atoms.positions.copy()
+        self._slices(atoms, projection="finite", periodic=False)
+        assert np.array_equal(atoms.positions, before)
+
+    @pytest.mark.parametrize(
+        "integrator",
+        [{"projection": "infinite"}, {"projection": "finite"}],
+        ids=["infinite", "quadrature"],
+    )
+    def test_cut_potential_folds_atoms_far_outside_the_cell(self, integrator):
+        """A hexagonal cell sends a non-periodic potential through ``cut_cell``,
+        which repeated the cell only as far as the atoms inside it need. Moving an
+        atom by whole lattice vectors leaves the repeated structure unchanged."""
+        import ase.build
+
+        def potential(shift):
+            atoms = ase.build.graphene(a=2.46, vacuum=2.0)
+            atoms.positions[0] += np.dot(shift, atoms.cell)
+            return self._slices(atoms, periodic=False, **integrator)
+
+        reference = potential((0, 0, 0))
+        np.testing.assert_allclose(
+            potential((-3, 2, 0)),
+            reference,
+            rtol=0,
+            atol=1e-5 * np.abs(reference).max(),
+        )
+
+    def test_default_box_keeps_an_atom_just_past_an_upper_face(self):
+        """The default box of a hexagonal cell is cut out of the repeated
+        structure. An atom 0.08 A past the upper face (0.03 of the second
+        lattice vector) is as much part of it as the same atom moved into the
+        cell."""
+        import ase.build
+
+        def potential(scaled_y):
+            atoms = ase.build.mx2("MoS2", vacuum=3.0)
+            scaled = atoms.get_scaled_positions(wrap=False)
+            scaled[1, 1] = scaled_y
+            atoms.set_scaled_positions(scaled)
+            return self._slices(atoms, periodic=False)
+
+        reference = potential(0.03)
+        np.testing.assert_allclose(
+            potential(1.03), reference, rtol=0, atol=1e-5 * np.abs(reference).max()
+        )
+
     def test_non_orthogonal_cell_raises_before_any_wrapping(self):
         from abtem.slicing import SliceIndexedAtoms
 

@@ -18,6 +18,7 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
+    _wrap_far_atoms,
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
@@ -832,6 +833,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # cut_cell already supplied exactly the margin padding would add.
             pass
         elif not self.integrator.periodic and self.integrator.finite:
+            # A real-space integrator takes its in-plane images from pad_atoms,
+            # which does not reach an atom given far outside the cell, and the
+            # build is periodic in-plane.
+            atoms = atoms.copy()
+            _wrap_far_atoms(atoms, (margins,) * 3, "xy")
             atoms = pad_atoms(atoms, margins=margins)
         elif self.integrator.periodic:
             atoms = pad_atoms(atoms, margins=margins, directions="z")
