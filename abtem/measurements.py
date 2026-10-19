@@ -2339,6 +2339,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
             sigma=padded_sigma,
             mode="wrap",
             depth=depth,
+            boundary="periodic",
             meta=xp.array((), dtype=get_dtype(complex=False)),
         )
     else:
