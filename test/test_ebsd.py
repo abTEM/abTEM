@@ -1804,6 +1804,15 @@ class TestHemispheres:
             assert pattern.metadata["centrosymmetric"] is given
         assert len(calls) == 1
 
+    def test_without_spglib_the_symmetry_is_unknown(self, monkeypatch):
+        def missing(atoms):
+            raise ImportError("no spglib")
+
+        monkeypatch.setattr(reference_module, "is_centrosymmetric", missing)
+        with pytest.warns(UserWarning, match="spglib is not installed"):
+            pattern = self.reference(SILICON, "north").build(pbar=False, lazy=False)
+        assert pattern.metadata["centrosymmetric"] is None
+
 
 # --------------------------------------------------------------------------
 # detector_pattern.py

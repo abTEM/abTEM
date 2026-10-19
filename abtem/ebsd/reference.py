@@ -207,7 +207,8 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         it decides whether the inversion image stands in for the hemisphere not
         calculated without a warning. If None (default), it is determined with
         spglib when first needed, which can be slow or fail for a large cell
-        without lattice symmetry.
+        without lattice symmetry. Without spglib (the ``abtem[ebsd]`` extra)
+        the pattern records it as unknown.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
         energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
@@ -347,6 +348,19 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
             self._centrosymmetric = is_centrosymmetric(self._atoms)
         return self._centrosymmetric
 
+    def _recorded_symmetry(self) -> Optional[bool]:
+        """:attr:`centrosymmetric`, or None with a warning if spglib is missing."""
+        try:
+            return self.centrosymmetric
+        except ImportError:
+            warnings.warn(
+                "spglib is not installed, so the pattern does not record whether "
+                "the crystal has an inversion centre, and the inversion image of "
+                "a calculated hemisphere stands in for the other without a "
+                "warning; install spglib or give centrosymmetric"
+            )
+            return None
+
     def _in_hemisphere(self, northern: np.ndarray, southern: np.ndarray) -> np.ndarray:
         if self._hemisphere == "north":
             return northern
@@ -425,6 +439,8 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
             frame.
         """
         lazy = validate_lazy(lazy)
+        # before the calculation, which it would otherwise follow
+        centrosymmetric = self._recorded_symmetry()
 
         directions = self.directions
         zone_axes = self.zone_axes
@@ -543,7 +559,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                     else self._frozen_phonons.num_configs
                 ),
                 "hemisphere": self._hemisphere,
-                "centrosymmetric": self.centrosymmetric,
+                "centrosymmetric": centrosymmetric,
             }
         )
 

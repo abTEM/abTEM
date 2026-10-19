@@ -203,7 +203,7 @@ def write_emsoft_master_pattern(
     except ImportError:
         raise ImportError(
             "writing EMsoft master patterns requires h5py; install it with "
-            "'pip install h5py'"
+            "'pip install h5py', or install abtem[ebsd]"
         ) from None
 
     if pattern.ensemble_shape != ():
