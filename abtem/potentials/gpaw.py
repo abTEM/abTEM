@@ -38,6 +38,7 @@ from abtem.inelastic.phonons import (
 from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.slicing import _integrate_planes
 
 try:
     from gpaw import GPAW
@@ -249,38 +250,34 @@ def _same_elements_and_cell(atoms, other):
     )
 
 
-# Slice limits are cumulative float sums, so a limit that is a whole number of planes
-# can lie a few units of roundoff below it. A limit within this fraction of a plane
-# below a plane boundary counts as on the boundary.
-_PLANE_TOLERANCE = 1e-6
-
-
 def integrate_slice(array, gpts, a, b, thickness):
     """
     Integrate the planes of `array` along its last axis between the heights `a`
     and `b`, and Fourier interpolate the result to `gpts`.
 
-    Plane k covers the heights from k * dz to (k + 1) * dz, with dz the plane
-    spacing. A slice takes the planes from floor(a / dz) up to, not including,
-    floor(b / dz), so consecutive slices share their limit and every plane belongs
-    to exactly one slice. A slice that contains no plane gets zero.
+    Plane k is the sample at the height k * dz, with dz the plane spacing, and
+    stands for the heights from k * dz - dz / 2 to k * dz + dz / 2; the grid is
+    periodic, so plane 0 also stands for the heights within dz / 2 below the
+    thickness. A slice takes each plane times the length of the plane's heights
+    that lie between `a` and `b`. Consecutive slices share their limit, so the
+    weights of every plane add up to dz. A limit on a plane splits it between the
+    slices on either side (the trapezoidal rule), so the integral of a slice is
+    centred on the slice. Taking the planes from floor(a / dz) to floor(b / dz)
+    whole (a left Riemann sum) put it dz / 2 below the slice.
     """
     nz = array.shape[2]
     dz = thickness / nz
-    na = int(np.floor(a / dz + _PLANE_TOLERANCE))
-    nb = min(int(np.floor(b / dz + _PLANE_TOLERANCE)), nz)
+    # The limits in plane spacings; the grid ends at plane nz.
+    start, stop = a / dz, min(b / dz, nz)
 
-    if nb <= na:
+    if stop <= start:
         return np.zeros(gpts, dtype=array.dtype)
 
-    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
-    new_shape = (nb - na,) + gpts
-    old_shape = (nb - na,) + slice_array.shape
+    slice_array = _integrate_planes(array, start, stop) * dz
+    old_shape = slice_array.shape
     slice_array = np.fft.fftn(slice_array)
     slice_array = fft_crop(slice_array, gpts)
-    slice_array = (
-        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
-    )
+    slice_array = np.fft.ifftn(slice_array).real * np.prod(gpts) / np.prod(old_shape)
     return slice_array
 
 

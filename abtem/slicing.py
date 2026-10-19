@@ -454,3 +454,52 @@ class SlicedAtoms(BaseSlicedAtoms):
         atoms = self.atoms[in_slice]
         atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
+
+
+def _sum_planes(array, start: int, stop: int):
+    """
+    The sum of the planes `start` up to, not including, `stop` of the grid that
+    repeats `array` along its last axis, taken from the one period.
+    """
+    # The planes start:stop of the repeated grid are the end of one period, whole
+    # periods and the start of one period. The partial periods are summed as views
+    # and the whole periods as `periods` times the sum of the grid, so no plane is
+    # copied.
+    n = array.shape[-1]
+    head_end = min(stop, (start // n + 1) * n)
+    summed = np.sum(array[..., start % n : start % n + head_end - start], axis=-1)
+    periods, tail = divmod(stop - head_end, n)
+    if periods:
+        summed = summed + periods * np.sum(array, axis=-1)
+    if tail:
+        summed = summed + np.sum(array[..., :tail], axis=-1)
+    return summed
+
+
+def _integrate_planes(array, start: float, stop: float):
+    """
+    The integral of the planes of `array`, repeated periodically along its last
+    axis, from `start` to `stop` (`start` < `stop`), in units of the plane spacing:
+    multiply by the spacing for an integral over heights.
+
+    Plane k is the sample at the height k and stands for the heights from k - 1/2
+    to k + 1/2, so each plane is weighted by the length of its heights that lie
+    between the limits. Consecutive slices share their limit, so the weights of
+    every plane add up to one. A limit on a plane splits it between the slices on
+    either side (the trapezoidal rule), so the integral of a slice is centred on
+    the slice; summing the planes from the lower limit up to the upper one whole (a
+    left Riemann sum) would put it half a plane below the slice.
+    """
+    n = array.shape[-1]
+    # The limits half a plane up, so that plane k stands for the interval from k
+    # to k + 1. Python floats, so that the weights keep the dtype of `array`: a
+    # NumPy float64 scalar would promote float32 planes to float64.
+    u, v = float(start) + 0.5, float(stop) + 0.5
+    first, last = int(np.floor(u)), int(np.floor(v))
+    if first == last:
+        return (v - u) * array[..., first % n]
+
+    summed = (first + 1 - u) * array[..., first % n] + (v - last) * array[..., last % n]
+    if last > first + 1:
+        summed = summed + _sum_planes(array, first + 1, last)
+    return summed
