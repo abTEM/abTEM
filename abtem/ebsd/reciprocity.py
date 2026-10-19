@@ -56,7 +56,11 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.array import validate_lazy
 from abtem.core.axes import AxisMetadata, EnergyAxis, NonLinearAxis, OrdinalAxis
-from abtem.core.backend import get_array_module, validate_device
+from abtem.core.backend import (
+    device_name_from_array_module,
+    get_array_module,
+    validate_device,
+)
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -196,6 +200,18 @@ def _depth_bins(depth_bins, slice_thickness) -> tuple[np.ndarray, np.ndarray]:
             "every depth bin must hold at least one slice; use fewer or wider bins"
         )
     return edges, index
+
+
+def _sum_dtype(xp) -> np.dtype:
+    """The dtype the yield's sums accumulate in.
+
+    Double precision whatever the configured one, since they run over every
+    atom of every slice -- where the device has it. Metal is single precision
+    only.
+    """
+    if device_name_from_array_module(xp) == "mps":
+        return np.dtype(get_dtype(complex=False))
+    return np.dtype(np.float64)
 
 
 def _energy_metadata(
@@ -947,10 +963,10 @@ class EBSD(CopyMixin, EqualityMixin):
 
         n_sources = int(np.prod(output_shape)) if output_shape else 1
         n_bins = depth_shape[0] if depth_shape else 1
-        # Accumulated in double precision whatever the configured one: these
-        # sum the emission of every atom over every slice.
-        numerator = xp.zeros((n_bins, n_sources, n_directions), dtype=xp.float64)
-        denominator = xp.zeros((n_bins, n_sources), dtype=xp.float64)
+        # see _sum_dtype
+        sum_dtype = _sum_dtype(xp)
+        numerator = xp.zeros((n_bins, n_sources, n_directions), dtype=sum_dtype)
+        denominator = xp.zeros((n_bins, n_sources), dtype=sum_dtype)
 
         # Weight still to be collected at and below each slice. Once it is
         # negligible there is nothing left to gather and the remaining slices
@@ -988,7 +1004,7 @@ class EBSD(CopyMixin, EqualityMixin):
                 overlap = self._overlap(reciprocity, emitted, n_directions)
                 numerator[b] += weight * overlap.T
                 denominator[b] += weight * xp.sum(
-                    emitted, axis=(-2, -1), dtype=xp.float64
+                    emitted, axis=(-2, -1), dtype=sum_dtype
                 )
 
             reciprocity = conventional_multislice_step(
@@ -1017,7 +1033,13 @@ class EBSD(CopyMixin, EqualityMixin):
         xp = get_array_module(self._device)
 
         # (directions, pixels) @ (pixels, sources) -> (directions, sources)
-        #
+        if device_name_from_array_module(xp) == "mps":
+            # Metal's arrays are torch tensors, which cannot be viewed through
+            # a NumPy dtype; the plain squared magnitude is the same sum.
+            array = reciprocity.array.reshape(n_directions, -1)
+            intensity = (array.real * array.real) + (array.imag * array.imag)
+            return intensity @ source.reshape(-1, intensity.shape[1]).T
+
         # The squared magnitude of the reciprocity waves is the largest array in
         # the loop, and taking it with abs()**2 costs more than the contraction
         # it feeds. Viewing the complex array as real numbers gives the real and

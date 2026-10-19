@@ -3,6 +3,7 @@ import warnings
 import ase
 import numpy as np
 import pytest
+from utils import gpu
 
 import abtem
 import abtem.ebsd.reciprocity as reciprocity
@@ -931,9 +932,9 @@ class TestSphericalPattern:
         )
 
     def test_a_lazy_pattern_has_to_be_computed_first(self):
-        grid = BackscatterDetector(max_angle=50, gpts=6)
+        grid = BackscatterDetector(max_angle=50, gpts=3)
         detector = BackscatterDetector(directions=grid.directions)
-        lazy = make_ebsd(silicon_slab(), detector).build(lazy=True)
+        lazy = make_ebsd(silicon_slab(thickness=2.0), detector).build(lazy=True)
         assert lazy.is_lazy
         for call in (
             lambda: lazy.bin(8),
@@ -1523,6 +1524,72 @@ class TestBackscatterEnergy:
             ).build()
 
 
+@pytest.mark.parametrize("device", [gpu])
+class TestDevices:
+    """On an accelerator -- CUDA, or Metal through torch -- as on the CPU.
+
+    Small: what costs time on an accelerator is the number of operations
+    launched, so few slices, patches and directions.
+    """
+
+    @staticmethod
+    def agree(build, device, lazies=(False,)):
+        def host(result):
+            array = result.array
+            return array.get() if hasattr(array, "get") else np.asarray(array)
+
+        expected = host(build("cpu", False))
+        for lazy in lazies:
+            result = build(device, lazy)
+            got = host(result.compute() if lazy else result)
+            assert np.allclose(got, expected, rtol=1e-4, atol=1e-6), lazy
+
+    def test_the_engine(self, device):
+        # every axis the engine can add: energy, depth and illumination
+        slab = silicon_slab(thickness=4.0)
+        illumination = np.random.default_rng(0).uniform(size=(2, len(slab)))
+
+        def build(on, lazy):
+            potential = abtem.Potential(
+                slab, sampling=0.2, slice_thickness=2.0, projection="finite", device=on
+            )
+            return EBSD(
+                potential,
+                BackscatterDetector(max_angle=50, gpts=3),
+                30e3,
+                illumination=illumination,
+                depth_bins=2,
+                backscatter_energy=[30e3, 26e3],
+                device=on,
+            ).build(lazy=lazy)
+
+        self.agree(build, device, lazies=(False, True))
+
+    def test_the_builders(self, device):
+        def reference(on, lazy):
+            return EBSDReferencePattern(
+                SILICON,
+                30e3,
+                slab_cell=(6.0, 6.0, 4.0),
+                n_patches=1,
+                gpts=4,
+                direction_gpts=7,
+                max_angle=200.0,
+                hemisphere="both",
+                device=on,
+            ).build(lazy=lazy, pbar=False)
+
+        def detector(on, lazy):
+            # the incident beam on the device too, scanned
+            probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
+            return detector_builder(
+                n_patches=None, sampling=0.25, source=probe, device=on
+            ).build(scan=abtem.CustomScan([[0.0, 0.0], [1.0, 1.5]]), lazy=lazy)
+
+        self.agree(reference, device)
+        self.agree(detector, device)
+
+
 # --------------------------------------------------------------------------
 # reference.py
 # --------------------------------------------------------------------------
@@ -1870,7 +1937,7 @@ class TestEBSDDetectorPattern:
         probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
         positions = [[0.0, 0.0], [1.0, 1.5]]
         for n_patches in (None, 2000):
-            builder = detector_builder(n_patches=n_patches, sampling=0.15, source=probe)
+            builder = detector_builder(n_patches=n_patches, source=probe)
             together = np.asarray(
                 builder.build(scan=abtem.CustomScan(positions), lazy=False).array
             )
@@ -1882,9 +1949,7 @@ class TestEBSDDetectorPattern:
         # A grid scan stays a grid, and positions are reported as given --
         # measured from the origin, not from the corner of the beam's slab.
         builder = detector_builder(
-            n_patches=None,
-            sampling=0.15,
-            source=abtem.Probe(semiangle_cutoff=30, energy=30e3),
+            n_patches=None, source=abtem.Probe(semiangle_cutoff=30, energy=30e3)
         )
         scan = abtem.GridScan(start=(0, 0), end=(1.5, 1.0), gpts=(2, 3))
         pattern = builder.build(scan=scan, lazy=False)
