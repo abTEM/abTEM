@@ -408,3 +408,142 @@ class TestFilterSites:
         assert filtered.shape[1:] == (2,)
         silicon = atoms[atoms.numbers == 14].positions[:, :2]
         assert all(np.isclose(silicon, site).all(axis=1).any() for site in filtered)
+
+
+class TestPotentialEnsembleAccumulation:
+    """The single-channel driver indexed only the exit-plane axis.
+
+    The measurement is allocated with the potential's ensemble axes before the
+    exit-plane axis, so indexing the plane axis alone addressed the ensemble
+    axis instead. With one exit plane the index was empty and every
+    configuration's contribution was broadcast across all configurations, so
+    the result came out ``num_configs`` times too large; with several exit
+    planes the plane slice landed on the configuration axis. On a length-1
+    configuration axis -- what the lazy path produces for every configuration
+    count, and what eager produces for num_configs == 1 -- it selected nothing
+    and the series came back zero; for eager with num_configs > 1 it selected
+    real configuration slots instead, giving a flat series carrying signal at
+    zero thickness. Wrong either way, zeros only in the first case.
+
+    The double-channel branch goes through ``_update_loss_measurements`` and
+    was always correct -- it is used here as a reference.
+    """
+
+    @staticmethod
+    def _setup(num_configs=None, exit_planes=None, seed=7):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 1.0)],
+            cell=(8, 8, 4),
+            pbc=True,
+        )
+        if num_configs is None:
+            ensemble = atoms
+        else:
+            ensemble = abtem.FrozenPhonons(
+                atoms, num_configs=num_configs, sigmas=0.05, seed=seed
+            )
+        potential = abtem.Potential(
+            ensemble, gpts=(64, 64), slice_thickness=2.0, exit_planes=exit_planes
+        )
+        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
+        probe.grid.match(potential)
+        return atoms, potential, probe
+
+    def _run(self, potential, probe, sites, lazy, double_channel=False):
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+        )
+        measurement = probe.transition_potential_scan(
+            scan=scan,
+            potential=potential,
+            detectors=abtem.FlexibleAnnularDetector(),
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            double_channel=double_channel,
+            sites=sites,
+            threshold=1.0,
+            lazy=lazy,
+        )
+        if lazy:
+            measurement = measurement.compute(progress_bar=False)
+        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
+
+    @pytest.mark.parametrize("num_configs", [2, 3])
+    @pytest.mark.parametrize("double_channel", [False, True])
+    def test_eager_matches_lazy_over_frozen_phonons(self, num_configs, double_channel):
+        """Eager summed over configurations where lazy averaged."""
+        atoms, potential, probe = self._setup(num_configs=num_configs)
+        sites = atoms
+        eager = self._run(
+            potential, probe, sites, lazy=False, double_channel=double_channel
+        )
+        lazy = self._run(
+            potential, probe, sites, lazy=True, double_channel=double_channel
+        )
+        # Core-loss intensities are ~1e-9, far below np.allclose's default
+        # atol of 1e-8, which would call a factor-of-num_configs error
+        # "close". Compare against the data's own scale instead.
+        scale = max(np.abs(eager).max(), np.abs(lazy).max())
+        np.testing.assert_allclose(eager, lazy, rtol=1e-6, atol=1e-9 * scale)
+
+    @pytest.mark.parametrize("num_configs", [1, 2])
+    def test_configuration_count_does_not_scale_the_result(self, num_configs):
+        """The ensemble reduction averages, so the total must not follow n."""
+        atoms, one, probe = self._setup(num_configs=1)
+        sites = atoms
+        reference = self._run(one, probe, sites, lazy=True)
+
+        _, potential, probe = self._setup(num_configs=num_configs)
+        got = self._run(potential, probe, sites, lazy=False)
+        assert got.sum() == pytest.approx(reference.sum(), rel=1e-2)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_thickness_series_survives_a_potential_ensemble(self, lazy):
+        """A frozen-phonon thickness series came back identically zero."""
+        atoms, plain, probe = self._setup(exit_planes=1)
+        sites = atoms
+        reference = self._run(plain, probe, sites, lazy=lazy)
+
+        _, potential, probe = self._setup(num_configs=1, exit_planes=1)
+        got = self._run(potential, probe, sites, lazy=lazy)
+
+        assert got.shape == reference.shape
+        # The entrance plane at t = 0 is zero by construction; every later
+        # plane must carry signal, and must match the un-wrapped potential to
+        # within the frozen-phonon displacement.
+        assert got[0].sum() == 0.0
+        assert np.all([got[i].sum() > 0.0 for i in range(1, got.shape[0])])
+        assert got.sum() == pytest.approx(reference.sum(), rel=1e-2)
+
+    def test_each_configuration_slot_holds_its_own_configuration(self):
+        """Every slot held the sum over all configurations, not its own.
+
+        Asserting only that the slots differ is too weak -- a permuted
+        configuration index passes that. With ``ensemble_mean=False`` the
+        per-configuration slots are public, so compare each against its own
+        independently built single-configuration run, which goes through the
+        plain-atoms path that was correct all along.
+        """
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        phonons = abtem.FrozenPhonons(
+            atoms, num_configs=3, sigmas=0.05, seed=7, ensemble_mean=False
+        )
+        potential = abtem.Potential(phonons, gpts=(64, 64), slice_thickness=2.0)
+        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
+        probe.grid.match(potential)
+        got = self._run(potential, probe, atoms, lazy=False)
+        assert got.shape[0] == 3
+
+        for index, configuration in enumerate(phonons):
+            single = abtem.Potential(configuration, gpts=(64, 64), slice_thickness=2.0)
+            reference = self._run(single, probe, atoms, lazy=False)
+            assert np.array_equal(
+                got[index], reference
+            ), f"slot {index} does not hold configuration {index}"
