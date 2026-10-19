@@ -1251,6 +1251,73 @@ def test_interpolate_periodic_spline_and_fft(lazy):
     array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)
 
 
+def _periodic_spline_interpolate(array, gpts, order, lazy):
+    images = abtem.Images(array, sampling=0.1)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=gpts, method="spline", boundary="periodic", order=order
+    )
+    return interpolated.compute().array
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_is_invariant_to_whole_pixel_rolls(lazy, order):
+    # A periodic interpolant commutes with rolling the image by whole pixels. The
+    # image has 40 x 30 pixels and is interpolated to 80 x 90, so one old pixel is
+    # 2 new pixels along x and 3 along y and the rolled output is a whole-pixel roll.
+    array = np.random.default_rng(0).random((40, 30))
+
+    interpolated_roll = _periodic_spline_interpolate(
+        np.roll(array, (5, 7), axis=(0, 1)), (80, 90), order, lazy
+    )
+    rolled_interpolation = np.roll(
+        _periodic_spline_interpolate(array, (80, 90), order, lazy),
+        (10, 21),
+        axis=(0, 1),
+    )
+
+    np.testing.assert_allclose(
+        interpolated_roll, rolled_interpolation, rtol=0, atol=1e-12 * array.max()
+    )
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("order", [2, 3])
+def test_periodic_spline_interpolation_reproduces_a_band_limited_field(lazy, order):
+    # Interpolating a periodic field with a few Fourier components from 40 x 30 to
+    # 53 x 41 points (a factor that is not an integer) must give the field itself at
+    # the new positions j * extent / gpts. A constant shift of the coordinates, which
+    # a roll test does not see, moves the result by up to 0.2 of the amplitude for a
+    # shift of half a pixel. The spline's own error is 9e-4 at order 2 and 2e-4 at
+    # order 3.
+    extent = (4.0, 3.0)
+    gpts, new_gpts = (40, 30), (53, 41)
+
+    def field(x, y):
+        return np.cos(2 * np.pi * (2 * x / extent[0] + y / extent[1] + 0.1)) + 0.5 * (
+            np.sin(2 * np.pi * (x / extent[0] - 3 * y / extent[1]))
+        )
+
+    def sample(points):
+        axes = [np.arange(n) * length / n for n, length in zip(points, extent)]
+        return field(*np.meshgrid(*axes, indexing="ij"))
+
+    sampling = tuple(e / n for e, n in zip(extent, gpts))
+    images = abtem.Images(sample(gpts), sampling=sampling)
+    if lazy:
+        images = images.lazy()
+    interpolated = images.interpolate(
+        gpts=new_gpts, method="spline", boundary="periodic", order=order
+    ).compute()
+
+    expected = sample(new_gpts)
+    np.testing.assert_allclose(
+        interpolated.array, expected, rtol=0, atol=2e-3 * np.abs(expected).max()
+    )
+
+
 @given(
     gpts=st.integers(min_value=16, max_value=32),
     extent=st.floats(min_value=5, max_value=10),
@@ -1442,3 +1509,47 @@ def test_block_direct_leaves_an_array_cutoff_in_the_metadata_unchanged(cutoff):
 
     assert np.asarray(waves.metadata["semiangle_cutoff"]) == 10.0
     assert np.asarray(diffraction_patterns.metadata["semiangle_cutoff"]) == 10.0
+
+
+@pytest.mark.parametrize("extent", [(19.525, 19.525), (10.0, 14.0)])
+def test_block_direct_of_radius_zero_blocks_the_zero_angle_pixel_on_every_grid(extent):
+    # The zero-angle coordinate of a float32 grid is on some grids a tiny number of
+    # either sign instead of 0, which a radius of exactly 0 does not reach.
+    missed = []
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 4)
+        patterns = DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=(1 / extent[0], 1 / extent[1]),
+            fftshift=True,
+            metadata={"energy": 200e3},
+        )
+        blocked = patterns.block_direct(radius=0, margin=False).array
+        zeroed = [tuple(int(i) for i in z) for z in np.argwhere(blocked == 0)]
+        if zeroed != [(shape[0] // 2, shape[1] // 2)]:
+            missed.append(gpts)
+
+    assert missed == []
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_reciprocal_coordinates_are_whole_multiples_of_the_sampling(fftshift):
+    # Zero frequency is then exactly 0 and opposite frequencies are exact negatives,
+    # so bandlimit(inner=0) removes the zero-angle pixel on every grid.
+    sampling = (1 / 19.525, 1 / 10.0)
+    for gpts in range(32, 301):
+        shape = (gpts, gpts + 3)
+        patterns = DiffractionPatterns(
+            np.ones(shape, dtype=np.float32),
+            sampling=sampling,
+            fftshift=fftshift,
+            metadata={"energy": 200e3},
+        )
+        for coordinates, n, d in zip(patterns.coordinates, shape, sampling):
+            expected = (np.arange(n) - n // 2) * d
+            if not fftshift:
+                expected = np.fft.ifftshift(expected)
+            np.testing.assert_array_equal(np.asarray(coordinates), expected)
+
+        center = (shape[0] // 2, shape[1] // 2) if fftshift else (0, 0)
+        assert patterns.bandlimit().array[center] == 0, gpts

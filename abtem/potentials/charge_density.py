@@ -231,16 +231,13 @@ def _interpolate_between_cells(
     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
     coordinates = np.dot(coordinates, new_cell) + offset
 
-    padding = 3
-    padded_array = np.pad(array, ((padding,) * 2,) * 3, mode="wrap")
-
     inverse_old_cell = np.linalg.inv(np.array(old_cell))
     mapped_coordinates = np.dot(coordinates, inverse_old_cell) % 1.0
     mapped_coordinates *= array.shape
-    mapped_coordinates += padding
 
+    # "grid-wrap" makes the spline periodic with the array's own length.
     interpolated = map_coordinates(
-        padded_array, mapped_coordinates.T, mode="wrap", order=order
+        array, mapped_coordinates.T, mode="grid-wrap", order=order
     )
     interpolated = interpolated.reshape(new_shape)
     return interpolated

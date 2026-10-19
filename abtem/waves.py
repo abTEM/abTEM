@@ -52,7 +52,9 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
 )
 from abtem.multislice import (
+    _FULL_EXPANSION_SCOPE_MESSAGE,
     MultisliceTransform,
+    _is_full_expansion_scope,
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, validate_potential
@@ -106,6 +108,14 @@ def _antialias_cutoff_gpts(
     extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+
+
+def _refuse_unsupported_core_loss_options(multislice_func_kwargs: dict):
+    # Refused before any wave function is built or a graph is made: a check in the
+    # per-chunk driver alone would fail only at compute time, inside a dask
+    # traceback, and after an eager probe was built at every scan position.
+    if _is_full_expansion_scope(multislice_func_kwargs.get("algorithm")):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -1369,6 +1379,8 @@ class Waves(BaseWaves, ArrayObject):
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
+
         potential = validate_potential(potential, self)
 
         # One entry per transition potential, each a list over detectors. The
@@ -2264,7 +2276,9 @@ class Probe(WavesBuilder):
             the value set in the user configuration file.
         **multislice_func_kwargs
             Additional keyword arguments forwarded to the inelastic multislice function
-            (e.g. ``double_channel``, ``threshold``).
+            (e.g. ``double_channel``, ``threshold``, ``algorithm``). ``algorithm`` is
+            a :class:`.FourierMultislice` (default) or a
+            :class:`.RealSpaceMultislice` with ``expansion_scope="propagator"``.
 
         Returns
         -------
@@ -2277,6 +2291,8 @@ class Probe(WavesBuilder):
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
+
+        _refuse_unsupported_core_loss_options(multislice_func_kwargs)
 
         probe = self.copy()
         potential = validate_potential(potential)

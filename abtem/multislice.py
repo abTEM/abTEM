@@ -770,6 +770,20 @@ def _back_propagate_backscattered_waves(
     return backscattered_waves
 
 
+_FULL_EXPANSION_SCOPE_MESSAGE = (
+    "RealSpaceMultislice(expansion_scope='full') is not supported by the "
+    "core-loss multislice. Use FourierMultislice or "
+    "RealSpaceMultislice(expansion_scope='propagator')."
+)
+
+
+def _is_full_expansion_scope(algorithm) -> bool:
+    return (
+        isinstance(algorithm, RealSpaceMultislice)
+        and algorithm.expansion_scope == "full"
+    )
+
+
 def transition_potential_multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
@@ -798,13 +812,19 @@ def transition_potential_multislice_and_detect(
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
     algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
+        Algorithm used for multislice operator (default is FourierMultislice()). A
+        RealSpaceMultislice must have ``expansion_scope="propagator"``.
 
     Returns
     -------
     measurements : Waves or tuple of :class:`.BaseMeasurement`
         Exit waves or detected measurements or lists of measurements.
     """
+    # The real-space step is called without a next slice, so the full expansion scope
+    # would return a (waves, backscattered) pair in place of the waves, and could not
+    # apply its correction in any case. The driver is also a public entry point.
+    if _is_full_expansion_scope(algorithm):
+        raise NotImplementedError(_FULL_EXPANSION_SCOPE_MESSAGE)
 
     def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
@@ -849,7 +869,7 @@ def transition_potential_multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
-                fully_corrected=algorithm.expansion_scope == "full",
+                fully_corrected=False,
             )
 
     if detectors is None:

@@ -341,9 +341,16 @@ def _interpolate_stack(
         positions = positions % xp.asarray(old_shape[-2:], dtype=positions.dtype)
 
     array = array.reshape((-1,) + array.shape[-2:])
-    array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
-    positions = positions + 2 * order
+    if mode == "grid-wrap":
+        # The spline is periodic with the array length: no padding is needed.
+        padding = 0
+        kwargs = {**kwargs, "mode": "grid-wrap"}
+    else:
+        padding = 2 * order
+        array = xp.pad(array, ((0, 0), (padding,) * 2, (padding,) * 2), mode=mode)
+
+    positions = positions + padding
     output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
@@ -1699,7 +1706,7 @@ class Images(_BaseMeasurement2D):
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         if boundary == "periodic":
-            boundary = "wrap"
+            boundary = "grid-wrap"
 
         array = None
         if self.is_lazy:
