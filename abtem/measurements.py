@@ -3780,6 +3780,57 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return self.bandlimit(radius, outer=np.inf)
 
+    def _apply_block_direct(self, block_direct) -> DiffractionPatterns:
+        """Apply the ``block_direct`` argument of ``Waves.diffraction_patterns``.
+
+        A number is the ``radius`` of ``block_direct()`` [mrad], with its margin;
+        False, 0 and None block nothing. True (a bool or ``numpy.bool_``) blocks
+        the direct beam:
+
+        - With a finite scalar ``semiangle_cutoff`` in the metadata larger than
+          half the smaller angular sampling: the bright-field disk and its margin,
+          as ``block_direct()`` blocks them. The margin covers the soft edge of the
+          aperture, which reaches the nearest pixels from that cutoff on; a hard
+          aperture records the same cutoff, so between half and the full sampling
+          the margin also blocks its dark nearest pixels.
+        - Otherwise (no cutoff, as for a plane wave or a probe ensemble over
+          cutoffs; a cutoff of at most half the smaller angular sampling; an
+          infinite one; or an array of cutoffs): the zero-frequency pixel alone,
+          so the bright-field disks of an ensemble stay; pass a radius for those.
+          ``block_direct()`` without a cutoff would also block the nearest pixels,
+          which in a one-unit-cell pattern are the first-order reflections. With
+          ``fftshift`` the pixel is found by its angular coordinate, within half
+          the smaller angular sampling, which reaches no other pixel whatever
+          roundoff the coordinate carries; without ``fftshift`` it is pixel
+          (0, 0), whatever the shape.
+        """
+        if not block_direct:
+            return self
+
+        # bool is a subclass of int, so True is checked before it can be taken
+        # as a radius of 1 mrad.
+        if not isinstance(block_direct, (bool, np.bool_)):
+            return self.block_direct(radius=block_direct)
+
+        half_sampling = 0.5 * min(self.angular_sampling)
+        cutoff = self.metadata.get("semiangle_cutoff")
+        if (
+            cutoff is not None
+            and np.ndim(cutoff) == 0
+            and not (0.0 <= cutoff <= half_sampling or cutoff == np.inf)
+        ):
+            return self.block_direct()
+
+        if self.fftshift:
+            return self.block_direct(radius=half_sampling, margin=False)
+
+        xp = get_array_module(self.array)
+        keep = xp.ones(self.base_shape, dtype=bool)
+        keep[0, 0] = False
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = self.array * keep
+        return self.__class__(**kwargs)
+
 
 def _complex_from_real_and_imag(real, imag):
     xp = get_array_module(real)

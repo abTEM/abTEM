@@ -1195,8 +1195,12 @@ class Waves(BaseWaves, ArrayObject):
                     [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float,
-            masks up to that scattering angle [mrad].
+            If True the direct beam is masked (default is False): the bright-field disk
+            and its margin if the metadata has a finite ``semiangle_cutoff`` larger
+            than half the smaller angular sampling, otherwise (a plane wave, or an
+            ensemble of cutoffs) the zero-angle pixel only. If given as a float,
+            masks up to that scattering angle [mrad], plus the same margin when the
+            metadata has a ``semiangle_cutoff``.
         fftshift : bool, optional
             If False, do not shift the direct beam to the center of the diffraction
             patterns (default is True).
@@ -1238,7 +1242,13 @@ class Waves(BaseWaves, ArrayObject):
                 )
 
         if self.is_lazy:
-            dtype = get_dtype(complex=return_complex)
+            # Declare the precision the blocks return, which follows the waves
+            # as in the eager branch: complex128 waves give float64 patterns
+            # under a float32 configuration. A declared dtype below the blocks'
+            # would make later dask reductions (e.g. sum) accumulate in it.
+            dtype = (
+                self.array.dtype if return_complex else np.finfo(self.array.dtype).dtype
+            )
 
             pattern = da.map_blocks(
                 self._diffraction_pattern,
@@ -1270,12 +1280,7 @@ class Waves(BaseWaves, ArrayObject):
             metadata=metadata,
         )
 
-        if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(
-                radius=block_direct
-            )
-
-        return diffraction_patterns
+        return diffraction_patterns._apply_block_direct(block_direct)
 
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
