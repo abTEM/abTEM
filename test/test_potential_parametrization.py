@@ -65,3 +65,18 @@ def test_gpaw_parametrization_charge_integrates_to_number_of_electrons(
     assert np.isclose(
         np.trapezoid(4 * np.pi * r**2 * n(r), r), num_electrons, atol=1e-2
     )
+
+
+@pytest.mark.parametrize("symbol", ["Sm", "Pu"])
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_gpaw_all_electron_atom_falls_back_to_unpolarized(symbol):
+    """GPAW's spin-polarized radial solver fails for some open-shell f-element
+    atoms; the density should then come from a non-spin-polarized calculation
+    (with a warning) rather than raising an AssertionError.
+    """
+    gpaw = GPAWParametrization()
+    with pytest.warns(UserWarning, match="non-spin-polarized"):
+        ae = gpaw._get_all_electron_atom(symbol)
+
+    assert ae.nspins == 1
+    assert np.isclose(ae.rgd.integrate(ae.n_sg.sum(0)), ae.Z, atol=1e-3)
