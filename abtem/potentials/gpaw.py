@@ -716,20 +716,24 @@ class GPAWParametrization:
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
 
+        added_electrons = self._get_added_electrons(symbol, charge)
+
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
-            ae.run()
+
+            for n, l, df in added_electrons:
+                ae.add(n, l, df)
+
+            if added_electrons:
+                # The occupations perturbed by add() need a more conservative
+                # mixing schedule to reach self-consistency than the default,
+                # which is tuned for the unperturbed (neutral) configuration.
+                ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+            else:
+                ae.run()
+
             ae.scalar_relativistic = True
             ae.refine()
-
-        # added_electrons = self._get_added_electrons(symbol, charge)
-        #
-        # for added_electron in added_electrons:
-        #     ae.add(*added_electron[:2], added_electron[-1])
-
-        # # ae.run()
-        # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        # maxiter=5000, mix=0.005, dnmax=1e-5)
 
         return ae
 

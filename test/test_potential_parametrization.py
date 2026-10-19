@@ -1,3 +1,5 @@
+import sys
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -48,3 +50,18 @@ def test_lobato_kirkland_match(atomic_number, func):
 #     f1 = getattr(gpaw, func)(chemical_symbols[atomic_number])(r)
 #     f2 = getattr(lobato, func)(chemical_symbols[atomic_number])(r)
 #     assert array_is_close(f1, f2, rel_tol=0.05, check_above_rel=.02)
+
+
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+@pytest.mark.parametrize(
+    "symbol, charge, num_electrons",
+    [("Na", 0.0, 11), ("Na", 1.0, 10), ("Fe", 2.0, 24)],
+)
+def test_gpaw_parametrization_charge_integrates_to_number_of_electrons(
+    symbol, charge, num_electrons
+):
+    n = GPAWParametrization().charge(symbol, charge)
+    r = np.linspace(0, 20, 20001)
+    assert np.isclose(
+        np.trapezoid(4 * np.pi * r**2 * n(r), r), num_electrons, atol=1e-2
+    )
