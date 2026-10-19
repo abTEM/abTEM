@@ -296,6 +296,23 @@ def test_annular_detector_region_is_centred_on_offset(fftshift, gpts):
     assert com == pytest.approx(offset[0] + 1.0j * offset[1], rel=1e-5)
 
 
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_annular_detector_region_is_in_percent(fftshift):
+    # The region is labelled as a detector efficiency in %: a fully sensitive pixel
+    # is 100, not 1, and the others are 0.
+    waves = abtem.Waves(
+        np.zeros((64, 65), dtype=np.complex64), energy=100e3, extent=(32.0, 32.5)
+    )
+
+    region = abtem.AnnularDetector(inner=5, outer=15).get_detector_region(
+        waves, fftshift=fftshift
+    )
+
+    assert region.metadata["units"] == "%"
+    assert np.issubdtype(region.array.dtype, np.floating)
+    np.testing.assert_array_equal(np.unique(region.array), [0.0, 100.0])
+
+
 def test_waves_detector_keeps_data_on_device_by_default():
     """WavesDetector is deliberately the exception: it returns the (large)
     wave functions themselves and is the implicit detector when none is

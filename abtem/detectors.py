@@ -778,7 +778,8 @@ class AnnularDetector(_AbstractRadialDetector):
             return_indices=False,
         )
         assert isinstance(array, np.ndarray)
-        return array >= 0
+        # A detector efficiency in %: 100 where the detector is sensitive.
+        return (array >= 0).astype(get_dtype(complex=False)) * 100.0
 
     def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
         """
