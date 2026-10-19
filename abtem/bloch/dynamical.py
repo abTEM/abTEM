@@ -1199,7 +1199,9 @@ def validate_rotations(
 
 
 def is_rotations_ensemble(axes: str, rotations: AllowedRotations) -> bool:
-    if isinstance(rotations, Iterable):
+    if isinstance(rotations, BaseDistribution):
+        ensemble = True
+    elif isinstance(rotations, Iterable):
         rotations = np.array(rotations)
         if rotations.ndim == 1 and len(axes) > 1:
             assert len(axes) == len(rotations)
@@ -1904,8 +1906,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
             if hasattr(rotation, "values"):
+                # SciPy >= 1.18 requires an explicit (N, len(axes)) shape, even for
+                # a single-axis sequence.
+                values = np.asarray(rotation.values, dtype=float).reshape(-1, len(axes))
                 R = Rotation.from_euler(
-                    axes, rotation.values, degrees=self._use_degrees
+                    axes, values, degrees=self._use_degrees
                 ).as_matrix()
                 R = R[(slice(None),) + (None,) * (orientation_matrices.ndim - 2)]
             else:
@@ -2117,7 +2122,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 lazy=False,
             )
 
-            array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
+            array[i][..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
             pbar_obj.update_if_exists(1)
 
