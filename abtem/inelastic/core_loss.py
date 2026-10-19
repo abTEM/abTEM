@@ -1044,7 +1044,11 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
 
-        validated_sites = self.validate_sites(sites)
+        # The mask below is computed over the validated array, which subsets
+        # an Atoms input to this element -- index that same array at the end,
+        # not the caller's object, or the two lengths disagree.
+        sites = self.validate_sites(sites)
+        validated_sites = sites
 
         if threshold is not None and threshold > 0.0:
             xp = get_array_module(waves.array)

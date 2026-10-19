@@ -385,3 +385,26 @@ class TestFilterByIntensity:
 
         assert len(filtered.transitions) == 1
         assert filtered.transitions[0] is potential.transitions[1]
+
+
+class TestFilterSites:
+    """The survival mask was built over the element-subset array but applied to
+    the caller's object."""
+
+    def test_mask_is_aligned_with_mixed_element_atoms(self):
+        potential = _synthetic_transition_potential((8.0, 8.0), (32, 32))
+        waves = abtem.Probe(
+            energy=ENERGY, extent=(8.0, 8.0), gpts=(32, 32), semiangle_cutoff=30
+        ).build(lazy=False)
+        atoms = ase.Atoms(
+            "SiNSi",
+            positions=[(4.0, 4.0, 0.0), (1.0, 1.0, 0.0), (2.0, 6.0, 0.0)],
+            cell=(8, 8, 4),
+        )
+
+        filtered = potential.filter_sites(waves, atoms, threshold=1e-12)
+
+        assert isinstance(filtered, np.ndarray)
+        assert filtered.shape[1:] == (2,)
+        silicon = atoms[atoms.numbers == 14].positions[:, :2]
+        assert all(np.isclose(silicon, site).all(axis=1).any() for site in filtered)
