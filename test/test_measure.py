@@ -196,6 +196,41 @@ def test_dask_array_on_the_left_of_a_measurement(op, lazy, device):
     )
 
 
+@pytest.mark.parametrize("reflected", [False, True], ids=["forward", "reflected"])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "truediv"])
+@pytest.mark.parametrize("operand_shape", [(), (2, 3)], ids=["0d_array", "2d_array"])
+def test_numpy_array_operand_of_a_measurement_on_the_device(
+    operand_shape, op, device, lazy, reflected
+):
+    # CuPy refuses a host array as an operand, a 0-d one included, so a NumPy
+    # array has to be moved to the device of the measurement. The array operand
+    # differs from the measurement in every element, so a reflected operation
+    # computed in the forward order fails.
+    rng = np.random.default_rng(0)
+    operand = rng.uniform(1.0, 2.0, size=operand_shape).astype(get_dtype())
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]], dtype=get_dtype())
+    measurement = Images(
+        da.from_array(array, chunks=(1, 3)) if lazy else array, sampling=(0.1, 0.2)
+    ).copy_to_device(device)
+
+    if reflected:
+        result = getattr(measurement, f"__r{op}__")(operand)
+        expected = getattr(operator, op)(operand, array)
+    else:
+        result = getattr(operator, op)(measurement, operand)
+        expected = getattr(operator, op)(array, operand)
+
+    assert isinstance(result, Images)
+    assert result.is_lazy == lazy
+    computed = result.compute().array
+    assert_array_matches_device(computed, device)
+    np.testing.assert_allclose(
+        asnumpy(computed), expected, rtol=1e-6, atol=1e-6 * np.abs(expected).max()
+    )
+
+
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_builtin_sum_of_measurements(lazy, device):

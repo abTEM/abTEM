@@ -1192,6 +1192,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"arithmetic operation not implemented for {type(other).__name__}"
             )
 
+        # CuPy refuses a host array as an operand, a 0-d one included, though it
+        # takes a NumPy scalar.
+        if cp is not None and get_array_module(self.array) is cp:
+            if isinstance(other_array, np.ndarray):
+                other_array = cp.asarray(other_array)
+
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = getattr(self.array, func)(other_array)
         return self.__class__(**kwargs)
