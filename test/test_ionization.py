@@ -618,3 +618,35 @@ def test_threshold_drops_sites_and_bounds_the_eels_signal(device):
         # Measured: ratio = 0.048, 0.210, 0.613, 0.902, 0.990, each within
         # ~1e-3 (the antialias aperture) of the retained-overlap fraction.
         assert ratio >= t, f"t={t}: retained only {ratio:.4f} of the signal"
+
+
+@pytest.mark.filterwarnings(
+    "ignore:`scipy.special.sph_harm` is deprecated:DeprecationWarning"
+)
+@pytest.mark.filterwarnings("ignore:bitcount function is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("gpts", [16, 17])
+def test_transition_potential_builds_on_a_coarse_grid(gpts):
+    """The radial grid of the overlap integral must reach the largest k of the
+    grid: with only a 5 % margin past it, np.arange ended below it on coarse
+    grids (16 pixels on a 6 A cell) and interp1d raised."""
+    from abtem.inelastic.core_loss import (
+        AtomicWaveFunction,
+        RadialWavefunction,
+        TransitionPotential,
+    )
+
+    r = np.linspace(1e-3, 20.0, 4000)
+    bound = RadialWavefunction(
+        n=1, l=0, energy=-100.0, radial_grid=r, radial_values=r * np.exp(-r)
+    )
+    excited = RadialWavefunction(
+        n=None, l=1, energy=25.0, radial_grid=r, radial_values=r * np.exp(-0.1 * r)
+    )
+    transitions = [(AtomicWaveFunction(bound, ml=0), AtomicWaveFunction(excited, ml=0))]
+    built = TransitionPotential(
+        14, transitions, extent=6.0, gpts=gpts, energy=100e3, double_channel=False
+    ).build()
+
+    assert built.array.shape == (1, gpts, gpts)
+    assert np.all(np.isfinite(built.array))
+    assert np.abs(built.array).max() > 0

@@ -692,7 +692,13 @@ class TransitionPotential(BaseTransitionPotential):
         ]
 
     def _calculate_overlap_integral(self, lprimeprime, bound, excited, k):
-        radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
+        # np.arange stops short of its end by up to one step, so with only the 5 %
+        # margin a coarse grid (max(k) * extent below ~20, e.g. 16 pixels) ended
+        # below max(k) and interp1d refused the largest k. Reach at least one step
+        # past max(k); grids that already did are unchanged.
+        step = 1 / max(self.extent)
+        k_max = np.max(k)
+        radial_grid = np.arange(0, max(k_max * 1.05, k_max + step), step)
         integration_grid = np.linspace(0, bound.radial_grid[-1], 20000)
 
         values = (
