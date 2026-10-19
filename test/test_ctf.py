@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 
 from abtem.core.energy import energy2wavelength
-from abtem.transfer import CTF, Aberrations, Aperture, point_resolution
+from abtem.transfer import (
+    CTF,
+    Aberrations,
+    Aperture,
+    point_resolution,
+    scherzer_defocus,
+)
 from abtem.waves import PlaneWave
 
 
@@ -68,3 +74,22 @@ def test_apply_ctf_with_fixed_energy_still_checks_the_energy_of_the_waves():
 
     with pytest.raises(RuntimeError, match="Inconsistent energies"):
         waves.apply_ctf(CTF(energy=300e3, defocus=50))
+
+
+def test_scherzer_string_via_C10_symbol():
+    # "scherzer" given as C10 must produce the same lens as "scherzer" given as
+    # defocus, since defocus = -C10: a positive defocus, with the focus moved
+    # into the cell.
+    ab = Aberrations(energy=200e3, Cs=1e7, C10="scherzer")
+    assert np.isclose(ab.C10, -scherzer_defocus(1e7, 200e3), rtol=1e-6)
+    assert np.isclose(ab.defocus, scherzer_defocus(1e7, 200e3), rtol=1e-6)
+
+
+def test_scherzer_string_independent_of_keyword_order():
+    # Scherzer defocus depends on Cs, so it must not matter whether Cs is given
+    # before or after defocus="scherzer".
+    expected = scherzer_defocus(1e7, 200e3)
+    ab = Aberrations(energy=200e3, defocus="scherzer", Cs=1e7)
+    assert np.isclose(ab.defocus, expected)
+    ctf = CTF(energy=200e3, aberration_coefficients={"defocus": "scherzer", "C30": 1e7})
+    assert np.isclose(ctf.defocus, expected)
