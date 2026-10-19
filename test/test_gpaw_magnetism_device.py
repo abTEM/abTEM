@@ -1,0 +1,172 @@
+import numpy as np
+import pytest
+from ase import Atoms
+from utils import gpu
+
+from abtem.bloch.dynamical import equal_slice_thicknesses
+from abtem.core.backend import asnumpy, get_array_module
+from abtem.magnetism.gpaw import (
+    GPAWMagneticField,
+    GPAWVectorPotential,
+    get_magnetic_field_from_gpaw,
+    get_vector_potential_from_gpaw,
+)
+
+
+class _SpinPolarizedCalculator:
+    """The two methods of a spin-polarized GPAW calculator that the GPAW
+    magnetic builders call (the `GPAW` protocol of abtem.magnetism.gpaw)."""
+
+    atoms = Atoms("Fe", positions=[(1.0, 1.2, 1.4)], cell=[3.0, 3.5, 4.0], pbc=True)
+
+    def get_number_of_grid_points(self):
+        return np.array([6, 7, 8])
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self.get_number_of_grid_points() * gridrefinement)
+        x, y, z = (np.arange(n) / n for n in shape)
+        up = (
+            1.0
+            + 0.3
+            * np.sin(2 * np.pi * x)[:, None, None]
+            * np.cos(2 * np.pi * y)[None, :, None]
+            * np.cos(2 * np.pi * z)[None, None, :]
+        )
+        # GPAW indexes its (spin, x, y, z) density with `spin`; True adds an axis.
+        return np.stack([up, 0.5 * up])[spin]
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("projection", ["fft", "real_space"])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_built_on_a_device_matches_the_cpu_build(
+    builder, projection, device
+):
+    kwargs = dict(
+        sampling=0.25, slice_thickness=1.0, gridrefinement=2, projection=projection
+    )
+
+    expected = asnumpy(
+        builder(_SpinPolarizedCalculator(), device="cpu", **kwargs).build().array
+    )
+    built = builder(_SpinPolarizedCalculator(), device=device, **kwargs).build()
+
+    assert get_array_module(built.array) is get_array_module(device)
+    scale = np.abs(expected).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        asnumpy(built.array), expected, rtol=0, atol=1e-6 * scale
+    )
+
+
+@pytest.mark.parametrize("projection", ["real_space", "fft"])
+@pytest.mark.parametrize("first_slice, last_slice", [(1, 4), (2, None)])
+@pytest.mark.parametrize("builder", [GPAWMagneticField, GPAWVectorPotential])
+def test_gpaw_field_slice_range_matches_the_full_build(
+    builder, projection, first_slice, last_slice
+):
+    # real-space slices are whole z pixels: 16 pixels over 5 slices are 3, 3, 3, 3, 4
+    field = builder(
+        _SpinPolarizedCalculator(),
+        sampling=0.25,
+        slice_thickness=0.8,
+        gridrefinement=2,
+        projection=projection,
+    )
+
+    full = field.build()
+    part = field.build(first_slice=first_slice, last_slice=last_slice)
+
+    assert full.array.shape[0] == 5
+    scale = np.abs(full.array).max()
+    assert scale > 0
+    np.testing.assert_allclose(
+        part.array, full.array[first_slice:last_slice], rtol=0, atol=1e-6 * scale
+    )
+
+
+class _NonDividingCalculator(_SpinPolarizedCalculator):
+    """A calculator whose 17 z planes over 2 Å, sliced at 0.34 Å, are 2, 3, 3, 3,
+    3, 3 planes per slice. With `axis=1` the y axis is the one of 17 planes, the
+    slicing axis of plane="xz"."""
+
+    def __init__(self, axis=2):
+        cell, gpts = [3.0, 3.5, 3.5], [6, 7, 7]
+        cell[axis], gpts[axis] = 2.0, 17
+        self.atoms = Atoms("Fe", positions=[(1.0, 1.2, 0.7)], cell=cell, pbc=True)
+        self._gpts = np.array(gpts)
+
+    def get_number_of_grid_points(self):
+        return self._gpts
+
+    def get_all_electron_density(self, spin, gridrefinement):
+        shape = tuple(self.get_number_of_grid_points() * gridrefinement)
+        x, y, z = np.meshgrid(
+            *(2 * np.pi * np.arange(n) / n for n in shape), indexing="ij"
+        )
+        # Terms constant along z and along y give the field a nonzero average
+        # along either slicing axis; the second harmonics vary it over slices.
+        up = (
+            1.0
+            + 0.3 * np.sin(x) * np.cos(y)
+            + 0.3 * np.sin(x) * np.cos(z)
+            + 0.2 * np.cos(x) * np.sin(2 * y) * np.sin(2 * z)
+        )
+        return np.stack([up, 0.5 * up])[spin]
+
+
+_REAL_SPACE_PLANES = {"xy": ((0, 1, 2), 2), "xz": ((0, 2, 1), 1)}
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("plane", list(_REAL_SPACE_PLANES))
+@pytest.mark.parametrize(
+    "builder, raw_field",
+    [
+        (GPAWMagneticField, get_magnetic_field_from_gpaw),
+        (GPAWVectorPotential, get_vector_potential_from_gpaw),
+    ],
+)
+def test_gpaw_real_space_slices_use_every_z_plane_once(
+    builder, raw_field, plane, device
+):
+    axes, axis = _REAL_SPACE_PLANES[plane]
+    calculator = _NonDividingCalculator(axis)
+    field = builder(
+        calculator,
+        gpts=tuple(int(calculator.get_number_of_grid_points()[a]) for a in axes[:2]),
+        slice_thickness=0.34,
+        gridrefinement=1,
+        projection="real_space",
+        plane=plane,
+        rotate_field=None,
+        device=device,
+    )
+    thicknesses, planes = equal_slice_thicknesses(17, 0.34, depth=2.0)
+    assert tuple(planes) == (2, 3, 3, 3, 3, 3)
+    assert field.slice_thickness == pytest.approx(thicknesses, rel=1e-12)
+
+    # The field in the frame of `plane`: its components and axes in the order of
+    # `axes`, sliced along the last axis.
+    expected = np.moveaxis(raw_field(calculator, gridrefinement=1), axis + 1, -1)
+    expected = expected[list(axes)]
+    dz = 2.0 / 17
+    bounds = np.cumsum((0,) + tuple(planes))
+    expected_slices = np.stack(
+        [expected[..., a:b].sum(-1) * dz for a, b in zip(bounds[:-1], bounds[1:])]
+    )
+
+    built = field.build()
+    assert get_array_module(built.array) is get_array_module(device)
+    array = asnumpy(built.array)
+    scale = np.abs(expected_slices).max()
+    assert scale > 0
+    atol = 1e-5 * scale
+    np.testing.assert_allclose(array, expected_slices, rtol=0, atol=atol)
+    # The slices add up to the integral of the field through the whole cell.
+    integral = expected.sum(-1) * dz
+    assert np.abs(integral).max() > 0.1 * scale
+    np.testing.assert_allclose(array.sum(0), integral, rtol=0, atol=atol)
+
+    part = asnumpy(field.build(first_slice=2, last_slice=5).array)
+    np.testing.assert_allclose(part, array[2:5], rtol=0, atol=atol)

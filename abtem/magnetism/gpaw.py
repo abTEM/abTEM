@@ -8,6 +8,7 @@ from scipy.spatial.transform import Rotation as R  # type: ignore
 
 from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
+from abtem.core.backend import get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.magnetism.iam import (
@@ -137,17 +138,23 @@ class _GPAWMagnetics(_FieldBuilder):
 
         self._rotate_field = rotate_field
 
+        # The number of z planes of the density summed into each real-space slice.
+        self._planes_per_slice: Optional[tuple[int, ...]] = None
+
         if projection == "real_space" and isinstance(slice_thickness, (float, int)):
-            n_z = calculators.get_number_of_grid_points()[2] * gridrefinement
+            # The slices are stacked along the third axis of `plane`, which is the
+            # last axis of the field once `generate_slices` has moved its axes.
+            axes = plane_to_axes(plane)
+            n_z = calculators.get_number_of_grid_points()[axes[2]] * gridrefinement
 
             slice_thickness = float(slice_thickness)
 
-            axes = plane_to_axes(plane)
             depth = np.diag(cell)[axes[2]]
 
             slice_thickness, n_per_slice = equal_slice_thicknesses(
                 n_z, slice_thickness, depth=depth
             )
+            self._planes_per_slice = tuple(int(n) for n in n_per_slice)
         elif projection == "real_space":
             raise NotImplementedError(
                 "Non-uniform slice thicknesses not supported for real-space projection."
@@ -209,43 +216,42 @@ class _GPAWMagnetics(_FieldBuilder):
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
+        # The density and its curl are computed on the host; each slice is moved to
+        # `device`.
+        xp = get_array_module(self.device)
 
         if self._projection == "real_space":
-            depth = self._calculators.atoms.cell[2, 2]
-            pixels_per_slice = (slice_thicknesses / depth * array.shape[-1]).astype(int)
+            bounds = np.cumsum((0,) + self._planes_per_slice)
 
             dz = slice_thicknesses.sum() / array.shape[-1]
 
-            start = 0
-            for i, slice_idx in enumerate(range(first_slice, last_slice)):
-                slice_array = (
-                    array[..., start : start + pixels_per_slice[i]].sum(-1) * dz
-                )
-                start += pixels_per_slice[i]
+            for slice_idx in range(first_slice, last_slice):
+                start, stop = bounds[slice_idx], bounds[slice_idx + 1]
+                slice_array = array[..., start:stop].sum(-1) * dz
 
                 if self._valid_gpts != slice_array.shape[1:]:
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
-                    slice_thickness=slice_thicknesses[i],
+                    slice_thickness=slice_thicknesses[slice_idx],
                 )
 
         else:
             shape = array.shape[:-1] + (self.num_slices,)
             array = fft_interpolate(array, shape)
 
-            for i, slice_idx in enumerate(range(first_slice, last_slice)):
+            for slice_idx in range(first_slice, last_slice):
                 slice_array = array[..., slice_idx]
 
                 if self._valid_gpts != slice_array.shape[1:]:
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
-                    slice_thickness=slice_thicknesses[i],
+                    slice_thickness=slice_thicknesses[slice_idx],
                 )
 
     def build(
