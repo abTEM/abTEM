@@ -1,28 +1,18 @@
-"""Projections between directions on the unit hemisphere and a square image.
+"""Projections between directions on the northern hemisphere and a square image.
 
-An EBSD reference pattern is a function on the sphere, but it has to be stored,
-displayed and compared as a square image. These projections are the map between
-the two, used in both directions:
-
-* forward (:meth:`~HemisphereProjection.project`) turns the outgoing directions
-  of a finished calculation into image coordinates for binning;
-* inverse (:meth:`~HemisphereProjection.unproject`) turns an evenly spaced grid
-  of image coordinates into the directions to calculate, so that the finished
-  image has no gaps and no clumping.
-
-Two projections are implemented. Both map the northern hemisphere (``z >= 0``)
-onto :math:`[-1, 1]^2`:
+Both projections map the hemisphere ``z >= 0`` onto :math:`[-1, 1]^2`.
+:meth:`~HemisphereProjection.project` takes directions to image coordinates,
+and :meth:`~HemisphereProjection.unproject` takes an even grid of image
+coordinates to the directions to calculate.
 
 ``stereographic``
-    Projection from the south pole onto the equatorial plane. Conformal, so
-    Kikuchi bands stay recognisable, but the area distortion grows towards the
-    equator and the image only fills the inscribed disk.
+    Projection from the south pole onto the equatorial plane. Conformal, but
+    it fills only the inscribed disk and stretches areas towards the equator.
 
 ``lambert``
-    The equal-area azimuthal projection composed with the Shirley--Chiu
-    concentric square-to-disk map. Fills the whole square and gives every
-    direction the same weight, which is what makes it the usual storage format
-    for reference patterns.
+    The equal-area azimuthal projection composed with the Shirley-Chiu
+    concentric map to the square. Fills the whole square with equal areas;
+    EMsoft stores master patterns this way.
 """
 
 from __future__ import annotations
@@ -88,9 +78,6 @@ class HemisphereProjection(ABC):
     def grid(self, gpts: int) -> np.ndarray:
         """Directions from an evenly spaced grid of image coordinates.
 
-        Sampling evenly in the *projected* space rather than on the sphere is
-        what guarantees the binned image has no empty pixels.
-
         Parameters
         ----------
         gpts : int
@@ -134,14 +121,7 @@ class StereographicProjection(HemisphereProjection):
 
 
 class SquareLambertProjection(HemisphereProjection):
-    """Equal-area Lambert projection composed with the Shirley--Chiu square map.
-
-    The azimuthal equal-area projection sends the hemisphere to a disk; the
-    Shirley--Chiu concentric map sends that disk to a square while preserving
-    area. The composition therefore gives every direction the same number of
-    image pixels, which is why reference patterns are conventionally stored
-    this way.
-    """
+    """Equal-area Lambert projection composed with the Shirley-Chiu square map."""
 
     name = "lambert"
 
@@ -228,8 +208,6 @@ class SquareLambertProjection(HemisphereProjection):
         return np.ones(len(xy), dtype=bool)
 
     def grid(self, gpts: int) -> np.ndarray:
-        # Unlike the stereographic grid there is nothing to mask away, so every
-        # one of the gpts ** 2 points is used.
         points = np.linspace(-1.0, 1.0, gpts)
         x, y = np.meshgrid(points, points)
         return self.unproject(np.stack([x.ravel(), y.ravel()], axis=1))
@@ -310,8 +288,7 @@ def bin_directions(
     projection : str or HemisphereProjection, optional
         Projection used to place each direction in the image.
     return_counts : bool, optional
-        If True, also return how many directions fell into each pixel, which
-        is what tells an empty pixel from a genuinely zero one.
+        If True, also return how many directions fell into each pixel.
 
     Returns
     -------

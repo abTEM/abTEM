@@ -35,26 +35,18 @@ def small_angle_error(angle: float) -> float:
 
 
 class BackscatterDetector(CopyMixin, EqualityMixin):
-    """The directions whose backscattered intensity an EBSD calculation collects.
+    """The directions collected by an :class:`~abtem.ebsd.EBSD` calculation.
 
-    By reciprocity, each collected direction is simulated by launching a plane
-    wave travelling in that direction into the crystal, so the "detector" is
-    really a list of directions rather than something that converts an exit
-    wave into a measurement.
+    Each direction is that of a reciprocity plane wave sent into the slab; it
+    gives the intensity of the electrons leaving back through the slab's top
+    surface in the opposite direction. The intensity is not a function of an
+    exit wave, so this is not a :class:`~abtem.detectors.BaseDetector`.
 
-    That is why this is **not** a :class:`~abtem.detectors.BaseDetector`.
-    Backscattered intensity is not a function of an exit wave — it is a
-    depth-resolved overlap of the source field with these back-propagated plane
-    waves — so a detector of this kind cannot implement ``detect(waves)`` and
-    must not be accepted by :meth:`abtem.Probe.scan`.
+    The directions are stored as unit vectors, which do not depend on the
+    energy, so one detector serves every energy.
 
-    The directions are stored as unit vectors rather than transverse
-    wavevectors, because the transverse wavevector ``k0(E) * (dx, dy)`` depends
-    on the energy while the direction does not. The same detector can therefore
-    be reused across energies.
-
-    Construct either from a regular grid of angles, by giving `max_angle` and
-    `gpts`, or from an explicit list of `directions`.
+    Construct either from a regular grid of angles, with `max_angle` and
+    `gpts`, or from explicit `directions`.
 
     Parameters
     ----------
@@ -116,10 +108,7 @@ class BackscatterDetector(CopyMixin, EqualityMixin):
         else:
             raise ValueError("give either 'directions' or 'max_angle' and 'gpts'")
 
-        # Only a grid detector reports an angular calibration (through
-        # DiffractionPatterns, whose axes are linear in the scattering angle),
-        # so only a grid detector can be miscalibrated by the small-angle
-        # approximation. Explicit directions carry their own exact geometry.
+        # only a grid's angular calibration assumes small angles
         if self.is_grid:
             error = small_angle_error(self.max_scattering_angle * 1e3)
             if error > 0.05:
@@ -132,9 +121,7 @@ class BackscatterDetector(CopyMixin, EqualityMixin):
 
     @staticmethod
     def _grid_directions(max_angle: float, gpts: int) -> np.ndarray:
-        # Grid points are placed the way abTEM places the frequencies of an
-        # fftshifted diffraction pattern, so that the reported sampling and the
-        # zero-frequency position are exactly right for any gpts.
+        # laid out like the frequencies of an fftshifted diffraction pattern
         sine_max = np.sin(max_angle * 1e-3)
         step = 2.0 * sine_max / gpts
         axis = (np.arange(gpts) - gpts // 2) * step

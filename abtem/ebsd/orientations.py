@@ -1,22 +1,16 @@
-"""Zone-axis sampling and the rotated slabs that go with them.
+"""Zone-axis patches and the rotated slabs they are calculated in.
 
-A reference pattern covers the whole hemisphere of outgoing directions, which is
-far more than one multislice run can resolve: the calculation is only valid for
-directions close to the beam direction it was set up for. So the hemisphere is
-tiled into patches, each with its own zone axis, and each patch gets its own
-slab of crystal cut with that zone axis along ``z``.
-
-This module provides the two halves of that: :func:`fibonacci_hemisphere`
-chooses the patch centres, and :func:`rotated_slab` cuts the slab for one of
-them.
+A multislice calculation is accurate for directions close to its slab's axis,
+so a reference pattern tiles the hemisphere into patches, each calculated in a
+slab cut with the patch's zone axis along ``z``. :func:`fibonacci_hemisphere`
+chooses the patch centres and :func:`rotated_slab` cuts the slabs.
 
 .. warning::
-    :func:`rotated_slab` cuts a box out of a rotated bulk crystal, which for a
-    general zone axis is **not** periodic across the box faces. The multislice
-    algorithm nevertheless applies periodic boundary conditions to it, so each
-    patch carries an artificial discontinuity at its edges. In practice the
-    patches are small and the resulting artefacts average out across the
-    hemisphere, but this is an approximation rather than an exact calculation.
+    A box cut from a rotated crystal is in general not periodic across its
+    faces, but the multislice treats it as periodic. The resulting seams are
+    the main approximation of a tiled pattern; their effect grows with a
+    direction's angle from the slab axis and with the slab's thickness over its
+    width.
 """
 
 from __future__ import annotations
@@ -42,8 +36,7 @@ __all__ = [
 def fibonacci_hemisphere(n: int) -> np.ndarray:
     """Evenly distributed directions on the northern hemisphere.
 
-    Uses a Fibonacci lattice, which spaces the points near-uniformly in solid
-    angle without the clustering a latitude/longitude grid produces at the pole.
+    A Fibonacci lattice, near-uniform in solid angle.
 
     Parameters
     ----------
@@ -62,7 +55,7 @@ def fibonacci_hemisphere(n: int) -> np.ndarray:
     i = np.arange(n)
     golden_ratio_inverse = (np.sqrt(5.0) - 1.0) / 2.0
 
-    # Halving the step compared to a full sphere keeps z in (0, 1).
+    # half the step of a full sphere keeps z in (0, 1)
     z = 1.0 - (2.0 * i + 1.0) / (2.0 * n)
     r = np.sqrt(1.0 - z**2)
     theta = 2.0 * np.pi * i * golden_ratio_inverse
@@ -73,13 +66,9 @@ def fibonacci_hemisphere(n: int) -> np.ndarray:
 def zone_axis_rotation(zone_axis: np.ndarray) -> np.ndarray:
     """Rotation matrix taking a zone axis onto ``+z``.
 
-    The returned matrix ``R`` maps the crystal frame to the slab frame, so a
-    direction transforms as ``R @ d`` and a stack of row vectors as
-    ``directions @ R.T``. Its transpose maps back.
-
-    This is the same rotation :meth:`ase.Atoms.rotate` applies for
-    ``atoms.rotate(zone_axis, "z")``, built explicitly so the transform is
-    available without going through an :class:`~ase.Atoms` object.
+    The matrix ``R`` maps the crystal frame to the slab frame: a direction
+    transforms as ``R @ d``. It is the rotation of ``atoms.rotate(zone_axis,
+    "z")`` in ASE.
 
     Parameters
     ----------
@@ -109,8 +98,7 @@ def zone_axis_rotation(zone_axis: np.ndarray) -> np.ndarray:
     sin_angle = float(np.linalg.norm(axis))
 
     if sin_angle < 1e-7:
-        # Parallel or antiparallel to z: any perpendicular axis will do, and
-        # ASE picks them in this order.
+        # parallel or antiparallel to z: any perpendicular axis, as ASE picks it
         axis = np.cross((0.0, 0.0, 1.0), target)
         if np.linalg.norm(axis) < 1e-7:
             axis = np.cross((1.0, 0.0, 0.0), target)
@@ -118,7 +106,7 @@ def zone_axis_rotation(zone_axis: np.ndarray) -> np.ndarray:
     else:
         axis = axis / sin_angle
 
-    # Rodrigues' rotation formula in matrix form.
+    # Rodrigues' rotation formula
     cross_matrix = np.array(
         [
             [0.0, -axis[2], axis[1]],
@@ -139,22 +127,10 @@ def estimate_repetitions(
 ) -> tuple[int, int, int]:
     """Repetitions of `atoms` needed to fill `cell` at any orientation.
 
-    The slab is cut from a bulk block after rotation, so the block has to
-    contain the slab's bounding sphere whichever way it is turned: a ball whose
-    diameter is the slab's longest diagonal, ``sqrt(a**2 + b**2 + c**2)``.
-
-    What bounds a ball inside a parallelepiped is the separation of its
-    opposite faces, not the length of its edges, and for a non-orthogonal cell
-    the two differ -- for the primitive cell of an fcc crystal the faces are
-    ``a / sqrt(3)`` apart against edges of ``a / sqrt(2)``. Sizing on the edges
-    leaves the block too thin across those faces, and a slab turned towards
-    them loses atoms from its corners and ends: silicon cut 40 x 40 x 100 Å
-    that way comes out with vacuum in 123 of 200 patches.
-
-    One cell more is added along each axis, because the slab is not cut about
-    the geometric centre of the block but about a point up to half a cell from
-    it: the centroid of the atoms, or an origin moved into the central copy of
-    the cell by :func:`central_origin`.
+    The block has to contain the slab's bounding sphere, whose diameter is the
+    slab's diagonal, along each of its face separations (shorter than its edges
+    for a non-orthogonal cell). One cell more is added along each axis, since
+    the slab is cut about a point up to half a cell from the block's centre.
 
     Parameters
     ----------
@@ -174,7 +150,7 @@ def estimate_repetitions(
     if volume == 0.0:
         raise ValueError("atoms must have a cell with nonzero volume")
 
-    # Separation of the faces spanned by the other two lattice vectors.
+    # separation of the faces spanned by the other two lattice vectors
     separations = [
         volume / np.linalg.norm(np.cross(lattice[(i + 1) % 3], lattice[(i + 2) % 3]))
         for i in range(3)
@@ -188,14 +164,10 @@ def central_origin(
 ) -> np.ndarray:
     """Move a point of `atoms` to the equivalent point in the middle of its block.
 
-    An origin is given in the frame of the unrepeated `atoms`, but the block
-    ``atoms * repetitions`` grows away from that frame's corner, so the point as
-    given sits at the edge of the block and a slab cut about it is mostly
-    vacuum. Shifting it by whole lattice vectors to the most central copy picks
-    out the same point of the crystal with the whole block around it.
-
-    With ``repetitions == (1, 1, 1)`` -- an atomic model holding one feature --
-    a point inside the cell is left where it is.
+    The block ``atoms * repetitions`` grows away from the corner of `atoms`,
+    so a point given in `atoms` is shifted by whole lattice vectors to the
+    central copy. With ``repetitions == (1, 1, 1)`` a point inside the cell is
+    left where it is.
 
     Parameters
     ----------
@@ -217,7 +189,7 @@ def central_origin(
     fractional = np.linalg.solve(lattice.T, origin)
     shift = np.round(np.asarray(repetitions, dtype=float) / 2.0 - fractional)
 
-    # np.round sends 0.5 to 0, so a point inside a (1, 1, 1) cell never moves.
+    # np.round sends 0.5 to 0, so a point inside a (1, 1, 1) cell does not move
     return origin + shift @ lattice
 
 
@@ -228,10 +200,8 @@ def bulk_block(
 ) -> Atoms:
     """The repeated block that :func:`rotated_slab` cuts a slab out of.
 
-    Building the block is the expensive part of cutting a slab, and it does not
-    depend on the zone axis, so a reference pattern covering many zone axes
-    should build it once here and pass it to :func:`rotated_slab` with
-    ``repetitions=(1, 1, 1)``.
+    The block does not depend on the zone axis, so it can be built once and
+    passed to :func:`rotated_slab` with ``repetitions=(1, 1, 1)``.
 
     Parameters
     ----------
@@ -264,11 +234,9 @@ def rotated_slab(
     """Cut an orthogonal slab with the given zone axis along ``z``.
 
     The unit cell is repeated into a block large enough to contain the slab at
-    any orientation, rotated so `zone_axis` points along ``+z``, and a box of
-    the requested size is cut from the middle of it.
-
-    See the module docstring for why the result is not periodic in ``x`` and
-    ``y``.
+    any orientation, rotated so that `zone_axis` points along ``+z``, and a box
+    of the requested size is cut about `origin`. The slab is not periodic in
+    ``x`` and ``y`` (see the module docstring).
 
     Parameters
     ----------
@@ -280,37 +248,17 @@ def rotated_slab(
         Dimensions of the slab to cut [Å]. The third entry is the thickness
         along the beam.
     repetitions : tuple of three int, optional
-        Repetitions of `atoms` used to build the block that the slab is cut
-        from. If not given, :func:`estimate_repetitions` chooses the smallest
-        block that can contain the slab at any orientation. Pass
-        ``(1, 1, 1)`` when `atoms` is already a block built by
-        :func:`bulk_block`, which is how to avoid rebuilding it for every zone
-        axis.
-
-        The slab is cut around `origin`, which defaults to the centre of the
-        block, so the repetitions also fix which point of the crystal ends up
-        at the centre of the slab. Changing them therefore shifts the cut,
-        which changes the result even when the block was already large enough.
-
-        Repeating a cell that contains a defect makes a periodic array of it.
-        For an atomic model that already holds the feature of interest -- an MD
-        cell, say -- pass ``(1, 1, 1)``, or check that
-        :func:`estimate_repetitions` returns it.
+        Repetitions of `atoms` in the block the slab is cut from. Defaults to
+        :func:`estimate_repetitions`. Pass ``(1, 1, 1)`` when `atoms` is
+        already a block, from :func:`bulk_block` or an atomic model holding a
+        defect. Without an `origin` the repetitions also decide which point of
+        the crystal is at the centre of the slab.
     origin : np.ndarray, optional
-        Point of `atoms`, in Cartesian coordinates, to place at the centre of
-        the slab and to rotate about. Defaults to the centroid of the block.
-
-        Give it to anchor the cut on a feature: a dislocation core, an
-        interface. The centroid is only the feature's position when the atoms
-        happen to be distributed symmetrically about it, which a void, a
-        surface or an off-centre defect all break.
-
-        When the block is built here, the origin is moved to the equivalent
-        point of its central copy by :func:`central_origin`. When `atoms` is a
-        prebuilt block (``repetitions=(1, 1, 1)``) it is used as given, so
-        pass it through :func:`central_origin` first -- a point of the
-        unrepeated cell sits at the corner of the block, and the slab cut
-        about it is mostly empty.
+        Cartesian point of `atoms` to place at the centre of the slab and to
+        rotate about, for example a defect. Defaults to the centroid of the
+        block. When the block is built here, the origin is moved to its central
+        copy with :func:`central_origin`; with ``repetitions=(1, 1, 1)`` it is
+        used as given.
 
     Returns
     -------
@@ -334,9 +282,7 @@ def rotated_slab(
             raise ValueError(f"origin must have shape (3,), got {origin.shape}")
 
     if repetitions == (1, 1, 1):
-        # `atoms` is already the block; copy it because the rotation and the
-        # recentring below are in place, and a caller reusing one block across
-        # many zone axes must not see it mutated.
+        # the rotation below is in place, and the caller may reuse the block
         block = atoms.copy()
     else:
         if repetitions is None:
@@ -347,11 +293,7 @@ def rotated_slab(
 
     anchor = np.mean(block.positions, axis=0) if origin is None else origin
 
-    # ASE's own rotation is used rather than `rotation` so that the cut is
-    # reproducible against code that calls Atoms.rotate directly; the two agree
-    # to floating-point precision (see test_zone_axis_rotation_matches_ase).
-    # Rotating about the anchor keeps it fixed, so a feature placed there stays
-    # at the centre of the slab whatever the zone axis.
+    # the same rotation as `rotation`, about the anchor
     block.rotate(
         zone_axis / np.linalg.norm(zone_axis), "z", center=anchor, rotate_cell=True
     )
@@ -384,7 +326,7 @@ def _crystal_and_displacements(
     """The crystal the slabs are cut from, and how to displace them thermally.
 
     Each atom is tagged with its index in the crystal, so that displacements
-    given atom by atom follow it through the block into every slab.
+    given per atom follow it into every slab.
     """
     if isinstance(atoms, FrozenPhonons):
         frozen_phonons, atoms = atoms, atoms.atoms
@@ -406,15 +348,15 @@ def _displaced(
 ) -> Atoms | FrozenPhonons:
     """The slab, displaced as `frozen_phonons` displaces the crystal it came from.
 
-    The same number of configurations, the same seeds, and each atom the
-    displacements of its own site in the crystal.
+    The same configurations and seeds, and each atom the displacements of its
+    site in the crystal.
     """
     if frozen_phonons is None:
         return slab
 
     sigmas = frozen_phonons.sigmas
     if not isinstance(sigmas, dict):
-        # given atom by atom, for the atoms of the crystal
+        # given per atom of the crystal
         sigmas = np.asarray(sigmas)[slab.arrays["cell_index"]]
 
     return FrozenPhonons(
@@ -429,10 +371,8 @@ def _displaced(
 def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
     """Whether a crystal has a centre of inversion.
 
-    For a centrosymmetric crystal the backscatter pattern obeys
-    ``I(-k) = I(k)``, so either hemisphere follows from the other; for one
-    without -- GaN, GaAs, ZnO -- the two differ, and the difference is what an
-    EBSD polarity measurement reads.
+    For a centrosymmetric crystal the pattern obeys ``I(-k) = I(k)``, so either
+    hemisphere follows from the other.
 
     Parameters
     ----------
@@ -451,8 +391,7 @@ def is_centrosymmetric(atoms: Atoms, symprec: float = 1e-3) -> bool:
 
     cell = (atoms.cell.array, atoms.get_scaled_positions(), atoms.numbers)
     with warnings.catch_warnings():
-        # spglib deprecates its own internal error handling; nothing the
-        # caller can act on, and it would otherwise fail under -W error.
+        # spglib warns about its own internal error handling
         warnings.simplefilter("ignore", DeprecationWarning)
         symmetry = spglib.get_symmetry(cell, symprec=symprec)
     if symmetry is None:

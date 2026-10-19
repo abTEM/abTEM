@@ -1,14 +1,8 @@
 """Reference patterns: EBSD intensity over the whole hemisphere.
 
-A single reciprocity calculation is only valid for directions near the beam
-direction it was set up for, because the slab is cut with that direction along
-``z`` and the propagator is accurate over a limited angle. Covering the whole
-hemisphere therefore means tiling it into patches, running one calculation per
-patch with its own slab, and stitching the results back together in the crystal
-frame.
-
-:class:`EBSDReferencePattern` does the tiling, the bookkeeping between the
-crystal frame and each slab frame, and the stitching.
+A reciprocity calculation is accurate for directions near its slab's axis, so
+:class:`EBSDReferencePattern` tiles the hemisphere into patches, calculates
+each in its own slab, and joins the results in the crystal frame.
 """
 
 from __future__ import annotations
@@ -58,21 +52,15 @@ __all__ = [
     "fft_friendly_gpts",
 ]
 
-#: Density of the direction grid relative to the output image, so that binning
-#: leaves no empty pixels at the rim where the grid thins out.
+#: Density of the direction grid relative to the output image.
 _DIRECTION_OVERSAMPLING = 1.15
 
 
 def fft_friendly_gpts(extent: tuple[float, float], sampling: float) -> tuple[int, int]:
     """Grid points covering `extent` at `sampling` or finer, sized for the FFT.
 
-    The calculation is almost entirely Fresnel propagation, so its cost is set
-    by how fast an FFT of this size is rather than by how many points there
-    are. Those are not the same thing: a grid of 71 points -- prime, so the
-    transform falls back to Bloom/Rader -- takes five times as long as one of
-    72, and longer than one of 128. Rounding *up* to the next size with only
-    small prime factors makes the sampling finer, so it can only help, and it
-    is typically several times faster.
+    Rounds the number of grid points up to the next size with only small
+    prime factors, for which the FFT is fast.
 
     Parameters
     ----------
@@ -95,19 +83,16 @@ def fft_friendly_gpts(extent: tuple[float, float], sampling: float) -> tuple[int
 def patch_half_angle(n_patches: int, coverage: float = 1.2) -> float:
     """Angular radius of each patch needed to tile the hemisphere.
 
-    A Fibonacci lattice of `n_patches` points on the hemisphere gives each point
-    a cell of solid angle :math:`2\\pi / n`. Treating the cell as a regular
-    hexagon and covering it with a disc through its corners gives the angular
-    radius below, which `coverage` then inflates so neighbouring patches overlap
-    rather than leaving seams.
+    Each of `n_patches` points of a Fibonacci lattice has a cell of solid angle
+    :math:`2\\pi / n`; the radius is that of a disc through the corners of a
+    regular hexagon of that area, enlarged by `coverage`.
 
     Parameters
     ----------
     n_patches : int
         Number of patches tiling the hemisphere.
     coverage : float, optional
-        Factor by which the discs are enlarged past the bare covering radius
-        (default 1.2).
+        Factor by which the covering radius is enlarged (default 1.2).
 
     Returns
     -------
@@ -131,18 +116,16 @@ def _patch_intensities(
     gpts: tuple[int, int],
     max_batch_directions: int | str,
 ) -> np.ndarray:
-    """Cut one patch's slab and collect its directions, eagerly.
+    """Cut one patch's slab and calculate its directions, eagerly.
 
-    The unit of work of a reference pattern, whether the patches run one after
-    another or as tasks of a lazy one. Returns one value per direction of
-    `local`, after an energy axis if there are several backscattered energies.
+    Returns one value per direction of `local`, after an energy axis if there
+    are several backscattered energies.
     """
     slab, _ = rotated_slab(
         block, slab_axis, builder.slab_cell, repetitions=(1, 1, 1), origin=origin
     )
 
-    # A coarse sampling is warned about once, by the builder; per patch it
-    # would be several hundred copies of the same warning.
+    # the builder warns about a coarse sampling once
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", AntialiasLossWarning)
         result = EBSD(
@@ -170,99 +153,61 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
     ----------
     atoms : ase.Atoms or FrozenPhonons
         The unit cell of the crystal. Give :class:`~abtem.FrozenPhonons` of it
-        for thermal vibrations -- EMsoft's Debye-Waller factor: every slab is
-        displaced configuration by configuration, as the unit cell would be,
-        and the pattern is the average over them, of the scattering and the
-        emitting atoms alike. It costs `num_configs` times as much.
+        for thermal vibrations: every slab is displaced as the unit cell would
+        be, and the pattern is averaged over the configurations, at
+        `num_configs` times the cost.
     energy : float
         Energy of the incident beam [eV].
     slab_cell : tuple of three float
         Dimensions of the slab cut for each patch [Å]; the third entry is the
-        thickness along the beam. There is no default: the right size depends
-        on the crystal and on how converged the pattern has to be, and a
-        default is how an undersized slab goes unnoticed.
+        thickness along the slab's axis. There is no default, since the right
+        size depends on the crystal and the accuracy needed.
 
-        The thickness matters most. The Kikuchi bands build up with depth, and
-        a thin slab leaves them too weak to hide the small differences between
-        neighbouring patches: silicon at 30 keV, 40 Å thick, breaks into facets
-        along the patch boundaries around ``[101]`` -- as badly 20 Å wide as
-        10 Å -- while 100 Å gives continuous bands at either width (measured
-        with the original implementation's source). That implementation was
-        validated at 40 x 40 x 100 Å.
-
-        The width sets how far a wave travels before it meets a seam. A slab
-        cut at an arbitrary orientation is not periodic across its faces, and
-        a reciprocity wave at an angle ``θ`` to the slab's axis drifts ``θ T``
-        sideways over the thickness ``T``, into the misaligned crystal beyond a
-        seam, where it stops channelling. Silicon near ``[101]``, 40 Å thick,
-        loses 14% of its yield 150 mrad off the slab's axis at 12 Å wide, and
-        7% at 24 Å. The default 400 patches keep every direction within 90
-        mrad of its slab's axis, and at 20 x 20 x 100 Å the pattern then dims
-        by less than 1% towards the patch edges, averaged over the hemisphere.
-        10 Å wide also swings by 12% in atom count from one patch to the next.
-
-        To make a run cheaper, lower `gpts`, which sets how many directions are
-        calculated, rather than the slab.
+        The bands build up over the first ~100 Å, so 60-100 Å is a typical
+        thickness. The width controls the seams: a wave at an angle ``θ`` to
+        the slab's axis moves ``θ T`` sideways over a thickness ``T`` and then
+        meets the slab's non-periodic edge. 30-40 Å wide slabs keep this error
+        to a few percent. To make a run cheaper, lower `gpts` rather than the
+        slab size.
     n_patches : int, optional
-        Number of zone-axis patches tiling each hemisphere calculated (default
-        400). More patches keep every direction closer to its slab's axis, at
-        the cost of more slabs.
+        Number of zone-axis patches tiling each hemisphere (default 400). More
+        patches keep every direction closer to its slab's axis.
     gpts : int, optional
-        Pixels along each axis of the projected image (default 128). Only sets
-        the default density of the sampled directions; the projection itself
-        happens in :meth:`SphericalPattern.project`.
+        Pixels along each axis of a projected image (default 128). Sets the
+        default density of the sampled directions.
     projection : str or HemisphereProjection, optional
-        Projection whose even grid the directions are drawn from. One of
-        ``'lambert'`` (default) or ``'stereographic'``.
-
-        Lambert is the better choice and the default for two reasons. It is
-        equal-area, so it samples the hemisphere uniformly: a stereographic
-        grid puts three times more directions per steradian at the equator than
-        at the pole, which is the wrong way round, since the poles carry the
-        zone-axis detail. And it covers the whole hemisphere including the
-        near-equator azimuths that fall in the corners of its square, which a
-        stereographic disk never reaches -- so a Lambert-sampled pattern can be
-        interpolated to either projection without gaps, while the reverse
-        leaves holes.
+        Projection whose even grid the directions are drawn from, ``'lambert'``
+        (default) or ``'stereographic'``. The equal-area Lambert grid samples
+        the hemisphere uniformly and can be interpolated to either projection.
     sampling : float, optional
         Real-space sampling of the potentials [Å]. Defaults to
-        :func:`potential_sampling` for `atoms`; the collected angles set no
-        condition of their own.
+        :func:`~abtem.ebsd.sampling.potential_sampling` for `atoms`.
     slice_thickness : float, optional
         Multislice slice thickness [Å] (default 1.0).
     direction_gpts : int, optional
         Number of points per axis of the grid the directions are drawn from.
-        Defaults to ``ceil(1.15 * gpts)``, slightly denser than the output image
-        so binning leaves no empty pixels.
+        Defaults to ``ceil(1.15 * gpts)``.
     max_angle : float, optional
-        Angular radius of each patch [mrad]: directions farther than this from
-        their patch's axis are left out. Defaults to :func:`patch_half_angle`
-        for `n_patches`, which leaves out none.
+        Angular radius of each patch [mrad]; directions farther than this from
+        their patch's axis are left out. Defaults to :func:`patch_half_angle`.
     repetitions : tuple of three int, optional
-        Repetitions of `atoms` used to build the block the slabs are cut from.
-        Defaults to the smallest block that can contain the slab at any
-        orientation. Note that this also fixes which point of the crystal sits
-        at the centre of each slab.
+        Repetitions of `atoms` in the block the slabs are cut from; see
+        :func:`~abtem.ebsd.orientations.rotated_slab`.
     origin : np.ndarray, optional
         Point of `atoms` to place at the centre of every slab, passed to
         :func:`rotated_slab`. Defaults to the centroid.
     hemisphere : {'north', 'south', 'both'}, optional
-        Which directions to calculate (default 'north'). A centrosymmetric
-        crystal needs only one: the other is its inversion image, which the
-        pattern supplies wherever it is asked about it
-        (:attr:`SphericalPattern.southern`). A crystal without an inversion
-        centre -- GaN, GaAs -- differs between the two, and the difference is
-        what an EBSD polarity measurement reads; calculate 'both' for it, at
-        twice the cost. The southern directions are laid out as EMsoft lays
-        them out, ``(x, y, -z)`` below each northern one.
+        Which directions to calculate (default 'north'). For a centrosymmetric
+        crystal the other hemisphere is the inversion image, which the pattern
+        provides (:attr:`SphericalPattern.southern`). For a crystal without an
+        inversion centre, such as GaN, calculate 'both'. The southern
+        directions are ``(x, y, -z)`` below the northern ones, as in EMsoft.
     centrosymmetric : bool, optional
-        Whether the crystal has an inversion centre. The pattern records it, and
-        it decides whether the hemisphere that was not calculated stands in as
-        the inversion image silently or with a warning. If not given, it is
-        determined with spglib (:func:`is_centrosymmetric`) when first needed,
-        which can be slow, or fail, for a large cell without lattice symmetry --
-        an amorphous or molecular-dynamics model; give True or False to skip
-        the search.
+        Whether the crystal has an inversion centre. Recorded in the pattern;
+        it decides whether the inversion image stands in for the hemisphere not
+        calculated without a warning. If None (default), it is determined with
+        spglib when first needed, which can be slow or fail for a large cell
+        without lattice symmetry.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
         energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
@@ -271,27 +216,18 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
 
     Notes
     -----
-    Every atom emits, lit evenly, by its cross-section for scattering straight
-    back (see :mod:`abtem.ebsd.emission`): the source EMsoft builds its master
-    patterns from, and the one that makes a reference pattern a property of the
-    crystal alone -- no incident direction singles out a patch.
+    Every atom emits by its backscattering cross-section and is lit evenly, as
+    in EMsoft (see :mod:`abtem.ebsd.emission`).
 
     A direction ``d`` is where the backscattered electrons go. By reciprocity
-    it is calculated with a plane wave travelling the other way, along ``-d``,
-    into the crystal from the side the detector is on -- so the directions
-    about a patch's centre are calculated in a slab cut along the opposite
-    direction. For a centrosymmetric crystal the distinction makes no
-    difference; for one without an inversion centre it is what puts each
-    polar face in its right hemisphere.
+    it is calculated with a plane wave travelling along ``-d``, so each patch
+    is calculated in a slab cut along the opposite of its centre.
 
-    The intensity leaving a crystal along ``-d`` is the intensity leaving its
-    inversion image along ``d``, so the southern hemisphere is calculated as
-    the northern hemisphere of the crystal inverted about the origin: every
-    southern patch in the slab of the northern patch opposite it, cut from the
-    inverted crystal. A direction and its opposite then differ by what
-    inverting the crystal changes and nothing else -- its polarity, for GaN.
-    For a crystal with an inversion centre at the origin, nothing: the two
-    calculations are the same.
+    The intensity leaving a crystal along ``-d`` equals the intensity leaving
+    its inversion image along ``d``. The southern hemisphere is therefore
+    calculated as the northern hemisphere of the crystal inverted about the
+    slab origin. For a crystal with an inversion centre at the origin the two
+    calculations are identical.
     """
 
     def __init__(
@@ -406,10 +342,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
 
     @property
     def centrosymmetric(self) -> bool:
-        """Whether the crystal has an inversion centre, so ``I(-k) = I(k)``.
-
-        As given, or else determined with spglib on first use.
-        """
+        """Whether the crystal has an inversion centre, so ``I(-k) = I(k)``."""
         if self._centrosymmetric is None:
             self._centrosymmetric = is_centrosymmetric(self._atoms)
         return self._centrosymmetric
@@ -425,9 +358,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
     def zone_axes(self) -> np.ndarray:
         """The centre of each patch, as unit vectors of shape ``(M, 3)``.
 
-        Each patch is calculated in a slab cut along the opposite direction,
-        and the southern ones, opposite the northern ones, as those in the
-        inverted crystal: see the notes.
+        The southern centres are the negated northern ones; see Notes.
         """
         northern = fibonacci_hemisphere(self._n_patches)
         return self._in_hemisphere(northern, -northern)
@@ -436,8 +367,8 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
     def directions(self) -> np.ndarray:
         """Every sampled direction in the crystal frame, of shape ``(N, 3)``.
 
-        The southern ones lie ``(x, y, -z)`` below the northern ones, as
-        EMsoft lays out its southern master pattern; -0.0 on the equator.
+        The southern ones are ``(x, y, -z)`` of the northern ones, with -0.0 on
+        the equator.
         """
         northern = self._projection.grid(self._direction_gpts)
         return self._in_hemisphere(northern, northern * np.array([1.0, 1.0, -1.0]))
@@ -456,17 +387,13 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
     def potential_gpts(self) -> tuple[int, int]:
         """Grid the potential is built on.
 
-        Derived from :attr:`sampling` and rounded up to a size the FFT handles
-        quickly; see :func:`fft_friendly_gpts`. The actual sampling is
-        therefore a little finer than :attr:`sampling`.
+        Rounded up from :attr:`sampling` by :func:`fft_friendly_gpts`, so the
+        actual sampling is slightly finer.
         """
         return fft_friendly_gpts(self._slab_cell[:2], self._sampling)
 
     def _assign_directions(self) -> list[np.ndarray]:
-        """Group the sampled directions by the patch that will calculate them.
-
-        Each direction goes to its nearest zone axis.
-        """
+        """Indices of the directions each patch calculates: its nearest ones."""
         zone_axes = self.zone_axes
         nearest = np.argmax(self.directions @ zone_axes.T, axis=1)
         return [np.where(nearest == j)[0] for j in range(len(zone_axes))]
@@ -477,12 +404,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         lazy: Optional[bool] = None,
         pbar: bool = True,
     ) -> SphericalPattern:
-        """Run every patch and stitch the results into one pattern.
-
-        Named for the abTEM builders it follows -- :meth:`abtem.Probe.build`,
-        :meth:`abtem.SMatrix.build` -- which leaves ``compute`` to mean what it
-        means everywhere else: realize a lazy array. So ``build(lazy=True)``
-        returns a pattern whose ``compute()`` runs it.
+        """Calculate every patch and join the results into one pattern.
 
         Parameters
         ----------
@@ -491,18 +413,16 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
             :meth:`~abtem.ebsd.reciprocity.EBSD.build`.
         lazy : bool, optional
             If True, return a pattern backed by a dask graph with one task per
-            patch, rather than running them here. Defaults to the abTEM
-            configuration.
+            patch. Defaults to the abTEM configuration.
         pbar : bool, optional
             If True (default), show a progress bar over the patches. Ignored
-            when lazy, where nothing runs yet.
+            when lazy.
 
         Returns
         -------
         pattern : SphericalPattern
             Backscattered intensity at every sampled direction, in the crystal
-            frame. Use :meth:`SphericalPattern.project` to turn it into an
-            image.
+            frame.
         """
         lazy = validate_lazy(lazy)
 
@@ -517,19 +437,13 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         )
         block = bulk_block(self._atoms, self._slab_cell, repetitions)
 
-        # The origin is given in the frame of `atoms`, but that copy of the
-        # cell is the corner of the block, and a slab cut about it would be
-        # mostly empty. The equivalent point of the central copy is the same
-        # place in the crystal with the whole block around it.
         origin = (
             None
             if self._origin is None
             else central_origin(self._atoms, repetitions, self._origin)
         )
 
-        # The southern patches are the northern ones of the inverted crystal
-        # (see the notes). Inverted about the point the slabs are cut about,
-        # the block still holds the crystal around it.
+        # the southern patches are calculated in the inverted crystal (see Notes)
         blocks = {False: block}
         if self._hemisphere != "north":
             centre_of_inversion = (
@@ -538,8 +452,6 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
             blocks[True] = block.copy()
             blocks[True].positions = 2.0 * centre_of_inversion - block.positions
 
-        # Every patch shares a slab shape and a sampling, so the grid is chosen
-        # once -- at a size the FFT likes, which dominates the runtime.
         gpts = self.potential_gpts
 
         cutoff = np.cos(self._max_angle * 1e-3)
@@ -559,7 +471,6 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         if lazy:
             import dask
 
-            # One node per block, which every patch's task cuts from.
             blocks = {south: dask.delayed(b) for south, b in blocks.items()}
 
         progress = TqdmWrapper(
@@ -567,15 +478,10 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
         )
         try:
             for centre, indices in zip(zone_axes, assignment):
-                # A southern patch is the northern one opposite it, in the
-                # inverted crystal.
                 south = bool(centre[2] < 0.0)
                 sign = -1.0 if south else 1.0
 
-                # The electrons leave along d, and the reciprocity waves come
-                # in along -d: in a slab cut along -centre, then. Crystal frame
-                # -> slab frame, and drop whatever this patch cannot
-                # legitimately collect.
+                # electrons leaving along d: reciprocity waves along -d
                 slab_axis = -sign * centre
                 local = -sign * directions[indices] @ zone_axis_rotation(slab_axis).T
                 keep = local[:, 2] > cutoff
@@ -593,11 +499,7 @@ class EBSDReferencePattern(CopyMixin, EqualityMixin):
                 )
 
                 if lazy:
-                    # One task per patch, run eagerly inside. Hundreds of
-                    # patches already occupy the workers; splitting each into
-                    # blocks as well, as a lone lazy scan does, repeats the
-                    # per-slice work of every block for nothing: 1.7 times the
-                    # cost, measured on 100 patches of 55 directions each.
+                    # one task per patch; the patches already fill the workers
                     task = dask.delayed(_patch_intensities, pure=True)(
                         self, blocks[south], **arguments
                     )

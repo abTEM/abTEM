@@ -1,12 +1,10 @@
-"""How fine the multislice grid has to be.
+"""Choosing the multislice sampling.
 
-One condition only: that the grid resolves the atoms' potential. The antialias
+The sampling has to resolve the atoms' projected potential: the antialias
 aperture passes spatial frequencies up to a third of the inverse sampling, and
-whatever the potential scatters beyond it is lost -- silently, since the
-transmission function is band-limited before it acts. The collected directions
-set no condition of their own: the reciprocity waves are carried as periodic
-envelopes (see :mod:`abtem.ebsd.reciprocity`), so a wave's direction uses up
-none of the aperture, which limits only the scattering about it.
+the potential's scattering beyond it is lost. The collected directions put no
+condition on the grid, since the reciprocity waves are carried as periodic
+envelopes (see :mod:`abtem.ebsd.reciprocity`).
 """
 
 from __future__ import annotations
@@ -21,18 +19,15 @@ from abtem.potentials.iam import Potential
 
 __all__ = ["AntialiasLossWarning", "potential_sampling", "scattering_power_lost"]
 
-#: Fraction of the scattering power a sampling may leave out before it is
-#: warned about. Measured on silicon, the error in the pattern runs at one to
-#: three times this fraction (see :func:`potential_sampling`).
+#: Fraction of the scattering power a sampling may lose before it is warned about.
 _UNDERSAMPLED = 0.02
 
 
 class AntialiasLossWarning(UserWarning):
     """The sampling leaves part of the atoms' scattering outside the aperture.
 
-    Its own class so that a caller constructing many calculations -- a
-    reference pattern, say -- can quiet the individual warnings and give one
-    for the whole run instead.
+    A separate class, so that a builder running many calculations can silence
+    the individual warnings and warn once for the whole run.
     """
 
 
@@ -40,24 +35,15 @@ class AntialiasLossWarning(UserWarning):
 def _scattering_power(number: int) -> tuple[np.ndarray, np.ndarray]:
     """An atom's projected scattering power, accumulated outwards in frequency.
 
-    The projected potential of an atom is sharply peaked, and its transform
-    decays slowly -- the electron scattering factor has a Rutherford tail, so
-    there is no frequency beyond which it truly vanishes. What can be asked is
-    where all but a given fraction of its power lies.
-
     Returns
     -------
     frequencies, fraction : np.ndarray
         Spatial frequencies [1 / Å] in increasing order, and the fraction of
         the power at or below each.
     """
-    # The tail of the spectrum matters to the total power, so the measuring
-    # grid has to reach well past the cutoff it is looking for. Converging on
-    # silicon: 512 points gives 0.066 A, 1024 gives 0.063, 2048 gives 0.062 and
-    # 4096 gives 0.0619. 1024 is within about 1.5% of the limit for light
-    # elements and 3% for gold, and costs a quarter of a second once per
-    # element. The slice thickness makes no difference at all for an isolated
-    # atom, and the box only a couple of percent.
+    # The Rutherford tail carries a noticeable part of the power, so the grid
+    # has to reach well past the cutoff: 1024 points over 8 Å converge it to
+    # about 1.5% for light elements and 3% for gold.
     extent, gpts, thickness = 8.0, 1024, 2.0
 
     atoms = Atoms(
@@ -87,17 +73,15 @@ def _scattering_power_cutoff(number: int, tolerance: float) -> float:
 
 
 def scattering_power_lost(atoms: Atoms, sampling: float) -> float:
-    """Fraction of the atoms' scattering power a sampling leaves out.
+    """Fraction of the atoms' scattering power that a sampling leaves out.
 
-    The antialias aperture passes spatial frequencies up to a third of the
-    inverse sampling, and the scattering of the potential beyond it is simply
-    lost -- silently, since the transmission function is band-limited before it
-    acts. This is that fraction, for the most demanding element present.
+    The fraction outside the antialias aperture, for the most demanding element
+    present.
 
     Parameters
     ----------
     atoms : ase.Atoms
-        The specimen. Only which elements are present matters.
+        The specimen. Only the elements present matter.
     sampling : float
         Real-space sampling [Å].
 
@@ -117,7 +101,7 @@ def scattering_power_lost(atoms: Atoms, sampling: float) -> float:
 
 
 def _warn_if_undersampled(atoms: Atoms, sampling: float, what: str) -> None:
-    """Warn when `sampling` loses more of the scattering than is worth risking."""
+    """Warn when `sampling` loses more than `_UNDERSAMPLED` of the scattering."""
     lost = scattering_power_lost(atoms, sampling)
     if lost > _UNDERSAMPLED:
         warnings.warn(
@@ -131,46 +115,24 @@ def _warn_if_undersampled(atoms: Atoms, sampling: float, what: str) -> None:
 def potential_sampling(atoms: Atoms, tolerance: float = 0.01) -> float:
     """Sampling that resolves the projected potential of `atoms`.
 
-    The one condition on the sampling. The reciprocity waves are carried as
-    periodic envelopes (see :mod:`abtem.ebsd.reciprocity`), so a wave's
-    direction uses up none of the antialias aperture, and the collected angles
-    set no condition of their own: the aperture limits only the scattering
-    about each wave, and scattering power beyond it is simply lost. This
-    returns the sampling that keeps all but `tolerance` of an isolated atom's
-    projected scattering power inside the aperture, taking the most demanding
-    element present.
+    Keeps all but `tolerance` of an isolated atom's projected scattering power
+    inside the antialias aperture, for the most demanding element present. The
+    error in the pattern is of the order of the power lost, so the default
+    targets about a percent; treat the result as an estimate and check
+    convergence for production runs.
 
-    Calibrated against a convergence test on silicon at 30 kV, with the
-    earlier potential-weighted source, where the error in the pattern relative
-    to a far finer grid ran at one to three times the power left outside the
-    aperture:
-
-    ==========  ===============  ==============
-    sampling    power captured   pattern error
-    ==========  ===============  ==============
-    0.20 Å      90.5%            33%
-    0.14 Å      94.8%            16%
-    0.10 Å      97.3%            5.5%
-    0.07 Å      98.7%            0.6%
-    ==========  ===============  ==============
-
-    So the default ``tolerance=0.01`` targets roughly a percent, and the
-    returned value should be read as an estimate good to a factor of about two
-    rather than a guarantee. A convergence test remains the only proof.
-
-    Static atoms emit from points, which a finer grid resolves ever more
-    sharply against the peaks the waves channel onto them: along ``[001]`` in
-    silicon the yield still moves by 2% between 0.063 and 0.032 Å. Atoms in
-    thermal motion do not -- with :class:`~abtem.FrozenPhonons` at 0.076 Å it
-    moves by 0.3%.
+    The yield of static atoms converges slowly with the sampling, since a finer
+    grid resolves the channelled waves at the emitting atoms ever more sharply:
+    along [001] in silicon it changes by 2% between 0.063 and 0.032 Å. With
+    :class:`~abtem.FrozenPhonons` it changes by 0.3%.
 
     Parameters
     ----------
     atoms : ase.Atoms
-        The specimen. Only which elements are present matters.
+        The specimen. Only the elements present matter.
     tolerance : float, optional
-        Fraction of the scattering power allowed to fall outside the antialias
-        aperture (default 0.01).
+        Fraction of the scattering power allowed outside the antialias aperture
+        (default 0.01).
 
     Returns
     -------

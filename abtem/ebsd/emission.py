@@ -1,21 +1,16 @@
-"""Where backscattered electrons are generated: at the atoms.
+"""Backscattered electrons are generated at the atoms.
 
-Backscattering is scattering through more than ninety degrees, a momentum
-transfer near ``q = 2 / λ`` -- far inside the screening radius, so the nucleus
-sets it and the cross-section is the electron scattering factor there,
-squared. Taken from abTEM's parametrization, that is Rutherford's ``Z²`` to
-within 2% from carbon to gold. EMsoft builds its master patterns from the same
-source (``CalcSgh``: ``Z²`` times the site occupation, times a Debye-Waller
-factor).
+Backscattering is a momentum transfer of about ``q = 2 / λ``, well inside the
+screening radius, so each atom's cross-section is the square of its electron
+scattering factor there: ``Z²`` to within 2% from carbon to gold. EMsoft's
+master patterns use the same source.
 
-The atoms are laid on the multislice grid exactly as abTEM lays them for an
-infinite projection -- each in the one slice that holds it
+The emitting atoms are placed on the multislice grid the way abTEM places them
+for an infinite projection: each in its own slice
 (:class:`~abtem.slicing.SliceIndexedAtoms`), as a sub-pixel delta
-(:func:`~abtem.integrals.superpose_deltas`) corrected by the same sinc -- here
-weighted atom by atom, since each may be lit differently by the incident beam.
-The thermal cloud of the emitting atom is abTEM's too: build the specimen from
-:class:`~abtem.FrozenPhonons`, and the average over its configurations is the
-Debye-Waller smearing.
+(:func:`~abtem.integrals.superpose_deltas`) with the sinc correction, weighted
+atom by atom by how the incident beam lights them. Thermal smearing of the
+emitters comes from building the specimen as :class:`~abtem.FrozenPhonons`.
 """
 
 from __future__ import annotations
@@ -42,9 +37,7 @@ def backscatter_cross_section(
 ) -> np.ndarray:
     """Relative cross-section of each atom for scattering straight back.
 
-    The square of the electron scattering factor at ``q = 2 / λ``, where the
-    nucleus alone matters -- Rutherford's ``Z²``, to within 2% from carbon to
-    gold.
+    The square of the electron scattering factor at ``q = 2 / λ``.
 
     Parameters
     ----------
@@ -58,7 +51,7 @@ def backscatter_cross_section(
     Returns
     -------
     cross_section : np.ndarray
-        One value per atom, relative to hydrogen -- so about ``Z²``.
+        One value per atom, relative to hydrogen, so about ``Z²``.
     """
     from ase.data import chemical_symbols
 
@@ -69,7 +62,6 @@ def backscatter_cross_section(
     def scattering_factor(number):
         return float(parametrization.scattering_factor(chemical_symbols[number])(q2))
 
-    # Relative to hydrogen, so the values are of order Z^2 rather than 1e-6.
     hydrogen = scattering_factor(1)
     values = {
         number: (scattering_factor(number) / hydrogen) ** 2
@@ -79,12 +71,7 @@ def backscatter_cross_section(
 
 
 def configuration_atoms(potential) -> Atoms:
-    """The atoms a single-configuration potential is built from.
-
-    Its frozen-phonon configuration, displaced exactly as the potential
-    displaces it; :class:`~abtem.slicing.SliceIndexedAtoms` wraps it into the
-    cell the same way.
-    """
+    """The atoms of a single-configuration potential, displaced as it displaces them."""
     return potential.frozen_phonons.randomize(potential.get_transformed_atoms())
 
 
@@ -143,9 +130,7 @@ class EmissionSlices:
         self._sampling = (extent[0] / self._gpts[0], extent[1] / self._gpts[1])
         self._device = device
 
-        # The Fourier-space kernel of abTEM's infinite projection, band-limited
-        # like the waves: |psi|^2 reaches 4/3 of Nyquist and aliases on the
-        # grid, and an emitter limited to 2/3 of it cannot see what folded in.
+        # abTEM's infinite-projection kernel, band-limited like the waves
         xp = get_array_module(device)
         self._kernel = antialias_aperture(self._gpts, self._sampling, xp=xp) / sinc(
             self._gpts, self._sampling, device
@@ -160,11 +145,7 @@ class EmissionSlices:
         return len(self._sliced)
 
     def totals(self) -> np.ndarray:
-        """Each slice's emission summed over its atoms, ``(slices, sources)``.
-
-        Proportional to what the maps of :meth:`__getitem__` sum to, which the
-        band-limited deltas preserve, without laying anything on the grid.
-        """
+        """Each slice's emission summed over its atoms, ``(slices, sources)``."""
         totals = np.zeros((len(self), self._n_sources))
         for index in range(len(self)):
             atoms = self._sliced.get_atoms_in_slices(index)
@@ -176,9 +157,8 @@ class EmissionSlices:
     def __getitem__(self, index: int):
         """The emission of one slice, of shape ``(sources, x, y)``, or None.
 
-        Per unit area [1 / Å²], as abTEM's infinite projection lays out the
-        potential: integrated over the slice, it is the cross-sections of the
-        slice's atoms, times their illumination.
+        Per unit area [1 / Å²]: integrated over the slice, it is the sum of the
+        cross-sections of the slice's atoms, times their illumination.
         """
         atoms = self._sliced.get_atoms_in_slices(index)
         if len(atoms) == 0:

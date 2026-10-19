@@ -37,9 +37,8 @@ class SparseProjectionWarning(UserWarning):
 class ReferencePatternImages(Images):
     """An EBSD reference pattern projected onto a square image.
 
-    Identical to :class:`~abtem.measurements.Images` except that the two base
-    axes are the dimensionless coordinates of the projection, spanning
-    ``[-1, 1]``, rather than a distance in Ångström.
+    Like :class:`~abtem.measurements.Images`, with the dimensionless projection
+    coordinates in ``[-1, 1]`` as base axes.
     """
 
     @property
@@ -57,8 +56,8 @@ class ReferencePatternImages(Images):
 class EBSDPatternImages(Images):
     """A pattern projected onto an EBSD detector.
 
-    Identical to :class:`~abtem.measurements.Images` except that the base axes
-    are the detector's own pixels, in micrometres on the scintillator.
+    Like :class:`~abtem.measurements.Images`, with the detector pixels in
+    micrometres as base axes.
     """
 
     @property
@@ -84,11 +83,9 @@ def _lambert_grid(xy: np.ndarray, tolerance: float = 1e-6):
     Returns
     -------
     grid : tuple of (int, np.ndarray) or None
-        ``(gpts, nodes)``, where `nodes` holds each point's integer node
-        position of shape ``(N, 2)`` on ``linspace(-1, 1, gpts)`` along both
-        axes -- or None unless the points lie on such a grid and cover every
-        node of it. Repeated nodes, as an overlap between patches produces,
-        are allowed.
+        ``(gpts, nodes)``, with each point's integer node position of shape
+        ``(N, 2)`` on ``linspace(-1, 1, gpts)``, or None unless the points
+        cover every node of such a grid. Repeated nodes are allowed.
     """
     if len(xy) < 4:
         return None
@@ -114,10 +111,8 @@ def _bilinear(
 ) -> np.ndarray:
     """Bilinear interpolation on a Lambert grid, as EMsoft does it.
 
-    A transcription of EMsoft's ``LambertgetInterpolation``: the lower node is
-    ``floor`` of the target's position in node units, the upper one the next
-    node along, held at the last node on the edge of the square, and the four
-    are weighted by the distances ``dx, 1 - dx, dy, 1 - dy``.
+    Follows EMsoft's ``LambertgetInterpolation``, including its clamping at the
+    edges of the square.
 
     Parameters
     ----------
@@ -162,24 +157,16 @@ def _bilinear(
 class SphericalPattern(CopyMixin, EqualityMixin):
     """Backscattered intensity sampled at directions on the unit sphere.
 
-    This is the natural output of a reference-pattern calculation: the
-    directions are chosen to tile a hemisphere evenly, which makes them an
-    unstructured list rather than a grid. Use :meth:`project` to turn it into a
-    square image.
+    Use :meth:`interpolate` or :meth:`bin` for a square image of it, and
+    :meth:`project` for a detector.
 
     A pattern may cover the northern hemisphere, the southern one, or both
-    (:attr:`hemisphere`). Where it is asked about the hemisphere it does not
-    cover, it answers from the inversion image of the one it does,
-    ``I(-k) = I(k)``, which holds for a centrosymmetric crystal. A pattern that
-    records in its metadata that its crystal is not centrosymmetric -- as
-    :class:`~abtem.ebsd.reference.EBSDReferencePattern` records it -- warns
-    when it does so; see :attr:`northern` and :attr:`southern`.
+    (:attr:`hemisphere`). For the hemisphere it does not cover, it uses the
+    inversion image of the one it does, ``I(-k) = I(k)``, and warns if its
+    metadata records that the crystal is not centrosymmetric.
 
-    Unlike most abTEM measurements this is not an
-    :class:`~abtem.array.ArrayObject`. Its base axis is a list of ``(N, 3)``
-    direction vectors, which does not fit the scalar-valued axis metadata that
-    machinery serializes; :meth:`to_zarr` stores the directions as their own
-    array instead.
+    It is not an :class:`~abtem.array.ArrayObject`, since its base axis is a
+    list of direction vectors.
 
     Parameters
     ----------
@@ -201,7 +188,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
-        # A dask array is kept as it is; np.asarray would compute it.
+        # np.asarray would compute a dask array
         if not isinstance(array, da.core.Array):
             array = np.asarray(array)
         directions = np.asarray(directions, dtype=float)
@@ -288,9 +275,8 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     def hemisphere(self) -> str:
         """Which hemispheres the pattern covers: 'north', 'south' or 'both'.
 
-        A direction belongs to the south when its ``z`` component is negative,
-        -0.0 included: the equator of a southern grid, mirrored from a
-        northern one, stays southern.
+        A direction is southern when its ``z`` component is negative, including
+        -0.0.
         """
         south = np.signbit(self._directions[:, 2])
         if south.all():
@@ -337,10 +323,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     def northern(self) -> "SphericalPattern":
         """The pattern over the northern hemisphere.
 
-        The calculated one if the pattern covers it; otherwise the inversion
-        image of the southern hemisphere, ``I(k) = I(-k)``, exact for a
-        centrosymmetric crystal -- and warned about when the pattern records
-        that its crystal is not.
+        The calculated one, or else the inversion image of the southern one.
         """
         return self._hemisphere_pattern(south=False)
 
@@ -348,41 +331,24 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     def southern(self) -> "SphericalPattern":
         """The pattern over the southern hemisphere.
 
-        The calculated one if the pattern covers it; otherwise the inversion
-        image of the northern hemisphere, ``I(-k) = I(k)``, exact for a
-        centrosymmetric crystal -- and warned about when the pattern records
-        that its crystal is not.
+        The calculated one, or else the inversion image of the northern one.
         """
         return self._hemisphere_pattern(south=True)
 
     def interpolate_directions(self, directions: np.ndarray) -> np.ndarray:
         """Evaluate the pattern at arbitrary directions.
 
-        The primitive the grid interpolations are built on, and what a detector
-        needs: the rays of a flat screen are a gnomonic projection of the
-        sphere, so they land nowhere near any square grid.
-
-        Interpolation is carried out in the square Lambert plane. Being
-        equal-area, it distorts the neighbourhoods least, and it covers the
-        whole hemisphere, so a pattern sampled there has no target outside it.
-
-        A pattern sampled on the nodes of a Lambert grid -- as
-        :class:`~abtem.ebsd.reference.EBSDReferencePattern` samples by default
-        -- is interpolated bilinearly on that grid, which is what EMsoft and
-        kikuchipy do with a master pattern (EMsoft's
-        ``LambertgetInterpolation``), so a pattern evaluated here and one read
-        from its EMsoft export agree. Any other sampling is triangulated and
-        interpolated linearly. That is worse on a regular grid, not merely
-        different: triangulating one cuts every cell along the same diagonal,
-        and a band crossing that diagonal comes out serrated.
+        Interpolates in the square Lambert plane. A pattern sampled on a Lambert
+        grid, the default of
+        :class:`~abtem.ebsd.reference.EBSDReferencePattern`, is interpolated
+        bilinearly as EMsoft interpolates a master pattern; any other sampling
+        is triangulated and interpolated linearly.
 
         Parameters
         ----------
         directions : np.ndarray
             Unit vectors of shape ``(M, 3)``, anywhere on the sphere. Each is
-            evaluated from its own hemisphere: from the calculated one, or
-            from the inversion image of the other when the pattern does not
-            cover it (see :attr:`southern`).
+            evaluated in its own hemisphere (see :attr:`southern`).
 
         Returns
         -------
@@ -418,9 +384,8 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     ) -> np.ndarray:
         """Interpolate a pattern covering one hemisphere, at directions in it.
 
-        The square Lambert projection covers the northern hemisphere; a
-        southern one is mirrored onto it through the equator, ``(x, y, -z)``,
-        which is how EMsoft lays out its southern master pattern.
+        A southern hemisphere is mirrored onto the northern Lambert square,
+        ``(x, y, -z)``, as in EMsoft.
         """
         from scipy.interpolate import griddata  # type: ignore[import-untyped]
 
@@ -465,37 +430,26 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         projection: str | HemisphereProjection = "lambert",
         hemisphere: str = "north",
     ) -> ReferencePatternImages:
-        """Sample the intensities at the nodes of a square grid.
+        """Evaluate the intensities at the nodes of a square grid.
 
-        This differs from :meth:`project`, which *bins* the directions into
-        pixels and therefore needs more directions than pixels to avoid holes.
-        Here the value is evaluated *at* each grid node, by
-        :meth:`interpolate_directions`, so any grid size is well defined.
-
-        Node sampling is what a master pattern file wants, because a consumer
-        reading it interpolates between nodes. When the pattern was calculated
-        on the very grid requested -- build it with the matching `projection`
-        and ``direction_gpts=gpts`` -- the interpolation is exact and this is a
-        lossless repackaging.
+        Unlike :meth:`bin`, it is defined for any grid size. If the pattern was
+        calculated on the same grid, the values are exact.
 
         Parameters
         ----------
         gpts : int
             Number of grid nodes along each axis, spanning ``[-1, 1]``.
         projection : str or HemisphereProjection, optional
-            One of ``'lambert'`` (default, the master-pattern convention) or
-            ``'stereographic'``.
+            ``'lambert'`` (default) or ``'stereographic'``.
         hemisphere : {'north', 'south'}, optional
-            Which hemisphere to lay out (default 'north'). The southern one is
-            laid out as EMsoft lays out its southern master pattern: the node
-            at ``(X, Y)`` is the direction ``(x, y, -z)`` below the northern
-            one there.
+            Which hemisphere to lay out (default 'north'). As in EMsoft, the
+            southern node at ``(X, Y)`` is the direction ``(x, y, -z)`` of the
+            northern one.
 
         Returns
         -------
         images : ReferencePatternImages
-            Nodes outside the projection's domain -- the corners the
-            stereographic disk does not cover -- are zero.
+            Nodes outside the projection's domain are zero.
         """
         projection = validate_projection(projection)
         if hemisphere not in ("north", "south"):
@@ -510,7 +464,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
 
         directions = projection.unproject(square[inside])
         if hemisphere == "south":
-            # -0.0 on the equator, so that it counts as southern too
+            # -0.0 on the equator, so that it counts as southern
             directions = directions * np.array([1.0, 1.0, -1.0])
         values = self.interpolate_directions(directions)
 
@@ -537,23 +491,20 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         """Bin the intensities into a square image.
 
         Each pixel is the mean of the directions falling inside it, so the
-        directions have to outnumber the pixels or the image has holes. This is
-        the reduction to reach for when many directions per pixel is exactly
-        what you have and an unbiased average is what you want; otherwise
-        :meth:`interpolate` evaluates at the grid nodes instead and is well
-        defined at any size.
+        directions have to outnumber the pixels. :meth:`interpolate` works at
+        any size.
 
         Parameters
         ----------
         gpts : int
             Number of pixels along each axis of the output image.
         projection : str or HemisphereProjection, optional
-            One of ``'stereographic'`` (default) or ``'lambert'``.
+            ``'stereographic'`` (default) or ``'lambert'``.
 
         Returns
         -------
         images : ReferencePatternImages
-            The projected pattern. Pixels no direction falls into are zero.
+            Pixels no direction falls into are zero.
         """
         projection = validate_projection(projection)
 
@@ -584,14 +535,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
 
     @staticmethod
     def _warn_if_sparse(counts, gpts, projection, tolerance=0.01):
-        """Warn if the image has holes the directions never reached.
-
-        Directions sampled on one projection's even grid are uneven in any
-        other, so projecting a pattern through a projection it was not sampled
-        for leaves a moire of empty pixels. Pixels outside the projection's
-        domain -- the corners the stereographic disk does not cover -- are
-        legitimately empty and do not count.
-        """
+        """Warn if pixels inside the projection's domain are empty."""
         inside = projection.domain_mask(pixel_centers(gpts)).reshape(gpts, gpts)
         if not inside.any():
             return
@@ -613,27 +557,16 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     ) -> "EBSDPatternImages":
         """Project the pattern onto an EBSD detector.
 
-        What a detector records is a gnomonic projection of the sphere: each
-        pixel looks along the ray through it, so the pattern is evaluated at
-        those directions after rotating them into the crystal frame by the
-        orientation.
-
-        The result is the diffraction *modulation*, around one. That is what an
-        experimental pattern becomes once its background is divided out, which
-        is how EBSD patterns are prepared for indexing anyway. What it does not
-        carry is the smooth background itself, nor the energy spectrum: both
-        are Monte Carlo products that this calculation does not produce.
-
-        To add shot noise, use the returned measurement's
-        :meth:`~abtem.measurements.Images.poisson_noise`. Note its
-        ``total_dose`` multiplies every pixel, and these values sit near one,
-        so it acts as the counts per pixel of a featureless specimen; divide
-        the result by it to come back to a modulation.
+        Evaluates the pattern at the direction each pixel looks along, rotated
+        into the crystal frame. The values are a modulation about one, without
+        the Monte Carlo background. With
+        :meth:`~abtem.measurements.Images.poisson_noise`, ``total_dose`` is
+        then the counts per pixel of a featureless specimen.
 
         Parameters
         ----------
         geometry : EBSDGeometry
-            Where the detector is.
+            The detector geometry.
         euler : np.ndarray, optional
             Bunge Euler angles of the crystal, of shape ``(3,)`` or ``(N, 3)``
             for several orientations at once (default no rotation).
@@ -684,19 +617,15 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     ):
         """Interpolate the pattern onto a square image and show it.
 
-        Uses :meth:`interpolate` rather than :meth:`project`, so the image is
-        filled whichever projection is asked for. Binning would leave holes
-        wherever the sampled directions do not reach the requested grid --
-        showing a Lambert-sampled pattern stereographically that way empties
-        more than half the pixels.
+        Uses :meth:`interpolate`, so the image has no holes in either
+        projection.
 
         Parameters
         ----------
         gpts : int, optional
             Number of pixels along each axis of the image shown (default 256).
         projection : str or HemisphereProjection, optional
-            One of ``'stereographic'`` (default, the familiar view) or
-            ``'lambert'``.
+            ``'stereographic'`` (default) or ``'lambert'``.
         kwargs :
             Passed to :meth:`abtem.measurements.Images.show`.
         """
@@ -745,8 +674,7 @@ class SphericalPattern(CopyMixin, EqualityMixin):
         from abtem.core.axes import axis_from_dict
 
         root = zarr.open_group(url, mode="r")
-        # zarr types its attrs as arbitrary JSON; these two were written by
-        # to_zarr, so they are a list and a mapping.
+        # written by to_zarr as a list and a mapping
         axes = cast(list, root.attrs["ensemble_axes_metadata"])
         metadata = cast(dict, root.attrs["metadata"])
 
@@ -760,9 +688,6 @@ class SphericalPattern(CopyMixin, EqualityMixin):
     @classmethod
     def concatenate(cls, patterns: Sequence["SphericalPattern"]) -> "SphericalPattern":
         """Join patterns sampled at different directions.
-
-        Used to assemble the per-patch results of a reference-pattern
-        calculation into a single pattern covering the hemisphere.
 
         Parameters
         ----------

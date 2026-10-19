@@ -1,23 +1,11 @@
 """Write reference patterns in EMsoft's EBSD master pattern format.
 
-EMsoft's master pattern files are the de-facto interchange format for EBSD
-simulations: kikuchipy, EMsoft's own indexing programs and others read them. A
-pattern written here can be projected onto a detector and indexed by those
-tools, which is the cheapest route to a real EBSD patch since none of the
-detector geometry has to be reimplemented.
+EMsoft master pattern files are read by EMsoft and kikuchipy, among others. The
+file holds the pattern on a square Lambert grid. It carries no Monte Carlo
+background, energy spectrum or depth distribution.
 
-What such a file holds is the *modulation* -- the diffraction contrast as a
-function of exit direction -- stored on a square Lambert grid. The smooth
-background, the energy spectrum and the depth distribution of backscattered
-electrons all come from a Monte Carlo simulation that neither abTEM nor
-kikuchipy performs; EMsoft keeps them in a separate group of the same file.
-A file written here therefore carries no background, which is what a consumer
-wants anyway: the standard indexing workflow removes the background from the
-*experimental* patterns and matches them against background-free simulations.
-
-.. note::
-    EMsoft stores lengths in **nanometres**, not Ångström: lattice parameters
-    in nm and Debye-Waller factors in nm². This module converts on the way out.
+EMsoft stores lengths in nanometres: lattice parameters in nm and Debye-Waller
+factors in nm².
 """
 
 from __future__ import annotations
@@ -51,12 +39,9 @@ def _string(value: str) -> np.ndarray:
 
 
 def _scalar(value, dtype) -> np.ndarray:
-    """A one-element array.
+    """A one-element array, as EMsoft stores scalars.
 
-    Every scalar in a genuine EMsoft file is a shape-(1,) array rather than an
-    HDF5 scalar, because Fortran writes them as rank-1 arrays. Readers index
-    them as ``dataset[:][0]``, which raises on a scalar dataspace, so writing
-    true scalars produces a file that looks right and cannot be read.
+    Readers index them as ``dataset[:][0]``, which fails on an HDF5 scalar.
     """
     return np.array([value], dtype=dtype)
 
@@ -80,11 +65,9 @@ def _conventional_cell(
 ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
     """Space group, conventional lattice, and the symmetry-unique sites.
 
-    EMsoft pairs a space group number with lattice parameters in that group's
-    *conventional* setting, and lists only the asymmetric unit, expanding it by
-    symmetry itself. An ASE cell is often neither -- ``ase.build.bulk`` returns
-    the primitive cell, whose rhombohedral axes would contradict the cubic
-    space group -- so standardize before writing.
+    EMsoft expects the lattice in the space group's conventional setting and
+    only the asymmetric unit of sites, while ``ase.build.bulk``, for example,
+    returns a primitive cell.
 
     Returns
     -------
@@ -116,8 +99,7 @@ def _conventional_cell(
     cell = (atoms.cell[:], atoms.get_scaled_positions(), atoms.numbers)
 
     with warnings.catch_warnings():
-        # spglib deprecates its own internal error handling; nothing the
-        # caller can act on, and it would otherwise fail under -W error.
+        # spglib warns about its own internal error handling
         warnings.simplefilter("ignore", DeprecationWarning)
         standardized = spglib.standardize_cell(cell, to_primitive=False)
     if standardized is None:
@@ -145,7 +127,6 @@ def _conventional_cell(
         )
         found = int(space_group)
 
-    # Only the asymmetric unit is listed; a consumer applies the symmetry.
     unique = np.unique(_field(dataset, "equivalent_atoms"))
 
     return found, lattice, positions[unique], numbers[unique]
@@ -189,28 +170,23 @@ def write_emsoft_master_pattern(
     path : str
         Destination ``.h5`` file.
     pattern : SphericalPattern
-        The reference pattern. Must not have ensemble axes. Its southern
-        hemisphere is written from the pattern itself when it covers it (built
-        with ``hemisphere='both'``), and otherwise from the inversion image of
-        the northern one -- see :attr:`SphericalPattern.southern`.
+        The reference pattern, without ensemble axes. The southern hemisphere
+        is taken from :attr:`SphericalPattern.southern`.
     atoms : ase.Atoms
         The unit cell the pattern was calculated from, used for the crystal
         metadata a consumer needs to build a phase.
     npx : int, optional
         Half-width of the square Lambert grid; the stored arrays are
-        ``2 * npx + 1`` on a side. Defaults to a grid matching the pattern's
-        own sampling density, so that no detail is invented or discarded.
+        ``2 * npx + 1`` on a side. Defaults to the pattern's own sampling.
     energy : float, optional
-        Electron energy [eV]. Defaults to the pattern's metadata.
+        Beam energy [eV]. Defaults to the pattern's metadata.
     space_group : int, optional
         Space group number. Determined with spglib if not given.
     sample_tilt : float, optional
-        Sample tilt [degrees] recorded in the file (default 70.0). Metadata
-        only -- no part of this calculation depends on it.
+        Sample tilt [degrees] recorded in the file (default 70.0).
     debye_waller : float or sequence of float, optional
-        Debye-Waller factor per atom [nm²] (default 0.005, i.e. 0.5 Å²).
-        Recorded for the consumer; the pattern itself already accounts for
-        whatever displacements `atoms` carries.
+        Debye-Waller factor per atom [nm²] (default 0.005, i.e. 0.5 Å²),
+        recorded in the file. It does not change the pattern.
     name : str, optional
         Phase name recorded in the file.
     overwrite : bool, optional
@@ -218,16 +194,9 @@ def write_emsoft_master_pattern(
 
     Notes
     -----
-    A pattern covering only the northern hemisphere fills the southern one by
-    assuming the crystal is centrosymmetric, ``I(-k) = I(k)``: on the Lambert
-    square, a 180° rotation of the northern array. For a crystal without an
-    inversion centre that is wrong, and the pattern warns when it records as
-    much; build it with ``hemisphere='both'`` to write the southern hemisphere
-    that was actually calculated.
-
-    No background, energy spectrum or depth distribution is written: those are
-    Monte Carlo products. Consumers that expect them will fall back to a flat
-    weighting.
+    For a pattern of the northern hemisphere alone, the southern one is its
+    inversion image, which is only right for a centrosymmetric crystal; build
+    the pattern with ``hemisphere='both'`` otherwise.
     """
     try:
         import h5py  # type: ignore[import-untyped]
@@ -244,7 +213,7 @@ def write_emsoft_master_pattern(
         )
 
     if energy is None:
-        # EMsoft's EkeV is the beam energy; older patterns record only "energy"
+        # patterns without "beam_energy" record the beam energy as "energy"
         energy = pattern.metadata.get("beam_energy", pattern.metadata.get("energy"))
         if energy is None:
             raise ValueError(
@@ -252,36 +221,21 @@ def write_emsoft_master_pattern(
             )
 
     if npx is None:
-        # Match the pattern's own sampling: a hemisphere sampled with N
-        # directions supports a grid of about sqrt(N) on a side.
+        # N directions support a grid of about sqrt(N) on a side
         npx = max(1, int(round((np.sqrt(len(pattern)) - 1) / 2)))
 
     space_group, lattice, scaled, numbers = _conventional_cell(atoms, space_group)
 
-    # EMsoft's Rosca-Lambert square is exactly abTEM's SquareLambertProjection,
-    # up to the edge length of the square, so this is a resampling and not a
-    # change of projection.
-    #
-    # It is stored transposed, though. EMsoft swaps the two Lambert
-    # coordinates when it looks a direction up (`ixy(1), ixy(2) = ixy(2),
-    # -ixy(1)` in CalcEBSDPatternSingleFull) and writes the array in Fortran
-    # order besides, which together amount to a transpose of the projection
-    # here. Writing it unchanged produces a file that loads, looks like a
-    # plausible Kikuchi pattern, and indexes to the wrong orientation --
-    # verified against kikuchipy, which reproduces this module's own detector
-    # projection only once the stored array is transposed.
+    # EMsoft's square Lambert grid is SquareLambertProjection's, transposed:
+    # EMsoft swaps the two coordinates when it looks a direction up
+    # (CalcEBSDPatternSingleFull) and stores arrays in Fortran order.
     northern = np.asarray(pattern.interpolate(2 * npx + 1, "lambert").array).T
-    # the node at (X, Y) of the southern square is the direction (x, y, -z);
-    # for a pattern of the northern hemisphere alone that is the inversion
-    # image, a 180 degree rotation of the northern square
     southern = np.asarray(
         pattern.interpolate(2 * npx + 1, "lambert", hemisphere="south").array
     ).T
 
-    # The stereographic arrays are a display convenience -- EMsoft and
-    # kikuchipy both project detector patterns from the Lambert ones. A pattern
-    # sampled in Lambert cannot also land exactly on a stereographic grid, so
-    # the resulting fill warning is unactionable here and is silenced.
+    # The stereographic arrays are only for display, and a Lambert-sampled
+    # pattern cannot fill a stereographic grid exactly.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SparseProjectionWarning)
         stereographic_n = np.asarray(

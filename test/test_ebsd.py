@@ -154,8 +154,8 @@ def uniform():
 def featureless(monkeypatch):
     """Atoms that emit, in a specimen that does not scatter.
 
-    The emission is the atoms' own, but the waves travel through a potential of
-    zeros sliced the same way, so they stay what they were sent in as.
+    The atoms emit as usual, but the waves travel through a potential of zeros
+    sliced the same way, so they stay plane waves.
     """
     prepare = reciprocity._prepare
 
@@ -356,9 +356,8 @@ class TestOrientations:
             assert np.all(clearance >= np.linalg.norm(cell) / 2.0), name
 
     def test_no_orientation_leaves_vacuum_in_the_slab(self):
-        # 40 x 40 x 100 is the size the reference patterns were validated at,
-        # and the one that sizing the block on edge lengths got wrong: 123 of
-        # 200 patches came out with vacuum at their corners and ends.
+        # sizing the block on edge lengths instead of face separations leaves
+        # vacuum in the corners of 40 x 40 x 100 Å slabs
         for cell in [(10.0, 10.0, 40.0), (40.0, 40.0, 100.0)]:
             block = bulk_block(SILICON, cell)
             expected = len(SILICON) / SILICON.get_volume() * float(np.prod(cell))
@@ -370,8 +369,6 @@ class TestOrientations:
                     assert len(slab) == pytest.approx(expected, rel=0.04), zone_axis
 
     def test_a_reused_block_gives_the_same_slab_and_is_left_alone(self):
-        # Building the block is the expensive part, so a reference pattern
-        # builds it once and cuts every zone axis out of it.
         cell = (10.0, 10.0, 20.0)
         zone_axis = np.array([1.0, 2.0, 3.0])
         block = bulk_block(SILICON, cell, (12, 12, 12))
@@ -424,8 +421,7 @@ class TestOrientations:
         assert np.allclose(slab.positions, explicit.positions, atol=1e-9)
 
     def test_an_origin_in_a_repeated_cell_is_moved_to_the_middle(self):
-        # A point of the unrepeated cell is the corner of the block; cut about
-        # it as given, the slab was 85% empty.
+        # a point of the unrepeated cell is at the corner of the block
         cell = (10.0, 10.0, 40.0)
         slab, _ = rotated_slab(
             SILICON, np.array([1.0, 0.0, 1.0]), cell, origin=np.zeros(3)
@@ -731,8 +727,8 @@ class TestSphericalPattern:
         with pytest.warns(SparseProjectionWarning):
             sampled_in("lambert", 32).bin(256, "lambert")
 
-        # Through its own projection there are none -- the corners outside the
-        # stereographic disk are legitimately empty, not holes.
+        # Through its own projection there are none; the corners outside the
+        # stereographic disk do not count.
         with warnings.catch_warnings():
             warnings.simplefilter("error", SparseProjectionWarning)
             for projection in ("stereographic", "lambert"):
@@ -1041,10 +1037,8 @@ class TestEBSD:
         assert np.allclose(patterns.array, 0.0)
 
     def test_a_featureless_specimen_yields_one(self, featureless):
-        # The definition of the normalization, however the atoms are lit -- and
-        # in every direction. A plane wave off the cell's reciprocal grid would
-        # jump in phase at the cell edge and diffract off the jump; carried as
-        # a periodic envelope it has no edge to jump at.
+        # the normalization, for any lighting, in every direction (including
+        # directions off the cell's reciprocal grid)
         slab = silicon_slab()
         detector = BackscatterDetector(max_angle=150, gpts=5)
         for name, illumination in lightings(slab).items():
@@ -1052,10 +1046,9 @@ class TestEBSD:
             assert np.allclose(patterns.array, 1.0, atol=1e-5), name
 
     def test_the_first_atoms_see_the_waves_unscattered(self):
-        # Emission is collected from the waves arriving at each slice, before
-        # the step through it -- where the multislice puts its atoms. The first
-        # atoms the waves meet therefore see them as they were sent in, however
-        # strongly the specimen scatters; the deepest see them scattered.
+        # Emission is read from the waves arriving at each slice, before the
+        # step through it, so the first atoms see unscattered waves and the
+        # deepest scattered ones.
         slab = silicon_slab()
         detector = BackscatterDetector(max_angle=150, gpts=4)
         occupied = np.unique(np.floor(slab.positions[:, 2]).astype(int))
@@ -1179,9 +1172,8 @@ class TestEBSD:
         assert np.allclose(from_grid.array.ravel(), from_explicit.array, rtol=1e-6)
 
     def test_steep_waves_are_not_cut_off_by_the_aperture(self):
-        # A wave's direction uses up none of the aperture, which limits only
-        # the scattering about it. Carried as plane waves on this grid, the
-        # waves at 250 and 300 mrad lay outside it and their yield collapsed.
+        # a wave's direction uses none of the antialias aperture: at this
+        # sampling, 250 and 300 mrad lie outside it
         angles = np.array([0.0, 150.0, 250.0, 300.0]) * 1e-3
         directions = np.column_stack(
             [np.sin(angles), np.zeros_like(angles), np.cos(angles)]
@@ -1222,8 +1214,7 @@ class TestEBSD:
                 np.asarray(lazy.compute().array), np.asarray(eager.array)
             )
 
-        # The eager and lazy paths differ by a few eps -- a different FFT plan
-        # per thread rounds differently -- but a given path repeats exactly.
+        # eager and lazy differ by rounding, but each path is reproducible
         first, second = (
             make_ebsd(slab, grid).build(lazy=True, max_batch_directions=8).compute()
             for _ in range(2)
@@ -1401,8 +1392,8 @@ class TestDepth:
         recombined = np.tensordot(emission, binned.array, (0, 0)) / emission.sum()
         assert np.allclose(recombined, whole, rtol=1e-5)
 
-        # ... and any depth weighting applies afterwards: constant within each
-        # bin, it is exactly the run weighted so
+        # ... and a depth weighting constant within each bin, applied
+        # afterwards, equals the run weighted so
         weights = np.array([1.0, 0.5, 0.25, 0.125])
         recombined = np.tensordot(weights * emission, binned.array, (0, 0))
         recombined /= (weights * emission).sum()
@@ -1526,10 +1517,9 @@ class TestBackscatterEnergy:
 
 @pytest.mark.parametrize("device", [gpu])
 class TestDevices:
-    """On an accelerator -- CUDA, or Metal through torch -- as on the CPU.
+    """On an accelerator (CUDA, or Metal through torch), as on the CPU.
 
-    Small: what costs time on an accelerator is the number of operations
-    launched, so few slices, patches and directions.
+    Kept small: on an accelerator the time goes with the number of operations.
     """
 
     @staticmethod
@@ -1806,8 +1796,7 @@ class TestHemispheres:
         assert reference.centrosymmetric is False
         assert len(calls) == 1
 
-        # given, it is never searched for -- slow, or impossible, for a large
-        # cell without lattice symmetry
+        # given, it is never searched for
         for given in (True, False):
             reference = self.reference(GAN, "north", centrosymmetric=given)
             pattern = reference.build(pbar=False, lazy=False)
@@ -1909,8 +1898,8 @@ class TestEBSDDetectorPattern:
                 )
 
     def test_a_plane_wave_lights_the_atoms_unevenly(self, uniform):
-        # Sent in along the beam's own direction, it channels, and lights some
-        # atoms more than others -- normalized within each of its slices.
+        # it channels and lights some atoms more than others, normalized
+        # within each slice
         builder = detector_builder(source=abtem.PlaneWave(energy=30e3))
         block, origin = builder._block_and_origin()
         illumination, axes, shape = builder._illumination(block, origin, None)
@@ -1932,8 +1921,7 @@ class TestEBSDDetectorPattern:
         assert np.allclose(np.asarray(lazy.array), np.asarray(pattern.array), rtol=1e-6)
 
     def test_scans_a_probe(self):
-        # The beam is sent in once for the whole block, so it can be scanned
-        # whether the pixels share one slab or not.
+        # in one slab or several patches
         probe = abtem.Probe(semiangle_cutoff=10, energy=30e3)
         positions = [[0.0, 0.0], [1.0, 1.5]]
         for n_patches in (None, 2000):
@@ -1946,8 +1934,7 @@ class TestEBSDDetectorPattern:
             assert np.allclose(together[1], np.asarray(alone.array)[0], rtol=1e-4)
             assert not np.allclose(together[0], together[1], rtol=1e-3)
 
-        # A grid scan stays a grid, and positions are reported as given --
-        # measured from the origin, not from the corner of the beam's slab.
+        # a grid scan keeps its shape, and positions are measured from the origin
         builder = detector_builder(
             n_patches=None, source=abtem.Probe(semiangle_cutoff=30, energy=30e3)
         )

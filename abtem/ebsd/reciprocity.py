@@ -1,13 +1,10 @@
 """EBSD patterns from multislice reciprocity.
 
-The physical process is an electron entering the specimen, scattering
-inelastically somewhere inside it, and leaving through the surface in some
-direction. Simulating that directly would mean a separate calculation for every
-scattering site. Reciprocity turns it around: the amplitude for an electron
-generated at :math:`(\\mathbf{r}, z)` to leave in direction :math:`\\mathbf{k}`
-equals the amplitude at :math:`(\\mathbf{r}, z)` of a plane wave travelling in
-:math:`-\\mathbf{k}` that entered at the surface. One multislice run per
-collected direction therefore covers every generation site at once.
+By reciprocity, the amplitude for an electron backscattered at
+:math:`(\\mathbf{r}, z)` to leave in direction :math:`\\mathbf{k}` equals the
+amplitude at :math:`(\\mathbf{r}, z)` of a plane wave travelling along
+:math:`-\\mathbf{k}` that entered at the surface. One multislice calculation
+per direction therefore covers every point where backscattering happens.
 
 The collected intensity for direction :math:`\\mathbf{k}` is
 
@@ -16,32 +13,17 @@ The collected intensity for direction :math:`\\mathbf{k}` is
     |\\psi_{\\mathbf{k}}(\\mathbf{r}, z)|^2 \\, s(\\mathbf{r}, z)}
     {\\sum_z w_z \\sum_{\\mathbf{r}} s(\\mathbf{r}, z)}
 
-where :math:`\\psi_{\\mathbf{k}}` is the reciprocity plane wave, :math:`s` is
-where backscatter is generated, and :math:`w_z` is the probability that an
-electron generated at depth :math:`z` escapes. The sums are incoherent: the
-generation events are independent, so intensities add rather than amplitudes.
+where :math:`\\psi_{\\mathbf{k}}` is the reciprocity wave, :math:`s` the emission
+of the atoms (see :mod:`abtem.ebsd.emission`), and :math:`w_z` the weight of
+depth :math:`z`. A specimen that does not scatter gives :math:`I = 1` in every
+direction, so the values are yields relative to a featureless specimen.
 
-The source :math:`s` is the atoms (see :mod:`abtem.ebsd.emission`): each emits
-in proportion to its cross-section for scattering straight back, as lit by the
-incident beam. The ratio is the emission-weighted mean of the escape
-probability, normalized once for the whole slab -- so a specimen that does not
-scatter the plane waves gives :math:`I = 1` in every direction, the values are
-yields relative to a featureless specimen, and nothing depends on how the atoms
-fall into slices.
-
-The reciprocity waves are carried as periodic envelopes. The multislice cell is
-periodic, and a plane wave :math:`e^{2\\pi i \\mathbf{k} \\cdot \\mathbf{r}}`
-fits it only when :math:`\\mathbf{k}` falls on the cell's reciprocal grid; in any
-other direction it jumps in phase at the cell edge, and diffracts off the jump.
-Written as :math:`e^{2\\pi i \\mathbf{k} \\cdot \\mathbf{r}} u(\\mathbf{r})`
--- Bloch's form -- the wave is carried by :math:`u`, which for a plane wave is
-one everywhere, periodic whatever the direction. The transmission function
-multiplies :math:`u` as it multiplies the wave, the propagator is the exact one
-evaluated at :math:`\\mathbf{q} + \\mathbf{k}`, and the carrier has unit
-modulus, so :math:`|u|^2` is the intensity. For a specimen that is periodic in
-the cell -- a crystal, or a supercell holding a defect -- every direction is
-then exact, and not only those on the grid; and a wave's direction no longer
-uses up any of the antialias aperture, which limits only the scattering about it.
+The reciprocity waves are carried as periodic envelopes, in Bloch's form
+:math:`e^{2\\pi i \\mathbf{k} \\cdot \\mathbf{r}} u(\\mathbf{r})`, with
+:math:`u` periodic in the cell for any direction. The envelope is propagated
+with the exact propagator evaluated at :math:`\\mathbf{q} + \\mathbf{k}`. For a
+specimen periodic in the cell, every direction is then exact, and a wave's
+direction uses none of the antialias aperture.
 """
 
 from __future__ import annotations
@@ -86,12 +68,7 @@ DepthWeight = float | Sequence[float] | np.ndarray | Callable[[np.ndarray], np.n
 def _validate_depth_weight(
     depth_weight: Optional[DepthWeight], depths: np.ndarray
 ) -> np.ndarray:
-    """Resolve the escape-probability weight of each slice.
-
-    The weights are normalized to sum to one, so the result is always a
-    weighted average over depth and does not change scale with the number of
-    slices or the thickness.
-    """
+    """The weight of each slice, normalized to sum to one."""
     if depth_weight is None:
         weights = np.ones(len(depths))
     elif callable(depth_weight):
@@ -144,12 +121,7 @@ def _takes_energy(function) -> bool:
 def _depth_weights(
     depth_weight: Optional[DepthWeight], depths: np.ndarray, energies: np.ndarray
 ) -> np.ndarray:
-    """The depth weights at each backscattered energy, ``(energies, slices)``.
-
-    An electron that lost more energy has, on the whole, come from deeper, so
-    the weights may depend on the energy: a callable of ``(depths, energy)``,
-    or one row of weights per energy.
-    """
+    """The depth weights at each backscattered energy, ``(energies, slices)``."""
     if callable(depth_weight) and _takes_energy(depth_weight):
         return np.stack(
             [
@@ -203,11 +175,9 @@ def _depth_bins(depth_bins, slice_thickness) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _sum_dtype(xp) -> np.dtype:
-    """The dtype the yield's sums accumulate in.
+    """The dtype of the sums over every atom and slice.
 
-    Double precision whatever the configured one, since they run over every
-    atom of every slice -- where the device has it. Metal is single precision
-    only.
+    Double precision, except on Metal, which supports single precision only.
     """
     if device_name_from_array_module(xp) == "mps":
         return np.dtype(get_dtype(complex=False))
@@ -217,14 +187,12 @@ def _sum_dtype(xp) -> np.dtype:
 def _energy_metadata(
     beam_energy: float, backscatter_energies: np.ndarray, energy_weights: np.ndarray
 ) -> dict:
-    """The energies a pattern records, the same way for every builder.
+    """The energy metadata of a pattern.
 
-    ``beam_energy`` is the incident beam's. ``energy`` is abTEM's: that of the
-    electrons the pattern counts, the backscattered ones. With several of them
-    the pattern's :class:`.EnergyAxis` carries them and ``energy`` is left
-    unset, as abTEM leaves it for every energy ensemble; their weights are
-    recorded rather than applied, since summing the axis is the consumer's
-    business and the weights usually come from a Monte Carlo spectrum.
+    ``beam_energy`` is the incident beam's energy and ``energy`` that of the
+    backscattered electrons. With several backscattered energies, ``energy``
+    is left unset, as for any abTEM energy ensemble, and the energies and their
+    weights are recorded instead.
     """
     metadata: dict = {"beam_energy": float(beam_energy)}
     if len(backscatter_energies) == 1:
@@ -238,11 +206,7 @@ def _energy_metadata(
 def _validate_backscatter_energy(
     backscatter_energy, beam_energy: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Resolve the backscattered energies and their weights.
-
-    The beam travels at `beam_energy`; a backscattered electron has lost some
-    of that, so the reciprocity waves belong at or below it.
-    """
+    """Resolve the backscattered energies, at most `beam_energy`, and their weights."""
     if backscatter_energy is None:
         return np.array([beam_energy]), np.array([1.0])
 
@@ -288,11 +252,7 @@ def _prepare(
     illumination: Optional[np.ndarray],
     device: str,
 ) -> tuple[BasePotential, EmissionSlices]:
-    """One configuration's potential and its emitting atoms, as one task.
-
-    The blocks of directions of a configuration all share them, and dask frees
-    them once the blocks are done.
-    """
+    """One configuration's built potential and its emitting atoms."""
     emission = EmissionSlices(
         configuration_atoms(configuration),
         configuration.slice_thickness,
@@ -310,17 +270,9 @@ def _potential_configurations(
 ) -> list[tuple[BasePotential, float]]:
     """Split a potential into its frozen-phonon configurations and their weights.
 
-    A potential built on :class:`~abtem.FrozenPhonons` or
-    :class:`~abtem.AtomsEnsemble` carries an ensemble axis, and the propagation
-    below runs on one configuration at a time -- so the axis has to be taken
-    apart here rather than left for ``generate_slices``, which would silently
-    walk the first configuration only.
-
-    The configurations are averaged with equal weight, which is what a
-    backscattered yield is: an incoherent sum over the thermal displacements
-    the specimen passes through, not a coherent one. A configuration axis is
-    therefore never carried through to the measurement, and an ensemble asked
-    to keep one says so.
+    The configurations are averaged with equal weight, since the yield is an
+    incoherent sum over them; an ensemble asking to keep them separate is
+    warned about.
 
     Returns
     -------
@@ -365,16 +317,15 @@ def _envelope_propagator_array(
     """Exact free-space propagators for periodic envelopes, one per wave.
 
     The envelope ``u`` of ``exp(2 pi i k.r) u`` holds at frequency ``q`` what the
-    wave holds at ``q + k``, so it propagates with the exact propagator there --
-    relative to the carrier's own phase, so that ``u = 1`` stays one in vacuum.
-    Band-limited in ``q`` by the antialias aperture, as abTEM's propagator is.
+    wave holds at ``q + k``. It is propagated with the exact propagator there,
+    relative to the carrier's phase, and band-limited by the antialias aperture.
     """
     wavelength = energy2wavelength(energy)
     qx, qy = spatial_frequencies(gpts, sampling, xp=xp)
     aperture = antialias_aperture(gpts, sampling, xp)
 
     kernel = xp.empty((len(wave_vectors),) + tuple(gpts), dtype=get_dtype(complex=True))
-    # A few waves at a time, to keep the temporaries small.
+    # a few waves at a time, to keep the temporaries small
     for start in range(0, len(wave_vectors), 64):
         k = wave_vectors[start : start + 64]
         kx = k[:, 0, None, None] + qx[None, :, None]
@@ -382,8 +333,7 @@ def _envelope_propagator_array(
         x = wavelength**2 * (kx**2 + ky**2)
         x_carrier = wavelength**2 * (k[:, 0] ** 2 + k[:, 1] ** 2)[:, None, None]
 
-        # Evanescent components are dropped, where abTEM's would decay; the
-        # aperture keeps them far out of reach at any sampling in use.
+        # evanescent components are dropped; the aperture removes them anyway
         propagating = x < 1.0
         root = xp.sqrt(xp.where(propagating, 1.0 - x, 0.0))
         # sqrt(1 - x) - sqrt(1 - x_carrier), without the cancellation between them
@@ -398,11 +348,7 @@ def _envelope_propagator_array(
 
 
 class _EnvelopePropagator(FresnelPropagator):
-    """abTEM's Fresnel propagator, for waves carried as periodic envelopes.
-
-    Only the kernel differs, so the propagation itself -- and the choice of FFT
-    behind it -- is abTEM's.
-    """
+    """abTEM's Fresnel propagator with the kernel for periodic envelopes."""
 
     def __init__(self, wave_vectors):
         super().__init__()
@@ -427,119 +373,66 @@ class _EnvelopePropagator(FresnelPropagator):
 class EBSD(CopyMixin, EqualityMixin):
     """Backscatter diffraction patterns from one slab, by reciprocity.
 
-    The engine the pattern builders run in each of their slabs. It takes a slab
-    already cut, and directions measured from its axis, and knows nothing of a
-    sample, a beam or a detector: for a pattern on a real detector, from Euler
-    angles and with the beam coming in from its true direction, see
+    The engine the pattern builders run in each slab. It takes a slab and
+    directions in the slab's frame; for a pattern on a detector, see
     :class:`~abtem.ebsd.detector_pattern.EBSDDetectorPattern`.
 
     Parameters
     ----------
     potential : BasePotential or Atoms
-        The specimen, built from atoms -- ``Atoms``,
-        :class:`~abtem.FrozenPhonons`, or a :class:`~abtem.Potential` of either.
-        The atoms are what emits, so a prebuilt ``PotentialArray``, which no
-        longer carries them, will not do. The reciprocity waves travel along
-        ``z``, so a slab should already be cut with the zone axis of interest
-        along it (see :func:`abtem.ebsd.rotated_slab`).
-
-        For the thermal cloud of the emitting atoms -- EMsoft's Debye-Waller
-        factor -- build it from :class:`~abtem.FrozenPhonons`: the average over
-        its configurations smears the emitters as it smears the scattering.
+        The specimen: ``Atoms``, :class:`~abtem.FrozenPhonons`, or a
+        :class:`~abtem.Potential` of either. A ``PotentialArray`` does not
+        carry the atoms, which are the emitters. The reciprocity waves travel
+        along ``z`` (see :func:`abtem.ebsd.rotated_slab`). Frozen phonons smear
+        the emitters as well as the scattering.
     detector : BackscatterDetector
-        The directions to collect, in the slab's frame: the directions the
-        reciprocity waves travel into it, ``+z`` being into the slab. The
-        electrons they stand for leave the other way, so to collect the
-        electrons leaving a crystal along ``d``, cut the slab along ``-d``;
-        :class:`~abtem.ebsd.reference.EBSDReferencePattern` and
-        :class:`~abtem.ebsd.detector_pattern.EBSDDetectorPattern` do.
+        The directions of the reciprocity waves in the slab's frame, ``+z``
+        pointing into the slab. Each gives the electrons leaving in the
+        opposite direction, so to collect electrons leaving a crystal along
+        ``d``, cut the slab along ``-d``.
     energy : float
-        Energy of the incident beam [eV]. It sets the atoms' cross-sections,
-        and the reciprocity waves' energy unless `backscatter_energy` does.
+        Energy of the incident beam [eV]. Sets the cross-sections, and the
+        reciprocity waves' energy unless `backscatter_energy` is given.
     illumination : np.ndarray, optional
         How brightly the incident beam lights each atom of the potential, of
-        shape ``(atoms,)``, or ``(sources, atoms)`` for several at once, which
-        become a leading axis of the result. Only the relative values matter.
-        The atoms always emit, each by its cross-section for scattering
-        straight back (see :mod:`abtem.ebsd.emission`); this says only how
-        they are lit.
-
-        By default all alike, as though the specimen were evenly illuminated --
-        EMsoft's picture. Backscattered electrons come from tens of nanometres
-        down, where the incident beam has long lost its direction, so the
-        pattern is then a property of the specimen alone. Every atom in the cell
-        emits, so for a specimen that is not a uniform crystal the pattern is
-        the average over the cell.
-        :class:`~abtem.ebsd.detector_pattern.EBSDDetectorPattern` passes the
-        lighting of a beam from its true direction here.
+        shape ``(atoms,)``, or ``(sources, atoms)`` for several, which adds a
+        leading axis. Only relative values matter. By default every atom is lit
+        alike, as in EMsoft.
     depth_weight : float or array or callable, optional
-        How much the electrons generated at each depth count: the depth
-        distribution of the backscattering events that end in the pattern.
-
-        The elastic multislice algorithm is unitary, so the reciprocity plane
-        waves carry no attenuation with depth on their own: without a weight,
-        an event 200 Å deep counts as much as one just below the surface. Give
-        a float to weight the depths by ``exp(-z / escape_depth)`` [Å], an array
-        of one weight per slice, or a callable mapping an array of depths to
-        weights. The weights are normalized to sum to one.
-
-        An electron that lost more energy has, on the whole, come from deeper,
-        so with several `backscatter_energy` the weights may depend on the
-        energy: a callable of ``(depths, energy)``, or an array of one row per
-        energy -- the depth distribution per energy bin of a Monte Carlo
-        simulation, as EMsoft uses.
-
-        The default, None, weights every depth equally. Thermal diffuse
-        scattering along the way is the specimen's own physics: build it from
-        :class:`~abtem.FrozenPhonons`. It damps the contrast but keeps the
-        electrons; the smooth background of electrons whose paths ran far
-        deeper than any slab is a Monte Carlo quantity this does not produce.
+        How much the electrons generated at each depth count. A float weights
+        depth ``z`` by ``exp(-z / escape_depth)`` [Å]; an array gives one
+        weight per slice, and a callable maps depths to weights. With several
+        `backscatter_energy`, the weights may depend on the energy: a callable
+        of ``(depths, energy)``, or one row per energy, as from a Monte Carlo
+        simulation. Normalized to sum to one. By default every depth counts
+        equally.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
-        Energy of the backscattered electrons [eV]. A backscattered electron
-        has lost some of the beam's `energy`, so these must not exceed it.
-        Giving more than one adds a leading :class:`.EnergyAxis` and costs
-        proportionally more: the reciprocity waves travel at this energy, so
-        each one needs its own wavelength, propagator and transmission
-        function. Defaults to `energy`, the elastic case.
+        Energies of the backscattered electrons [eV], at most `energy`, at
+        which the reciprocity waves travel. Several add a leading
+        :class:`.EnergyAxis`. Defaults to `energy`. The weights of a
+        distribution are recorded in the metadata, not applied.
 
-        The weights of a distribution are recorded in the metadata rather than
-        applied, since summing the energy axis is the consumer's business and
-        the weights usually come from a Monte Carlo spectrum.
-
-        ``metadata["energy"]`` is that of the backscattered electrons, unset
+        ``metadata["energy"]`` is the backscattered electrons' energy, unset
         when there are several, and ``metadata["beam_energy"]`` the beam's. A
-        grid detector's directions are the same at every energy, while abTEM
-        calibrates a :class:`.DiffractionPatterns` of several energies in
-        reciprocal space, by the highest; its angles are then those of the
-        grid, but indexing one lower energy out rescales them by its
-        wavelength.
+        :class:`.DiffractionPatterns` of several energies is calibrated by the
+        highest, so its angles are those of the detector grid; indexing out a
+        lower energy rescales them by its wavelength.
     depth_tolerance : float, optional
         Stop propagating once the depth weight still to be collected falls
-        below this fraction of the total (default 1e-4). Slices past a short
-        escape depth carry no weight, and propagating them is the dominant
-        cost. Has no effect under the default uniform weighting, where the
-        remaining weight only vanishes at the last slice.
-
-        The bound is on the *discarded weight*; the error in any one direction
-        can be a few times that, because the slices dropped are not average
-        ones. Set to 0 to disable.
+        below this fraction of the total (default 1e-4); the error in a
+        direction can be a few times larger. Set to 0 to disable.
     depth_bins : int or array, optional
-        Resolve the pattern by depth: a number of equal bins over the slab, or
-        bin edges [Å]. Adds a ``depth`` axis, after any energy axis, holding
-        the pattern of the electrons generated in each bin alone -- each a
-        yield of its own, one for a featureless specimen. The emission in each
-        bin is recorded as ``metadata["depth_emission"]``, shaped like the
-        leading axes, so that any other depth weighting ``W`` can be applied
-        afterwards::
+        Resolve the pattern by depth: a number of equal bins, or bin edges
+        [Å]. Adds a ``depth`` axis after any energy axis. The emission of each
+        bin is recorded as ``metadata["depth_emission"]``, so a depth
+        weighting ``W`` can be applied afterwards::
 
-            E = np.array(patterns.metadata["depth_emission"])   # (bins,)
+            E = np.array(patterns.metadata["depth_emission"])
             pattern = np.tensordot(W * E, patterns.array, (0, 0)) / (W * E).sum()
 
-        which with ``W = 1`` is the pattern without bins -- exactly, for a
-        specimen without frozen-phonon configurations, and to within their
-        spread otherwise. Slices outside the edges are left out.
+        Slices outside the edges are left out.
     device : str, optional
-        'cpu' or 'gpu'. Defaults to the user configuration.
+        'cpu', 'gpu' or 'mps'. Defaults to the user configuration.
     """
 
     def __init__(
@@ -560,9 +453,9 @@ class EBSD(CopyMixin, EqualityMixin):
         frozen_phonons = getattr(potential, "frozen_phonons", None)
         if frozen_phonons is None:
             raise ValueError(
-                f"backscatter is generated at the atoms, so the potential has to "
-                f"be built from them -- Atoms, FrozenPhonons, or a Potential of "
-                f"either; a {type(potential).__name__} does not carry its atoms"
+                f"the potential has to be built from atoms (Atoms, FrozenPhonons "
+                f"or a Potential of either), since they emit the backscattered "
+                f"electrons; a {type(potential).__name__} does not carry its atoms"
             )
 
         if illumination is not None:
@@ -621,19 +514,15 @@ class EBSD(CopyMixin, EqualityMixin):
     def _direction_blocks(
         self, max_batch: int | str, lazy: bool = False
     ) -> list[tuple[int, int]]:
-        """Split the collected directions into batches that fit in memory.
+        """Split the directions into batches that fit in memory.
 
-        Blocks are the unit of work, so when they are going to become dask
-        tasks there have to be enough of them to occupy the workers. The
-        memory-derived size alone can leave three tasks on a twelve core
-        machine; this only ever splits further, never coarser.
+        When lazy, the batches are split further to give every worker a task.
         """
         gpts = self._potential.gpts
         if gpts is None:
             raise RuntimeError("the potential has no grid")
 
-        # Every wave carries a propagator kernel of its own as large as itself,
-        # so each direction holds two complex arrays of the grid's size.
+        # each direction holds its wave and its own propagator kernel
         if isinstance(max_batch, int):
             max_batch = max_batch * 2 * int(np.prod(gpts))
 
@@ -671,11 +560,8 @@ class EBSD(CopyMixin, EqualityMixin):
             batch from the abTEM chunk-size configuration. Larger batches are
             faster but use more memory.
         lazy : bool, optional
-            If True, build a dask graph instead of computing, with one task per
-            block of directions per backscattered energy.
-
-            Defaults to abTEM's ``dask.lazy`` configuration, which ships as
-            True, so ask for ``lazy=False`` to get an array back directly.
+            If True, return a pattern backed by a dask graph. Defaults to the
+            abTEM configuration.
         pbar : bool, optional
             If True, show a progress bar over the slices.
 
@@ -685,18 +571,14 @@ class EBSD(CopyMixin, EqualityMixin):
             :class:`~abtem.measurements.DiffractionPatterns` if the detector is
             a grid, otherwise a
             :class:`~abtem.ebsd.measurements.SphericalPattern` holding one
-            value per collected direction. Several illuminations appear as a
-            leading ensemble axis, and several backscattered energies as one
-            before that.
+            value per direction. Leading axes are energy, depth and
+            illumination, where present.
         """
         lazy = validate_lazy(lazy)
 
         xp = get_array_module(self._device)
 
-        # Only the geometry is needed to lay out the work, and every frozen
-        # -phonon configuration shares it. Building each one is deferred to the
-        # point of use, so that 400 of them are neither built serially while
-        # the graph is assembled nor held in it at once.
+        # the configurations are built where they are used
         num_slices = self._potential.num_slices
         configurations = _potential_configurations(self._potential)
 
@@ -819,12 +701,7 @@ class EBSD(CopyMixin, EqualityMixin):
     def _depth_metadata(
         self, configurations, weights, edges, slice_bins, output_shape, energy
     ) -> dict:
-        """The bins, and the emission in each: what recombining them needs.
-
-        The pattern with any other depth weighting is the emission-weighted
-        mean of the bins' patterns, with the new weights applied to the
-        emission recorded here.
-        """
+        """The bin edges and each bin's emission, for recombining the bins."""
         n_bins = len(edges) - 1
         emission = np.zeros((len(weights), n_bins) + output_shape)
         for configuration, configuration_weight in configurations:
@@ -863,14 +740,10 @@ class EBSD(CopyMixin, EqualityMixin):
         block_shape: tuple[int, ...] = (),
         extra_metadata: Optional[dict] = None,
     ) -> DiffractionPatterns | SphericalPattern:
-        """Assemble the same per-block computation into a dask graph.
+        """The same computation as a dask graph.
 
-        Each block of directions, at each backscattered energy and each frozen
-        -phonon configuration, is one task. The blocks of a configuration share
-        its built potential and emitters, which the threaded scheduler passes
-        by reference rather than copying. The wavefields a task propagates are
-        its own, so only one block of them is resident at a time however many
-        directions were asked for.
+        One task per block of directions, energy and configuration; the blocks
+        of a configuration share its potential and emitters.
         """
         import dask
 
@@ -878,8 +751,6 @@ class EBSD(CopyMixin, EqualityMixin):
 
         array = None
         for configuration, configuration_weight in configurations:
-            # One task per configuration, so its blocks share the built
-            # potential and its emitters, and dask frees them once done.
             prepared = dask.delayed(_prepare, pure=True, nout=2)(
                 configuration, energy, self._illumination, self._device
             )
@@ -911,7 +782,7 @@ class EBSD(CopyMixin, EqualityMixin):
             ] + ensemble_axes_metadata
 
         if self._detector.is_grid:
-            # The two base axes of a diffraction pattern have to be one chunk.
+            # the base axes have to be one chunk
             array = array.rechunk(array.chunks[:-1] + (-1,))
 
         return self._to_measurement(
@@ -936,22 +807,14 @@ class EBSD(CopyMixin, EqualityMixin):
     ) -> np.ndarray:
         """Propagate one batch of reciprocity waves and collect the emission.
 
-        Returns the block's own intensities rather than writing into a shared
-        buffer, so the same routine serves the eager
-        assembly and the lazy one, where each block is a separate task.
-
-        At every slice the emission of its atoms is laid on the grid and
-        weighted by the escape probability -- the reciprocity waves' intensity
-        -- and by the depth weight. Numerator and denominator are summed over
-        the whole slab and divided once, so the result is the emission-weighted
-        mean escape probability -- per depth bin, when there are bins.
+        At every slice, the emission of its atoms is weighted by the waves'
+        intensity and the depth weight. Numerator and denominator are summed
+        over the slab, per depth bin, and divided once.
         """
         potential, emission = prepared
         xp = get_array_module(self._device)
 
-        # Each wave is carried as its periodic envelope (see the module notes):
-        # a plane wave of unit modulus, whose escape probability is one, is an
-        # envelope of ones whatever its direction.
+        # the periodic envelope of a plane wave is one (see the module docstring)
         reciprocity = Waves(
             xp.ones(
                 (n_directions,) + tuple(potential.gpts), dtype=get_dtype(complex=True)
@@ -963,15 +826,11 @@ class EBSD(CopyMixin, EqualityMixin):
 
         n_sources = int(np.prod(output_shape)) if output_shape else 1
         n_bins = depth_shape[0] if depth_shape else 1
-        # see _sum_dtype
         sum_dtype = _sum_dtype(xp)
         numerator = xp.zeros((n_bins, n_sources, n_directions), dtype=sum_dtype)
         denominator = xp.zeros((n_bins, n_sources), dtype=sum_dtype)
 
-        # Weight still to be collected at and below each slice. Once it is
-        # negligible there is nothing left to gather and the remaining slices
-        # are wasted propagation -- which is most of the specimen when the
-        # escape depth is short compared to its thickness.
+        # weight still to be collected at and below each slice
         collected = weights * (slice_bins >= 0)
         remaining = np.cumsum(collected[::-1])[::-1]
         tolerance = self._depth_tolerance * collected.sum()
@@ -989,13 +848,7 @@ class EBSD(CopyMixin, EqualityMixin):
                 in_place=True,
             )
 
-            # The emission of a slice's atoms is collected from the waves as
-            # they arrive at the slice -- the plane the multislice lumps those
-            # atoms onto -- before the step through it. Collected after the
-            # step, it would be read a whole slice downstream of them, where
-            # the waves have been focused by them and, travelling at an angle,
-            # drifted sideways off them: the yield would then depend on the
-            # slice thickness, the more so the steeper the waves.
+            # read before the step, at the plane the slice's atoms are placed on
             weight = float(weights[index])
             b = int(slice_bins[index])
             emitted = emission[index] if weight > 0.0 and b >= 0 else None
@@ -1017,7 +870,7 @@ class EBSD(CopyMixin, EqualityMixin):
             if progress is not None:
                 progress.update_if_exists(1)
 
-        # Nothing emitted -- a slab with no atoms -- is no backscatter, not 0/0.
+        # no emission gives zero rather than 0/0
         safe = xp.where(denominator > 0.0, denominator, 1.0)
         intensities = xp.where(
             denominator[..., None] > 0.0, numerator / safe[..., None], 0.0
@@ -1034,29 +887,17 @@ class EBSD(CopyMixin, EqualityMixin):
 
         # (directions, pixels) @ (pixels, sources) -> (directions, sources)
         if device_name_from_array_module(xp) == "mps":
-            # Metal's arrays are torch tensors, which cannot be viewed through
-            # a NumPy dtype; the plain squared magnitude is the same sum.
+            # torch tensors cannot be viewed through a NumPy dtype
             array = reciprocity.array.reshape(n_directions, -1)
             intensity = (array.real * array.real) + (array.imag * array.imag)
             return intensity @ source.reshape(-1, intensity.shape[1]).T
 
-        # The squared magnitude of the reciprocity waves is the largest array in
-        # the loop, and taking it with abs()**2 costs more than the contraction
-        # it feeds. Viewing the complex array as real numbers gives the real and
-        # imaginary parts interleaved and contiguous, so squaring every
-        # component and contracting against the source with each of its values
-        # repeated twice computes the same sum in one pass over contiguous
-        # memory -- about seven times faster than abs()**2 on the strided
-        # halves, and exactly equal.
+        # |psi|^2 without abs(): square the interleaved real and imaginary parts
+        # and contract them against the source repeated twice
         real_view = reciprocity.array.view(get_dtype(complex=False))
         real_view = real_view.reshape(n_directions, -1)
 
-        # The interleave is built from a one-dimensional repeat rather than
-        # `repeat(source_flat, 2, axis=-1)`. The two are exactly equal -- row
-        # -major order puts each position's pixels contiguously, so duplicating
-        # pairwise reproduces the interleave -- but cupy's axis-ed path is
-        # pathologically slow: 482 ms against 0.0 ms for half a megabyte, which
-        # was the whole of a 169x slowdown on the GPU.
+        # a one-dimensional repeat; cupy's repeat along an axis is very slow
         source_flat = source.reshape(-1, real_view.shape[1] // 2)
         source_interleaved = xp.repeat(source_flat.ravel(), 2).reshape(
             source_flat.shape[0], -1
@@ -1088,8 +929,7 @@ class EBSD(CopyMixin, EqualityMixin):
         }
 
         if self._detector.is_grid:
-            # Calibrated by the highest energy, as abTEM reads the angles of a
-            # diffraction pattern of several: see `backscatter_energy`.
+            # calibrated by the highest energy; see `backscatter_energy`
             gpts = self._detector.gpts
             return DiffractionPatterns(
                 array.reshape(array.shape[:-1] + (gpts, gpts)),

@@ -1,24 +1,14 @@
 """The geometry of an EBSD detector, in EMsoft's conventions.
 
-A reference pattern is a function on the sphere; an EBSD detector is a flat
-screen. The map between them is a **gnomonic** projection: each pixel looks
-along the ray from the illuminated point through that pixel, so the direction
-is the normalized vector to it. Tilting the sample and the camera then rotates
-that fan of rays relative to the sample, and the crystal's orientation rotates
-it again into the crystal frame, where the reference pattern lives.
+Each pixel of the flat detector looks along the ray from the illuminated point
+through it, a gnomonic projection. The sample and camera tilts rotate these
+rays into the sample frame, and the crystal orientation rotates them into the
+crystal frame, where a reference pattern is defined.
 
-The parameters are EMsoft's, so a geometry measured for EMsoft or kikuchipy can
-be used here unchanged; EMsoft's name is given for each. Lengths are in
-micrometres, as EMsoft has them, and angles in degrees.
-
-The arithmetic follows kikuchipy's
-``_get_direction_cosines_for_fixed_pc`` rather than EMsoft's
-``GenerateEBSDDetector`` directly. EMsoft's intermediate frame is entangled
-with a coordinate swap it applies when reading its own master patterns, so
-transcribing it without that swap gives directions in the wrong frame.
-kikuchipy's formulation is in the sample frame throughout and agrees with
-EMsoft; this module reproduces it to 6e-16 over a range of tilts, pattern
-centres and azimuths.
+The parameters are EMsoft's, so a geometry calibrated for EMsoft or kikuchipy
+can be used unchanged. Lengths are in micrometres and angles in degrees. The
+arithmetic follows kikuchipy's ``_get_direction_cosines_for_fixed_pc``, which
+works in the sample frame throughout.
 """
 
 from __future__ import annotations
@@ -37,15 +27,9 @@ def bunge_rotation(
 ) -> np.ndarray:
     """Orientation matrix from Bunge Euler angles.
 
-    The returned matrix takes a direction in the **sample** frame to the
-    **crystal** frame, which is the direction the detector rays have to travel
-    to be looked up in a reference pattern. It is the convention EMsoft, TSL
-    and HKL all use.
-
-    Equal to ``euler_to_rotation(phi1, Phi, phi2, axes="zxz",
-    convention="extrinsic").T`` from :mod:`abtem.atoms`; written out here
-    because that equivalence involves both a transpose and an angle order, and
-    getting either backwards silently mirrors every pattern.
+    The matrix takes a direction in the sample frame to the crystal frame, as
+    in EMsoft, TSL and HKL. It equals ``euler_to_rotation(phi1, Phi, phi2,
+    axes="zxz", convention="extrinsic").T`` from :mod:`abtem.atoms`.
 
     Parameters
     ----------
@@ -203,10 +187,6 @@ class EBSDGeometry(CopyMixin, EqualityMixin):
     def detector_to_sample(self) -> np.ndarray:
         """Rotation taking a direction in the detector frame to the sample frame.
 
-        The sample and camera tilts differ by ``sample_tilt - camera_tilt``,
-        and the detector's horizontal axis is the sample's ``y``; the azimuth
-        turns the detector about that horizontal.
-
         Returns
         -------
         rotation : np.ndarray
@@ -225,10 +205,6 @@ class EBSDGeometry(CopyMixin, EqualityMixin):
     @property
     def directions(self) -> np.ndarray:
         """Unit vector each pixel looks along, in the sample frame.
-
-        The gnomonic part is the normalization of ``(x, y, L)``: a flat screen
-        at distance ``L``, each pixel a ray through the illuminated point. The
-        rest is the rigid rotation of :attr:`detector_to_sample`.
 
         Returns
         -------

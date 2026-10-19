@@ -1,16 +1,8 @@
 """An EBSD pattern on a detector, calculated directly for one orientation.
 
-:class:`~abtem.ebsd.reference.EBSDReferencePattern` calculates the whole
-hemisphere, and :meth:`~abtem.ebsd.measurements.SphericalPattern.project` then
-reads any detector out of it. When one orientation is all that is wanted -- a
-defect, a strained region, a disordered specimen -- that is most of the
-hemisphere calculated for nothing, and the detector's pixels are interpolated
-from a grid usually coarser than they are. This goes the other way round: it
-works out which directions the pixels look along in the crystal, and calculates
-exactly those.
-
-An orientation also fixes where the beam comes from, which a reference pattern
-cannot know. So here the atoms can be lit as the beam really lights them.
+Instead of interpolating a reference pattern, the directions the detector
+pixels look along are calculated directly. An orientation also fixes the
+direction of the incident beam, so the atoms can be lit by it.
 """
 
 from __future__ import annotations
@@ -64,8 +56,7 @@ from abtem.waves import PlaneWave, Probe
 
 __all__ = ["EBSDDetectorPattern"]
 
-# Kept between the incident beam's slab and every atom the patches use, so that
-# the seams of that non-periodic slab stay clear of them [Å].
+# Margin between the incident beam's slab faces and the atoms the patches use [Å]
 _INCIDENT_MARGIN = 10.0
 
 
@@ -81,8 +72,7 @@ def _detector_patch(
 ) -> np.ndarray:
     """Cut one patch's slab and calculate its pixels, eagerly.
 
-    Returns one row per source, whether or not the source had an axis of its
-    own, of one value per direction of `local`.
+    Returns an array of shape ``(sources, len(local))``.
     """
     slab, _ = rotated_slab(
         block, slab_axis, builder.slab_cell, repetitions=(1, 1, 1), origin=origin
@@ -116,88 +106,64 @@ def _detector_patch(
 class EBSDDetectorPattern(CopyMixin, EqualityMixin):
     """One orientation's EBSD pattern on a detector, calculated by reciprocity.
 
-    The single-orientation counterpart of
-    :class:`~abtem.ebsd.reference.EBSDReferencePattern`: it takes the same
-    detector geometry and Euler angles as
+    Takes the same detector geometry and Euler angles as
     :meth:`~abtem.ebsd.measurements.SphericalPattern.project`, and returns the
-    same kind of image, but calculates each pixel's direction itself.
+    same kind of image, but calculates each pixel's direction directly.
 
-    The multislice is only accurate near a slab's axis, so the pixels are tiled
-    into patches as a reference pattern tiles the hemisphere: each belongs to
-    its nearest of ``n_patches`` zone axes, and is calculated in a slab cut
-    along it. With the same `n_patches` and slab, and the uniform source, the
-    result *is* the reference pattern at those pixels. Pixels looking into the
-    crystal's southern hemisphere get patches of their own, along the negated
-    axes, rather than an assumption that the crystal is centrosymmetric.
+    The pixels are tiled into patches as a reference pattern tiles the
+    hemisphere: each pixel belongs to its nearest of ``n_patches`` zone axes
+    and is calculated in a slab cut along it. With the uniform source the result
+    equals the reference pattern at those pixels. Pixels looking into the
+    southern hemisphere are calculated in patches of their own.
 
     Parameters
     ----------
     atoms : ase.Atoms or FrozenPhonons
         The crystal's unit cell, or an atomic model of the specimen, in its own
-        frame. The Euler angles take the sample frame to this one. Give
-        :class:`~abtem.FrozenPhonons` of either for thermal vibrations: every
-        slab -- the incident beam's too -- is displaced configuration by
-        configuration, and the pattern averaged over them, as for
-        :class:`~abtem.ebsd.reference.EBSDReferencePattern`.
+        frame. Give :class:`~abtem.FrozenPhonons` for thermal vibrations; every
+        slab, including the incident beam's, is then averaged over the
+        configurations.
     geometry : EBSDGeometry
-        Where the detector is, in EMsoft's conventions -- and where the beam
-        comes in: along the microscope axis, at `geometry.sample_tilt` to the
-        sample normal.
+        The detector geometry, in EMsoft's conventions. The incident beam comes
+        in along the microscope axis, at `geometry.sample_tilt` to the sample
+        normal.
     euler : sequence of three float
         Bunge Euler angles ``(phi1, Phi, phi2)`` of the crystal.
     slab_cell : tuple of three float
         Dimensions of each slab [Å]; the third entry is the thickness along the
-        beam. As for a reference pattern there is no default -- see
-        :class:`~abtem.ebsd.reference.EBSDReferencePattern`.
+        slab's axis. See :class:`~abtem.ebsd.reference.EBSDReferencePattern`.
     energy : float, optional
         Energy of the incident beam [eV]. Taken from the source when that is a
         wave, and required otherwise.
     source : 'uniform' or PlaneWave or Probe, optional
-        How the incident beam lights the emitting atoms.
-
-        ``'uniform'`` (default): evenly, as in a reference pattern and EMsoft.
-
-        A :class:`~abtem.PlaneWave` or :class:`~abtem.Probe`: sent in along the
-        beam's true direction, through a slab of its own cut from the same
-        crystal about the same `origin`, recording how brightly it lights every
-        atom the patches use. Channelling of the incident beam then picks out
-        some atoms over others -- one sublattice over another in silicon, say.
-        The depth at which an atom sits below that slab's entrance face is not
-        its depth below the real surface, so the illumination is normalized
-        within each of its slices: the beam decides which atoms are lit, and
-        `depth_weight` how deep they count. A plane wave is what an SEM beam is
-        on this scale; a probe can be scanned (see :meth:`build`).
-
-        Both waves travel into the crystal as they do in the experiment: the
-        beam down the microscope axis, and each pixel's reciprocity wave from
-        the detector's side, against the electrons it collects -- in a slab
-        cut along the opposite of the pixel's direction. So a crystal without
-        an inversion centre shows each polar face where it really is.
+        How the incident beam lights the emitting atoms. ``'uniform'``
+        (default) lights them evenly, as in a reference pattern. A
+        :class:`~abtem.PlaneWave` or :class:`~abtem.Probe` is propagated along
+        the beam direction through a slab of its own, cut about the same
+        `origin`, and lights each atom by its intensity there, normalized
+        within each slice; `depth_weight` sets how much each depth counts. A
+        probe can be scanned (see :meth:`build`).
     n_patches : int or None, optional
         Zone axes tiling each hemisphere, as for a reference pattern (default
-        400, a patch radius of 132 mrad). Only the patches the pixels fall in
-        are calculated. None calculates everything in one slab along the mean
-        pixel direction -- cheaper, and fine for a narrow detector, but the
-        edges of a wide one come out dim.
+        400). Only the patches the pixels fall in are calculated. If None,
+        every pixel is calculated in one slab along the mean pixel direction,
+        which is cheaper but less accurate at the edges of a wide detector.
     degrees : bool, optional
         If True (default), `euler` is in degrees.
     sampling : float, optional
         Real-space sampling of the potentials [Å]. Defaults to
-        :func:`~abtem.ebsd.reference.potential_sampling` for `atoms`; the
-        angles of the pixels set no condition of their own.
+        :func:`~abtem.ebsd.sampling.potential_sampling` for `atoms`.
     slice_thickness : float, optional
         Multislice slice thickness [Å] (default 1.0).
     repetitions : tuple of three int, optional
-        Repetitions of `atoms` building the block every slab is cut from; see
-        :func:`~abtem.ebsd.orientations.rotated_slab`. Pass ``(1, 1, 1)`` for
-        an atomic model that already holds the feature of interest.
+        Repetitions of `atoms` in the block every slab is cut from; see
+        :func:`~abtem.ebsd.orientations.rotated_slab`.
     origin : np.ndarray, optional
-        Point of `atoms` at the centre of every slab -- the point every slab
-        turns about, and that the incident beam passes through.
+        Point of `atoms` at the centre of every slab, including the incident
+        beam's.
     backscatter_energy : float or sequence of float or BaseDistribution, optional
         Energies of the backscattered electrons [eV]; several add a leading
-        energy axis, one detector image per energy. The beam keeps `energy`.
-        See :class:`~abtem.ebsd.reciprocity.EBSD`.
+        energy axis. See :class:`~abtem.ebsd.reciprocity.EBSD`.
     depth_weight, device :
         Passed to :class:`~abtem.ebsd.reciprocity.EBSD`.
     """
@@ -329,9 +295,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
     def beam_direction(self) -> np.ndarray:
         """The direction the incident beam travels, in the crystal frame.
 
-        Down the microscope axis, which in the sample frame is
-        ``(sin σ, 0, -cos σ)`` for a sample tilted by ``σ``: into the surface,
-        towards the detector's side.
+        In the sample frame it is ``(sin σ, 0, -cos σ)`` for a sample tilt σ.
         """
         tilt = np.radians(self._geometry.sample_tilt)
         beam = np.array([np.sin(tilt), 0.0, -np.cos(tilt)])
@@ -373,9 +337,8 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
     def incident_cell(self) -> tuple[float, float, float]:
         """The slab the incident beam is sent through [Å].
 
-        Wide and deep enough to hold every atom of every patch: the sphere the
-        patches' slabs sweep out as they turn about `origin`, plus a margin
-        that keeps the seams of this slab's own non-periodic faces clear of it.
+        Large enough to hold every patch's slab, at any orientation, with a
+        margin to its own faces.
         """
         diagonal = float(np.linalg.norm(self._slab_cell))
         width = diagonal + 2.0 * _INCIDENT_MARGIN
@@ -403,11 +366,10 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         """How brightly the incident beam lights every atom of the block.
 
         Returns an array of shape ``(sources, block atoms)``, one row per probe
-        position, normalized to a mean of one over the atoms in each of the
-        incident slab's slices -- with the axes and shape of the positions.
+        position and normalized to a mean of one within each slice, and the
+        ensemble axes and shape of the positions.
         """
         xp = get_array_module(self._device)
-        # The beam travels along its own direction into this slab.
         slab, _ = rotated_slab(
             block,
             self.beam_direction,
@@ -441,8 +403,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
 
         from scipy.ndimage import map_coordinates  # type: ignore[import-untyped]
 
-        # Each thermal configuration lights its own displaced atoms, and an
-        # atom's illumination is the average over them.
+        # averaged over the configurations, each lighting its displaced atoms
         lit = np.zeros((n_sources, len(block)))
         for configuration, weight in _potential_configurations(potential):
             sliced = SliceIndexedAtoms(
@@ -453,7 +414,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
             for index, potential_slice in enumerate(configuration.generate_slices()):
                 potential_slice = potential_slice.copy_to_device(self._device)
 
-                # As in EBSD: the atoms are lit by the beam arriving at their slice.
+                # the beam arriving at the slice, as in EBSD
                 atoms = sliced.get_atoms_in_slices(index)
                 if len(atoms) > 0:
                     intensity = xp.abs(beam.array.reshape((-1,) + beam.shape[-2:])) ** 2
@@ -481,7 +442,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
                     antialias_aperture=aperture,
                 )
 
-        # Atoms of the block outside the incident slab are in no patch either.
+        # the atoms outside the incident slab are in no patch
         illumination = np.ones((n_sources, len(block)))
         inside = slab.arrays["block_index"]
         illumination[:, inside] = lit[:, inside]
@@ -500,25 +461,23 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         Parameters
         ----------
         scan : BaseScan or array of xy-positions, optional
-            Positions of a probe source [Å], across the incident beam and
-            measured from `origin`: one pattern each, as leading axes of the
-            result.
+            Positions of a probe source [Å], measured from `origin`. Each gives
+            a pattern, along leading axes of the result.
         max_batch_directions : int or str, optional
             Directions propagated at once; passed to
             :meth:`~abtem.ebsd.reciprocity.EBSD.build`.
         lazy : bool, optional
-            If True, return a pattern backed by a dask graph, with one task per
-            patch. The incident beam, which every patch shares, is calculated
-            first. Defaults to the abTEM configuration.
+            If True, return a pattern backed by a dask graph with one task per
+            patch; the incident beam is calculated first. Defaults to the abTEM
+            configuration.
         pbar : bool, optional
             If True, show a progress bar over the patches.
 
         Returns
         -------
         pattern : EBSDPatternImages
-            Of shape ``geometry.shape``, with leading axes for any probe
-            positions -- the same kind of image
-            :meth:`~abtem.ebsd.measurements.SphericalPattern.project` returns.
+            Of shape ``geometry.shape``, with leading axes for any energies and
+            probe positions.
         """
         lazy = validate_lazy(lazy)
 
@@ -575,8 +534,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         try:
             for j, axis in enumerate(axes):
                 indices = np.where(owner == j)[0]
-                # the reciprocity waves come in against the electrons, along
-                # -d, in a slab cut along -axis
+                # electrons leaving along d: reciprocity waves along -d
                 local = -directions[indices] @ zone_axis_rotation(-axis).T
                 arguments = dict(
                     slab_axis=-axis,
@@ -612,7 +570,7 @@ class EBSDDetectorPattern(CopyMixin, EqualityMixin):
         array = array[..., inverse]
 
         if isinstance(array, da.core.Array):
-            # The pixels become the two base axes, which have to be one chunk.
+            # the base axes have to be one chunk
             array = array.rechunk(array.chunks[:-1] + (-1,))
         array = array.reshape(output_shape + (rows, columns))
 
