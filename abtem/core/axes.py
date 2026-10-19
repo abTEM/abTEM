@@ -160,9 +160,14 @@ class AxisMetadata:
         )
 
     def _to_blocks(self, chunks):
+        # Mirrors the `hasattr(axis, "__getitem__")` fallback of
+        # `ArrayObject._partition_ensemble_axes_metadata`: an axis whose metadata
+        # depends on the range it covers (e.g. the offset of `LinearAxis`) defines
+        # `__getitem__`, otherwise each block gets an identical copy.
         arr = np.empty((len(chunks[0]),), dtype=object)
+        has_getitem = hasattr(self, "__getitem__")
         for i, slic in iterate_chunk_ranges(chunks):
-            arr[i] = copy(self)
+            arr[i] = self[slic] if has_getitem else copy(self)
         arr = da.from_array(arr, chunks=1)
         return arr
 
@@ -235,6 +240,32 @@ class LinearAxis(AxisMetadata):
         return tuple(
             np.linspace(self.offset, self.offset + self.sampling * n, n, endpoint=False)
         )
+
+    def __getitem__(self, item):
+        # Only the offset depends on the range. Slices that cannot be represented by
+        # shifting it raise TypeError, for which indexing falls back to a plain copy.
+        if isinstance(item, tuple) and len(item) == 1:
+            item = item[0]
+
+        if isinstance(item, Number):
+            start, stop = item, item + 1
+        elif isinstance(item, slice) and item.step in (None, 1):
+            start, stop = item.start or 0, item.stop
+        else:
+            raise TypeError(
+                f"{type(self).__name__} indices must be an int or a slice with unit "
+                f"step, got {item!r}"
+            )
+
+        if start < 0 or (stop is not None and stop <= start):
+            raise TypeError(
+                f"{type(self).__name__} does not support the negative or empty "
+                f"index {item!r}"
+            )
+
+        new_axis = self.copy()
+        new_axis.offset = self.offset + start * self.sampling
+        return new_axis
 
     def to_ordinal_axis(self, n):
         values = tuple(self.coordinates(n))
