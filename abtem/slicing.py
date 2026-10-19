@@ -355,6 +355,21 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
 
         labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
+        # label_to_index silently discards labels outside [0, num_slices - 1].
+        # np.digitize against increasing bins returns [0, len(bins)], never
+        # negative, so only the upper end can escape: an atom below the entrance
+        # face already lands in slice 0.
+        #
+        # With wrap=False (a non-periodic potential) an atom displaced just
+        # outside the cell is expected, e.g. by frozen phonons randomised after
+        # padding. It belongs to the face it left, so clamp it into the last
+        # slice, mirroring what digitize already does at the entrance face. Its
+        # true position is kept: the infinite projection does not depend on z
+        # within a slice, so the projected potential is conserved exactly, where
+        # dropping the atom lost its whole contribution.
+        if not wrap:
+            labels = np.minimum(labels, len(self) - 1)
+
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
         ]

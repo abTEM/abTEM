@@ -1241,21 +1241,15 @@ class TestSliceIndexedAtomsWrapping:
         assert got == per_unit * reps[2]
         assert sum(got) == len(z) * reps[2]
 
-    @pytest.mark.parametrize("periodic", [True, False])
-    def test_wrapping_follows_the_potentials_periodicity(self, periodic):
-        """``Potential(periodic=False)`` deliberately never wraps.
+    @staticmethod
+    def _edge_atoms():
+        """Four B atoms in a 4 A tall cell, two of them just inside a face.
 
-        Its atoms are cut from a larger repeated potential and randomised
-        *after* padding, so an edge atom displaced just outside the cell
-        belongs at the face it left, not the opposite one. Wrapping it
-        unconditionally moved it the full height of the box -- the same depth
-        corruption the wrap exists to prevent, for the other path.
+        ``FrozenPhonons(sigmas=0.25, seed=1)`` then displaces one out through
+        the entrance face and one out through the exit face; the tests assert
+        that rather than assume it.
         """
-        from abtem.inelastic.phonons import FrozenPhonons
-
-        # Sits just inside the entrance face, so the randomize that runs after
-        # padding on the non-periodic path pushes it out.
-        atoms = Atoms(
+        return Atoms(
             "B4",
             positions=[
                 [1.0, 1.0, 0.05],
@@ -1266,31 +1260,278 @@ class TestSliceIndexedAtomsWrapping:
             cell=np.diag([4.0, 4.0, 4.0]),
             pbc=True,
         )
+
+    @pytest.mark.parametrize("periodic", [True, False])
+    def test_wrapping_follows_the_potentials_periodicity(self, periodic):
+        """``Potential(periodic=False)`` deliberately never wraps.
+
+        Its atoms are cut from a larger repeated potential and randomised
+        *after* padding, so an edge atom displaced just outside the cell
+        belongs at the face it left, not the opposite one. Wrapping it
+        unconditionally moved it the full height of the box -- the same depth
+        corruption the wrap exists to prevent, for the other path.
+
+        Not wrapping must not mean dropping, though: the atom displaced out
+        through the exit face used to fall outside every slice and vanish.
+        """
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        atoms = self._edge_atoms()
         phonons = FrozenPhonons(atoms, num_configs=1, sigmas=0.25, seed=1)
         potential = Potential(
             phonons, gpts=(32, 32), slice_thickness=1.0, periodic=periodic
         )
-        z = potential.get_sliced_atoms().atoms.positions[:, 2]
+        sliced = potential.get_sliced_atoms()
+        z = sliced.atoms.positions[:, 2]
 
         if periodic:
             assert np.all((z >= 0.0) & (z < 4.0))
         else:
-            # Unwrapped, exactly as on a potential built without this change.
-            assert z.min() < 0.0 or z.max() >= 4.0
+            # Unwrapped, and out through *both* faces -- otherwise this does
+            # not exercise the non-periodic path at either end.
+            assert z.min() < 0.0 and z.max() >= 4.0
 
-    def test_out_of_range_atoms_are_dropped_when_wrapping_is_off(self):
-        """Without a wrap, an atom outside the cell is expected, not an error."""
+        # Conservation: every atom is held by exactly one slice -- the one
+        # containing its depth, or, for an atom displaced out of the cell, the
+        # face slice it left through.
+        expected = [0] * 4
+        for depth in z:
+            expected[min(max(int(np.floor(depth / 1.0)), 0), 3)] += 1
+        assert sum(self._per_slice(sliced)) == len(atoms)
+        assert self._per_slice(sliced) == expected
+
+    def test_atoms_outside_the_cell_stay_in_the_face_slices_without_wrapping(self):
+        """Without a wrap, an out-of-cell atom is kept, at its true position."""
         from abtem.slicing import SliceIndexedAtoms
 
         atoms = Atoms(
-            "B2",
-            positions=[[1.0, 1.0, 2.0], [1.0, 1.0, 4.36]],
+            "B3",
+            positions=[[1.0, 1.0, -0.3], [1.0, 1.0, 2.0], [1.0, 1.0, 4.36]],
             cell=np.diag([4.0, 4.0, 4.0]),
             pbc=True,
         )
         sliced = SliceIndexedAtoms(atoms, slice_thickness=1.0, wrap=False)
-        # Dropped silently, as before.
-        assert sum(self._per_slice(sliced)) == 1
+        # z = -0.3 belongs to the entrance slice [0, 1), z = 2.0 to [2, 3) and
+        # z = 4.36 to the exit slice [3, 4): nothing is lost, and nothing is
+        # moved to the opposite face.
+        assert self._per_slice(sliced) == [1, 0, 1, 1]
+        assert np.array_equal(sliced.atoms.positions, atoms.positions)
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_crystal_of_a_non_periodic_frozen_phonon_unit_keeps_every_atom(
+        self, device, lazy
+    ):
+        """A CrystalPotential draws its tiles from the unit's frozen-phonon pool,
+        built by the unit's own slicing. A pool configuration that pushed the
+        atom near the exit face out of the cell used to lose it, so 3 of these
+        4 members were 0.75 of the expected potential."""
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        cell = np.diag([4.0, 4.0, 4.0])
+        kwargs = dict(gpts=(32, 32), slice_thickness=1.0, device=device)
+
+        # One atom 0.01 A below the exit face: sigma = 0.2 pushes it out in
+        # about half of the configurations.
+        atoms = Atoms(
+            "B2", positions=[[1.0, 1.0, 2.0], [3.0, 3.0, 3.99]], cell=cell, pbc=True
+        )
+        unit = Potential(
+            FrozenPhonons(atoms, num_configs=4, sigmas=0.2, seed=5),
+            periodic=False,
+            **kwargs,
+        )
+        crystal = CrystalPotential(
+            unit,
+            repetitions=(1, 1, 2),
+            num_frozen_phonons=4,
+            seeds=7,
+            ensemble_mean=False,
+        )
+        array = asnumpy(crystal.build(lazy=lazy).compute().array)
+
+        # Oracle: an atom's infinite projection summed over the cell is its
+        # q = 0 Fourier component, independent of where the atom sits, so
+        # every member must sum to (2 atoms x 2 units) single atoms.
+        single = asnumpy(
+            Potential(Atoms("B", positions=[[2.0, 2.0, 2.0]], cell=cell), **kwargs)
+            .build()
+            .compute()
+            .array
+        ).sum()
+        np.testing.assert_allclose(
+            array.reshape(len(array), -1).sum(axis=1), 4 * single, rtol=1e-5
+        )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_non_periodic_infinite_projection_conserves_every_atom(self, device):
+        """An atom displaced out of a non-periodic cell used to lose all of its
+        potential -- a quarter of the total for these four atoms."""
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        phonons = FrozenPhonons(self._edge_atoms(), num_configs=1, sigmas=0.25, seed=1)
+        potential = Potential(
+            phonons, gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+        )
+        displaced = potential.get_sliced_atoms().atoms
+        z = displaced.positions[:, 2]
+        assert z.min() < 0.0 and z.max() >= 4.0
+        projected = asnumpy(potential.build().project().compute().array)
+        projected = projected.reshape((-1,) + projected.shape[-2:])[0]
+
+        # Oracle: the infinite projection of an atom does not depend on its
+        # depth, so the projected potential must equal that of the same
+        # in-plane positions with every atom moved to mid-depth, inside the
+        # cell, where no boundary handling is involved.
+        inside = displaced.copy()
+        inside.positions[:, 2] = 2.0
+        reference = asnumpy(
+            Potential(inside, gpts=(32, 32), slice_thickness=1.0, device=device)
+            .build()
+            .project()
+            .compute()
+            .array
+        )
+        np.testing.assert_allclose(
+            projected, reference, rtol=1e-5, atol=1e-5 * np.abs(reference).max()
+        )
+
+    @staticmethod
+    def _outside_atoms():
+        """Five B atoms in a 4 A cube, four of them already outside it: one
+        through each in-plane face and one through each z face."""
+        return Atoms(
+            "B5",
+            positions=[
+                [-0.3, 2.0, 2.0],
+                [2.0, 4.2, 2.0],
+                [1.0, 1.0, 4.3],
+                [3.0, 3.0, -0.2],
+                [2.0, 2.0, 2.0],
+            ],
+            cell=np.diag([4.0, 4.0, 4.0]),
+            pbc=True,
+        )
+
+    def test_pad_atoms_crops_only_along_the_repeated_axes(self):
+        from abtem.atoms import pad_atoms
+
+        atoms = self._outside_atoms()
+
+        # Nothing is repeated, so nothing is cropped either.
+        padded = pad_atoms(atoms, margins=0.0, directions="z")
+        assert np.array_equal(padded.positions, atoms.positions)
+
+        # Repeated along z only: the z crop still trims the images, but no
+        # atom is cropped in-plane.
+        margin = 0.5
+        padded = pad_atoms(atoms, margins=margin, directions="z")
+        expected = [
+            position + [0.0, 0.0, shift]
+            for position in atoms.positions
+            for shift in (-4.0, 0.0, 4.0)
+            if -margin <= position[2] + shift < 4.0 + margin
+        ]
+        assert sorted(map(tuple, padded.positions.round(12))) == sorted(
+            map(tuple, np.array(expected).round(12))
+        )
+
+    @pytest.mark.parametrize("device", ["cpu", gpu])
+    def test_non_periodic_potential_keeps_atoms_already_outside_the_cell(self, device):
+        """Atoms that reach the potential already outside the cell, in-plane or
+        in depth, used to be cropped before slicing and lose all of their
+        potential."""
+        atoms = self._outside_atoms()
+        potential = Potential(
+            atoms, gpts=(32, 32), slice_thickness=1.0, periodic=False, device=device
+        )
+        assert len(potential.get_sliced_atoms().atoms) == len(atoms)
+
+        # Oracle: the in-plane build is periodic and the infinite projection
+        # does not depend on depth, so the projected potential must equal that
+        # of the periodic potential, which wraps every atom into the cell.
+        def projected(periodic):
+            return asnumpy(
+                Potential(
+                    atoms,
+                    gpts=(32, 32),
+                    slice_thickness=1.0,
+                    periodic=periodic,
+                    device=device,
+                )
+                .build()
+                .project()
+                .compute()
+                .array
+            )
+
+        reference = projected(True)
+        np.testing.assert_allclose(
+            projected(False),
+            reference,
+            rtol=1e-5,
+            atol=1e-5 * np.abs(reference).max(),
+        )
+
+    @pytest.mark.parametrize("structure", ["graphene", "Mg", "MoS2"])
+    @pytest.mark.parametrize(
+        "integrator", ["scattering_factor", "gaussian", "quadrature"]
+    )
+    def test_non_periodic_cut_cell_is_not_padded_again(self, integrator, structure):
+        """A transformed non-periodic cell is cut out of the repeated structure
+        with the integrator's margin already included. Padding it periodically
+        on top added images of those margin atoms: the infinite projection was
+        empty, and the Gaussian and quadrature potentials many times too
+        large.
+
+        hcp Mg and MoS2 also put atoms within float noise of the faces after
+        the cut, at scaled -3e-17 and 1 - 1e-16. With no margin to absorb them,
+        a crop keeping both ends of that pair held each such atom twice."""
+        import ase.build
+
+        from abtem.atoms import orthogonalize_cell
+        from abtem.integrals import (
+            GaussianProjectionIntegrals,
+            ScatteringFactorProjectionIntegrals,
+        )
+
+        integrators = {
+            "scattering_factor": ScatteringFactorProjectionIntegrals,
+            "gaussian": GaussianProjectionIntegrals,
+            "quadrature": QuadratureProjectionIntegrals,
+        }
+
+        hexagonal = {
+            "graphene": lambda: ase.build.graphene(vacuum=2),
+            "Mg": lambda: ase.build.bulk("Mg"),
+            "MoS2": lambda: ase.build.mx2("MoS2", vacuum=2),
+        }[structure]()
+        orthogonal = orthogonalize_cell(hexagonal)
+
+        def build(atoms, periodic):
+            return (
+                Potential(
+                    atoms,
+                    gpts=64,
+                    slice_thickness=0.5,
+                    periodic=periodic,
+                    integrator=integrators[integrator](),
+                )
+                .build()
+                .compute()
+                .array
+            )
+
+        # Oracle: the orthogonal cell is commensurate with the lattice, so
+        # cutting it out of the repeated hexagonal structure must give the
+        # potential of the same cell built periodically.
+        reference = build(orthogonal, periodic=True)
+        np.testing.assert_allclose(
+            build(hexagonal, periodic=False),
+            reference,
+            rtol=1e-5,
+            atol=1e-5 * np.abs(reference).max(),
+        )
 
     def test_non_orthogonal_cell_raises_before_any_wrapping(self):
         from abtem.slicing import SliceIndexedAtoms
