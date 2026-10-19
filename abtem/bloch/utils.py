@@ -213,11 +213,11 @@ def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     elif centering.lower() == "i":
         return hkl.sum(axis=1) % 2 == 0
     elif centering.lower() == "a":
-        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [1, 2]].sum(axis=1) % 2 == 0
     elif centering.lower() == "b":
-        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [0, 2]].sum(axis=1) % 2 == 0
     elif centering.lower() == "c":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+        return hkl[:, [0, 1]].sum(axis=1) % 2 == 0
     elif centering.lower() == "p":
         return np.ones(len(hkl), dtype=bool)
     else:
@@ -439,19 +439,19 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
         "A": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.5, 0.0, 0.0],
+                [0.0, 0.5, 0.5],
             ]
         ),
         "B": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.5, 0.0],
+                [0.5, 0.0, 0.5],
             ]
         ),
         "C": np.array(
             [
                 [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.5],
+                [0.5, 0.5, 0.0],
             ]
         ),
         "P": np.array([[0.0, 0.0, 0.0]]),
@@ -549,6 +549,10 @@ def auto_detect_centering(
                 positions[atoms.numbers == number], relative_positions[centering]
             )
         }
+
+    # The F-centering translations include those of A-, B- and C-centering.
+    if "F" in centerings_to_check:
+        centerings_to_check = centerings_to_check - {"A", "B", "C"}
 
     if len(centerings_to_check) == 1:
         return next(iter(centerings_to_check))
