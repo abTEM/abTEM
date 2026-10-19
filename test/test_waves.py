@@ -404,6 +404,24 @@ def test_tile(data, repetitions, renormalize, lazy, device):
         assert np.allclose(old_sum, new_sum)
 
 
+@pytest.mark.parametrize("lazy", [True, False])
+def test_tile_renormalize_keeps_the_configured_precision(lazy):
+    # Dividing by a 0-d array or NumPy scalar (xp.asarray(np.prod(repetitions)))
+    # promotes complex64 to complex128 under NEP 50, doubling the precision and
+    # memory of a lazy wave; dividing by a Python int does not.
+    import abtem
+
+    waves = abtem.Probe(energy=100e3, semiangle_cutoff=20, extent=5, gpts=32).build(
+        (0, 0), lazy=lazy
+    )
+    assert waves.array.dtype == np.complex64
+
+    tiled = waves.tile((2, 2), renormalize=True)
+
+    assert tiled.array.dtype == np.complex64
+    assert tiled.compute().array.dtype == np.complex64
+
+
 def _build_exit_plane_waves(device="cpu", exit_planes=1):
     import abtem
     import ase

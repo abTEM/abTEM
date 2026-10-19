@@ -630,7 +630,7 @@ class Waves(BaseWaves, ArrayObject):
         kwargs["array"] = array
 
         if renormalize:
-            kwargs["array"] /= xp.asarray(np.prod(repetitions))
+            kwargs["array"] /= int(np.prod(repetitions))
 
         return self.__class__(**kwargs)
 
