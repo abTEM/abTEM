@@ -547,3 +547,62 @@ class TestPotentialEnsembleAccumulation:
             assert np.array_equal(
                 got[index], reference
             ), f"slot {index} does not hold configuration {index}"
+
+
+class TestMultisliceBuiltTransitionPotentialMatch:
+    """A built transition potential cannot be matched to the waves.
+
+    ``build()`` bakes the energy into the array's form factors (k0, kn, the
+    relativistic mass correction, the interaction parameter) and fixes its
+    shape, so the driver's ``match`` could only overwrite the grid or energy
+    label without recomputing anything. A mismatched energy used to run to
+    completion silently; a mismatched grid failed with an opaque broadcast
+    error. Both are now refused with a clear error before the match.
+    """
+
+    @staticmethod
+    def _scan(transition_potential):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 3.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=4.0)
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20)
+        probe.grid.match(potential)
+        return probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=transition_potential,
+            scan=abtem.GridScan(
+                start=(0, 0),
+                end=(1, 1),
+                gpts=(2, 2),
+                fractional=True,
+                potential=potential,
+            ),
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=False,
+            lazy=False,
+        )
+
+    def test_a_mismatched_energy_is_refused(self):
+        wrong_energy = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+        wrong_energy.accelerator._energy = 2 * ENERGY
+
+        with pytest.raises(RuntimeError, match="Inconsistent energies"):
+            self._scan(wrong_energy)
+
+        assert wrong_energy.energy == 2 * ENERGY
+
+    def test_a_mismatched_grid_is_refused(self):
+        wrong_grid = _synthetic_transition_potential((8.0, 8.0), (32, 32), n=2)
+
+        with pytest.raises(RuntimeError, match="Inconsistent grid gpts"):
+            self._scan(wrong_grid)
+
+    def test_a_matching_built_transition_potential_is_accepted(self):
+        matching = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
+
+        assert self._scan(matching).array.shape[:2] == (2, 2)

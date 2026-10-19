@@ -901,6 +901,19 @@ def transition_potential_multislice_and_detect(
         extra_ensemble_axes_metadata,
     )
 
+    # A built TransitionPotentialArray cannot be matched: build() bakes
+    # self.energy into the array's form factors (k0, kn, the relativistic
+    # mass correction, the interaction parameter), and its array shape is
+    # fixed, so the match below can only change the grid or accelerator,
+    # never recompute the array to agree with them. Checking first, while
+    # grid/accelerator still report what the array actually is, catches both
+    # -- the grid case otherwise fails with an opaque broadcast ValueError
+    # inside scatter, and the energy case would silently run with form
+    # factors computed for another energy.
+    if not isinstance(transition_potential, TransitionPotential):
+        transition_potential.grid.check_match(waves)
+        transition_potential.accelerator.check_match(waves)
+
     transition_potential.grid.match(waves)
     transition_potential.accelerator.match(waves)
 
