@@ -1255,3 +1255,33 @@ def test_diffraction_patterns_crop_keeps_the_frequencies_within_max_angle(fftshi
         for my, j in new[1].items():
             expected[i, j] = arr[old[0][mx], old[1][my]]
     np.testing.assert_array_equal(cropped.array, expected)
+
+
+@pytest.mark.parametrize("cutoff", [np.array(10.0), np.array([10.0])])
+def test_block_direct_leaves_an_array_cutoff_in_the_metadata_unchanged(cutoff):
+    from abtem.waves import Waves
+
+    rng = np.random.default_rng(0)
+    array = (
+        rng.standard_normal((100, 100)) + 1j * rng.standard_normal((100, 100))
+    ).astype(np.complex64)
+
+    def patterns(semiangle_cutoff):
+        waves = Waves(
+            array,
+            energy=200e3,
+            sampling=0.5,
+            metadata={"semiangle_cutoff": semiangle_cutoff},
+        )
+        return waves, waves.diffraction_patterns()
+
+    expected = patterns(10.0)[1].block_direct().array
+    waves, diffraction_patterns = patterns(cutoff)
+
+    for _ in range(3):
+        np.testing.assert_array_equal(
+            diffraction_patterns.block_direct().array, expected
+        )
+
+    assert np.asarray(waves.metadata["semiangle_cutoff"]) == 10.0
+    assert np.asarray(diffraction_patterns.metadata["semiangle_cutoff"]) == 10.0

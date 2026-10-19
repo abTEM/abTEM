@@ -6,6 +6,7 @@ are grouped by the object they belong to rather than by symptom.
 
 from __future__ import annotations
 
+import io
 import sys
 
 import ase
@@ -231,8 +232,9 @@ class TestRadialEquation:
         from gpaw.atom.aeatom import AllElectronAtom
         from scipy.interpolate import interp1d
 
-        AllElectronAtom.log = lambda self, *args, **kwargs: None
-        ae = AllElectronAtom("Si", xc="PBE", scalar_relativistic=False)
+        ae = AllElectronAtom(
+            "Si", xc="PBE", scalar_relativistic=False, log=io.StringIO()
+        )
         ae.run()
         ae.refine()
         rv = interp1d(

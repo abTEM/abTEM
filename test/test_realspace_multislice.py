@@ -404,6 +404,20 @@ class TestBackscattering:
                 return_backscattered=True,
             )
 
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("exit_planes", [(2, 5), (0, 2, 5)])
+    def test_backscattering_requires_the_entrance_plane(self, exit_planes, lazy):
+        # the back-propagation sums the backscattered waves into the entrance plane
+        atoms = ase.build.bulk("Si", cubic=True) * (1, 1, 2)
+        potential = abtem.Potential(
+            atoms,
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / 6,
+            exit_planes=exit_planes,
+        )
+        with pytest.raises(ValueError, match="starting with the entrance plane -1"):
+            _multislice_arrays(potential, lazy)
+
     @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     def test_backscattering_returns_extra_waves(self, test_system):
         """Test that backscattering adds an extra detector (WavesDetector)."""
@@ -464,6 +478,147 @@ class TestBackscattering:
 
         # Forward and backward should have same spatial dimensions
         assert forward.array.shape[-2:] == backward.array.shape[-2:]
+
+
+def _multislice_arrays(potential, lazy, scan=None, backscattered=True):
+    """The arrays of a full-expansion real-space multislice: the transmitted
+    waves, and with `backscattered` also the backscattered waves."""
+    algorithm = RealSpaceMultislice(expansion_scope="full")
+    kwargs = dict(lazy=lazy, return_backscattered=backscattered, algorithm=algorithm)
+    if scan is None:
+        result = abtem.PlaneWave(energy=100e3).multislice(potential, **kwargs)
+    else:
+        result = abtem.Probe(energy=100e3, semiangle_cutoff=20).multislice(
+            potential, scan=scan, **kwargs
+        )
+    result = result if backscattered else [result]
+    if lazy:
+        result = [
+            r.compute(scheduler="synchronous", progress_bar=False) for r in result
+        ]
+    return [r.array for r in result]
+
+
+class TestBackscatteringEnsemble:
+    """The backscattered waves of an ensemble potential are those of each
+    configuration run on its own."""
+
+    @pytest.mark.parametrize(
+        "num_configs, slices_per_cell, scan, lazy",
+        [
+            (*case, lazy)
+            for case in [
+                (2, 2, None),  # 3 exit planes
+                (3, 2, None),  # as many configurations as exit planes
+                (2, 3, None),  # 4 exit planes
+                (3, 2, [(1.0, 1.0), (2.0, 3.0)]),  # two probe positions
+            ]
+            for lazy in (False, True)
+        ],
+    )
+    def test_frozen_phonons(self, num_configs, slices_per_cell, scan, lazy):
+        atoms = ase.build.bulk("Si", cubic=True)
+        frozen_phonons = abtem.FrozenPhonons(atoms, num_configs, sigmas=0.1, seed=1)
+        kwargs = dict(
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2] / slices_per_cell,
+            exit_planes=1,
+        )
+
+        members = [
+            _multislice_arrays(abtem.Potential(config, **kwargs), False, scan)
+            for config in frozen_phonons
+        ]
+        result = _multislice_arrays(
+            abtem.Potential(frozen_phonons, **kwargs), lazy, scan
+        )
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    @pytest.mark.parametrize(
+        "num_frozen_phonons, lazy",
+        [
+            (num_frozen_phonons, lazy)  # 5 exit planes for 5 frozen phonons
+            for num_frozen_phonons in (2, 5)
+            for lazy in (False, True)
+        ],
+    )
+    def test_crystal_potential(self, num_frozen_phonons, lazy):
+        atoms = ase.build.bulk("Si", cubic=True)
+
+        def crystal():
+            unit = abtem.Potential(
+                abtem.FrozenPhonons(atoms, 4, sigmas=0.1, seed=1),
+                gpts=(24, 20),
+                slice_thickness=atoms.cell[2, 2] / 2,
+            )
+            return abtem.CrystalPotential(
+                unit,
+                (2, 1, 2),
+                num_frozen_phonons=num_frozen_phonons,
+                seeds=tuple(range(1, num_frozen_phonons + 1)),
+                exit_planes=1,
+            )
+
+        members = []
+        for _, _, member in crystal().generate_blocks():
+            member = member.item()
+            slices = list(member.generate_slices())
+            slices = abtem.PotentialArray(
+                np.concatenate([slic.array for slic in slices]),
+                slice_thickness=[t for slic in slices for t in slic.slice_thickness],
+                sampling=member.sampling,
+                exit_planes=1,
+            )
+            members.append(_multislice_arrays(slices, False))
+
+        result = _multislice_arrays(crystal(), lazy)
+
+        for i, output in enumerate(result):
+            expected = np.stack([member[i] for member in members])
+            assert output.shape == expected.shape
+            np.testing.assert_allclose(
+                output, expected, rtol=0, atol=1e-5 * np.abs(expected).max()
+            )
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_backscattering_between_identical_slices_is_zero(self, lazy):
+        # One slice per unit cell: every slice equals the next, so the correction
+        # term (the difference between consecutive slices) vanishes exactly.
+        atoms = ase.build.bulk("Si", cubic=True)
+        displaced = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        potential = abtem.Potential(
+            displaced * (1, 1, 3),
+            gpts=(24, 20),
+            slice_thickness=atoms.cell[2, 2],
+            exit_planes=1,
+        )
+        transmitted, backscattered = _multislice_arrays(potential, lazy)
+        (alone,) = _multislice_arrays(potential, lazy, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        assert not np.any(backscattered)
+
+    def test_backscattering_of_a_slab_followed_by_vacuum(self):
+        atoms = ase.build.bulk("Si", cubic=True)
+        slab = list(abtem.FrozenPhonons(atoms, 1, sigmas=0.1, seed=1))[0]
+        slab.positions[:, 2] += 2.0
+        slab.cell[2, 2] = 3 * atoms.cell[2, 2]
+        potential = abtem.Potential(
+            slab, gpts=(24, 20), slice_thickness=atoms.cell[2, 2] / 3, exit_planes=1
+        )
+        transmitted, backscattered = _multislice_arrays(potential, False)
+        (alone,) = _multislice_arrays(potential, False, backscattered=False)
+
+        np.testing.assert_array_equal(transmitted, alone)
+        per_plane = np.abs(backscattered).max(axis=(-2, -1))
+        # nothing comes back from the vacuum behind the slab
+        assert per_plane[:5].all() and not per_plane[5:].any()
 
 
 class TestAlgorithmComparison:

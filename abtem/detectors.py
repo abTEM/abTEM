@@ -1030,6 +1030,11 @@ class PixelatedDetector(BaseDetector):
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
+        if not reciprocal_space and isinstance(resample, str):
+            raise ValueError(
+                f"resample={resample!r} applies to diffraction patterns only; "
+                "in real space give the sampling of the images [Å]."
+            )
         self._resample = resample
         self._max_angle = max_angle
         self._reciprocal_space = reciprocal_space
@@ -1114,8 +1119,24 @@ class PixelatedDetector(BaseDetector):
 
         return sampling, gpts
 
+    def _real_space_sampling_and_gpts(self, waves: WavesType):
+        """The sampling [Å] and grid points of the intensity images detected in real
+        space: the waves' own grid, or the grid `Images.interpolate` gives with
+        `resample` as its sampling."""
+        sampling, gpts = waves._valid_sampling, waves._valid_gpts
+        if self.resample:
+            extent = tuple(d * n for d, n in zip(sampling, gpts))
+            resample = (
+                (self.resample,) * 2 if np.isscalar(self.resample) else self.resample
+            )
+            gpts = tuple(int(np.ceil(e / d)) for e, d in zip(extent, resample))
+            sampling = tuple(e / n for e, n in zip(extent, gpts))
+        return sampling, gpts
+
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
-        return (self._new_sampling_and_gpts(waves)[1],)
+        if self.reciprocal_space:
+            return (self._new_sampling_and_gpts(waves)[1],)
+        return (self._real_space_sampling_and_gpts(waves)[1],)
 
     def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
@@ -1145,14 +1166,11 @@ class PixelatedDetector(BaseDetector):
                 ],
             )
         else:
+            sampling = self._real_space_sampling_and_gpts(waves)[0]
             return (
                 [
-                    RealSpaceAxis(
-                        label="x", sampling=waves._valid_sampling[0], units="Å"
-                    ),
-                    RealSpaceAxis(
-                        label="y", sampling=waves._valid_sampling[1], units="Å"
-                    ),
+                    RealSpaceAxis(label="x", sampling=sampling[0], units="Å"),
+                    RealSpaceAxis(label="y", sampling=sampling[1], units="Å"),
                 ],
             )
 
@@ -1228,6 +1246,11 @@ class WavesDetector(BaseDetector):
 
     Parameters
     ----------
+    gpts : two int, optional
+       Number of grid points of the detected wave functions. The waves are
+       Fourier-interpolated onto `gpts` points over their unchanged extent, as
+       :meth:`abtem.waves.Waves.downsample` does. If not given (default), the waves
+       keep their grid.
     to_cpu : bool, optional
        If True, copy the measurement data from the calculation device to CPU memory
        after applying the detector, otherwise the data stays on the respective devices.
@@ -1263,7 +1286,34 @@ class WavesDetector(BaseDetector):
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
+        if self._gpts:
+            # as `Waves.downsample` records it: the resampled waves keep the
+            # band limit of the waves they were resampled from
+            metadata["adjusted_antialias_cutoff_gpts"] = waves.antialias_cutoff_gpts
         return (metadata,)
+
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, int]]:
+        if self._gpts:
+            return (tuple(self._gpts),)
+        return super()._out_base_shape(waves)
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        if not self._gpts:
+            return super()._out_base_axes_metadata(waves)
+        # `gpts` points over the extent of the waves, as `Waves.downsample` gives
+        sampling = tuple(
+            length / n for length, n in zip(waves._valid_extent, self._gpts)
+        )
+        return (
+            [
+                RealSpaceAxis(
+                    label="x", sampling=sampling[0], units="Å", endpoint=False
+                ),
+                RealSpaceAxis(
+                    label="y", sampling=sampling[1], units="Å", endpoint=False
+                ),
+            ],
+        )
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         waves = waves.ensure_real_space()
@@ -1271,10 +1321,8 @@ class WavesDetector(BaseDetector):
         if self.to_cpu:
             waves = waves.to_cpu()
 
-        if self._gpts is not None:
-            array = fft_interpolate(
-                waves._eager_array, new_shape=waves.shape[:-2] + self._gpts
-            )
+        if self._gpts:
+            array = fft_interpolate(waves._eager_array, new_shape=tuple(self._gpts))
         else:
             array = waves.array
 

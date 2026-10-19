@@ -589,9 +589,12 @@ def multislice_and_detect(
             raise ValueError(
                 "Backscattering contributions require expansion_scope='full'."
             )
-        if potential.num_exit_planes == 1:
+        # The back-propagation sums the backscattered waves into the entrance
+        # plane, the first exit plane.
+        if potential.num_exit_planes == 1 or potential.exit_planes[0] != -1:
             raise ValueError(
-                "Backscattering contributions require potential.exit_planes."
+                "Backscattering contributions require potential.exit_planes, "
+                "starting with the entrance plane -1."
             )
 
         # moved to MultisliceTransform
@@ -668,6 +671,7 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         depth = 0.0
+        forward_slices = []
 
         for potential_slice, next_slice in lookahead(
             potential_configuration.generate_slices()
@@ -679,6 +683,9 @@ def multislice_and_detect(
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
             tqdm_pbar.update_if_exists(int(n_waves))
+
+            if return_backscattered:
+                forward_slices.append(potential_slice)
 
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -706,19 +713,24 @@ def multislice_and_detect(
                         )
                 exit_plane_index += 1
 
+        if return_backscattered:
+            # The back-propagation of this configuration's backscattered waves
+            # uses the slices its forward pass used.
+            _back_propagate_backscattered_waves(
+                measurements[-1][  # type: ignore
+                    _validate_potential_ensemble_indices(potential_index, (), potential)
+                ],
+                forward_slices,
+                potential.exit_planes,
+                multislice_step,
+            )
+
     # Handle final output if not using intermediate measurements
     if measurements is None:
         measurements = [
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
-
-    elif return_backscattered:
-        _back_propagate_backscattered_waves(
-            measurements[-1],  # type: ignore
-            potential,
-            multislice_step,
-        )
 
     tqdm_pbar.close_if_exists()
 
@@ -765,29 +777,23 @@ def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
 
 def _back_propagate_backscattered_waves(
     backscattered_waves: Waves,
-    potential: BasePotential,
+    potential_slices: list[BasePotential],
+    exit_planes: tuple[int, ...],
     multislice_step: Callable,
 ) -> Waves:
     """
     For each slice in the multislice step, a small part of the wave get backscattered.
     This function runs the multislice in reverse for each backscattered wave summing
     them for a final backscattered wave result.
+
+    `backscattered_waves` are those of one configuration, with the exit-plane axis
+    first, and `potential_slices` are the slices its forward pass used.
     """
 
     xp = get_array_module(backscattered_waves.device)
-    potential_slices = [
-        slice
-        for _, config in _generate_potential_configurations(potential)
-        for slice in config.generate_slices()
-    ]
-
-    effective_slices = _aggregate_slices_by_exit_planes(
-        potential_slices, potential.exit_planes
-    )
+    effective_slices = _aggregate_slices_by_exit_planes(potential_slices, exit_planes)
 
     num_slices = len(effective_slices)
-    if len(backscattered_waves) != num_slices + 1:
-        raise ValueError("Wrong shapes")
 
     # zero intensity in incoming wave
     backscattered_waves[0]._array[:] = 0
