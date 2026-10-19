@@ -113,3 +113,25 @@ def test_potential_from_structure_factor(
 
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
     assert error < 2.5
+
+
+def test_structure_matrix_with_read_only_structure_factor_values(monkeypatch):
+    # recent pandas versions return read-only arrays from Series.to_numpy()
+    from ase.build import bulk
+
+    from abtem.bloch import dynamical
+    from abtem.bloch.utils import retrieve_structure_factor_values
+
+    def read_only_values(*args, **kwargs):
+        values = retrieve_structure_factor_values(*args, **kwargs)
+        values.flags.writeable = False
+        return values
+
+    structure_factor = abtem.StructureFactor(bulk("Si", cubic=True), g_max=3)
+    bloch_waves = abtem.BlochWaves(structure_factor, energy=100e3, sg_max=0.1)
+    expected = bloch_waves.calculate_structure_matrix(lazy=False)
+
+    monkeypatch.setattr(dynamical, "retrieve_structure_factor_values", read_only_values)
+    structure_matrix = bloch_waves.calculate_structure_matrix(lazy=False)
+
+    assert np.allclose(structure_matrix, expected)

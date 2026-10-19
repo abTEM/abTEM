@@ -274,6 +274,19 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
     assert np.allclose(expected_total_dose, actual_total_dose, rtol=0.1)
 
 
+def test_scan_noise():
+    array = np.random.default_rng(0).random((16, 16)) + 1.0
+    image = Images(array, sampling=0.1, metadata={"units": "electrons"})
+
+    noisy = image.scan_noise(
+        rms_power=0.1, dwell_time=1e-6, flyback_time=1e-5, seed=1
+    ).compute()
+
+    assert isinstance(noisy, Images)
+    assert noisy.base_shape == image.base_shape
+    assert not np.allclose(noisy.array, array)
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
