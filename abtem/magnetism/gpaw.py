@@ -18,6 +18,7 @@ from abtem.magnetism.iam import (
 )
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
+from abtem.potentials.gpaw import _GPAW_LOCK
 from abtem.potentials.iam import _FieldBuilder
 
 
@@ -75,7 +76,8 @@ def calculate_magnetic_vector_potential(spin_density, cell):
 def get_vector_potential_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
     if not assume_colinear:
         raise NotImplementedError("Non-collinear calculations not supported.")
-    n = calc.get_all_electron_density(spin=True, gridrefinement=gridrefinement)
+    with _GPAW_LOCK:
+        n = calc.get_all_electron_density(spin=True, gridrefinement=gridrefinement)
     rho = n[0][0] - n[0][1]
     A = calculate_magnetic_vector_potential(rho, calc.atoms.cell)
     return A
