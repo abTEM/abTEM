@@ -25,6 +25,7 @@ from abtem.atoms import (
     pad_atoms,
     plane_to_axes,
     rotate_atoms_to_plane,
+    wrap_and_snap_atoms,
 )
 from abtem.core.axes import (
     AxisMetadata,
@@ -767,14 +768,20 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap(eps=0.0)
-            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
-            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
-            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
-            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
-            # outside all bins and is silently dropped.  Snap those back to 0.
-            cell_z = atoms.cell[2, 2]
-            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+            # Shared with SliceIndexedAtoms, which applies the same wrap to the
+            # atoms it is handed directly -- e.g. explicit core-loss ``sites``
+            # and CrystalPotential's tiled atoms, which do not come through
+            # here.
+            #
+            # Copy, because these atoms are *not* this method's own. For
+            # DummyFrozenPhonons -- the wrapper every plain Potential(atoms)
+            # gets -- get_transformed_atoms() and randomize() are both the
+            # identity, so writing in place here mutates the object the
+            # potential stores and ships into the task graph as ONE shared
+            # node, and for a list of atoms or a pre-built frozen-phonons
+            # object it is the CALLER's own object. wrap_and_snap_atoms copies
+            # only when it has to change something.
+            atoms = wrap_and_snap_atoms(atoms)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -790,7 +797,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
         else:
             sliced_atoms = SliceIndexedAtoms(
-                atoms=atoms, slice_thickness=self.slice_thickness
+                atoms=atoms,
+                slice_thickness=self.slice_thickness,
+                # Non-periodic potentials are randomised after padding and are
+                # deliberately never wrapped.
+                wrap=self.periodic,
             )
 
         return sliced_atoms

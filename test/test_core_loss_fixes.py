@@ -606,3 +606,62 @@ class TestMultisliceBuiltTransitionPotentialMatch:
         matching = _synthetic_transition_potential((8.0, 8.0), (64, 64), n=2)
 
         assert self._scan(matching).array.shape[:2] == (2, 2)
+
+
+class TestExplicitSitesAreWrapped:
+    """Explicit ``sites`` outside the cell were binned without being wrapped.
+
+    ``np.digitize`` returns 0 for any z below the first slice edge, so a site
+    at negative z was assigned to the first slice whatever its true wrapped
+    depth, i.e. it ionised at the wrong depth; one above the last edge was
+    dropped. Sites that differ from in-cell ones by a lattice vector are the
+    same sites in a periodic potential, and must give the same result.
+    """
+
+    @staticmethod
+    def _run(sites):
+        atoms = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 5.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        potential = abtem.Potential(atoms, gpts=(64, 64), slice_thickness=2.0)
+        probe = abtem.Probe(semiangle_cutoff=32, energy=ENERGY, extent=(8.0, 8.0))
+        probe.grid.match(potential)
+        scan = abtem.GridScan(
+            start=(0, 0), end=(1, 1), gpts=(2, 2), fractional=True, potential=potential
+        )
+        measurement = probe.transition_potential_scan(
+            scan=scan,
+            potential=potential,
+            detectors=abtem.FlexibleAnnularDetector(),
+            transition_potentials=_synthetic_transition_potential(
+                potential.extent, potential.gpts, n=2
+            ),
+            sites=sites,
+            threshold=1.0,
+            double_channel=False,
+            lazy=False,
+        )
+        return np.asarray(abtem.core.backend.asnumpy(measurement.array))
+
+    def test_sites_a_cell_vector_away_give_the_same_result(self):
+        inside = ase.Atoms(
+            "Si2",
+            positions=[(2.0, 2.0, 1.0), (4.0, 4.0, 5.0)],
+            cell=(8, 8, 8),
+            pbc=True,
+        )
+        outside = inside.copy()
+        # The same two sites, one cell below and one cell above.
+        outside.positions[0, 2] -= 8.0
+        outside.positions[1, 2] += 8.0
+
+        reference = self._run(inside)
+        got = self._run(outside)
+
+        assert reference.sum() > 0.0
+        np.testing.assert_allclose(
+            got, reference, rtol=1e-6, atol=1e-9 * reference.max()
+        )

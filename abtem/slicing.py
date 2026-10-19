@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal
+from abtem.atoms import is_cell_orthogonal, wrap_and_snap_atoms
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -305,14 +305,43 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         supercell. The slice thickness may be given as a sequence of values for each
         slice, in which case an error will be thrown if the sum of slice thicknesses is
         not equal to the height of the atoms.
+    wrap : bool, optional
+        If True (default), atoms outside the cell are wrapped into it before they
+        are assigned to slices. The given atoms are not modified.
     """
 
     def __init__(
         self,
         atoms: Atoms,
         slice_thickness: float | Sequence[float],
+        wrap: bool = True,
     ):
+        # Atoms outside the cell must be wrapped before they are binned, and
+        # not every caller has done so: Potential._prepare_atoms wraps, but
+        # explicit core-loss ``sites`` and CrystalPotential's tiled atoms are
+        # handed here raw. np.digitize returns 0 for any z below the first bin
+        # edge -- including arbitrarily negative z -- so an unwrapped atom was
+        # assigned to slice 0 whatever its true wrapped depth, and one above
+        # the last edge was discarded by label_to_index. Both are silent, and
+        # the mis-sliced one is the damaging case: it ionises at the wrong
+        # depth, which is exactly what a depth-resolved measurement is trying
+        # to resolve.
+        #
+        # ``wrap`` exists because that is only right for a periodic potential.
+        # Potential(periodic=False) deliberately does not wrap -- its atoms are
+        # cut from a larger repeated potential and randomised *after* padding,
+        # so an edge atom displaced just outside the cell belongs at the face
+        # it left, not at the opposite one. Callers that know the potential's
+        # convention pass it through; the default wraps, since that is right
+        # for everything else that reaches here.
+        #
+        # Validate first: wrapping reads np.diag(atoms.cell) and would
+        # silently ignore the shear terms of a non-orthogonal cell before
+        # BaseSlicedAtoms raises for it.
         super().__init__(atoms, slice_thickness)
+
+        if wrap:
+            self._atoms = wrap_and_snap_atoms(self.atoms)
 
         bin_edges = np.array(self.slice_thickness).cumsum()
 
