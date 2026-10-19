@@ -192,3 +192,23 @@ def test_pixelated_detector_resample_uniform(lazy, extent, gpts):
     assert np.isclose(sampling[0], sampling[1]), (
         f"Sampling should be uniform but got {sampling}"
     )
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_annular_detector_offset(lazy):
+    waves = abtem.Probe(
+        energy=100e3, semiangle_cutoff=20, extent=10, gpts=128, defocus=100
+    ).build(lazy=lazy)
+
+    diffraction_patterns = waves.diffraction_patterns(
+        max_angle="full", parity="same", fftshift=False
+    )
+
+    results = []
+    for offset in [(0.0, 0.0), (8.0, 8.0)]:
+        detected = abtem.AnnularDetector(inner=5, outer=20, offset=offset).detect(waves)
+        expected = diffraction_patterns.integrate_radial(5, 20, offset=offset)
+        assert np.allclose(detected.compute().array, expected.compute().array)
+        results.append(float(detected.compute().array))
+
+    assert not np.isclose(results[0], results[1])
