@@ -17,7 +17,7 @@ import pytest
 
 import abtem
 from abtem.core.axes import OrdinalAxis
-from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll
+from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll, numerov
 from abtem.waves import Probe
 
 try:
@@ -349,3 +349,12 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
     )
 
 
+def test_numerov_solves_harmonic_oscillator():
+    omega = 2.0
+    t = np.linspace(0, 5, 2001)
+    f = np.full(t.shape, -(omega**2))
+
+    x = numerov(f, 0.0, 1.0, t[1] - t[0])
+
+    assert np.allclose(x, np.sin(omega * t) / omega, atol=1e-6)
+    assert np.all(f == -(omega**2))

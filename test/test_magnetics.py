@@ -547,9 +547,12 @@ import pytest
 from ase import Atoms
 
 from abtem.magnetism.iam import (
+    MagneticFieldArray,
     QuasiDipoleMagneticFieldProjections,
     QuasiDipoleVectorPotentialProjections,
+    VectorPotentialArray,
 )
+from abtem.potentials.iam import PotentialArray
 
 
 @pytest.mark.parametrize(
@@ -580,3 +583,25 @@ def test_quasi_dipole_projections_superposition(projections):
     assert np.abs(array1).max() > 0
     assert np.abs(array2).max() > 0
     assert np.allclose(array12, array1 + array2, atol=1e-5 * np.abs(array12).max())
+
+
+@pytest.mark.parametrize(
+    "field_array, component_axes",
+    [
+        (PotentialArray, ()),
+        (MagneticFieldArray, (3,)),
+        (VectorPotentialArray, (3,)),
+    ],
+)
+def test_field_array_tile(field_array, component_axes):
+    # The z axis sits before the component axis of vector-valued fields.
+    shape = (2,) + component_axes + (6, 4)
+    array = np.random.default_rng(0).random(shape).astype(np.float32)
+    field = field_array(array, slice_thickness=(0.5, 0.25), extent=(3.0, 2.0))
+
+    tiled = field.tile((2, 3, 4))
+
+    reps = (4,) + (1,) * len(component_axes) + (2, 3)
+    assert np.array_equal(tiled.array, np.tile(array, reps))
+    assert np.allclose(tiled.slice_thickness, (0.5, 0.25) * 4)
+    assert np.allclose(tiled.extent, (6.0, 6.0))
