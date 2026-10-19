@@ -446,3 +446,40 @@ class TestWrappedCrop2D:
                 np.asarray(copy_to_device(got, "cpu")),
                 self._reference(array, corner, (11, 11)),
             )
+
+
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_reduce_of_a_built_s_matrix_follows_the_ensemble_mean_of_the_frozen_phonons(
+    ensemble_mean,
+):
+    # An eager SMatrixArray.reduce returned the frozen-phonon axis unreduced, while
+    # a lazy one averaged it, as SMatrix.scan and multislice do, eager and lazy.
+    import ase.build
+
+    import abtem
+
+    atoms = ase.build.mx2("WSe2", vacuum=2) * (2, 1, 1)
+    frozen_phonons = abtem.FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.1, seed=1, ensemble_mean=ensemble_mean
+    )
+    potential = abtem.Potential(frozen_phonons, sampling=0.15, slice_thickness=2)
+    detector = abtem.AnnularDetector(30, 60)
+    scan = GridScan((0, 0), (1, 1), gpts=(3, 5), fractional=True, potential=potential)
+    s_matrix = abtem.SMatrix(potential=potential, energy=70e3, semiangle_cutoff=20)
+
+    def axis_names(measurement):
+        return [type(a).__name__ for a in measurement.axes_metadata]
+
+    eager = s_matrix.build(lazy=False).reduce(scan, detectors=detector)
+    lazy = s_matrix.build(lazy=True).reduce(scan, detectors=detector).compute()
+    scanned = s_matrix.scan(scan, detector, lazy=False)
+
+    expected = ["RealSpaceAxis", "RealSpaceAxis"]
+    if not ensemble_mean:
+        expected = ["FrozenPhononsAxis"] + expected
+    for measurement in (eager, lazy, scanned):
+        assert axis_names(measurement) == expected
+
+    scale = np.abs(scanned.array).max()
+    np.testing.assert_allclose(eager.array, scanned.array, rtol=0, atol=1e-5 * scale)
+    np.testing.assert_allclose(lazy.array, scanned.array, rtol=0, atol=1e-5 * scale)
