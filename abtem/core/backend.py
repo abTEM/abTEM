@@ -270,3 +270,77 @@ def copy_to_device(
         return cp.asarray(array)
 
     raise RuntimeError("Invalid device specified")
+
+
+_pushed_config_token = None
+
+_CONFIG_PLUGIN_NAME = "abtem-config"
+
+
+def _apply_config_snapshot(snapshot):
+    import copy
+
+    from abtem.core.config import config as config_dict
+    from abtem.core.config import config_lock
+
+    snapshot = copy.deepcopy(snapshot)
+    with config_lock:
+        # Update before pruning: readers that do not take the lock (config.get)
+        # then always observe a fully-populated dict, never the empty window a
+        # clear-then-update would open to a concurrently executing task.
+        config_dict.update(snapshot)
+        for key in [k for k in config_dict if k not in snapshot]:
+            del config_dict[key]
+
+
+def _make_config_plugin(snapshot):
+    from distributed.diagnostics.plugin import WorkerPlugin
+
+    class _AbtemConfigPlugin(WorkerPlugin):
+        """Apply the client's abTEM configuration snapshot on every worker.
+
+        Plugin ``setup`` runs on all current workers at registration time and
+        on every worker that joins or is restarted later (e.g. by a Nanny) --
+        coverage a one-shot ``client.run`` cannot provide.
+        """
+
+        name = _CONFIG_PLUGIN_NAME
+
+        def __init__(self, snapshot):
+            self._snapshot = snapshot
+
+        def setup(self, worker=None):
+            _apply_config_snapshot(self._snapshot)
+
+    return _AbtemConfigPlugin(snapshot)
+
+
+def push_config_to_workers(client):
+    """Mirror this process's abTEM configuration onto the client's workers.
+
+    abTEM resolves configuration inside tasks, in the worker process --
+    ``get_dtype`` reads ``precision`` at call time, for example -- but worker
+    processes only ever see the defaults: ``abtem.config.set`` in the client
+    does not reach them, silently changing results (a float64 computation
+    dispatched to default-configured workers runs in float32).
+
+    The snapshot is carried by a named worker plugin, so workers that join or
+    restart later also receive it; when the configuration changes,
+    re-registering under the same name replaces the plugin and re-runs its
+    setup on all workers. Repeated pushes of an unchanged configuration to the
+    same client (keyed on ``client.id``) are skipped.
+    """
+    global _pushed_config_token
+
+    import copy
+
+    snapshot = copy.deepcopy(config)
+    token = (getattr(client, "id", None) or id(client), repr(snapshot))
+    if token == _pushed_config_token:
+        return
+    plugin = _make_config_plugin(snapshot)
+    try:
+        client.register_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
+    except AttributeError:  # distributed without Client.register_plugin
+        client.register_worker_plugin(plugin, name=_CONFIG_PLUGIN_NAME)
+    _pushed_config_token = token

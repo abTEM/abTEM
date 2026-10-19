@@ -46,6 +46,7 @@ from abtem.core.backend import (
     cp,
     device_name_from_array_module,
     get_array_module,
+    push_config_to_workers,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -419,6 +420,8 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
+        _push_config_to_active_client()
+
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
@@ -492,6 +495,23 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _push_config_to_active_client():
+    """Mirror the configuration onto an active distributed client's workers.
+
+    Any distributed client (a CPU LocalCluster, a SLURMCluster, ...) executes
+    tasks in worker processes that never saw the client's ``abtem.config.set``.
+    Deduplicated inside push_config_to_workers, so calling this on every
+    dispatch is cheap.
+    """
+    try:
+        from distributed import get_client
+
+        client = get_client()
+    except (ImportError, ValueError):
+        return
+    push_config_to_workers(client)
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -502,6 +522,8 @@ def _compute(
     is_gpu = config.get("device") == "gpu" or any(
         hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
     )
+
+    _push_config_to_active_client()
 
     if is_gpu:
         check_cupy_is_installed()
