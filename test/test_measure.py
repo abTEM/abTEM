@@ -10,7 +10,8 @@ from utils import array_is_close, ensure_is_tuple, gpu
 
 import abtem
 from abtem.core.axes import OrdinalAxis, ScanAxis
-from abtem.core.backend import copy_to_device
+from abtem.core.backend import asnumpy, copy_to_device
+from abtem.core.energy import energy2wavelength
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -96,6 +97,34 @@ def test_inplace_add_subtract(data, measurement, method, device):
     measurement = data.draw(measurement(lazy=False, device=device))
     new_measurement = getattr(measurement, method)(measurement.copy())
     assert new_measurement.array is measurement.array
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("scalar", [2.0, -0.5])
+def test_reflected_arithmetic_with_a_scalar(scalar, lazy):
+    # Oracle: numpy's own reflected operators on the plain array. The array is
+    # not symmetric under any of the operations, so e.g. `scalar / m` computed
+    # as `m / scalar` (as __rtruediv__ = __truediv__ used to do) fails.
+    array = np.array([[1.0, 2.0, 4.0], [8.0, 0.5, 0.25]])
+    if lazy:
+        measurement = Images(da.from_array(array, chunks=(1, 3)), sampling=(0.1, 0.2))
+    else:
+        measurement = Images(array, sampling=(0.1, 0.2))
+
+    for result, expected in (
+        (scalar / measurement, scalar / array),
+        (scalar * measurement, scalar * array),
+    ):
+        assert isinstance(result, Images)
+        np.testing.assert_allclose(result.compute().array, expected, rtol=1e-6)
+
+
+def test_in_place_true_division_refuses_lazy_measurements():
+    # Like the other in-place operators, /= must refuse a lazy measurement
+    # (it used to fail with an AttributeError on the dask array).
+    measurement = Images(da.ones((4, 4), chunks=2), sampling=0.1)
+    with pytest.raises(RuntimeError, match="inplace"):
+        measurement /= 2.0
 
 
 @given(data=st.data())
@@ -286,6 +315,75 @@ def test_images_interpolate_line(data, lazy, device):
     )
 
     assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
+
+
+def _periodic_gaussian_blob(gpts, sampling, center, sigma):
+    """exp(-|r - center|^2 / (2 sigma^2)) on a periodic grid (minimum-image
+    distance), peak 1."""
+    extent = [n * d for n, d in zip(gpts, sampling)]
+    coords = []
+    for n, d, c, length in zip(gpts, sampling, center, extent):
+        r = np.arange(n) * d - c
+        coords.append(r - length * np.round(r / length))
+    x, y = np.meshgrid(*coords, indexing="ij")
+    return np.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+
+def _line_values(line):
+    return np.asarray(asnumpy(line.compute().array), dtype=np.float64)
+
+
+@settings(max_examples=10, deadline=None)
+@given(data=st.data())
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_images_interpolate_line_at_position(data, lazy, device):
+    """A line of length L at any angle through the centre c of a rotationally
+    symmetric Gaussian blob exp(-|r - c|^2/2 sigma^2) samples
+    exp(-t^2/2 sigma^2), t = -L/2 ... L/2, independent of the angle (analytic
+    profile)."""
+    # Anisotropic sampling, so pixel/physical-unit mix-ups show; the line
+    # may extend past the image edge, where the image is periodic.
+    gpts, sampling, sigma, length, n = (128, 160), (0.1, 0.08), 0.8, 6.0, 121
+    center = data.draw(
+        st.tuples(
+            *(
+                st.floats(min_value=0, max_value=g * d, exclude_max=True)
+                for g, d in zip(gpts, sampling)
+            )
+        ),
+        label="center",
+    )
+    angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle")
+
+    array = _periodic_gaussian_blob(gpts, sampling, center, sigma)
+    if lazy:
+        array = da.from_array(array, chunks=(gpts[0] // 2, -1))
+    images = Images(array, sampling=sampling).copy_to_device(device)
+    line = images.interpolate_line_at_position(
+        center=center, angle=angle, extent=length, gpts=n, endpoint=True
+    )
+
+    t = np.linspace(-length / 2, length / 2, n)
+    expected = np.exp(-(t**2) / (2 * sigma**2))
+    # Cubic-spline interpolation of a Gaussian 8-10 pixels wide errs by
+    # ~1e-4 of the peak; 1e-3 still rejects any off-centre or mis-rotated
+    # line (a 0.1 Å offset changes the profile by ~1e-2 of the peak).
+    np.testing.assert_allclose(_line_values(line), expected, rtol=0, atol=1e-3)
+
+    # Averaging across a perpendicular width preserves the rotational
+    # symmetry: the profile must not depend on the angle.
+    width = data.draw(st.floats(min_value=0.1, max_value=2.0), label="width")
+    other_angle = data.draw(st.floats(min_value=0, max_value=360.0), label="angle2")
+    wide = [
+        _line_values(
+            images.interpolate_line_at_position(
+                center=center, angle=a, extent=length, gpts=n, width=width
+            )
+        )
+        for a in (angle, other_angle)
+    ]
+    np.testing.assert_allclose(wide[0], wide[1], rtol=0, atol=1e-3)
 
 
 def test_interpolate_line_lazy_matches_eager_with_ensemble_axis():
@@ -903,3 +1001,91 @@ def test_integrate_disc(gpts, radius, sampling, position):
 #     image1 = diffraction_patterns.gaussian_source_size(sigma).integrate_radial(0, outer)
 #     image2 = diffraction_patterns.integrate_radial(0, outer).gaussian_filter(sigma)
 #     assert np.allclose(image1.array, image2.array)
+
+
+class TestImagesNormalizeEnsemble:
+    # Two members, the second an affine transform (x -> 10 x + 5) of the first.
+    _member = np.array([[1.0, 2.0], [3.0, 7.0]])
+    _arr = np.stack([_member, 10 * _member + 5])
+
+    def _images(self):
+        return Images(
+            self._arr,
+            sampling=(0.1, 0.1),
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        )
+
+    def test_normalize_removes_offset_and_scale_per_member(self):
+        """Shifting by the min and scaling by the peak-to-peak range removes any
+        per-member offset and scale: both members map onto the same image,
+        spanning exactly [0, 1]."""
+        normalized = self._images().normalize_ensemble(scale="ptp", shift="min")
+        member = self._member
+        # Per member (the whole 2-D image, not each row of it).
+        expected = (member - member.min()) / (member.max() - member.min())
+        np.testing.assert_allclose(normalized.array[0], expected)
+        np.testing.assert_allclose(normalized.array[1], expected)
+
+    def test_normalize_default_mean_max(self):
+        """The defaults shift each member by its mean and divide by its max
+        (evaluated before shifting): the members' means become zero."""
+        normalized = self._images().normalize_ensemble()
+        for original, result in zip(self._arr, normalized.array):
+            np.testing.assert_allclose(
+                result, (original - original.mean()) / original.max()
+            )
+            assert abs(result.mean()) < 1e-12
+
+    def test_normalize_line_profiles_per_profile(self):
+        """For 1-D members the reduction runs along the single base axis."""
+        arr = np.array([[1.0, 3.0, 5.0], [2.0, 2.0, 8.0]])
+        profiles = RealSpaceLineProfiles(
+            arr, sampling=0.1, ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))]
+        )
+        normalized = profiles.normalize_ensemble(scale="ptp", shift="min")
+        np.testing.assert_allclose(normalized.array, [[0, 0.5, 1], [0, 0, 1]])
+
+
+def _frequency_index_positions(n, fftshift):
+    """Map integer spatial-frequency index -> array position, in numpy's
+    fftfreq convention (shifted: zero frequency at n // 2)."""
+    freqs = np.fft.fftfreq(n, 1 / n)
+    if fftshift:
+        freqs = np.fft.fftshift(freqs)
+    return {int(round(f)): i for i, f in enumerate(freqs)}
+
+
+@pytest.mark.parametrize("fftshift", [True, False])
+def test_diffraction_patterns_crop_keeps_the_frequencies_within_max_angle(fftshift):
+    """Cropping to max_angle keeps exactly the frequencies |m| d_alpha <= max_angle
+    along each axis (an odd grid centred on zero frequency), with their original
+    values and unchanged sampling, for either fftshift layout."""
+    shape, sampling, energy = (64, 48), (0.05, 0.08), 100e3
+    arr = np.random.default_rng(3).random(shape)
+    dp = DiffractionPatterns(
+        arr, sampling=sampling, fftshift=fftshift, metadata={"energy": energy}
+    )
+    # Anisotropic sampling: the same angle is a different number of
+    # frequency steps along x and y.
+    angular_sampling = [d * energy2wavelength(energy) * 1e3 for d in sampling]
+    max_angle = 10.2 * angular_sampling[0]  # 10 steps along x, 6 along y
+    n_max = [int(np.round(max_angle / a)) for a in angular_sampling]
+    assert n_max == [10, 6]
+
+    cropped = dp.crop(max_angle=max_angle)
+
+    assert cropped.shape == (2 * n_max[0] + 1, 2 * n_max[1] + 1)
+    assert np.allclose(cropped.sampling, dp.sampling)
+    assert cropped.fftshift == fftshift
+
+    # Each kept frequency (m_x, m_y) must hold the original value at that
+    # frequency.
+    old = [_frequency_index_positions(n, fftshift) for n in shape]
+    new = [_frequency_index_positions(n, fftshift) for n in cropped.shape]
+    assert sorted(new[0]) == list(range(-n_max[0], n_max[0] + 1))
+    assert sorted(new[1]) == list(range(-n_max[1], n_max[1] + 1))
+    expected = np.zeros(cropped.shape)
+    for mx, i in new[0].items():
+        for my, j in new[1].items():
+            expected[i, j] = arr[old[0][mx], old[1][my]]
+    np.testing.assert_array_equal(cropped.array, expected)
