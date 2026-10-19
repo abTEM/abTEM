@@ -637,10 +637,17 @@ class AnnularDetector(_AbstractRadialDetector):
     def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
         ensemble_shapes = super()._out_ensemble_shape(waves)
 
-        if len(_scan_shape(waves)) == 0:
+        source = _scan_axes(waves)
+        if not source:
             return ensemble_shapes  # No 2D scan axes: keep PositionsAxis in ensemble as-is
 
-        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
+        # Drop exactly the axes _scan_axes identifies, by position: a LineScan has
+        # only one, so the last two entries need not all be scan axes.
+        drop = {i + len(self.ensemble_shape) for i in source}
+        return tuple(
+            tuple(s for i, s in enumerate(ensemble_shape) if i not in drop)
+            for ensemble_shape in ensemble_shapes
+        )
 
     def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)

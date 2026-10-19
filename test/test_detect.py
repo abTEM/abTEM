@@ -2,6 +2,7 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase.build import bulk
 from hypothesis import assume, given
 
 import abtem
@@ -212,6 +213,39 @@ def test_annular_detector_offset(lazy):
         results.append(float(detected.compute().array))
 
     assert not np.isclose(results[0], results[1])
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_annular_detector_line_scan_with_ensemble_axis(lazy):
+    """An AnnularDetector over a LineScan (one scan axis) keeps every other
+    ensemble axis, here a defocus series.
+
+    It used to drop the last two entries of the ensemble shape regardless of
+    how many scan axes there were, so with a single scan axis it also
+    discarded the defocus axis, and the declared shape no longer matched the
+    data.
+    """
+    atoms = bulk("Si", cubic=True)
+    potential = abtem.Potential(
+        atoms, gpts=64, slice_thickness=2, projection="infinite"
+    )
+    defocus = [0.0, 50.0]
+    scan = abtem.LineScan(start=(0, 0), end=(2, 0), gpts=3)
+    detector = abtem.AnnularDetector(inner=30, outer=80)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, defocus=defocus)
+    measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
+
+    assert measurement.ensemble_shape == (2,)
+    assert measurement.base_shape == (3,)
+    measurement = measurement.compute()
+    assert measurement.shape == (2, 3)
+
+    for i, value in enumerate(defocus):
+        single = abtem.Probe(energy=100e3, semiangle_cutoff=20, defocus=value).scan(
+            potential, scan=scan, detectors=detector
+        )
+        assert np.allclose(measurement.array[i], single.array)
 
 
 @pytest.mark.parametrize(
