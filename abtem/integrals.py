@@ -1027,7 +1027,12 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_xp)[None]
             )
 
-            if len(self._parametrization.sigmas):
+            # An element with a smoothing width is accumulated into its own
+            # buffer, smoothed, and then added; every other element goes
+            # straight into the slice.
+            symbol = chemical_symbols[number]
+            smoothed = symbol in self._parametrization.sigmas
+            if smoothed:
                 temp = xp.zeros(gpts, dtype=get_dtype(complex=False))
             else:
                 temp = array
@@ -1056,9 +1061,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            symbol = chemical_symbols[number]
-
-            if symbol in self._parametrization.sigmas:
+            if smoothed:
                 sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"
