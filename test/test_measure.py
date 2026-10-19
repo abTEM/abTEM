@@ -176,6 +176,15 @@ def test_tile_images(data, tile, lazy, device):
     )
 
 
+def test_images_coordinates_spaced_by_sampling():
+    # Pixel i of a periodic image with sampling s sits at i * s; the last
+    # pixel is one sampling short of the extent, not at the extent.
+    images = Images(np.zeros((4, 5)), sampling=(0.5, 0.2))
+    x, y = images.coordinates
+    assert np.allclose(x, [0.0, 0.5, 1.0, 1.5])
+    assert np.allclose(y, [0.0, 0.2, 0.4, 0.6, 0.8])
+
+
 @composite
 def sigma(draw):
     sigma = st.floats(min_value=0.0, max_value=5.0)
