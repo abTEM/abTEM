@@ -283,7 +283,7 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
 
 
 def radial_schroedinger_equation(ef, l, r, vr):
-    return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
+    return l * (l + 1) / r**2 - vr(r) / r - ef
 
 
 # Radial step of the continuum integration grid [Bohr], and the largest grid we
@@ -1011,6 +1011,16 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return self[included]
 
     def absolute_threshold(self, waves: Waves, threshold: float = 1.0):
+        """The overlap cut that ``filter_sites`` applies for a relative
+        ``threshold``: ranking the overlap of a site placed at every pixel
+        with ``waves``, the most-overlapping pixels that together carry the
+        fraction ``threshold`` of the total overlap all lie above the cut.
+        Evaluate it on the waves that the sites are then filtered against
+        -- applied to a different (e.g. further propagated) wave, a group of
+        symmetry-tied sites at the cut falls below it all at once.
+
+        Returns 0.0, which disables filtering, for ``threshold >= 1``.
+        """
         if threshold >= 1.0:
             return 0.0
 
@@ -1035,7 +1045,25 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
         cumulative = np.cumsum(overlap) / overlap.sum()
 
-        return overlap[np.searchsorted(cumulative, threshold, side="left") - 1]
+        # The pixels ranked 0..index together carry at least the fraction
+        # ``threshold`` of the overlap, so the cut is the overlap of pixel
+        # ``index`` itself -- not of pixel ``index - 1``, which stopped the
+        # retained set short of the requested fraction (and, for a threshold
+        # below the largest single-pixel fraction, wrapped to -1, i.e. the
+        # *smallest* overlap, keeping almost every site).
+        index = min(
+            int(np.searchsorted(cumulative, threshold, side="left")),
+            len(overlap) - 1,
+        )
+
+        # filter_sites keeps sites whose overlap is strictly greater than the
+        # returned value, recomputing it by direct summation, which differs
+        # from this FFT convolution by float round-off (~1 ulp of the largest
+        # overlap). Lower the cut by a few such ulps so that the pixel at the
+        # cut -- and any group of (symmetry-)tied pixels with it -- is kept
+        # whole rather than partly lost to round-off.
+        tolerance = 8 * np.finfo(overlap.dtype).eps * float(overlap[0])
+        return max(float(overlap[index]) - tolerance, 0.0)
 
     def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):

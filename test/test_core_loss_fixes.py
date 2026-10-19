@@ -195,6 +195,55 @@ class TestContinuumGrid:
 
 
 @requires_gpaw
+class TestRadialEquation:
+    """``radial_schroedinger_equation`` is the operator the continuum states
+    are solved with; it must be the one GPAW's own bound states solve."""
+
+    @staticmethod
+    def _bound_eigenvalue(n, l, rv, rmax=25.0, h=2e-4):
+        """Shooting with node counting: the eigenvalue [Rydberg] of the state
+        with n - l - 1 radial nodes, by bisection on the energy."""
+        from abtem.inelastic.core_loss import numerov, radial_schroedinger_equation
+
+        # u(0) = 0 at the origin itself (r = 0 would divide by zero).
+        r = np.arange(int(rmax / h) + 1) * h
+        r[0] = 1e-12
+        inner = int(0.9 * len(r))  # ignore the divergent tail's last node
+        lower, upper = -1.2 * 14**2, -1e-4
+        for _ in range(80):
+            energy = 0.5 * (lower + upper)
+            u = numerov(radial_schroedinger_equation(energy, l, r, rv), 0.0, 1e-12, h)
+            signs = np.sign(u[:inner])
+            signs = signs[signs != 0]
+            if np.sum(signs[1:] != signs[:-1]) > n - l - 1:
+                upper = energy
+            else:
+                lower = energy
+        return 0.5 * (lower + upper)
+
+    @pytest.mark.parametrize("n, l", [(2, 1), (3, 0), (3, 1)])
+    def test_reproduces_gpaw_bound_eigenvalues(self, n, l):
+        """In the potential of a non-relativistic GPAW atom (whose kinetic
+        operator is the same non-relativistic one) the equation must give
+        GPAW's eigenvalues. It did not: both the centrifugal and the
+        potential term were multiplied by an unexplained 1.02, which put
+        these eigenvalues 4-10% off. Measured without it: <= 1e-5."""
+        from gpaw.atom.aeatom import AllElectronAtom
+        from scipy.interpolate import interp1d
+
+        AllElectronAtom.log = lambda self, *args, **kwargs: None
+        ae = AllElectronAtom("Si", xc="PBE", scalar_relativistic=False)
+        ae.run()
+        ae.refine()
+        rv = interp1d(
+            ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value=(28.0, 0.0), bounds_error=False
+        )
+        expected = 2 * ae.channels[l].e_n[n - l - 1]  # Hartree -> Rydberg
+
+        assert self._bound_eigenvalue(n, l, rv) == pytest.approx(expected, rel=1e-4)
+
+
+@requires_gpaw
 class TestContinuumNormalisation:
     """The continuum state must be energy-normalised: u -> sin(kr+d)/sqrt(pi k)."""
 

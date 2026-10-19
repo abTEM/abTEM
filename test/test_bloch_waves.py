@@ -601,3 +601,38 @@ def test_cupy_expm_matches_scipy():
     np.testing.assert_allclose(
         result, reference, rtol=0, atol=1e-10 * np.abs(reference).max()
     )
+
+
+@pytest.mark.parametrize(
+    "hkl, expected",
+    [
+        # Planes: (h k l) -> (h k i l), i = -(h + k), derived by hand.
+        ((1, 0, 0), (1, 0, -1, 0)),  # a prism plane, (10-10)
+        ((1, 0, 1), (1, 0, -1, 1)),  # a pyramidal plane, (10-11)
+        ((2, 1, 3), (2, 1, -3, 3)),
+        ((1, 1, 0), (1, 1, -2, 0)),  # (11-20)
+        ((0, 0, 1), (0, 0, 0, 1)),  # the basal plane, (0001)
+    ],
+)
+def test_miller_bravais_known_values(hkl, expected):
+    from abtem.bloch.indexing import miller_to_miller_bravais
+
+    assert tuple(miller_to_miller_bravais(hkl)) == expected
+
+
+@pytest.mark.parametrize("hkl", [(1, 0, 0), (0, 1, 2), (2, -1, 1), (-3, 2, 4)])
+def test_miller_bravais_indices_are_the_plane_intercepts(hkl):
+    """Geometric oracle: a plane's Miller(-Bravais) indices are g . a_j for
+    its reciprocal-lattice vector g and each axis a_j. Using a real
+    hexagonal cell with the three basal axes a1, a2, a3 = -(a1 + a2) and c,
+    the four indices must be (g.a1, g.a2, g.a3, g.c)."""
+    from ase.cell import Cell
+
+    from abtem.bloch.indexing import miller_to_miller_bravais
+
+    cell = Cell.new([3.2, 3.2, 5.2, 90, 90, 120])
+    a1, a2, c = np.array(cell)
+    a3 = -(a1 + a2)
+    g = np.array(hkl) @ np.linalg.inv(np.array(cell)).T
+    intercepts = [g @ axis for axis in (a1, a2, a3, c)]
+    np.testing.assert_allclose(miller_to_miller_bravais(hkl), intercepts, atol=1e-9)
