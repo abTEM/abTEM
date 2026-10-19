@@ -717,15 +717,17 @@ class Waves(BaseWaves, ArrayObject):
         images : Images
             The wave functions as an image.
         """
-        array = self.array.copy()
-        metadata = copy(self.metadata)
+        waves = self.ensure_real_space()
+        # The inverse FFT of reciprocal-space waves is already a new array.
+        array = waves.array.copy() if waves is self else waves.array
+        metadata = copy(waves.metadata)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
         images = Images(
             array,
-            sampling=self._valid_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            sampling=waves._valid_sampling,
+            ensemble_axes_metadata=waves.ensemble_axes_metadata,
             metadata=metadata,
         )
 
@@ -1115,44 +1117,55 @@ class Waves(BaseWaves, ArrayObject):
             The downsampled wave functions.
         """
 
-        xp = get_array_module(self.array)
+        waves = self.ensure_real_space()
+        xp = get_array_module(waves.array)
 
         if gpts is None:
-            gpts = self._gpts_within_angle(max_angle)
+            gpts = waves._gpts_within_angle(max_angle)
 
-        if self.is_lazy:
+        if waves.is_lazy:
             array = da.map_blocks(
                 fft_interpolate,
-                self.array,
+                waves.array,
                 new_shape=gpts,
                 normalization=normalization,
-                chunks=self._lazy_array.chunks[:-2] + gpts,
+                chunks=waves._lazy_array.chunks[:-2] + gpts,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = fft_interpolate(
-                self._eager_array, new_shape=gpts, normalization=normalization
+                waves._eager_array, new_shape=gpts, normalization=normalization
             )
 
-        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["sampling"] = (
-            self._valid_extent[0] / gpts[0],
-            self._valid_extent[1] / gpts[1],
+            waves._valid_extent[0] / gpts[0],
+            waves._valid_extent[1] / gpts[1],
         )
         kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = (
-            self.antialias_cutoff_gpts
+            waves.antialias_cutoff_gpts
         )
-        return self.__class__(**kwargs)
+        downsampled = self.__class__(**kwargs)
+        if self.reciprocal_space:
+            return downsampled.ensure_reciprocal_space()
+        return downsampled
 
     @staticmethod
-    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
+    def _diffraction_pattern(
+        array, new_gpts, return_complex, fftshift, normalize, reciprocal_space
+    ):
         xp = get_array_module(array)
 
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
+        elif reciprocal_space:
+            # a new array, as the FFT would return
+            array = array.copy()
 
-        array = fft2(array, overwrite_x=False)
+        # A reciprocal-space array already holds the Fourier coefficients.
+        if not reciprocal_space:
+            array = fft2(array, overwrite_x=False)
 
         if array.shape[-2:] != new_gpts:
             array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
@@ -1260,6 +1273,7 @@ class Waves(BaseWaves, ArrayObject):
                 fftshift=fftshift,
                 return_complex=return_complex,
                 normalize=normalize,
+                reciprocal_space=self.reciprocal_space,
                 chunks=self._lazy_array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
@@ -1270,6 +1284,7 @@ class Waves(BaseWaves, ArrayObject):
                 return_complex=return_complex,
                 fftshift=fftshift,
                 normalize=normalize,
+                reciprocal_space=self.reciprocal_space,
             )
 
         diffraction_patterns = DiffractionPatterns(
