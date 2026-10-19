@@ -1304,10 +1304,9 @@ class Waves(BaseWaves, ArrayObject):
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        if not ctf.accelerator.energy:
-            ctf.accelerator.match(self.accelerator)
-
-        self.accelerator.match(ctf.accelerator, check_match=True)
+        # Match a stand-in for the CTF's accelerator, so that a CTF without an energy
+        # does not take on that of these wave functions.
+        self.accelerator.match(Accelerator(energy=ctf.energy), check_match=True)
         self.accelerator.check_is_defined()
 
         waves = self.apply_transform(ctf, max_batch=max_batch)

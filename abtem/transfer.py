@@ -89,17 +89,20 @@ class BaseTransferFunction(
         """
 
         if waves is None:
-            device = "cpu"
+            transfer_function, device = self, "cpu"
         else:
-            self.accelerator.match(waves)
-            self.grid.match(waves)
+            # Match a copy, so that evaluating against `waves` does not leave this
+            # transfer function with their energy or grid.
+            transfer_function = self.copy()
+            transfer_function.accelerator.match(waves)
+            transfer_function.grid.match(waves)
             device = waves.device
 
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
+        transfer_function.grid.check_is_defined()
+        transfer_function.accelerator.check_is_defined()
 
-        alpha, phi = self._angular_grid(device)
-        return self._evaluate_from_angular_grid(alpha, phi)
+        alpha, phi = transfer_function._angular_grid(device)
+        return transfer_function._evaluate_from_angular_grid(alpha, phi)
 
     def to_diffraction_patterns(
         self,

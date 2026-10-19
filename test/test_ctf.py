@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from abtem.core.energy import energy2wavelength
-from abtem.transfer import Aberrations, Aperture, point_resolution
+from abtem.transfer import CTF, Aberrations, Aperture, point_resolution
+from abtem.waves import PlaneWave
 
 
 def test_point_resolution():
@@ -45,3 +46,25 @@ def test_aperture_to_diffraction_patterns_is_centred_on_zero_frequency(gpts, uni
     kx, ky = dp.coordinates
     zero = (int(np.argmin(np.abs(kx))), int(np.argmin(np.abs(ky))))
     assert np.asarray(dp.array)[zero] == pytest.approx(np.asarray(dp.array).max())
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_apply_ctf_does_not_take_on_the_energy_of_the_waves(lazy):
+    # The energy of a CTF without one is inferred from the wave functions. It must
+    # not be written into the CTF, or the CTF could not be reused at another energy.
+    ctf = CTF(defocus=50, semiangle_cutoff=20)
+
+    for energy in (200e3, 300e3):
+        waves = PlaneWave(energy=energy, extent=5, gpts=32).build(lazy=lazy)
+        result = waves.apply_ctf(ctf)
+
+        assert ctf.energy is None
+        reference = waves.apply_ctf(CTF(energy=energy, defocus=50, semiangle_cutoff=20))
+        assert np.allclose(result.compute().array, reference.compute().array)
+
+
+def test_apply_ctf_with_fixed_energy_still_checks_the_energy_of_the_waves():
+    waves = PlaneWave(energy=200e3, extent=5, gpts=32).build()
+
+    with pytest.raises(RuntimeError, match="Inconsistent energies"):
+        waves.apply_ctf(CTF(energy=300e3, defocus=50))
