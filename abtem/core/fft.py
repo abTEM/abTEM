@@ -1,10 +1,11 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
 import warnings
-from typing import Tuple, TypeVar, overload
+from typing import Optional, Tuple, TypeVar, overload
 
 import dask.array as da
 import numpy as np
+from dask.array.core import broadcast_chunks
 from threadpoolctl import threadpool_limits  # type: ignore
 
 from abtem.core import config
@@ -345,6 +346,41 @@ def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
     return ifft2(x, overwrite_x=overwrite_x)
 
 
+def _chunk_kernel_like(kernel, x: da.core.Array) -> Optional[da.core.Array]:
+    """
+    The kernel as a dask array chunked like `x` along every axis where both are
+    longer than 1, and in one chunk along the axes where either has length 1 or `x`
+    has no axis. The axes are aligned from the end, as in NumPy broadcasting.
+
+    None if a kernel axis longer than 1 meets an axis of `x` of unknown length
+    (NaN, as after a filtering operation): the blocks of the kernel cannot be
+    matched to those of `x` then.
+    """
+    # Raises the ValueError of the eager product for shapes that do not broadcast;
+    # an axis of unknown length is checked when the blocks are computed.
+    np.broadcast_shapes(
+        tuple(1 if np.isnan(length) else length for length in x.shape), kernel.shape
+    )
+    offset = x.ndim - kernel.ndim
+    chunks = []
+    for axis, n in enumerate(kernel.shape):
+        x_axis = axis + offset
+        if x_axis < 0 or n == 1:
+            chunks.append((n,))
+        elif np.isnan(x.shape[x_axis]):
+            return None
+        elif x.shape[x_axis] == 1:
+            chunks.append((n,))
+        else:
+            chunks.append(x.chunks[x_axis])
+
+    if isinstance(kernel, da.core.Array):
+        return kernel.rechunk(tuple(chunks))
+    # A random name: the default names the array by a hash of its data, which
+    # reads the whole kernel on every call.
+    return da.from_array(kernel, chunks=tuple(chunks), name=False)
+
+
 @overload
 def fft2_convolve(
     x: np.ndarray, kernel: np.ndarray, overwrite_x: bool = False
@@ -383,12 +419,34 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
+        dtype = get_dtype(complex=True)
+        # The kernel goes in as a second dask array, so each block of x meets
+        # the matching block of the kernel. Passed whole, it is broadcast
+        # against every block, and a kernel axis longer than a block of x
+        # would make each block as long as the kernel.
+        chunked_kernel = _chunk_kernel_like(kernel, x)
+        if chunked_kernel is None:
+            # An axis of x of unknown length: the kernel goes in whole, which is
+            # right where it fits every block of x along that axis.
+            return da.map_blocks(
+                _fft2_convolve,
+                x,
+                kernel=kernel,
+                overwrite_x=overwrite_x,
+                meta=xp.array((), dtype=dtype),
+            )
+        chunks = broadcast_chunks(x.chunks, chunked_kernel.chunks)
+        if chunks != x.chunks:
+            # x is the side that broadcasts, so the product cannot be taken in
+            # place and is promoted to the dtype of the kernel, as eagerly.
+            dtype = np.result_type(dtype, kernel.dtype)
         return da.map_blocks(
             _fft2_convolve,
             x,
-            kernel=kernel,
+            chunked_kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            chunks=chunks,
+            meta=xp.array((), dtype=dtype),
         )
 
     check_cupy_is_installed()  # type: ignore
