@@ -271,6 +271,31 @@ def test_measurement_detectors_default_to_cpu(detector_cls, kwargs):
     assert detector_cls(**kwargs).to_cpu is True
 
 
+@pytest.mark.parametrize("fftshift", [True, False])
+@pytest.mark.parametrize("gpts", [(64, 65), (65, 64)])
+def test_annular_detector_region_is_centred_on_offset(fftshift, gpts):
+    # An annulus inner <= |alpha - offset| < outer is symmetric under reflection
+    # through `offset`; with `offset` on a grid point and the ring well inside
+    # the grid, the reflected grid coincides with itself, so the region's center
+    # of mass is exactly `offset`, in whichever storage order it was requested.
+    waves = abtem.Waves(
+        np.zeros(gpts, dtype=np.complex64), energy=100e3, extent=(32.0, 32.5)
+    )
+    ax, ay = waves.angular_sampling
+    offset = (3 * ax, -2 * ay)
+    # Radii off-grid (x.3 pixels) so no pixel sits on a boundary; the ring
+    # reaches <= 13.3 px from the centre, inside the >= 20 px half-width of
+    # the region within the antialias cutoff.
+    detector = abtem.AnnularDetector(inner=2.3 * ax, outer=10.3 * ax, offset=offset)
+
+    region = detector.get_detector_region(waves, fftshift=fftshift)
+
+    com = complex(region.center_of_mass(units="mrad").array)
+    # float32 angular coordinates: ~1e-7 relative; a one-pixel error is
+    # >= 1 / 3.6 of |offset|.
+    assert com == pytest.approx(offset[0] + 1.0j * offset[1], rel=1e-5)
+
+
 def test_waves_detector_keeps_data_on_device_by_default():
     """WavesDetector is deliberately the exception: it returns the (large)
     wave functions themselves and is the implicit detector when none is
