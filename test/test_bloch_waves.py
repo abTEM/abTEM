@@ -1,3 +1,4 @@
+import dask.array as da
 import numpy as np
 import pytest
 import strategies as abtem_st
@@ -484,6 +485,54 @@ def test_kinematical_pattern_and_eager_exit_waves_on_device(device):
         np.testing.assert_allclose(
             asnumpy(result.array), asnumpy(expected.array), rtol=1e-5, atol=1e-7
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("radius", [None, 0.25])
+def test_spot_indexing_stays_on_device(device, lazy, radius):
+    # Every array that indexing combines with the patterns must be on their device
+    # (CuPy refuses the implicit conversion of NumPy arrays), and the result stays
+    # there and matches the CPU result.
+    from scipy.spatial.transform import Rotation
+
+    from abtem.core.axes import NonLinearAxis
+    from abtem.core.backend import asnumpy, copy_to_device, get_array_module
+    from abtem.measurements import DiffractionPatterns
+
+    # a single member: the eager path indexes with one orientation matrix
+    rotations = (10.0,)
+    cpu_array = np.random.default_rng(0).random((len(rotations), 49, 49))
+    orientation_matrices = Rotation.from_euler(
+        "x", np.asarray(rotations)[:, None], degrees=True
+    ).as_matrix()
+
+    def index(array):
+        patterns = DiffractionPatterns(
+            array,
+            sampling=(0.1, 0.1),
+            fftshift=True,
+            ensemble_axes_metadata=[
+                NonLinearAxis(label="x_rotation", units="deg", values=rotations)
+            ],
+        )
+        return patterns.index_diffraction_spots(
+            cell=bulk("Si", cubic=True).cell,
+            orientation_matrices=orientation_matrices,
+            centering="F",
+            radius=radius,
+            energy=100e3,
+        )
+
+    array = copy_to_device(cpu_array, device)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 49, 49))
+    result = index(array)
+    if lazy:
+        result = result.compute()
+
+    assert get_array_module(result.array) is get_array_module(device)
+    np.testing.assert_allclose(asnumpy(result.array), index(cpu_array).array, rtol=1e-6)
 
 
 def test_eager_exit_waves_for_scalar_thickness_have_no_thickness_axis():

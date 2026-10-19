@@ -2681,7 +2681,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             orientation_matrices=orientation_matrices,
         )
 
-        array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
+        xp = get_array_module(array)
+        array_all = xp.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
         array_all[..., mask[mask_all]] = array
 
         return array_all
@@ -2799,7 +2800,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (mask.sum(),),
-                meta=np.array((), dtype=self.dtype),
+                meta=get_array_module(self.array).array((), dtype=self.dtype),
             )
         else:
             intensities = self._index_diffraction_spots(
