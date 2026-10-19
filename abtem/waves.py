@@ -1466,14 +1466,16 @@ class Waves(BaseWaves, ArrayObject):
 
         Parameters
         ----------
-        potential : BasePotential or Atoms
-            The scattering potential.
-        scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire
-            potential at Nyquist sampling.
+        scan : BaseScan or np.ndarray
+            Positions of the probe wave functions.
+        potential : BasePotential or Atoms, optional
+            The scattering potential. If not given, the shifted wave functions are
+            returned without running the multislice algorithm.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`).
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -1485,11 +1487,9 @@ class Waves(BaseWaves, ArrayObject):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
         scan = validate_scan(scan)
 
@@ -2168,7 +2168,9 @@ class Probe(WavesBuilder):
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
             converted to measurements after running the multislice algorithm. If not
-            given, defaults to the flexible annular detector.
+            given, the exit wave functions are returned (equivalent to
+            :class:`WavesDetector`). Use :meth:`Probe.scan` for a STEM simulation
+            that defaults to the :class:`FlexibleAnnularDetector`.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
             If 'auto' (default), the batch size is automatically chosen based on the
@@ -2183,6 +2185,8 @@ class Probe(WavesBuilder):
         Returns
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
+            The detected measurement(s), or the exit wave functions if no detector is
+            given.
         """
         probe = self.copy()
 
@@ -2288,7 +2292,10 @@ class Probe(WavesBuilder):
             potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm.
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the :class:`FlexibleAnnularDetector`. To obtain the
+            exit wave functions, pass :class:`WavesDetector` or use
+            :meth:`Probe.multislice`.
             See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array.
@@ -2303,11 +2310,9 @@ class Probe(WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
-            The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential
-            (if no detector(s) given).
+        detected_waves : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+            The detected measurement(s). These are :class:`Waves` only if a
+            :class:`WavesDetector` is given.
         """
 
         if scan is None:
